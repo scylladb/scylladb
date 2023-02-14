@@ -42,6 +42,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/key_utils.hh"
+#include "test/lib/cql_assertions.hh"
 
 using namespace db;
 
@@ -1701,4 +1702,136 @@ SEASTAR_TEST_CASE(test_wait_for_delete) {
 
     co_await log.shutdown();
     co_await log.clear();
+}
+
+static future<> do_test_commitlog_replay_compression(std::string_view compressor_name) {
+    auto cfg = make_shared<db::config>();
+    tmpdir tmp;
+
+    // set commitlog compression as well as a cross-restart persistent data dir
+    cfg->commitlog_compression({ compressor_name.data(), {} });
+    cfg->data_file_directories({tmp.path().string()});
+
+    co_await do_with_cql_env_thread([] (cql_test_env& env) {
+        env.execute_cql("create table t (pk text primary key, v text)").get();
+        env.execute_cql("insert into ks.t (pk, v) values ('apa', 'ko')").get();
+
+        // fake unclean shutdown by simply dropping all commitlog segments.
+        env.db().invoke_on_all([](auto& db) -> future<> {
+            co_await db.commitlog()->sync_all_segments();
+            co_await db.commitlog()->release();
+        }).get();
+
+    }, cfg);
+
+    // remove all sstables for our keyspace so we can test for data being
+    // recovered by commitlog
+    fs::remove_all(tmp.path() / "ks");
+
+    co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+        auto& db = env.local_db();
+        auto cl = db.commitlog();
+        auto paths = cl->get_segments_to_replay().get0();
+
+        BOOST_REQUIRE(!paths.empty());
+
+        auto rp = db::commitlog_replayer::create_replayer(env.db(), env.get_system_keyspace()).get0();
+        rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
+        cl->delete_segments(std::move(paths)).get();
+
+        require_rows(env, "select * from ks.t", {{utf8_type->decompose("apa"), utf8_type->decompose("ko")}});
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_commitlog_replay_compression_lz4) {
+    co_await do_test_commitlog_replay_compression("LZ4Compressor");
+}
+
+SEASTAR_TEST_CASE(test_commitlog_replay_compression_snappy) {
+    co_await do_test_commitlog_replay_compression("SnappyCompressor");
+}
+
+SEASTAR_TEST_CASE(test_commitlog_replay_compression_deflate) {
+    co_await do_test_commitlog_replay_compression("DeflateCompressor");
+}
+
+// Note: not testing ZstdCompressor. Something does not work right with it. Gets allocation
+// errors. Not sure why. 
+
+static future<> do_test_commitlog_add_entries_compressed(std::string_view compressor_name) {
+    commitlog::config cfg;
+
+    cfg.compressor = compressor::create(sstring(compressor_name), [](auto&&) { return std::nullopt; });
+
+    return cl_test(cfg, [](commitlog& log) {
+        return seastar::async([&log] {
+            using force_sync = commitlog_entry_writer::force_sync;
+
+            constexpr auto n = 10;
+            for (auto fs : { force_sync(false), force_sync(true) }) {
+                std::vector<commitlog_entry_writer> writers;
+                std::vector<frozen_mutation> mutations;
+                std::vector<replay_position> rps;
+
+                writers.reserve(n);
+                mutations.reserve(n);
+
+                for (auto i = 0; i < n; ++i) {
+                    random_mutation_generator gen(random_mutation_generator::generate_counters(false));
+                    mutations.emplace_back(gen(1).front());
+                    writers.emplace_back(gen.schema(), mutations.back(), fs);
+                }
+
+                auto res = log.add_entries(writers, db::timeout_clock::now() + 60s).get0();
+
+                std::set<segment_id_type> ids;
+                for (auto& h : res) {
+                    ids.emplace(h.rp().id);
+                    rps.emplace_back(h.rp());
+                }
+                BOOST_CHECK_EQUAL(ids.size(), 1);
+
+                log.sync_all_segments().get();
+                auto segments = log.get_active_segment_names();
+                BOOST_REQUIRE(!segments.empty());
+
+                std::unordered_set<replay_position> result;
+
+                for (auto& seg : segments) {
+                    db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position buf_rp) {
+                        commitlog_entry_reader r(buf_rp.buffer);
+                        auto& rp = buf_rp.position;
+                        auto i = std::find(rps.begin(), rps.end(), rp);
+                        // since we are looping, we can be reading last test cases 
+                        // segment (force_sync permutations)
+                        if (i != rps.end()) {
+                            auto n = std::distance(rps.begin(), i);
+                            auto& fm1 = mutations.at(n);
+                            auto& fm2 = r.mutation();
+                            auto s = writers.at(n).schema();
+                            auto m1 = fm1.unfreeze(s);
+                            auto m2 = fm2.unfreeze(s);
+                            BOOST_CHECK_EQUAL(m1, m2);
+                            result.emplace(rp);
+                        }
+                        return make_ready_future<>();
+                    }).get();
+                }
+
+                BOOST_CHECK_EQUAL(result.size(), rps.size());
+            }
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_commitlog_add_entries_compressed_lz4) {
+    co_await do_test_commitlog_add_entries_compressed("LZ4Compressor");
+}
+
+SEASTAR_TEST_CASE(test_commitlog_add_entries_compressed_snappy) {
+    co_await do_test_commitlog_add_entries_compressed("SnappyCompressor");
+}
+
+SEASTAR_TEST_CASE(test_commitlog_add_entries_compressed_deflate) {
+    co_await do_test_commitlog_add_entries_compressed("DeflateCompressor");
 }
