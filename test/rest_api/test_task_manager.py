@@ -3,30 +3,9 @@ import time
 import asyncio
 
 from rest_util import new_test_module, new_test_task, set_tmp_task_ttl
+from task_manager_utils import check_field_correctness, check_status_correctness, assert_task_does_not_exist
 
 long_time = 1000000000
-
-def check_field_correctness(field_name, status, expected_status):
-    if field_name in expected_status:
-        assert status[field_name] == expected_status[field_name], f"Incorrect task {field_name}"
-
-def check_status_correctness(status, expected_status):
-    check_field_correctness("id", status, expected_status)
-    check_field_correctness("state", status, expected_status)
-    check_field_correctness("sequence_number", status, expected_status)
-    check_field_correctness("keyspace", status, expected_status)
-    check_field_correctness("table", status, expected_status)
-    if "error" in expected_status:
-        assert expected_status["error"] in status["error"], "Incorrect error message"
-    else:
-        assert status["error"] == "", "Error message was set"
-
-async def wait_for_task(rest_api, task_id):
-    rest_api.send("GET", f"task_manager/wait_task/{task_id}")
-
-def assert_task_does_not_exist(rest_api, task_id):
-    resp = rest_api.send("GET", f"task_manager/task_status/{task_id}")
-    assert resp.status_code == requests.codes.internal_server_error, f"Task {task_id} is kept in memory"
 
 def check_sequence_number(rest_api, task_id, expected):
     resp = rest_api.send("GET", f"task_manager/task_status/{task_id}")
@@ -120,7 +99,7 @@ async def test_task_manager_wait(rest_api):
         with new_test_task(rest_api, args0) as task0:
             print(f"created test task {task0}")
 
-            waiting_task = asyncio.create_task(wait_for_task(rest_api, task0))
+            waiting_task = asyncio.create_task(wait_for_task_async(rest_api, task0))
             done, pending = await asyncio.wait({waiting_task})
 
             assert waiting_task in pending, "wait_task finished while the task was still running"
