@@ -86,7 +86,7 @@ if [[ $# -eq 0 ]]; then
     docker_args=(-it)
 elif [[ "$1" = -* ]]; then
     while [[ "$1" != "--" && $# != 0 ]]; do
-	case "$1" in
+        case "$1" in
             -h|--help)
                 help
                 ;;
@@ -101,21 +101,21 @@ elif [[ "$1" = -* ]]; then
                 fi
                 continue
                 ;;
-	    --*)
-		if [[ "$1" = --interactive || "$1" = --interactive=true ]]; then
-		    interactive=y
-		fi
-		;;
-	    -*)
-		if [[ "$1" = -*i* ]]; then
-		    interactive=y
-		fi
-		;;
-	    *)
-		;;
-	esac
-	docker_args+=("$1")
-	shift
+            --*)
+                if [[ "$1" = --interactive || "$1" = --interactive=true ]]; then
+                    interactive=y
+                fi
+                ;;
+            -*)
+                if [[ "$1" = -*i* ]]; then
+                    interactive=y
+                fi
+                ;;
+            *)
+                ;;
+        esac
+        docker_args+=("$1")
+        shift
     done
     if [[ "$1" != "--" ]]; then
         die "Expected '--' to terminate docker flag list"
