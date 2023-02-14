@@ -743,25 +743,6 @@ target_include_directories(scylla PRIVATE
     "${scylla_gen_build_dir}")
 
 ###
-### Create crc_combine_table helper executable.
-### Use it to generate crc_combine_table.cc to be used in scylla at build time.
-###
-add_executable(crc_combine_table utils/gz/gen_crc_combine_table.cc)
-target_link_libraries(crc_combine_table PRIVATE seastar)
-target_include_directories(crc_combine_table PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_compile_options(crc_combine_table PRIVATE
-    -std=gnu++20
-    ${cxx_coro_flag}
-    ${target_arch_flag})
-add_dependencies(scylla crc_combine_table)
-
-# Generate an additional source file at build time that is needed for Scylla compilation
-add_custom_command(OUTPUT "${scylla_gen_build_dir}/utils/gz/crc_combine_table.cc"
-    COMMAND $<TARGET_FILE:crc_combine_table> > "${scylla_gen_build_dir}/utils/gz/crc_combine_table.cc"
-    DEPENDS crc_combine_table)
-target_sources(scylla PRIVATE "${scylla_gen_build_dir}/utils/gz/crc_combine_table.cc")
-
-###
 ### Generate version file and supply appropriate compile definitions for release.cc
 ###
 execute_process(COMMAND ${CMAKE_SOURCE_DIR}/SCYLLA-VERSION-GEN --output-dir "${CMAKE_BINARY_DIR}/gen" RESULT_VARIABLE scylla_version_gen_res)
