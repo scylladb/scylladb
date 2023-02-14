@@ -96,6 +96,30 @@ def test_allow_filtering_partition_slice(cql, table1):
     check_af_optional(cql, table1, 'k=1 AND c=2', lambda row: row.k==1 and row.c==2)
     check_af_optional(cql, table1, 'k=1 AND c>=2 AND c<=4', lambda row: row.k==1 and row.c>=2 and row.c<=4)
 
+# Although as the above test showed that a partition slice does not require
+# filtering, if we add another restriction like 'v=2' the filtering *is*
+# required: The point is that the slice may have many rows, out of which
+# only a small number might match 'v=2'.
+# The above is true only for potentially-long slices. The single-row slice
+# 'k=1 and c=2' is different, and will be tested in the following test
+# test_allow_filtering_single_row().
+def test_allow_filtering_partition_slice_and_restriction(cql, table1):
+    check_af_mandatory(cql, table1, 'k=1 AND v=2', lambda row: row.k==1 and row.v==2)
+    check_af_mandatory(cql, table1, 'k=1 AND c>2 AND v=2', lambda row: row.k==1 and row.c>2 and row.v==2)
+    check_af_mandatory(cql, table1, 'k=1 AND c<2 AND v=2', lambda row: row.k==1 and row.c<2 and row.v==2)
+    check_af_mandatory(cql, table1, 'k=1 AND c>=2 AND c<=4 AND v=2', lambda row: row.k==1 and row.c>=2 and row.c<=4 and row.v==2)
+
+# Reading a clustering single row 'k=1 AND c=2' always takes a O(1) amount
+# of work and returns one or zero results. Adding another restriction
+# like 'v=2' doesn't change any of the above, so doesn't require filtering.
+# Reproduces #7964 on Scylla, and also wrong on Cassandra so marked
+# cassandra_bug.
+@pytest.mark.xfail(reason="#7964")
+def test_allow_filtering_single_row(cql, table1, cassandra_bug):
+    check_af_optional(cql, table1, 'k=1 AND c=2', lambda row: row.k==1 and row.c==2)
+    # Reproduces #7964, as ALLOW FILTERING is considered mandatory, not optional
+    check_af_optional(cql, table1, 'k=1 AND c=2 AND v=2', lambda row: row.k==1 and row.c==2 and row.v==2)
+
 # A scan of the whole table or of a whole partition looking for one particular
 # regular column value requires filtering.
 def test_allow_filtering_regular_column(cql, table1):
