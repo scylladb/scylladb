@@ -19,6 +19,7 @@
 #include "sstables/shared_sstable.hh"            // sstables::shared_sstable
 #include "sstables/version.hh"                   // sstable versions
 #include "compaction/compaction_descriptor.hh"     // for compaction_sstable_creator_fn
+#include "data_dictionary/storage_options.hh"
 #include "sstables/open_info.hh"                 // for entry_descriptor and foreign_sstable_open_info, chunked_vector wants to know if they are move constructible
 #include "utils/chunked_vector.hh"
 #include "utils/phased_barrier.hh"
@@ -105,6 +106,7 @@ private:
 
     sstables_manager& _manager;
     schema_ptr _schema;
+    lw_shared_ptr<const data_dictionary::storage_options> _storage_opts;
     std::filesystem::path _sstable_dir;
     ::io_priority_class _io_priority;
     io_error_handler_gen _error_handler_gen;
@@ -155,6 +157,7 @@ private:
 public:
     sstable_directory(sstables_manager& manager,
             schema_ptr schema,
+            lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
             std::filesystem::path sstable_dir,
             ::io_priority_class io_prio,
             io_error_handler_gen error_handler_gen);

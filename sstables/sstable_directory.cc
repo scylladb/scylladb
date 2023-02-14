@@ -51,11 +51,13 @@ future<> sstable_directory::components_lister::close() {
 
 sstable_directory::sstable_directory(sstables_manager& manager,
         schema_ptr schema,
+        lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
         fs::path sstable_dir,
         ::io_priority_class io_prio,
         io_error_handler_gen error_handler_gen)
     : _manager(manager)
     , _schema(std::move(schema))
+    , _storage_opts(std::move(storage_opts))
     , _sstable_dir(std::move(sstable_dir))
     , _io_priority(std::move(io_prio))
     , _error_handler_gen(error_handler_gen)

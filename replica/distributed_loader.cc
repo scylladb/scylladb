@@ -420,6 +420,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         directory.start(
             sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
             sharded_parameter([&global_table] { return global_table->schema(); }),
+            sharded_parameter([&global_table] { return global_table->get_storage_options_ptr(); }),
             upload, service::get_local_streaming_priority(),
             &error_handler_gen_for_upload_dir
         ).get();
@@ -480,6 +481,7 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
         directory.start(
             sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
             sharded_parameter([&global_table] { return global_table->schema(); }),
+            sharded_parameter([&global_table] { return global_table->get_storage_options_ptr(); }),
             upload, service::get_local_streaming_priority(),
             &error_handler_gen_for_upload_dir
         ).get();
@@ -625,6 +627,7 @@ future<> table_populator::start_subdir(sstring subdir) {
     co_await directory.start(
         sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
         sharded_parameter([&global_table] { return global_table->schema(); }),
+        sharded_parameter([&global_table] { return global_table->get_storage_options_ptr(); }),
         fs::path(sstdir), default_priority_class(),
         default_io_error_handler_gen()
     );
