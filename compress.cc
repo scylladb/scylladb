@@ -13,6 +13,9 @@
 #include "compress.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/class_registrator.hh"
+#include "utils/managed_bytes.hh"
+#include "bytes_ostream.hh"
+#include "utils/fragmented_temporary_buffer.hh"
 
 const sstring compressor::namespace_prefix = "org.apache.cassandra.io.compress.";
 
@@ -147,6 +150,146 @@ static size_t read_uncompressed_size(const int8_t* in, size_t size) {
         | (in[0] << 0 & 0x000000ff)
         ;
     return res;
+}
+
+
+bytes_source::bytes_source(bool lin)
+    : _linearized(lin)
+{}
+
+class buffer_bytes_source : public bytes_source {
+    bytes _buf;
+    bool _done = false;
+public:
+    buffer_bytes_source(bytes_source& in)
+        : bytes_source(true)
+        , _buf(bytes::initialized_later(), in.size())        
+    {
+        auto out = _buf.begin();
+        for (;;) {
+            auto v = in.next();
+            if (v.empty()) {
+                break;
+            }
+            out = std::copy(v.begin(), v.end(), out);
+        }
+    }
+    bytes_view next() override {
+        if (std::exchange(_done, true)) {
+            _buf = {};
+        }
+        return _buf;
+    }
+    size_t size() const override {
+        return _buf.size();
+    }
+};
+
+class managed_bytes_source : public bytes_source {
+    managed_bytes_view _view;
+    bool _first = true;
+public:
+    managed_bytes_source(managed_bytes_view in)
+        : bytes_source(in.is_linearized())
+        , _view(std::move(in))
+    {}
+    bytes_view next() override {
+        if (!std::exchange(_first, false)) {
+            _view.remove_current();
+        }
+        return _view.current_fragment();
+    }
+    size_t size() const override {
+        return _view.size();
+    }
+};
+
+class fragmented_bytes_source : public bytes_source {
+    fragmented_temporary_buffer::view _view;
+    bool _first = true;
+public:
+    fragmented_bytes_source(fragmented_temporary_buffer::view in)
+        : bytes_source(in.size_bytes() == in.current_fragment().size())
+        , _view(std::move(in))
+    {}
+    bytes_view next() override {
+        if (!std::exchange(_first, false)) {
+            _view.remove_current();
+        }
+        return _view.current_fragment();
+    }
+    size_t size() const override {
+        return _view.size_bytes();
+    }
+};
+
+size_t compressor::uncompress(managed_bytes_view in, bytes_ostream& os) const {
+    managed_bytes_source tmp(in);
+    return uncompress(tmp, os);
+}
+
+size_t compressor::uncompress(const fragmented_temporary_buffer& in, bytes_ostream& os) const {
+    fragmented_bytes_source tmp{fragmented_temporary_buffer::view(in)};
+    return uncompress(tmp, os);
+}
+
+size_t compressor::uncompress(bytes_source& in, bytes_ostream& os) const {
+    // default. fallback to linearized.
+    if (!in.is_linearized()) {
+        buffer_bytes_source tmp(in);
+        return uncompress(tmp, os);
+    }
+
+    auto view = in.next();
+    auto uncompressed_size = read_uncompressed_size(view.data(), view.size());
+
+    if (!_writes_uncompressed_size) {
+        view.remove_prefix(uncompressed_size_marker_size);
+    }
+
+    auto out = os.write_place_holder(uncompressed_size);
+    auto res = uncompress(reinterpret_cast<const char*>(view.data()), view.size(), reinterpret_cast<char*>(out), uncompressed_size);
+
+    assert(res == uncompressed_size);
+    return res;
+}
+
+
+size_t compressor::compress(managed_bytes_view in, bytes_ostream& os) const {
+    managed_bytes_source tmp(in);
+    return compress(tmp, os);
+}
+
+size_t compressor::compress(const fragmented_temporary_buffer& in, bytes_ostream& os) const {
+    fragmented_bytes_source tmp{fragmented_temporary_buffer::view(in)};
+    return compress(tmp, os);
+}
+
+size_t compressor::compress(bytes_source& in, bytes_ostream& os) const {
+    if (!in.is_linearized()) {
+        buffer_bytes_source tmp(in);
+        return compress(tmp, os);
+    }
+    auto view = in.next();
+    auto input_len = view.size();
+    if (view.size() > std::numeric_limits<uint32_t>::max()) {
+        throw std::invalid_argument("Data overflow");
+    }
+
+    auto size = compress_max_size(input_len);
+    if (!_writes_uncompressed_size) {
+        size += uncompressed_size_marker_size;
+    }
+    auto out = os.write_place_holder(size);
+    if (!_writes_uncompressed_size) {
+        auto n = write_uncompressed_size(out, size, input_len);
+        out += n;
+        size -= n;
+    }
+    auto actual = compress(reinterpret_cast<const char*>(view.data()), input_len, reinterpret_cast<char*>(out), size);
+    assert(actual <= size);
+    os.remove_suffix(size - actual);
+    return actual;
 }
 
 thread_local const shared_ptr<compressor> compressor::lz4 = ::make_shared<lz4_processor>(namespace_prefix + "LZ4Compressor");

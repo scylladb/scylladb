@@ -16,6 +16,39 @@
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
 
+#include "exceptions/exceptions.hh"
+#include "utils/fragment_range.hh"
+
+template <mutable_view is_mutable_view>
+class managed_bytes_basic_view;
+using managed_bytes_view = managed_bytes_basic_view<mutable_view::no>;
+
+class bytes_ostream;
+class fragmented_temporary_buffer;
+
+class compressor;
+
+// abstract byte source input type for compress/decompress operations
+// capable of representing fragmented data.
+class bytes_source {
+    bool _linearized;
+protected:
+    bytes_source(bool);
+public:
+    virtual ~bytes_source() = default;
+    // return next available fragment. If at end, return empty view.
+    virtual bytes_view next() = 0;
+    // return remaining size of data (including last retured view from next())
+    virtual size_t size() const = 0;
+    // i.e. if next() returns non-empty > 1 times
+    bool is_linearized() const {
+        return _linearized;
+    }
+    bool empty() const {
+        return size() == 0;
+    }
+};
+
 class compressor {
     sstring _name;
     // keeps track of whether the linear compressor path of this
@@ -45,6 +78,24 @@ public:
      * Returns the maximum output size for compressing data on "input_len" size.
      */
     virtual size_t compress_max_size(size_t input_len) const = 0;
+
+    /**
+     * Decompress a single packet, potentially scattered across multiple fragments.
+     * May or may not operate without linearization depending on compressor type.
+     */
+    virtual size_t uncompress(bytes_source& in, bytes_ostream&) const;
+
+    size_t uncompress(managed_bytes_view in, bytes_ostream&) const;
+    size_t uncompress(const fragmented_temporary_buffer& in, bytes_ostream&) const;
+
+    /**
+     * Compresses a potentially fragmented buffer into ostream. May or may not operate without
+     * linearization.
+     */ 
+    virtual size_t compress(bytes_source& in, bytes_ostream&) const;
+
+    size_t compress(managed_bytes_view in, bytes_ostream&) const;
+    size_t compress(const fragmented_temporary_buffer& in, bytes_ostream&) const;
 
     /**
      * Returns accepted option names for this compressor
