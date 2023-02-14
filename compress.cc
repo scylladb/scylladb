@@ -94,8 +94,8 @@ compressor::ptr_type compressor::create(const sstring& name, const opt_getter& o
     return compressor_registry::create(qn, opts);
 }
 
-shared_ptr<compressor> compressor::create(const std::map<sstring, sstring>& options) {
-    auto i = options.find(compression_parameters::SSTABLE_COMPRESSION);
+shared_ptr<compressor> compressor::create(const std::map<sstring, sstring>& options, const sstring& class_opt) {
+    auto i = options.find(class_opt);
     if (i != options.end() && !i->second.empty()) {
         return create(i->second, [&options](const sstring& key) -> opt_string {
             auto i = options.find(key);
@@ -313,7 +313,7 @@ compression_parameters::compression_parameters(compressor_ptr c)
 {}
 
 compression_parameters::compression_parameters(const std::map<sstring, sstring>& options) {
-    _compressor = compressor::create(options);
+    _compressor = compressor::create(options, SSTABLE_COMPRESSION);
 
     validate_options(options);
 

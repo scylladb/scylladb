@@ -119,7 +119,7 @@ public:
     using ptr_type = shared_ptr<compressor>;
 
     static ptr_type create(const sstring& name, const opt_getter&);
-    static ptr_type create(const std::map<sstring, sstring>&);
+    static ptr_type create(const std::map<sstring, sstring>&, const sstring& class_opt);
 
     static thread_local const ptr_type lz4;
     static thread_local const ptr_type snappy;

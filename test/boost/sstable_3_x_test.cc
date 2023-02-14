@@ -1754,7 +1754,7 @@ SEASTAR_TEST_CASE(test_zstd_partition_key_with_values_of_different_types_read) {
     return test_partition_key_with_values_of_different_types_read(
         ZSTD_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH, compressor::create({
             {"sstable_compression", "org.apache.cassandra.io.compress.ZstdCompressor"},
-            {"compression_level", "1"}}));
+            {"compression_level", "1"}}, "sstable_compression"));
 }
 
 // Following test runs on files in test/resource/sstables/3.x/zstd/multiple_chunks.
@@ -1781,7 +1781,7 @@ static schema_ptr make_zstd_multiple_chunks_schema() {
         .set_compressor_params(compression_parameters{compressor::create({
             {"sstable_compression", "org.apache.cassandra.io.compress.ZstdCompressor"},
             {"compression_level", "5"},
-            {"chunk_length_in_kb", "4"}})})
+            {"chunk_length_in_kb", "4"}}, "sstable_compression")})
         .build();
 }
 
@@ -3748,7 +3748,7 @@ SEASTAR_TEST_CASE(test_write_many_partitions_zstd) {
             tombstone{},
             compression_parameters{compressor::create({
                 {"sstable_compression", "org.apache.cassandra.io.compress.ZstdCompressor"}
-            })});
+            }, "sstable_compression")});
 }
 
 SEASTAR_TEST_CASE(test_write_multiple_rows) {
