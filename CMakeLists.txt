@@ -536,18 +536,19 @@ set(scylla_sources
     tombstone_gc_options.cc
     tombstone_gc.cc
     reader_concurrency_semaphore.cc
+    redis/controller.cc
+    redis/server.cc
+    redis/query_processor.cc
+    redis/protocol_parser.rl
+    redis/keyspace_utils.cc
+    redis/options.cc
+    redis/stats.cc
+    redis/mutation_utils.cc
+    redis/query_utils.cc
     redis/abstract_command.cc
     redis/command_factory.cc
     redis/commands.cc
-    redis/keyspace_utils.cc
     redis/lolwut.cc
-    redis/mutation_utils.cc
-    redis/options.cc
-    redis/query_processor.cc
-    redis/query_utils.cc
-    redis/server.cc
-    redis/service.cc
-    redis/stats.cc
     release.cc
     repair/repair.cc
     repair/row_level.cc
@@ -616,13 +617,15 @@ set(scylla_sources
     thrift/server.cc
     thrift/thrift_validation.cc
     timeout_config.cc
-    tools/scylla-sstable-index.cc
     tools/scylla-types.cc
-    tracing/traced_file.cc
+    tools/scylla-sstable.cc
+    tools/schema_loader.cc
+    tools/utils.cc
+    tools/lua_sstable_consumer.cc
+    tracing/tracing.cc
     tracing/trace_keyspace_helper.cc
     tracing/trace_state.cc
-    tracing/tracing_backend_registry.cc
-    tracing/tracing.cc
+    tracing/traced_file.cc
     transport/controller.cc
     transport/cql_protocol_extension.cc
     transport/event.cc
@@ -649,7 +652,7 @@ set(scylla_sources
     utils/file_lock.cc
     utils/generation-number.cc
     utils/gz/crc_combine.cc
-    utils/gz/gen_crc_combine_table.cc
+    utils/gz/crc_combine_table.cc
     utils/human_readable.cc
     utils/i_filter.cc
     utils/large_bitset.cc
