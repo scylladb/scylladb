@@ -437,9 +437,7 @@ public:
     timed_rate_moving_average met;
     timed_rate_moving_average_and_histogram() = default;
     timed_rate_moving_average_and_histogram(timed_rate_moving_average_and_histogram&&) = default;
-    timed_rate_moving_average_and_histogram(const timed_rate_moving_average_and_histogram&) = default;
     timed_rate_moving_average_and_histogram(size_t size, int64_t _sample_mask = 0x80) : hist(size, _sample_mask) {}
-    timed_rate_moving_average_and_histogram& operator=(const timed_rate_moving_average_and_histogram&) = default;
 
     template <typename Rep, typename Ratio>
     void mark(std::chrono::duration<Rep, Ratio> dur) {
@@ -505,7 +503,6 @@ public:
     }
 
     timed_rate_moving_average_summary_and_histogram(timed_rate_moving_average_summary_and_histogram&&) = default;
-    timed_rate_moving_average_summary_and_histogram(const timed_rate_moving_average_summary_and_histogram&) = default;
     timed_rate_moving_average_summary_and_histogram(size_t size) : _timer([this]{
         _rates.update();
         _last_update++;
@@ -515,7 +512,6 @@ public:
         _last_update = 0;
         _summary.update();}), hist(size, 0) {
     }
-    timed_rate_moving_average_summary_and_histogram& operator=(const timed_rate_moving_average_summary_and_histogram&) = default;
 
     template <typename Rep, typename Ratio>
     void mark(std::chrono::duration<Rep, Ratio> dur) noexcept {
