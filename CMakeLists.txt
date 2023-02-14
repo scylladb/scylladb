@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.18)
 
 project(scylla)
 
+list(APPEND CMAKE_MODULE_PATH
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   message(STATUS "Setting build type to 'Release' as none was specified.")
   set(CMAKE_BUILD_TYPE "Release" CACHE
@@ -48,7 +51,7 @@ find_package(Boost COMPONENTS filesystem program_options system thread regex REQ
 find_package(Lua REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(ICU COMPONENTS uc REQUIRED)
-find_package(Abseil REQUIRED)
+find_package(absl REQUIRED)
 
 set(scylla_build_dir "${CMAKE_BINARY_DIR}/build/${BUILD_TYPE}")
 set(scylla_gen_build_dir "${scylla_build_dir}/gen")
@@ -96,63 +99,6 @@ scylla_generate_thrift(
     OUT_DIR ${scylla_gen_build_dir}
     SERVICE Cassandra)
 
-# Parse antlr3 grammar files and generate C++ sources
-function(scylla_generate_antlr3)
-    set(one_value_args TARGET VAR IN_FILE OUT_DIR)
-    cmake_parse_arguments(args "" "${one_value_args}" "" ${ARGN})
-
-    get_filename_component(in_file_pure_name ${args_IN_FILE} NAME)
-    get_filename_component(stem ${in_file_pure_name} NAME_WE)
-
-    set(outputs
-        "${args_OUT_DIR}/${stem}Lexer.hpp"
-        "${args_OUT_DIR}/${stem}Lexer.cpp"
-        "${args_OUT_DIR}/${stem}Parser.hpp"
-        "${args_OUT_DIR}/${stem}Parser.cpp")
-
-    add_custom_command(
-        DEPENDS
-            ${args_IN_FILE}
-        OUTPUT ${outputs}
-        # Remove #ifdef'ed code from the grammar source code
-        COMMAND sed -e "/^#if 0/,/^#endif/d" "${args_IN_FILE}" > "${args_OUT_DIR}/${in_file_pure_name}"
-        COMMAND antlr3 "${args_OUT_DIR}/${in_file_pure_name}"
-        # We replace many local `ExceptionBaseType* ex` variables with a single function-scope one.
-        # Because we add such a variable to every function, and because `ExceptionBaseType` is not a global
-        # name, we also add a global typedef to avoid compilation errors.
-        COMMAND sed -i -e "/^.*On :.*$/d" "${args_OUT_DIR}/${stem}Lexer.hpp"
-        COMMAND sed -i -e "/^.*On :.*$/d" "${args_OUT_DIR}/${stem}Lexer.cpp"
-        COMMAND sed -i -e "/^.*On :.*$/d" "${args_OUT_DIR}/${stem}Parser.hpp"
-        COMMAND sed -i
-            -e "s/^\\( *\\)\\(ImplTraits::CommonTokenType\\* [a-zA-Z0-9_]* = NULL;\\)$/\\1const \\2/"
-            -e "/^.*On :.*$/d"
-            -e "1i using ExceptionBaseType = int;"
-            -e "s/^{/{ ExceptionBaseType\\* ex = nullptr;/; s/ExceptionBaseType\\* ex = new/ex = new/; s/exceptions::syntax_exception e/exceptions::syntax_exception\\& e/"
-            "${args_OUT_DIR}/${stem}Parser.cpp"
-        VERBATIM)
-
-    add_custom_target(${args_TARGET}
-        DEPENDS ${outputs})
-
-    set(${args_VAR} ${outputs} PARENT_SCOPE)
-endfunction()
-
-set(antlr3_grammar_files
-    cql3/Cql.g
-    alternator/expressions.g)
-
-set(antlr3_gen_files)
-
-foreach(f ${antlr3_grammar_files})
-    get_filename_component(grammar_file_name "${f}" NAME_WE)
-    get_filename_component(f_dir "${f}" DIRECTORY)
-    scylla_generate_antlr3(
-        TARGET scylla_antlr3_gen_${grammar_file_name}
-        VAR scylla_antlr3_gen_${grammar_file_name}_files
-        IN_FILE "${CMAKE_SOURCE_DIR}/${f}"
-        OUT_DIR ${scylla_gen_build_dir}/${f_dir})
-    list(APPEND antlr3_gen_files "${scylla_antlr3_gen_${grammar_file_name}_files}")
-endforeach()
 
 # Generate C++ sources from ragel grammar files
 seastar_generate_ragel(
@@ -267,15 +213,6 @@ endforeach()
 
 set(scylla_sources
     absl-flat_hash_map.cc
-    alternator/auth.cc
-    alternator/conditions.cc
-    alternator/controller.cc
-    alternator/executor.cc
-    alternator/expressions.cc
-    alternator/serialization.cc
-    alternator/server.cc
-    alternator/stats.cc
-    alternator/streams.cc
     api/api.cc
     api/cache_service.cc
     api/collectd.cc
@@ -332,101 +269,6 @@ set(scylla_sources
     compress.cc
     converting_mutation_partition_applier.cc
     counters.cc
-    cql3/abstract_marker.cc
-    cql3/attributes.cc
-    cql3/cf_name.cc
-    cql3/column_condition.cc
-    cql3/column_identifier.cc
-    cql3/column_specification.cc
-    cql3/constants.cc
-    cql3/cql3_type.cc
-    cql3/expr/expression.cc
-    cql3/expr/prepare_expr.cc
-    cql3/expr/restrictions.cc
-    cql3/functions/aggregate_fcts.cc
-    cql3/functions/castas_fcts.cc
-    cql3/functions/error_injection_fcts.cc
-    cql3/functions/functions.cc
-    cql3/functions/user_function.cc
-    cql3/index_name.cc
-    cql3/keyspace_element_name.cc
-    cql3/lists.cc
-    cql3/maps.cc
-    cql3/operation.cc
-    cql3/prepare_context.cc
-    cql3/query_options.cc
-    cql3/query_processor.cc
-    cql3/restrictions/statement_restrictions.cc
-    cql3/result_set.cc
-    cql3/role_name.cc
-    cql3/selection/abstract_function_selector.cc
-    cql3/selection/selectable.cc
-    cql3/selection/selection.cc
-    cql3/selection/selector.cc
-    cql3/selection/selector_factories.cc
-    cql3/selection/simple_selector.cc
-    cql3/sets.cc
-    cql3/statements/alter_keyspace_statement.cc
-    cql3/statements/alter_service_level_statement.cc
-    cql3/statements/alter_table_statement.cc
-    cql3/statements/alter_type_statement.cc
-    cql3/statements/alter_view_statement.cc
-    cql3/statements/attach_service_level_statement.cc
-    cql3/statements/authentication_statement.cc
-    cql3/statements/authorization_statement.cc
-    cql3/statements/batch_statement.cc
-    cql3/statements/cas_request.cc
-    cql3/statements/cf_prop_defs.cc
-    cql3/statements/cf_statement.cc
-    cql3/statements/create_aggregate_statement.cc
-    cql3/statements/create_function_statement.cc
-    cql3/statements/create_index_statement.cc
-    cql3/statements/create_keyspace_statement.cc
-    cql3/statements/create_service_level_statement.cc
-    cql3/statements/create_table_statement.cc
-    cql3/statements/create_type_statement.cc
-    cql3/statements/create_view_statement.cc
-    cql3/statements/delete_statement.cc
-    cql3/statements/detach_service_level_statement.cc
-    cql3/statements/drop_aggregate_statement.cc
-    cql3/statements/drop_function_statement.cc
-    cql3/statements/drop_index_statement.cc
-    cql3/statements/drop_keyspace_statement.cc
-    cql3/statements/drop_service_level_statement.cc
-    cql3/statements/drop_table_statement.cc
-    cql3/statements/drop_type_statement.cc
-    cql3/statements/drop_view_statement.cc
-    cql3/statements/function_statement.cc
-    cql3/statements/grant_statement.cc
-    cql3/statements/index_prop_defs.cc
-    cql3/statements/index_target.cc
-    cql3/statements/ks_prop_defs.cc
-    cql3/statements/list_permissions_statement.cc
-    cql3/statements/list_service_level_attachments_statement.cc
-    cql3/statements/list_service_level_statement.cc
-    cql3/statements/list_users_statement.cc
-    cql3/statements/modification_statement.cc
-    cql3/statements/permission_altering_statement.cc
-    cql3/statements/property_definitions.cc
-    cql3/statements/raw/parsed_statement.cc
-    cql3/statements/revoke_statement.cc
-    cql3/statements/role-management-statements.cc
-    cql3/statements/schema_altering_statement.cc
-    cql3/statements/select_statement.cc
-    cql3/statements/service_level_statement.cc
-    cql3/statements/sl_prop_defs.cc
-    cql3/statements/truncate_statement.cc
-    cql3/statements/update_statement.cc
-    cql3/statements/strongly_consistent_modification_statement.cc
-    cql3/statements/strongly_consistent_select_statement.cc
-    cql3/statements/use_statement.cc
-    cql3/type_json.cc
-    cql3/untyped_result_set.cc
-    cql3/update_parameters.cc
-    cql3/user_types.cc
-    cql3/util.cc
-    cql3/ut_name.cc
-    cql3/values.cc
     data_dictionary/data_dictionary.cc
     db/batchlog_manager.cc
     db/commitlog/commitlog.cc
@@ -537,18 +379,19 @@ set(scylla_sources
     tombstone_gc_options.cc
     tombstone_gc.cc
     reader_concurrency_semaphore.cc
+    redis/controller.cc
+    redis/server.cc
+    redis/query_processor.cc
+    redis/protocol_parser.rl
+    redis/keyspace_utils.cc
+    redis/options.cc
+    redis/stats.cc
+    redis/mutation_utils.cc
+    redis/query_utils.cc
     redis/abstract_command.cc
     redis/command_factory.cc
     redis/commands.cc
-    redis/keyspace_utils.cc
     redis/lolwut.cc
-    redis/mutation_utils.cc
-    redis/options.cc
-    redis/query_processor.cc
-    redis/query_utils.cc
-    redis/server.cc
-    redis/service.cc
-    redis/stats.cc
     release.cc
     repair/repair.cc
     repair/row_level.cc
@@ -617,13 +460,15 @@ set(scylla_sources
     thrift/server.cc
     thrift/thrift_validation.cc
     timeout_config.cc
-    tools/scylla-sstable-index.cc
     tools/scylla-types.cc
-    tracing/traced_file.cc
+    tools/scylla-sstable.cc
+    tools/schema_loader.cc
+    tools/utils.cc
+    tools/lua_sstable_consumer.cc
+    tracing/tracing.cc
     tracing/trace_keyspace_helper.cc
     tracing/trace_state.cc
-    tracing/tracing_backend_registry.cc
-    tracing/tracing.cc
+    tracing/traced_file.cc
     transport/controller.cc
     transport/cql_protocol_extension.cc
     transport/event.cc
@@ -650,7 +495,7 @@ set(scylla_sources
     utils/file_lock.cc
     utils/generation-number.cc
     utils/gz/crc_combine.cc
-    utils/gz/gen_crc_combine_table.cc
+    utils/gz/crc_combine_table.cc
     utils/human_readable.cc
     utils/i_filter.cc
     utils/large_bitset.cc
@@ -675,12 +520,20 @@ set(scylla_gen_sources
     "${scylla_thrift_gen_cassandra_files}"
     "${scylla_ragel_gen_protocol_parser_file}"
     "${swagger_gen_files}"
-    "${idl_gen_files}"
-    "${antlr3_gen_files}")
+    "${idl_gen_files}")
+
+add_subdirectory(alternator)
+add_subdirectory(cql3)
+add_subdirectory(rust)
 
 add_executable(scylla
     ${scylla_sources}
     ${scylla_gen_sources})
+
+target_link_libraries(scylla PRIVATE
+    alternator
+    cql3
+    wasmtime_bindings)
 
 target_link_libraries(scylla PRIVATE
     seastar
@@ -735,29 +588,11 @@ target_compile_options(scylla PRIVATE
 # Hacks needed to expose internal APIs for xxhash dependencies
 target_compile_definitions(scylla PRIVATE XXH_PRIVATE_API HAVE_LZ4_COMPRESS_DEFAULT)
 
+find_package(libdeflate REQUIRED)
 target_include_directories(scylla PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
-    libdeflate
+    libdeflate::libdeflate
     "${scylla_gen_build_dir}")
-
-###
-### Create crc_combine_table helper executable.
-### Use it to generate crc_combine_table.cc to be used in scylla at build time.
-###
-add_executable(crc_combine_table utils/gz/gen_crc_combine_table.cc)
-target_link_libraries(crc_combine_table PRIVATE seastar)
-target_include_directories(crc_combine_table PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_compile_options(crc_combine_table PRIVATE
-    -std=gnu++20
-    ${cxx_coro_flag}
-    ${target_arch_flag})
-add_dependencies(scylla crc_combine_table)
-
-# Generate an additional source file at build time that is needed for Scylla compilation
-add_custom_command(OUTPUT "${scylla_gen_build_dir}/utils/gz/crc_combine_table.cc"
-    COMMAND $<TARGET_FILE:crc_combine_table> > "${scylla_gen_build_dir}/utils/gz/crc_combine_table.cc"
-    DEPENDS crc_combine_table)
-target_sources(scylla PRIVATE "${scylla_gen_build_dir}/utils/gz/crc_combine_table.cc")
 
 ###
 ### Generate version file and supply appropriate compile definitions for release.cc
@@ -776,20 +611,6 @@ string(STRIP "${scylla_release}" scylla_release)
 get_property(release_cdefs SOURCE "${CMAKE_SOURCE_DIR}/release.cc" PROPERTY COMPILE_DEFINITIONS)
 list(APPEND release_cdefs "SCYLLA_VERSION=\"${scylla_version}\"" "SCYLLA_RELEASE=\"${scylla_release}\"")
 set_source_files_properties("${CMAKE_SOURCE_DIR}/release.cc" PROPERTIES COMPILE_DEFINITIONS "${release_cdefs}")
-
-###
-### Custom command for building libdeflate. Link the library to scylla.
-###
-set(libdeflate_lib "${scylla_build_dir}/libdeflate/libdeflate.a")
-add_custom_command(OUTPUT "${libdeflate_lib}"
-    COMMAND make -C "${CMAKE_SOURCE_DIR}/libdeflate"
-        BUILD_DIR=../build/${BUILD_TYPE}/libdeflate/
-        CC=${CMAKE_C_COMPILER}
-        "CFLAGS=${target_arch_flag}"
-        ../build/${BUILD_TYPE}/libdeflate//libdeflate.a) # Two backslashes are important!
-# Hack to force generating custom command to produce libdeflate.a
-add_custom_target(libdeflate DEPENDS "${libdeflate_lib}")
-target_link_libraries(scylla PRIVATE "${libdeflate_lib}")
 
 # TODO: create cmake/ directory and move utilities (generate functions etc) there
 # TODO: Build tests if BUILD_TESTING=on (using CTest module)
