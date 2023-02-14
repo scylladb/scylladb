@@ -23,8 +23,9 @@ from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disa
 
 
 logger = logging.getLogger(__name__)
-logger.warning("Driver name %s", DRIVER_NAME)
-logger.warning("Driver version %s", DRIVER_VERSION)
+logging.basicConfig(format='%(asctime)s.%(msecs)03d %(levelname)s> %(message)s', level=logging.DEBUG)
+logger.info("Driver name %s", DRIVER_NAME)
+logger.info("Driver version %s", DRIVER_VERSION)
 
 
 def pytest_addoption(parser):
