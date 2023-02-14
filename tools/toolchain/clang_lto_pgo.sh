@@ -15,10 +15,14 @@ else
 	exit 1
 fi
 # Which Scylla branch to train on
-SCYLLA_BRANCH=master
+SCYLLA_BRANCH=scylla-5.2.0-rc0
 
-# Which LLVM release to build
-LLVM_TAG=15.0.7
+# Which LLVM release to build to compile Scylla
+LLVM_SCYLLA_TAG=15.0.7
+
+# Which LLVM release to use to build clang.
+# TODO: Move to use Fedora 38 or above built-in clang 16
+LLVM_CLANG_TAG=16.0.0-rc2
 
 if [ -d "/optimized_clang" ];
 then
@@ -35,7 +39,7 @@ git clone https://github.com/scylladb/scylla --branch ${SCYLLA_BRANCH} --depth=1
 git -C scylla submodule update --init --depth=1
 
 # Clone, patch and bootstrap the newest Clang and BOLT.
-git clone https://github.com/llvm/llvm-project --branch main --depth=1 stage-0
+git clone https://github.com/llvm/llvm-project --branch llvmorg-${LLVM_CLANG_TAG} --depth=1 stage-0
 cd stage-0
 
 cmake -B build -S llvm -DLLVM_ENABLE_PROJECTS='clang;lld;bolt' -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=X86 -G Ninja -DLLVM_ENABLE_RUNTIMES='compiler-rt' -DCOMPILER_RT_BUILD_SANITIZERS=Off -DCOMPILER_RT_DEFAULT_TARGET_ONLY=On -DLLVM_INCLUDE_BENCHMARKS=No -DLLVM_INCLUDE_EXAMPLES=No -DLLVM_INCLUDE_TESTS=No
@@ -47,8 +51,8 @@ COMMON_OPTS=(-DLLVM_ENABLE_PROJECTS='clang' -DCMAKE_BUILD_TYPE=Release -DLLVM_TA
 # Build a PGO-optimized compiler using the boostrapped compiler.
 # Choose a version compatible with your system.
 # If you change it, remember to change clang-15 in the later part of the script to the appropriate name as well.
-git fetch --depth=1 origin tag llvmorg-${LLVM_TAG}
-git worktree add ../stage-1 llvmorg-${LLVM_TAG}
+git fetch --depth=1 origin tag llvmorg-${LLVM_SCYLLA_TAG}
+git worktree add ../stage-1 llvmorg-${LLVM_SCYLLA_TAG}
 cd ../stage-1
 cmake -B build -S llvm "${USE_NEW_COMPILER[@]}" "${COMMON_OPTS[@]}" -DLLVM_BUILD_INSTRUMENTED=IR
 cmake --build build -- bin/clang
@@ -100,8 +104,8 @@ if [ "${CLANG_BUILD}" = "INSTALL" ]; then
     sudo cp $DIR/stage-1/build/bin/clang-15 /usr/bin
     echo "optimizaed clang was copied to /usr/bin"
 else
-    sudo cp $DIR/stage-1/build/bin/clang-15 /opt
-    echo "optimized clang was copied to /opt"
+    sudo cp $DIR/stage-1/build/bin/clang-15 $DIR/
+    echo "optimized clang was copied"
 fi
 
 cd ../
