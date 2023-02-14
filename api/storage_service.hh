@@ -36,6 +36,10 @@ class gossiper;
 
 namespace api {
 
+// verify that the keyspace is found, otherwise a bad_param_exception exception is thrown
+// containing the description of the respective keyspace error.
+sstring validate_keyspace(http_context& ctx, sstring ks_name);
+
 // verify that the keyspace parameter is found, otherwise a bad_param_exception exception is thrown
 // containing the description of the respective keyspace error.
 sstring validate_keyspace(http_context& ctx, const parameters& param);

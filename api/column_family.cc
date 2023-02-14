@@ -1018,15 +1018,19 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         });
     });
 
-    cf::force_major_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
+    cf::force_major_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         if (req->get_query_param("split_output") != "") {
             fail(unimplemented::cause::API);
         }
-        return foreach_column_family(ctx, req->param["name"], [](replica::column_family &cf) {
-            return cf.compact_all_sstables();
-        }).then([] {
-            return make_ready_future<json::json_return_type>(json_void());
-        });
+
+        auto [ks, cf] = parse_fully_qualified_cf_name(req->param["name"]);
+        auto keyspace = validate_keyspace(ctx, ks);
+        std::vector<table_id> table_infos = {ctx.db.local().find_uuid(ks, cf)};
+
+        auto& compaction_module = ctx.db.local().get_compaction_manager().get_task_manager_module();
+        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), ctx.db, std::move(table_infos));
+        co_await task->done();
+        co_return json_void();
     });
 }
 
