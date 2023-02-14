@@ -109,8 +109,16 @@ future<> sstables_manager::close() {
     co_await _sstable_metadata_concurrency_sem.stop();
 }
 
-std::unique_ptr<sstable_directory::components_lister> sstables_manager::get_components_lister(std::filesystem::path dir) {
-    return std::make_unique<sstable_directory::components_lister>(std::move(dir));
+std::unique_ptr<sstable_directory::components_lister> sstables_manager::get_components_lister(const data_dictionary::storage_options& storage, std::filesystem::path dir) {
+    return std::visit(overloaded_functor {
+        [dir] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstable_directory::components_lister> {
+            return std::make_unique<sstable_directory::components_lister>(std::move(dir));
+        },
+        [dir] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
+            throw std::runtime_error("S3 storage not implemented yet");
+            return nullptr;
+        }
+    }, storage.value);
 }
 
 void sstables_manager::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {

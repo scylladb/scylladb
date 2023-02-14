@@ -61,7 +61,7 @@ sstable_directory::sstable_directory(sstables_manager& manager,
     , _sstable_dir(std::move(sstable_dir))
     , _io_priority(std::move(io_prio))
     , _error_handler_gen(error_handler_gen)
-    , _lister(_manager.get_components_lister(_sstable_dir))
+    , _lister(_manager.get_components_lister(*_storage_opts, _sstable_dir))
     , _unshared_remote_sstables(smp::count)
 {}
 
