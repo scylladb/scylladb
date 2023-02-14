@@ -76,16 +76,31 @@ frozen_mutation::frozen_mutation(bytes_ostream&& b, partition_key pk)
 frozen_mutation::frozen_mutation(const mutation& m)
     : _pk(m.key())
 {
+    freeze_to(_bytes, m);
+    _bytes.reduce_chunk_count();
+}
+
+template<typename Out>
+static void freeze_impl(Out& out, const mutation& m) {
     mutation_partition_serializer part_ser(*m.schema(), m.partition());
 
-    ser::writer_of_mutation<bytes_ostream> wom(_bytes);
+    ser::writer_of_mutation<Out> wom(out);
     std::move(wom).write_table_id(m.schema()->id())
                   .write_schema_version(m.schema()->version())
                   .write_key(m.key())
                   .partition([&] (auto wr) {
                       part_ser.write(std::move(wr));
                   }).end_mutation();
-    _bytes.reduce_chunk_count();
+}
+
+void freeze_to(bytes_ostream& out, const mutation& m) {
+    freeze_impl(out, m);
+}
+
+size_t frozen_size(const mutation& m) {
+    seastar::measuring_output_stream ms;
+    freeze_impl(ms, m);
+    return ms.size();
 }
 
 mutation
