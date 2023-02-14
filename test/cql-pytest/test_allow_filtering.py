@@ -209,15 +209,18 @@ def test_allow_filtering_indexed_a_and_k(cql, table2):
 def table3(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
     cql.execute("CREATE TABLE " + table +
-        "(k1 int, k2 int, c1 int, c2 int, a int, b int, PRIMARY KEY ((k1,k2),c1,c2))")
+        "(k1 int, k2 int, c1 int, c2 int, a int, b int, s int static, PRIMARY KEY ((k1,k2),c1,c2))")
+    cql.execute("CREATE INDEX ON " + table + "(s)")
     cql.execute("CREATE INDEX ON " + table + "(a)")
     cql.execute("CREATE INDEX ON " + table + "(b)")
     for i in range(0, 5):
         for j in range(0, 5):
-            cql.execute("INSERT INTO {} (k1, k2, c1, c2, a, b) VALUES ({}, {}, {}, {}, {}, {})".format(
-                table, i, j, i*10, j*10, i*100, j*100))
+            cql.execute("INSERT INTO {} (k1, k2, c1, c2, a, b, s) VALUES ({}, {}, {}, {}, {}, {}, {})".format(
+                table, i, j, i*10, j*10, i*100, j*100, i+j))
     everything = list(cql.execute('SELECT * FROM ' + table))
+    wait_for_index(cql, table, 'a', everything)
     wait_for_index(cql, table, 'b', everything)
+    wait_for_index(cql, table, 's', everything)
     yield (table, everything)
     cql.execute("DROP TABLE " + table)
 
@@ -235,6 +238,12 @@ def test_allow_filtering_multi_column(cql, table3):
 # the given clustering key value requires filtering.
 def test_allow_filtering_indexed_a_and_c(cql, table3):
     check_af_mandatory(cql, table3, 'a=100 AND c1=10', lambda row: row.a==100 and row.c1==10)
+
+# Exactly the same for an indexed static column: s=5 may match many rows,
+# and c1=10 may restrict the returned list to much fewer.
+# (See also discussion in #12828)
+def test_allow_filtering_indexed_s_and_c(cql, table3):
+    check_af_mandatory(cql, table3, 's=5 AND c1=10', lambda row: row.s==5 and row.c1==10)
 
 # Similarly, trying two combine two different indexes requires filtering.
 # Scylla does not have efficient intersections of two indexes.
