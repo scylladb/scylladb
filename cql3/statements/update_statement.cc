@@ -297,7 +297,9 @@ void prepare_new_value(broadcast_tables::prepared_update& query, const std::vect
 }
 
 static
-std::optional<expr::expression> get_value_condition(const std::vector<expr::expression>& conditions) {
+std::optional<expr::expression> get_value_condition(const expr::expression& the_condition) {
+    auto conditions = expr::boolean_factors(the_condition);
+
     if (conditions.size() == 0) {
         return std::nullopt;
     }
@@ -341,7 +343,7 @@ update_statement::prepare_for_broadcast_tables() const {
 
     broadcast_tables::prepared_update query = {
         .key = get_key(restrictions().get_partition_key_restrictions()),
-        .value_condition = get_value_condition(_regular_conditions),
+        .value_condition = get_value_condition(_condition),
     };
 
     prepare_new_value(query, _column_operations);

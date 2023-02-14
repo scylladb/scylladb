@@ -188,11 +188,7 @@ bool modification_statement::applies_to(const selection::selection* selection,
     };
 
     static auto true_value = raw_value::make_value(data_value(true).serialize());
-    auto condition_applies = [&row, &inputs](const expr::expression& cond) {
-        return expr::evaluate(cond, inputs) == true_value;
-    };
-    return (std::all_of(_static_conditions.begin(), _static_conditions.end(), condition_applies) &&
-            std::all_of(_regular_conditions.begin(), _regular_conditions.end(), condition_applies));
+    return expr::evaluate(_condition, inputs) == true_value;
 }
 
 std::vector<mutation> modification_statement::apply_updates(
@@ -359,12 +355,7 @@ void modification_statement::build_cas_result_set_metadata() {
             _columns_of_cas_result_set.set(def.ordinal_id);
         }
     } else {
-        for (const auto& cond : _regular_conditions) {
-            expr::for_each_expression<expr::column_value>(cond, [&] (const expr::column_value& col) {
-                _columns_of_cas_result_set.set(col.col->ordinal_id);
-            });
-        }
-        for (const auto& cond : _static_conditions) {
+        for (const auto& cond : expr::boolean_factors(_condition)) {
             expr::for_each_expression<expr::column_value>(cond, [&] (const expr::column_value& col) {
                 _columns_of_cas_result_set.set(col.col->ordinal_id);
             });
@@ -584,14 +575,9 @@ modification_statement::prepare_conditions(data_dictionary::database db, const s
             assert(!_if_not_exists);
             stmt.set_if_exist_condition();
         } else {
-            auto conditions = expr::boolean_factors(*_conditions);
-            for (auto&& entry : conditions) {
-                auto condition = column_condition_prepare(entry, db, keyspace(), schema);
-
-                expr::fill_prepare_context(condition, ctx);
-
-                stmt.add_condition(condition);
-            }
+            stmt._condition = column_condition_prepare(*_conditions, db, keyspace(), schema);
+            expr::fill_prepare_context(stmt._condition, ctx);
+            stmt.analyze_condition(stmt._condition);
         }
         stmt.build_cas_result_set_metadata();
     }
@@ -663,15 +649,13 @@ bool modification_statement::is_conditional() const {
     return has_conditions();
 }
 
-void modification_statement::add_condition(expr::expression cond) {
+void modification_statement::analyze_condition(expr::expression cond) {
   expr::for_each_expression<expr::column_value>(cond, [&] (const expr::column_value& col) {
     if (col.col->is_static()) {
         _has_static_column_conditions = true;
-        _static_conditions.emplace_back(std::move(cond));
     } else {
         _has_regular_column_conditions = true;
         _selects_a_collection |=  col.col->type->is_collection();
-        _regular_conditions.emplace_back(std::move(cond));
     }
   });
 }
@@ -725,7 +709,7 @@ void modification_statement::validate_where_clause_for_conditions() const {
         }
 
         // All primary key parts must be specified, unless this statement has only static column conditions
-        if (_regular_conditions.empty() == false) {
+        if (_has_regular_column_conditions) {
             throw exceptions::invalid_request_exception(
                     "DELETE statements must restrict all PRIMARY KEY columns with equality relations"
                     " in order to use IF condition on non static columns");

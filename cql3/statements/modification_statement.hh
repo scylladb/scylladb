@@ -70,9 +70,7 @@ protected:
     std::vector<::shared_ptr<operation>> _column_operations;
     cql_stats& _stats;
 
-    // Separating normal and static conditions makes things somewhat easier
-    std::vector<expr::expression> _regular_conditions;
-    std::vector<expr::expression> _static_conditions;
+    expr::expression _condition = expr::conjunction{{}}; // TRUE
 private:
     const ks_selector _ks_sel;
 
@@ -149,7 +147,7 @@ public:
     bool is_conditional() const override;
 
 public:
-    void add_condition(expr::expression cond);
+    void analyze_condition(expr::expression cond);
 
     void set_if_not_exist_condition();
 
@@ -181,7 +179,7 @@ private:
     // have _sets_static_columns set either so checking the latter flag too here guarantees that
     // this function works as expected in all cases.
     bool applies_only_to_static_columns() const {
-        return _sets_static_columns && !_sets_regular_columns && _regular_conditions.empty();
+        return _sets_static_columns && !_sets_regular_columns && !_has_regular_column_conditions;
     }
 public:
     // True if any of update operations of this statement requires
