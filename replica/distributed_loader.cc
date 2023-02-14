@@ -582,6 +582,10 @@ public:
             _global_table->update_sstables_known_generation(_highest_generation);
             return _global_table->disable_auto_compaction();
         });
+
+        co_await populate_subdir(sstables::staging_dir, allow_offstrategy_compaction::no);
+        co_await populate_subdir(sstables::quarantine_dir, allow_offstrategy_compaction::no, must_exist::no);
+        co_await populate_subdir("", allow_offstrategy_compaction::yes);
     }
 
     future<> stop() {
@@ -590,15 +594,15 @@ public:
         }
     }
 
+private:
     fs::path get_path(std::string_view subdir) {
         return subdir.empty() ? _base_path : _base_path / subdir;
     }
 
     using allow_offstrategy_compaction = bool_class<struct allow_offstrategy_compaction_tag>;
     using must_exist = bool_class<struct must_exist_tag>;
-    future<> populate_column_family(sstring subdir, allow_offstrategy_compaction, must_exist = must_exist::yes);
+    future<> populate_subdir(sstring subdir, allow_offstrategy_compaction, must_exist = must_exist::yes);
 
-private:
     future<> start_subdir(sstring subdir);
 };
 
@@ -656,11 +660,9 @@ sstables::shared_sstable make_sstable(replica::table& table, fs::path dir, sstab
     return table.get_sstables_manager().make_sstable(table.schema(), dir.native(), generation, v, sstables::sstable_format_types::big);
 }
 
-future<> table_population_metadata::populate_column_family(sstring subdir, allow_offstrategy_compaction do_allow_offstrategy_compaction, must_exist dir_must_exist) {
+future<> table_population_metadata::populate_subdir(sstring subdir, allow_offstrategy_compaction do_allow_offstrategy_compaction, must_exist dir_must_exist) {
     auto sstdir = get_path(subdir);
     dblog.debug("Populating {}/{}/{} allow_offstrategy_compaction={} must_exist={}", _ks, _cf, sstdir, do_allow_offstrategy_compaction, dir_must_exist);
-
-    assert(this_shard_id() == 0);
 
     if (!co_await file_exists(sstdir.native())) {
         if (dir_must_exist) {
@@ -737,9 +739,6 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
             co_await ks.make_directory_for_column_family(cfname, uuid);
 
             co_await metadata.start();
-            co_await metadata.populate_column_family(sstables::staging_dir, table_population_metadata::allow_offstrategy_compaction::no);
-            co_await metadata.populate_column_family(sstables::quarantine_dir, table_population_metadata::allow_offstrategy_compaction::no, table_population_metadata::must_exist::no);
-            co_await metadata.populate_column_family("", table_population_metadata::allow_offstrategy_compaction::yes);
         } catch (...) {
             std::exception_ptr eptr = std::current_exception();
             std::string msg =
