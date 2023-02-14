@@ -6,7 +6,7 @@ from util import new_test_table, new_test_keyspace
 from rest_util import set_tmp_task_ttl
 from task_manager_utils import wait_for_task, list_tasks, check_child_parent_relationship
 
-def check_compaction_task(cql, this_dc, rest_api, run_compaction):
+def check_compaction_task(cql, this_dc, rest_api, run_compaction, depth):
     long_time = 1000000000
     with set_tmp_task_ttl(rest_api, long_time):
         with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
@@ -31,19 +31,19 @@ def check_compaction_task(cql, this_dc, rest_api, run_compaction):
                 assert not failed, f"tasks with ids {failed} failed"
 
                 for top_level_task in statuses:
-                    check_child_parent_relationship(rest_api, top_level_task)
+                    check_child_parent_relationship(rest_api, top_level_task, depth)
 
 def test_major_keyspace_compaction_task(cql, this_dc, rest_api):
-    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_compaction/{keyspace}"))
+    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_compaction/{keyspace}"), 2)
 
 def test_major_column_family_compaction_task(cql, this_dc, rest_api):
-    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"column_family/major_compaction/{keyspace}:{table}"))
+    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"column_family/major_compaction/{keyspace}:{table}"), 2)
 
 def test_cleanup_keyspace_compaction_task(cql, this_dc, rest_api):
-    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace}"))
+    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace}"), 1)
 
 def test_offstrategy_keyspace_compaction_task(cql, this_dc, rest_api):
-    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_offstrategy_compaction/{keyspace}"))
+    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_offstrategy_compaction/{keyspace}"), 1)
 
 def test_rewrite_sstables_keyspace_compaction_task(cql, this_dc, rest_api):
-    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("GET", f"storage_service/keyspace_upgrade_sstables/{keyspace}"))
+    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("GET", f"storage_service/keyspace_upgrade_sstables/{keyspace}"), 1)
