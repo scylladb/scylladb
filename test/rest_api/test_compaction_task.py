@@ -30,4 +30,4 @@ def test_major_keyspace_compaction_task(cql, this_dc, rest_api):
                 assert not failed, f"tasks with ids {failed} failed"
 
                 for top_level_task in statuses:
-                    check_child_parent_relationship(rest_api, top_level_task)
+                    check_child_parent_relationship(rest_api, top_level_task, 2, 0)
