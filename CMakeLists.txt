@@ -523,6 +523,7 @@ set(scylla_gen_sources
 
 add_subdirectory(alternator)
 add_subdirectory(cql3)
+add_subdirectory(rust)
 
 add_executable(scylla
     ${scylla_sources}
@@ -530,7 +531,8 @@ add_executable(scylla
 
 target_link_libraries(scylla PRIVATE
     alternator
-    cql3)
+    cql3
+    wasmtime_bindings)
 
 target_link_libraries(scylla PRIVATE
     seastar
