@@ -519,13 +519,13 @@ expr::expression
 update_for_lwt_null_equality_rules(const expr::expression& e) {
     using namespace expr;
 
-    return search_and_replace(e, [] (const expression& e) -> expression {
+    return search_and_replace(e, [] (const expression& e) -> std::optional<expression> {
         if (auto* binop = as_if<binary_operator>(&e)) {
             auto new_binop = *binop;
             new_binop.null_handling = expr::null_handling_style::lwt_nulls;
             return new_binop;
         }
-        return e;
+        return std::nullopt;
     });
 }
 
