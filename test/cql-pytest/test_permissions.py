@@ -223,12 +223,12 @@ def test_drop_udf_with_same_name(cql):
 # Test that permissions set for user-defined functions are enforced
 # Tests for ALTER are separate, because they are qualified as cassandra_bug
 def test_grant_revoke_udf_permissions(cql):
-    schema = "a int primary key"
+    schema = "a int primary key, b list<int>"
     user = "cassandra"
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
         with new_test_table(cql, keyspace, schema) as table:
-            fun_body_lua = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
-            fun_body_java = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
+            fun_body_lua = "(i int, l list<int>) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
+            fun_body_java = "(i int, l list<int>) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
             fun_body = fun_body_lua
             try:
                 with new_function(cql, keyspace, fun_body) as fun:
@@ -241,28 +241,28 @@ def test_grant_revoke_udf_permissions(cql):
 
                     def create_function_idempotent():
                         user_session.execute(f"CREATE FUNCTION IF NOT EXISTS {keyspace}.{fun} {fun_body}")
-                        cql.execute(f"DROP FUNCTION IF EXISTS {keyspace}.{fun}(int)")
+                        cql.execute(f"DROP FUNCTION IF EXISTS {keyspace}.{fun}(int, list<int>)")
                     check_enforced(cql, username, permission='CREATE', resource=f'all functions in keyspace {keyspace}',
                             function=create_function_idempotent)
                     check_enforced(cql, username, permission='CREATE', resource='all functions',
                             function=create_function_idempotent)
 
                     def drop_function_idempotent():
-                        user_session.execute(f"DROP FUNCTION IF EXISTS {keyspace}.{fun}(int)")
+                        user_session.execute(f"DROP FUNCTION IF EXISTS {keyspace}.{fun}(int, list<int>)")
                         cql.execute(f"CREATE FUNCTION IF NOT EXISTS {keyspace}.{fun} {fun_body}")
-                    for resource in [f'function {keyspace}.{fun}(int)', f'all functions in keyspace {keyspace}', 'all functions']:
+                    for resource in [f'function {keyspace}.{fun}(int, list<int>)', f'all functions in keyspace {keyspace}', 'all functions']:
                         check_enforced(cql, username, permission='DROP', resource=resource, function=drop_function_idempotent)
 
                     grant(cql, 'SELECT', table, username)
-                    for resource in [f'function {keyspace}.{fun}(int)', f'all functions in keyspace {keyspace}', 'all functions']:
+                    for resource in [f'function {keyspace}.{fun}(int, list<int>)', f'all functions in keyspace {keyspace}', 'all functions']:
                         check_enforced(cql, username, permission='EXECUTE', resource=resource,
-                                function=lambda: user_session.execute(f"SELECT {keyspace}.{fun}(a) FROM {table}"))
+                                function=lambda: user_session.execute(f"SELECT {keyspace}.{fun}(a, b) FROM {table}"))
 
                     grant(cql, 'EXECUTE', 'ALL FUNCTIONS', username)
                     def grant_idempotent():
-                        grant(user_session, 'EXECUTE', f'function {keyspace}.{fun}(int)', 'cassandra')
-                        revoke(cql, 'EXECUTE', f'function {keyspace}.{fun}(int)', 'cassandra')
-                    for resource in [f'function {keyspace}.{fun}(int)', f'all functions in keyspace {keyspace}', 'all functions']:
+                        grant(user_session, 'EXECUTE', f'function {keyspace}.{fun}(int, list<int>)', 'cassandra')
+                        revoke(cql, 'EXECUTE', f'function {keyspace}.{fun}(int, list<int>)', 'cassandra')
+                    for resource in [f'function {keyspace}.{fun}(int, list<int>)', f'all functions in keyspace {keyspace}', 'all functions']:
                         check_enforced(cql, username, permission='AUTHORIZE', resource=resource, function=grant_idempotent)
 
 # This test case is artificially extracted from the one above,

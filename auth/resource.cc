@@ -21,6 +21,7 @@
 #include "service/storage_proxy.hh"
 #include "data_dictionary/user_types_metadata.hh"
 #include "cql3/util.hh"
+#include "db/marshal/type_parser.hh"
 
 namespace auth {
 
@@ -231,7 +232,7 @@ std::pair<sstring, std::vector<data_type>> decode_signature(std::string_view enc
     boost::split(raw_types, encoded_signature, boost::is_any_of("^"));
     std::vector<data_type> decoded_types = boost::copy_range<std::vector<data_type>>(
         raw_types | boost::adaptors::transformed([] (std::string_view raw_type) {
-            return abstract_type::parse_type(sstring(raw_type));
+            return db::marshal::type_parser::parse(raw_type);
         })
     );
     return {sstring(function_name), decoded_types};
