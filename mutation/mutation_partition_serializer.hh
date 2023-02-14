@@ -33,6 +33,7 @@ public:
 public:
     void write(bytes_ostream&) const;
     void write(ser::writer_of_mutation_partition<bytes_ostream>&&) const;
+    void write(ser::writer_of_mutation_partition<seastar::measuring_output_stream>&&) const;
 };
 
 void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone,

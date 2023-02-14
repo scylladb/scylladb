@@ -196,6 +196,11 @@ void mutation_partition_serializer::write(ser::writer_of_mutation_partition<byte
     write_serialized(std::move(wr), _schema, _p);
 }
 
+void mutation_partition_serializer::write(ser::writer_of_mutation_partition<measuring_output_stream>&& wr) const
+{
+    write_serialized(std::move(wr), _schema, _p);
+}
+
 void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone,
     std::optional<static_row> sr,  range_tombstone_list rts,
     std::deque<clustering_row> crs, ser::writer_of_mutation_partition<bytes_ostream>&& wr)
