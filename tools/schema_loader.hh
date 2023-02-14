@@ -10,7 +10,7 @@
 #include <seastar/core/future.hh>
 
 #include "seastarx.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 
 namespace tools {
 

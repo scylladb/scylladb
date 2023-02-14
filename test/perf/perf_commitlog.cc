@@ -24,7 +24,7 @@
 #include "test/lib/random_utils.hh"
 
 #include "db/config.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "release.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"

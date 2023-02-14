@@ -9,7 +9,7 @@
 #pragma once
 
 #include "serializer.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "db/extensions.hh"
 
 namespace db {

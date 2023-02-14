@@ -12,7 +12,7 @@
 
 #include "gc_clock.hh"
 #include "timestamp.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "mutation/atomic_cell.hh"
 #include "mutation/tombstone.hh"
 #include "exceptions/exceptions.hh"

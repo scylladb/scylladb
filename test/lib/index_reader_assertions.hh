@@ -11,7 +11,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include "dht/i_partitioner.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "sstables/index_reader.hh"
 #include "reader_concurrency_semaphore.hh"
 

@@ -20,7 +20,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/scylla_test_case.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "compress.hh"
 #include "replica/database.hh"
 #include <memory>

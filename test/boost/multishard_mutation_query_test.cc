@@ -7,7 +7,7 @@
  */
 
 #include "multishard_mutation_query.hh"
-#include "schema_registry.hh"
+#include "schema/schema_registry.hh"
 #include "db/config.hh"
 #include "partition_slice_builder.hh"
 #include "serializer_impl.hh"

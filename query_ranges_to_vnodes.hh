@@ -10,7 +10,7 @@
 
 #include "dht/i_partitioner.hh"
 #include "locator/token_metadata.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 
 class query_ranges_to_vnodes_generator {
     schema_ptr _s;

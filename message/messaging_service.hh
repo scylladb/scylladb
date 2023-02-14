@@ -19,7 +19,7 @@
 #include <unordered_map>
 #include "range.hh"
 #include "tracing/tracing.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "streaming/stream_fwd.hh"
 
 #include <list>

@@ -17,7 +17,7 @@
 #include "utils/UUID_gen.hh"
 #include "row_cache.hh"
 #include "log.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "readers/combined.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 #include "replica/memtable.hh"

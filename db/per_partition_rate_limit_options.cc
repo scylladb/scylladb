@@ -10,7 +10,7 @@
 #include <boost/range/adaptor/map.hpp>
 
 #include "serializer.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "log.hh"
 
 namespace db {

@@ -10,7 +10,7 @@
 
 #include <seastar/util/program-options.hh>
 
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "tools/sstable_consumer.hh"
 
 class reader_permit;

@@ -16,7 +16,7 @@
 #include "utils/logalloc.hh"
 #include "row_cache.hh"
 #include "log.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "replica/memtable.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 

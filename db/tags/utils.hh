@@ -15,7 +15,7 @@
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
 
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "service/client_state.hh"
 #include "service/migration_manager.hh"
 

@@ -10,7 +10,7 @@
 
 #include "mutation/mutation_partition_visitor.hh"
 #include "mutation/atomic_cell.hh"
-#include "schema.hh" // temporary: bring in definition of `column_kind`
+#include "schema/schema.hh" // temporary: bring in definition of `column_kind`
 
 class schema;
 class row;

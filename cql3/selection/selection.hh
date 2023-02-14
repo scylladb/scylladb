@@ -11,7 +11,7 @@
 #pragma once
 
 #include "bytes.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "query-result-reader.hh"
 #include "cql3/column_specification.hh"
 #include "cql3/selection/selector.hh"

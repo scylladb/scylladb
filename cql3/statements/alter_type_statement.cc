@@ -12,7 +12,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/column_identifier.hh"
 #include "prepared_statement.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "mutation/mutation.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"

@@ -12,7 +12,7 @@
 
 #include "cell_locking.hh"
 #include "mutation/mutation.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 
 using namespace std::literals::chrono_literals;
 

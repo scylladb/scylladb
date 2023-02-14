@@ -8,7 +8,7 @@
 #pragma once
 
 #include "serializer.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "log.hh"
 
 extern logging::logger dblog;

@@ -11,7 +11,7 @@
 
 #include <stdint.h>
 #include <seastar/core/shared_ptr.hh>
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "utils/hash.hh"
 #include "sstables/version.hh"
 

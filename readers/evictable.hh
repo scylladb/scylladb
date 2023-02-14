@@ -10,7 +10,7 @@
 
 #include "dht/i_partitioner.hh"
 #include "readers/flat_mutation_reader_fwd.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "seastarx.hh"
 
 namespace seastar {

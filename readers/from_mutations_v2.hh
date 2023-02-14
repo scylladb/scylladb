@@ -7,7 +7,7 @@
  */
 
 #pragma once
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include <vector>
 #include "dht/i_partitioner_fwd.hh"
 #include "mutation/mutation_fragment_fwd.hh"

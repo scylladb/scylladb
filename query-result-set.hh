@@ -11,7 +11,7 @@
 
 #include <seastar/core/shared_ptr.hh>
 #include "types.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 
 #include <optional>
 #include <stdexcept>

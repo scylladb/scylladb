@@ -21,7 +21,7 @@
 #include <unordered_map>
 #include <variant>
 #include "types.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include <seastar/core/stream.hh>
 #include "encoding_stats.hh"
 #include "filter.hh"

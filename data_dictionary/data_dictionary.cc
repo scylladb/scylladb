@@ -10,7 +10,7 @@
 #include "impl.hh"
 #include "user_types_metadata.hh"
 #include "keyspace_metadata.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "utils/overloaded_functor.hh"
 #include "cql3/util.hh"
 #include <fmt/core.h>

@@ -17,7 +17,7 @@
 
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/random_utils.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "keys.hh"
 #include "mutation/mutation.hh"
 #include "mutation/frozen_mutation.hh"

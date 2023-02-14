@@ -10,7 +10,7 @@
 
 #include "sstables/index_entry.hh"
 #include "sstables/promoted_index_blocks_reader.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "log.hh"
 
 namespace sstables {

@@ -35,7 +35,7 @@
 #include "sstables/sstables_manager.hh"
 #include "compaction.hh"
 #include "compaction_manager.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "db/system_keyspace.hh"
 #include "service/priority_manager.hh"
 #include "db_clock.hh"

@@ -12,7 +12,7 @@
 
 #include "cql3/statements/property_definitions.hh"
  
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "compaction/compaction_strategy.hh"
 #include "utils/UUID.hh"
 

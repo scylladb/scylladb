@@ -14,7 +14,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/statements/create_table_statement.hh"
 #include "replica/database.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "service/migration_manager.hh"
 #include "timeout_config.hh"
 

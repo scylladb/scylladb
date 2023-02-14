@@ -23,7 +23,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/sstable_utils.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "service/priority_manager.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/data_model.hh"

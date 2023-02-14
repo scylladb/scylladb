@@ -14,7 +14,7 @@
 #include <vector>
 #include <seastar/core/shared_ptr.hh>
 #include "seastarx.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 
 namespace replica {
 class database; // For transition; remove

@@ -7,7 +7,7 @@
  */
 
 #pragma once
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include <functional>
 #include <seastar/core/future.hh>
 #include "mutation/mutation_fragment_fwd.hh"

@@ -13,7 +13,7 @@
 #include <vector>
 #include <seastar/core/shared_ptr.hh>
 
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "query-result.hh"
 #include "query-request.hh"
 #include "service/query_state.hh"

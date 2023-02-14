@@ -9,7 +9,7 @@
  */
 
 #include "validation.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "keys.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "exceptions/exceptions.hh"

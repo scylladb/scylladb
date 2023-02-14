@@ -30,7 +30,7 @@
 #include "db/commitlog/commitlog.hh"
 #include "db/commitlog/rp_set.hh"
 #include "log.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 
 using namespace db;
 

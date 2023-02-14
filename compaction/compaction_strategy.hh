@@ -12,7 +12,7 @@
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/core/file.hh>
 
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "sstables/shared_sstable.hh"
 #include "exceptions/exceptions.hh"
 #include "compaction_strategy_type.hh"

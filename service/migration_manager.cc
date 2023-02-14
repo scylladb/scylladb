@@ -12,7 +12,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
-#include "schema_registry.hh"
+#include "schema/schema_registry.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "service/raft/group0_state_machine.hh"
@@ -23,7 +23,7 @@
 #include "utils/runtime.hh"
 #include "gms/gossiper.hh"
 #include "view_info.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "replica/database.hh"
 #include "db/schema_tables.hh"
 #include "types/user.hh"

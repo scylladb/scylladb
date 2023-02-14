@@ -26,7 +26,7 @@
 #include "mutation_query.hh"
 #include <seastar/core/do_with.hh>
 #include <seastar/core/thread.hh>
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "partition_slice_builder.hh"
 #include "readers/from_mutations_v2.hh"
 #include "mutation/mutation_rebuilder.hh"

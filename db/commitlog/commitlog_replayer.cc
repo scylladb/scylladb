@@ -23,7 +23,7 @@
 #include "db/system_keyspace.hh"
 #include "log.hh"
 #include "converting_mutation_partition_applier.hh"
-#include "schema_registry.hh"
+#include "schema/schema_registry.hh"
 #include "commitlog_entry.hh"
 #include "service/priority_manager.hh"
 #include "db/extensions.hh"

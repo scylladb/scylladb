@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "schema_registry.hh"
+#include "schema/schema_registry.hh"
 #include "service/priority_manager.hh"
 #include "multishard_mutation_query.hh"
 #include "mutation_query.hh"

@@ -10,7 +10,7 @@
 
 #include "querier.hh"
 
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "log.hh"
 
 #include <boost/range/adaptor/map.hpp>

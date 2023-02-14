@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "mutation/mutation_partition.hh"
 #include "mutation/mutation_partition_visitor.hh"
 #include "mutation/tombstone.hh"

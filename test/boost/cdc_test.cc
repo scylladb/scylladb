@@ -14,7 +14,7 @@
 #include "cdc/log.hh"
 #include "cdc/cdc_extension.hh"
 #include "db/config.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/exception_utils.hh"

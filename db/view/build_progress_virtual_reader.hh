@@ -13,7 +13,7 @@
 #include "readers/flat_mutation_reader_v2.hh"
 #include "mutation/mutation_fragment.hh"
 #include "query-request.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "tracing/tracing.hh"
 
 #include <boost/range/iterator_range.hpp>

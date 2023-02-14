@@ -15,7 +15,7 @@
 #include "mutation_partition_view.hh"
 #include "mutation_consumer_concepts.hh"
 #include "range_tombstone_change_generator.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 
 class mutation;
 class flat_mutation_reader_v2;

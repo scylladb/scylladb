@@ -13,7 +13,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
 #include "query-result-set.hh"

@@ -10,7 +10,7 @@
 
 #include <vector>
 #include "mutation/mutation.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "mutation/canonical_mutation.hh"
 
 // Commutative representation of table schema

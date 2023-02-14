@@ -13,7 +13,7 @@
 #include "schema_altering_statement.hh"
 #include "index_target.hh"
 
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 
 #include <seastar/core/shared_ptr.hh>
 

@@ -7,7 +7,7 @@
  */
 
 #include "dht/i_partitioner.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "sstables/sstables.hh"
 #include "utils/rjson.hh"
 

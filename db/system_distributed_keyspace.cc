@@ -12,7 +12,7 @@
 #include "replica/database.hh"
 #include "db/consistency_level_type.hh"
 #include "db/system_keyspace.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "timeout_config.hh"
 #include "types.hh"
 #include "types/tuple.hh"

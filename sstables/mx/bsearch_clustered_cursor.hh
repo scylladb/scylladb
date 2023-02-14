@@ -12,7 +12,7 @@
 #include "sstables/column_translation.hh"
 #include "sstables/promoted_index_blocks_reader.hh"
 #include "parsers.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "utils/cached_file.hh"
 
 #include <seastar/core/byteorder.hh>

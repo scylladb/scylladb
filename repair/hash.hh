@@ -2,7 +2,7 @@
 #include <absl/container/btree_set.h>
 #include <cstdint>
 #include <ostream>
-#include "schema.hh"
+#include "schema/schema.hh"
 
 class decorated_key_with_hash;
 class mutation_fragment;

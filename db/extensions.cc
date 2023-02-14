@@ -10,7 +10,7 @@
 #include "extensions.hh"
 #include "sstables/sstables.hh"
 #include "commitlog/commitlog_extensions.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 

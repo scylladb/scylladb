@@ -17,7 +17,7 @@
 #include "utils/UUID_gen.hh"
 #include "row_cache.hh"
 #include "partition_slice_builder.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "replica/memtable.hh"
 #include "test/lib/memtable_snapshot_source.hh"
 #include "test/perf/perf.hh"

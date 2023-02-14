@@ -9,7 +9,7 @@
 #include <chrono>
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "dht/i_partitioner.hh"
 #include "gc_clock.hh"
 #include "tombstone_gc.hh"

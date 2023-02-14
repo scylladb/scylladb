@@ -29,7 +29,7 @@
 #include "cql3/selection/writetime_or_ttl.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/util.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "service/storage_proxy.hh"
 #include "validation.hh"
 #include "db/extensions.hh"

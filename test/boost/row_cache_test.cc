@@ -21,7 +21,7 @@
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/key_utils.hh"
 
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "test/lib/simple_schema.hh"
 #include "row_cache.hh"
 #include <seastar/core/thread.hh>

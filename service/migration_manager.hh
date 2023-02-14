@@ -20,7 +20,7 @@
 #include "gms/feature.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "message/msg_addr.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "utils/serialized_action.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"

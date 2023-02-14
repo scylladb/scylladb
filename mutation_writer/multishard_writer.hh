@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "dht/i_partitioner.hh"
 #include "utils/phased_barrier.hh"

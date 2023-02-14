@@ -16,7 +16,7 @@
 #include <optional>
 #include <memory>
 
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 
 namespace cql3 {
 

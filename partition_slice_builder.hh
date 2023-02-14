@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "query-request.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 
 //
 // Fluent builder for query::partition_slice.

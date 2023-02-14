@@ -19,8 +19,8 @@
 #include "compaction/compaction.hh"
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
-#include "schema.hh"
-#include "schema_builder.hh"
+#include "schema/schema.hh"
+#include "schema/schema_builder.hh"
 #include "replica/database.hh"
 #include "compaction/leveled_manifest.hh"
 #include "sstables/metadata_collector.hh"

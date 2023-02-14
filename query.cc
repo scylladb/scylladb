@@ -21,7 +21,7 @@
 #include "query-result-reader.hh"
 #include "query_result_merger.hh"
 #include "partition_slice_builder.hh"
-#include "schema_registry.hh"
+#include "schema/schema_registry.hh"
 #include "utils/overloaded_functor.hh"
 
 namespace query {

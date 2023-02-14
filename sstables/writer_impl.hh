@@ -10,7 +10,7 @@
 
 #include "sstable_writer.hh"
 #include "sstables_manager.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "mutation/mutation_fragment.hh"
 #include "metadata_collector.hh"
 #include "mutation/mutation_fragment_stream_validator.hh"

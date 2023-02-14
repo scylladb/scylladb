@@ -25,7 +25,7 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "test/lib/exception_utils.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "cql3/query_options.hh"
 
 using namespace std::literals::chrono_literals;

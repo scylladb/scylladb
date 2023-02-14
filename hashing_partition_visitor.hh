@@ -10,7 +10,7 @@
 
 #include "mutation/mutation_partition_visitor.hh"
 #include "hashing.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "mutation/atomic_cell_hash.hh"
 #include "keys.hh"
 #include "counters.hh"

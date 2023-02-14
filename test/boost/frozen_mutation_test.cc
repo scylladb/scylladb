@@ -14,7 +14,7 @@
 #include <seastar/util/closeable.hh>
 
 #include "mutation/frozen_mutation.hh"
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include "mutation/mutation_partition_view.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_source_test.hh"

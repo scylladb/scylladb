@@ -13,7 +13,7 @@
 #include "utils/UUID_gen.hh"
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
-#include "schema_builder.hh"
+#include "schema/schema_builder.hh"
 #include <seastar/util/closeable.hh>
 #include "service/migration_manager.hh"
 

@@ -9,7 +9,7 @@
 #pragma  once
 
 #include "replica/database_fwd.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include <seastar/core/timer.hh>
 #include <seastar/core/sharded.hh>
 

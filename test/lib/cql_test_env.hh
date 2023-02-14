@@ -23,7 +23,7 @@
 #include "cql3/prepared_statements_cache.hh"
 #include "cql3/query_processor.hh"
 #include "bytes.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "test/lib/eventually.hh"
 
 namespace replica {

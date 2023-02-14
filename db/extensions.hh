@@ -19,7 +19,7 @@
 #include <seastar/core/sstring.hh>
 
 #include "bytes.hh"
-#include "schema_fwd.hh"
+#include "schema/schema_fwd.hh"
 
 namespace sstables {
 class file_io_extension;

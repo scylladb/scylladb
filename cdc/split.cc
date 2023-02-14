@@ -7,7 +7,7 @@
  */
 
 #include "mutation/mutation.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 
 #include "concrete_types.hh"
 #include "types/user.hh"

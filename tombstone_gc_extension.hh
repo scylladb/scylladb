@@ -14,7 +14,7 @@
 #include "bytes.hh"
 #include "serializer.hh"
 #include "db/extensions.hh"
-#include "schema.hh"
+#include "schema/schema.hh"
 #include "serializer_impl.hh"
 #include "tombstone_gc_options.hh"
 
