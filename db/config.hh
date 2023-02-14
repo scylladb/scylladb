@@ -45,27 +45,28 @@ namespace fs = std::filesystem;
 class extensions;
 
 /*
- * This type is not use, and probably never will be.
- * So it makes sense to jump through hoops just to ensure
- * it is in fact handled properly...
+ * Cassandra-compat class + options tuple.
  */
-struct seed_provider_type {
-    seed_provider_type() = default;
-    seed_provider_type(sstring n,
+struct class_and_options_type {
+    class_and_options_type() = default;
+    class_and_options_type(sstring n,
             std::initializer_list<program_options::string_map::value_type> opts =
                     { })
             : class_name(std::move(n)), parameters(std::move(opts)) {
     }
     sstring class_name;
     std::unordered_map<sstring, sstring> parameters;
-    bool operator==(const seed_provider_type& other) const {
+    bool operator==(const class_and_options_type& other) const {
         return class_name == other.class_name && parameters == other.parameters;
     }
-    friend std::ostream& operator<<(std::ostream& os, const seed_provider_type&);
+    friend std::ostream& operator<<(std::ostream& os, const class_and_options_type&);
 };
 
-std::ostream& operator<<(std::ostream& os, const db::seed_provider_type& s);
-inline std::istream& operator>>(std::istream& is, seed_provider_type&);
+std::ostream& operator<<(std::ostream& os, const db::class_and_options_type& s);
+inline std::istream& operator>>(std::istream& is, class_and_options_type&);
+
+using seed_provider_type = class_and_options_type;
+using commitlog_compression_type = class_and_options_type;
 
 // Describes a single error injection that should be enabled at startup.
 struct error_injection_at_startup {
@@ -86,7 +87,7 @@ std::istream& operator>>(std::istream& is, error_injection_at_startup&);
 
 namespace utils {
 
-sstring config_value_as_json(const db::seed_provider_type& v);
+sstring config_value_as_json(const db::class_and_options_type& v);
 
 sstring config_value_as_json(const log_level& v);
 
@@ -210,6 +211,7 @@ public:
     named_value<uint32_t> commitlog_sync_period_in_ms;
     named_value<uint32_t> commitlog_sync_batch_window_in_ms;
     named_value<int64_t> commitlog_total_space_in_mb;
+    named_value<commitlog_compression_type> commitlog_compression;
     named_value<bool> commitlog_reuse_segments; // unused. retained for upgrade compat
     named_value<int64_t> commitlog_flush_threshold_in_mb;
     named_value<bool> commitlog_use_o_dsync;
