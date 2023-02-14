@@ -67,6 +67,13 @@ public:
     };
 
     class components_lister {
+    public:
+        virtual future<> process(sstable_directory& directory, fs::path location, process_flags flags) = 0;
+        virtual future<> commit() = 0;
+        virtual ~components_lister() {}
+    };
+
+    class filesystem_components_lister final : public components_lister {
         struct scan_state {
             using scan_multimap = std::unordered_multimap<generation_type, std::filesystem::path>;
             using scan_descriptors = utils::chunked_vector<sstables::entry_descriptor>;
@@ -92,10 +99,10 @@ public:
         future<> close();
 
     public:
-        components_lister(std::filesystem::path dir);
+        filesystem_components_lister(std::filesystem::path dir);
 
-        future<> process(sstable_directory& directory, fs::path location, process_flags flags);
-        future<> commit();
+        virtual future<> process(sstable_directory& directory, fs::path location, process_flags flags) override;
+        virtual future<> commit() override;
     };
 
 private:

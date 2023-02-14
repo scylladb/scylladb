@@ -34,18 +34,18 @@ bool manifest_json_filter(const fs::path&, const directory_entry& entry) {
     return true;
 }
 
-sstable_directory::components_lister::components_lister(std::filesystem::path dir)
+sstable_directory::filesystem_components_lister::filesystem_components_lister(std::filesystem::path dir)
         : _lister(dir, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter)
         , _state(std::make_unique<scan_state>())
 {
 }
 
-future<sstring> sstable_directory::components_lister::get() {
+future<sstring> sstable_directory::filesystem_components_lister::get() {
     auto de = co_await _lister.get();
     co_return sstring(de ? de->name : "");
 }
 
-future<> sstable_directory::components_lister::close() {
+future<> sstable_directory::filesystem_components_lister::close() {
     return _lister.close();
 }
 
@@ -65,7 +65,7 @@ sstable_directory::sstable_directory(sstables_manager& manager,
     , _unshared_remote_sstables(smp::count)
 {}
 
-void sstable_directory::components_lister::handle(sstables::entry_descriptor desc, fs::path filename) {
+void sstable_directory::filesystem_components_lister::handle(sstables::entry_descriptor desc, fs::path filename) {
     if ((generation_value(desc.generation) % smp::count) != this_shard_id()) {
         return;
     }
@@ -190,7 +190,7 @@ future<> sstable_directory::process_sstable_dir(process_flags flags) {
     return _lister->process(*this, _sstable_dir, flags);
 }
 
-future<> sstable_directory::components_lister::process(sstable_directory& directory, fs::path location, process_flags flags) {
+future<> sstable_directory::filesystem_components_lister::process(sstable_directory& directory, fs::path location, process_flags flags) {
     // It seems wasteful that each shard is repeating this scan, and to some extent it is.
     // However, we still want to open the files and especially call process_dir() in a distributed
     // fashion not to overload any shard. Also in the common case the SSTables will all be
@@ -283,7 +283,7 @@ future<> sstable_directory::commit_directory_changes() {
     return _lister->commit().finally([x = std::move(_lister)] {});
 }
 
-future<> sstable_directory::components_lister::commit() {
+future<> sstable_directory::filesystem_components_lister::commit() {
     // Remove all files scheduled for removal
     return parallel_for_each(std::exchange(_state->files_for_removal, {}), [] (sstring path) {
         dirlog.info("Removing file {}", path);
