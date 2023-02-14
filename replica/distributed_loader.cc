@@ -664,16 +664,13 @@ future<> table_population_metadata::populate_subdir(sstring subdir, allow_offstr
     auto sstdir = get_path(subdir);
     dblog.debug("Populating {}/{}/{} allow_offstrategy_compaction={} must_exist={}", _ks, _cf, sstdir, do_allow_offstrategy_compaction, dir_must_exist);
 
-    if (!co_await file_exists(sstdir.native())) {
+    if (!_sstable_directories.contains(subdir)) {
         if (dir_must_exist) {
             throw std::runtime_error(format("Populating {}/{} failed: {} does not exist", _ks, _cf, sstdir));
         }
         co_return;
     }
 
-    if (!_sstable_directories.contains(subdir)) {
-        dblog.error("Could not find sstables directory {}.{}/{}", _ks, _cf, subdir);
-    }
     auto& directory = *_sstable_directories.at(subdir);
 
     co_await distributed_loader::reshard(directory, _db, _ks, _cf, [this, sstdir] (shard_id shard) mutable {
