@@ -119,7 +119,6 @@ class range_tombstone_list final {
             revert();
         }
         reverter(reverter&&) = default;
-        reverter& operator=(reverter&&) = default;
         reverter(const reverter&) = delete;
         reverter& operator=(reverter&) = delete;
         virtual range_tombstones_type::iterator insert(range_tombstones_type::iterator it, range_tombstone_entry& new_rt);
