@@ -99,63 +99,6 @@ scylla_generate_thrift(
     OUT_DIR ${scylla_gen_build_dir}
     SERVICE Cassandra)
 
-# Parse antlr3 grammar files and generate C++ sources
-function(scylla_generate_antlr3)
-    set(one_value_args TARGET VAR IN_FILE OUT_DIR)
-    cmake_parse_arguments(args "" "${one_value_args}" "" ${ARGN})
-
-    get_filename_component(in_file_pure_name ${args_IN_FILE} NAME)
-    get_filename_component(stem ${in_file_pure_name} NAME_WE)
-
-    set(outputs
-        "${args_OUT_DIR}/${stem}Lexer.hpp"
-        "${args_OUT_DIR}/${stem}Lexer.cpp"
-        "${args_OUT_DIR}/${stem}Parser.hpp"
-        "${args_OUT_DIR}/${stem}Parser.cpp")
-
-    add_custom_command(
-        DEPENDS
-            ${args_IN_FILE}
-        OUTPUT ${outputs}
-        # Remove #ifdef'ed code from the grammar source code
-        COMMAND sed -e "/^#if 0/,/^#endif/d" "${args_IN_FILE}" > "${args_OUT_DIR}/${in_file_pure_name}"
-        COMMAND antlr3 "${args_OUT_DIR}/${in_file_pure_name}"
-        # We replace many local `ExceptionBaseType* ex` variables with a single function-scope one.
-        # Because we add such a variable to every function, and because `ExceptionBaseType` is not a global
-        # name, we also add a global typedef to avoid compilation errors.
-        COMMAND sed -i -e "/^.*On :.*$/d" "${args_OUT_DIR}/${stem}Lexer.hpp"
-        COMMAND sed -i -e "/^.*On :.*$/d" "${args_OUT_DIR}/${stem}Lexer.cpp"
-        COMMAND sed -i -e "/^.*On :.*$/d" "${args_OUT_DIR}/${stem}Parser.hpp"
-        COMMAND sed -i
-            -e "s/^\\( *\\)\\(ImplTraits::CommonTokenType\\* [a-zA-Z0-9_]* = NULL;\\)$/\\1const \\2/"
-            -e "/^.*On :.*$/d"
-            -e "1i using ExceptionBaseType = int;"
-            -e "s/^{/{ ExceptionBaseType\\* ex = nullptr;/; s/ExceptionBaseType\\* ex = new/ex = new/; s/exceptions::syntax_exception e/exceptions::syntax_exception\\& e/"
-            "${args_OUT_DIR}/${stem}Parser.cpp"
-        VERBATIM)
-
-    add_custom_target(${args_TARGET}
-        DEPENDS ${outputs})
-
-    set(${args_VAR} ${outputs} PARENT_SCOPE)
-endfunction()
-
-set(antlr3_grammar_files
-    cql3/Cql.g
-    alternator/expressions.g)
-
-set(antlr3_gen_files)
-
-foreach(f ${antlr3_grammar_files})
-    get_filename_component(grammar_file_name "${f}" NAME_WE)
-    get_filename_component(f_dir "${f}" DIRECTORY)
-    scylla_generate_antlr3(
-        TARGET scylla_antlr3_gen_${grammar_file_name}
-        VAR scylla_antlr3_gen_${grammar_file_name}_files
-        IN_FILE "${CMAKE_SOURCE_DIR}/${f}"
-        OUT_DIR ${scylla_gen_build_dir}/${f_dir})
-    list(APPEND antlr3_gen_files "${scylla_antlr3_gen_${grammar_file_name}_files}")
-endforeach()
 
 # Generate C++ sources from ragel grammar files
 seastar_generate_ragel(
@@ -270,15 +213,6 @@ endforeach()
 
 set(scylla_sources
     absl-flat_hash_map.cc
-    alternator/auth.cc
-    alternator/conditions.cc
-    alternator/controller.cc
-    alternator/executor.cc
-    alternator/expressions.cc
-    alternator/serialization.cc
-    alternator/server.cc
-    alternator/stats.cc
-    alternator/streams.cc
     api/api.cc
     api/cache_service.cc
     api/collectd.cc
@@ -337,101 +271,6 @@ set(scylla_sources
     compress.cc
     converting_mutation_partition_applier.cc
     counters.cc
-    cql3/abstract_marker.cc
-    cql3/attributes.cc
-    cql3/cf_name.cc
-    cql3/column_condition.cc
-    cql3/column_identifier.cc
-    cql3/column_specification.cc
-    cql3/constants.cc
-    cql3/cql3_type.cc
-    cql3/expr/expression.cc
-    cql3/expr/prepare_expr.cc
-    cql3/expr/restrictions.cc
-    cql3/functions/aggregate_fcts.cc
-    cql3/functions/castas_fcts.cc
-    cql3/functions/error_injection_fcts.cc
-    cql3/functions/functions.cc
-    cql3/functions/user_function.cc
-    cql3/index_name.cc
-    cql3/keyspace_element_name.cc
-    cql3/lists.cc
-    cql3/maps.cc
-    cql3/operation.cc
-    cql3/prepare_context.cc
-    cql3/query_options.cc
-    cql3/query_processor.cc
-    cql3/restrictions/statement_restrictions.cc
-    cql3/result_set.cc
-    cql3/role_name.cc
-    cql3/selection/abstract_function_selector.cc
-    cql3/selection/selectable.cc
-    cql3/selection/selection.cc
-    cql3/selection/selector.cc
-    cql3/selection/selector_factories.cc
-    cql3/selection/simple_selector.cc
-    cql3/sets.cc
-    cql3/statements/alter_keyspace_statement.cc
-    cql3/statements/alter_service_level_statement.cc
-    cql3/statements/alter_table_statement.cc
-    cql3/statements/alter_type_statement.cc
-    cql3/statements/alter_view_statement.cc
-    cql3/statements/attach_service_level_statement.cc
-    cql3/statements/authentication_statement.cc
-    cql3/statements/authorization_statement.cc
-    cql3/statements/batch_statement.cc
-    cql3/statements/cas_request.cc
-    cql3/statements/cf_prop_defs.cc
-    cql3/statements/cf_statement.cc
-    cql3/statements/create_aggregate_statement.cc
-    cql3/statements/create_function_statement.cc
-    cql3/statements/create_index_statement.cc
-    cql3/statements/create_keyspace_statement.cc
-    cql3/statements/create_service_level_statement.cc
-    cql3/statements/create_table_statement.cc
-    cql3/statements/create_type_statement.cc
-    cql3/statements/create_view_statement.cc
-    cql3/statements/delete_statement.cc
-    cql3/statements/detach_service_level_statement.cc
-    cql3/statements/drop_aggregate_statement.cc
-    cql3/statements/drop_function_statement.cc
-    cql3/statements/drop_index_statement.cc
-    cql3/statements/drop_keyspace_statement.cc
-    cql3/statements/drop_service_level_statement.cc
-    cql3/statements/drop_table_statement.cc
-    cql3/statements/drop_type_statement.cc
-    cql3/statements/drop_view_statement.cc
-    cql3/statements/function_statement.cc
-    cql3/statements/grant_statement.cc
-    cql3/statements/index_prop_defs.cc
-    cql3/statements/index_target.cc
-    cql3/statements/ks_prop_defs.cc
-    cql3/statements/list_permissions_statement.cc
-    cql3/statements/list_service_level_attachments_statement.cc
-    cql3/statements/list_service_level_statement.cc
-    cql3/statements/list_users_statement.cc
-    cql3/statements/modification_statement.cc
-    cql3/statements/permission_altering_statement.cc
-    cql3/statements/property_definitions.cc
-    cql3/statements/raw/parsed_statement.cc
-    cql3/statements/revoke_statement.cc
-    cql3/statements/role-management-statements.cc
-    cql3/statements/schema_altering_statement.cc
-    cql3/statements/select_statement.cc
-    cql3/statements/service_level_statement.cc
-    cql3/statements/sl_prop_defs.cc
-    cql3/statements/truncate_statement.cc
-    cql3/statements/update_statement.cc
-    cql3/statements/strongly_consistent_modification_statement.cc
-    cql3/statements/strongly_consistent_select_statement.cc
-    cql3/statements/use_statement.cc
-    cql3/type_json.cc
-    cql3/untyped_result_set.cc
-    cql3/update_parameters.cc
-    cql3/user_types.cc
-    cql3/util.cc
-    cql3/ut_name.cc
-    cql3/values.cc
     data_dictionary/data_dictionary.cc
     db/batchlog_manager.cc
     db/commitlog/commitlog.cc
@@ -680,12 +519,18 @@ set(scylla_gen_sources
     "${scylla_thrift_gen_cassandra_files}"
     "${scylla_ragel_gen_protocol_parser_file}"
     "${swagger_gen_files}"
-    "${idl_gen_files}"
-    "${antlr3_gen_files}")
+    "${idl_gen_files}")
+
+add_subdirectory(alternator)
+add_subdirectory(cql3)
 
 add_executable(scylla
     ${scylla_sources}
     ${scylla_gen_sources})
+
+target_link_libraries(scylla PRIVATE
+    alternator
+    cql3)
 
 target_link_libraries(scylla PRIVATE
     seastar
