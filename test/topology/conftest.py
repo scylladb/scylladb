@@ -7,7 +7,6 @@
 # defines common test fixtures for all of them to use
 
 import asyncio
-import logging
 import ssl
 from typing import List
 from test.pylib.random_tables import RandomTables
@@ -22,9 +21,7 @@ from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disa
 from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
 
 
-logger = logging.getLogger(__name__)
-logger.warning("Driver name %s", DRIVER_NAME)
-logger.warning("Driver version %s", DRIVER_VERSION)
+print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
 
 
 def pytest_addoption(parser):
