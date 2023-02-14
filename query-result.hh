@@ -382,9 +382,7 @@ public:
         w.reduce_chunk_count();
     }
     result(result&&) = default;
-    result(const result&) = default;
     result& operator=(result&&) = default;
-    result& operator=(const result&) = default;
 
     const bytes_ostream& buf() const {
         return _w;
