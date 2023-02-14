@@ -24,7 +24,10 @@ future<> function_statement::check_access(query_processor& qp, const service::cl
 future<> create_function_statement_base::check_access(query_processor& qp, const service::client_state& state) const {
     co_await state.has_functions_access(qp.db(), _name.keyspace, auth::permission::CREATE);
     if (_or_replace) {
-        co_await state.has_functions_access(qp.db(), _name.keyspace, auth::permission::ALTER);
+        create_arg_types(qp);
+        sstring encoded_signature = auth::encode_signature(_name.name, _arg_types);
+
+        co_await state.has_function_access(qp.db(), _name.keyspace, encoded_signature, auth::permission::ALTER);
     }
 }
 

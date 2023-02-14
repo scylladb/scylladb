@@ -167,15 +167,15 @@ def test_udf_permissions_quoted_names(cassandra_bug, cql):
     schema = "a int primary key"
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
         with new_test_table(cql, keyspace, schema) as table:
-            weird_body_lua = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
-            weird_body_java = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42;'"
-            weird_body = weird_body_lua
+            fun_body_lua = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
+            fun_body_java = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42;'"
+            fun_body = fun_body_lua
             try:
-                with new_function(cql, keyspace, weird_body) as weird_fun:
+                with new_function(cql, keyspace, fun_body):
                     pass
             except:
-                weird_body = weird_body_java
-            with new_function(cql, keyspace, weird_body, '"weird[name]"') as weird_fun:
+                fun_body = fun_body_java
+            with new_function(cql, keyspace, fun_body, '"weird[name]"') as weird_fun:
                 with new_user(cql) as username:
                     with new_session(cql, username) as user_session:
                         grant(cql, 'EXECUTE', f'FUNCTION {keyspace}.{weird_fun}(int)', username)
@@ -297,6 +297,8 @@ def test_grant_revoke_alter_udf_permissions(cassandra_bug, cql):
                     check_enforced(cql, username, permission='ALTER', resource=f'all functions in keyspace {keyspace}',
                             function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
                     check_enforced(cql, username, permission='ALTER', resource='all functions',
+                            function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}")) 
+                    check_enforced(cql, username, permission='ALTER', resource=f'FUNCTION {keyspace}.{fun}(int)',
                             function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
 
 # Test that granting permissions on non-existent UDFs fails
