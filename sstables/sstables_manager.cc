@@ -114,9 +114,8 @@ std::unique_ptr<sstable_directory::components_lister> sstables_manager::get_comp
         [dir] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstable_directory::components_lister> {
             return std::make_unique<sstable_directory::filesystem_components_lister>(std::move(dir));
         },
-        [dir] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
-            throw std::runtime_error("S3 storage not implemented yet");
-            return nullptr;
+        [this, dir] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
+            return std::make_unique<sstable_directory::system_keyspace_components_lister>(system_keyspace(), dir.native());
         }
     }, storage.value);
 }

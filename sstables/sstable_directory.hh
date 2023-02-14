@@ -28,6 +28,7 @@
 #include "sstables/generation_type.hh"
 
 class compaction_manager;
+namespace db { class system_keyspace; }
 
 namespace sstables {
 
@@ -100,6 +101,17 @@ public:
 
     public:
         filesystem_components_lister(std::filesystem::path dir);
+
+        virtual future<> process(sstable_directory& directory, fs::path location, process_flags flags) override;
+        virtual future<> commit() override;
+    };
+
+    class system_keyspace_components_lister final : public components_lister {
+        db::system_keyspace& _sys_ks;
+        sstring _location;
+
+    public:
+        system_keyspace_components_lister(db::system_keyspace& sys_ks, sstring location);
 
         virtual future<> process(sstable_directory& directory, fs::path location, process_flags flags) override;
         virtual future<> commit() override;

@@ -20,6 +20,7 @@
 #include "sstable_directory.hh"
 #include "utils/lister.hh"
 #include "replica/database.hh"
+#include "db/system_keyspace.hh"
 
 static logging::logger dirlog("sstable_directory");
 
@@ -47,6 +48,12 @@ future<sstring> sstable_directory::filesystem_components_lister::get() {
 
 future<> sstable_directory::filesystem_components_lister::close() {
     return _lister.close();
+}
+
+sstable_directory::system_keyspace_components_lister::system_keyspace_components_lister(db::system_keyspace& sys_ks, sstring location)
+        : _sys_ks(sys_ks)
+        , _location(std::move(location))
+{
 }
 
 sstable_directory::sstable_directory(sstables_manager& manager,
@@ -279,6 +286,21 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     }
 }
 
+future<> sstable_directory::system_keyspace_components_lister::process(sstable_directory& directory, fs::path location, process_flags flags) {
+    return _sys_ks.sstables_registry_list(location.native(), [this, flags, &directory] (utils::UUID uuid, sstring status, entry_descriptor desc) {
+        if (status != "sealed") {
+            // FIXME -- handle
+            return make_ready_future<>();
+        }
+        if ((generation_value(desc.generation) % smp::count) != this_shard_id()) {
+            return make_ready_future<>();
+        }
+
+        dirlog.debug("Processing {} entry from {}", uuid, _location);
+        return directory.process_descriptor(std::move(desc), flags);
+    });
+}
+
 future<> sstable_directory::commit_directory_changes() {
     return _lister->commit().finally([x = std::move(_lister)] {});
 }
@@ -289,6 +311,10 @@ future<> sstable_directory::filesystem_components_lister::commit() {
         dirlog.info("Removing file {}", path);
         return remove_file(std::move(path));
     });
+}
+
+future<> sstable_directory::system_keyspace_components_lister::commit() {
+    return make_ready_future<>();
 }
 
 future<>
