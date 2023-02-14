@@ -19,6 +19,10 @@ import random
 
 from util import unique_name, new_test_table, cql_session
 
+
+print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
+
+
 # By default, tests run against a CQL server (Scylla or Cassandra) listening
 # on localhost:9042. Add the --host and --port options to allow overiding
 # these defaults.
