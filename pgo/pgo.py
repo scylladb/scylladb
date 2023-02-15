@@ -633,6 +633,21 @@ async def train_clustering(executable: PathLike, workdir: PathLike) -> None:
 trainers["clustering"] = ("clustering_dataset", train_clustering)
 populators["clustering_dataset"] = populate_clustering
 
+# DECOMMISSION ==================================================
+
+async def populate_decommission(executable: PathLike, workdir: PathLike) -> None:
+    async with with_cs_populate(executable=executable, workdir=workdir) as server:
+        await cs(cmd=["write"], n=10000000, pop=f"dist=UNIFORM(1..8000000)", schema=RF1_SCHEMA, node=server, cl="one")
+
+async def train_decommission(executable: PathLike, workdir: PathLike) -> None:
+    async with with_cluster(executable=executable, workdir=workdir) as (addrs, procs):
+        await asyncio.sleep(5) # FIXME: artificial gossip sleep, get rid of it.
+        await bash(fr"curl --silent -X POST http://{addrs[2]}:10000/storage_service/decommission")
+    await merge_profraw(workdir)
+
+trainers["decommission"] = ("decommission_dataset", train_decommission)
+populators["decommission_dataset"] = populate_decommission
+
 ################################################################################
 # Training procedures
 
