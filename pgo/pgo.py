@@ -697,6 +697,29 @@ async def train_counters(executable: PathLike, workdir: PathLike) -> None:
 #trainers["counters"] = ("counters_dataset", train_counters)
 populators["counters_dataset"] = populate_counters
 
+# REPAIR ==================================================
+
+async def populate_repair(executable: PathLike, workdir: PathLike) -> None:
+    async with with_cs_populate(executable=executable, workdir=workdir) as server:
+        await cs(cmd=["user", "profile=./conf/repair.yaml", "ops(insert=1)"], n=5000000, cl="local_quorum", node=server)
+        await cs(cmd=["write"], n=1000000, cl="local_quorum", schema=RF3_SCHEMA, node=server)
+
+async def train_repair(executable: PathLike, workdir: PathLike) -> None:
+    # The idea is to remove some user data sstables from the node (in an offline cluster),
+    # start the cluster, and run repair on the affected node.
+    # I don't know if it's a good PGO workload.
+    # Does this cover repair codepaths reasonably?
+    addr = cluster_metadata(workdir)["subnet"] + ".2"
+    await bash(fr"rm -rf {workdir}/{addr}/data/ks/*")
+    async with with_cluster(executable=executable, workdir=workdir) as (addrs, procs):
+        await asyncio.sleep(5) # FIXME: artificial gossip sleep, get rid of it.
+        repair_id = (await query(["curl", "--silent", "-X", "POST", fr"http://{addr}:10000/storage_service/repair_async/ks"])).decode()
+        await query(["curl", "--silent", fr"http://{addr}:10000/storage_service/repair_status/?id={repair_id}"])
+    await merge_profraw(workdir)
+
+trainers["repair"] = ("repair_dataset", train_repair)
+populators["repair_dataset"] = populate_repair
+
 ################################################################################
 # Training procedures
 
