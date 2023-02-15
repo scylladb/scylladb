@@ -82,6 +82,7 @@ class authorized_prepared_statements_cache {
 public:
     struct stats {
         uint64_t authorized_prepared_statements_cache_evictions = 0;
+        uint64_t authorized_prepared_statements_privileged_entries_evictions_on_size = 0;
         uint64_t authorized_prepared_statements_unprivileged_entries_evictions_on_size = 0;
     };
 
@@ -96,6 +97,10 @@ public:
         static void inc_blocks() noexcept {}
         static void inc_evictions() noexcept {
             ++shard_stats().authorized_prepared_statements_cache_evictions;
+        }
+
+        static void inc_privileged_on_cache_size_eviction() noexcept {
+            ++shard_stats().authorized_prepared_statements_privileged_entries_evictions_on_size;
         }
 
         static void inc_unprivileged_on_cache_size_eviction() noexcept {
