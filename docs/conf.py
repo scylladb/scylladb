@@ -109,8 +109,8 @@ html_theme_options = {
     "versions_unstable": UNSTABLE_VERSIONS,
     "versions_deprecated": DEPRECATED_VERSIONS,
     'banner_button_text': 'Register for Free',
-    'banner_button_url': 'https://www.scylladb.com/scylladb-summit-2023',
-    'banner_title_text': 'ScyllaDB Summit 2023 Online Conference | February 15-16',
+    'banner_button_url': 'https://lp.scylladb.com/university-live-2023-03-registration?siteplacement=docs',
+    'banner_title_text': 'ScyllaDB University LIVE, FREE Virtual Training Event | March 21',
     'hide_banner': 'false',
     "collapse_navigation": 'true',
 }
