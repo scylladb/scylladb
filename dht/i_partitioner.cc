@@ -456,7 +456,6 @@ dht::token_range_vector split_token_range_msb(unsigned most_significant_bits) {
     ret.reserve(number_of_ranges);
     assert(most_significant_bits < 64);
     uint8_t log2_shift = (64 - most_significant_bits);
-    uint64_t keys_per_range = 1ULL << log2_shift;
     uint64_t unbiased_key = 0;
     dht::token token;
     for (uint64_t i = 0; i < number_of_ranges; ) {

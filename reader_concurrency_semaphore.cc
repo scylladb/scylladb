@@ -1326,7 +1326,7 @@ public:
 
     virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) override {
         return _permit.request_memory(range_size).then([this, offset, range_size, &pc] (reader_permit::resource_units units) {
-            return get_file_impl(_tracked_file)->dma_read_bulk(offset, range_size, pc).then([this, units = std::move(units)] (temporary_buffer<uint8_t> buf) mutable {
+            return get_file_impl(_tracked_file)->dma_read_bulk(offset, range_size, pc).then([units = std::move(units)] (temporary_buffer<uint8_t> buf) mutable {
                 return make_ready_future<temporary_buffer<uint8_t>>(make_tracked_temporary_buffer(std::move(buf), std::move(units)));
             });
         });

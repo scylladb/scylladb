@@ -659,7 +659,7 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
         slogger.info("Wait until local node knows tokens of peer nodes");
         _gossiper.wait_for_range_setup().get();
 
-        _db.invoke_on_all([this] (replica::database& db) {
+        _db.invoke_on_all([] (replica::database& db) {
             for (auto& cf : db.get_non_system_column_families()) {
                 cf->notify_bootstrap_or_replace_start();
             }
@@ -749,7 +749,7 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
             run_replace_ops(bootstrap_tokens, *replacement_info);
         }
 
-        _db.invoke_on_all([this] (replica::database& db) {
+        _db.invoke_on_all([] (replica::database& db) {
             for (auto& cf : db.get_non_system_column_families()) {
                 cf->notify_bootstrap_or_replace_end();
             }
@@ -1473,7 +1473,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
         auto base_shard = this_shard_id();
         pending_token_metadata_ptr[base_shard] = tmptr;
         // clone a local copy of updated token_metadata on all other shards
-        co_await smp::invoke_on_others(base_shard, [&, base_shard, tmptr] () -> future<> {
+        co_await smp::invoke_on_others(base_shard, [&, tmptr] () -> future<> {
             pending_token_metadata_ptr[this_shard_id()] = make_token_metadata_ptr(co_await tmptr->clone_async());
         });
 
@@ -1490,7 +1490,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             auto erm = co_await get_erm_factory().create_effective_replication_map(rs, tmptr);
             pending_effective_replication_maps[base_shard].emplace(ks_name, std::move(erm));
         }
-        co_await container().invoke_on_others([&, base_shard] (storage_service& ss) -> future<> {
+        co_await container().invoke_on_others([&] (storage_service& ss) -> future<> {
             auto& db = ss._db.local();
             for (auto& ks_name : keyspaces) {
                 auto rs = db.find_keyspace(ks_name).get_replication_strategy_ptr();
@@ -2791,7 +2791,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
         } else if (req.cmd == node_ops_cmd::replace_prepare_pending_ranges) {
             // Update the pending_ranges for the replacing node
             slogger.debug("replace[{}]: Updated pending_ranges from coordinator={}", req.ops_uuid, coordinator);
-            mutate_token_metadata([coordinator, &req, this] (mutable_token_metadata_ptr tmptr) mutable {
+            mutate_token_metadata([&req, this] (mutable_token_metadata_ptr tmptr) mutable {
                 return update_pending_ranges(tmptr, format("replace {}", req.replace_nodes));
             }).get();
         } else if (req.cmd == node_ops_cmd::replace_heartbeat) {
@@ -3304,7 +3304,7 @@ storage_service::get_new_source_ranges(locator::effective_replication_map_ptr er
 }
 
 future<> storage_service::move(token new_token) {
-    return run_with_api_lock(sstring("move"), [new_token] (storage_service& ss) mutable {
+    return run_with_api_lock(sstring("move"), [] (storage_service& ss) mutable {
         return make_exception_future<>(std::runtime_error("Move opeartion is not supported only more"));
     });
 }
@@ -3421,7 +3421,7 @@ future<> storage_service::snitch_reconfigured() {
 }
 
 void storage_service::init_messaging_service() {
-    _messaging.local().register_replication_finished([this] (gms::inet_address from) {
+    _messaging.local().register_replication_finished([] (gms::inet_address from) {
         slogger.info("Got confirm_replication from {}", from);
         return make_ready_future<>();
     });

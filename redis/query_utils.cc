@@ -96,7 +96,7 @@ private:
     void add_cell(const bytes& ckey, const column_definition& col, const std::optional<query::result_atomic_cell_view>& cell)
     {
         if (cell) {
-            cell->value().with_linearized([this, &col, &cell, &ckey] (bytes_view cell_view) {
+            cell->value().with_linearized([this, &col, &ckey] (bytes_view cell_view) {
                 auto&& dv = col.type->deserialize_value(cell_view);
                 auto&& d = dv.serialize_nonnull();
                 _data->emplace(std::move(ckey), std::move(d));

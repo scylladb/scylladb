@@ -152,7 +152,7 @@ void raft_group_registry::init_rpc_verbs() {
             const rpc::client_info& cinfo,
             const raft::group_id& gid, raft::server_id from, raft::server_id dst, auto handler) {
         return container().invoke_on(shard_for_group(gid),
-                [addr = netw::messaging_service::get_source(cinfo).addr, from, dst, gid, handler] (raft_group_registry& self) mutable {
+                [addr = netw::messaging_service::get_source(cinfo).addr, from, gid, handler] (raft_group_registry& self) mutable {
             // Update the address mappings for the rpc module
             // in case the sender is encountered for the first time
             auto& rpc = self.get_rpc(gid);

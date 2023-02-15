@@ -506,7 +506,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     // filter out cdc generations older than the table or now() - cdc::ttl (typically dynamodb_streams_max_window - 24h)
     auto low_ts = std::max(as_timepoint(schema->id()), db_clock::now() - ttl);
 
-    return _sdks.cdc_get_versioned_streams(low_ts, { normal_token_owners }).then([this, db, shard_start, limit, ret = std::move(ret), stream_desc = std::move(stream_desc)] (std::map<db_clock::time_point, cdc::streams_version> topologies) mutable {
+    return _sdks.cdc_get_versioned_streams(low_ts, { normal_token_owners }).then([db, shard_start, limit, ret = std::move(ret), stream_desc = std::move(stream_desc)] (std::map<db_clock::time_point, cdc::streams_version> topologies) mutable {
 
         auto e = topologies.end();
         auto prev = e;

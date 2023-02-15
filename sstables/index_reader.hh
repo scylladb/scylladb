@@ -514,8 +514,8 @@ private:
                 end = summary.entries[summary_idx + 1].position;
             }
 
-            return advance_context(bound, position, end, quantity).then([this, summary_idx, &bound] {
-                return bound.context->consume_input().then_wrapped([this, summary_idx, &bound] (future<> f) {
+            return advance_context(bound, position, end, quantity).then([this, &bound] {
+                return bound.context->consume_input().then_wrapped([this, &bound] (future<> f) {
                     std::exception_ptr ex;
                     if (f.failed()) {
                         ex = f.get_exception();
@@ -528,7 +528,7 @@ private:
                         // if the associated reader is forwarding despite having singular range, we prepare for that
                         _single_page_read = false;
                         auto& ctx = *bound.context;
-                        return ctx.close().then([bc = std::move(bound.context), &bound, this] { return std::move(bound.consumer->indexes); });
+                        return ctx.close().then([bc = std::move(bound.context), &bound] { return std::move(bound.consumer->indexes); });
                     }
                     return make_ready_future<index_list>(std::move(bound.consumer->indexes));
                 });
@@ -997,7 +997,6 @@ public:
                 " sstable version (expected >= mc): {}", fmt::ptr(this), static_cast<int>(_sstable->get_version())));
         }
 
-        index_entry& e = current_partition_entry(*_upper_bound);
         return cur_bsearch->advance_past(pos).then([this, partition_start_pos = get_data_file_position()]
                 (std::optional<clustered_index_cursor::skip_info> si) {
             if (!si) {

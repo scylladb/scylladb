@@ -1313,7 +1313,7 @@ private:
                 if (index_position.start <= _context->position()) {
                     return make_ready_future<>();
                 }
-                return skip_to(idx.element_kind(), index_position.start).then([this, &idx] {
+                return skip_to(idx.element_kind(), index_position.start).then([this] {
                     _sst->get_stats().on_partition_seek();
                 });
             });

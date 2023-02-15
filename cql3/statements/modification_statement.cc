@@ -187,7 +187,7 @@ bool modification_statement::applies_to(const selection::selection* selection,
         .options = &options,
     };
 
-    auto condition_applies = [&row, &inputs](const lw_shared_ptr<column_condition>& cond) {
+    auto condition_applies = [&inputs](const lw_shared_ptr<column_condition>& cond) {
         return cond->applies_to(inputs);
     };
     return (std::all_of(_static_conditions.begin(), _static_conditions.end(), condition_applies) &&

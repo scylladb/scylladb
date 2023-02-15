@@ -355,7 +355,7 @@ static size_t compute_buffer_size(const schema& s, const flat_mutation_reader_v2
 {
     return boost::accumulate(
         buffer
-        | boost::adaptors::transformed([&s] (const mutation_fragment_v2& mf) {
+        | boost::adaptors::transformed([] (const mutation_fragment_v2& mf) {
             return mf.memory_usage();
         }), size_t(0)
     );

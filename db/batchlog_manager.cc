@@ -189,7 +189,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
 
         auto size = data.size();
 
-        return map_reduce(*fms, [this, written_at] (canonical_mutation& fm) {
+        return map_reduce(*fms, [written_at] (canonical_mutation& fm) {
             return system_keyspace::get_truncated_at(fm.column_family_id()).then([written_at, &fm] (db_clock::time_point t) ->
                     std::optional<std::reference_wrapper<canonical_mutation>> {
                 if (written_at > t) {
@@ -206,11 +206,11 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
                 mutations.emplace_back(fm.value().get().to_mutation(s));
             }
             return mutations;
-        }).then([this, id, limiter, written_at, size, fms] (std::vector<mutation> mutations) {
+        }).then([this, limiter, written_at, size, fms] (std::vector<mutation> mutations) {
             if (mutations.empty()) {
                 return make_ready_future<>();
             }
-            const auto ttl = [this, &mutations, written_at]() -> clock_type {
+            const auto ttl = [written_at]() -> clock_type {
                 /*
                  * Calculate ttl for the mutations' hints (and reduce ttl by the time the mutations spent in the batchlog).
                  * This ensures that deletes aren't "undone" by an old batch replay.
@@ -232,7 +232,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
             // Our normal write path does not add much redundancy to the dispatch, and rate is handled after send
             // in both cases.
             // FIXME: verify that the above is reasonably true.
-            return limiter->reserve(size).then([this, mutations = std::move(mutations), id] {
+            return limiter->reserve(size).then([this, mutations = std::move(mutations)] {
                 _stats.write_attempts += mutations.size();
                 // #1222 - change cl level to ALL, emulating origins behaviour of sending/hinting
                 // to all natural end points.
@@ -292,7 +292,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
                     });
                 });
             });
-        }).then([this] {
+        }).then([] {
         // TODO FIXME : cleanup()
 #if 0
             ColumnFamilyStore cfs = Keyspace.open(SystemKeyspace.NAME).getColumnFamilyStore(SystemKeyspace.BATCHLOG);
@@ -305,7 +305,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
 
 #endif
 
-        }).then([this] {
+        }).then([] {
             blogger.debug("Finished replayAllFailedBatches");
         });
     });

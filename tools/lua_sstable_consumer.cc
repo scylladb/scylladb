@@ -265,7 +265,6 @@ int8_t normalize_weight(int w) {
 
 int new_ring_position_l(lua_State* l) {
     const auto weight = normalize_weight(lua_tointeger(l, 1));
-    const auto n = lua_gettop(l);
 
     const auto& s = get_schema_l(l);
 
@@ -374,7 +373,6 @@ int position_in_partition_index_l(lua_State* l) {
 
 int new_position_in_partition_l(lua_State* l) {
     const auto weight = normalize_weight(lua_tointeger(l, 1));
-    const auto n = lua_gettop(l);
 
     std::optional<clustering_key> ck;
 
@@ -445,7 +443,6 @@ int partition_start_index_l(lua_State* l) {
     auto field = lua_tostring(l, 2);
     auto& ps = pop_userdata_as_ref<partition_start>(l, 1);
     lua_pop(l, 2);
-    auto& s = get_schema_l(l);
     if (strcmp(field, "key") == 0) {
         push_userdata<partition_key>(l, ps.key().key());
         return 1;
@@ -954,7 +951,7 @@ public:
     json_writer(const schema& s) : _writer(s)
     { }
     static int null_l(lua_State* l) {
-        return invoke(l, __FUNCTION__, LUA_TNIL, [l] (json_writer& w) {
+        return invoke(l, __FUNCTION__, LUA_TNIL, [] (json_writer& w) {
             w._writer.writer().Null();
         });
     }
@@ -981,7 +978,7 @@ public:
         });
     }
     static int start_object_l(lua_State* l) {
-        return invoke(l, __FUNCTION__, LUA_TNIL, [l] (json_writer& w) {
+        return invoke(l, __FUNCTION__, LUA_TNIL, [] (json_writer& w) {
             w._writer.writer().StartObject();
         });
     }
@@ -993,22 +990,22 @@ public:
         });
     }
     static int end_object_l(lua_State* l) {
-        return invoke(l, __FUNCTION__, LUA_TNIL, [l] (json_writer& w) {
+        return invoke(l, __FUNCTION__, LUA_TNIL, [] (json_writer& w) {
             w._writer.writer().EndObject();
         });
     }
     static int start_array_l(lua_State* l) {
-        return invoke(l, __FUNCTION__, LUA_TNIL, [l] (json_writer& w) {
+        return invoke(l, __FUNCTION__, LUA_TNIL, [] (json_writer& w) {
             w._writer.writer().StartArray();
         });
     }
     static int end_array_l(lua_State* l) {
-        return invoke(l, __FUNCTION__, LUA_TNIL, [l] (json_writer& w) {
+        return invoke(l, __FUNCTION__, LUA_TNIL, [] (json_writer& w) {
             w._writer.writer().EndArray();
         });
     }
     static int start_stream_l(lua_State* l) {
-        return invoke(l, __FUNCTION__, LUA_TNIL, [l] (json_writer& w) {
+        return invoke(l, __FUNCTION__, LUA_TNIL, [] (json_writer& w) {
             w._writer.start_stream();
         });
     }

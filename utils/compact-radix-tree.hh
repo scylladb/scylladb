@@ -1389,7 +1389,6 @@ private:
 
     template <typename FN, typename Cloner>
     static std::exception_ptr copy_slots(const node_head& h, const T* slots, unsigned nr, unsigned depth, auto& into, FN&& node_index_of, Cloner&& cloner) noexcept {
-        unsigned count = 0;
         for (unsigned i = 0; i < nr; i++) {
             node_index_t ni = node_index_of(i);
             if (ni != unused_node_index) {
@@ -1405,7 +1404,6 @@ private:
 
     template <typename FN, typename Cloner>
     static std::exception_ptr copy_slots(const node_head& h, const node_head_ptr* slots, unsigned nr, unsigned depth, auto& into, FN&& node_index_of, Cloner&& cloner) noexcept {
-        unsigned count = 0;
         for (unsigned i = 0; i < nr; i++) {
             node_index_t ni = node_index_of(i);
             if (ni != unused_node_index) {

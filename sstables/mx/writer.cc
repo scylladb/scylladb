@@ -1151,7 +1151,7 @@ void writer::write_cells(bytes_ostream& writer, const clustering_key_prefix* clu
     // is compared with the set of all columns filled in the memtable. So our encoding may be less optimal in some cases
     // but still valid.
     write_missing_columns(writer, kind == column_kind::static_column ? _sst_schema.static_columns : _sst_schema.regular_columns, row_body);
-    row_body.for_each_cell([this, &writer, kind, &properties, has_complex_deletion, clustering_key] (column_id id, const atomic_cell_or_collection& c) {
+    row_body.for_each_cell([this, &writer, kind, &properties, clustering_key] (column_id id, const atomic_cell_or_collection& c) {
         auto&& column_definition = _schema.column_at(kind, id);
         if (!column_definition.is_atomic()) {
             _collections.push_back({&column_definition, c});

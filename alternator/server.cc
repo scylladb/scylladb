@@ -145,7 +145,7 @@ public:
             std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
         handle_CORS(*req, *rep, false);
         return _f_handle(std::move(req), std::move(rep)).then(
-                [this](std::unique_ptr<reply> rep) {
+                [](std::unique_ptr<reply> rep) {
                     rep->set_mime_type("application/x-amz-json-1.0");
                     rep->done();
                     return make_ready_future<std::unique_ptr<reply>>(std::move(rep));

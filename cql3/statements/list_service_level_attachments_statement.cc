@@ -70,7 +70,7 @@ list_service_level_attachments_statement::execute(query_processor& qp,
             });
 
         }
-    }).then([this, &state] (std::unordered_map<sstring, sstring> roles_to_att_val) {
+    }).then([] (std::unordered_map<sstring, sstring> roles_to_att_val) {
 
         auto rs = std::make_unique<result_set>(metadata);
         for (auto&& role_to_sl : roles_to_att_val) {

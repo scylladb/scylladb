@@ -1335,11 +1335,11 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
     auto& db = proxy.local().get_db();
     auto ts = db_clock::now();
-    co_await max_concurrent_for_each(views_diff.dropped, max_concurrent, [&db, ts] (schema_diff::dropped_schema& dt) {
+    co_await max_concurrent_for_each(views_diff.dropped, max_concurrent, [&db] (schema_diff::dropped_schema& dt) {
         auto& s = *dt.schema.get();
         return replica::database::drop_table_on_all_shards(db, s.ks_name(), s.cf_name());
     });
-    co_await max_concurrent_for_each(tables_diff.dropped, max_concurrent, [&db, ts] (schema_diff::dropped_schema& dt) -> future<> {
+    co_await max_concurrent_for_each(tables_diff.dropped, max_concurrent, [&db] (schema_diff::dropped_schema& dt) -> future<> {
         auto& s = *dt.schema.get();
         return replica::database::drop_table_on_all_shards(db, s.ks_name(), s.cf_name());
     });
@@ -1397,7 +1397,7 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
             store_column_mapping(proxy, altered.old_schema.get(), true),
             store_column_mapping(proxy, altered.new_schema.get(), false));
     });
-    co_await max_concurrent_for_each(tables_diff.dropped, max_concurrent, [&proxy] (schema_diff::dropped_schema& dropped) -> future<> {
+    co_await max_concurrent_for_each(tables_diff.dropped, max_concurrent, [] (schema_diff::dropped_schema& dropped) -> future<> {
         schema_ptr s = dropped.schema.get();
         co_await drop_column_mapping(s->id(), s->version());
     });

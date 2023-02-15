@@ -183,7 +183,7 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
     }
 
     bool was_aborted = false;
-    co_await coroutine::parallel_for_each(_ep_managers, [this, &was_aborted, &rps, &local_as] (auto& p) {
+    co_await coroutine::parallel_for_each(_ep_managers, [&was_aborted, &rps, &local_as] (auto& p) {
         const auto addr = p.first;
         auto& ep_man = p.second;
 
@@ -873,9 +873,9 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                     return make_ready_future<>();
                 }
 
-                return this->send_one_mutation(std::move(m)).then([this, rp, ctx_ptr] {
+                return this->send_one_mutation(std::move(m)).then([this, ctx_ptr] {
                     ++this->shard_stats().sent;
-                }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
+                }).handle_exception([this, ctx_ptr] (auto eptr) {
                     manager_logger.trace("send_one_hint(): failed to send to {}: {}", end_point_key(), eptr);
                     return make_exception_future<>(std::move(eptr));
                 });
@@ -913,7 +913,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
             }
             f.ignore_ready_future();
         });
-    }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
+    }).handle_exception([ctx_ptr, rp] (auto eptr) {
         manager_logger.trace("send_one_file(): Hmmm. Something bad had happend: {}", eptr);
         ctx_ptr->on_hint_send_failure(rp);
     });

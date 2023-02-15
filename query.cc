@@ -318,7 +318,7 @@ std::ostream& operator<<(std::ostream& os, const query::result::printer& p) {
 void result::ensure_counts() {
     if (!_partition_count || !row_count()) {
         uint64_t row_count;
-        std::tie(_partition_count, row_count) = result_view::do_with(*this, [this] (auto&& view) {
+        std::tie(_partition_count, row_count) = result_view::do_with(*this, [] (auto&& view) {
             return view.count_partitions_and_rows();
         });
         set_row_count(row_count);

@@ -1391,8 +1391,6 @@ namespace db {
 typedef utils::UUID truncation_key;
 typedef std::unordered_map<truncation_key, truncation_record> truncation_map;
 
-static constexpr uint8_t current_version = 1;
-
 future<truncation_record> system_keyspace::get_truncation_record(table_id cf_id) {
     if (qctx->qp().db().get_config().ignore_truncation_record.is_set()) {
         truncation_record r{truncation_record::current_magic};
@@ -2850,7 +2848,6 @@ future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::
 
     auto& db = dist_db.local();
     auto& db_config = db.get_config();
-    auto enable_cache = db_config.enable_cache();
     bool durable = db_config.data_file_directories().size() > 0;
     for (auto&& table : system_keyspace::all_tables(db_config)) {
         if (!tables.contains(table)) {

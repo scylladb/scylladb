@@ -136,7 +136,7 @@ future<sstring> ec2_snitch::aws_api_call_once(sstring addr, uint16_t port, sstri
             auto content_len = std::stoi(it->second);
 
             // Read HTTP response body
-            return _in.read_exactly(content_len).then([this] (temporary_buffer<char> buf) {
+            return _in.read_exactly(content_len).then([] (temporary_buffer<char> buf) {
                 sstring res(buf.get(), buf.size());
 
                 return make_ready_future<sstring>(std::move(res));

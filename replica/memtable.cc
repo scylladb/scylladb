@@ -767,7 +767,7 @@ future<>
 memtable::apply(memtable& mt, reader_permit permit) {
     if (auto reader_opt = mt.make_flat_reader_opt(_schema, std::move(permit), query::full_partition_range, _schema->full_slice())) {
         return with_closeable(std::move(*reader_opt), [this] (auto&& rd) mutable {
-            return consume_partitions(rd, [self = this->shared_from_this(), &rd] (mutation&& m) {
+            return consume_partitions(rd, [self = this->shared_from_this()] (mutation&& m) {
                 self->apply(m);
                 return stop_iteration::no;
             });

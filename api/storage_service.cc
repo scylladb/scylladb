@@ -654,7 +654,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 req.get_query_param("key")));
     });
 
-    ss::cdc_streams_check_and_repair.set(r, [&ctx, &cdc_gs] (std::unique_ptr<request> req) {
+    ss::cdc_streams_check_and_repair.set(r, [&cdc_gs] (std::unique_ptr<request> req) {
         if (!cdc_gs.local_is_initialized()) {
             throw std::runtime_error("get_cdc_generation_service: not initialized yet");
         }
@@ -712,7 +712,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                         return int64_t(-1);
                     }
                 });
-                auto& cm = db.get_compaction_manager();
                 auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
                 co_await run_on_existing_tables("force_keyspace_cleanup", db, keyspace, local_tables, [&] (replica::table& t) {
                     return t.perform_cleanup_compaction(owned_ranges_ptr);

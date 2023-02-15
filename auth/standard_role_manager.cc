@@ -470,7 +470,7 @@ standard_role_manager::grant(std::string_view grantee_name, std::string_view rol
 
 future<>
 standard_role_manager::revoke(std::string_view revokee_name, std::string_view role_name) {
-    return this->exists(role_name).then([this, revokee_name, role_name](bool role_exists) {
+    return this->exists(role_name).then([role_name](bool role_exists) {
         if (!role_exists) {
             throw nonexistant_role(sstring(role_name));
         }

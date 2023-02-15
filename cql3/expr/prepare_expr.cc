@@ -985,7 +985,6 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
             if (!schema_opt) {
                 throw exceptions::invalid_request_exception("cannot process token() function without schema");
             }
-            auto& schema = *schema_opt;
 
             std::vector<expression> prepared_token_args;
             prepared_token_args.reserve(tk.args.size());

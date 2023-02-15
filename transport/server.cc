@@ -756,7 +756,7 @@ future<fragmented_temporary_buffer> cql_server::connection::read_and_decompress_
             if (length < 4) {
                 throw std::runtime_error(fmt::format("CQL frame truncated: expected to have at least 4 bytes, got {}", length));
             }
-            return _buffer_reader.read_exactly(_read_buf, length).then([this] (fragmented_temporary_buffer buf) {
+            return _buffer_reader.read_exactly(_read_buf, length).then([] (fragmented_temporary_buffer buf) {
                 auto linearization_buffer = bytes_ostream();
                 int32_t uncomp_len = request_reader(buf.get_istream(), linearization_buffer).read_int();
                 if (uncomp_len < 0) {
@@ -779,7 +779,7 @@ future<fragmented_temporary_buffer> cql_server::connection::read_and_decompress_
                 return uncomp;
             });
         } else if (_compression == cql_compression::snappy) {
-            return _buffer_reader.read_exactly(_read_buf, length).then([this] (fragmented_temporary_buffer buf) {
+            return _buffer_reader.read_exactly(_read_buf, length).then([] (fragmented_temporary_buffer buf) {
                 auto in = input_buffer.get_linearized_view(fragmented_temporary_buffer::view(buf));
                 size_t uncomp_len;
                 if (snappy_uncompressed_length(reinterpret_cast<const char*>(in.data()), in.size(), &uncomp_len) != SNAPPY_OK) {
@@ -858,7 +858,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_au
             f = f.then([&client_state] {
                 return client_state.maybe_update_per_service_level_params();
             });
-            return f.then([this, stream, &client_state, challenge = std::move(challenge), trace_state]() mutable {
+            return f.then([this, stream, challenge = std::move(challenge), trace_state]() mutable {
                 return make_ready_future<std::unique_ptr<cql_server::response>>(make_auth_success(stream, std::move(challenge), trace_state));
             });
         });
@@ -990,7 +990,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
         }
     }).then([this, query, stream, &client_state, trace_state] () mutable {
         tracing::trace(trace_state, "Done preparing on remote shards");
-        return _server._query_processor.local().prepare(std::move(query), client_state, false).then([this, stream, &client_state, trace_state] (auto msg) {
+        return _server._query_processor.local().prepare(std::move(query), client_state, false).then([this, stream, trace_state] (auto msg) {
             tracing::trace(trace_state, "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
                 return messages::result_message::prepared::cql::get_id(msg);
             }));

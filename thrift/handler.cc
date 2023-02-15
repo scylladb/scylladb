@@ -255,7 +255,7 @@ public:
     }
 
     void get(thrift_fn::function<void(ColumnOrSuperColumn const& _return)> cob, thrift_fn::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnPath& column_path, const ConsistencyLevel::type consistency_level) {
-        return get_slice([cob = std::move(cob), &column_path](auto&& results) {
+        return get_slice([cob = std::move(cob)](auto&& results) {
             if (results.empty()) {
                 throw NotFoundException();
             }

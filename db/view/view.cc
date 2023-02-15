@@ -91,7 +91,7 @@ cql3::statements::select_statement& view_info::select_statement() const {
         }
 
         if (legacy_token_column || boost::algorithm::any_of(_schema.all_columns(), std::mem_fn(&column_definition::is_computed))) {
-            auto real_columns = _schema.all_columns() | boost::adaptors::filtered([this, legacy_token_column] (const column_definition& cdef) {
+            auto real_columns = _schema.all_columns() | boost::adaptors::filtered([legacy_token_column] (const column_definition& cdef) {
                 return &cdef != legacy_token_column && !cdef.is_computed();
             });
             schema::columns_type columns = boost::copy_range<schema::columns_type>(std::move(real_columns));
@@ -2076,8 +2076,8 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
 
     return parallel_for_each(_base_to_build_step, [this] (auto& p) {
         return initialize_reader_at_current_token(p.second);
-    }).then([this, &vbi] {
-        return seastar::when_all_succeed(vbi.bookkeeping_ops.begin(), vbi.bookkeeping_ops.end()).handle_exception([this] (std::exception_ptr ep) {
+    }).then([&vbi] {
+        return seastar::when_all_succeed(vbi.bookkeeping_ops.begin(), vbi.bookkeeping_ops.end()).handle_exception([] (std::exception_ptr ep) {
             vlogger.warn("Failed to update materialized view bookkeeping while synchronizing view builds on all shards ({}), continuing anyway.", ep);
         });
     });
@@ -2085,7 +2085,7 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
 
 future<std::unordered_map<sstring, sstring>>
 view_builder::view_build_statuses(sstring keyspace, sstring view_name) const {
-    return _sys_dist_ks.view_status(std::move(keyspace), std::move(view_name)).then([this] (std::unordered_map<locator::host_id, sstring> status) {
+    return _sys_dist_ks.view_status(std::move(keyspace), std::move(view_name)).then([] (std::unordered_map<locator::host_id, sstring> status) {
         auto& endpoint_to_host_id = service::get_local_storage_proxy().get_token_metadata_ptr()->get_endpoint_to_host_id_map_for_reading();
         return boost::copy_range<std::unordered_map<sstring, sstring>>(endpoint_to_host_id
                 | boost::adaptors::transformed([&status] (const std::pair<gms::inet_address, locator::host_id>& p) {
@@ -2458,7 +2458,7 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
                     _sys_ks.update_view_build_progress(view->ks_name(), view->cf_name(), *next_token));
         }
     }
-    seastar::when_all_succeed(bookkeeping_ops.begin(), bookkeeping_ops.end()).handle_exception([this] (std::exception_ptr ep) {
+    seastar::when_all_succeed(bookkeeping_ops.begin(), bookkeeping_ops.end()).handle_exception([] (std::exception_ptr ep) {
         vlogger.warn("Failed to update materialized view bookkeeping ({}), continuing anyway.", ep);
     }).get();
 }

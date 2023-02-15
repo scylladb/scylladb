@@ -485,8 +485,8 @@ public:
     void clear_and_dispose(Func&& disp) noexcept {
         if (_root != nullptr) {
             _root->clear(
-                [this, &disp] (data* d) noexcept { data::destroy(*d, disp); },
-                [this] (node* n) noexcept { node::destroy(*n); }
+                [&disp] (data* d) noexcept { data::destroy(*d, disp); },
+                [] (node* n) noexcept { node::destroy(*n); }
             );
 
             node::destroy(*_root);

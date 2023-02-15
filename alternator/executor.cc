@@ -1543,7 +1543,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             // This is the old, unsafe, read before write which does first
             // a read, then a write. TODO: remove this mode entirely.
             return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, stats).then(
-                    [this, &client_state, &proxy, trace_state, permit = std::move(permit)] (std::unique_ptr<rjson::value> previous_item) mutable {
+                    [this, &proxy, trace_state, permit = std::move(permit)] (std::unique_ptr<rjson::value> previous_item) mutable {
                 std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp());
                 if (!m) {
                     return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("Failed condition."));

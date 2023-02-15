@@ -714,7 +714,7 @@ private:
             bool local = shard == this_shard_id();
             sp.get_stats().replica_cross_shard_ops += !local;
             return sp.container().invoke_on(shard, sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
-                                     local, cmd = make_lw_shared<query::read_command>(std::move(cmd)), key = std::move(key),
+                                     cmd = make_lw_shared<query::read_command>(std::move(cmd)), key = std::move(key),
                                      ballot, only_digest, da, timeout, src_ip] (storage_proxy& sp) {
                 tracing::trace_state_ptr tr_state = gt;
                 return paxos::paxos_state::prepare(sp, tr_state, gs, *cmd, key, ballot, only_digest, da, *timeout).then([src_ip, tr_state] (paxos::prepare_response r) {
@@ -744,7 +744,7 @@ private:
             bool local = shard == this_shard_id();
             sp.get_stats().replica_cross_shard_ops += !local;
             return sp.container().invoke_on(shard, sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
-                                     local, proposal = std::move(proposal), timeout, token] (storage_proxy& sp) {
+                                     proposal = std::move(proposal), timeout, token] (storage_proxy& sp) {
                 return paxos::paxos_state::accept(sp, gt, gs, token, proposal, *timeout);
             });
         });

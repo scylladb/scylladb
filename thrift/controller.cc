@@ -108,7 +108,7 @@ future<> thrift_controller::request_stop_server() {
 }
 
 future<> thrift_controller::do_stop_server() {
-    return do_with(std::move(_server), [this] (std::unique_ptr<distributed<thrift_server>>& tserver) {
+    return do_with(std::move(_server), [] (std::unique_ptr<distributed<thrift_server>>& tserver) {
         if (tserver) {
             return tserver->stop().then([] {
                 clogger.info("Thrift server stopped");

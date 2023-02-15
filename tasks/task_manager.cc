@@ -145,7 +145,7 @@ void task_manager::task::start() {
         // Background fiber does not capture task ptr, so the task can be unregistered and destroyed independently in the foreground.
         // After the ttl expires, the task id will be used to unregister the task if that didn't happen in any other way.
         (void)with_gate(_impl->_module->async_gate(), [f = done(), module = _impl->_module, id = id()] () mutable {
-            return std::move(f).finally([module, id] {
+            return std::move(f).finally([module] {
                 return sleep_abortable(module->get_task_manager().get_task_ttl(), module->abort_source());
             }).then_wrapped([module, id] (auto f) {
                 f.ignore_ready_future();

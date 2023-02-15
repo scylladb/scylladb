@@ -304,8 +304,8 @@ public:
         // We shouldn't be here if caching is disabled
         assert(caching_enabled());
 
-        return _loading_values.get_or_load(k, [this, load = std::forward<LoadFunc>(load)] (const Key& k) mutable {
-            return load(k).then([this] (value_type val) {
+        return _loading_values.get_or_load(k, [load = std::forward<LoadFunc>(load)] (const Key& k) mutable {
+            return load(k).then([] (value_type val) {
                 return timestamped_val(std::move(val));
             });
         }).then([this, k] (timestamped_val_ptr ts_val_ptr) {
@@ -384,10 +384,10 @@ public:
     template <typename Pred>
     requires std::is_invocable_r_v<bool, Pred, const value_type&>
     void remove_if(Pred&& pred) {
-        auto cond_pred = [this, &pred] (const ts_value_lru_entry& v) {
+        auto cond_pred = [&pred] (const ts_value_lru_entry& v) {
             return pred(v.timestamped_value().value());
         };
-        auto value_destroyer = [this] (ts_value_lru_entry* p) {
+        auto value_destroyer = [] (ts_value_lru_entry* p) {
             loading_cache::destroy_ts_value(p);
         };
 
@@ -443,7 +443,7 @@ private:
         }
         ts_value_lru_entry* lru_entry_ptr = ts_ptr->lru_entry_ptr();
         lru_list_type& entry_list = container_list(*lru_entry_ptr);
-        entry_list.erase_and_dispose(entry_list.iterator_to(*lru_entry_ptr), [this] (ts_value_lru_entry* p) { loading_cache::destroy_ts_value(p); });
+        entry_list.erase_and_dispose(entry_list.iterator_to(*lru_entry_ptr), [] (ts_value_lru_entry* p) { loading_cache::destroy_ts_value(p); });
     }
 
     timestamped_val_ptr ready_entry_ptr(timestamped_val_ptr tv_ptr) {
@@ -560,7 +560,7 @@ private:
             }
             return false;
         };
-        auto value_destroyer = [this] (ts_value_lru_entry* p) {
+        auto value_destroyer = [] (ts_value_lru_entry* p) {
             loading_cache::destroy_ts_value(p);
         };
 

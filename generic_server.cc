@@ -166,7 +166,7 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
 future<> server::do_accepts(int which, bool keepalive, socket_address server_addr) {
     return repeat([this, which, keepalive, server_addr] {
         ++_connections_being_accepted;
-        return _listeners[which].accept().then_wrapped([this, which, keepalive, server_addr] (future<accept_result> f_cs_sa) mutable {
+        return _listeners[which].accept().then_wrapped([this, keepalive, server_addr] (future<accept_result> f_cs_sa) mutable {
             --_connections_being_accepted;
             if (_stopping) {
                 f_cs_sa.ignore_ready_future();

@@ -1466,7 +1466,7 @@ def add_view(cout, cls):
             elem_type = element_type(m.type)
             fprintln(cout, reindent(4, """
                 auto {name}() const {{
-                  return seastar::with_serialized_stream(v, [this] (auto& v) {{
+                  return seastar::with_serialized_stream(v, [] (auto& v) {{
                    auto in = v;
                    {skip}
                    return vector_deserializer<{elem_type}>(in);

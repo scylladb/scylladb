@@ -49,7 +49,7 @@ future<> cql3::statements::list_permissions_statement::check_access(query_proces
     const auto& as = *state.get_auth_service();
     const auto user = state.user();
 
-    return auth::has_superuser(as, *user).then([this, &state, &as, user](bool has_super) {
+    return auth::has_superuser(as, *user).then([this, &as, user](bool has_super) {
         if (has_super) {
             return make_ready_future<>();
         }
@@ -109,7 +109,7 @@ cql3::statements::list_permissions_statement::execute(
                 as,
                 _permissions,
                 _role_name,
-                resource_filter).then([this](std::vector<auth::permission_details> all_details) {
+                resource_filter).then([](std::vector<auth::permission_details> all_details) {
             std::sort(all_details.begin(), all_details.end());
 
             auto rs = std::make_unique<result_set>(metadata);

@@ -74,7 +74,7 @@ future<bool> default_authorizer::any_granted() const {
             query,
             db::consistency_level::LOCAL_ONE,
             {},
-            cql3::query_processor::cache_internal::yes).then([this](::shared_ptr<cql3::untyped_result_set> results) {
+            cql3::query_processor::cache_internal::yes).then([](::shared_ptr<cql3::untyped_result_set> results) {
         return !results->empty();
     });
 }

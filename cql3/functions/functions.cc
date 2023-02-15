@@ -225,7 +225,7 @@ inline
 shared_ptr<function>
 make_from_json_function(data_dictionary::database db, const sstring& keyspace, data_type t) {
     return make_native_scalar_function<true>("fromjson", t, {utf8_type},
-            [&db, keyspace, t](const std::vector<bytes_opt>& parameters) -> bytes_opt {
+            [keyspace, t](const std::vector<bytes_opt>& parameters) -> bytes_opt {
         try {
             rjson::value json_value = rjson::parse(utf8_type->to_string(parameters[0].value()));
             bytes_opt parsed_json_value;

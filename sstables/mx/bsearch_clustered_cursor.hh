@@ -195,7 +195,7 @@ private:
 
     future<pi_offset_type> read_block_offset(pi_index_type idx, tracing::trace_state_ptr trace_state) {
         _stream = _cached_file.read(_promoted_index_start + get_offset_entry_pos(idx), _pc, _permit, trace_state);
-        return _stream.next_page_view().then([this, idx] (cached_file::page_view page) {
+        return _stream.next_page_view().then([this] (cached_file::page_view page) {
             temporary_buffer<char> buf = page.get_buf();
             static_assert(noexcept(std::declval<data_consumer::primitive_consumer>().read_32(buf)));
             if (__builtin_expect(_primitive_parser.read_32(buf) == data_consumer::read_status::ready, true)) {
@@ -333,7 +333,7 @@ public:
         }
         auto& block = const_cast<promoted_index_block&>(*i);
         if (!block.end) {
-            return read_block(block, trace_state).then([this, &block] {
+            return read_block(block, trace_state).then([&block] {
                 return make_ready_future<std::optional<uint64_t>>(block.data_file_offset);
             });
         }
@@ -562,7 +562,7 @@ public:
             return make_ready_future<std::optional<uint64_t>>();
         }
         return _promoted_index.get_block(_blocks_count - 1, _trace_state)
-                .then([this] (promoted_index_block* block) {
+                .then([] (promoted_index_block* block) {
             return std::optional<uint64_t>(block->data_file_offset);
         });
     }

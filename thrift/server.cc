@@ -260,8 +260,8 @@ thrift_server::do_accepts(int which, bool keepalive, int num_attempts) {
             fd.set_keepalive(keepalive);
             // Future is waited on indirectly in `stop()` (via `_stop_gate`).
             (void)with_gate(_stop_gate, [&, this] {
-                return do_with(connection(*this, std::move(fd), addr), [this] (auto& conn) {
-                    return conn.process().then_wrapped([this, &conn] (future<> f) {
+                return do_with(connection(*this, std::move(fd), addr), [] (auto& conn) {
+                    return conn.process().then_wrapped([&conn] (future<> f) {
                         conn.shutdown();
                         try {
                             f.get();

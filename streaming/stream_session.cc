@@ -94,7 +94,7 @@ void stream_manager::init_messaging_service_handler() {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto dst_cpu_id = this_shard_id();
         auto reason = reason_opt ? *reason_opt : stream_reason::unspecified;
-        return container().invoke_on(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, dst_cpu_id, reason] (auto& sm) mutable {
+        return container().invoke_on(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, reason] (auto& sm) mutable {
             auto sr = stream_result_future::init_receiving_side(sm, plan_id, description, from);
             auto session = sm.get_session(plan_id, from, "PREPARE_MESSAGE");
             session->init(sr);
@@ -119,8 +119,8 @@ void stream_manager::init_messaging_service_handler() {
             return make_exception_future<rpc::sink<int>>(std::runtime_error(format("Node {} is not fully initialized for streaming, try again later",
                     utils::fb_utilities::get_broadcast_address())));
         }
-        return _mm.local().get_schema_for_write(schema_id, from, _ms.local()).then([this, from, estimated_partitions, plan_id, cf_id, schema_id, source, reason] (schema_ptr s) mutable {
-          return _db.local().obtain_reader_permit(s, "stream-session", db::no_timeout).then([this, from, estimated_partitions, plan_id, cf_id, schema_id, source, reason, s] (reader_permit permit) mutable {
+        return _mm.local().get_schema_for_write(schema_id, from, _ms.local()).then([this, from, estimated_partitions, plan_id, cf_id, source, reason] (schema_ptr s) mutable {
+          return _db.local().obtain_reader_permit(s, "stream-session", db::no_timeout).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, s] (reader_permit permit) mutable {
             auto sink = _ms.local().make_sink_for_stream_mutation_fragments(source);
             struct stream_mutation_fragments_cmd_status {
                 bool got_cmd = false;
