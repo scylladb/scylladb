@@ -879,7 +879,7 @@ SEASTAR_TEST_CASE(test_static_data) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table  ab ( a int, b int , c int static , primary key(a,b)) with clustering order by (b asc);").get();
         e.execute_cql("create materialized view ba as select a ,b from ab "
-                       "where a is not null and b is not null primary key (b,a) with clustering order by (b asc);").get();
+                       "where a is not null and b is not null primary key (b,a) with clustering order by (a asc);").get();
 
         e.execute_cql("insert into ab (a, b) values (1, 2);").get();
         auto msg = e.execute_cql("select a, b from ab where a = 1;").get0();

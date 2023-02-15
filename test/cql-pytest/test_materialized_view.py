@@ -694,6 +694,23 @@ def test_mv_override_clustering_order_2(cql, test_keyspace):
             assert list(cql.execute(f'SELECT y from {table}')) == [(0,),(1,),(2,),(3,)]
             assert list(cql.execute(f'SELECT y from {mv}')) == [(3,),(2,),(1,),(0,)]
 
+# Another test for CLUSTERING ORDER BY, using quoted and unquoted column
+# names and checking they are matched properly
+def test_mv_override_clustering_order_quoted(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, x int, "Hello" int, primary key (p,c)') as table:
+        # X and "x" are the same as x:
+        with new_materialized_view(cql, table, '*', 'p, c, x', 'p is not null and c is not null and x is not null', 'with clustering order by (c DESC, X ASC)') as mv:
+            pass
+        with new_materialized_view(cql, table, '*', 'p, c, x', 'p is not null and c is not null and x is not null', 'with clustering order by (c DESC, "x" ASC)') as mv:
+            pass
+        # But "Hello" is not the same as "HELLO" or hello
+        with pytest.raises(InvalidRequest, match="CLUSTERING ORDER BY"):
+            with new_materialized_view(cql, table, '*', 'p, c, "Hello"', 'p is not null and c is not null and "Hello" is not null', 'with clustering order by (c DESC, hello ASC)') as mv:
+                pass
+        with pytest.raises(InvalidRequest, match="CLUSTERING ORDER BY"):
+            with new_materialized_view(cql, table, '*', 'p, c, "Hello"', 'p is not null and c is not null and "Hello" is not null', 'with clustering order by (c DESC, "HELLO" ASC)') as mv:
+                pass
+
 # Cassandra requires that if we specify WITH CLUSTERING ORDER BY in the
 # materialized view definition, it must mention all clustering key columns
 # (in the example below, c and x). Scylla allows the user to leave out
@@ -721,7 +738,6 @@ def test_mv_override_clustering_order_partial(cql, test_keyspace, scylla_only):
 # shows, some can be ommitted), but we should still not allow to list
 # spurious names of non-clustering keys in the CLUSTERING ORDER BY clause.
 # Reproduces #10767
-@pytest.mark.xfail(reason="issue #10767")
 def test_mv_override_clustering_order_error(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'p int, c int, x int, y int, primary key (p,c)') as table:
         # Only a non-clustering-key column y (clustering key c and x missing):
@@ -739,6 +755,16 @@ def test_mv_override_clustering_order_error(cql, test_keyspace):
         # The two clustering key column (c and x) plus non-existent z
         with pytest.raises(InvalidRequest, match="CLUSTERING ORDER BY"):
             with new_materialized_view(cql, table, '*', 'p, c, x', 'p is not null and c is not null and x is not null', 'with clustering order by (c ASC, x ASC, z DESC)') as mv:
+                pass
+        # The clustering key column in the base (c) but it's no longer
+        # a clustering key column in the view so can't be ordered
+        with pytest.raises(InvalidRequest, match="CLUSTERING ORDER BY"):
+            with new_materialized_view(cql, table, '*', 'c, p', 'p is not null and c is not null', 'with clustering order by (c ASC)') as mv:
+                pass
+        # Check that the case of quoted names is supported correctly,
+        # "X" and x are not the same
+        with pytest.raises(InvalidRequest, match="CLUSTERING ORDER BY"):
+            with new_materialized_view(cql, table, '*', 'p, c, x', 'p is not null and c is not null and x is not null', 'with clustering order by ("X" ASC)') as mv:
                 pass
 
 # Test views that only refer to the primary key, exercising the invisible
