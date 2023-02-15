@@ -5961,8 +5961,7 @@ parse(std::basic_istream<CharT, Traits>& is,
             }
             if (Y != not_a_year)
             {
-                if (!(static_cast<int64_t>(year::min()) <= Y &&
-                      Y <= static_cast<int64_t>(year::max())))
+                if (!std::in_range<int64_t>(Y))
                     goto broken;
                 if (j != 0)
                 {
