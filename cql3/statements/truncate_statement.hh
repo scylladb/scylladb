@@ -26,7 +26,6 @@ class truncate_statement : public cql_statement_no_metadata {
 public:
     truncate_statement(schema_ptr schema, std::unique_ptr<attributes> prepared_attrs);
     truncate_statement(const truncate_statement&);
-    truncate_statement(truncate_statement&&) = default;
 
     const sstring& keyspace() const;
 
