@@ -1,0 +1,108 @@
+# Keyspace Name
+keyspace: ks
+
+# The CQL for creating a keyspace (optional if it already exists)
+keyspace_definition: |
+  CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3};
+
+# Table name
+table: targettable
+
+# The CQL for creating a table you wish to stress (optional if it already exists)
+table_definition: |
+  CREATE TABLE targettable (
+        pr1 timeuuid,
+        cl1 text,
+        aux1 timeuuid,
+        aux2 int,
+        aux3 smallint,
+        aux4 bigint,
+        aux5 double,
+        aux6 float,
+        aux7 tinyint,
+        aux8 decimal,
+        aux9 text,
+        PRIMARY KEY(pr1, cl1)
+  );
+
+### Column Distribution Specifications ###
+
+columnspec:
+  - name: pr1
+    population: uniform(1..1M)
+  - name: cl1
+    cluster: uniform(1..1k)
+    population: uniform(1..20M)
+  - name: aux1
+    size: uniform(1..1k)
+    population: uniform(1..1k)
+  - name: aux2
+    size: uniform(1..1k)
+    population: uniform(1..1k)
+  - name: aux3
+    size: uniform(1..1k)
+    population: uniform(1..1k)
+  - name: aux4
+    size: uniform(1..1k)
+    population: uniform(1..1k)
+  - name: aux5
+    size: uniform(1..1k)
+    population: uniform(1..1k)
+  - name: aux6
+    size: uniform(1..1k)
+    population: uniform(1..1k)
+  - name: aux7
+    size: uniform(1..254)
+    population: uniform(1..254)
+  - name: aux8
+    size: uniform(1..1k)
+    population: uniform(1..1k)
+  - name: aux9
+    size: uniform(1..1k)
+    population: uniform(1..1k)
+
+### Batch Ratio Distribution Specifications ###
+
+# Insert is used only to propagate data into the dataset. This is only query that supports batches,
+#   it is actually works only thru batches.
+# In order to call it add it to the ops statement: 'ops(insert=1,...)'
+# It overrides custom query 'insert' if it is defined
+# batch size maximum is hardcoded to 65535, it can be limiting row number in partition for
+#   big row insertation, by setting 'partitions' key to fixed(X)
+
+insert: # SchemaInsert.java, does batched prepared statements insert
+  partitions: fixed(2)
+  select:    fixed(2)/10240M
+  batchtype: UNLOGGED
+
+# After running "ops(insert=1) n=1000000" you will get ~1m records with ~1.3k avg row size
+#   across ~895k partitions, table size will be ~1.3g
+
+queries:
+   stmt-select: # SchemaQuery.java: not batched execution
+      cql: select pr1, cl1, aux1, aux2, aux3, aux4, aux5, aux6, aux7, aux8, aux9 from targettable where pr1 = ? AND cl1 = ?
+      fields: samerow
+   stmt-update: # SchemaQuery.java: not batched execution
+      cql: update targettable set aux1 = ?, aux2 = ?, aux3 = ?, aux4 = ?, aux5 = ?, aux6 = ?, aux7 = ?, aux8 = ?, aux9 = ? where pr1 = ? AND cl1 = ?
+      fields: samerow
+   stmt-insert: # SchemaQuery.java: not batched execution
+      cql: insert into targettable(pr1, cl1, aux1, aux2, aux3, aux4, aux5, aux6, aux7, aux8, aux9) values (?,?,?,?,?,?,?,?,?,?,?)
+      fields: samerow
+   stmt-delete: # SchemaQuery.java: not batched execution
+      cql: delete from targettable where pr1 = ? AND cl1 = ?
+      fields: samerow
+   stmt-update-if-cond: # CASQuery.java: not batched execution, do select first then update
+      cql: update targettable set aux1 = ?, aux2 = ?, aux3 = ?, aux4 = ?, aux5 = ?, aux6 = ?, aux7 = ?, aux8 = ?, aux9 = ? where pr1 = ? AND cl1 = ? if aux1 = ? AND aux2 = ? AND aux3 = ? AND aux4 = ? AND aux5 = ? AND aux6 = ? AND aux7 = ? AND aux8 = ? AND aux9 = ?
+      fields: samerow
+   stmt-update-if-exists:  # CASQuery.java: not batched execution, do select first then update
+      cql: update targettable set aux1 = ?, aux2 = ?, aux3 = ?, aux4 = ?, aux5 = ?, aux6 = ?, aux7 = ?, aux8 = ?, aux9 = ? where pr1 = ? AND cl1 = ? if exists
+      fields: samerow
+   stmt-insert-if-not-exists:  # CASQuery.java: not batched execution, do select first then insert
+      cql: insert into targettable(pr1, cl1, aux1, aux2, aux3, aux4, aux5, aux6, aux7, aux8, aux9) values (?,?,?,?,?,?,?,?,?,?,?) if not exists
+      fields: samerow
+   stmt-delete-if-cond:  # CASQuery.java: not batched execution, do select first then delete
+      cql: delete from targettable where pr1 = ? AND cl1 = ? IF aux1 = ? AND aux2 = ? AND aux3 = ? AND aux4 = ? AND aux5 = ? AND aux6 = ? AND aux7 = ? AND aux8 = ? AND aux9 = ?
+      fields: samerow
+   stmt-delete-if-exists:  # CASQuery.java: not batched execution, do select first then delete
+      cql: delete from targettable where pr1 = ? AND cl1 = ? if exists
+      fields: samerow

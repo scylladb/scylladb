@@ -648,6 +648,20 @@ async def train_decommission(executable: PathLike, workdir: PathLike) -> None:
 trainers["decommission"] = ("decommission_dataset", train_decommission)
 populators["decommission_dataset"] = populate_decommission
 
+# LWT ==================================================
+
+async def populate_lwt(executable: PathLike, workdir: PathLike) -> None:
+    async with with_cs_populate(executable=executable, workdir=workdir) as server:
+        await cs(cmd=["user", "profile=./conf/lwt.yaml", "ops(insert=1)"], n=1000000, cl="local_quorum", node=server)
+
+async def train_lwt(executable: PathLike, workdir: PathLike) -> None:
+    async with with_cs_train(executable=executable, workdir=workdir) as server:
+        ops = "ops(stmt-insert=1,stmt-select=1,stmt-update=1,stmt-delete=1,stmt-insert-if-not-exists=1,stmt-update-if-cond=1,stmt-update-if-exists=1,stmt-delete-if-cond=1,stmt-delete-if-exists=1)"
+        await cs(cmd=["user", "profile=./conf/lwt.yaml", ops], n=100000, cl="local_quorum", node=server)
+
+trainers["lwt"] = ("lwt_dataset", train_lwt)
+populators["lwt_dataset"] = populate_lwt
+
 ################################################################################
 # Training procedures
 
