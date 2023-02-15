@@ -11,6 +11,7 @@ from cassandra.cluster import NoHostAvailable
 from cassandra.protocol import InvalidRequest
 from util import unique_name, new_cql
 import requests
+from contextlib import contextmanager
 
 
 @pytest.fixture(scope="module")
@@ -19,6 +20,20 @@ def table1(cql, test_keyspace):
     cql.execute(f"CREATE TABLE {table} (p int primary key, t1 text, t2 text, t3 text, t4 text, t5 text, t6 text)")
     yield table
     cql.execute("DROP TABLE " + table)
+
+
+@contextmanager
+def disable_compression():
+    import cassandra.connection
+    from collections import OrderedDict
+
+    saved = cassandra.connection.locally_supported_compressions
+    cassandra.connection.locally_supported_compressions = OrderedDict()
+    try:
+        yield
+    finally:
+        cassandra.connection.locally_supported_compressions = saved
+
 
 # When a too large request comes, it should be rejected in full.
 # That means that first of all a client receives an error after sending
@@ -56,21 +71,23 @@ def test_shed_too_large_request(cql, table1, scylla_only):
     # cassandra python driver use these errors to negotiate the protocol version
     protocol_errors_before = get_protocol_errors()
 
-    # separate session is needed due to the cql_test_connection fixture,
-    # which checks that the session is not broken at the end of the test
-    with new_cql(cql) as ncql:
-        prepared = ncql.prepare(f"INSERT INTO {table1} (p,t1,t2,t3,t4,t5,t6) VALUES (42,?,?,?,?,?,?)")
+    # disable compression since we rely on specific request size
+    with disable_compression():
+        # separate session is needed due to the cql_test_connection fixture,
+        # which checks that the session is not broken at the end of the test
+        with new_cql(cql) as ncql:
+            prepared = ncql.prepare(f"INSERT INTO {table1} (p,t1,t2,t3,t4,t5,t6) VALUES (42,?,?,?,?,?,?)")
 
-        # With release builds of Scylla, information that the socket is closed reaches the client driver
-        # before it has time to process the error message written by Scylla to the socket.
-        # The driver ignores unread bytes from the socket (this looks like a bug),
-        # tries to establish a connection with another node, and throws a NoHostAvailable exception if it fails.
-        # In the debug builds, the driver can have time to grab the error from the socket,
-        # and we get InvalidRequest exception.
-        with pytest.raises((NoHostAvailable, InvalidRequest),
-                           match="request size too large|Unable to complete the operation against any hosts"):
-            a_5mb_string = 'x'*10*1024*1024
-            ncql.execute(prepared, [a_5mb_string]*6)
+            # With release builds of Scylla, information that the socket is closed reaches the client driver
+            # before it has time to process the error message written by Scylla to the socket.
+            # The driver ignores unread bytes from the socket (this looks like a bug),
+            # tries to establish a connection with another node, and throws a NoHostAvailable exception if it fails.
+            # In the debug builds, the driver can have time to grab the error from the socket,
+            # and we get InvalidRequest exception.
+            with pytest.raises((NoHostAvailable, InvalidRequest),
+                               match="request size too large|Unable to complete the operation against any hosts"):
+                a_5mb_string = 'x'*10*1024*1024
+                ncql.execute(prepared, [a_5mb_string]*6)
     protocol_errors_after = get_protocol_errors()
     assert protocol_errors_after == protocol_errors_before
     cql.execute(prepared, ["small_string"]*6)
