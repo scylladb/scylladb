@@ -373,7 +373,7 @@ public:
 
     auto with_original_result(R& res) {
         return [this, &res] (const auto& ex) {
-            return handle(ex, res);
+            return this->handle(ex, res);
         };
     }
 };
