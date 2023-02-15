@@ -1135,10 +1135,12 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
     _compaction_strategy.get_backlog_tracker().transfer_ongoing_charges(new_cs.get_backlog_tracker(), move_read_charges);
 
     auto new_sstables = new_cs.make_sstable_set(_schema);
+    std::vector<sstables::shared_sstable> new_sstables_for_backlog_tracker;
     _main_sstables->for_each_sstable([&] (const sstables::shared_sstable& s) {
-        add_sstable_to_backlog_tracker(new_cs.get_backlog_tracker(), s);
         new_sstables.insert(s);
+        new_sstables_for_backlog_tracker.push_back(s);
     });
+    new_cs.get_backlog_tracker().replace_sstables({}, std::move(new_sstables_for_backlog_tracker));
 
     // now exception safe:
     _compaction_strategy = std::move(new_cs);
