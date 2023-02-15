@@ -193,7 +193,7 @@ sstable_directory::highest_version_seen() const {
 }
 
 future<> sstable_directory::process_sstable_dir(process_flags flags) {
-    dirlog.debug("Start processing directory {} for SSTables", _sstable_dir);
+    dirlog.debug("Start processing directory {} for SSTables (storage {})", _sstable_dir, _storage_opts->type_string());
     return _lister->process(*this, _sstable_dir, flags);
 }
 

@@ -742,7 +742,7 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
 
         sstring cfname = cf->schema()->cf_name();
         auto sstdir = ks.column_family_directory(ksdir, cfname, uuid);
-        dblog.info("Keyspace {}: Reading CF {} id={} version={}", ks_name, cfname, uuid, s->version());
+        dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={}", ks_name, cfname, uuid, s->version(), cf->get_storage_options().type_string());
 
         auto metadata = table_populator(db, ks_name, cfname);
         std::exception_ptr ex;
