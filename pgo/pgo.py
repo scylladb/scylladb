@@ -675,6 +675,28 @@ async def train_si(executable: PathLike, workdir: PathLike) -> None:
 trainers["si"] = ("si_dataset", train_si)
 populators["si_dataset"] = populate_si
 
+# COUNTERS ==================================================
+
+async def populate_counters(executable: PathLike, workdir: PathLike) -> None:
+    async with with_cs_populate(executable=executable, workdir=workdir) as server:
+        await bash(fr"../tools/java/bin/cqlsh -f conf/counters.yaml {server}")
+        # Sleeps added in reaction to schema disagreement errors.
+        # FIXME: get rid of this sleep and find a sane way to wait for schema
+        # agreement.
+        await asyncio.sleep(3)
+        await cs(cmd=["counter_write"], n=1000000, cl="local_quorum", node=server, schema="keyspace=counters")
+
+async def train_counters(executable: PathLike, workdir: PathLike) -> None:
+    async with with_cs_train(executable=executable, workdir=workdir) as server:
+        await cs(cmd=["counter_write"], n=50000, pop=f"dist=UNIFORM(1..1000000)", cl="local_quorum", node=server, schema="keyspace=counters")
+        await cs(cmd=["counter_read"], n=50000, pop=f"dist=UNIFORM(1..1000000)", cl="local_quorum", node=server, schema="keyspace=counters")
+
+# This workload depends on cqlsh, so it's commented out until we merge
+# python3 support in cqlsh (which, at the moment of writing, is supposed
+# to be imminent).
+#trainers["counters"] = ("counters_dataset", train_counters)
+populators["counters_dataset"] = populate_counters
+
 ################################################################################
 # Training procedures
 
