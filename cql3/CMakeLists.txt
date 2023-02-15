@@ -107,6 +107,8 @@ target_sources(cql3
     ${cql_grammar_srcs})
 target_include_directories(cql3
   PUBLIC
+    ${CMAKE_SOURCE_DIR}
     ${CMAKE_BINARY_DIR})
 target_link_libraries(cql3
-  Seastar::seastar)
+  Seastar::seastar
+  xxHash::xxhash)
