@@ -26,6 +26,7 @@ find_package(Lua REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(ICU COMPONENTS uc REQUIRED)
 find_package(absl REQUIRED)
+find_package(libdeflate REQUIRED)
 find_package(xxHash REQUIRED)
 
 set(scylla_gen_build_dir "${CMAKE_BINARY_DIR}/gen")
@@ -535,6 +536,7 @@ target_link_libraries(scylla PRIVATE
     absl::exponential_biased
     absl::throw_delegate
     # System libs
+    libdeflate::libdeflate
     ZLIB::ZLIB
     ICU::uc
     systemd
@@ -553,10 +555,8 @@ target_link_libraries(scylla PRIVATE
 # Hacks needed to expose internal APIs for xxhash dependencies
 target_compile_definitions(scylla PRIVATE XXH_PRIVATE_API HAVE_LZ4_COMPRESS_DEFAULT)
 
-find_package(libdeflate REQUIRED)
 target_include_directories(scylla PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
-    libdeflate::libdeflate
     "${scylla_gen_build_dir}")
 
 ###
