@@ -1477,6 +1477,7 @@ def add_view(cout, cls):
             fprintln(cout, reindent(4, """
                 auto {name}() const {{
                   return seastar::with_serialized_stream(v, [this] (auto& v) -> decltype({f}(std::declval<utils::input_stream&>(), boost::type<{full_type}>())) {{
+                   std::ignore = this;
                    auto in = v;
                    {skip}
                    return {deser};
