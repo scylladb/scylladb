@@ -81,8 +81,6 @@ class ScyllaMetrics:
 #    which is enough to trigger shedding.
 # See also #8193.
 #
-# Big request causes the entire connection to be closed (see #8800 for the reasons),
-# this results in NoHostAvailable on the client.
 # We check that there are no unexpected protocol_errors using Scylla Prometheus API.
 # Such errors occurred before, when before closing the connection, the remaining
 # bytes of the current request were not read to the end and were treated as
@@ -101,8 +99,10 @@ def test_shed_too_large_request(cql, table1, scylla_only):
 
     # disable compression since we rely on specific request size
     with disable_compression():
-        # separate session is needed due to the cql_test_connection fixture,
-        # which checks that the session is not broken at the end of the test
+        # Big request causes the entire connection to be closed (see #8800 for the reasons).
+        # For some reason the driver doesn't try to reopen the connection to the same host,
+        # so we end up with a broken session and cql_test_connection fixture fails the test.
+        # We create a separate session to make the test work.
         with new_cql(cql) as ncql:
             prepared = ncql.prepare(f"INSERT INTO {table1} (p,t) VALUES (42,?)")
 
