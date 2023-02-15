@@ -14,7 +14,7 @@
 
 namespace cql3 {
 
-class cf_name : public keyspace_element_name {
+class cf_name final : public keyspace_element_name {
     sstring _cf_name = "";
 public:
     void set_column_family(const sstring& cf, bool keep_case);
