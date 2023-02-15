@@ -297,23 +297,25 @@ void prepare_new_value(broadcast_tables::prepared_update& query, const std::vect
 }
 
 static
-std::optional<expr::expression> get_value_condition(const std::vector<lw_shared_ptr<column_condition>>& conditions) {
+std::optional<expr::expression> get_value_condition(const expr::expression& the_condition) {
+    auto conditions = expr::boolean_factors(the_condition);
+
     if (conditions.size() == 0) {
         return std::nullopt;
     }
 
     if (conditions.size() > 1) {
         throw service::broadcast_tables::unsupported_operation_error(fmt::format("conditions: {}", fmt::join(
-            conditions | boost::adaptors::transformed(std::mem_fn(&column_condition::_expr)), ", ")));
+            conditions, ", ")));
     }
 
     const auto& condition = conditions[0];
 
-    auto binop = expr::as_if<expr::binary_operator>(&condition->_expr);
+    auto binop = expr::as_if<expr::binary_operator>(&condition);
     auto lhs = binop ? expr::as_if<expr::column_value>(&binop->lhs) : nullptr;
     if (!lhs || (binop->op != cql3::expr::oper_t::EQ)) {
         throw service::broadcast_tables::unsupported_operation_error(fmt::format(
-            "condition: {}", condition->_expr));
+            "condition: {}", condition));
     }
 
     return binop->rhs;
@@ -335,9 +337,13 @@ update_statement::prepare_for_broadcast_tables() const {
         }
     }
 
+    if (has_static_column_conditions()) {
+        throw service::broadcast_tables::unsupported_operation_error{"static column conditions"};
+    }
+
     broadcast_tables::prepared_update query = {
         .key = get_key(restrictions().get_partition_key_restrictions()),
-        .value_condition = get_value_condition(_regular_conditions),
+        .value_condition = get_value_condition(_condition),
     };
 
     prepare_new_value(query, _column_operations);
@@ -356,7 +362,7 @@ insert_statement::insert_statement(cf_name name,
                                    std::vector<::shared_ptr<column_identifier::raw>> column_names,
                                    std::vector<expr::expression> column_values,
                                    bool if_not_exists)
-    : raw::modification_statement{std::move(name), std::move(attrs), conditions_vector{}, if_not_exists, false}
+    : raw::modification_statement{std::move(name), std::move(attrs), std::nullopt /* condition */, if_not_exists, false}
     , _column_names{std::move(column_names)}
     , _column_values{std::move(column_values)}
 { }
@@ -414,7 +420,7 @@ insert_json_statement::insert_json_statement(cf_name name,
                                              expr::expression json_value,
                                              bool if_not_exists,
                                              bool default_unset)
-    : raw::modification_statement{name, std::move(attrs), conditions_vector{}, if_not_exists, false}
+    : raw::modification_statement{name, std::move(attrs), std::nullopt /* condition */, if_not_exists, false}
     , _name(name)
     , _json_value(std::move(json_value))
     , _if_not_exists(if_not_exists)
@@ -439,7 +445,7 @@ update_statement::update_statement(cf_name name,
                                    std::unique_ptr<attributes::raw> attrs,
                                    std::vector<std::pair<::shared_ptr<column_identifier::raw>, std::unique_ptr<operation::raw_update>>> updates,
                                    expr::expression where_clause,
-                                   conditions_vector conditions, bool if_exists)
+                                   std::optional<expr::expression> conditions, bool if_exists)
     : raw::modification_statement(std::move(name), std::move(attrs), std::move(conditions), false, if_exists)
     , _updates(std::move(updates))
     , _where_clause(std::move(where_clause))

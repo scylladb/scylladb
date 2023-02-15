@@ -187,11 +187,8 @@ bool modification_statement::applies_to(const selection::selection* selection,
         .options = &options,
     };
 
-    auto condition_applies = [&row, &inputs](const lw_shared_ptr<column_condition>& cond) {
-        return cond->applies_to(inputs);
-    };
-    return (std::all_of(_static_conditions.begin(), _static_conditions.end(), condition_applies) &&
-            std::all_of(_regular_conditions.begin(), _regular_conditions.end(), condition_applies));
+    static auto true_value = raw_value::make_value(data_value(true).serialize());
+    return expr::evaluate(_condition, inputs) == true_value;
 }
 
 std::vector<mutation> modification_statement::apply_updates(
@@ -358,16 +355,9 @@ void modification_statement::build_cas_result_set_metadata() {
             _columns_of_cas_result_set.set(def.ordinal_id);
         }
     } else {
-        for (const auto& cond : _regular_conditions) {
-            expr::for_each_expression<expr::column_value>(cond->_expr, [&] (const expr::column_value& col) {
-                _columns_of_cas_result_set.set(col.col->ordinal_id);
-            });
-        }
-        for (const auto& cond : _static_conditions) {
-            expr::for_each_expression<expr::column_value>(cond->_expr, [&] (const expr::column_value& col) {
-                _columns_of_cas_result_set.set(col.col->ordinal_id);
-            });
-        }
+        expr::for_each_expression<expr::column_value>(_condition, [&] (const expr::column_value& col) {
+            _columns_of_cas_result_set.set(col.col->ordinal_id);
+        });
     }
     columns.reserve(columns.size() + all_columns.size());
     // We must filter conditions using the _columns_of_cas_result_set, since
@@ -513,11 +503,58 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
     return prepared_stmt;
 }
 
+static
+expr::expression
+update_for_lwt_null_equality_rules(const expr::expression& e) {
+    using namespace expr;
+
+    return search_and_replace(e, [] (const expression& e) -> std::optional<expression> {
+        if (auto* binop = as_if<binary_operator>(&e)) {
+            auto new_binop = *binop;
+            new_binop.null_handling = expr::null_handling_style::lwt_nulls;
+            return new_binop;
+        }
+        return std::nullopt;
+    });
+}
+
+static
+expr::expression
+column_condition_prepare(const expr::expression& expr, data_dictionary::database db, const sstring& keyspace, const schema& schema){
+    auto prepared = expr::prepare_expression(expr, db, keyspace, &schema, make_lw_shared<column_specification>("", "", make_shared<column_identifier>("IF condition", true), boolean_type));
+
+    expr::for_each_expression<expr::column_value>(prepared, [] (const expr::column_value& cval) {
+      auto def = cval.col;
+      if (def->is_primary_key()) {
+        throw exceptions::invalid_request_exception(format("PRIMARY KEY column '{}' cannot have IF conditions", def->name_as_text()));
+      }
+    });
+
+    // If a collection is multi-cell and not frozen, it is returned as a map even if the
+    // underlying data type is "set" or "list". This is controlled by
+    // partition_slice::collections_as_maps enum, which is set when preparing a read command
+    // object. Representing a list as a map<timeuuid, listval> is necessary to identify the list field
+    // being updated, e.g. in case of UPDATE t SET list[3] = null WHERE a = 1 IF list[3]
+    // = 'key'
+    //
+    // We adjust for it by reinterpreting the returned value as a list, since the map
+    // representation is not needed here.
+    prepared = expr::adjust_for_collection_as_maps(prepared);
+
+    prepared = expr::optimize_like(prepared);
+
+    prepared = update_for_lwt_null_equality_rules(prepared);
+
+
+    return prepared;
+}
+
+
 void
 modification_statement::prepare_conditions(data_dictionary::database db, const schema& schema, prepare_context& ctx,
         cql3::statements::modification_statement& stmt) const
 {
-    if (_if_not_exists || _if_exists || !_conditions.empty()) {
+    if (_if_not_exists || _if_exists || _conditions) {
         if (stmt.is_counter()) {
             throw exceptions::invalid_request_exception("Conditional updates are not supported on counter tables");
         }
@@ -528,21 +565,17 @@ modification_statement::prepare_conditions(data_dictionary::database db, const s
         if (_if_not_exists) {
             // To have both 'IF NOT EXISTS' and some other conditions doesn't make sense.
             // So far this is enforced by the parser, but let's assert it for sanity if ever the parse changes.
-            assert(_conditions.empty());
+            assert(!_conditions);
             assert(!_if_exists);
             stmt.set_if_not_exist_condition();
         } else if (_if_exists) {
-            assert(_conditions.empty());
+            assert(!_conditions);
             assert(!_if_not_exists);
             stmt.set_if_exist_condition();
         } else {
-            for (auto&& entry : _conditions) {
-                auto condition = entry->prepare(db, keyspace(), schema);
-
-                condition->collect_marker_specificaton(ctx);
-
-                stmt.add_condition(condition);
-            }
+            stmt._condition = column_condition_prepare(*_conditions, db, keyspace(), schema);
+            expr::fill_prepare_context(stmt._condition, ctx);
+            stmt.analyze_condition(stmt._condition);
         }
         stmt.build_cas_result_set_metadata();
     }
@@ -614,15 +647,13 @@ bool modification_statement::is_conditional() const {
     return has_conditions();
 }
 
-void modification_statement::add_condition(lw_shared_ptr<column_condition> cond) {
-  expr::for_each_expression<expr::column_value>(cond->_expr, [&] (const expr::column_value& col) {
+void modification_statement::analyze_condition(expr::expression cond) {
+  expr::for_each_expression<expr::column_value>(cond, [&] (const expr::column_value& col) {
     if (col.col->is_static()) {
         _has_static_column_conditions = true;
-        _static_conditions.emplace_back(std::move(cond));
     } else {
         _has_regular_column_conditions = true;
         _selects_a_collection |=  col.col->type->is_collection();
-        _regular_conditions.emplace_back(std::move(cond));
     }
   });
 }
@@ -676,7 +707,7 @@ void modification_statement::validate_where_clause_for_conditions() const {
         }
 
         // All primary key parts must be specified, unless this statement has only static column conditions
-        if (_regular_conditions.empty() == false) {
+        if (_has_regular_column_conditions) {
             throw exceptions::invalid_request_exception(
                     "DELETE statements must restrict all PRIMARY KEY columns with equality relations"
                     " in order to use IF condition on non static columns");
@@ -695,7 +726,7 @@ const statement_type statement_type::SELECT = statement_type(statement_type::typ
 
 namespace raw {
 
-modification_statement::modification_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, conditions_vector conditions, bool if_not_exists, bool if_exists)
+modification_statement::modification_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, std::optional<expr::expression> conditions, bool if_not_exists, bool if_exists)
     : cf_statement{std::move(name)}
     , _attrs{std::move(attrs)}
     , _conditions{std::move(conditions)}

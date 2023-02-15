@@ -95,7 +95,6 @@ target_sources(cql3
     constants.cc
     query_processor.cc
     query_options.cc
-    column_condition.cc
     user_types.cc
     untyped_result_set.cc
     selection/abstract_function_selector.cc

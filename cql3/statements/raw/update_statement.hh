@@ -46,7 +46,7 @@ public:
         std::unique_ptr<attributes::raw> attrs,
         std::vector<std::pair<::shared_ptr<column_identifier::raw>, std::unique_ptr<operation::raw_update>>> updates,
         expr::expression where_clause,
-        conditions_vector conditions, bool if_exists);
+        std::optional<expr::expression> conditions, bool if_exists);
 protected:
     virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(data_dictionary::database db, schema_ptr schema,
                 prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const override;

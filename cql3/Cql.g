@@ -100,7 +100,6 @@ using namespace cql3::selection;
 using namespace cql3::expr;
 
 using cql3::cql3_type;
-using conditions_type = std::vector<lw_shared_ptr<cql3::column_condition::raw>>;
 using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>, std::unique_ptr<cql3::operation::raw_update>>>;
 
 // ANTLR forces us to define a default-initialized return value
@@ -545,24 +544,32 @@ updateStatement returns [std::unique_ptr<raw::update_statement> expr]
         bool if_exists = false;
         auto attrs = std::make_unique<cql3::attributes::raw>();
         std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>, std::unique_ptr<cql3::operation::raw_update>>> operations;
+        std::optional<expression> cond_opt;
     }
     : K_UPDATE cf=columnFamilyName
       ( usingClause[attrs] )?
       K_SET columnOperation[operations] (',' columnOperation[operations])*
       K_WHERE wclause=whereClause
-      ( K_IF (K_EXISTS{ if_exists = true; } | conditions=updateConditions) )?
+      ( K_IF (K_EXISTS{ if_exists = true; } | conditions=updateConditions { cond_opt = std::move(conditions); } ))?
       {
           return std::make_unique<raw::update_statement>(std::move(cf),
                                                   std::move(attrs),
                                                   std::move(operations),
                                                   std::move(wclause),
-                                                  std::move(conditions),
+                                                  std::move(cond_opt),
                                                   if_exists);
      }
     ;
 
-updateConditions returns [conditions_type conditions]
-    : columnCondition[conditions] ( K_AND columnCondition[conditions] )*
+updateConditions returns [expression cond]
+    @init {
+        std::vector<expression> conditions;
+    }
+    : c1=columnCondition { conditions.emplace_back(std::move(c1)); }
+         ( K_AND cn=columnCondition { conditions.emplace_back(std::move(cn)); } )*
+    {
+        return conjunction{std::move(conditions)};
+    }
     ;
 
 /**
@@ -577,18 +584,19 @@ deleteStatement returns [std::unique_ptr<raw::delete_statement> expr]
         auto attrs = std::make_unique<cql3::attributes::raw>();
         std::vector<std::unique_ptr<cql3::operation::raw_deletion>> column_deletions;
         bool if_exists = false;
+        std::optional<expression> cond_opt;
     }
     : K_DELETE ( dels=deleteSelection { column_deletions = std::move(dels); } )?
       K_FROM cf=columnFamilyName
       ( usingTimestampTimeoutClause[attrs] )?
       K_WHERE wclause=whereClause
-      ( K_IF ( K_EXISTS { if_exists = true; } | conditions=updateConditions ))?
+      ( K_IF ( K_EXISTS { if_exists = true; } | conditions=updateConditions { cond_opt = std::move(conditions); } ))?
       {
           return std::make_unique<raw::delete_statement>(cf,
                                             std::move(attrs),
                                             std::move(column_deletions),
                                             std::move(wclause),
-                                            std::move(conditions),
+                                            std::move(cond_opt),
                                             if_exists);
       }
     ;
@@ -1678,66 +1686,36 @@ udtColumnOperation[operations_type& operations,
       }
     ;
 
-columnCondition[conditions_type& conditions]
+columnRefExpr returns [expression e]
+    : column=cident { e = unresolved_identifier{column}; }
+    ;
+
+subscriptExpr returns [expression e]
+    : col=columnRefExpr { e = std::move(col); }
+        ( '[' sub=term ']'  { e = subscript{std::move(e), std::move(sub)}; } )?
+    ;
+
+singleColumnInValuesOrMarkerExpr returns [expression e]
+    : values=singleColumnInValues { e = collection_constructor{collection_constructor::style_type::list, std::move(values)}; }
+    | m=marker { e = std::move(m); }
+    ;
+
+columnCondition returns [expression e]
     // Note: we'll reject duplicates later
-    : key=cident
-        ( op=relationType t=term { conditions.emplace_back(
-                    column_condition::raw::make(
-                        binary_operator(
-                            unresolved_identifier{key},
+    : key=subscriptExpr
+        ( op=relationType t=term {
+                    e = binary_operator(
+                            key,
                             op,
-                            t)));
+                            t);
                 }
         | K_IN
-            ( values=singleColumnInValues { conditions.emplace_back(
-                    column_condition::raw::make(
-                        binary_operator(
-                            unresolved_identifier{key},
+            values=singleColumnInValuesOrMarkerExpr {
+                    e = binary_operator(
+                            key,
                             oper_t::IN,
-                            collection_constructor{collection_constructor::style_type::list, values})));
+                            std::move(values));
                 }
-            | marker1=marker { conditions.emplace_back(
-                    column_condition::raw::make(
-                        binary_operator(
-                            unresolved_identifier{key},
-                            oper_t::IN,
-                            marker1)));
-                }
-            )
-        | '[' element=term ']'
-            ( op=relationType t=term { conditions.emplace_back(
-                    column_condition::raw::make(
-                        binary_operator(
-                            subscript{
-                                unresolved_identifier{key},
-                                 element
-                            },
-                            op,
-                            t)));
-                }
-            | K_IN
-                ( values=singleColumnInValues { conditions.emplace_back(
-                        column_condition::raw::make(
-                            binary_operator(
-                                subscript{
-                                    unresolved_identifier{key},
-                                    element
-                                },
-                                oper_t::IN,
-                                collection_constructor{collection_constructor::style_type::list, values})));
-                    }
-                | marker1=marker { conditions.emplace_back(
-                        column_condition::raw::make(
-                            binary_operator(
-                                subscript{
-                                    unresolved_identifier{key},
-                                    element
-                                },
-                                oper_t::IN,
-                                marker1)));
-                    }
-                )
-            )
         )
     ;
 
