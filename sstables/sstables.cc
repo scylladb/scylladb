@@ -480,7 +480,7 @@ parse(const schema& schema, sstable_version_types v, random_access_reader& in, d
 
     key_type nr_elements;
     co_await parse(schema, v, in, nr_elements);
-    for (auto _ : boost::irange<key_type>(0, nr_elements)) {
+    for ([[maybe_unused]] auto _ : boost::irange<key_type>(0, nr_elements)) {
         key_type new_key;
         unsigned new_size;
         co_await parse(schema, v, in, new_key);
