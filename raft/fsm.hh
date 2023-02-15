@@ -642,7 +642,7 @@ void fsm::step(server_id from, Message&& msg) {
     }
 
     auto visitor = [this, from, msg = std::move(msg)](const auto& state) mutable {
-        step(from, state, std::move(msg));
+        this->step(from, state, std::move(msg));
     };
 
     std::visit(visitor, _state);
