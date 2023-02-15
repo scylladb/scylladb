@@ -726,6 +726,8 @@ private:
     }
 
     future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
+    // runs in async context (called from storage::open)
+    void write_toc(file_writer w);
 public:
     future<> read_toc() noexcept;
 

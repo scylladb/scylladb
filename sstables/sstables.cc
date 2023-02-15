@@ -957,11 +957,21 @@ void sstable::open_sstable(const io_priority_class& pc) {
     _storage.open(*this, pc);
 }
 
+void sstable::write_toc(file_writer w) {
+    sstlog.debug("Writing TOC file {} ", w.get_filename());
+
+    for (auto&& key : _recognized_components) {
+            // new line character is appended to the end of each component name.
+        auto value = sstable_version_constants::get_component_map(_version).at(key) + "\n";
+        bytes b = bytes(reinterpret_cast<const bytes::value_type *>(value.c_str()), value.size());
+        write(_version, w, b);
+    }
+    w.close();
+}
+
 void sstable::filesystem_storage::open(sstable& sst, const io_priority_class& pc) {
     touch_temp_dir(sst).get0();
     auto file_path = sst.filename(component_type::TemporaryTOC);
-
-    sstlog.debug("Writing TOC file {} ", file_path);
 
     // Writing TOC content to temporary file.
     // If creation of temporary TOC failed, it implies that that boot failed to
@@ -981,13 +991,7 @@ void sstable::filesystem_storage::open(sstable& sst, const io_priority_class& pc
         throw std::runtime_error(format("SSTable write failed due to existence of TOC file for generation {:d} of {}.{}", sst._generation.value(), sst._schema->ks_name(), sst._schema->cf_name()));
     }
 
-    for (auto&& key : sst._recognized_components) {
-            // new line character is appended to the end of each component name.
-        auto value = sstable_version_constants::get_component_map(sst._version).at(key) + "\n";
-        bytes b = bytes(reinterpret_cast<const bytes::value_type *>(value.c_str()), value.size());
-        write(sst._version, w, b);
-    }
-    w.close();
+    sst.write_toc(std::move(w));
 
     // Flushing parent directory to guarantee that temporary TOC file reached
     // the disk.
