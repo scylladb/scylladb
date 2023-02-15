@@ -20,7 +20,7 @@
 #include "cql3/assignment_testable.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/column_identifier.hh"
-#include "to_string.hh"
+#include "utils/to_string.hh"
 #include "log.hh"
 #include <unordered_map>
 

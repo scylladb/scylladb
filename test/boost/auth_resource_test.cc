@@ -14,7 +14,7 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include "to_string.hh"
+#include "utils/to_string.hh"
 
 BOOST_AUTO_TEST_CASE(root_of) {
     //

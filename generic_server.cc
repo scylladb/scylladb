@@ -8,7 +8,7 @@
 
 #include "generic_server.hh"
 
-#include "to_string.hh"
+#include "utils/to_string.hh"
 
 #include <seastar/core/when_all.hh>
 #include <seastar/core/loop.hh>

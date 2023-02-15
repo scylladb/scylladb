@@ -15,7 +15,7 @@
 #include "query-result-set.hh"
 #include "seastar/core/shared_ptr.hh"
 #include "seastar/core/thread.hh"
-#include "to_string.hh"
+#include "utils/to_string.hh"
 #include "bytes.hh"
 #include "mutation/mutation_partition_serializer.hh"
 #include "query-result-reader.hh"

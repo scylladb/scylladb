@@ -15,7 +15,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/config.hh"
-#include "to_string.hh"
+#include "utils/to_string.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_function.hh"
 #include "cql3/functions/user_aggregate.hh"

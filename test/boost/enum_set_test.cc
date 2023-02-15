@@ -16,7 +16,7 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include "to_string.hh"
+#include "utils/to_string.hh"
 
 enum class fruit { apple = 3, pear = 7, banana = 8 };
 

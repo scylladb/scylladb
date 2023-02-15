@@ -24,7 +24,7 @@
 #include "log.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/raft_group0.hh"
-#include "to_string.hh"
+#include "utils/to_string.hh"
 #include "gms/gossiper.hh"
 #include "gms/failure_detector.hh"
 #include "gms/feature_service.hh"

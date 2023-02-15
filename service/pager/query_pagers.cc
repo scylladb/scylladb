@@ -15,7 +15,7 @@
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "log.hh"
 #include "service/storage_proxy.hh"
-#include "to_string.hh"
+#include "utils/to_string.hh"
 #include "utils/result_combinators.hh"
 #include "view_info.hh"
 #include "db/view/delete_ghost_rows_visitor.hh"

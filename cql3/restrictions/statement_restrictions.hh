@@ -15,7 +15,7 @@
 #include "bounds_slice.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/restrictions.hh"
-#include "to_string.hh"
+#include "utils/to_string.hh"
 #include "schema_fwd.hh"
 #include "cql3/prepare_context.hh"
 #include "cql3/statements/statement_type.hh"

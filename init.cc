@@ -8,7 +8,7 @@
 
 #include "init.hh"
 #include "gms/failure_detector.hh"
-#include "to_string.hh"
+#include "utils/to_string.hh"
 #include "gms/inet_address.hh"
 #include "utils/fb_utilities.hh"
 #include "seastarx.hh"

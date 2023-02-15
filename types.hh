@@ -20,7 +20,7 @@
 #include <seastar/net/byteorder.hh>
 #include "db_clock.hh"
 #include "bytes.hh"
-#include "to_string.hh"
+#include "utils/to_string.hh"
 #include "duration.hh"
 #include "marshal_exception.hh"
 #include <seastar/net/ipv4_address.hh>
