@@ -53,6 +53,8 @@ struct do_nothing_loading_cache_stats {
     // Accounts events when entries are evicted from the unprivileged cache section due to size restriction.
     // These events are interesting because they are an indication of a cache pollution event.
     static void inc_unprivileged_on_cache_size_eviction() noexcept {};
+    // A metric complementary to the above one. Both combined allow to get the total number of cache evictions
+    static void inc_privileged_on_cache_size_eviction() noexcept {};
 };
 
 /// \brief Loading cache is a cache that loads the value into the cache using the given asynchronous callback.
@@ -213,6 +215,7 @@ private:
         , _timer([this] { on_timer(); })
     {
         static_assert(noexcept(LoadingCacheStats::inc_unprivileged_on_cache_size_eviction()), "LoadingCacheStats::inc_unprivileged_on_cache_size_eviction must be non-throwing");
+        static_assert(noexcept(LoadingCacheStats::inc_privileged_on_cache_size_eviction()), "LoadingCacheStats::inc_privileged_on_cache_size_eviction must be non-throwing");
 
         if (!validate_config(_cfg)) {
             throw exceptions::configuration_exception("loading_cache: caching is enabled but refresh period and/or max_size are zero");
@@ -577,6 +580,7 @@ private:
             ts_value_lru_entry& lru_entry = *_lru_list.rbegin();
             _logger.trace("shrink(): {}: dropping the entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
             loading_cache::destroy_ts_value(&lru_entry);
+            LoadingCacheStats::inc_privileged_on_cache_size_eviction();
         };
 
         auto drop_unprivileged_entry = [&] {
