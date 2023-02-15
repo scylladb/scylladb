@@ -1144,7 +1144,7 @@ future<> server_impl::applier_fiber() {
                         co_await _state_machine->apply(std::move(commands));
                     } catch (abort_requested_exception& e) {
                         logger.info("[{}] applier fiber stopped because state machine was aborted: {}", _id, e);
-                        co_return;
+                        throw stop_apply_fiber{};
                     } catch (...) {
                         std::throw_with_nested(raft::state_machine_error{});
                     }
