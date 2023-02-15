@@ -662,6 +662,19 @@ async def train_lwt(executable: PathLike, workdir: PathLike) -> None:
 trainers["lwt"] = ("lwt_dataset", train_lwt)
 populators["lwt_dataset"] = populate_lwt
 
+# SI ==================================================
+
+async def populate_si(executable: PathLike, workdir: PathLike) -> None:
+    async with with_cs_populate(executable=executable, workdir=workdir) as server:
+        await cs(cmd=["user", "profile=./conf/si.yaml", "ops(insert=1)"], n=100000, cl="local_quorum", node=server)
+
+async def train_si(executable: PathLike, workdir: PathLike) -> None:
+    async with with_cs_train(executable=executable, workdir=workdir) as server:
+        await cs(cmd=["user", "profile=./conf/si.yaml", "ops(insert=25,si_read1=1,si_read2=1,si_read3=1,si_read4=1,si_read5=10)"], n=100000, cl="local_quorum", node=server)
+
+trainers["si"] = ("si_dataset", train_si)
+populators["si_dataset"] = populate_si
+
 ################################################################################
 # Training procedures
 
