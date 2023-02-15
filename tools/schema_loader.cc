@@ -133,7 +133,8 @@ private:
         throw std::bad_function_call();
     }
     virtual const std::vector<view_ptr>& get_table_views(data_dictionary::table t) const override {
-        return {};
+        static const std::vector<view_ptr> empty;
+        return empty;
     }
     virtual sstring get_available_index_name(data_dictionary::database db, std::string_view ks_name, std::string_view table_name,
             std::optional<sstring> index_name_root) const override {
