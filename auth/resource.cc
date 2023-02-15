@@ -134,25 +134,17 @@ resource::resource(functions_resource_t, std::string_view keyspace, std::string_
     _parts.emplace_back(function_signature);
 }
 
-resource::resource(functions_resource_t, std::string_view keyspace, std::string_view function_name, std::vector<sstring> function_signature) : resource(resource_kind::functions) {
+resource::resource(functions_resource_t, std::string_view keyspace, std::string_view function_name, std::vector<::shared_ptr<cql3::cql3_type::raw>> function_args) : resource(resource_kind::functions) {
     _parts.emplace_back(keyspace);
-    sstring encoded_signature = format("{}[{}]",
-            function_name,
-            ::join("^", function_signature));
-    _parts.emplace_back(encoded_signature);
-}
-
-resource make_functions_resource(std::string_view keyspace, std::string_view function_name, std::vector<::shared_ptr<cql3::cql3_type::raw>> function_signature) {
-    if (keyspace.empty()) {
-        throw exceptions::invalid_request_exception("In this context function name must be explictly qualified by a keyspace");
+    _parts.emplace_back(function_name);
+    if (function_args.empty()) {
+        _parts.emplace_back("");
+        return;
     }
-    std::vector<sstring> args_types;
-    for (auto& raw_type : function_signature) {
-        // FIXME(sarna): provide information on user-defined types - this is tricky, because this information
-        // is kept in a database instance, and is thus dynamic
-        args_types.emplace_back(raw_type->prepare_internal(sstring(keyspace), data_dictionary::user_types_metadata{}).get_type()->name());
+    for (auto& arg_type : function_args) {
+        // We can't validate the UDTs here, so we just use the raw cql type names.
+        _parts.emplace_back(arg_type->to_string());
     }
-    return resource(functions_resource_t{}, keyspace, function_name, std::move(args_types));
 }
 
 sstring resource::name() const {
@@ -228,6 +220,9 @@ std::pair<sstring, std::vector<data_type>> decode_signature(std::string_view enc
     std::string_view function_name = encoded_signature.substr(0, name_delim);
     encoded_signature.remove_prefix(name_delim + 1);
     encoded_signature.remove_suffix(1);
+    if (encoded_signature.empty()) {
+        return {sstring(function_name), {}};
+    }
     std::vector<std::string_view> raw_types;
     boost::split(raw_types, encoded_signature, boost::is_any_of("^"));
     std::vector<data_type> decoded_types = boost::copy_range<std::vector<data_type>>(
@@ -252,9 +247,17 @@ static sstring decoded_signature_string(std::string_view encoded_signature) {
 std::ostream &operator<<(std::ostream &os, const functions_resource_view &v) {
     const auto keyspace = v.keyspace();
     const auto function_signature = v.function_signature();
+    const auto name = v.function_name();
+    const auto args = v.function_args();
 
     if (!keyspace) {
         os << "<all functions>";
+    } else if (name) {
+        os << "<function " << *keyspace << '.' << cql3::util::maybe_quote(sstring(*name)) << '(';
+        for (auto arg : *args) {
+            os << arg << ',';
+        }
+        os << ")>";
     } else if (!function_signature) {
         os << "<all functions in " << *keyspace << '>';
     } else {
@@ -278,11 +281,34 @@ std::optional<std::string_view> functions_resource_view::keyspace() const {
 }
 
 std::optional<std::string_view> functions_resource_view::function_signature() const {
-    if (_resource._parts.size() <= 2) {
+    if (_resource._parts.size() <= 2 || _resource._parts.size() > 3) {
         return {};
     }
 
     return _resource._parts[2];
+}
+
+std::optional<std::string_view> functions_resource_view::function_name() const {
+    if (_resource._parts.size() <= 3) {
+        return {};
+    }
+
+    return _resource._parts[2];
+}
+
+std::optional<std::vector<std::string_view>> functions_resource_view::function_args() const {
+    if (_resource._parts.size() <= 3) {
+        return {};
+    }
+
+    std::vector<std::string_view> parts;
+    if (_resource._parts[3] == "") {
+        return {};
+    }
+    for (size_t i = 3; i < _resource._parts.size(); i++) {
+        parts.push_back(_resource._parts[i]);
+    }
+    return parts;
 }
 
 data_resource_view::data_resource_view(const resource& r) : _resource(r) {

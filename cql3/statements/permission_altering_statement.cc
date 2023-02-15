@@ -42,7 +42,7 @@ void cql3::statements::permission_altering_statement::validate(query_processor&,
 
 future<> cql3::statements::permission_altering_statement::check_access(query_processor& qp, const service::client_state& state) const {
     state.ensure_not_anonymous();
-    maybe_correct_resource(_resource, state);
+    maybe_correct_resource(_resource, state, qp);
 
     return state.ensure_exists(_resource).then([this, &state] {
         // check that the user has AUTHORIZE permission on the resource or its parents, otherwise reject

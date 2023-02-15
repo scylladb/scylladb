@@ -35,7 +35,7 @@ public:
     void validate(query_processor&, const service::client_state& state) const override;
 
 protected:
-    static void maybe_correct_resource(auth::resource&, const service::client_state&);
+    static void maybe_correct_resource(auth::resource&, const service::client_state&, query_processor&);
 };
 
 }

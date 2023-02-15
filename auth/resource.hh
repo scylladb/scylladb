@@ -94,7 +94,7 @@ public:
     resource(functions_resource_t, std::string_view keyspace);
     resource(functions_resource_t, std::string_view keyspace, std::string_view function_signature);
     resource(functions_resource_t, std::string_view keyspace, std::string_view function_name,
-            std::vector<sstring> function_signature);
+            std::vector<::shared_ptr<cql3::cql3_type::raw>> function_args);
 
     resource_kind kind() const noexcept {
         return _kind;
@@ -208,6 +208,8 @@ public:
 
     std::optional<std::string_view> keyspace() const;
     std::optional<std::string_view> function_signature() const;
+    std::optional<std::string_view> function_name() const;
+    std::optional<std::vector<std::string_view>> function_args() const;
 };
 
 std::ostream& operator<<(std::ostream&, const functions_resource_view&);
@@ -254,7 +256,9 @@ inline resource make_functions_resource(std::string_view keyspace, std::string_v
     return resource(functions_resource_t{}, keyspace, function_signature);
 }
 
-resource make_functions_resource(std::string_view keyspace, std::string_view function_name, std::vector<::shared_ptr<cql3::cql3_type::raw>> function_signature);
+inline resource make_functions_resource(std::string_view keyspace, std::string_view function_name, std::vector<::shared_ptr<cql3::cql3_type::raw>> function_signature) {
+    return resource(functions_resource_t{}, keyspace, function_name, function_signature);
+}
 
 sstring encode_signature(std::string_view name, std::vector<data_type> args);
 

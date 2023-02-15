@@ -380,8 +380,6 @@ def test_grant_revoke_uda_permissions(scylla_only, cql):
                         cql.execute(f"DROP AGGREGATE IF EXISTS {keyspace}.{custom_avg}(bigint)")
 
 # Test that permissions for user-defined functions created on top of user-defined types work
-# Fails on Scylla, because we currently don't properly support user-defined types in function permissions
-@pytest.mark.xfail(reason='user-defined types not supported in function permissions yet')
 def test_udf_permissions_with_udt(cql):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
         with new_type(cql, keyspace, '(v int)') as udt:
@@ -402,3 +400,21 @@ def test_udf_permissions_with_udt(cql):
                             grant(cql, 'SELECT', table, username)
                             grant(cql, 'EXECUTE', f'FUNCTION {keyspace}.{fun}({udt})', username)
                             user_session.execute(f'SELECT {keyspace}.{fun}(a) FROM {table}')
+
+# Test that permissions on user-defined functions with no arguments work
+def test_udf_permissions_no_args(cql):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+        with new_test_table(cql, keyspace, schema="a int primary key") as table, new_user(cql) as username:
+            with new_session(cql, username) as user_session:
+                fun_body_lua = f"() CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
+                fun_body_java = f"() CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
+                fun_body = fun_body_lua
+                try:
+                    with new_function(cql, keyspace, fun_body):
+                        pass
+                except:
+                    fun_body = fun_body_java
+                with new_function(cql, keyspace, fun_body) as fun:
+                    grant(cql, 'SELECT', table, username)
+                    check_enforced(cql, username, permission='EXECUTE', resource=f'function {keyspace}.{fun}()',
+                            function=lambda: user_session.execute(f'SELECT {keyspace}.{fun}() FROM {table}'))
