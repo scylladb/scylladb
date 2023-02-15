@@ -113,74 +113,6 @@ foreach(f ${swagger_files})
     list(APPEND swagger_gen_files "${scylla_swagger_gen_${fname}_files}")
 endforeach()
 
-# Create C++ bindings for IDL serializers
-function(scylla_generate_idl_serializer)
-    set(one_value_args TARGET VAR IN_FILE OUT_FILE)
-    cmake_parse_arguments(args "" "${one_value_args}" "" ${ARGN})
-    get_filename_component(out_dir ${args_OUT_FILE} DIRECTORY)
-    set(idl_compiler "${CMAKE_SOURCE_DIR}/idl-compiler.py")
-
-    find_package(Python3 COMPONENTS Interpreter)
-
-    add_custom_command(
-        DEPENDS
-            ${args_IN_FILE}
-            ${idl_compiler}
-        OUTPUT ${args_OUT_FILE}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${out_dir}
-        COMMAND Python3::Interpreter ${idl_compiler} --ns ser -f ${args_IN_FILE} -o ${args_OUT_FILE})
-
-    add_custom_target(${args_TARGET}
-        DEPENDS ${args_OUT_FILE})
-
-    set(${args_VAR} ${args_OUT_FILE} PARENT_SCOPE)
-endfunction()
-
-set(idl_serializers
-    idl/cache_temperature.idl.hh
-    idl/commitlog.idl.hh
-    idl/consistency_level.idl.hh
-    idl/frozen_mutation.idl.hh
-    idl/frozen_schema.idl.hh
-    idl/gossip_digest.idl.hh
-    idl/hinted_handoff.idl.hh
-    idl/idl_test.idl.hh
-    idl/keys.idl.hh
-    idl/messaging_service.idl.hh
-    idl/mutation.idl.hh
-    idl/paging_state.idl.hh
-    idl/partition_checksum.idl.hh
-    idl/paxos.idl.hh
-    idl/query.idl.hh
-    idl/raft.idl.hh
-    idl/range.idl.hh
-    idl/read_command.idl.hh
-    idl/reconcilable_result.idl.hh
-    idl/replay_position.idl.hh
-    idl/result.idl.hh
-    idl/ring_position.idl.hh
-    idl/streaming.idl.hh
-    idl/token.idl.hh
-    idl/tracing.idl.hh
-    idl/truncation_record.idl.hh
-    idl/uuid.idl.hh
-    idl/view.idl.hh)
-
-set(idl_gen_files)
-
-foreach(f ${idl_serializers})
-    get_filename_component(idl_name "${f}" NAME)
-    get_filename_component(idl_target "${idl_name}" NAME_WE)
-    get_filename_component(idl_dir "${f}" DIRECTORY)
-    string(REPLACE ".idl.hh" ".dist.hh" idl_out_hdr_name "${idl_name}")
-    scylla_generate_idl_serializer(
-        TARGET scylla_idl_gen_${idl_target}
-        VAR scylla_idl_gen_${idl_target}_files
-        IN_FILE "${CMAKE_SOURCE_DIR}/${f}"
-        OUT_FILE ${scylla_gen_build_dir}/${idl_dir}/${idl_out_hdr_name})
-    list(APPEND idl_gen_files "${scylla_idl_gen_${idl_target}_files}")
-endforeach()
-
 set(scylla_sources
     absl-flat_hash_map.cc
     api/api.cc
@@ -489,11 +421,11 @@ set(scylla_sources
 set(scylla_gen_sources
     "${scylla_thrift_gen_cassandra_files}"
     "${scylla_ragel_gen_protocol_parser_file}"
-    "${swagger_gen_files}"
-    "${idl_gen_files}")
+    "${swagger_gen_files}")
 
 add_subdirectory(alternator)
 add_subdirectory(cql3)
+add_subdirectory(idl)
 add_subdirectory(rust)
 
 add_executable(scylla
@@ -503,6 +435,7 @@ add_executable(scylla
 target_link_libraries(scylla PRIVATE
     alternator
     cql3
+    idl
     wasmtime_bindings)
 
 target_link_libraries(scylla PRIVATE
