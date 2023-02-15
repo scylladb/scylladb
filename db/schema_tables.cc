@@ -1847,7 +1847,7 @@ static std::vector<data_value> read_arg_values(const query::result_set_row& row)
     }
 #endif
 
-static shared_ptr<cql3::functions::user_function> create_func(replica::database& db, const query::result_set_row& row) {
+static seastar::future<shared_ptr<cql3::functions::user_function>> create_func(replica::database& db, const query::result_set_row& row) {
     cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("function_name")};
     auto arg_types = read_arg_types(db, row, name.keyspace);
@@ -1871,13 +1871,13 @@ static shared_ptr<cql3::functions::user_function> create_func(replica::database&
             .cfg = cfg,
         };
 
-        return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types), std::move(arg_names),
+        co_return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types), std::move(arg_names),
                 std::move(body), language, std::move(return_type),
                 row.get_nonnull<bool>("called_on_null_input"), std::move(ctx));
     } else if (language == "xwasm") {
         wasm::context ctx{db.wasm_engine(), name.name, qctx->qp().get_wasm_instance_cache(), db.get_config().wasm_udf_yield_fuel(), db.get_config().wasm_udf_total_fuel()};
-        wasm::precompile(ctx, arg_names, body);
-        return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types), std::move(arg_names),
+        co_await wasm::precompile(ctx, arg_names, body);
+        co_return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types), std::move(arg_names),
                 std::move(body), language, std::move(return_type),
                 row.get_nonnull<bool>("called_on_null_input"), std::move(ctx));
     } else {
@@ -1951,9 +1951,9 @@ static void drop_cached_func(replica::database& db, const query::result_set_row&
 static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after) {
     auto diff = diff_rows(before, after);
 
-    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) {
+    co_await proxy.local().get_db().invoke_on_all(coroutine::lambda([&] (replica::database& db) -> future<> {
         for (const auto& val : diff.created) {
-            cql3::functions::functions::add_function(create_func(db, *val));
+            cql3::functions::functions::add_function(co_await create_func(db, *val));
         }
         for (const auto& val : diff.dropped) {
             cql3::functions::function_name name{
@@ -1964,9 +1964,9 @@ static future<> merge_functions(distributed<service::storage_proxy>& proxy, sche
         }
         for (const auto& val : diff.altered) {
             drop_cached_func(db, *val);
-            cql3::functions::functions::replace_function(create_func(db, *val));
+            cql3::functions::functions::replace_function(co_await create_func(db, *val));
         }
-    });
+    }));
 }
 
 static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after, 
@@ -2167,13 +2167,13 @@ std::vector<user_type> create_types_from_schema_partition(
     return create_types(ks, result->rows());
 }
 
-std::vector<shared_ptr<cql3::functions::user_function>> create_functions_from_schema_partition(
+seastar::future<std::vector<shared_ptr<cql3::functions::user_function>>> create_functions_from_schema_partition(
         replica::database& db, lw_shared_ptr<query::result_set> result) {
     std::vector<shared_ptr<cql3::functions::user_function>> ret;
     for (const auto& row : result->rows()) {
-        ret.emplace_back(create_func(db, row));
+        ret.emplace_back(co_await create_func(db, row));
     }
-    return ret;
+    co_return ret;
 }
 
 std::vector<shared_ptr<cql3::functions::user_aggregate>> create_aggregates_from_schema_partition(

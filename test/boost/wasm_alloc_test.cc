@@ -65,7 +65,7 @@ SEASTAR_TEST_CASE(test_allocation_failures) {
         auto wasm_ctx = wasm::context(*wasm_engine, "grow_return", wasm_cache.get(), 1000, 1000000000);
         try {
             // Function that ignores the input, grows its memory by 1 page, and returns 10
-            wasm::precompile(wasm_ctx, {}, grow_return);
+            co_await wasm::precompile(wasm_ctx, {}, grow_return);
             wasm_ctx.module.value()->compile(*wasm_engine);
         } catch (const wasm::exception& e) {
             errors_during_compilation++;

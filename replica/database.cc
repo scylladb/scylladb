@@ -803,7 +803,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
         co_return;
     }));
     co_await do_parse_schema_tables(proxy, db::schema_tables::FUNCTIONS, coroutine::lambda([&] (schema_result_value_type& v) -> future<> {
-        auto&& user_functions = create_functions_from_schema_partition(*this, v.second);
+        auto&& user_functions = co_await create_functions_from_schema_partition(*this, v.second);
         for (auto&& func : user_functions) {
             cql3::functions::functions::add_function(func);
         }

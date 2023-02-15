@@ -19,6 +19,7 @@
 #include "seastarx.hh"
 #include "rust/cxx.h"
 #include "rust/wasmtime_bindings.hh"
+#include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
 static logging::logger wasm_logger("wasm");
@@ -216,7 +217,8 @@ struct from_val_visitor {
     }
 };
 
-void precompile(context& ctx, const std::vector<sstring>& arg_names, std::string script) {
+seastar::future<> precompile(context& ctx, const std::vector<sstring>& arg_names, std::string script) {
+    std::exception_ptr ex;
     try {
         ctx.module = wasmtime::create_module(ctx.engine_ptr, rust::Str(script.data(), script.size()));
         // After precompiling the module, we try creating a store, an instance and a function with it to make sure it's valid.
@@ -227,8 +229,12 @@ void precompile(context& ctx, const std::vector<sstring>& arg_names, std::string
         create_func(*inst, *store, ctx.function_name);
         ctx.module.value()->release();
     } catch (const rust::Error& e) {
-        throw wasm::exception(e.what());
+        ex = std::make_exception_ptr(wasm::exception(format("Compilation failed: {}", e.what())));
     }
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+    co_return;
 }
 seastar::future<bytes_opt> run_script(context& ctx, wasmtime::Store& store, wasmtime::Instance& instance, wasmtime::Func& func, const std::vector<data_type>& arg_types, const std::vector<bytes_opt>& params, data_type return_type, bool allow_null_input) {
     wasm_logger.debug("Running function {}", ctx.function_name);

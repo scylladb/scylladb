@@ -23,7 +23,7 @@ namespace cql3 {
 
 namespace statements {
 
-shared_ptr<functions::function> create_function_statement::create(query_processor& qp, functions::function* old) const {
+seastar::future<shared_ptr<functions::function>> create_function_statement::create(query_processor& qp, functions::function* old) const {
     if (old && !dynamic_cast<functions::user_function*>(old)) {
         throw exceptions::invalid_request_exception(format("Cannot replace '{}' which is not a user defined function", *old));
     }
@@ -44,20 +44,20 @@ shared_ptr<functions::function> create_function_statement::create(query_processo
             .cfg = cfg,
         };
 
-        return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
+        co_return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
             std::move(return_type), _called_on_null_input, std::move(ctx));
     } else if (_language == "xwasm") {
        // FIXME: need better way to test wasm compilation without real_database()
        wasm::context ctx{db.real_database().wasm_engine(), _name.name, qp.get_wasm_instance_cache(), db.get_config().wasm_udf_yield_fuel(), db.get_config().wasm_udf_total_fuel()};
        try {
-            wasm::precompile(ctx, arg_names, _body);
-            return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
+            co_await wasm::precompile(ctx, arg_names, _body);
+            co_return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
                 std::move(return_type), _called_on_null_input, std::move(ctx));
        } catch (const wasm::exception& we) {
            throw exceptions::invalid_request_exception(we.what());
        }
     }
-    return nullptr;
+    co_return nullptr;
 }
 
 std::unique_ptr<prepared_statement> create_function_statement::prepare(data_dictionary::database db, cql_stats& stats) {
@@ -69,7 +69,7 @@ create_function_statement::prepare_schema_mutations(query_processor& qp, api::ti
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
-    auto func = dynamic_pointer_cast<functions::user_function>(validate_while_executing(qp));
+    auto func = dynamic_pointer_cast<functions::user_function>(co_await validate_while_executing(qp));
 
     if (func) {
         m = co_await qp.get_migration_manager().prepare_new_function_announcement(func, ts);
