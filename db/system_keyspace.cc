@@ -3281,9 +3281,11 @@ future<> system_keyspace::enable_features_on_startup(sharded<gms::feature_servic
             }
         }
         if (is_registered_feat) {
-            // `gms::feature::enable` should be run within a seastar thread context
-            co_await seastar::async([&local_feat_srv, f] {
-                local_feat_srv.enable(sstring(f));
+            co_await feat.invoke_on_all([f] (auto& srv) -> future<> {
+                // `gms::feature::enable` should be run within a seastar thread context
+                co_await seastar::async([&srv, f] {
+                    srv.enable(sstring(f));
+                });
             });
         }
         // If a feature is not in `registered_features` but still in `known_features` list
