@@ -34,7 +34,7 @@ find_package_handle_standard_args (libdeflate
     deflate_INCLUDE_DIR
   VERSION_VAR PC_deflate_VERSION)
 
-if (deflate_FOUND)
+if (libdeflate_FOUND)
   set (deflate_LIBRARIES ${deflate_LIBRARY})
   set (deflate_INCLUDE_DIRS ${deflate_INCLUDE_DIR})
   if (NOT (TARGET libdeflate::libdeflate))
