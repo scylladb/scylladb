@@ -452,31 +452,6 @@ class std_map:
         return self.size
 
 
-class intrusive_set_external_comparator:
-    size_t = gdb.lookup_type('size_t')
-
-    def __init__(self, ref):
-        container_type = ref.type.strip_typedefs()
-        self.node_type = container_type.template_argument(0)
-        self.link_offset = container_type.template_argument(1).cast(self.size_t)
-        self.root = ref['_header']['parent_']
-
-    def __visit(self, node):
-        if node:
-            for n in self.__visit(node['left_']):
-                yield n
-
-            node_ptr = node.cast(self.size_t) - self.link_offset
-            yield node_ptr.cast(self.node_type.pointer()).dereference()
-
-            for n in self.__visit(node['right_']):
-                yield n
-
-    def __iter__(self):
-        for n in self.__visit(self.root):
-            yield n
-
-
 class std_array:
     def __init__(self, ref):
         self.ref = ref
@@ -967,11 +942,7 @@ class mutation_partition_printer(gdb.printing.PrettyPrinter):
         self.val = val
 
     def __rows(self):
-        try:
-            return intrusive_btree(self.val['_rows'])
-        except gdb.error:
-            # Compatibility, rows were stored in intrusive set
-            return intrusive_set_external_comparator(self.val['_rows'])
+        return intrusive_btree(self.val['_rows'])
 
     def to_string(self):
         rows = list(str(r) for r in self.__rows())
