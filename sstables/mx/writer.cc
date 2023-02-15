@@ -802,7 +802,6 @@ public:
     }
 
     ~writer();
-    writer(writer&& o) = default;
     void consume_new_partition(const dht::decorated_key& dk) override;
     void consume(tombstone t) override;
     stop_iteration consume(static_row&& sr) override;
