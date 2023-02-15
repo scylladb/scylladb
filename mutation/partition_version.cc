@@ -433,7 +433,7 @@ utils::coroutine partition_entry::apply_to_incomplete(const schema& s,
     // of allocating sections, so we return here to get out of the current allocating section and
     // give the caller a chance to store the coroutine object. The code inside coroutine below
     // runs outside allocating section.
-    return utils::coroutine([self = this, &tracker, &s, &alloc, &reg, &acc, can_move, preemptible,
+    return utils::coroutine([&tracker, &s, &alloc, &reg, &acc, can_move, preemptible,
             cur = partition_snapshot_row_cursor(s, *dst_snp),
             src_cur = partition_snapshot_row_cursor(s, *src_snp, can_move),
             dst_snp = std::move(dst_snp),

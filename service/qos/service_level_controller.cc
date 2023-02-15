@@ -206,7 +206,7 @@ future<std::optional<service_level_options>> service_level_controller::find_serv
                 return std::nullopt;
             }
         });
-    }, std::optional<service_level_options>{}, [this] (std::optional<service_level_options> first, std::optional<service_level_options> second) -> std::optional<service_level_options> {
+    }, std::optional<service_level_options>{}, [] (std::optional<service_level_options> first, std::optional<service_level_options> second) -> std::optional<service_level_options> {
         if (!second) {
             return first;
         } else if (!first) {

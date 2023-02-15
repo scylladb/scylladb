@@ -1628,7 +1628,7 @@ public:
     }
 
     reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) override {
-        return [this, end_consumer = std::move(end_consumer)] (flat_mutation_reader_v2 reader) mutable -> future<> {
+        return [end_consumer = std::move(end_consumer)] (flat_mutation_reader_v2 reader) mutable -> future<> {
             return mutation_writer::segregate_by_shard(std::move(reader), std::move(end_consumer));
         };
     }

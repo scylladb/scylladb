@@ -61,7 +61,7 @@ list_service_level_statement::execute(query_processor& qp,
                                       return state.get_service_level_controller().get_distributed_service_level(_service_level);
                                   }
                               })
-            .then([this] (qos::service_levels_info sl_info) {
+            .then([] (qos::service_levels_info sl_info) {
                 auto d = [] (const qos::service_level_options::timeout_type& duration) -> bytes_opt {
                     return std::visit(overloaded_functor{
                         [&] (const qos::service_level_options::unset_marker&) {

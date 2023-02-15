@@ -66,7 +66,6 @@ future<query_result> execute_broadcast_table_query(
     return std::visit(make_visitor(
         std::bind_front([] (storage_proxy& proxy, const service::broadcast_tables::select_query& q) -> future<query_result> {
             const auto schema = db::system_keyspace::broadcast_kv_store();
-            const auto* column_definition = schema->get_column_definition("value");
 
             // Read mutations
             const auto [read_cmd, range] = prepare_read_command(proxy, *schema, q.key);

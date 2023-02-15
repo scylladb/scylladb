@@ -137,7 +137,7 @@ compaction_descriptor
 leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) {
     std::array<std::vector<shared_sstable>, leveled_manifest::MAX_LEVELS> level_info;
 
-    auto is_disjoint = [this, schema] (const std::vector<shared_sstable>& sstables, unsigned tolerance) -> std::tuple<bool, unsigned> {
+    auto is_disjoint = [schema] (const std::vector<shared_sstable>& sstables, unsigned tolerance) -> std::tuple<bool, unsigned> {
         auto overlapping_sstables = sstable_set_overlapping_count(schema, sstables);
         return { overlapping_sstables <= tolerance, overlapping_sstables };
     };
@@ -167,7 +167,6 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
     }
 
     size_t offstrategy_threshold = (mode == reshape_mode::strict) ? std::max(schema->min_compaction_threshold(), 4) : std::max(schema->max_compaction_threshold(), 32);
-    size_t max_sstables = std::max(schema->max_compaction_threshold(), int(offstrategy_threshold));
     auto tolerance = [mode] (unsigned level) -> unsigned {
         if (mode == reshape_mode::strict) {
             return 0;

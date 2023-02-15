@@ -966,13 +966,13 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         return ctx.db.local().find_column_family(get_uuid(req.param["name"], ctx.db.local())).get_compaction_strategy().name();
     });
 
-    cf::set_compression_parameters.set(r, [&ctx](std::unique_ptr<request> req) {
+    cf::set_compression_parameters.set(r, [](std::unique_ptr<request> req) {
         // TBD
         unimplemented();
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    cf::set_crc_check_chance.set(r, [&ctx](std::unique_ptr<request> req) {
+    cf::set_crc_check_chance.set(r, [](std::unique_ptr<request> req) {
         // TBD
         unimplemented();
         return make_ready_future<json::json_return_type>(json_void());

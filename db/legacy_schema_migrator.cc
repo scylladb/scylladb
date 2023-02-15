@@ -136,7 +136,7 @@ public:
                         _qp.execute_internal(cq, { dst.name, cf_name }, cql3::query_processor::cache_internal::yes),
                         _qp.execute_internal(zq, { dst.name, cf_name }, cql3::query_processor::cache_internal::yes),
                         db::schema_tables::legacy::read_table_mutations(_sp, dst.name, cf_name, db::system_keyspace::legacy::column_families()))
-                    .then([this, &dst, cf_name, timestamp](result_tuple&& t) {
+                    .then([&dst, cf_name, timestamp](result_tuple&& t) {
 
             result_set_type tables = std::get<0>(t).get0();
             result_set_type columns = std::get<1>(t).get0();
@@ -473,7 +473,7 @@ public:
 
     future<> read_functions(keyspace& dst) {
         auto query = fmt_query("SELECT * FROM {}.{} WHERE keyspace_name = ?", db::system_keyspace::legacy::FUNCTIONS);
-        return _qp.execute_internal(query, {dst.name}, cql3::query_processor::cache_internal::yes).then([this, &dst](result_set_type result) {
+        return _qp.execute_internal(query, {dst.name}, cql3::query_processor::cache_internal::yes).then([](result_set_type result) {
             if (!result->empty()) {
                 throw unsupported_feature("functions");
             }
@@ -482,7 +482,7 @@ public:
 
     future<> read_aggregates(keyspace& dst) {
         auto query = fmt_query("SELECT * FROM {}.{} WHERE keyspace_name = ?", db::system_keyspace::legacy::AGGREGATES);
-        return _qp.execute_internal(query, {dst.name}, cql3::query_processor::cache_internal::yes).then([this, &dst](result_set_type result) {
+        return _qp.execute_internal(query, {dst.name}, cql3::query_processor::cache_internal::yes).then([](result_set_type result) {
             if (!result->empty()) {
                 throw unsupported_feature("aggregates");
             }
@@ -501,7 +501,7 @@ public:
             return read_functions(*ks);
         }).then([this, ks] {
             return read_aggregates(*ks);
-        }).then([this, ks] {
+        }).then([ks] {
             return make_ready_future<keyspace>(std::move(*ks));
         });
     }

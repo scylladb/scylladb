@@ -96,7 +96,7 @@ struct send_info {
     future<size_t> estimate_partitions() {
         return do_with(cf.get_sstables(), size_t(0), [this] (auto& sstables, size_t& partition_count) {
             return do_for_each(*sstables, [this, &partition_count] (auto& sst) {
-                return do_for_each(ranges, [this, &sst, &partition_count] (auto& range) {
+                return do_for_each(ranges, [&sst, &partition_count] (auto& range) {
                     partition_count += sst->estimated_keys_for_range(range);
                 });
             }).then([&partition_count] {
@@ -201,7 +201,7 @@ future<> stream_transfer_task::execute() {
         auto si = make_lw_shared<send_info>(sm.ms(), plan_id, tbl, std::move(permit), std::move(ranges), id, dst_cpu_id, reason, [&sm, plan_id, addr = id.addr] (size_t sz) {
             sm.update_progress(plan_id, addr, streaming::progress_info::direction::OUT, sz);
         });
-        return si->has_relevant_range_on_this_shard().then([&sm, si, plan_id, cf_id] (bool has_relevant_range_on_this_shard) {
+        return si->has_relevant_range_on_this_shard().then([si, plan_id, cf_id] (bool has_relevant_range_on_this_shard) {
             if (!has_relevant_range_on_this_shard) {
                 sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}: ignore ranges on shard={}",
                         plan_id, cf_id, this_shard_id());
@@ -215,11 +215,11 @@ future<> stream_transfer_task::execute() {
     }).then([this, plan_id, cf_id, id, &sm] {
         sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, cf_id={}", plan_id, id, cf_id);
         return sm.ms().send_stream_mutation_done(id, plan_id, _ranges,
-                cf_id, session->dst_cpu_id).handle_exception([plan_id, id, cf_id] (auto ep) {
+                cf_id, session->dst_cpu_id).handle_exception([plan_id, id] (auto ep) {
             sslog.warn("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION_DONE to {}: {}", plan_id, id, ep);
             std::rethrow_exception(ep);
         });
-    }).then([this, id, plan_id, cf_id] {
+    }).then([this, id, plan_id] {
         _mutation_done_sent = true;
         sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply from {}", plan_id, id.addr);
     }).handle_exception([this, plan_id, cf_id, id] (std::exception_ptr ep) {

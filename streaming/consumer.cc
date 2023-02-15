@@ -43,7 +43,7 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
             };
 
             auto consumer = make_interposer_consumer(metadata,
-                    [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vug, origin = std::move(origin), offstrategy, reason] (flat_mutation_reader_v2 reader) {
+                    [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vug, origin = std::move(origin), offstrategy] (flat_mutation_reader_v2 reader) {
                 sstables::shared_sstable sst;
                 try {
                     sst = use_view_update_path ? cf->make_streaming_staging_sstable() : cf->make_streaming_sstable_for_write();
@@ -59,7 +59,7 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
                                              cf->get_sstables_manager().configure_writer(origin),
                                              encoding_stats{}, pc).then([sst] {
                     return sst->open_data();
-                }).then([cf, sst, offstrategy, reason, origin] {
+                }).then([cf, sst, offstrategy, origin] {
                     if (offstrategy && sstables::repair_origin == origin) {
                         sstables::sstlog.debug("Enabled automatic off-strategy trigger for table {}.{}",
                                 cf->schema()->ks_name(), cf->schema()->cf_name());

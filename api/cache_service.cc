@@ -164,14 +164,14 @@ void set_cache_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(0);
     });
 
-    cs::get_key_hits_moving_avrage.set(r, [&ctx] (std::unique_ptr<request> req) {
+    cs::get_key_hits_moving_avrage.set(r, [] (std::unique_ptr<request> req) {
         // TBD
         // FIXME
         // See above
         return make_ready_future<json::json_return_type>(meter_to_json(utils::rate_moving_average()));
     });
 
-    cs::get_key_requests_moving_avrage.set(r, [&ctx] (std::unique_ptr<request> req) {
+    cs::get_key_requests_moving_avrage.set(r, [] (std::unique_ptr<request> req) {
         // TBD
         // FIXME
         // See above
@@ -287,14 +287,14 @@ void set_cache_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(0);
     });
 
-    cs::get_counter_hits_moving_avrage.set(r, [&ctx] (std::unique_ptr<request> req) {
+    cs::get_counter_hits_moving_avrage.set(r, [] (std::unique_ptr<request> req) {
         // TBD
         // FIXME
         // See above
         return make_ready_future<json::json_return_type>(meter_to_json(utils::rate_moving_average()));
     });
 
-    cs::get_counter_requests_moving_avrage.set(r, [&ctx] (std::unique_ptr<request> req) {
+    cs::get_counter_requests_moving_avrage.set(r, [] (std::unique_ptr<request> req) {
         // TBD
         // FIXME
         // See above

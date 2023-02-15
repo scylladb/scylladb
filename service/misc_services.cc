@@ -155,13 +155,13 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
         return a;
     };
 
-    return _db.map_reduce0(cf_to_cache_hit_stats, std::unordered_map<table_id, stat>(), sum_stats_per_cf).then([this, non_system_filter] (std::unordered_map<table_id, stat> rates) mutable {
+    return _db.map_reduce0(cf_to_cache_hit_stats, std::unordered_map<table_id, stat>(), sum_stats_per_cf).then([this] (std::unordered_map<table_id, stat> rates) mutable {
         _diff = 0;
         _gstate.reserve(_slen); // assume length did not change from previous iteration
         _slen = 0;
         _rates = std::move(rates);
         // set calculated rates on all shards
-        return _db.invoke_on_all([this, cpuid = this_shard_id(), non_system_filter] (replica::database& db) {
+        return _db.invoke_on_all([this, cpuid = this_shard_id()] (replica::database& db) {
             return do_for_each(_rates, [this, cpuid, &db] (auto&& r) mutable {
                 auto it = db.get_column_families().find(r.first);
                 if (it == db.get_column_families().end()) { // a table may be added before map/reduce completes and this code runs
@@ -209,7 +209,7 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
             ++_published_nr;
             _published_time = now;
             return _gossiper.add_local_application_state(gms::application_state::CACHE_HITRATES,
-                    gms::versioned_value::cache_hitrates(_gstate)).then([this, recalculate_duration] {
+                    gms::versioned_value::cache_hitrates(_gstate)).then([recalculate_duration] {
                 return recalculate_duration;
             });
         } else {

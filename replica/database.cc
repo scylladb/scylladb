@@ -1587,7 +1587,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
         querier_opt = _querier_cache.lookup_mutation_querier(cmd.query_uuid, *s, range, cmd.slice, trace_state, timeout);
     }
 
-    auto read_func = [&, this] (reader_permit permit) {
+    auto read_func = [&] (reader_permit permit) {
         reader_permit::used_guard ug{permit};
         permit.set_max_result_size(max_result_size);
         return cf.mutation_query(std::move(s), std::move(permit), cmd, range,
@@ -1770,13 +1770,13 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
 
     data_listeners().on_write(m_schema, m);
 
-    return with_gate(cf.async_gate(), [this, &m, m_schema = std::move(m_schema), h = std::move(h), &cf, timeout] () mutable -> future<> {
+    return with_gate(cf.async_gate(), [&m, m_schema = std::move(m_schema), h = std::move(h), &cf, timeout] () mutable -> future<> {
         return cf.apply(m, std::move(m_schema), std::move(h), timeout);
     });
 }
 
 future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
-    return with_gate(cf.async_gate(), [this, &m, h = std::move(h), &cf, timeout]() mutable -> future<> {
+    return with_gate(cf.async_gate(), [&m, h = std::move(h), &cf, timeout]() mutable -> future<> {
         return cf.apply(m, std::move(h), timeout);
     });
 }
@@ -1914,7 +1914,6 @@ future<> database::do_apply_many(const std::vector<frozen_mutation>& muts, db::t
 
     // FIXME: Memtable application is not atomic so reads may observe mutations partially applied until restart.
     for (size_t i = 0; i < muts.size(); ++i) {
-        auto&& cf = find_column_family(muts[i].column_family_id());
         auto s = local_schema_registry().get(muts[i].schema_version());
         co_await apply_in_memory(muts[i], s, std::move(handles[i]), timeout);
     }
@@ -2005,7 +2004,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
 
 template<typename Future>
 Future database::update_write_metrics(Future&& f) {
-    return f.then_wrapped([this, s = _stats] (auto f) {
+    return f.then_wrapped([s = _stats] (auto f) {
         if (f.failed()) {
             ++s->total_writes_failed;
             auto ep = f.get_exception();
@@ -2176,7 +2175,7 @@ schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& i
 
 future<> database::close_tables(table_kind kind_to_close) {
     auto b = defer([this] { _stop_barrier.abort(); });
-    co_await coroutine::parallel_for_each(_column_families, [this, kind_to_close](auto& val_pair) -> future<> {
+    co_await coroutine::parallel_for_each(_column_families, [kind_to_close](auto& val_pair) -> future<> {
         table_kind k = is_system_table(*val_pair.second->schema()) ? table_kind::system : table_kind::user;
         if (k == kind_to_close) {
             co_await val_pair.second->stop();
@@ -2256,7 +2255,7 @@ future<> database::stop() {
 }
 
 future<> database::flush_all_memtables() {
-    return parallel_for_each(_column_families, [this] (auto& cfp) {
+    return parallel_for_each(_column_families, [] (auto& cfp) {
         return cfp.second->flush();
     });
 }
@@ -2493,7 +2492,7 @@ future<std::vector<database::snapshot_details_result>> database::get_snapshot_de
             // KS directory
             sstring ks_name = de.name;
 
-            co_return co_await lister::scan_dir(parent_dir / de.name, lister::dir_entry_types::of<directory_entry_type::directory>(), [this, &details, ks_name = std::move(ks_name)] (fs::path parent_dir, directory_entry de) -> future<> {
+            co_return co_await lister::scan_dir(parent_dir / de.name, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details, ks_name = std::move(ks_name)] (fs::path parent_dir, directory_entry de) -> future<> {
                 // CF directory
                 auto cf_dir = parent_dir / de.name;
 
@@ -2505,13 +2504,13 @@ future<std::vector<database::snapshot_details_result>> database::get_snapshot_de
                 }
 
                 auto cf_name_and_uuid = extract_cf_name_and_uuid(de.name);
-                co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this, &details, &ks_name, &cf_name = cf_name_and_uuid.first, &cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
+                co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details, &ks_name, &cf_name = cf_name_and_uuid.first, &cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
                     database::snapshot_details_result snapshot_result = {
                         .snapshot_name = de.name,
                         .details = {0, 0, cf_name, ks_name}
                     };
 
-                    co_await lister::scan_dir(parent_dir / de.name,  lister::dir_entry_types::of<directory_entry_type::regular>(), [this, cf_dir, &snapshot_result] (fs::path snapshot_dir, directory_entry de) -> future<> {
+                    co_await lister::scan_dir(parent_dir / de.name,  lister::dir_entry_types::of<directory_entry_type::regular>(), [cf_dir, &snapshot_result] (fs::path snapshot_dir, directory_entry de) -> future<> {
                         auto sd = co_await io_check(file_stat, (snapshot_dir / de.name).native(), follow_symlink::no);
                         auto size = sd.allocated_size;
 
@@ -2794,7 +2793,6 @@ flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::da
                 std::move(trace_state), fwd_mr);
     });
     auto&& full_slice = schema->full_slice();
-    auto& cf = db.local().find_column_family(schema);
     return make_flat_multi_range_reader(schema, std::move(permit), std::move(ms),
             std::move(range_generator), std::move(full_slice), service::get_local_streaming_priority(), {}, mutation_reader::forwarding::no);
 }

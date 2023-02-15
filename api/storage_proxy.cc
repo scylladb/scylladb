@@ -190,7 +190,7 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
         return make_ready_future<json::json_return_type>(0);
     });
 
-    sp::get_hinted_handoff_enabled.set(r, [&ctx](std::unique_ptr<request> req)  {
+    sp::get_hinted_handoff_enabled.set(r, [](std::unique_ptr<request> req)  {
         const auto& filter = service::get_storage_proxy().local().get_hints_host_filter();
         return make_ready_future<json::json_return_type>(!filter.is_disabled_for_all());
     });
@@ -481,7 +481,7 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
         return sum_timer_stats(ctx.sp, &proxy::stats::cas_read);
     });
 
-    sp::get_view_write_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_view_write_metrics_latency_histogram.set(r, [](std::unique_ptr<request> req) {
         //TBD
         // FIXME
         // No View metrics are available, so just return empty moving average

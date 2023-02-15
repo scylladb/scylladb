@@ -354,7 +354,7 @@ distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<r
         std::function<bool (const sstables::shared_sstable&)> filter, io_priority_class iop) {
 
     auto start = std::chrono::steady_clock::now();
-    auto total_size = co_await dir.map_reduce0([&dir, &db, ks_name = std::move(ks_name), table_name = std::move(table_name), creator = std::move(creator), mode, filter, iop] (sstables::sstable_directory& d) {
+    auto total_size = co_await dir.map_reduce0([&db, ks_name = std::move(ks_name), table_name = std::move(table_name), creator = std::move(creator), mode, filter, iop] (sstables::sstable_directory& d) {
         auto& table = db.local().find_column_family(ks_name, table_name);
         return ::replica::reshape(d, table, creator, mode, filter, iop);
     }, uint64_t(0), std::plus<uint64_t>());
@@ -811,7 +811,7 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<replica::data
 
         ks_dirs dirs;
 
-        parallel_for_each(cfg.data_file_directories(), [&db, &dirs] (sstring directory) {
+        parallel_for_each(cfg.data_file_directories(), [&dirs] (sstring directory) {
             // we want to collect the directories first, so we can get a full set of potential dirs
             return lister::scan_dir(directory, lister::dir_entry_types::of<directory_entry_type::directory>(), [&dirs] (fs::path datadir, directory_entry de) {
                 if (!is_system_keyspace(de.name)) {

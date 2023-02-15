@@ -998,7 +998,7 @@ private:
                 return repeat([this, &sharder, &partitions_sum] () mutable {
                     auto shard_range = sharder.next();
                     if (shard_range) {
-                        return do_estimate_partitions_on_all_shards().then([this, &partitions_sum] (uint64_t partitions) mutable {
+                        return do_estimate_partitions_on_all_shards().then([&partitions_sum] (uint64_t partitions) mutable {
                             partitions_sum += partitions;
                             return make_ready_future<stop_iteration>(stop_iteration::no);
                         });
@@ -1177,7 +1177,7 @@ private:
             // contains rows within (_last_sync_boundary,
             // _current_sync_boundary], _row_buf contains rows wthin
             // (_current_sync_boundary, ...]
-            return repeat([this, &it, sz] () {
+            return repeat([this, &it] () {
                 if (it == _row_buf.rend()) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
@@ -1228,7 +1228,7 @@ private:
     future<std::list<repair_row>>
     copy_rows_from_working_row_buf() {
         return do_with(std::list<repair_row>(), [this] (std::list<repair_row>& rows) {
-            return do_for_each(_working_row_buf, [this, &rows] (const repair_row& r) {
+            return do_for_each(_working_row_buf, [&rows] (const repair_row& r) {
                 rows.push_back(r);
             }).then([&rows] {
                 return std::move(rows);
@@ -1240,7 +1240,7 @@ private:
     copy_rows_from_working_row_buf_within_set_diff(repair_hash_set set_diff) {
         return do_with(std::list<repair_row>(), std::move(set_diff),
                 [this] (std::list<repair_row>& rows, repair_hash_set& set_diff) {
-            return do_for_each(_working_row_buf, [this, &set_diff, &rows] (const repair_row& r) {
+            return do_for_each(_working_row_buf, [&set_diff, &rows] (const repair_row& r) {
                 if (set_diff.contains(r.hash())) {
                     rows.push_back(r);
                 }
@@ -1686,7 +1686,7 @@ private:
             needs_all_rows_t needs_all_rows,
             rpc::sink<repair_hash_with_cmd>& sink,
             gms::inet_address remote_node) {
-        return do_with(std::move(set_diff), [needs_all_rows, remote_node, &sink] (repair_hash_set& set_diff) mutable {
+        return do_with(std::move(set_diff), [needs_all_rows, &sink] (repair_hash_set& set_diff) mutable {
             if (inject_rpc_stream_error) {
                 return make_exception_future<>(std::runtime_error("get_row_diff: Inject sender error in sink loop"));
             }
@@ -1805,7 +1805,7 @@ private:
             repair_rows_on_wire rows,
             rpc::sink<repair_row_on_wire_with_cmd>& sink,
             gms::inet_address remote_node) {
-        return do_with(std::move(rows), [&sink, remote_node] (repair_rows_on_wire& rows) mutable {
+        return do_with(std::move(rows), [&sink] (repair_rows_on_wire& rows) mutable {
             return do_for_each(rows, [&sink] (repair_row_on_wire& row) mutable {
                 rlogger.trace("put_row_diff: send row");
                 return sink(repair_row_on_wire_with_cmd{repair_stream_cmd::row_data, std::move(row)});
@@ -2578,7 +2578,7 @@ private:
             // are identical, there is no need to transfer each and every
             // row hashes to the repair master.
             master.all_nodes()[idx].state = repair_state::get_combined_row_hash_started;
-            return master.get_combined_row_hash(_common_sync_boundary, master.all_nodes()[idx].node).then([&, this, idx] (get_combined_row_hash_response resp) {
+            return master.get_combined_row_hash(_common_sync_boundary, master.all_nodes()[idx].node).then([&, idx] (get_combined_row_hash_response resp) {
                 master.all_nodes()[idx].state = repair_state::get_combined_row_hash_finished;
                 rlogger.debug("Calling master.get_combined_row_hash for node {}, got combined_hash={}", master.all_nodes()[idx].node, resp);
                 combined_hashes[idx]= std::move(resp);
@@ -3097,12 +3097,10 @@ repair_service::insert_repair_meta(
             max_row_buf_size,
             seed,
             master_node_shard_config,
-            schema_version,
             reason] (schema_ptr s) {
         auto& db = get_db();
         auto& cf = db.local().find_column_family(s->id());
         return db.local().obtain_reader_permit(cf, "repair-meta", db::no_timeout).then([s = std::move(s),
-                &db,
                 &cf,
                 this,
                 from,
@@ -3112,7 +3110,6 @@ repair_service::insert_repair_meta(
                 max_row_buf_size,
                 seed,
                 master_node_shard_config,
-                schema_version,
                 reason] (reader_permit permit) mutable {
         node_repair_meta_id id{from, repair_meta_id};
         auto rm = make_shared<repair_meta>(*this,

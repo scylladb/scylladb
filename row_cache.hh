@@ -491,7 +491,7 @@ public:
     template<typename Func>
     void run_in_update_section_with_allocator(Func &&func) {
         return _cache._update_section(_cache._tracker.region(), [this, &func]() {
-            return with_allocator(_cache._tracker.region().allocator(), [this, &func]() mutable {
+            return with_allocator(_cache._tracker.region().allocator(), [&func]() mutable {
                 return func();
             });
         });

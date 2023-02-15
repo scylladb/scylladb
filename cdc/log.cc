@@ -784,10 +784,10 @@ static managed_bytes merge(const set_type_impl& ctype, const managed_bytes_opt& 
 }
 static managed_bytes merge(const user_type_impl& type, const managed_bytes_opt& prev, const managed_bytes_opt& next, const managed_bytes_opt& deleted) {
     std::vector<managed_bytes_view_opt> res(type.size());
-    udt_for_each(prev, [&res, i = res.begin()](managed_bytes_view_opt k) mutable {
+    udt_for_each(prev, [i = res.begin()](managed_bytes_view_opt k) mutable {
         *i++ = k;
     });
-    udt_for_each(next, [&res, i = res.begin()](managed_bytes_view_opt k) mutable {
+    udt_for_each(next, [i = res.begin()](managed_bytes_view_opt k) mutable {
         if (k) {
             *i = k;
         }
@@ -1781,8 +1781,8 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
     mutations.reserve(2 * mutations.size());
 
     return do_with(std::move(mutations), service::query_state(service::client_state::for_internal_calls(), empty_service_permit()), operation_details{},
-            [this, timeout, i, tr_state = std::move(tr_state), write_cl] (std::vector<mutation>& mutations, service::query_state& qs, operation_details& details) {
-        return transform_mutations(mutations, 1, [this, &mutations, timeout, &qs, tr_state = tr_state, &details, write_cl] (int idx) mutable {
+            [this, tr_state = std::move(tr_state), write_cl] (std::vector<mutation>& mutations, service::query_state& qs, operation_details& details) {
+        return transform_mutations(mutations, 1, [this, &mutations, &qs, tr_state = tr_state, &details, write_cl] (int idx) mutable {
             auto& m = mutations[idx];
             auto s = m.schema();
 

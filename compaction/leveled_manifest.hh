@@ -434,7 +434,7 @@ private:
         const schema& s = *_schema;
         // for non-L0 compactions, pick up where we left off last time
         auto& sstables = get_level(level);
-        boost::sort(sstables, [&s] (auto& i, auto& j) {
+        boost::sort(sstables, [] (auto& i, auto& j) {
             return i->compare_by_first_key(*j) < 0;
         });
 

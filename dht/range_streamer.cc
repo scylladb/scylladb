@@ -246,7 +246,7 @@ future<> range_streamer::stream_async() {
     _nr_total_ranges = nr_ranges_remaining;
     logger.info("{} starts, nr_ranges_remaining={}", _description, nr_ranges_remaining);
     auto start = lowres_clock::now();
-    return do_for_each(_to_stream, [this, start, description = _description] (auto& stream) {
+    return do_for_each(_to_stream, [this, description = _description] (auto& stream) {
         const auto& keyspace = stream.first;
         auto& ip_range_vec = stream.second;
         auto ips = boost::copy_range<std::list<inet_address>>(ip_range_vec | boost::adaptors::map_keys);

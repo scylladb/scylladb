@@ -73,7 +73,7 @@ flat_mutation_reader_v2 toppartitions_data_listener::on_read(const schema_ptr& s
 
     if (include_all || _keyspace_filters.contains(s->ks_name()) || _table_filters.contains({s->ks_name(), s->cf_name()})) {
         dblog.trace("toppartitions_data_listener::on_read: {}.{}", s->ks_name(), s->cf_name());
-        return make_filtering_reader(std::move(rd), [zis = this->weak_from_this(), &range, &slice, s = std::move(s)] (const dht::decorated_key& dk) {
+        return make_filtering_reader(std::move(rd), [zis = this->weak_from_this(), s = std::move(s)] (const dht::decorated_key& dk) {
             // The data query may be executing after the toppartitions_data_listener object has been removed, so check
             if (zis) {
                 zis->_top_k_read.append(toppartitions_item_key{s, dk});
@@ -131,13 +131,13 @@ using top_t = toppartitions_data_listener::global_top_k::results;
 future<toppartitions_query::results> toppartitions_query::gather(unsigned res_size) {
     dblog.debug("toppartitions_query::gather");
 
-    auto map = [res_size, this] (toppartitions_data_listener& listener) {
+    auto map = [res_size] (toppartitions_data_listener& listener) {
         dblog.trace("toppartitions_query::map_reduce with listener {}", fmt::ptr(&listener));
         top_t rd = toppartitions_data_listener::globalize(listener._top_k_read.top(res_size));
         top_t wr = toppartitions_data_listener::globalize(listener._top_k_write.top(res_size));
         return make_foreign(std::make_unique<std::tuple<top_t, top_t>>(std::move(rd), std::move(wr)));
     };
-    auto reduce = [this] (results res, foreign_ptr<std::unique_ptr<std::tuple<top_t, top_t>>> rd_wr) {
+    auto reduce = [] (results res, foreign_ptr<std::unique_ptr<std::tuple<top_t, top_t>>> rd_wr) {
         res.read.append(toppartitions_data_listener::localize(std::get<0>(*rd_wr)));
         res.write.append(toppartitions_data_listener::localize(std::get<1>(*rd_wr)));
         return res;
@@ -148,7 +148,7 @@ future<toppartitions_query::results> toppartitions_query::gather(unsigned res_si
             return make_exception_future<results>(ep);
         }).finally([this] () {
             dblog.debug("toppartitions_query::gather: stopping query");
-            return _query->stop().then([this] {
+            return _query->stop().then([] {
                 dblog.debug("toppartitions_query::gather: query stopped");
             });
         });

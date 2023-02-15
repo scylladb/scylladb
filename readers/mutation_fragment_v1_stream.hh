@@ -195,7 +195,7 @@ public:
     // This method returns whatever is returned from Consumer::consume_end_of_stream().
     auto consume(Consumer consumer) {
         return do_with(consumer_adapter<Consumer>(*this, std::move(consumer)), [this] (consumer_adapter<Consumer>& adapter) {
-            return consume_pausable(std::ref(adapter)).then([this, &adapter] {
+            return consume_pausable(std::ref(adapter)).then([&adapter] {
                 return adapter._consumer.consume_end_of_stream();
             });
         });

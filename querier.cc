@@ -230,7 +230,7 @@ void querier_cache::insert_querier(
     // current partition when the page ends so it cannot be reused across
     // pages.
     if (q.is_reversed()) {
-        (void)with_gate(_closing_gate, [this, q = std::move(q)] () mutable {
+        (void)with_gate(_closing_gate, [q = std::move(q)] () mutable {
             return q.close().finally([q = std::move(q)] {});
         });
         return;
@@ -342,7 +342,7 @@ std::optional<Querier> querier_cache::lookup_querier(
     // Close and drop the querier in the background.
     // It is safe to do so, since _closing_gate is closed and
     // waited on in querier_cache::stop()
-    (void)with_gate(_closing_gate, [this, q = std::move(q)] () mutable {
+    (void)with_gate(_closing_gate, [q = std::move(q)] () mutable {
         return q.close().finally([q = std::move(q)] {});
     });
 

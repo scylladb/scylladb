@@ -366,7 +366,7 @@ list_roles_statement::execute(query_processor&, service::query_state& state, con
     const auto& cs = state.get_client_state();
     const auto& as = *cs.get_auth_service();
 
-    return auth::has_superuser(as, *cs.user()).then([this, &state, &cs, &as](bool super) {
+    return auth::has_superuser(as, *cs.user()).then([this, &cs, &as](bool super) {
         auto& rm = as.underlying_role_manager();
         const auto& a = as.underlying_authenticator();
         const auto query_mode = _recursive ? auth::recursive_role_query::yes : auth::recursive_role_query::no;
@@ -409,7 +409,7 @@ std::unique_ptr<prepared_statement> grant_role_statement::prepare(
 future<> grant_role_statement::check_access(query_processor& qp, const service::client_state& state) const {
     state.ensure_not_anonymous();
 
-    return do_with(auth::make_role_resource(_role), [this, &state](const auto& r) {
+    return do_with(auth::make_role_resource(_role), [&state](const auto& r) {
         return state.ensure_has_permission({auth::permission::AUTHORIZE, r});
     });
 }
@@ -437,7 +437,7 @@ std::unique_ptr<prepared_statement> revoke_role_statement::prepare(
 future<> revoke_role_statement::check_access(query_processor& qp, const service::client_state& state) const {
     state.ensure_not_anonymous();
 
-    return do_with(auth::make_role_resource(_role), [this, &state](const auto& r) {
+    return do_with(auth::make_role_resource(_role), [&state](const auto& r) {
         return state.ensure_has_permission({auth::permission::AUTHORIZE, r});
     });
 }

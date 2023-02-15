@@ -477,7 +477,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(de
 
 future<> read_context::save_reader(shard_id shard, full_position_view last_pos) {
   return do_with(std::exchange(_readers[shard], {}), [this, shard, last_pos] (reader_meta& rm) mutable {
-    return _db.invoke_on(shard, [this, query_uuid = _cmd.query_uuid, query_ranges = _ranges, &rm,
+    return _db.invoke_on(shard, [query_uuid = _cmd.query_uuid, query_ranges = _ranges, &rm,
             last_pos, gts = tracing::global_trace_state_ptr(_trace_state)] (replica::database& db) mutable {
         try {
             auto rparts = rm.rparts.release(); // avoid another round-trip when destroying rparts
