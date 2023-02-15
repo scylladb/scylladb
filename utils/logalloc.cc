@@ -707,6 +707,7 @@ public:
         , _freed_segment_increases_general_memory_availability(freed_segment_increases_general_memory_availability)
         , _segments_base(align_up(_layout.start, static_cast<uintptr_t>(segment::size)))
     { }
+    virtual ~segment_store_backend() = default;
     memory::memory_layout memory_layout() const noexcept { return _layout; }
     uintptr_t segments_base() const noexcept { return _segments_base; }
     virtual void* alloc_segment_memory() noexcept = 0;
