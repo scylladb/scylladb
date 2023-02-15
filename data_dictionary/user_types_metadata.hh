@@ -42,6 +42,7 @@ public:
 class user_types_storage {
 public:
     virtual const user_types_metadata& get(const sstring& ks) const = 0;
+    virtual ~user_types_storage() = default;
 };
 
 class dummy_user_types_storage : public user_types_storage {
