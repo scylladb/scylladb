@@ -37,7 +37,7 @@
 #include "gms/feature_service.hh"
 #include "system_keyspace_view_types.hh"
 #include "schema/schema_builder.hh"
-#include "hashers.hh"
+#include "utils/hashers.hh"
 #include "release.hh"
 #include "log.hh"
 #include <seastar/core/enum.hh>

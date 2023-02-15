@@ -9,7 +9,7 @@
 #pragma once
 #include "service/paxos/proposal.hh"
 #include "log.hh"
-#include "digest_algorithm.hh"
+#include "utils/digest_algorithm.hh"
 #include "db/timeout_clock.hh"
 #include <unordered_map>
 #include "utils/UUID_gen.hh"

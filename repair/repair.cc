@@ -20,7 +20,7 @@
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
-#include "hashers.hh"
+#include "utils/hashers.hh"
 #include "locator/network_topology_strategy.hh"
 #include "service/migration_manager.hh"
 #include "partition_range_compat.hh"

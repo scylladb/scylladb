@@ -10,7 +10,7 @@
 
 #include "seastarx.hh"
 #include <seastar/core/sstring.hh>
-#include "hashing.hh"
+#include "utils/hashing.hh"
 #include <optional>
 #include <iosfwd>
 #include <functional>

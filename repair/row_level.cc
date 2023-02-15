@@ -17,7 +17,7 @@
 #include "dht/i_partitioner.hh"
 #include "dht/sharder.hh"
 #include "to_string.hh"
-#include "xx_hasher.hh"
+#include "utils/xx_hasher.hh"
 #include "utils/UUID.hh"
 #include "utils/hash.hh"
 #include "service/priority_manager.hh"
@@ -55,7 +55,7 @@
 #include "repair/decorated_key_with_hash.hh"
 #include "repair/row.hh"
 #include "repair/writer.hh"
-#include "xx_hasher.hh"
+#include "utils/xx_hasher.hh"
 
 extern logging::logger rlogger;
 

@@ -13,8 +13,8 @@
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/combine.hpp>
 #include "mutation_query.hh"
-#include "hashers.hh"
-#include "xx_hasher.hh"
+#include "utils/hashers.hh"
+#include "utils/xx_hasher.hh"
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/do_with.hh>

@@ -39,7 +39,7 @@
 #include "db/marshal/type_parser.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
-#include "hashers.hh"
+#include "utils/hashers.hh"
 
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/rpc/rpc_types.hh>

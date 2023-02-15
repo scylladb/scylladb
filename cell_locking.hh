@@ -12,7 +12,7 @@
 
 #include "utils/small_vector.hh"
 #include "mutation/mutation_partition.hh"
-#include "xx_hasher.hh"
+#include "utils/xx_hasher.hh"
 
 #include "db/timeout_clock.hh"
 

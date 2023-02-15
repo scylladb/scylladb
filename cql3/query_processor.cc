@@ -21,7 +21,7 @@
 #include "cql3/untyped_result_set.hh"
 #include "db/config.hh"
 #include "data_dictionary/data_dictionary.hh"
-#include "hashers.hh"
+#include "utils/hashers.hh"
 #include "utils/error_injection.hh"
 
 namespace cql3 {

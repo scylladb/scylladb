@@ -12,7 +12,7 @@
 
 #include "bytes.hh"
 #include "utils/managed_bytes.hh"
-#include "hashing.hh"
+#include "utils/hashing.hh"
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/loop.hh>
 #include <bit>

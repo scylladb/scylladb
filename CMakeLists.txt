@@ -221,7 +221,6 @@ set(scylla_sources
     gms/inet_address.cc
     gms/versioned_value.cc
     gms/version_generator.cc
-    hashers.cc
     index/secondary_index.cc
     index/secondary_index_manager.cc
     init.cc
@@ -398,6 +397,7 @@ set(scylla_sources
     utils/generation-number.cc
     utils/gz/crc_combine.cc
     utils/gz/crc_combine_table.cc
+    utils/hashers.cc
     utils/human_readable.cc
     utils/i_filter.cc
     utils/large_bitset.cc

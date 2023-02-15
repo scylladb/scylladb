@@ -9,7 +9,7 @@
 #pragma once
 
 #include "bytes.hh"
-#include "hashing.hh"
+#include "utils/hashing.hh"
 
 class md5_hasher;
 

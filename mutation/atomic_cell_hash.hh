@@ -14,7 +14,7 @@
 #include "types/collection.hh"
 #include "atomic_cell.hh"
 #include "atomic_cell_or_collection.hh"
-#include "hashing.hh"
+#include "utils/hashing.hh"
 #include "counters.hh"
 
 template<>

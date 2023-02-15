@@ -12,7 +12,7 @@
 #include <boost/range/numeric.hpp>
 
 #include "query-result.hh"
-#include "digest_algorithm.hh"
+#include "utils/digest_algorithm.hh"
 #include "full_position.hh"
 
 #include "idl/query.dist.hh"

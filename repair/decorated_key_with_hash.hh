@@ -7,7 +7,7 @@
  */
 
 #pragma once
-#include "xx_hasher.hh"
+#include "utils/xx_hasher.hh"
 #include "repair/hash.hh"
 #include "dht/i_partitioner.hh"
 

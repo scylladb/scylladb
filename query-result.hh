@@ -9,7 +9,7 @@
 #pragma once
 
 #include "bytes_ostream.hh"
-#include "digest_algorithm.hh"
+#include "utils/digest_algorithm.hh"
 #include "query-request.hh"
 #include "full_position.hh"
 #include <optional>
