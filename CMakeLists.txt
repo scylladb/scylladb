@@ -26,6 +26,7 @@ find_package(Lua REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(ICU COMPONENTS uc REQUIRED)
 find_package(absl REQUIRED)
+find_package(xxHash REQUIRED)
 
 set(scylla_gen_build_dir "${CMAKE_BINARY_DIR}/gen")
 file(MAKE_DIRECTORY "${scylla_gen_build_dir}")
