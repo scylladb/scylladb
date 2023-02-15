@@ -201,7 +201,7 @@ public:
     future<replication_map> clone_endpoints_gently() const;
 
     inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const;
-    virtual stop_iteration for_each_natural_endpoint_until(const token& search_token, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
+    stop_iteration for_each_natural_endpoint_until(const token& search_token, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
     inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const;
 
     // get_ranges() returns the list of ranges held by the given endpoint.
