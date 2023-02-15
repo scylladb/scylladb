@@ -619,6 +619,20 @@ async def train_basic(executable: PathLike, workdir: PathLike) -> None:
 #trainers["basic"] = ("basic_dataset", train_basic)
 populators["basic_dataset"] = populate_basic
 
+# CLUSTERING  ==================================================
+
+async def populate_clustering(executable: PathLike, workdir: PathLike) -> None:
+    async with with_cs_populate(executable=executable, workdir=workdir) as server:
+        await cs(cmd=["user", "profile=./conf/clustering.yaml", "ops(insert=1)"], n=5000000, cl="local_quorum", node=server)
+
+async def train_clustering(executable: PathLike, workdir: PathLike) -> None:
+    N = 2500000 # Preferably keep big enough to cause compactions.
+    async with with_cs_train(executable=executable, workdir=workdir) as server:
+        await cs(cmd=["user", "profile=./conf/clustering.yaml", "ops(insert=5,simple1=1,range1=1)"], n=N, cl="local_quorum", node=server)
+
+trainers["clustering"] = ("clustering_dataset", train_clustering)
+populators["clustering_dataset"] = populate_clustering
+
 ################################################################################
 # Training procedures
 
