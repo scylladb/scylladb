@@ -11,8 +11,8 @@
 #include <seastar/util/closeable.hh>
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
-#include "hashers.hh"
-#include "xx_hasher.hh"
+#include "utils/hashers.hh"
+#include "utils/xx_hasher.hh"
 #include "gc_clock.hh"
 #include "test/lib/simple_schema.hh"
 #include "reader_concurrency_semaphore.hh"

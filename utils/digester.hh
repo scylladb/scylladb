@@ -8,9 +8,9 @@
 
 #pragma once
 
-#include "digest_algorithm.hh"
-#include "hashers.hh"
-#include "xx_hasher.hh"
+#include "utils/digest_algorithm.hh"
+#include "utils/hashers.hh"
+#include "utils/xx_hasher.hh"
 
 #include <type_traits>
 #include <variant>

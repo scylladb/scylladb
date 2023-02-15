@@ -13,8 +13,8 @@
 #include "mutation_fragment.hh"
 #include "mutation_fragment_v2.hh"
 #include "clustering_interval_set.hh"
-#include "hashing.hh"
-#include "xx_hasher.hh"
+#include "utils/hashing.hh"
+#include "utils/xx_hasher.hh"
 
 std::ostream&
 operator<<(std::ostream& os, const clustering_row::printer& p) {

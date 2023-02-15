@@ -14,7 +14,7 @@
 #include "keys.hh"
 #include "schema/schema_fwd.hh"
 #include "dht/i_partitioner.hh"
-#include "hashing.hh"
+#include "utils/hashing.hh"
 #include "mutation_fragment_v2.hh"
 #include "mutation_consumer.hh"
 #include "range_tombstone_change_generator.hh"

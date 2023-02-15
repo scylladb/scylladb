@@ -10,7 +10,7 @@
 
 #include <boost/intrusive/set.hpp>
 #include <optional>
-#include "hashing.hh"
+#include "utils/hashing.hh"
 #include "keys.hh"
 #include "mutation/tombstone.hh"
 #include "clustering_bounds_comparator.hh"

@@ -27,7 +27,7 @@
 #include <seastar/net/ipv6_address.hh>
 #include <seastar/net/inet_address.hh>
 #include <seastar/util/backtrace.hh>
-#include "hashing.hh"
+#include "utils/hashing.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 #include "utils/exceptions.hh"
 #include "utils/managed_bytes.hh"

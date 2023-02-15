@@ -16,7 +16,7 @@
 #endif // __linux__
 
 #include <stdlib.h>
-#include "hashers.hh"
+#include "utils/hashers.hh"
 
 namespace utils {
 

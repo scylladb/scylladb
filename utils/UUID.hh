@@ -20,7 +20,7 @@
 #include <seastar/core/print.hh>
 #include <seastar/net/byteorder.hh>
 #include "bytes.hh"
-#include "hashing.hh"
+#include "utils/hashing.hh"
 #include "utils/serialization.hh"
 
 namespace utils {
