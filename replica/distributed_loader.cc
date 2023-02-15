@@ -547,7 +547,7 @@ future<> distributed_loader::handle_sstables_pending_delete(sstring pending_dele
     co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
 }
 
-class table_population_metadata {
+class table_populator {
     distributed<replica::database>& _db;
     sstring _ks;
     sstring _cf;
@@ -558,7 +558,7 @@ class table_population_metadata {
     sstables::generation_type _highest_generation = sstables::generation_from_value(0);
 
 public:
-    table_population_metadata(distributed<replica::database>& db, sstring ks, sstring cf)
+    table_populator(distributed<replica::database>& db, sstring ks, sstring cf)
         : _db(db)
         , _ks(std::move(ks))
         , _cf(std::move(cf))
@@ -566,9 +566,9 @@ public:
         , _base_path(_global_table->dir())
     {}
 
-    ~table_population_metadata() {
+    ~table_populator() {
         // All directories must have been stopped
-        // using table_population_metadata::stop()
+        // using table_populator::stop()
         assert(_sstable_directories.empty());
     }
 
@@ -606,7 +606,7 @@ private:
     future<> start_subdir(sstring subdir);
 };
 
-future<> table_population_metadata::start_subdir(sstring subdir) {
+future<> table_populator::start_subdir(sstring subdir) {
     sstring sstdir = get_path(subdir).native();
     if (!co_await file_exists(sstdir)) {
         co_return;
@@ -631,7 +631,7 @@ future<> table_population_metadata::start_subdir(sstring subdir) {
         default_io_error_handler_gen()
     );
 
-    // directory must be stopped using table_population_metadata::stop below
+    // directory must be stopped using table_populator::stop below
     _sstable_directories[subdir] = dptr;
 
     co_await distributed_loader::lock_table(directory, _db, _ks, _cf);
@@ -660,7 +660,7 @@ sstables::shared_sstable make_sstable(replica::table& table, fs::path dir, sstab
     return table.get_sstables_manager().make_sstable(table.schema(), dir.native(), generation, v, sstables::sstable_format_types::big);
 }
 
-future<> table_population_metadata::populate_subdir(sstring subdir, allow_offstrategy_compaction do_allow_offstrategy_compaction, must_exist dir_must_exist) {
+future<> table_populator::populate_subdir(sstring subdir, allow_offstrategy_compaction do_allow_offstrategy_compaction, must_exist dir_must_exist) {
     auto sstdir = get_path(subdir);
     dblog.debug("Populating {}/{}/{} allow_offstrategy_compaction={} must_exist={}", _ks, _cf, sstdir, do_allow_offstrategy_compaction, dir_must_exist);
 
@@ -729,7 +729,7 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
         auto sstdir = ks.column_family_directory(ksdir, cfname, uuid);
         dblog.info("Keyspace {}: Reading CF {} id={} version={}", ks_name, cfname, uuid, s->version());
 
-        auto metadata = table_population_metadata(db, ks_name, cfname);
+        auto metadata = table_populator(db, ks_name, cfname);
         std::exception_ptr ex;
 
         try {

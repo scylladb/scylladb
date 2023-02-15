@@ -60,11 +60,11 @@ class distributed_loader_for_tests;
 
 namespace replica {
 
-class table_population_metadata;
+class table_populator;
 
 class distributed_loader {
     friend class ::distributed_loader_for_tests;
-    friend class table_population_metadata;
+    friend class table_populator;
 
     static future<> reshape(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstables::reshape_mode mode,
             sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator, std::function<bool (const sstables::shared_sstable&)> filter, io_priority_class iop);
