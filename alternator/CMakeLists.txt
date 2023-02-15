@@ -17,3 +17,10 @@ target_sources(alternator
     streams.cc
     ttl.cc
     ${cql_grammar_srcs})
+target_include_directories(alternator
+  PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_BINARY_DIR})
+target_link_libraries(alternator
+  Seastar::seastar
+  xxHash::xxhash)
