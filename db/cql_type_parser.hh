@@ -22,11 +22,13 @@ class types_metadata;
 namespace data_dictionary {
 class keyspace_metadata;
 class user_types_storage;
+class user_types_metadata;
 }
 
 namespace db {
 namespace cql_type_parser {
 
+data_type parse(const sstring& keyspace, const sstring& type, const data_dictionary::user_types_metadata& utm);
 data_type parse(const sstring& keyspace, const sstring& type, const data_dictionary::user_types_storage& uts);
 
 class raw_builder {

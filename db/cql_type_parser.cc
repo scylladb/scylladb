@@ -24,7 +24,7 @@ static ::shared_ptr<cql3::cql3_type::raw> parse_raw(const sstring& str) {
         });
 }
 
-data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str, const data_dictionary::user_types_storage& uts) {
+data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str, const data_dictionary::user_types_metadata& utm) {
     static const thread_local std::unordered_map<sstring, cql3::cql3_type> native_types = []{
         std::unordered_map<sstring, cql3::cql3_type> res;
         for (auto& nt : cql3::cql3_type::values()) {
@@ -39,7 +39,11 @@ data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str
     }
 
     auto raw = parse_raw(str);
-    return raw->prepare_internal(keyspace, uts.get(keyspace)).get_type();
+    return raw->prepare_internal(keyspace, utm).get_type();
+}
+
+data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str, const data_dictionary::user_types_storage& uts) {
+    return parse(keyspace, str, uts.get(keyspace));
 }
 
 class db::cql_type_parser::raw_builder::impl {
