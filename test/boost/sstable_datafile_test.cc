@@ -2285,8 +2285,6 @@ SEASTAR_TEST_CASE(sstable_bad_tombstone_histogram_test) {
 
 SEASTAR_TEST_CASE(sstable_owner_shards) {
     return test_env::do_with_async([] (test_env& env) {
-        cell_locker_stats cl_stats;
-
         auto builder = schema_builder("tests", "test")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", int32_type);
@@ -2650,8 +2648,6 @@ SEASTAR_TEST_CASE(sstable_timestamp_metadata_correcness_with_negative) {
     BOOST_REQUIRE(smp::count == 1);
     return test_env::do_with_async([] (test_env& env) {
         for (auto version : writable_sstable_versions) {
-            cell_locker_stats cl_stats;
-
             auto s = schema_builder("tests", "ts_correcness_test")
                     .with_column("id", utf8_type, column_kind::partition_key)
                     .with_column("value", int32_type).build();
@@ -2684,8 +2680,6 @@ SEASTAR_TEST_CASE(sstable_timestamp_metadata_correcness_with_negative) {
 SEASTAR_TEST_CASE(sstable_run_identifier_correctness) {
     BOOST_REQUIRE(smp::count == 1);
     return test_env::do_with_async([] (test_env& env) {
-        cell_locker_stats cl_stats;
-
         auto s = schema_builder("tests", "ts_correcness_test")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", int32_type).build();
@@ -3025,7 +3019,7 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
         BOOST_REQUIRE(boost::accumulate(*compound->all() | boost::adaptors::transformed([] (const sstables::shared_sstable& sst) { return generation_value(sst->generation()); }), unsigned(0)) == 6);
         {
             unsigned found = 0;
-            for (auto sstables = compound->all(); auto& sst : *sstables) {
+            for (auto sstables = compound->all(); [[maybe_unused]] auto& sst : *sstables) {
                 found++;
             }
             size_t compound_size = compound->all()->size();
@@ -3042,7 +3036,7 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
         compound = make_lw_shared(sstables::make_compound_sstable_set(s, {set1, set2}));
         {
             unsigned found = 0;
-            for (auto sstables = compound->all(); auto& sst : *sstables) {
+            for (auto sstables = compound->all(); [[maybe_unused]] auto& sst : *sstables) {
                 found++;
             }
             size_t compound_size = compound->all()->size();

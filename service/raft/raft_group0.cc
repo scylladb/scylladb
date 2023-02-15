@@ -1319,7 +1319,6 @@ static future<bool> synchronize_schema(
         service::migration_manager& mm,
         const noncopyable_function<future<bool>()>& can_finish_early,
         abort_source& as) {
-    static constexpr auto rpc_timeout = std::chrono::seconds{5};
     static constexpr auto max_concurrency = 10;
 
     bool last_pull_successful = false;

@@ -34,7 +34,7 @@ static constexpr unsigned nr_sizes = 32;
 
 int main(int argc, char** argv) {
     app_template app;
-    return app.run(argc, argv, [&app] {
+    return app.run(argc, argv, [] {
         return seastar::async([&] {
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             logalloc::region reg;

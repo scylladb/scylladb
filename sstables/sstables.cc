@@ -1035,7 +1035,7 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
                 return r->close();
             }).then([r] {});
         });
-    }).then_wrapped([this, file_path] (future<> f) {
+    }).then_wrapped([file_path] (future<> f) {
         try {
             f.get();
         } catch (std::system_error& e) {

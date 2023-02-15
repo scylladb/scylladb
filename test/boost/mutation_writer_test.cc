@@ -74,9 +74,9 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                             return make_exception_future<>(std::runtime_error("Failed to write"));
                           });
                         }
-                        return with_closeable(std::move(reader), [&sharder, &shards_after, error] (flat_mutation_reader_v2& reader) {
-                          return repeat([&sharder, &shards_after, &reader, error] () mutable {
-                            return reader().then([&sharder, &shards_after, error] (mutation_fragment_v2_opt mf_opt) mutable {
+                        return with_closeable(std::move(reader), [&sharder, &shards_after] (flat_mutation_reader_v2& reader) {
+                          return repeat([&sharder, &shards_after, &reader] () mutable {
+                            return reader().then([&sharder, &shards_after] (mutation_fragment_v2_opt mf_opt) mutable {
                                 if (mf_opt) {
                                     if (mf_opt->is_partition_start()) {
                                         auto shard = sharder.shard_of(mf_opt->as_partition_start().key().token());
@@ -145,9 +145,9 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
                             return make_exception_future<>(std::runtime_error("Failed to write"));
                           });
                         }
-                        return with_closeable(std::move(reader), [&sharder, error] (flat_mutation_reader_v2& reader) {
-                          return repeat([&sharder, &reader, error] () mutable {
-                            return reader().then([&sharder,  error] (mutation_fragment_v2_opt mf_opt) mutable {
+                        return with_closeable(std::move(reader), [&sharder] (flat_mutation_reader_v2& reader) {
+                          return repeat([&sharder, &reader] () mutable {
+                            return reader().then([&sharder] (mutation_fragment_v2_opt mf_opt) mutable {
                                 if (mf_opt) {
                                     if (mf_opt->is_partition_start()) {
                                         auto shard = sharder.shard_of(mf_opt->as_partition_start().key().token());

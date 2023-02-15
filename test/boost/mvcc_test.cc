@@ -1919,7 +1919,6 @@ SEASTAR_TEST_CASE(test_reverse_cursor_refreshing_on_nonevictable_snapshot_with_e
             //
 
             auto t0 = table.new_tombstone();
-            auto t1 = table.new_tombstone();
 
             auto e = partition_entry_builder(table.schema(), cleaner, nullptr, r)
                     .new_version()
@@ -1972,7 +1971,6 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_with_dummies) {
 
         auto t0 = ss.new_tombstone();
         auto t1 = ss.new_tombstone();
-        auto t2 = ss.new_tombstone();
         auto t3 = ss.new_tombstone();
 
         mutation m0(s, ss.make_pkey());

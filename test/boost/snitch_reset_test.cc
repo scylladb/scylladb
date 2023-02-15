@@ -38,7 +38,6 @@ future<> one_test(const std::string& property_fname1,
         auto cpu0_rack = make_lw_shared<sstring>();
         auto cpu0_dc_new = make_lw_shared<sstring>();
         auto cpu0_rack_new = make_lw_shared<sstring>();
-        auto my_address = utils::fb_utilities::get_broadcast_address();
         sharded<snitch_ptr> snitch;
 
         try {
@@ -61,7 +60,7 @@ future<> one_test(const std::string& property_fname1,
             }
 
             snitch.invoke_on(0,
-                    [cpu0_dc, cpu0_rack, my_address] (snitch_ptr& inst) {
+                    [cpu0_dc, cpu0_rack] (snitch_ptr& inst) {
                 *cpu0_dc =inst->get_datacenter();
                 *cpu0_rack = inst->get_rack();
             }).get();
@@ -82,7 +81,7 @@ future<> one_test(const std::string& property_fname1,
 
             // Check that the returned DC and Rack values are different now
             snitch.invoke_on(0,
-                    [cpu0_dc_new, cpu0_rack_new, my_address] (snitch_ptr& inst) {
+                    [cpu0_dc_new, cpu0_rack_new] (snitch_ptr& inst) {
                 *cpu0_dc_new =inst->get_datacenter();
                 *cpu0_rack_new = inst->get_rack();
             }).get();
@@ -95,7 +94,7 @@ future<> one_test(const std::string& property_fname1,
 
             // Check that the new DC and Rack values have been propagated to all CPUs
             snitch.invoke_on_all(
-                    [cpu0_dc_new, cpu0_rack_new, res, my_address] (snitch_ptr& inst) {
+                    [cpu0_dc_new, cpu0_rack_new, res] (snitch_ptr& inst) {
                 if (*cpu0_dc_new != inst->get_datacenter() ||
                     *cpu0_rack_new != inst->get_rack()) {
                     *res = false;
@@ -117,7 +116,7 @@ future<> one_test(const std::string& property_fname1,
                 // despite the insuccessful reset_snitch() call.
                 //
                 snitch.invoke_on(0,
-                        [cpu0_dc_new, cpu0_rack_new, my_address] (snitch_ptr& inst) {
+                        [cpu0_dc_new, cpu0_rack_new] (snitch_ptr& inst) {
                     *cpu0_dc_new =inst->get_datacenter();
                     *cpu0_rack_new = inst->get_rack();
                 }).get();

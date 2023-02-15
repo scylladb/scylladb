@@ -29,7 +29,7 @@ public:
     virtual flat_mutation_reader_v2 on_read(const schema_ptr& s, const dht::partition_range& range,
             const query::partition_slice& slice, flat_mutation_reader_v2&& rd) override {
         if (s->cf_name() == _cf_name) {
-            return make_filtering_reader(std::move(rd), [this, &range, &slice, s = std::move(s)] (const dht::decorated_key& dk) {
+            return make_filtering_reader(std::move(rd), [this, s = std::move(s)] (const dht::decorated_key& dk) {
                 testlog.info("listener {}: read {}", fmt::ptr(this), dk);
                 ++read;
                 return true;

@@ -34,7 +34,6 @@ future<> step_seconds(int seconds) {
 
 SEASTAR_TEST_CASE(test_rate_limiter_no_rejections_on_sequential) {
     const uint64_t token_count = 1000 * 1000;
-    const uint64_t limit = 1;
     test_rate_limiter::label lbl;
 
     test_rate_limiter limiter;

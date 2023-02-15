@@ -1704,7 +1704,6 @@ public:
             ._server = nullptr,
         });
         assert(inserted);
-        auto& n = it->second;
 
         return id;
     }

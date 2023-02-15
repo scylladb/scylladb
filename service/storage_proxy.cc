@@ -787,7 +787,7 @@ private:
             bool local = shard == this_shard_id();
             sp.get_stats().replica_cross_shard_ops += !local;
             return smp::submit_to(shard, sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
-                                     local,  key = std::move(key), ballot, timeout, src_ip, d = std::move(d)] () {
+                                     key = std::move(key), ballot, timeout, src_ip, d = std::move(d)] () {
                 tracing::trace_state_ptr tr_state = gt;
                 return paxos::paxos_state::prune(gs, key, ballot,  *timeout, tr_state).then([src_ip, tr_state] () {
                     tracing::trace(tr_state, "paxos_prune: handling is done, sending a response to /{}", src_ip);
@@ -3545,16 +3545,16 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
     };
 
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
-        return _cdc->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), cl).then([this, mk_ctxt = std::move(mk_ctxt), cleanup = std::move(cleanup), cdc = _cdc->shared_from_this()](std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
+        return _cdc->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), cl).then([mk_ctxt = std::move(mk_ctxt), cleanup = std::move(cleanup), cdc = _cdc->shared_from_this()](std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
             auto mutations = std::move(std::get<0>(t));
             auto tracker = std::move(std::get<1>(t));
-            return std::move(mk_ctxt)(std::move(mutations), std::move(tracker)).then([this] (lw_shared_ptr<context> ctxt) {
+            return std::move(mk_ctxt)(std::move(mutations), std::move(tracker)).then([] (lw_shared_ptr<context> ctxt) {
                 return ctxt->run().finally([ctxt]{});
             }).then_wrapped(std::move(cleanup));
         });
     }
 
-    return mk_ctxt(std::move(mutations), nullptr).then([this] (lw_shared_ptr<context> ctxt) {
+    return mk_ctxt(std::move(mutations), nullptr).then([] (lw_shared_ptr<context> ctxt) {
         return ctxt->run().finally([ctxt]{});
     }).then_wrapped(std::move(cleanup));
 }
@@ -3563,7 +3563,7 @@ mutation storage_proxy::get_batchlog_mutation_for(const std::vector<mutation>& m
     auto schema = local_db().find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG);
     auto key = partition_key::from_singular(*schema, id);
     auto timestamp = api::new_timestamp();
-    auto data = [this, &mutations] {
+    auto data = [&mutations] {
         std::vector<canonical_mutation> fm(mutations.begin(), mutations.end());
         bytes_ostream out;
         for (auto& m : fm) {
@@ -3762,7 +3762,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     };
 
     // lambda for applying mutation remotely
-    auto rmutate = [this, handler_ptr, timeout, response_id, my_address, &global_stats] (gms::inet_address coordinator, inet_address_vector_replica_set&& forward) {
+    auto rmutate = [this, handler_ptr, timeout, response_id, &global_stats] (gms::inet_address coordinator, inet_address_vector_replica_set&& forward) {
         auto msize = handler_ptr->get_mutation_size(); // can overestimate for repair writes
         global_stats.queued_write_bytes += msize;
 
@@ -3833,7 +3833,7 @@ size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& m
 {
     if (hints_enabled(type)) {
         db::hints::manager& hints_manager = hints_manager_for(type);
-        return boost::count_if(targets, [this, &mh, tr_state = std::move(tr_state), &hints_manager] (gms::inet_address target) mutable -> bool {
+        return boost::count_if(targets, [&mh, tr_state = std::move(tr_state), &hints_manager] (gms::inet_address target) mutable -> bool {
             return mh->store_hint(hints_manager, target, tr_state);
         });
     } else {
@@ -5376,7 +5376,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         cmd->slice.options.set<query::partition_slice::option::range_scan_data_variant>();
     }
 
-    const auto preferred_replicas_for_range = [this, &preferred_replicas, &tm] (const dht::partition_range& r) {
+    const auto preferred_replicas_for_range = [&preferred_replicas, &tm] (const dht::partition_range& r) {
         auto it = preferred_replicas.find(r.transform(std::mem_fn(&dht::ring_position::token)));
         return it == preferred_replicas.end() ? inet_address_vector_replica_set{} : replica_ids_to_endpoints(tm, it->second);
     };
@@ -5750,7 +5750,7 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
     auto request = seastar::make_shared<read_cas_request>();
 
     return cas(std::move(s), request, cmd, std::move(partition_ranges), std::move(query_options),
-            cl, db::consistency_level::ANY, timeout, cas_timeout, false).then([this, request] (bool is_applied) mutable {
+            cl, db::consistency_level::ANY, timeout, cas_timeout, false).then([request] (bool is_applied) mutable {
         return make_ready_future<coordinator_query_result>(std::move(request->res));
     });
 }
@@ -6173,7 +6173,7 @@ future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spo
 
     bool was_aborted = false;
     unsigned original_shard = this_shard_id();
-    co_await container().invoke_on_all([this, original_shard, &sources, &spoint, &was_aborted] (storage_proxy& sp) {
+    co_await container().invoke_on_all([original_shard, &sources, &spoint, &was_aborted] (storage_proxy& sp) {
         auto wait_for = [&sources, original_shard, &was_aborted] (db::hints::manager& mgr, const std::vector<db::hints::sync_point::shard_rps>& shard_rps) {
             const unsigned shard = this_shard_id();
             return mgr.wait_for_sync_point(sources[shard], shard_rps[shard]).handle_exception([original_shard, &sources, &was_aborted] (auto eptr) {

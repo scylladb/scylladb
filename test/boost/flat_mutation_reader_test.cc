@@ -786,7 +786,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_fragments_v2_as_mutation_sour
                 tracing::trace_state_ptr,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding) mutable {
-            auto get_fragments = [&schema, &permit, &muts] {
+            auto get_fragments = [&permit, &muts] {
                 std::deque<mutation_fragment_v2> fragments;
                 auto rd = make_flat_mutation_reader_from_mutations_v2(muts.front().schema(), permit, squash_mutations(muts));
                 auto close_rd = deferred_close(rd);

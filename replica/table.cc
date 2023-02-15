@@ -1718,11 +1718,11 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
                 continue;
             }
 
-            lister::scan_dir(snapshots_dir,  lister::dir_entry_types::of<directory_entry_type::directory>(), [this, datadir, &all_snapshots] (fs::path snapshots_dir, directory_entry de) {
+            lister::scan_dir(snapshots_dir,  lister::dir_entry_types::of<directory_entry_type::directory>(), [datadir, &all_snapshots] (fs::path snapshots_dir, directory_entry de) {
                 auto snapshot_name = de.name;
                 all_snapshots.emplace(snapshot_name, snapshot_details());
-                return lister::scan_dir(snapshots_dir / fs::path(snapshot_name),  lister::dir_entry_types::of<directory_entry_type::regular>(), [this, datadir, &all_snapshots, snapshot_name] (fs::path snapshot_dir, directory_entry de) {
-                    return io_check(file_stat, (snapshot_dir / de.name).native(), follow_symlink::no).then([this, datadir, &all_snapshots, snapshot_name, snapshot_dir, name = de.name] (stat_data sd) {
+                return lister::scan_dir(snapshots_dir / fs::path(snapshot_name),  lister::dir_entry_types::of<directory_entry_type::regular>(), [datadir, &all_snapshots, snapshot_name] (fs::path snapshot_dir, directory_entry de) {
+                    return io_check(file_stat, (snapshot_dir / de.name).native(), follow_symlink::no).then([datadir, &all_snapshots, snapshot_name, snapshot_dir, name = de.name] (stat_data sd) {
                         auto size = sd.allocated_size;
 
                         // The manifest is the only file expected to be in this directory not belonging to the SSTable.
