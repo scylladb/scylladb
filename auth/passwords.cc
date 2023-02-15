@@ -18,7 +18,7 @@ extern "C" {
 
 namespace auth::passwords {
 
-static thread_local crypt_data tlcrypt = { 0, };
+static thread_local crypt_data tlcrypt = {};
 
 namespace detail {
 
