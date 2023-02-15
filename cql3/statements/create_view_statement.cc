@@ -260,6 +260,25 @@ view_ptr create_view_statement::prepare_view(data_dictionary::database db) const
         throw exceptions::invalid_request_exception(format("Must select at least a column for a Materialized View"));
     }
 
+    // Cassandra requires that if CLUSTERING ORDER BY is used, it must specify
+    // all clustering columns. Scylla relaxes this requirement and allows just
+    // a subset of the clustering columns. But it doesn't make sense (and it's
+    // forbidden) to list something which is not a clustering key column in
+    // the CLUSTERING ORDER BY. Let's verify that:
+    for (auto& pair: _properties.defined_ordering()) {
+        auto&& name = pair.first->text();
+        bool not_clustering = true;
+        for (auto& c : _clustering_keys) {
+            if (name == c->to_string()) {
+                not_clustering = false;
+                break;
+            }
+        }
+        if (not_clustering) {
+            throw exceptions::invalid_request_exception(format("CLUSTERING ORDER BY lists {} which is not a clustering column in the view", name));
+        }
+    }
+
     // The unique feature of a filter by a non-key column is that the
     // value of such column can be updated - and also be expired with TTL
     // and cause the view row to appear and disappear. We don't currently
