@@ -5,44 +5,18 @@ project(scylla)
 list(APPEND CMAKE_MODULE_PATH
   ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
-if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-  message(STATUS "Setting build type to 'Release' as none was specified.")
-  set(CMAKE_BUILD_TYPE "Release" CACHE
-      STRING "Choose the type of build." FORCE)
-  # Set the possible values of build type for cmake-gui
-  set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
-    "Debug" "Release" "Dev" "Sanitize")
-endif()
-
-if(CMAKE_BUILD_TYPE)
-    string(TOLOWER "${CMAKE_BUILD_TYPE}" BUILD_TYPE)
-else()
-    set(BUILD_TYPE "release")
-endif()
-
-function(default_target_arch arch)
-    set(x86_instruction_sets i386 i686 x86_64)
-    if(CMAKE_SYSTEM_PROCESSOR IN_LIST x86_instruction_sets)
-        set(${arch} "westmere" PARENT_SCOPE)
-    elseif(CMAKE_SYSTEM_PROCESSOR EQUAL "aarch64")
-        set(${arch} "armv8-a+crc+crypto" PARENT_SCOPE)
-    else()
-        set(${arch} "" PARENT_SCOPE)
-    endif()
-endfunction()
-default_target_arch(target_arch)
-if(target_arch)
-    set(target_arch_flag "-march=${target_arch}")
-endif()
-
-set(cxx_coro_flag)
-if (CMAKE_CXX_COMPILER_ID MATCHES GNU)
-    set(cxx_coro_flag -fcoroutines)
-endif()
-
+set(CMAKE_BUILD_TYPE "${CMAKE_BUILD_TYPE}" CACHE
+    STRING "Choose the type of build." FORCE)
+# Set the possible values of build type for cmake-gui
+set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+  "Debug" "Release" "Dev" "Sanitize")
+string(TOUPPER "${CMAKE_BUILD_TYPE}" build_mode)
+include("mode.common")
+include("mode.${build_mode}")
+add_compile_definitions(${Seastar_DEFINITIONS_${build_mode}})
 # Configure Seastar compile options to align with Scylla
-set(Seastar_CXX_FLAGS ${cxx_coro_flag} ${target_arch_flag} CACHE INTERNAL "" FORCE)
-set(Seastar_CXX_DIALECT gnu++20 CACHE INTERNAL "" FORCE)
+set(CMAKE_CXX_STANDARD "20" CACHE INTERNAL "")
+set(CMAKE_CXX_EXTENSIONS ON CACHE INTERNAL "")
 
 add_subdirectory(seastar)
 
@@ -53,14 +27,8 @@ find_package(ZLIB REQUIRED)
 find_package(ICU COMPONENTS uc REQUIRED)
 find_package(absl REQUIRED)
 
-set(scylla_build_dir "${CMAKE_BINARY_DIR}/build/${BUILD_TYPE}")
-set(scylla_gen_build_dir "${scylla_build_dir}/gen")
-file(MAKE_DIRECTORY "${scylla_build_dir}" "${scylla_gen_build_dir}")
-
-# Place libraries, executables and archives in ${buildroot}/build/${mode}/
-foreach(mode RUNTIME LIBRARY ARCHIVE)
-    set(CMAKE_${mode}_OUTPUT_DIRECTORY "${scylla_build_dir}")
-endforeach()
+set(scylla_gen_build_dir "${CMAKE_BINARY_DIR}/gen")
+file(MAKE_DIRECTORY "${scylla_gen_build_dir}")
 
 # Generate C++ source files from thrift definitions
 function(scylla_generate_thrift)
@@ -581,10 +549,6 @@ target_link_libraries(scylla PRIVATE
     -fuse-ld=lld)
 # TODO: patch dynamic linker to match configure.py behavior
 
-target_compile_options(scylla PRIVATE
-    -std=gnu++20
-    ${cxx_coro_flag}
-    ${target_arch_flag})
 # Hacks needed to expose internal APIs for xxhash dependencies
 target_compile_definitions(scylla PRIVATE XXH_PRIVATE_API HAVE_LZ4_COMPRESS_DEFAULT)
 
