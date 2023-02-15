@@ -705,7 +705,6 @@ class year_month_weekday
     date::weekday_indexed wdi_;
 
 public:
-    year_month_weekday() = default;
     CONSTCD11 year_month_weekday(const date::year& y, const date::month& m,
                                    const date::weekday_indexed& wdi) NOEXCEPT;
     CONSTCD14 year_month_weekday(const sys_days& dp) NOEXCEPT;
