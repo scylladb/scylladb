@@ -25,7 +25,7 @@ add_subdirectory(seastar)
 find_package(Boost COMPONENTS filesystem program_options system thread regex REQUIRED)
 find_package(Lua REQUIRED)
 find_package(ZLIB REQUIRED)
-find_package(ICU COMPONENTS uc REQUIRED)
+find_package(ICU COMPONENTS uc i18n REQUIRED)
 find_package(absl REQUIRED)
 find_package(libdeflate REQUIRED)
 find_package(xxHash REQUIRED)
@@ -406,6 +406,9 @@ target_link_libraries(scylla PRIVATE
     idl
     test-perf
     wasmtime_bindings)
+target_link_libraries(Boost::regex
+  INTERFACE
+    ICU::i18n)
 
 target_link_libraries(scylla PRIVATE
     seastar
