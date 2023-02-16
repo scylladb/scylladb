@@ -3,42 +3,17 @@ import time
 import asyncio
 
 from rest_util import new_test_module, new_test_task, set_tmp_task_ttl
+from task_manager_utils import check_field_correctness, check_status_correctness, assert_task_does_not_exist, list_modules, get_task_status, list_tasks, get_task_status_recursively
 
 long_time = 1000000000
 
-def check_field_correctness(field_name, status, expected_status):
-    if field_name in expected_status:
-        assert status[field_name] == expected_status[field_name], f"Incorrect task {field_name}"
-
-def check_status_correctness(status, expected_status):
-    check_field_correctness("id", status, expected_status)
-    check_field_correctness("state", status, expected_status)
-    check_field_correctness("sequence_number", status, expected_status)
-    check_field_correctness("keyspace", status, expected_status)
-    check_field_correctness("table", status, expected_status)
-    if "error" in expected_status:
-        assert expected_status["error"] in status["error"], "Incorrect error message"
-    else:
-        assert status["error"] == "", "Error message was set"
-
-async def wait_for_task(rest_api, task_id):
-    rest_api.send("GET", f"task_manager/wait_task/{task_id}")
-
-def assert_task_does_not_exist(rest_api, task_id):
-    resp = rest_api.send("GET", f"task_manager/task_status/{task_id}")
-    assert resp.status_code == requests.codes.internal_server_error, f"Task {task_id} is kept in memory"
-
 def check_sequence_number(rest_api, task_id, expected):
-    resp = rest_api.send("GET", f"task_manager/task_status/{task_id}")
-    resp.raise_for_status()
-    status = resp.json()
+    status = get_task_status(rest_api, task_id)
     check_field_correctness("sequence_number", status, { "sequence_number": expected })
 
 def test_task_manager_modules(rest_api):
     with new_test_module(rest_api):
-        resp = rest_api.send("GET", "task_manager/list_modules")
-        resp.raise_for_status()
-        modules = resp.json()
+        modules = list_modules(rest_api)
         assert "test" in modules, "test module was not listed"
 
 def test_task_manager_tasks(rest_api):
@@ -49,10 +24,8 @@ def test_task_manager_tasks(rest_api):
             args1 = { "shard": 1, "keyspace": "keyspace0", "table": "table1"}
             with new_test_task(rest_api, args1) as task1:
                 print(f"created test task {task1}")
-                resp = rest_api.send("GET", "task_manager/list_module_tasks/test")
-                resp.raise_for_status()
                 tasks = [task0, task1]
-                for task in resp.json():
+                for task in list_tasks(rest_api, "test"):
                     task_id = task["task_id"]
                     assert task_id in tasks, f"Unrecognized task_id={task_id}"
                     tasks.remove(task_id)
@@ -63,14 +36,11 @@ def test_task_manager_status_running(rest_api):
         args0 = { "keyspace": "keyspace0", "table": "table0"}
         with new_test_task(rest_api, args0) as task0:
             print(f"created test task {task0}")
-            resp = rest_api.send("GET", f"task_manager/task_status/{task0}")
-            resp.raise_for_status()
 
-            status = resp.json()
+            status = get_task_status(rest_api, task0)
             check_status_correctness(status, { "id": task0, "state": "running", "sequence_number": 1, "keyspace": "keyspace0", "table": "table0" })
 
-            resp = rest_api.send("GET", "task_manager/list_module_tasks/test")
-            tasks = resp.json()
+            tasks = list_tasks(rest_api, "test")
             assert tasks, "task_status unregistered task that did not finish"
 
 def test_task_manager_status_done(rest_api):
@@ -82,12 +52,10 @@ def test_task_manager_status_done(rest_api):
             with set_tmp_task_ttl(rest_api, long_time):
                 resp = rest_api.send("POST", f"task_manager_test/finish_test_task/{task0}")
                 resp.raise_for_status()
-                resp = rest_api.send("GET", f"task_manager/task_status/{task0}")
-                resp.raise_for_status()
 
-            status = resp.json()
-            check_status_correctness(status, { "id": task0, "state": "done", "sequence_number": 1, "keyspace": "keyspace0", "table": "table0" })
-            assert_task_does_not_exist(rest_api, task0)
+                status = get_task_status(rest_api, task0)
+                check_status_correctness(status, { "id": task0, "state": "done", "sequence_number": 1, "keyspace": "keyspace0", "table": "table0" })
+                assert_task_does_not_exist(rest_api, task0)
 
 def test_task_manager_status_failed(rest_api):
     with new_test_module(rest_api):
@@ -98,12 +66,10 @@ def test_task_manager_status_failed(rest_api):
             with set_tmp_task_ttl(rest_api, long_time):
                 resp = rest_api.send("POST", f"task_manager_test/finish_test_task/{task0}", { "error": "Test task failed" })
                 resp.raise_for_status()
-                resp = rest_api.send("GET", f"task_manager/task_status/{task0}")
-                resp.raise_for_status()
 
-            status = resp.json()
-            check_status_correctness(status, { "id": task0, "state": "failed", "error": "Test task failed", "sequence_number": 1, "keyspace": "keyspace0", "table": "table0" })
-            assert_task_does_not_exist(rest_api, task0)
+                status = get_task_status(rest_api, task0)
+                check_status_correctness(status, { "id": task0, "state": "failed", "error": "Test task failed", "sequence_number": 1, "keyspace": "keyspace0", "table": "table0" })
+                assert_task_does_not_exist(rest_api, task0)
 
 def test_task_manager_not_abortable(rest_api):
     with new_test_module(rest_api):
@@ -120,7 +86,7 @@ async def test_task_manager_wait(rest_api):
         with new_test_task(rest_api, args0) as task0:
             print(f"created test task {task0}")
 
-            waiting_task = asyncio.create_task(wait_for_task(rest_api, task0))
+            waiting_task = asyncio.create_task(wait_for_task_async(rest_api, task0))
             done, pending = await asyncio.wait({waiting_task})
 
             assert waiting_task in pending, "wait_task finished while the task was still running"
@@ -187,11 +153,7 @@ def test_task_manager_recursive_status(rest_api):
                     with new_test_task(rest_api, args1) as task3:               # child2
                         print(f"created test task {task3}")
 
-                    resp = rest_api.send("GET", f"task_manager/task_status_recursive/{task0}")
-                    resp.raise_for_status()
-
-                    tasks = resp.json()
-                    print(tasks)
+                    tasks = get_task_status_recursively(rest_api, task0)
                     check_field_correctness("id", tasks[0], { "id" : f"{task0}" })
                     check_field_correctness("id", tasks[1], { "id" : f"{task1}" })
                     check_field_correctness("id", tasks[2], { "id" : f"{task3}" })
