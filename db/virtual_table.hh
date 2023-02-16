@@ -70,6 +70,7 @@ public:
         : _schema(std::move(s))
         , _permit(std::move(p))
     { }
+    virtual ~result_collector() = default;
 
     // Subsequent calls should pass fragments which form a valid mutation fragment stream (see mutation_fragment.hh).
     // Concurrent calls not allowed.
