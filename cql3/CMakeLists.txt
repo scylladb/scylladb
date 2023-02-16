@@ -1,7 +1,4 @@
-find_program (ANTLR3 antlr3)
-if(NOT ANTLR3)
-  message(FATAL "antlr3 is required")
-endif()
+include(generate_cql_grammar)
 
 generate_cql_grammar(
   GRAMMAR Cql.g
@@ -107,3 +104,10 @@ target_sources(cql3
     result_set.cc
     prepare_context.cc
     ${cql_grammar_srcs})
+target_include_directories(cql3
+  PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_BINARY_DIR})
+target_link_libraries(cql3
+  Seastar::seastar
+  xxHash::xxhash)

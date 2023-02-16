@@ -40,7 +40,7 @@ function(generate_cql_grammar)
       -e "1i using ExceptionBaseType = int;"
       -e "s/^{{/{{ ExceptionBaseType\* ex = nullptr;/"
       -e "s/ExceptionBaseType\* ex = new/ex = new/"
-      -e "s/exceptions::syntax_exception e/exceptions::syntax_exception\& e/"
+      -e "s/exceptions::syntax_exception e/exceptions::syntax_exception\\& e/"
       ${gen_dir}/${stem}Parser.cpp
     COMMENT "Generating sources from ${grammar}"
     VERBATIM)
