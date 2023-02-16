@@ -705,7 +705,6 @@ class year_month_weekday
     date::weekday_indexed wdi_;
 
 public:
-    year_month_weekday() = default;
     CONSTCD11 year_month_weekday(const date::year& y, const date::month& m,
                                    const date::weekday_indexed& wdi) NOEXCEPT;
     CONSTCD14 year_month_weekday(const sys_days& dp) NOEXCEPT;
@@ -5962,8 +5961,7 @@ parse(std::basic_istream<CharT, Traits>& is,
             }
             if (Y != not_a_year)
             {
-                if (!(static_cast<int64_t>(year::min()) <= Y &&
-                      Y <= static_cast<int64_t>(year::max())))
+                if (!std::in_range<int64_t>(Y))
                     goto broken;
                 if (j != 0)
                 {
