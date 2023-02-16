@@ -1394,7 +1394,7 @@ void test_large_partition_single_key_slice(replica::column_family& cf, clustered
     run_test_case([&] { // adjacent, contained
         return test_result_vector {
             test(int_range::make({1}, {100})),
-            check_no_disk_reads(test(int_range::make_singular({100}))),
+            check_no_disk_reads(test(int_range::make_singular(100))),
         };
     });
 
@@ -1423,14 +1423,14 @@ void test_large_partition_single_key_slice(replica::column_family& cf, clustered
     run_test_case([&] { // adjacent, singular excluded
         return test_result_vector {
             test(int_range::make({0}, {100, false})),
-            test(int_range::make_singular({100})),
+            test(int_range::make_singular(100)),
         };
     });
 
     run_test_case([&] { // adjacent, singular excluded
         return test_result_vector {
             test(int_range::make({100, false}, {200})),
-            test(int_range::make_singular({100})),
+            test(int_range::make_singular(100)),
         };
     });
 
@@ -1438,7 +1438,7 @@ void test_large_partition_single_key_slice(replica::column_family& cf, clustered
         return test_result_vector {
             test(int_range::make_ending_with({100})),
             check_no_disk_reads(test(int_range::make({10}, {20}))),
-            check_no_disk_reads(test(int_range::make_singular({-1}))),
+            check_no_disk_reads(test(int_range::make_singular(-1))),
         };
     });
 
@@ -1446,8 +1446,8 @@ void test_large_partition_single_key_slice(replica::column_family& cf, clustered
         return test_result_vector {
             test(int_range::make_starting_with({100})),
             check_no_disk_reads(test(int_range::make({150}, {159}))),
-            check_no_disk_reads(test(int_range::make_singular({n_rows - 1}))),
-            check_no_disk_reads(test(int_range::make_singular({n_rows + 1}))),
+            check_no_disk_reads(test(int_range::make_singular(n_rows - 1))),
+            check_no_disk_reads(test(int_range::make_singular(n_rows + 1))),
         };
     });
 
