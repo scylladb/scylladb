@@ -57,7 +57,7 @@ add_custom_command(
 generate_cxxbridge(wasmtime_bindings
   INPUT wasmtime_bindings/src/lib.rs
   INCLUDE ${cxx_header}
-  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}"
+  OUTPUT_DIR "${scylla_gen_build_dir}"
   SOURCES wasmtime_bindings_sources)
 
 set_target_properties(Rust::rust_combined PROPERTIES
