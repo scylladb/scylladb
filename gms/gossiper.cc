@@ -2218,25 +2218,38 @@ bool gossiper::is_alive(inet_address ep) const {
 }
 
 future<> gossiper::wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout) {
+    return wait_alive_or_down(std::move(nodes), timeout, wait_node_status::alive);
+}
+
+future<> gossiper::wait_down(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout) {
+    return wait_alive_or_down(std::move(nodes), timeout, wait_node_status::down);
+}
+
+future<> gossiper::wait_alive_or_down(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout, wait_node_status wait_status) {
     auto start_time = std::chrono::steady_clock::now();
+    auto wait = wait_status == wait_node_status::alive ? "alive" : "down";
     for (;;) {
-        std::vector<gms::inet_address> live_nodes;
+        std::vector<gms::inet_address> checked_nodes;
         for (const auto& node: nodes) {
-            size_t nr_alive = co_await container().map_reduce0([node] (gossiper& g) -> size_t {
-                return g.is_alive(node) ? 1 : 0;
+            size_t nr = co_await container().map_reduce0([wait_status, node] (gossiper& g) -> size_t {
+                if (wait_status == wait_node_status::alive) {
+                    return g.is_alive(node) ? 1 : 0;
+                } else {
+                    return !g.is_alive(node) ? 1 : 0;
+                }
             }, 0, std::plus<size_t>());
-            logger.debug("Marked node={} as alive on {} out of {} shards", node, nr_alive, smp::count);
-            if (nr_alive == smp::count) {
-                live_nodes.push_back(node);
+            logger.debug("Marked node={} as {} on {} out of {} shards", node, wait, nr, smp::count);
+            if (nr == smp::count) {
+                checked_nodes.push_back(node);
             }
         }
-        logger.debug("Waited for marking node as up, replace_nodes={}, live_nodes={}", nodes, live_nodes);
-        if (live_nodes.size() == nodes.size()) {
+        logger.debug("Waited for marking node as {}, nodes={}, checked_nodes={}", wait, nodes, checked_nodes);
+        if (checked_nodes.size() == nodes.size()) {
             break;
         }
         if (std::chrono::steady_clock::now() > timeout + start_time) {
-            throw std::runtime_error(format("Failed to mark node as alive in {} ms, nodes={}, live_nodes={}",
-                    timeout.count(), nodes, live_nodes));
+            throw std::runtime_error(format("Failed to mark node as {} in {} ms, nodes={}, checked_nodes={}",
+                    wait, timeout.count(), nodes, checked_nodes));
         }
         co_await sleep_abortable(std::chrono::milliseconds(100), _abort_source);
     }

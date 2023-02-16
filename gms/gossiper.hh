@@ -82,6 +82,11 @@ struct gossip_config {
     uint32_t skip_wait_for_gossip_to_settle = -1;
 };
 
+enum class wait_node_status {
+    alive,
+    down,
+};
+
 /**
  * This module is responsible for Gossiping information for the local endpoint. This abstraction
  * maintains the list of live and dead endpoints. Periodically i.e. every 1 second this module
@@ -434,8 +439,13 @@ public:
     bool is_dead_state(const endpoint_state& eps) const;
     // Wait for nodes to be alive on all shards
     future<> wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout);
+    // Wait for nodes to be down on all shards
+    future<> wait_down(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout);
 
     future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
+
+private:
+    future<> wait_alive_or_down(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout, wait_node_status wait_status);
 
 private:
     future<> do_apply_state_locally(gms::inet_address node, const endpoint_state& remote_state, bool listener_notification);
