@@ -68,6 +68,8 @@ public:
         uint64_t pinned_dirty_memory_overload;
         uint64_t range_tombstone_reads;
         uint64_t row_tombstone_reads;
+        uint64_t rows_compacted;
+        uint64_t rows_compacted_away;
 
         uint64_t active_reads() const {
             return reads - reads_done;
@@ -115,6 +117,8 @@ public:
     void on_row_merged_from_memtable() noexcept { ++_stats.rows_merged_from_memtable; }
     void on_range_tombstone_read() noexcept { ++_stats.range_tombstone_reads; }
     void on_row_tombstone_read() noexcept { ++_stats.row_tombstone_reads; }
+    void on_row_compacted() noexcept { ++_stats.rows_compacted; }
+    void on_row_compacted_away() noexcept { ++_stats.rows_compacted_away; }
     void pinned_dirty_memory_overload(uint64_t bytes) noexcept;
     allocation_strategy& allocator() noexcept;
     logalloc::region& region() noexcept;

@@ -140,6 +140,10 @@ cache_tracker::setup_metrics() {
             sm::description("total amount of range tombstones processed during read")),
         sm::make_counter("row_tombstone_reads", _stats.row_tombstone_reads,
             sm::description("total amount of row tombstones processed during read")),
+        sm::make_counter("rows_compacted", _stats.rows_compacted,
+            sm::description("total amount of attempts to compact expired rows during read")),
+        sm::make_counter("rows_compacted_away", _stats.rows_compacted_away,
+            sm::description("total amount of compacted and removed rows during read")),
     });
 }
 
@@ -725,12 +729,13 @@ row_cache::make_reader_opt(schema_ptr s,
                        reader_permit permit,
                        const dht::partition_range& range,
                        const query::partition_slice& slice,
+                       const tombstone_gc_state* gc_state,
                        tracing::trace_state_ptr trace_state,
                        streamed_mutation::forwarding fwd,
                        mutation_reader::forwarding fwd_mr)
 {
     auto make_context = [&] {
-        return std::make_unique<read_context>(*this, s, std::move(permit), range, slice, trace_state, fwd_mr);
+        return std::make_unique<read_context>(*this, s, std::move(permit), range, slice, gc_state, trace_state, fwd_mr);
     };
 
     if (query::is_single_partition(range) && !fwd_mr) {
