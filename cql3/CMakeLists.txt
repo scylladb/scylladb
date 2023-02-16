@@ -3,6 +3,9 @@ include(generate_cql_grammar)
 generate_cql_grammar(
   GRAMMAR Cql.g
   SOURCES cql_grammar_srcs)
+set_source_files_properties(${cql_grammar_srcs}
+  PROPERTIES
+    COMPILE_FLAGS "-Wno-uninitialized")
 
 add_library(cql3 STATIC)
 target_sources(cql3
