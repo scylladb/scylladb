@@ -219,6 +219,7 @@ using stats_values = std::tuple<
 
 
 struct output_writer {
+    virtual ~output_writer() = default;
     virtual void write_test_group(const test_group& group, const dataset& ds, bool running) = 0;
 
     virtual void write_dataset_population(const dataset& ds) = 0;
