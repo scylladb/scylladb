@@ -18,6 +18,7 @@ add_compile_definitions(${Seastar_DEFINITIONS_${build_mode}})
 set(CMAKE_CXX_STANDARD "20" CACHE INTERNAL "")
 set(CMAKE_CXX_EXTENSIONS ON CACHE INTERNAL "")
 
+set(Seastar_TESTING ON CACHE BOOL "" FORCE)
 add_subdirectory(seastar)
 
 # System libraries dependencies
@@ -391,6 +392,7 @@ add_subdirectory(api)
 add_subdirectory(alternator)
 add_subdirectory(cql3)
 add_subdirectory(idl)
+add_subdirectory(test)
 add_subdirectory(rust)
 
 add_executable(scylla
@@ -402,6 +404,7 @@ target_link_libraries(scylla PRIVATE
     alternator
     cql3
     idl
+    test-perf
     wasmtime_bindings)
 
 target_link_libraries(scylla PRIVATE
