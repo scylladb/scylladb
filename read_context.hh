@@ -126,6 +126,7 @@ class read_context final : public enable_lw_shared_from_this<read_context> {
     tracing::trace_state_ptr _trace_state;
     mutation_reader::forwarding _fwd_mr;
     bool _range_query;
+    const tombstone_gc_state* _tombstone_gc_state;
     // When reader enters a partition, it must be set up for reading that
     // partition from the underlying mutation source (_underlying) in one of two ways:
     //
@@ -148,6 +149,7 @@ public:
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
+            const tombstone_gc_state* gc_state,
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr)
         : _cache(cache)
@@ -158,6 +160,7 @@ public:
         , _trace_state(std::move(trace_state))
         , _fwd_mr(fwd_mr)
         , _range_query(!query::is_single_partition(range))
+        , _tombstone_gc_state(gc_state)
         , _underlying(_cache, *this)
     {
         if (_slice.options.contains(query::partition_slice::option::reversed)) {
@@ -195,6 +198,7 @@ public:
     bool partition_exists() const { return _partition_exists; }
     void on_underlying_created() { ++_underlying_created; }
     bool digest_requested() const { return _slice.options.contains<query::partition_slice::option::with_digest>(); }
+    const tombstone_gc_state* tombstone_gc_state() const { return _tombstone_gc_state; }
 public:
     future<> ensure_underlying() {
         if (_underlying_snapshot) {

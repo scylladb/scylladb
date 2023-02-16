@@ -4588,3 +4588,59 @@ SEASTAR_THREAD_TEST_CASE(test_digest_read_during_schema_upgrade) {
     m2.upgrade(s2);
     assert_that(std::move(rd)).produces(m2);
 }
+
+SEASTAR_TEST_CASE(test_cache_compacts_expired_tombstones_on_read) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("v", int32_type)
+            .build();
+
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        auto pkey = tests::generate_partition_key(s);
+
+        auto make_ck = [&s] (int v) {
+            return clustering_key::from_deeply_exploded(*s, {data_value{v}});
+        };
+
+        auto make_prefix = [&s] (int v) {
+            return clustering_key_prefix::from_deeply_exploded(*s, {data_value{v}});
+        };
+
+        auto ck1 = make_ck(1);
+        auto ck2 = make_ck(2);
+        auto ck3 = make_ck(3);
+        auto dt_noexp = gc_clock::now();
+        auto dt_exp = gc_clock::now() - std::chrono::seconds(s->gc_grace_seconds().count() + 1);
+
+        auto mt = make_lw_shared<replica::memtable>(s);
+        cache_tracker tracker;
+        row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
+
+        {
+            mutation m(s, pkey);
+            m.set_clustered_cell(ck1, "v", data_value(101), 1);
+            m.partition().apply_delete(*s, make_prefix(2), tombstone(1, dt_noexp)); // create non-expired tombstone
+            m.partition().apply_delete(*s, make_prefix(3), tombstone(2, dt_exp)); // create expired tombstone
+            cache.populate(m);
+        }
+
+        tombstone_gc_state gc_state(nullptr);
+        auto rd1 = cache.make_reader(s, semaphore.make_permit(), query::full_partition_range, &gc_state);
+        auto close_rd = deferred_close(rd1);
+        rd1.fill_buffer().get(); // cache_flat_mutation_reader compacts cache on fill buffer
+
+        cache_entry& entry = cache.lookup(pkey);
+        auto& cp = entry.partition().version()->partition();
+
+        BOOST_REQUIRE(cp.find_row(*s, ck1) != nullptr); // live row is in cache
+        BOOST_REQUIRE_EQUAL(cp.clustered_row(*s, ck2).deleted_at(), row_tombstone(tombstone(1, dt_noexp))); // non-expired tombstone is in cache
+        BOOST_REQUIRE(cp.find_row(*s, ck3) == nullptr); // expired tombstone isn't in cache
+
+        // check tracker stats
+        auto &tracker_stats = tracker.get_stats();
+        BOOST_REQUIRE(tracker_stats.rows_compacted == 1);
+        BOOST_REQUIRE(tracker_stats.rows_compacted_away == 1);
+    });
+}
