@@ -473,7 +473,6 @@ public:
     { }
 
     partition_reversing_data_source_impl(partition_reversing_data_source_impl&&) noexcept = default;
-    partition_reversing_data_source_impl& operator=(partition_reversing_data_source_impl&&) noexcept = default;
 
     virtual future<temporary_buffer<char>> get() override {
         if (!_partition_header_context) {
