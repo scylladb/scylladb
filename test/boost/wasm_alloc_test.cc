@@ -12,6 +12,7 @@
 #include "seastar/core/reactor.hh"
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/core/coroutine.hh>
+#include "rust/cxx.h"
 
 // This test file can contain only a single test case which uses the wasmtime
 // runtime. This is because the wasmtime runtime registers a signal handler
@@ -65,7 +66,7 @@ SEASTAR_TEST_CASE(test_allocation_failures) {
         auto wasm_ctx = wasm::context(*wasm_engine, "grow_return", wasm_cache.get(), 1000, 1000000000);
         try {
             // Function that ignores the input, grows its memory by 1 page, and returns 10
-            wasm::precompile(wasm_ctx, {}, grow_return);
+            wasm::precompile(wasm_ctx, {}, rust::Slice<const rust::u8>(reinterpret_cast<const rust::u8*>(grow_return), strlen(grow_return)));
             wasm_ctx.module.value()->compile(*wasm_engine);
         } catch (const wasm::exception& e) {
             errors_during_compilation++;

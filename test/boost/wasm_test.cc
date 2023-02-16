@@ -14,13 +14,9 @@
 #include <seastar/core/lowres_clock.hh>
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/core/coroutine.hh>
+#include "rust/cxx.h"
 
-SEASTAR_TEST_CASE(test_long_udf_yields) {
-    auto wasm_engine = wasmtime::create_engine(1024 * 1024);
-    auto wasm_cache = std::make_unique<wasm::instance_cache>(100 * 1024 * 1024, 1024 * 1024, std::chrono::seconds(1));
-    auto wasm_ctx = wasm::context(*wasm_engine, "fib", wasm_cache.get(), 100000, 100000000000);
-    // Recursive fibonacci function
-    wasm::precompile(wasm_ctx, {}, R"(
+static const char* fib_wasm = R"(
 (module
   (type (;0;) (func (param i64) (result i64)))
   (func (;0;) (type 0) (param i64) (result i64)
@@ -61,7 +57,15 @@ SEASTAR_TEST_CASE(test_long_udf_yields) {
   (export "fib" (func 1))
   (export "_scylla_abi" (global 0))
   (data (;0;) (i32.const 1024) "01"))
-)");
+)";
+
+SEASTAR_TEST_CASE(test_long_udf_yields) {
+    auto wasm_engine = wasmtime::create_engine(1024 * 1024);
+    auto wasm_cache = std::make_unique<wasm::instance_cache>(100 * 1024 * 1024, 1024 * 1024, std::chrono::seconds(1));
+    auto wasm_ctx = wasm::context(*wasm_engine, "fib", wasm_cache.get(), 100000, 100000000000);
+    // Recursive fibonacci function
+
+    wasm::precompile(wasm_ctx, {}, rust::Slice<const rust::u8>(reinterpret_cast<const rust::u8*>(fib_wasm), strlen(fib_wasm)));
     wasm_ctx.module.value()->compile(*wasm_engine);
     auto argv = wasmtime::get_val_vec();
     argv->push_i64(42);

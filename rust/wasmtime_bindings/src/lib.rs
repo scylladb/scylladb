@@ -38,7 +38,7 @@ mod ffi {
         ) -> Result<Box<Instance>>;
 
         type Module;
-        fn create_module(engine: &mut Engine, script: &str) -> Result<Box<Module>>;
+        fn create_module(engine: &mut Engine, script: &[u8]) -> Result<Box<Module>>;
         fn raw_size(self: &Module) -> usize;
         fn is_compiled(self: &Module) -> bool;
         fn compile(self: &mut Module, engine: &mut Engine) -> Result<()>;
@@ -139,10 +139,10 @@ pub struct Module {
     references: usize,
 }
 
-fn create_module(engine: &mut Engine, script: &str) -> Result<Box<Module>> {
+fn create_module(engine: &mut Engine, script: &[u8]) -> Result<Box<Module>> {
     let module_bytes = engine
         .wasmtime_engine
-        .precompile_module((&script).as_bytes())
+        .precompile_module(script)
         .map_err(|e| anyhow!("Compilation failed: {:?}", e))?;
     let module = Box::new(Module {
         serialized_module: module_bytes,

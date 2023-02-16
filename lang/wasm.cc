@@ -216,9 +216,9 @@ struct from_val_visitor {
     }
 };
 
-void precompile(context& ctx, const std::vector<sstring>& arg_names, std::string script) {
+void precompile(context& ctx, const std::vector<sstring>& arg_names, rust::Slice<const rust::u8> script) {
     try {
-        ctx.module = wasmtime::create_module(ctx.engine_ptr, rust::Str(script.data(), script.size()));
+        ctx.module = wasmtime::create_module(ctx.engine_ptr, script);
         // After precompiling the module, we try creating a store, an instance and a function with it to make sure it's valid.
         // If we succeed, we drop them and keep the module, knowing that we will be able to create them again for UDF execution.
         ctx.module.value()->compile(ctx.engine_ptr);
