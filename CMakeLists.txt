@@ -103,6 +103,7 @@ set(scylla_sources
     cdc/log.cc
     cdc/metadata.cc
     cdc/split.cc
+    client_data.cc
     clocks-impl.cc
     collection_mutation.cc
     compaction/compaction.cc
@@ -115,43 +116,45 @@ set(scylla_sources
     converting_mutation_partition_applier.cc
     counters.cc
     data_dictionary/data_dictionary.cc
-    db/batchlog_manager.cc
-    db/commitlog/commitlog.cc
-    db/commitlog/commitlog_entry.cc
-    db/commitlog/commitlog_replayer.cc
-    db/config.cc
     db/consistency_level.cc
+    db/system_keyspace.cc
+    db/virtual_table.cc
+    db/system_distributed_keyspace.cc
+    db/size_estimates_virtual_reader.cc
+    db/schema_tables.cc
     db/cql_type_parser.cc
+    db/legacy_schema_migrator.cc
+    db/commitlog/commitlog.cc
+    db/commitlog/commitlog_replayer.cc
+    db/commitlog/commitlog_entry.cc
     db/data_listeners.cc
-    db/extensions.cc
-    db/heat_load_balance.cc
-    db/hints/host_filter.cc
     db/hints/manager.cc
     db/hints/resource_manager.cc
+    db/hints/host_filter.cc
     db/hints/sync_point.cc
+    db/config.cc
+    db/extensions.cc
+    db/heat_load_balance.cc
     db/large_data_handler.cc
-    db/legacy_schema_migrator.cc
     db/marshal/type_parser.cc
-    db/rate_limiter.cc
-    db/schema_tables.cc
-    db/size_estimates_virtual_reader.cc
-    db/snapshot-ctl.cc
-    db/sstables-format-selector.cc
-    db/system_distributed_keyspace.cc
-    db/system_keyspace.cc
-    db/view/row_locking.cc
+    db/batchlog_manager.cc
+    db/tags/utils.cc
     db/view/view.cc
     db/view/view_update_generator.cc
-    db/virtual_table.cc
+    db/view/row_locking.cc
+    db/sstables-format-selector.cc
+    db/snapshot-ctl.cc
+    db/rate_limiter.cc
+    db/per_partition_rate_limit_options.cc
     dht/boot_strapper.cc
     dht/i_partitioner.cc
     dht/murmur3_partitioner.cc
     dht/range_streamer.cc
     dht/token.cc
+    direct_failure_detector/failure_detector.cc
     replica/distributed_loader.cc
     duration.cc
     exceptions/exceptions.cc
-    readers/mutation_readers.cc
     frozen_schema.cc
     generic_server.cc
     gms/application_state.cc
@@ -165,29 +168,32 @@ set(scylla_sources
     gms/inet_address.cc
     gms/versioned_value.cc
     gms/version_generator.cc
+    debug.cc
     index/secondary_index.cc
     index/secondary_index_manager.cc
     init.cc
     keys.cc
-    utils/lister.cc
     locator/abstract_replication_strategy.cc
     locator/azure_snitch.cc
-    locator/ec2_multi_region_snitch.cc
-    locator/ec2_snitch.cc
-    locator/everywhere_replication_strategy.cc
-    locator/gce_snitch.cc
-    locator/gossiping_property_file_snitch.cc
+    locator/simple_strategy.cc
     locator/local_strategy.cc
     locator/network_topology_strategy.cc
-    locator/production_snitch_base.cc
-    locator/rack_inferring_snitch.cc
-    locator/simple_snitch.cc
-    locator/simple_strategy.cc
-    locator/snitch_base.cc
+    locator/everywhere_replication_strategy.cc
     locator/token_metadata.cc
+    locator/snitch_base.cc
+    locator/simple_snitch.cc
+    locator/rack_inferring_snitch.cc
+    locator/gossiping_property_file_snitch.cc
+    locator/production_snitch_base.cc
+    locator/ec2_snitch.cc
+    locator/ec2_multi_region_snitch.cc
+    locator/gce_snitch.cc
+    locator/topology.cc
+    locator/util.cc
     lang/lua.cc
+    lang/wasm.cc
+    lang/wasm_instance_cache.cc
     main.cc
-    replica/memtable.cc
     message/messaging_service.cc
     multishard_mutation_query.cc
     mutation/atomic_cell.cc
@@ -203,7 +209,6 @@ set(scylla_sources
     mutation/range_tombstone.cc
     mutation/range_tombstone_list.cc
     mutation_query.cc
-    readers/mutation_reader.cc
     mutation_writer/feed_writers.cc
     mutation_writer/multishard_writer.cc
     mutation_writer/partition_based_splitting_writer.cc
@@ -219,6 +224,10 @@ set(scylla_sources
     raft/raft.cc
     raft/server.cc
     raft/tracker.cc
+    readers/combined.cc
+    readers/multishard.cc
+    readers/mutation_reader.cc
+    readers/mutation_readers.cc
     service/broadcast_tables/experimental/lang.cc
     tombstone_gc_options.cc
     tombstone_gc.cc
@@ -241,6 +250,10 @@ set(scylla_sources
     repair/row_level.cc
     replica/database.cc
     replica/table.cc
+    replica/distributed_loader.cc
+    replica/memtable.cc
+    replica/exceptions.cc
+    replica/dirty_memory_manager.cc
     row_cache.cc
     schema/caching_options.cc
     schema/schema.cc
@@ -261,17 +274,22 @@ set(scylla_sources
     service/qos/qos_common.cc
     service/qos/service_level_controller.cc
     service/qos/standard_service_level_distributed_data_accessor.cc
+    service/raft/discovery.cc
+    service/raft/group0_state_machine.cc
+    service/raft/raft_group0.cc
+    service/raft/raft_group0_client.cc
     service/raft/raft_group_registry.cc
     service/raft/raft_rpc.cc
     service/raft/raft_sys_table_storage.cc
-    service/raft/group0_state_machine.cc
     service/storage_proxy.cc
     service/storage_service.cc
+    sstables_loader.cc
     sstables/compress.cc
     sstables/integrity_checked_file_impl.cc
     sstables/kl/reader.cc
     sstables/metadata_collector.cc
     sstables/m_format_read_helpers.cc
+    sstables/mx/partition_reversing_data_source.cc
     sstables/mx/reader.cc
     sstables/mx/writer.cc
     sstables/prepended_input_stream.cc
@@ -322,6 +340,7 @@ set(scylla_sources
     transport/server.cc
     types.cc
     unimplemented.cc
+    utils/UUID_gen.cc
     utils/arch/powerpc/crc32-vpmsum/crc32_wrapper.cc
     utils/array-search.cc
     utils/ascii.cc
@@ -342,11 +361,13 @@ set(scylla_sources
     utils/gz/crc_combine.cc
     utils/gz/crc_combine_table.cc
     utils/hashers.cc
+    utils/histogram_metrics_helper.cc
     utils/human_readable.cc
     utils/i_filter.cc
     utils/large_bitset.cc
     utils/like_matcher.cc
     utils/limiting_data_source.cc
+    utils/lister.cc
     utils/logalloc.cc
     utils/managed_bytes.cc
     utils/multiprecision_int.cc
@@ -357,7 +378,6 @@ set(scylla_sources
     utils/updateable_value.cc
     utils/utf8.cc
     utils/uuid.cc
-    utils/UUID_gen.cc
     validation.cc
     vint-serialization.cc
     zstd.cc)
