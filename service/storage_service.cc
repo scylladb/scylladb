@@ -2749,6 +2749,28 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
         } else if (req.cmd == node_ops_cmd::decommission_abort) {
             node_ops_abort(ops_uuid).get();
         } else if (req.cmd == node_ops_cmd::replace_prepare) {
+            // We can only replace a dead node. Check the node to be replaced
+            // has marked as down by this node. Skip to check the node itself.
+            auto nodes = boost::copy_range<std::vector<inet_address>>(req.replace_nodes| boost::adaptors::map_keys);
+            auto it = std::find(nodes.begin(), nodes.end(), get_broadcast_address());
+            if (it != nodes.end()) {
+                nodes.erase(it);
+            }
+            slogger.info("replace[{}]: Started to wait for marking nodes to be replaced as down, nodes={}. replace_nodes={}",
+                        req.ops_uuid, nodes, req.replace_nodes);
+            try {
+                _gossiper.wait_down(nodes, std::chrono::milliseconds(120 * 1000)).get();
+            } catch (...) {
+                auto msg = format("replace[{}]: Failed to wait for marking nodes to be replaced as down, nodes={}, replace_nodes={}: {}",
+                        req.ops_uuid, nodes, req.replace_nodes, std::current_exception());
+                slogger.warn("{}", msg);
+                throw std::runtime_error(msg);
+            }
+            slogger.info("replace[{}]: Finished to wait for marking nodes to be replaced as down, nodes={}, replace_nodes={}",
+                        req.ops_uuid, nodes, req.replace_nodes);
+            // Check if any node ops is performed while we are sleeping
+            node_ops_cmd_check(coordinator, req);
+
             // Mark the replacing node as replacing
             if (req.replace_nodes.size() > 1) {
                 auto msg = format("replace[{}]: Could not replace more than one node at a time: replace_nodes={}", req.ops_uuid, req.replace_nodes);
