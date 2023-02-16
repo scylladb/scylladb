@@ -18,6 +18,7 @@
 #include "replica/database.hh" // for wasm
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
+#include "utils/base64.hh"
 
 namespace cql3 {
 
@@ -27,7 +28,7 @@ shared_ptr<functions::function> create_function_statement::create(query_processo
     if (old && !dynamic_cast<functions::user_function*>(old)) {
         throw exceptions::invalid_request_exception(format("Cannot replace '{}' which is not a user defined function", *old));
     }
-    if (_language != "lua" && _language != "xwasm") {
+    if (_language != "lua" && _language != "xwasm" && _language != "xwasm_b64") {
         throw exceptions::invalid_request_exception(format("Language '{}' is not supported", _language));
     }
     data_type return_type = prepare_type(qp, *_return_type);
@@ -46,11 +47,16 @@ shared_ptr<functions::function> create_function_statement::create(query_processo
 
         return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
             std::move(return_type), _called_on_null_input, std::move(ctx));
-    } else if (_language == "xwasm") {
+    } else if (_language == "xwasm" || _language == "xwasm_b64") {
        // FIXME: need better way to test wasm compilation without real_database()
        wasm::context ctx{db.real_database().wasm_engine(), _name.name, qp.get_wasm_instance_cache(), db.get_config().wasm_udf_yield_fuel(), db.get_config().wasm_udf_total_fuel()};
        try {
-            wasm::precompile(ctx, arg_names, rust::Slice<const rust::u8>(reinterpret_cast<const rust::u8*>(_body.data()), _body.size()));
+            if (_language == "xwasm") {
+                wasm::precompile(ctx, arg_names, rust::Slice<const rust::u8>(reinterpret_cast<const rust::u8*>(_body.data()), _body.size()));
+            } else {
+                auto body_bytes = base64_decode(_body);
+                wasm::precompile(ctx, arg_names, rust::Slice<const rust::u8>(reinterpret_cast<const rust::u8*>(body_bytes.data()), body_bytes.size()));
+            }
             return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
                 std::move(return_type), _called_on_null_input, std::move(ctx));
        } catch (const wasm::exception& we) {

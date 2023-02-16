@@ -1107,3 +1107,21 @@ def test_counter(cql, test_keyspace, scylla_only):
             cql.execute(f"UPDATE {table} SET c = c + 1  WHERE p = 42;")
             cql.execute(f"UPDATE {table} SET c = c - 4  WHERE p = 42;")
             assert cql.execute(f"SELECT {ri_counter_name}(c) AS result FROM {table} WHERE p = 42").one().result == -1
+
+# Test that we can use a wasm binary converted to base64 as the source of a WASM UDF.
+# The base64 file was generated from the following Rust code:
+# #[scylla_udf::export_udf]
+# pub fn mul(left: i32, right: i32) -> i64 {
+#     (left as i64) * (right as i64)
+# }
+# using the following commands:
+# cargo build --release --target wasm32-wasi
+# base64 -w 0 target/wasm32-wasi/release/mul.wasm > mul.b64
+def test_wasm_base64(cql, test_keyspace, table1, scylla_only):
+    mul_name = 'mul'
+    mul_source = open(os.path.realpath(os.path.join(__file__, f"../../resource/wasm/mul.b64")), 'r').read()
+    src = f"(a int, b int) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE xwasm_b64 AS '{mul_source}'"
+    table = table1
+    with new_function(cql, test_keyspace, src, mul_name):
+        cql.execute(f"INSERT INTO {table} (p, i, i2) VALUES (42, 2, 3)")
+        assert cql.execute(f"SELECT {test_keyspace}.{mul_name}(i, i2) AS result FROM {table} WHERE p = 42").one().result == 6

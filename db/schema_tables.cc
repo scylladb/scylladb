@@ -76,6 +76,7 @@
 #include "cql3/column_identifier.hh"
 #include "cql3/column_specification.hh"
 #include "types.hh"
+#include "utils/base64.hh"
 
 using namespace db;
 using namespace std::chrono_literals;
@@ -1732,9 +1733,14 @@ static shared_ptr<cql3::functions::user_function> create_func(replica::database&
         return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types), std::move(arg_names),
                 std::move(body), language, std::move(return_type),
                 row.get_nonnull<bool>("called_on_null_input"), std::move(ctx));
-    } else if (language == "xwasm") {
+    } else if (language == "xwasm" || language == "xwasm_b64") {
         wasm::context ctx{db.wasm_engine(), name.name, qctx->qp().get_wasm_instance_cache(), db.get_config().wasm_udf_yield_fuel(), db.get_config().wasm_udf_total_fuel()};
-        wasm::precompile(ctx, arg_names, rust::Slice<const rust::u8>(reinterpret_cast<const rust::u8*>(body.data()), body.size()));
+        if (language == "xwasm") {
+            wasm::precompile(ctx, arg_names, rust::Slice<const rust::u8>(reinterpret_cast<const rust::u8*>(body.data()), body.size()));
+        } else {
+            auto body_bytes = base64_decode(body);
+            wasm::precompile(ctx, arg_names, rust::Slice<const rust::u8>(reinterpret_cast<const rust::u8*>(body_bytes.data()), body_bytes.size()));
+        }
         return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types), std::move(arg_names),
                 std::move(body), language, std::move(return_type),
                 row.get_nonnull<bool>("called_on_null_input"), std::move(ctx));
@@ -1798,7 +1804,7 @@ static shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::dat
 
 static void drop_cached_func(replica::database& db, const query::result_set_row& row) {
     auto language = row.get_nonnull<sstring>("language");
-    if (language == "xwasm") {
+    if (language == "xwasm" || language == "xwasm_b64") {
         cql3::functions::function_name name{
             row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("function_name")};
         auto arg_types = read_arg_types(db, row, name.keyspace);
