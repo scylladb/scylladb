@@ -8,7 +8,8 @@ function(add_rust_library name)
   set(mode ${CMAKE_BUILD_TYPE})
   string(TOLOWER ${CMAKE_BUILD_TYPE} mode)
   set(target_dir ${CMAKE_CURRENT_BINARY_DIR})
-  set(library ${target_dir}/lib${name}.a)
+  set(profile "rust-${mode}")
+  set(library ${target_dir}/${profile}/lib${name}.a)
   add_custom_command(
     OUTPUT ${library}
     COMMAND ${CMAKE_COMMAND} -E env CARGO_BUILD_DEP_INFO_BASEDIR=. ${CARGO} build --locked --target-dir=${target_dir} --profile=rust-${mode}
