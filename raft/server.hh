@@ -100,46 +100,8 @@ public:
     //     Thrown if the node is not a leader and forwarding is not enabled through enable_forwarding config option.
     virtual future<> add_entry(command command, wait_type type, seastar::abort_source* as = nullptr) = 0;
 
-    // Set a new cluster configuration. If the configuration is
-    // identical to the previous one does nothing.
-    //
-    // Does not preempt before adding entry to this server's
-    // in-memory log.
-    //
-    // Provided node_info is passed to
-    // rpc::on_configuration_change() for each added or removed
-    // server.
-    // struct node_info is expected to contain connection
-    // information/credentials which is then used by RPC.
-    // Can be called on a leader only, otherwise throws not_a_leader.
-    // Cannot be called until previous set_configuration() completes
-    // otherwise throws conf_change_in_progress exception.
-    //
-    // Waits until configuration completes, i.e. the server left the joint
-    // configuration. The server will apply a dummy entry to
-    // make sure this happens.
-    //
-    // Note: committing a dummy entry extends the opportunity for
-    // uncertainty, thus commit_status_unknown exception may be
-    // returned even in case of a successful config change.
-    //
-    // The caller may pass a pointer to an abort_source to make the operation abortable.
-    //
-    // Exceptions:
-    // raft::conf_change_in_progress
-    //     Thrown if the previous set_configuration/modify_config is not completed.
-    // raft::commit_status_unknown
-    //     Thrown if the leader has changed and the config mutation has either
-    //     been replaced by the new leader or the server has lost track of it.
-    //     It may also be thrown in case of a transport error while
-    //     forwarding the corresponding add_entry to the leader.
-    // raft::request_aborted
-    //     Thrown if abort is requested before the operation finishes.
-    virtual future<> set_configuration(config_member_set c_new, seastar::abort_source* as = nullptr) = 0;
-
-    // A simplified wrapper around set_configuration() which adds
-    // and deletes servers. Unlike set_configuration(),
-    // works on a follower (if forwarding is enabled) as well as on a leader
+    // Adds new cluster configurations and deletes servers.
+    // Works on a follower (if forwarding is enabled) as well as on a leader
     // (forwards the request to the current leader). If the added servers are
     // already part of the configuration, or deleted are not
     // present, does nothing. The implementation forwards the
@@ -171,7 +133,7 @@ public:
     // raft::not_a_leader
     //     Thrown if the node is not a leader and forwarding is not enabled through enable_forwarding config option.
     // raft::conf_change_in_progress
-    //     Thrown if the previous set_configuration/modify_config is not completed.
+    //     Thrown if the previous modify_config is not completed.
     virtual future<> modify_config(std::vector<config_member> add,
         std::vector<server_id> del, seastar::abort_source* as = nullptr) = 0;
 

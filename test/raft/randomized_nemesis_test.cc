@@ -1238,10 +1238,18 @@ future<reconfigure_result_t> reconfigure(
     for (auto [id, can_vote] : ids) {
         config.insert(raft::config_member{server_addr_from_id(id), can_vote});
     }
+    const auto& cfg = server.get_configuration();
+    const auto [joining, leaving] = cfg.diff(config);
+
+    std::vector<raft::config_member> add_configs { joining.begin(), joining.end() };
+    std::vector<raft::server_id> remove_configs;
+    for (auto s : leaving) {
+        remove_configs.push_back(s.addr.id);
+    }
 
     try {
-        co_await with_timeout(timer, timeout, [&server, config = std::move(config)] (abort_source& as) {
-            return server.set_configuration(std::move(config), &as);
+        co_await with_timeout(timer, timeout, [&server, add_configs = std::move(add_configs), remove_configs = std::move(remove_configs)] (abort_source& as) {
+            return server.modify_config(std::move(add_configs), std::move(remove_configs), &as);
         });
         co_return std::monostate{};
     } catch (raft::not_a_leader e) {
@@ -2750,52 +2758,7 @@ struct reconfiguration {
         co_return res;
     }
 
-    future<result_type> execute_reconfigure(
-            state_type& s, const operation::context& ctx, std::vector<raft::server_id> nodes, size_t members_end, size_t voters_end) {
-        std::vector<std::pair<raft::server_id, bool>> nodes_voters;
-        nodes_voters.reserve(members_end);
-        for (size_t i = 0; i < voters_end; ++i) {
-            nodes_voters.emplace_back(nodes[i], true);
-        }
-        for (size_t i = voters_end; i < members_end; ++i) {
-            nodes_voters.emplace_back(nodes[i], false);
-        }
-
-        auto contact = *s.known.begin();
-
-        tlogger.debug("reconfig set_configuration start nodes {} start tid {} start time {} current time {} contact {}",
-                nodes_voters, ctx.thread, ctx.start, s.timer.now(), contact);
-
-        assert(s.known.size() > 0);
-        auto [res, last] = co_await bouncing{[&nodes_voters, timeout = s.timer.now() + timeout, &timer = s.timer, &env = s.env] (raft::server_id id) {
-            return env.reconfigure(id, nodes_voters, timeout, timer);
-        }}(s.timer, s.known, contact, 10, 10_t, 10_t);
-
-        std::visit(make_visitor(
-        [&, last = last] (std::monostate) {
-            tlogger.debug("reconfig successful from {} to {} by {}", s.known, nodes_voters, last);
-            s.known = std::unordered_set<raft::server_id>{nodes.begin(), nodes.begin() + members_end};
-            // TODO: include the old leader as well in case it's not part of the new config?
-            // it may remain a leader for some time...
-        },
-        [&, last = last] (raft::not_a_leader& e) {
-            tlogger.debug("reconfig failed, not a leader: {} tried {} by {}", e, nodes_voters, last);
-        },
-        [&, last = last] (auto& e) {
-            s.known.merge(std::unordered_set<raft::server_id>{nodes.begin(), nodes.begin() + members_end});
-            tlogger.debug("reconfig failed: {}, tried {} after merge {} by {}", e, nodes_voters, s.known, last);
-        }
-        ), res);
-
-        tlogger.debug("reconfig set_configuration end nodes {} start tid {} start time {} current time {} last contact {}",
-                nodes_voters, ctx.thread, ctx.start, s.timer.now(), last);
-
-        co_return res;
-    }
-
     future<result_type> execute(state_type& s, const operation::context& ctx) {
-        static std::bernoulli_distribution bdist{0.5};
-
         assert(s.all_servers.size() > 1);
         std::vector<raft::server_id> nodes{s.all_servers.begin(), s.all_servers.end()};
 
@@ -2803,11 +2766,7 @@ struct reconfiguration {
         size_t members_end = std::uniform_int_distribution<size_t>{1, nodes.size()}(s.rnd);
         size_t voters_end = std::uniform_int_distribution<size_t>{1, members_end}(s.rnd);
 
-        if (bdist(s.rnd)) {
-            return execute_modify_config(s, ctx, std::move(nodes), members_end, voters_end);
-        } else {
-            return execute_reconfigure(s, ctx, std::move(nodes), members_end, voters_end);
-        }
+        return execute_modify_config(s, ctx, std::move(nodes), members_end, voters_end);
     }
 
     friend std::ostream& operator<<(std::ostream& os, const reconfiguration& r) {

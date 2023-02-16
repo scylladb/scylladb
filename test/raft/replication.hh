@@ -1157,18 +1157,26 @@ future<> raft_cluster<Clock>::free_election() {
 template <typename Clock>
 future<> raft_cluster<Clock>::change_configuration(set_config sc) {
     BOOST_CHECK_MESSAGE(sc.size() > 0, "Empty configuration change not supported");
-    raft::config_member_set set;
+    std::vector<raft::config_member> add_configs;
+    std::vector<raft::server_id> remove_configs;
+
     std::unordered_set<size_t> new_config;
     for (auto s: sc) {
         new_config.insert(s.node_idx);
         auto m = to_config_member(s.node_idx);
         m.can_vote = s.can_vote;
-        set.insert(std::move(m));
+        add_configs.push_back(std::move(m));
         BOOST_CHECK_MESSAGE(s.node_idx < _servers.size(),
                 format("Configuration element {} past node limit {}", s.node_idx, _servers.size() - 1));
     }
     BOOST_CHECK_MESSAGE(new_config.contains(_leader) || sc.size() < (_servers.size()/2 + 1),
             "New configuration without old leader and below quorum size (no election)");
+
+    for (auto node_idx: _in_configuration) {
+        if (!new_config.contains(node_idx)) {
+            remove_configs.push_back(raft::server_id{to_raft_uuid(node_idx)});
+        }
+    }
 
     if (!new_config.contains(_leader)) {
         // Wait log on all nodes in new config before change
@@ -1191,7 +1199,7 @@ future<> raft_cluster<Clock>::change_configuration(set_config sc) {
     }
 
     tlogger.debug("Changing configuration on leader {}", _leader);
-    co_await _servers[_leader].server->set_configuration(std::move(set));
+    co_await _servers[_leader].server->modify_config(std::move(add_configs), std::move(remove_configs));
 
     if (!new_config.contains(_leader)) {
         co_await free_election();

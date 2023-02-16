@@ -78,7 +78,6 @@ public:
 
     // server interface
     future<> add_entry(command command, wait_type type, seastar::abort_source* as = nullptr) override;
-    future<> set_configuration(config_member_set c_new, seastar::abort_source* as = nullptr) override;
     raft::configuration get_configuration() const override;
     future<> start() override;
     future<> abort(sstring reason) override;
@@ -290,6 +289,10 @@ private:
         { aa(leader) } -> std::same_as<future<stop_iteration>>;
     }
     future<> do_on_leader_with_retries(seastar::abort_source* as, AsyncAction&& action);
+
+    // Set a new cluster configuration. If the configuration is
+    // identical to the previous one does nothing.
+    future<> set_configuration(config_member_set c_new, seastar::abort_source* as = nullptr);
 
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
 };
