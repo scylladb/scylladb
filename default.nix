@@ -157,7 +157,7 @@ in derive ({
     xorg.libpciaccess
     xxHash
     zlib
-    zstdStatic
+    zstd
   ];
 
   JAVA8_HOME = "${pkgs.openjdk8_headless}/lib/openjdk";
