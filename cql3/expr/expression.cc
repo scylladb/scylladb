@@ -560,89 +560,11 @@ value_set intersection(value_set a, value_set b, const abstract_type* type) {
     return std::visit(intersection_visitor{type}, std::move(a), std::move(b));
 }
 
-bool is_satisfied_by(const binary_operator& opr, const evaluation_inputs& inputs) {
-    if (is<token>(opr.lhs)) {
-        // The RHS value was already used to ensure we fetch only rows in the specified
-        // token range. It is impossible for any fetched row not to match now.
-        // When token restrictions are present we forbid all other restrictions on partition key.
-        // This means that the partition range is defined solely by restrictions on token.
-        // When is_satisifed_by is used by filtering we can be sure that the token restrictions
-        // are fulfilled. In the future it will be possible to evaluate() a token,
-        // and we will be able to get rid of this risky if.
-        return true;
-    }
-
-    raw_value binop_eval_result = evaluate(opr, inputs);
-
-    if (binop_eval_result.is_null()) {
-        return false;
-    }
-    if (binop_eval_result.is_empty_value()) {
-        on_internal_error(expr_logger, format("is_satisfied_by: binary operator evaluated to EMPTY_VALUE: {}", opr));
-    }
-
-    return binop_eval_result.view().deserialize<bool>(*boolean_type);
-}
-
 } // anonymous namespace
 
 bool is_satisfied_by(const expression& restr, const evaluation_inputs& inputs) {
-    return expr::visit(overloaded_functor{
-            [] (const constant& constant_val) {
-                std::optional<bool> bool_val = get_bool_value(constant_val);
-                if (bool_val.has_value()) {
-                    return *bool_val;
-                }
-
-                on_internal_error(expr_logger,
-                    "is_satisfied_by: a constant that is not a bool value cannot serve as a restriction by itself");
-            },
-            [&] (const conjunction& conj) {
-                return boost::algorithm::all_of(conj.children, [&] (const expression& c) {
-                    return is_satisfied_by(c, inputs);
-                });
-            },
-            [&] (const binary_operator& opr) { return is_satisfied_by(opr, inputs); },
-            [] (const column_value&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a column cannot serve as a restriction by itself");
-            },
-            [] (const subscript&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a subscript cannot serve as a restriction by itself");
-            },
-            [] (const token&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: the token function cannot serve as a restriction by itself");
-            },
-            [] (const unresolved_identifier&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: an unresolved identifier cannot serve as a restriction");
-            },
-            [] (const column_mutation_attribute&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: the writetime/ttl cannot serve as a restriction by itself");
-            },
-            [] (const function_call&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a function call cannot serve as a restriction by itself");
-            },
-            [] (const cast&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a a type cast cannot serve as a restriction by itself");
-            },
-            [] (const field_selection&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a field selection cannot serve as a restriction by itself");
-            },
-            [] (const bind_variable&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a bind variable cannot serve as a restriction by itself");
-            },
-            [] (const untyped_constant&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: an untyped constant cannot serve as a restriction by itself");
-            },
-            [] (const tuple_constructor&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a tuple constructor cannot serve as a restriction by itself");
-            },
-            [] (const collection_constructor&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a collection constructor cannot serve as a restriction by itself");
-            },
-            [] (const usertype_constructor&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a user type constructor cannot serve as a restriction by itself");
-            },
-        }, restr);
+    static auto true_value = managed_bytes_opt(data_value(true).serialize_nonnull());
+    return evaluate(restr, inputs).to_managed_bytes_opt() == true_value;
 }
 
 namespace {
