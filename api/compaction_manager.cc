@@ -154,7 +154,7 @@ void set_compaction_manager(http_context& ctx, routes& r) {
         std::function<future<>(output_stream<char>&&)> f = [](output_stream<char>&& s) {
             return do_with(output_stream<char>(std::move(s)), true, [] (output_stream<char>& s, bool& first){
                 return s.write("[").then([&s, &first] {
-                    return db::system_keyspace::get_compaction_history([&s, &first](const db::system_keyspace::compaction_history_entry& entry) mutable {
+                    return db::system_keyspace::get_compaction_history([&s, &first](const db::compaction_history_entry& entry) mutable {
                         cm::history h;
                         h.id = entry.id.to_sstring();
                         h.ks = std::move(entry.ks);
