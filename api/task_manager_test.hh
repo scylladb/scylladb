@@ -11,11 +11,10 @@
 #pragma once
 
 #include "api.hh"
-#include "db/config.hh"
 
 namespace api {
 
-void set_task_manager_test(http_context& ctx, routes& r, db::config& cfg);
+void set_task_manager_test(http_context& ctx, routes& r);
 
 }
 

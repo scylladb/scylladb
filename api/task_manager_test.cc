@@ -19,7 +19,7 @@ namespace api {
 namespace tmt = httpd::task_manager_test_json;
 using namespace json;
 
-void set_task_manager_test(http_context& ctx, routes& r, db::config& cfg) {
+void set_task_manager_test(http_context& ctx, routes& r) {
     tmt::register_test_module.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
         co_await ctx.tm.invoke_on_all([] (tasks::task_manager& tm) {
             auto m = make_shared<tasks::test_module>(tm);
@@ -93,12 +93,6 @@ void set_task_manager_test(http_context& ctx, routes& r, db::config& cfg) {
             return make_ready_future<>();
         });
         co_return json_void();
-    });
-
-    tmt::get_and_update_ttl.set(r, [&cfg] (std::unique_ptr<request> req) -> future<json::json_return_type> {
-        uint32_t ttl = cfg.task_ttl_seconds();
-        co_await cfg.task_ttl_seconds.set_value_on_all_shards(req->query_parameters["ttl"], utils::config_file::config_source::API);
-        co_return json::json_return_type(ttl);
     });
 }
 

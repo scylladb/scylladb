@@ -148,30 +148,6 @@
                 ]
              }
           ]
-       },
-       {
-         "path":"/task_manager_test/ttl",
-         "operations":[
-            {
-               "method":"POST",
-               "summary":"Set ttl in seconds and get last value",
-               "type":"long",
-               "nickname":"get_and_update_ttl",
-               "produces":[
-                  "application/json"
-               ],
-               "parameters":[
-                  {
-                     "name":"ttl",
-                     "description":"The number of seconds for which the tasks will be kept in memory after it finishes",
-                     "required":true,
-                     "allowMultiple":false,
-                     "type":"long",
-                     "paramType":"query"
-                  }
-               ]
-            }
-         ]
-      }
+       }
     ]
  }

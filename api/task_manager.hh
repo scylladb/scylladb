@@ -9,9 +9,10 @@
 #pragma once
 
 #include "api.hh"
+#include "db/config.hh"
 
 namespace api {
 
-void set_task_manager(http_context& ctx, routes& r);
+void set_task_manager(http_context& ctx, routes& r, db::config& cfg);
 
 }

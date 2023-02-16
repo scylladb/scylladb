@@ -115,7 +115,7 @@ future<> set_server_gossip_settle(http_context& ctx, sharded<gms::gossiper>& g);
 future<> set_server_cache(http_context& ctx);
 future<> set_server_compaction_manager(http_context& ctx);
 future<> set_server_done(http_context& ctx);
-future<> set_server_task_manager(http_context& ctx);
-future<> set_server_task_manager_test(http_context& ctx, lw_shared_ptr<db::config> cfg);
+future<> set_server_task_manager(http_context& ctx, lw_shared_ptr<db::config> cfg);
+future<> set_server_task_manager_test(http_context& ctx);
 
 }

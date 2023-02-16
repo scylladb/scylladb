@@ -107,7 +107,7 @@ future<full_task_status> retrieve_status(const tasks::task_manager::foreign_task
     co_return s;
 }
 
-void set_task_manager(http_context& ctx, routes& r) {
+void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
     tm::get_modules.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
         std::vector<std::string> v = boost::copy_range<std::vector<std::string>>(ctx.tm.local().get_modules() | boost::adaptors::map_keys);
         co_return v;
@@ -223,6 +223,12 @@ void set_task_manager(http_context& ctx, routes& r) {
             co_await s.close();
         };
         co_return f;
+    });
+
+    tm::get_and_update_ttl.set(r, [&cfg] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+        uint32_t ttl = cfg.task_ttl_seconds();
+        co_await cfg.task_ttl_seconds.set_value_on_all_shards(req->query_parameters["ttl"], utils::config_file::config_source::API);
+        co_return json::json_return_type(ttl);
     });
 }
 
