@@ -41,6 +41,7 @@
 
 namespace db {
 class system_keyspace;
+class compaction_history_entry;
 }
 
 class compacting_sstable_registration;
@@ -421,6 +422,9 @@ public:
     // The compaction manager is still alive after drain but it will not accept new compactions
     // unless it is moved back to enabled state.
     future<> drain();
+
+    using compaction_history_consumer = noncopyable_function<future<>(const db::compaction_history_entry&)>;
+    future<> get_compaction_history(compaction_history_consumer&& f);
 
     // Submit a table to be compacted.
     void submit(compaction::table_state& t);

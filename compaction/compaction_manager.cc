@@ -360,6 +360,14 @@ future<> compaction_manager::task::update_history(compaction::table_state& t, co
     }
 }
 
+future<> compaction_manager::get_compaction_history(compaction_history_consumer&& f) {
+    if (!_sys_ks) {
+        return make_ready_future<>();
+    }
+
+    return _sys_ks->get_compaction_history(std::move(f)).finally([s = _sys_ks] {});
+}
+
 class compaction_manager::major_compaction_task : public compaction_manager::task {
 public:
     major_compaction_task(compaction_manager& mgr, compaction::table_state* t)
