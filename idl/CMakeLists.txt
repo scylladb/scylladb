@@ -62,6 +62,7 @@ set(idl_headers
 
 foreach(idl_header ${idl_headers})
   compile_idl(${idl_header}
+    OUT_DIR "${scylla_gen_build_dir}/idl"
     SOURCES srcs)
   list(APPEND idl_sources ${srcs})
 endforeach()
@@ -72,4 +73,4 @@ add_library(idl INTERFACE)
 add_dependencies(idl idl-sources)
 target_include_directories(idl
   INTERFACE
-    ${CMAKE_BINARY_DIR})
+    ${scylla_gen_build_dir})

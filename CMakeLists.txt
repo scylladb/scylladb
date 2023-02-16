@@ -77,64 +77,8 @@ seastar_generate_ragel(
     IN_FILE "${CMAKE_SOURCE_DIR}/redis/protocol_parser.rl"
     OUT_FILE ${scylla_gen_build_dir}/redis/protocol_parser.hh)
 
-# Generate C++ sources from Swagger definitions
-set(swagger_files
-    api/api-doc/cache_service.json
-    api/api-doc/collectd.json
-    api/api-doc/column_family.json
-    api/api-doc/commitlog.json
-    api/api-doc/compaction_manager.json
-    api/api-doc/config.json
-    api/api-doc/endpoint_snitch_info.json
-    api/api-doc/error_injection.json
-    api/api-doc/failure_detector.json
-    api/api-doc/gossiper.json
-    api/api-doc/hinted_handoff.json
-    api/api-doc/lsa.json
-    api/api-doc/messaging_service.json
-    api/api-doc/storage_proxy.json
-    api/api-doc/storage_service.json
-    api/api-doc/stream_manager.json
-    api/api-doc/system.json
-    api/api-doc/task_manager.json
-    api/api-doc/task_manager_test.json
-    api/api-doc/utils.json)
-
-set(swagger_gen_files)
-
-foreach(f ${swagger_files})
-    get_filename_component(fname "${f}" NAME_WE)
-    get_filename_component(dir "${f}" DIRECTORY)
-    seastar_generate_swagger(
-        TARGET scylla_swagger_gen_${fname}
-        VAR scylla_swagger_gen_${fname}_files
-        IN_FILE "${CMAKE_SOURCE_DIR}/${f}"
-        OUT_DIR "${scylla_gen_build_dir}/${dir}")
-    list(APPEND swagger_gen_files "${scylla_swagger_gen_${fname}_files}")
-endforeach()
-
 set(scylla_sources
     absl-flat_hash_map.cc
-    api/api.cc
-    api/cache_service.cc
-    api/collectd.cc
-    api/column_family.cc
-    api/commitlog.cc
-    api/compaction_manager.cc
-    api/config.cc
-    api/endpoint_snitch.cc
-    api/error_injection.cc
-    api/failure_detector.cc
-    api/gossiper.cc
-    api/hinted_handoff.cc
-    api/lsa.cc
-    api/messaging_service.cc
-    api/storage_proxy.cc
-    api/storage_service.cc
-    api/stream_manager.cc
-    api/system.cc
-    api/task_manager.cc
-    api/task_manager_test.cc
     auth/allow_all_authenticator.cc
     auth/allow_all_authorizer.cc
     auth/authenticated_user.cc
@@ -423,6 +367,7 @@ set(scylla_gen_sources
     "${scylla_ragel_gen_protocol_parser_file}"
     "${swagger_gen_files}")
 
+add_subdirectory(api)
 add_subdirectory(alternator)
 add_subdirectory(cql3)
 add_subdirectory(idl)
@@ -433,6 +378,7 @@ add_executable(scylla
     ${scylla_gen_sources})
 
 target_link_libraries(scylla PRIVATE
+    api
     alternator
     cql3
     idl
