@@ -72,3 +72,5 @@ target_sources(wasmtime_bindings
 target_include_directories(wasmtime_bindings
   INTERFACE
     ${CMAKE_BINARY_DIR})
+target_link_libraries(wasmtime_bindings
+  INTERFACE Rust::rust_combined)
