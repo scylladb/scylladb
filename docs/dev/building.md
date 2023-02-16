@@ -40,7 +40,7 @@ After the build completes, you can find build artifacts in `build/<mode>` direct
 You can run unit tests with:
 
 ```console
-./tools/toolchain/dbuild test
+./tools/toolchain/dbuild ninja test
 ```
 
 or launch a Scylla server locally with:
