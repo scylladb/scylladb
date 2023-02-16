@@ -45,9 +45,7 @@ let
   # all later Boost versions are problematic one way or another
   boost = pkgs.boost175;
 
-  # no Clang newer than 12 and older than 15 can compile Scylla with
-  # sanitizers, and 15 is not in Nixpkgs yet
-  llvm = pkgs.llvmPackages_12;
+  llvm = pkgs.llvmPackages_15;
 
   stdenvUnwrapped = llvm.stdenv;
 
