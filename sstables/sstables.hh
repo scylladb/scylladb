@@ -552,8 +552,8 @@ private:
 
     filesystem_storage _storage;
 
-    version_types _version;
-    format_types _format;
+    const version_types _version;
+    const format_types _format;
 
     filter_tracker _filter_tracker;
     std::unique_ptr<partition_index_cache> _index_cache;
