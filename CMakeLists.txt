@@ -264,23 +264,6 @@ set(scylla_sources
     service/storage_proxy.cc
     service/storage_service.cc
     sstables_loader.cc
-    sstables/compress.cc
-    sstables/integrity_checked_file_impl.cc
-    sstables/kl/reader.cc
-    sstables/metadata_collector.cc
-    sstables/m_format_read_helpers.cc
-    sstables/mx/partition_reversing_data_source.cc
-    sstables/mx/reader.cc
-    sstables/mx/writer.cc
-    sstables/prepended_input_stream.cc
-    sstables/random_access_reader.cc
-    sstables/sstable_directory.cc
-    sstables/sstable_mutation_reader.cc
-    sstables/sstables.cc
-    sstables/sstable_set.cc
-    sstables/sstables_manager.cc
-    sstables/sstable_version.cc
-    sstables/writer.cc
     streaming/consumer.cc
     streaming/progress_info.cc
     streaming/session_info.cc
@@ -334,6 +317,7 @@ add_subdirectory(auth)
 add_subdirectory(cql3)
 add_subdirectory(idl)
 add_subdirectory(schema)
+add_subdirectory(sstables)
 add_subdirectory(test)
 add_subdirectory(utils)
 add_subdirectory(rust)
@@ -349,6 +333,7 @@ target_link_libraries(scylla PRIVATE
     cql3
     idl
     schema
+    sstables
     test-perf
     utils
     wasmtime_bindings)
