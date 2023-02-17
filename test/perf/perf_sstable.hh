@@ -26,6 +26,63 @@
 
 using namespace sstables;
 
+
+class test_setup {
+    file _f;
+    sstring _path;
+    future<> _listing_done;
+
+    static sstring& path() {
+        static sstring _p = "test/resource/sstables/tests-temporary";
+        return _p;
+    };
+
+public:
+    test_setup(file f, sstring path)
+            : _f(std::move(f))
+            , _path(path)
+            , _listing_done(_f.list_directory([this] (directory_entry de) { return remove(de); }).done()) {
+    }
+    ~test_setup() {
+        // FIXME: discarded future.
+        (void)_f.close().finally([save = _f] {});
+    }
+private:
+    future<> remove(directory_entry de) {
+        sstring t = _path + "/" + de.name;
+        return file_type(t).then([t] (std::optional<directory_entry_type> det) {
+            auto f = make_ready_future<>();
+
+            if (!det) {
+                throw std::runtime_error("Can't determine file type\n");
+            } else if (det == directory_entry_type::directory) {
+                f = empty_test_dir(t);
+            }
+            return f.then([t] {
+                return remove_file(t);
+            });
+        });
+    }
+    future<> done() { return std::move(_listing_done); }
+
+    static future<> empty_test_dir(sstring p = path()) {
+        return open_directory(p).then([p] (file f) {
+            auto l = make_lw_shared<test_setup>(std::move(f), p);
+            return l->done().then([l] { });
+        });
+    }
+public:
+    static future<> create_empty_test_dir(sstring p = path()) {
+        return make_directory(p).then_wrapped([p] (future<> f) {
+            try {
+                f.get();
+            // it's fine if the directory exists, just shut down the exceptional future message
+            } catch (std::exception& e) {}
+            return empty_test_dir(p);
+        });
+    }
+};
+
 class perf_sstable_test_env {
     test_env _env;
 
