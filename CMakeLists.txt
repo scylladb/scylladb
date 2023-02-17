@@ -80,24 +80,6 @@ seastar_generate_ragel(
 
 set(scylla_sources
     absl-flat_hash_map.cc
-    auth/allow_all_authenticator.cc
-    auth/allow_all_authorizer.cc
-    auth/authenticated_user.cc
-    auth/authentication_options.cc
-    auth/authenticator.cc
-    auth/common.cc
-    auth/default_authorizer.cc
-    auth/password_authenticator.cc
-    auth/passwords.cc
-    auth/permission.cc
-    auth/permissions_cache.cc
-    auth/resource.cc
-    auth/role_or_anonymous.cc
-    auth/roles-metadata.cc
-    auth/sasl_challenge.cc
-    auth/service.cc
-    auth/standard_role_manager.cc
-    auth/transitional.cc
     bytes.cc
     cdc/cdc_partitioner.cc
     cdc/generation.cc
@@ -256,9 +238,6 @@ set(scylla_sources
     replica/exceptions.cc
     replica/dirty_memory_manager.cc
     row_cache.cc
-    schema/caching_options.cc
-    schema/schema.cc
-    schema/schema_registry.cc
     schema_mutations.cc
     serializer.cc
     service/client_state.cc
@@ -351,8 +330,10 @@ set(scylla_gen_sources
 
 add_subdirectory(api)
 add_subdirectory(alternator)
+add_subdirectory(auth)
 add_subdirectory(cql3)
 add_subdirectory(idl)
+add_subdirectory(schema)
 add_subdirectory(test)
 add_subdirectory(utils)
 add_subdirectory(rust)
@@ -363,9 +344,11 @@ add_executable(scylla
 
 target_link_libraries(scylla PRIVATE
     api
+    auth
     alternator
     cql3
     idl
+    schema
     test-perf
     utils
     wasmtime_bindings)
