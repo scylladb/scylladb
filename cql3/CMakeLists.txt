@@ -3,6 +3,9 @@ include(generate_cql_grammar)
 generate_cql_grammar(
   GRAMMAR Cql.g
   SOURCES cql_grammar_srcs)
+set_source_files_properties(${cql_grammar_srcs}
+  PROPERTIES
+    COMPILE_FLAGS "-Wno-uninitialized")
 
 add_library(cql3 STATIC)
 target_sources(cql3
@@ -103,11 +106,13 @@ target_sources(cql3
     restrictions/statement_restrictions.cc
     result_set.cc
     prepare_context.cc
+    ${CMAKE_SOURCE_DIR}/types.cc
     ${cql_grammar_srcs})
 target_include_directories(cql3
   PUBLIC
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_BINARY_DIR})
 target_link_libraries(cql3
-  Seastar::seastar
-  xxHash::xxhash)
+    idl
+    Seastar::seastar
+    xxHash::xxhash)

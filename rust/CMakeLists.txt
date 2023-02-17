@@ -8,7 +8,8 @@ function(add_rust_library name)
   set(mode ${CMAKE_BUILD_TYPE})
   string(TOLOWER ${CMAKE_BUILD_TYPE} mode)
   set(target_dir ${CMAKE_CURRENT_BINARY_DIR})
-  set(library ${target_dir}/lib${name}.a)
+  set(profile "rust-${mode}")
+  set(library ${target_dir}/${profile}/lib${name}.a)
   add_custom_command(
     OUTPUT ${library}
     COMMAND ${CMAKE_COMMAND} -E env CARGO_BUILD_DEP_INFO_BASEDIR=. ${CARGO} build --locked --target-dir=${target_dir} --profile=rust-${mode}
@@ -57,7 +58,7 @@ add_custom_command(
 generate_cxxbridge(wasmtime_bindings
   INPUT wasmtime_bindings/src/lib.rs
   INCLUDE ${cxx_header}
-  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}"
+  OUTPUT_DIR "${scylla_gen_build_dir}"
   SOURCES wasmtime_bindings_sources)
 
 set_target_properties(Rust::rust_combined PROPERTIES
@@ -71,3 +72,5 @@ target_sources(wasmtime_bindings
 target_include_directories(wasmtime_bindings
   INTERFACE
     ${CMAKE_BINARY_DIR})
+target_link_libraries(wasmtime_bindings
+  INTERFACE Rust::rust_combined)

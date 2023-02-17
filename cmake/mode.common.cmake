@@ -3,6 +3,7 @@ set(disabled_warnings
   mismatched-tags
   missing-braces
   overloaded-virtual
+  parentheses-equality
   unsupported-friend)
 include(CheckCXXCompilerFlag)
 foreach(warning disabled_warnings)

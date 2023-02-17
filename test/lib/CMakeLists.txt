@@ -1,0 +1,15 @@
+add_library(test-lib)
+target_sources(test-lib
+  PRIVATE
+    log.cc
+    test_utils.cc
+    tmpdir.cc)
+target_include_directories(test-lib
+  PUBLIC
+    ${CMAKE_SOURCE_DIR})
+target_link_libraries(test-lib
+  PUBLIC
+    Seastar::seastar
+    xxHash::xxhash
+  PRIVATE
+    idl)

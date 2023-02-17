@@ -1,0 +1,31 @@
+add_library(auth STATIC)
+target_sources(auth
+  PRIVATE
+    allow_all_authenticator.cc
+    allow_all_authorizer.cc
+    authenticated_user.cc
+    authentication_options.cc
+    authenticator.cc
+    common.cc
+    default_authorizer.cc
+    password_authenticator.cc
+    passwords.cc
+    permission.cc
+    permissions_cache.cc
+    resource.cc
+    role_or_anonymous.cc
+    roles-metadata.cc
+    sasl_challenge.cc
+    service.cc
+    standard_role_manager.cc
+    transitional.cc)
+target_include_directories(auth
+  PUBLIC
+    ${CMAKE_SOURCE_DIR})
+target_link_libraries(auth
+  PUBLIC
+    Seastar::seastar
+    xxHash::xxhash
+  PRIVATE
+    idl
+    wasmtime_bindings)
