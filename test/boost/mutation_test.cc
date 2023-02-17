@@ -1119,7 +1119,7 @@ SEASTAR_TEST_CASE(test_v2_apply_monotonically_is_monotonic_on_alloc_failures) {
                     }
                 });
                 apply_resume res;
-                if (m.apply_monotonically(s, std::move(m2), no_cache_tracker, app_stats, preempt_check, res, is_evictable::no) == stop_iteration::yes) {
+                if (m.apply_monotonically(s, std::move(m2), no_cache_tracker, app_stats, preempt_check, res, is_evictable::yes) == stop_iteration::yes) {
                     continuity_check.cancel();
                     seastar::memory::local_failure_injector().cancel();
                 }
