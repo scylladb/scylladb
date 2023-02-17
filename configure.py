@@ -472,6 +472,7 @@ scylla_tests = set([
     'test/boost/storage_proxy_test',
     'test/boost/top_k_test',
     'test/boost/transport_test',
+    'test/boost/type_json_test',
     'test/boost/types_test',
     'test/boost/user_function_test',
     'test/boost/user_types_test',

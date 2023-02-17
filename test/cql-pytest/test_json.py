@@ -136,6 +136,32 @@ def test_fromjson_bigint_overflow_prepared(cql, table1):
     stmt = cql.prepare(f"INSERT INTO {table1} (p, bigv) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '9223372036854775808'])
+def test_fromjson_bigint_float_overflow_prepared(cql, table1):
+    # -9223372036854775808
+    MIN_BIGINT = -(2 ** 63)
+    # +9223372036854775807
+    MAX_BIGINT = 2 ** 63 - 1
+    p = unique_key_int()
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, bigv) VALUES (?, fromJson(?))")
+    # all the tested number in this test case can be represented by IEEE-754
+    # 64-bit float, in order to verify that we only accept the numbers in the
+    # range of bigint without worrying if RapidJSON nearest rounds them first.
+    with pytest.raises(FunctionFailure):
+        # the last IEEE-754 64-bit float point number less than min value
+        # of 64-bit signed long
+        cql.execute(stmt, [p, f'{MIN_BIGINT - 2048}.0'])
+    cql.execute(stmt, [p, f'{MIN_BIGINT}'])
+    # the first IEEE-754 64-bit float point number greater than min value of
+    # bigint
+    cql.execute(stmt, [p, f'{MIN_BIGINT + 1024}.0'])
+    # the last IEEE-754 64-bit float point number less than max value of
+    # bigint
+    cql.execute(stmt, [p, f'{MAX_BIGINT - 1024}.0'])
+    # reproduces issue #13077
+    with pytest.raises(FunctionFailure):
+        # the first IEEE-754 64-bit float point number greater than max value
+        # of 64-bit signed long
+        cql.execute(stmt, [p, f'{MAX_BIGINT + 1}.0'])
 
 # On the other hand, let's check a case of the biggest bigint (64-bit
 # integer) which should *not* overflow. Let's check that we handle it

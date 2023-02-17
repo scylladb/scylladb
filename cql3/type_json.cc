@@ -18,6 +18,8 @@
 #include "types/listlike_partial_deserializing_iterator.hh"
 #include "utils/managed_bytes.hh"
 #include "exceptions/exceptions.hh"
+#include <bit>
+#include <compare>
 #include <limits>
 #include <utility>
 #include <boost/algorithm/string/trim_all.hpp>
@@ -75,6 +77,82 @@ static sstring quote_json_string(const sstring& value) {
     return oss.str();
 }
 
+template <std::floating_point Tf, std::integral Ti>
+static std::partial_ordering cmp(Tf x, Ti y) {
+    return x <=> y;
+}
+
+// With IEEE-754, a 64-bit float point number is represented with
+// - 1 sign bit
+// - 11 bits of exponent
+// - 52 bits of significand
+//
+// At the two ends of the range of the numbers represented by a 64 bit float
+// point number, the exponent is greater or equal to 1, so the float point numbers
+// are not able to represent all integers any more. Specifically, two nearest
+// representable integers greater than 2^53 would be have a spacing greater or
+// equal to 2. And, we cannot assume the existence of float128, we are not able
+// to fit an uint64_t or a 64 bit float into a wider numeric type for comparing
+// them, we need to develop an algorithem to tackle the problem of comparing a
+// float point number and a fixed point number, where the fixed point number is
+// so large that the former is not able to represent it accurately, because the
+// number of bits of float point number's significand is not enough for represent
+// the all the bits of a two's complement number.
+//
+// here is a hypothetical example, assuming we need to compare 4.0 with 3, and a
+// 64-bit float point number is not able to represent 3, the nearest float point
+// number to "3" is "2.0". the hypothetical distribution of IEEE-754 float point
+// between 2 and 6 is like:
+//            |<- 2 ->|                |<-- 8 -->|
+// float:   2.0     4.0     6.0 ...  248.0     256.0    264.0
+// integer: 2   3   4   5   6   ...          254
+// ----------------------------------->
+// so, if we cast 3 to a float point number, we'd get 2.0. so we can compare two
+// float point numbers: 2.0 < 4.0. in this case, we can safely conclude the
+// comparison with the result of "3 < 4.0".
+//
+// what if we need to compare 2.0 with 3? as usual, we cast 3 to a float point
+// number, and get "2.0". but we cannot just go the conclusion of "2.0 == 3" as
+// of yet. because this could be caused by rounding! so we just cast "2.0" back
+// to the nearest integer, which is "2", then compare "2" with the original "3"
+// to see if the nearest rounding changed the value of the integer being
+// compared. it turns out "2" is less than the orignal "3", after it is
+// casted. so, we can tell that 3 was rounded to 2.0, and it is not equal to
+// 2.0. then we can now conclude the comparison now: "2.0 < 3".
+//
+// please note, the example above uses 2.0, 3, 4.0 for the sake of simplicy.
+// a real world example could be 9007199254740992.0, 9007199254740993,
+// 9007199254740994.0, which are 2^53, 2^53+1 and 2^53+2 respectively.
+//
+// JuliaLang is using a similar algorithm for comparison large float and large integers,
+// see https://github.com/JuliaLang/julia/blob/49b361aa2ec68efe4cb0d5870e772eb3e0d89993/base/float.jl#L553-L565
+template <std::floating_point Tf, std::integral Ti>
+requires (sizeof(Tf) <= 8 && sizeof(Ti) >= 8)
+static std::partial_ordering cmp(Tf x, Ti y) {
+    // fy is the nearest float which can be represented by Tf, and it is not always
+    // accurate enough to be equal to y.
+    auto fy = static_cast<Tf>(y);
+    // don't go the conclusion that "x == fy" as of yet, in case fy is nearest
+    // rounded. but before comparing the truncated fy, let's make sure fy is
+    // in the range of representable values of Ti first.
+    if (x < fy || (x == fy && (fy < static_cast<Tf>(std::numeric_limits<Ti>::max()) &&
+                               static_cast<Ti>(fy) < y))) {
+        return std::partial_ordering::less;
+    }
+    // the number of bits of mantissa of Tf is so small that it is not able to
+    // represent (std::numeric_limits<Ti>::max(), which would need "8 * sizeof(Ti)"
+    // bits filled with "1" mantissa. so, if both "x == fy" and fy is equal to the
+    // rounded value of it, there are two possible cases:
+    // 1. y is std::numeric_limits<Ti>::max(), but if this is the case, x would be
+    //    have been greater than it. as explained above, x can never be equal to it.
+    //    so this never happens.
+    // 2. y is rouneded to this number, and y is smaller than fy and x
+    if (x > fy || (x == fy && (fy == static_cast<Tf>(std::numeric_limits<Ti>::max()) ||
+                               static_cast<Ti>(fy) > y))) {
+        return std::partial_ordering::greater;
+    }
+    return std::partial_ordering::equivalent;
+}
 
 template <typename T> static T to_int(const rjson::value& value) {
     int64_t result;
@@ -119,7 +197,8 @@ template <typename T> static T to_int(const rjson::value& value) {
                 "for int64 type: {} (it should not contain fractional part {})", value, fractional));
         }
 
-        if (std::numeric_limits<T>::min() > double_value || double_value > std::numeric_limits<T>::max()) {
+        if (std::is_lt(cmp(double_value, std::numeric_limits<T>::min())) ||
+            std::is_gt(cmp(double_value, std::numeric_limits<T>::max()))) {
             throw marshal_exception(format("Value {} out of range", double_value));
         }
 
