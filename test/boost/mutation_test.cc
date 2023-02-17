@@ -1082,8 +1082,8 @@ SEASTAR_TEST_CASE(test_v2_apply_monotonically_is_monotonic_on_alloc_failures) {
             auto expected_cont = mutation_partition_v2(s, expected.partition()).get_continuity(s);
 
             testlog.trace("target: {}", target);
-            testlog.trace("second: {}", target);
-            testlog.trace("expected: {}", target);
+            testlog.trace("second: {}", second);
+            testlog.trace("expected: {}", expected);
 
             auto preempt_check = [] () noexcept {
                 try {
