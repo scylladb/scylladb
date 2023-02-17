@@ -18,6 +18,8 @@
 #include "types/listlike_partial_deserializing_iterator.hh"
 #include "utils/managed_bytes.hh"
 #include "exceptions/exceptions.hh"
+#include <bit>
+#include <compare>
 #include <limits>
 #include <utility>
 #include <boost/algorithm/string/trim_all.hpp>
@@ -75,6 +77,31 @@ static sstring quote_json_string(const sstring& value) {
     return oss.str();
 }
 
+template <std::floating_point Tf, std::integral Ti>
+static std::partial_ordering cmp(Tf x, Ti y) {
+    return x <=> y;
+}
+
+// we are not able to fit an uint64_t or a 64 bit float into a wider numeric type
+// to compare them, so need to do this in a more convoluted way. specifically, we
+// have to compare the float with the maximum value represented by the integer
+// type to see if the nearest conversion changes the result of the comparison.
+//
+// see https://github.com/JuliaLang/julia/blob/49b361aa2ec68efe4cb0d5870e772eb3e0d89993/base/float.jl#L553-L565
+template <std::floating_point Tf, std::integral Ti>
+requires (sizeof(Tf) <= 8 && sizeof(Ti) >= 8)
+static std::partial_ordering cmp(Tf x, Ti y) {
+    auto fy = static_cast<Tf>(y);
+    if (x < fy || (x == fy && (fy < static_cast<Tf>(std::numeric_limits<Ti>::max()) &&
+                               std::bit_cast<Ti>(fy) < y))) {
+        return std::partial_ordering::less;
+    }
+    if (x > fy || (x == fy && (fy == static_cast<Tf>(std::numeric_limits<Ti>::max()) ||
+                               std::bit_cast<Ti>(fy) > y))) {
+        return std::partial_ordering::greater;
+    }
+    return std::partial_ordering::equivalent;
+}
 
 template <typename T> static T to_int(const rjson::value& value) {
     int64_t result;
@@ -119,7 +146,8 @@ template <typename T> static T to_int(const rjson::value& value) {
                 "for int64 type: {} (it should not contain fractional part {})", value, fractional));
         }
 
-        if (std::numeric_limits<T>::min() > double_value || double_value > std::numeric_limits<T>::max()) {
+        if (std::is_lt(cmp(double_value, std::numeric_limits<T>::min())) ||
+            std::is_gt(cmp(double_value, std::numeric_limits<T>::max()))) {
             throw marshal_exception(format("Value {} out of range", double_value));
         }
 
