@@ -855,8 +855,9 @@ future<> gossiper::failure_detector_loop() {
     logger.info("failure_detector_loop: Finished main loop");
 }
 
-void gossiper::replicate_live_endpoints_on_change() {
+future<> gossiper::replicate_live_endpoints_on_change() {
     assert(this_shard_id() == 0);
+    auto lock = co_await get_units(_endpoint_update_semaphore, 1);
     //
     // Gossiper task runs only on CPU0:
     //
@@ -878,7 +879,8 @@ void gossiper::replicate_live_endpoints_on_change() {
             _shadow_unreachable_endpoints = _unreachable_endpoints;
         }
 
-        container().invoke_on_all([this, live_endpoint_changed, unreachable_endpoint_changed, es = _endpoint_state_map] (gossiper& local_gossiper) {
+        co_await container().invoke_on_all([this, live_endpoint_changed, unreachable_endpoint_changed,
+                                   es = _endpoint_state_map] (gossiper& local_gossiper) {
             // Don't copy gossiper(CPU0) maps into themselves!
             if (this_shard_id() != 0) {
                 if (live_endpoint_changed) {
@@ -893,7 +895,7 @@ void gossiper::replicate_live_endpoints_on_change() {
                     local_gossiper._endpoint_state_map[e.first].set_alive(e.second.is_alive());
                 }
             }
-        }).get();
+        });
     }
 }
 
@@ -974,7 +976,7 @@ void gossiper::run() {
                 do_status_check().get();
             }
 
-            replicate_live_endpoints_on_change();
+            replicate_live_endpoints_on_change().get();
 
     }).then_wrapped([this] (auto&& f) {
         try {
