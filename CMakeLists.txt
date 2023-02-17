@@ -341,48 +341,9 @@ set(scylla_sources
     transport/server.cc
     types.cc
     unimplemented.cc
-    utils/UUID_gen.cc
-    utils/arch/powerpc/crc32-vpmsum/crc32_wrapper.cc
-    utils/array-search.cc
-    utils/ascii.cc
-    utils/base64.cc
-    utils/big_decimal.cc
-    utils/bloom_calculations.cc
-    utils/bloom_filter.cc
-    utils/buffer_input_stream.cc
-    utils/build_id.cc
-    utils/config_file.cc
-    utils/directories.cc
-    utils/disk-error-handler.cc
-    utils/dynamic_bitset.cc
-    utils/error_injection.cc
-    utils/exceptions.cc
-    utils/file_lock.cc
-    utils/generation-number.cc
-    utils/gz/crc_combine.cc
-    utils/gz/crc_combine_table.cc
-    utils/hashers.cc
-    utils/histogram_metrics_helper.cc
-    utils/human_readable.cc
-    utils/i_filter.cc
-    utils/large_bitset.cc
-    utils/like_matcher.cc
-    utils/limiting_data_source.cc
-    utils/lister.cc
-    utils/logalloc.cc
-    utils/managed_bytes.cc
-    utils/multiprecision_int.cc
-    utils/murmur_hash.cc
-    utils/rate_limiter.cc
-    utils/rjson.cc
-    utils/runtime.cc
-    utils/updateable_value.cc
-    utils/utf8.cc
-    utils/uuid.cc
     validation.cc
     vint-serialization.cc
     zstd.cc)
-
 set(scylla_gen_sources
     "${scylla_thrift_gen_cassandra_files}"
     "${scylla_ragel_gen_protocol_parser_file}"
@@ -393,6 +354,7 @@ add_subdirectory(alternator)
 add_subdirectory(cql3)
 add_subdirectory(idl)
 add_subdirectory(test)
+add_subdirectory(utils)
 add_subdirectory(rust)
 
 add_executable(scylla
@@ -405,6 +367,7 @@ target_link_libraries(scylla PRIVATE
     cql3
     idl
     test-perf
+    utils
     wasmtime_bindings)
 target_link_libraries(Boost::regex
   INTERFACE
