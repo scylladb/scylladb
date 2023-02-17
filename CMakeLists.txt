@@ -22,7 +22,8 @@ set(Seastar_TESTING ON CACHE BOOL "" FORCE)
 add_subdirectory(seastar)
 
 # System libraries dependencies
-find_package(Boost COMPONENTS filesystem program_options system thread regex REQUIRED)
+find_package(Boost REQUIRED
+    COMPONENTS filesystem program_options system thread regex unit_test_framework)
 find_package(Lua REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(ICU COMPONENTS uc i18n REQUIRED)

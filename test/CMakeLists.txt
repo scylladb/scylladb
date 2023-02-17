@@ -32,3 +32,6 @@ target_link_libraries(test-perf
     JsonCpp::JsonCpp
     xxHash::xxhash
     wasmtime_bindings)
+
+add_subdirectory(lib)
+add_subdirectory(boost)
