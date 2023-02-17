@@ -1132,7 +1132,7 @@ SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
                 replica::database& db = env.local_db();
                 replica::table& t = db.find_column_family(ks_name, cf_name);
 
-                for (int value : boost::irange<int>(0, num_flushes)) {
+                for ([[maybe_unused]] int value : boost::irange<int>(0, num_flushes)) {
                     ::usleep(sleep_ms * 1000);
                     co_await db.apply(t.schema(), freeze(gen()), tracing::trace_state_ptr(), db::commitlog::force_sync::yes, db::no_timeout);
                     co_await t.flush();
@@ -1143,7 +1143,7 @@ SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
         };
 
         int sleep_ms = 2;
-        for (int i : boost::irange<int>(8)) {
+        for ([[maybe_unused]] int i : boost::irange<int>(8)) {
             future<> f0 = smp::submit_to(0, flusher{.env=env, .num_flushes=100, .sleep_ms=0});
             future<> f1 = smp::submit_to(1, flusher{.env=env, .num_flushes=3, .sleep_ms=sleep_ms});
             co_await std::move(f0);
