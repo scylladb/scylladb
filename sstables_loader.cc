@@ -21,6 +21,7 @@
 #include "message/messaging_service.hh"
 
 #include <cfloat>
+#include <algorithm>
 
 static logging::logger llog("sstables_loader");
 
@@ -123,6 +124,16 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
     const auto cf_id = s->id();
     const auto reason = streaming::stream_reason::repair;
     auto erm = _db.local().find_keyspace(ks_name).get_effective_replication_map();
+
+    // By sorting SSTables by their primary key, we allow SSTable runs to be
+    // incrementally streamed.
+    // Overlapping run fragments can have their content deduplicated, reducing
+    // the amount of data we need to put on the wire.
+    // Elements are popped off from the back of the vector, therefore we're sorting
+    // it in descending order, to start from the smaller tokens.
+    std::ranges::sort(sstables, [] (const sstables::shared_sstable& x, const sstables::shared_sstable& y) {
+        return x->compare_by_first_key(*y) > 0;
+    });
 
     size_t nr_sst_total = sstables.size();
     size_t nr_sst_current = 0;
