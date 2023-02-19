@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "types.hh"
+#include "types/types.hh"
 
 #include <seastar/core/sstring.hh>
 

@@ -18,7 +18,7 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/json/json_elements.hh>
 #include "system_keyspace.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "service/storage_proxy.hh"
 #include "service/client_state.hh"
 #include "service/query_state.hh"

@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "types.hh"
+#include "types/types.hh"
 
 namespace cql3 {
 

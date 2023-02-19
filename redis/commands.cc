@@ -10,7 +10,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include "redis/request.hh"
 #include "redis/reply.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "service_permit.hh"
 #include "service/client_state.hh"
 #include "redis/options.hh"

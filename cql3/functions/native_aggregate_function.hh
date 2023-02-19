@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "types.hh"
+#include "types/types.hh"
 #include "native_function.hh"
 #include "aggregate_function.hh"
 #include <seastar/core/shared_ptr.hh>

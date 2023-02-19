@@ -13,7 +13,7 @@
 #include <boost/range/numeric.hpp>
 
 #include "mutation/atomic_cell.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "locator/host_id.hh"
 
 class mutation;

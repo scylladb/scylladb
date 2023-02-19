@@ -10,7 +10,6 @@
 #pragma once
 
 #include "sstable_version.hh"
-#include "types.hh"
 
 namespace sstables {
 

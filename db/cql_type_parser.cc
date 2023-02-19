@@ -14,7 +14,7 @@
 #include "cql3/CqlParser.hpp"
 #include "cql3/util.hh"
 #include "cql_type_parser.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "data_dictionary/user_types_metadata.hh"
 
 static ::shared_ptr<cql3::cql3_type::raw> parse_raw(const sstring& str) {

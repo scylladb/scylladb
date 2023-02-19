@@ -34,7 +34,7 @@
 #include "gms/feature_service.hh"
 #include "sstables/types.hh"
 #include "mutation/mutation.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "types/map.hh"
 #include "utils/rjson.hh"
 #include "utils/big_decimal.hh"

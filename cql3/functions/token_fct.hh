@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "types.hh"
+#include "types/types.hh"
 #include "native_scalar_function.hh"
 #include "dht/i_partitioner.hh"
 #include "utils/UUID.hh"

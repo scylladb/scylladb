@@ -1,7 +1,7 @@
 #include "cql3/column_identifier.hh"
 #include "cql3/util.hh"
 #include "seastar/core/shared_ptr.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "types/list.hh"
 #include "types/map.hh"
 #include <boost/test/tools/old/interface.hpp>

@@ -33,7 +33,6 @@
 #include <seastar/coroutine/as_future.hh>
 
 #include "dht/sharder.hh"
-#include "types.hh"
 #include "writer.hh"
 #include "m_format_read_helpers.hh"
 #include "open_info.hh"

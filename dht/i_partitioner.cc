@@ -13,7 +13,7 @@
 #include "dht/token-sharding.hh"
 #include "dht/partition_filter.hh"
 #include "utils/class_registrator.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "utils/murmur_hash.hh"
 #include "utils/div_ceil.hh"
 #include <deque>

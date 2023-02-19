@@ -10,7 +10,7 @@
 
 #include <seastar/net/inet_address.hh>
 
-#include "types.hh"
+#include "types/types.hh"
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"

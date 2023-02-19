@@ -7,7 +7,7 @@
  */
 
 #include "redis/options.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "service/storage_proxy.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "schema/schema.hh"

@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "types.hh"
+#include "types/types.hh"
 #include "types/tuple.hh"
 #include "data_dictionary/keyspace_element.hh"
 

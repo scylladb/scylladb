@@ -9,7 +9,6 @@
 #pragma once
 
 #include "consumer.hh"
-#include "types.hh"
 #include "column_translation.hh"
 #include "m_format_read_helpers.hh"
 #include "sstables/mx/parsers.hh"

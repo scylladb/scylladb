@@ -9,7 +9,7 @@
 #include "atomic_cell.hh"
 #include "atomic_cell_or_collection.hh"
 #include "counters.hh"
-#include "types.hh"
+#include "types/types.hh"
 
 atomic_cell atomic_cell::make_dead(api::timestamp_type timestamp, gc_clock::time_point deletion_time) {
     return atomic_cell_type::make_dead(timestamp, deletion_time);

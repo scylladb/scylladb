@@ -8,7 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 #include <seastar/core/metrics.hh>
-#include "types.hh"
+#include "types/types.hh"
 #include "tracing/trace_keyspace_helper.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"

@@ -7,7 +7,7 @@
  */
 
 #include "redis/mutation_utils.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "service/storage_proxy.hh"
 #include "schema/schema.hh"
 #include <seastar/core/print.hh>

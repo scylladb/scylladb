@@ -9,7 +9,7 @@
  */
 
 #include "streaming/stream_summary.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "utils/serialization.hh"
 
 namespace streaming {

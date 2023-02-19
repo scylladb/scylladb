@@ -12,7 +12,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/util/optimized_optional.hh>
-#include "types.hh"
+#include "types/types.hh"
 #include "keys.hh"
 #include "utils/managed_bytes.hh"
 #include <memory>

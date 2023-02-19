@@ -20,7 +20,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/util/backtrace.hh>
 #include "seastar/core/sstring.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "compound.hh"
 #include "gc_clock.hh"
 #include "compress.hh"
