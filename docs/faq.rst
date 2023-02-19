@@ -398,6 +398,52 @@ Two mailing lists.
 * `scylladb-dev <https://groups.google.com/d/forum/scylladb-dev>`_: Discuss the development of Scylla itself.
 * `scylladb-users <https://groups.google.com/d/forum/scylladb-users>`_: Discuss using Scylla and developing client applications.
 
+What is Eventual Consistency, and how is it different from Strong Consistency?
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+To understand the difference, I’ll start with defining `consistency <https://www.scylladb.com/glossary/database-consistency/>`_. 
+In Database Management Systems, **consistency** (sometimes also called correctness) means that after a successful write (or update or delete) request of a value, any read request receives the latest value. 
+
+Another way to understand it is that any given `database transaction <https://en.wikipedia.org/wiki/Database_transaction>`_ can only change the affected data in allowed ways. Any written data has to be valid according to the defined rules, constraints, and triggers. 
+
+Consistency is one of the guarantees defined in relational, transactional databases. These provide `ACID guarantees <https://en.wikipedia.org/wiki/ACID>`_ and are sometimes also referred to as strongly consistent databases. There are ambiguities in the definition of these guarantees. One definition for ACID transactions is:
+
+* **Atomicity**: If any part of the transaction fails, the entire operation rolls back.
+* **Consistency**: The database remains structurally sound with every transaction.
+* **Isolation**: Each transaction is independent of other transactions.
+* **Durability**: All transaction results are permanently preserved.
+
+ACID compliance is a complex and often contested topic. The consistency guarantee is incredibly difficult to deliver in a globally distributed database topology that involves multiple clusters, each containing many nodes.
+
+For this reason, ACID-compliant databases are usually very expensive and difficult to scale. Since SQL databases are all ACID compliant to varying degrees, they also share these downsides. 
+Some relational database systems enable ACID guarantees to be relaxed in the interest of offsetting these downsides. Achieving resilient, distributed SQL database deployments can be extraordinarily difficult and expensive.
+In contrast to SQL’s ACID guarantees, NoSQL databases provide BASE guarantees:
+
+* **Basic Availability**: Data is available most of the time, even during a partial system failure.
+* **Soft state**: Replicas are not consistent all the time.
+* **Eventual consistency**: Data will become consistent at some point in time, with no guarantee when.
+
+This is also related to the `CAP theorem <https://groups.google.com/d/forum/scylladb-users>`_, which states that in a distributed data system, only two out of the following three guarantees can be satisfied:
+
+* **Consistency**: The same response is given to all identical requests
+* **Availability**: Requests receive responses even during a partial system failure
+* **Partition** Tolerance: Operations remain intact even when some nodes are unavailable.
+
+ScyllaDB, as well as `Apache Cassandra <https://cassandra.apache.org/>`_ and other NoSQL databases, sacrifice a degree of consistency in order to increase availability. Rather than providing strong consistency, they provide `eventual consistency <https://www.scylladb.com/glossary/eventual-consistency/>`_. This means that in some cases, a read request will fail to return the result of the latest WRITE. 
+In ScyllaDB (and Apache Cassandra), consistency is tunable, meaning that for a given query, the client can specify a `Consistency Level <https://university.scylladb.com/courses/scylla-essentials-overview/lessons/architecture/topic/consistency-level-cl/>`_, which refers to the number of replicas that are required to respond to a request for it to be considered successful.  This is also known as `Tunable Consistency <https://docs.scylladb.com/stable/glossary.html#term-Tunable-Consistency>`_. 
+
+A related feature is `Lightweight Transactions <https://docs.scylladb.com/stable/using-scylla/lwt>`_ (LWT). LWT in ScyllaDB allow the client to modify data based on its current state: that is, to perform an update that is executed only if a row does not exist or contains a certain value. 
+LWT are limited to a single conditional statement, which allows an “atomic compare and set” operation. That is, it checks if a condition is true, and if so, it conducts the transaction. If the condition is not met, the transaction does not go through.
+
+Further reading:
+
+* `Jepsen and ScyllaDB: Putting Consistency to the Test blog post <hhttps://www.scylladb.com/2020/12/23/jepsen-and-scylla-putting-consistency-to-the-test/>`_ 
+* `Nauto: Achieving Consistency in an Eventually Consistent Environment blog post <https://www.scylladb.com/2020/02/20/nauto-achieving-consistency-in-an-eventually-consistent-environment/>`_ 
+* `Consistency Levels documentation <https://docs.scylladb.com/stable/cql/consistency.html>`_ 
+* `High Availability lesson on ScyllaDB University <https://university.scylladb.com/courses/scylla-essentials-overview/lessons/high-availability/>`_ 
+* `Lightweight Transactions lesson on ScyllaDB University <https://university.scylladb.com/courses/data-modeling/lessons/lightweight-transactions/>`_ 
+* `Getting the Most out of Lightweight Transactions in ScyllaDB blog post <https://www.scylladb.com/2020/07/15/getting-the-most-out-of-lightweight-transactions-in-scylla/>`_ 
+
 I deleted data from Scylla, but disk usage stays the same. Why?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
