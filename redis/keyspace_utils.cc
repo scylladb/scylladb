@@ -10,7 +10,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "redis/keyspace_utils.hh"
 #include "schema/schema_builder.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include <seastar/core/future.hh>

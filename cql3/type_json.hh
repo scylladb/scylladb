@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "types.hh"
+#include "types/types.hh"
 #include "utils/rjson.hh"
 
 bytes from_json_object(const abstract_type &t, const rjson::value& value);

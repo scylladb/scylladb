@@ -16,7 +16,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/for_each.hpp>
 
-#include "types.hh"
+#include "types/types.hh"
 
 struct tuple_deserializing_iterator {
 public:

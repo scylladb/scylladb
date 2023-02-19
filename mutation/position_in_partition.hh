@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "types.hh"
+#include "types/types.hh"
 #include "keys.hh"
 #include "clustering_bounds_comparator.hh"
 #include "query-request.hh"

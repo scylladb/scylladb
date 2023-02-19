@@ -302,7 +302,6 @@ set(scylla_sources
     transport/event_notifier.cc
     transport/messages/result_message.cc
     transport/server.cc
-    types.cc
     unimplemented.cc
     validation.cc
     vint-serialization.cc
@@ -317,11 +316,12 @@ add_subdirectory(alternator)
 add_subdirectory(auth)
 add_subdirectory(cql3)
 add_subdirectory(idl)
+add_subdirectory(rust)
 add_subdirectory(schema)
 add_subdirectory(sstables)
 add_subdirectory(test)
+add_subdirectory(types)
 add_subdirectory(utils)
-add_subdirectory(rust)
 
 add_executable(scylla
     ${scylla_sources}
@@ -336,6 +336,7 @@ target_link_libraries(scylla PRIVATE
     schema
     sstables
     test-perf
+    types
     utils
     wasmtime_bindings)
 target_link_libraries(Boost::regex

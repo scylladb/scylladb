@@ -16,7 +16,7 @@
 #include "cql3/util.hh"
 #include "concrete_types.hh"
 #include <seastar/core/print.hh>
-#include "types.hh"
+#include "types/types.hh"
 #include "utils/exceptions.hh"
 #include "utils/serialization.hh"
 #include "vint-serialization.hh"

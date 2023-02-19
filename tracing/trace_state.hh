@@ -18,7 +18,7 @@
 #include "gms/inet_address.hh"
 #include "auth/authenticated_user.hh"
 #include "db/consistency_level_type.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "timestamp.hh"
 #include "inet_address_vectors.hh"
 

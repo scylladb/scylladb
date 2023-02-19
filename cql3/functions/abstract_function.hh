@@ -11,7 +11,7 @@
 #pragma once
 
 #include "function.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "cql3/cql3_type.hh"
 #include <vector>
 #include <iosfwd>

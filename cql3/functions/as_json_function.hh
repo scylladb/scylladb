@@ -17,7 +17,7 @@
 #include "cql3/type_json.hh"
 
 #include "bytes_ostream.hh"
-#include "types.hh"
+#include "types/types.hh"
 
 #include <boost/algorithm/cxx11/any_of.hpp>
 

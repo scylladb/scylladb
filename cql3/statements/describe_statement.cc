@@ -21,7 +21,7 @@
 #include "seastar/core/on_internal_error.hh"
 #include "seastar/coroutine/maybe_yield.hh"
 #include "service/client_state.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/statements/raw/describe_statement.hh"

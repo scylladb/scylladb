@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "types.hh"
+#include "types/types.hh"
 #include "mutation/atomic_cell.hh"
 #include "query-request.hh"
 #include "query-result.hh"

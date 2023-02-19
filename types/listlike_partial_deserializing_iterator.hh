@@ -13,7 +13,7 @@
 #include "utils/fragment_range.hh"
 #include "utils/managed_bytes.hh"
 #include "exceptions/exceptions.hh"
-#include "types.hh"
+#include "types/types.hh"
 
 int read_collection_size(bytes_view& in);
 bytes_view read_collection_key(bytes_view& in);

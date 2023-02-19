@@ -11,7 +11,7 @@
 #include <optional>
 #include <seastar/core/sharded.hh>
 #include "bytes.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"

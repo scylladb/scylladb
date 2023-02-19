@@ -32,7 +32,7 @@
 #include "test/lib/random_utils.hh"
 #include "sstables/types.hh"
 #include "keys.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "types/user.hh"
 #include "partition_slice_builder.hh"
 #include "schema/schema.hh"

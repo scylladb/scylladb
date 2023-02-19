@@ -12,7 +12,7 @@
 
 #include "cql3/error_listener.hh"
 #include "exceptions/exceptions.hh"
-#include "types.hh"
+#include "types/types.hh"
 
 namespace cql3 {
 

@@ -21,7 +21,7 @@
 #include "test/lib/log.hh"
 #include "transport/messages/result_message.hh"
 
-#include "types.hh"
+#include "types/types.hh"
 #include "types/tuple.hh"
 #include "types/map.hh"
 #include "types/list.hh"

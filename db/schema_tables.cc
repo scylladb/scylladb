@@ -75,7 +75,7 @@
 #include "cql3/expr/expression.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/column_specification.hh"
-#include "types.hh"
+#include "types/types.hh"
 
 using namespace db;
 using namespace std::chrono_literals;

@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "types.hh"
+#include "sstables/types.hh"
 #include "version.hh"
 #include "component_type.hh"
 

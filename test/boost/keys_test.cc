@@ -13,7 +13,7 @@
 #include "keys.hh"
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"
-#include "types.hh"
+#include "types/types.hh"
 
 #include "idl/keys.dist.hh"
 #include "serializer_impl.hh"

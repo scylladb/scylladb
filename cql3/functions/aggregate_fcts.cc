@@ -9,7 +9,7 @@
  */
 
 #include "bytes.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "types/tuple.hh"
 #include "cql3/functions/scalar_function.hh"
 #include "cql3/util.hh"

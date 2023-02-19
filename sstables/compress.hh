@@ -42,7 +42,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/fstream.hh>
 
-#include "types.hh"
+#include "types/types.hh"
 #include "sstables/types.hh"
 #include "checksum_utils.hh"
 #include "../compress.hh"

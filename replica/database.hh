@@ -27,7 +27,7 @@
 #include <boost/range/algorithm/find.hpp>
 #include <optional>
 #include <string.h>
-#include "types.hh"
+#include "types/types.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
 #include "db/commitlog/replay_position.hh"

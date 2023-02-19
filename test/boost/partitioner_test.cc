@@ -14,7 +14,7 @@
 #include "dht/sharder.hh"
 #include "dht/murmur3_partitioner.hh"
 #include "schema/schema.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "schema/schema_builder.hh"
 #include "utils/div_ceil.hh"
 

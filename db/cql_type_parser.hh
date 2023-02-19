@@ -13,7 +13,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
 
-#include "types.hh"
+#include "types/types.hh"
 
 #include "seastarx.hh"
 

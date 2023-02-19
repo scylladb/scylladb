@@ -13,7 +13,7 @@
 #include <initializer_list>
 
 #include "utils/serialization.hh"
-#include "types.hh"
+#include "types/types.hh"
 #include "gms/inet_address.hh"
 #include "gms/inet_address_serializer.hh"
 #include "serializer_impl.hh"

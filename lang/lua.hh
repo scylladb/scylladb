@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "types.hh"
+#include "types/types.hh"
 #include "utils/updateable_value.hh"
 #include <seastar/core/future.hh>
 

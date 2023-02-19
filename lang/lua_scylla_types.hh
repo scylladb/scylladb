@@ -7,7 +7,7 @@
  */
 
 #include <lua.hpp>
-#include "types.hh"
+#include "types/types.hh"
 
 namespace lua {
 
