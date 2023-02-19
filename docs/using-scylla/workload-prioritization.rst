@@ -140,6 +140,14 @@ Where:
 * ``service_level_name``  - Specifies the name of the service level you created. See `Create a Service Level`_. 
 * ``shares_number`` - The number of shares in the CPU that you're granting to the service level name.   You can use any number within the range from 1 to 1000. **Default : 1000**
 
+
+.. warning::
+
+   Altering the SERVICE LEVEL does not affect active sessions (see `#12923 <https://github.com/scylladb/scylladb/issues/12923>`_).
+   
+   To apply a new timeout to existing clients, execute a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart>` after the ALTER command.
+
+
 Example
 ........
 
