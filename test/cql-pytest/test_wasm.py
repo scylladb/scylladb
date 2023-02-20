@@ -1107,3 +1107,99 @@ def test_counter(cql, test_keyspace, scylla_only):
             cql.execute(f"UPDATE {table} SET c = c + 1  WHERE p = 42;")
             cql.execute(f"UPDATE {table} SET c = c - 4  WHERE p = 42;")
             assert cql.execute(f"SELECT {ri_counter_name}(c) AS result FROM {table} WHERE p = 42").one().result == -1
+
+# See docs/dev/wasm.md for the source and build instructions of the compiled UDF.
+def test_docs_assemblyscript(cql, test_keyspace, table1, scylla_only):
+    table = table1
+    fib_name = unique_name()
+    fib_source = f"""(module
+ (type $i32_=>_i32 (func (param i32) (result i32)))
+ (global $fib/_scylla_abi i32 (i32.const 1088))
+ (memory $0 1)
+ (data (i32.const 1036) "\\1c")
+ (data (i32.const 1048) "\\01\\00\\00\\00\\04\\00\\00\\00\\01")
+ (data (i32.const 1068) ",")
+ (data (i32.const 1080) "\\04\\00\\00\\00\\10\\00\\00\\00 \\04\\00\\00 \\04\\00\\00\\04\\00\\00\\00\\01")
+ (export "_scylla_abi" (global $fib/_scylla_abi))
+ (export "{fib_name}" (func $fib/fib))
+ (export "memory" (memory $0))
+ (func $fib/fib (param $0 i32) (result i32)
+  local.get $0
+  i32.const 2
+  i32.lt_s
+  if
+   local.get $0
+   return
+  end
+  local.get $0
+  i32.const 1
+  i32.sub
+  call $fib/fib
+  local.get $0
+  i32.const 2
+  i32.sub
+  call $fib/fib
+  i32.add
+ )
+)
+"""
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE xwasm AS '{fib_source}'"
+    with new_function(cql, test_keyspace, src, fib_name):
+        cql.execute(f"INSERT INTO {table} (p, i) VALUES (42, 10)")
+        assert cql.execute(f"SELECT {test_keyspace}.{fib_name}(i) AS result FROM {table} WHERE p = 42").one().result == 55
+
+# See docs/dev/wasm.md for the source and build instructions of the compiled UDF.
+def test_docs_c(cql, test_keyspace, table1, scylla_only):
+    table = table1
+    fib_name = unique_name()
+    fib_source = f"""(module
+  (type (;0;) (func (param i32) (result i64)))
+  (type (;1;) (func))
+  (func (;0;) (type 0) (param i32) (result i64)
+    (local i64 i32)
+    local.get 0
+    i32.const 2
+    i32.ge_s
+    if  ;; label = @1
+      loop  ;; label = @2
+        local.get 0
+        i32.const 1
+        i32.sub
+        call 0
+        local.get 1
+        i64.add
+        local.set 1
+        local.get 0
+        i32.const 4
+        i32.lt_u
+        local.set 2
+        local.get 0
+        i32.const 2
+        i32.sub
+        local.set 0
+        local.get 2
+        i32.eqz
+        br_if 0 (;@2;)
+      end
+    end
+    local.get 1
+    local.get 0
+    i64.extend_i32_s
+    i64.add)
+  (func (;1;) (type 1)
+    nop)
+  (func (;2;) (type 0) (param i32) (result i64)
+    local.get 0
+    call 0)
+  (memory (;0;) 2)
+  (global (;0;) i32 (i32.const 1024))
+  (export "memory" (memory 0))
+  (export "_scylla_abi" (global 0))
+  (export "_start" (func 1))
+  (export "{fib_name}" (func 2))
+  (data (;0;) (i32.const 1024) "\\01"))
+"""
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE xwasm AS '{fib_source}'"
+    with new_function(cql, test_keyspace, src, fib_name):
+        cql.execute(f"INSERT INTO {table} (p, i) VALUES (42, 9)")
+        assert cql.execute(f"SELECT {test_keyspace}.{fib_name}(i) AS result FROM {table} WHERE p = 42").one().result == 34
