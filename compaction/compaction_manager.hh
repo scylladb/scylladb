@@ -100,7 +100,7 @@ public:
     class can_purge_tombstones_tag;
     using can_purge_tombstones = bool_class<can_purge_tombstones_tag>;
 
-    class task {
+    class task : public enable_shared_from_this<task> {
     public:
         enum class state {
             none,       // initial and final state
@@ -172,6 +172,10 @@ public:
         }
     public:
         future<compaction_stats_opt> run() noexcept;
+
+        future<> perform() {
+            return _cm.perform_task(shared_from_this()).discard_result();
+        }
 
         const compaction::table_state* compacting_table() const noexcept {
             return _compacting_table;
