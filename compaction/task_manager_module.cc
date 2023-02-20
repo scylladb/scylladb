@@ -87,8 +87,9 @@ future<> table_major_keyspace_compaction_task_impl::run() {
     co_await _cv.wait([&] {
         return _current_task && _current_task->id() == _status.id;
     });
-    co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [] (replica::table& t) {
-        return t.compact_all_sstables();
+    tasks::task_info parent_info{_status.id, _status.shard};
+    co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [parent_info] (replica::table& t) {
+        return t.compact_all_sstables(parent_info);
     });
 }
 

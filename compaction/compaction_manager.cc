@@ -416,11 +416,28 @@ protected:
     }
 };
 
-future<> compaction_manager::perform_major_compaction(compaction::table_state& t) {
+future<> compaction_manager::perform_major_compaction(compaction::table_state& t, tasks::task_info parent_info) {
     if (_state != state::enabled) {
-        return make_ready_future<>();
+        co_return;
     }
-    return perform_task(make_shared<major_compaction_task>(*this, &t)).discard_result();;
+    sstring keyspace, table;
+    tasks::task_id parent_id;
+    tasks::task_manager::task_ptr parent;
+    if (parent_info) {
+        parent_id = parent_info.id;
+        parent = get_task_manager_module().get_tasks()[parent_id];
+        keyspace = parent->get_status().keyspace;
+        table = parent->get_status().table;
+    }
+
+    auto task_impl_ptr = std::make_unique<compaction_group_major_keyspace_compaction_task_impl<shared_ptr<major_compaction_task>>>(get_task_manager_module().shared_from_this(), std::move(keyspace), std::move(table), parent_id, t, make_shared<major_compaction_task>(*this, &t));
+    if (parent_info) {
+        auto task = co_await get_task_manager_module().make_task(std::move(task_impl_ptr), parent_info);
+        task->start();
+        co_await task->done();
+    } else {
+        co_await task_impl_ptr->run();
+    }
 }
 
 class compaction_manager::custom_compaction_task : public compaction_manager::task {
