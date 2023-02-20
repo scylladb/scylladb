@@ -43,7 +43,35 @@ for arch in "${archs[@]}"; do
     fi
 done
 
-buildah bud "${archs[@]/#/--platform=linux/}" --jobs 0 --squash --no-cache --pull -f tools/toolchain/Dockerfile --manifest "$(<tools/toolchain/image)" --build-arg CLANG_BUILD=SKIP
+usage() {
+    cat <<EOF
+
+Options:
+  --clang_install          build and install an optimized clang compiler binary.
+  --clang_build <host dir> build an optimized clang compiler binary and keep in the host directory
+  --help                   this help snippet
+EOF
+    exit 1
+}
+
+CLANG_CMD="--build-arg CLANG_BUILD=SKIP"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--clang_install")
+	    CLANG_CMD="--build-arg CLANG_BUILD=INSTALL"
+            shift 1
+            ;;
+        "--clang_build")
+	    CLANG_CMD="--build-arg CLANG_BUILD=BUILD -v $2:/optimized_clang:Z"
+            shift 2
+            ;;
+        "--help")
+            usage
+            ;;
+    esac
+done
+
+buildah bud "${archs[@]/#/--platform=linux/}" --jobs 0 --squash --no-cache --pull -f tools/toolchain/Dockerfile --manifest "$(<tools/toolchain/image)" ${CLANG_CMD}
 
 echo "Done building $(<tools/toolchain/image). You can now test it, and push with"
 echo ""
