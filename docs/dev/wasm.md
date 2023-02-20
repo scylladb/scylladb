@@ -23,10 +23,10 @@ parameters and returning values, but they differ in approaches to memory managem
 The memory management differs depending on the used ABI verison:
  - version 1 - There are no requirements of the usage of memory by the user. The host grows memory for each of parameters and does not free the memory in any way.
  - version 2 - The user program is required to export "_scylla_malloc" and "_scylla_free" methods, which
- are then used by the host for allocating memory for parameters and freeing memory for the returned value. The user is required to free the memory allocated for parameters (this can be achieved by using
- the provided helper libraries).
- The "_scylla_malloc" and "_scylla_free" methods may be simple wrappers of "malloc" and "free" methods
- implemented by default when compiling with WASI.
+    are then used by the host for allocating memory for parameters and freeing memory for the returned value.
+    The user is required to free the memory allocated for parameters using the "_scylla_free" method, and allocate the memory for result using the "_scylla_malloc" method (both can be achieved by using the provided helper libraries).
+    Alternatively, the user may return one of the arguments, shifting the responsibility of freeing it to the host.
+    The "_scylla_malloc" and "_scylla_free" methods may be simple wrappers of "malloc" and "free" methods implemented by default when compiling with WASI.
 
 ## Supported types
 
@@ -38,6 +38,8 @@ Due to the limitations imposed by WebAssembly specification, the following types
  - bool
  - float
  - double
+Specifically, the int, bigint, float and double types are represented as WASM i32, i64, f32 and f64 types, while the smallint, tinyint
+and bool are represented as the WASM i32.
 
 The rest of CQL types (text, date, timestamp, etc.) are implemented by putting their serialized representation into wasm module memory
 and passing for each parameter a 64-bit value, of which top 32 bits are its size and its bottom
@@ -55,61 +57,51 @@ and passing for each parameter a 64-bit value, of which top 32 bits are its size
 Native WebAssembly types can only be represented directly if the function does not operate on NULL values. Fortunately, user-defined functions
 explicitly specify whether they accept NULL or not.
 
-If the function is specified not to accept NULL, all parameters are represented
+If the function is specified not to accept NULL, all parameters and return values are represented
 as in the description above.
 
-If the function is specified to accept NULL, each parameter should be represented in WebAssembly by 
-size and pointer to its serialized form in memory, as in the paragraph above.
+If the function is specified to accept NULL, parameters and return values of both natively and non-natively supported types are represented
+using their serialized representation, also decribed above. 
 
-the important distinction is that size equal to -1 (minus one)indicates that the value is NULL and should not be parsed.
+The important distinction is that size equal to -1 (minus one or 0xffffffff) indicates that the value is NULL and should not be parsed.
 
-## Return values
-
-NOTE: ABI for return values is experimental and subject to change. It can (and should) be redesigned
-after implementing helper libraries for a few popular languages (including C++, C, Rust).
-
-Natively supported types are returned as is. All the other types are returned via memory, similarly to the way
-they are passed as parameters: the wasm function should return a single 64-bit integer, representing the size and the offset of a serialized form of the returned value
+NOTE: CQL syntax extensions and new helper libraries may be deployed together with new ABI versions,
+the description below only refers to ABI versions 1 and 2.
 
 Currently, returning NULL values is possible only for functions declared to be `CALLED ON NULL INPUT`.
-For such functions, the return value is always expected to be presented in the serialized form (which
-allows representing nulls), even for types natively supported by WebAssembly.
-The decision is experimental and it was done in order to allow returning some values as native WebAssembly types
-without having to allocate memory for them and serialize them first.
-Alternative ways of expressing whether a function can **return** null should be considered - perhaps
-as CQL syntax extension.
+This decision allows returning some values as native WebAssembly types without having to allocate memory for them and serialize them first.
+Alternative ways of expressing whether a function can **return** null should be considered - perhaps as CQL syntax extension.
 
 ## How to generate a correct wasm UDF source code
 
-Scylla accepts UDF's source code in WebAssembly text format - also known as `wat`. The source can use and define whatever's needed for execution, including multiple helper functions and symbols. The only requirement for it to be accepted as correct UDF source is that the WebAssembly module exports a symbol with the same name as the function, and this symbol's type is indeed a function with correct signature.
+Scylla accepts UDF's source code in WebAssembly text format - also known as `wat`. The source can use and define whatever's needed for execution, including multiple helper functions and symbols. The requirements for it to be accepted as correct UDF source is that the WebAssembly module exports a symbol with the same name as the function, this symbol's type is indeed a function with correct signature, the module exports a _scylla_abi global and all symbols related to the selected ABI version.
 
 UDF's source code can be, naturally, simply coded by hand in wat. It is not often very convenient to program directly in assembly, so here are a few tips.
 
 ### Compiling to wasm
 
-#### AssemblyScript
+#### Rust
 
-AssemblyScript is a TypeScript-like language that compiles to WebAsembly.
+The main supported language for WASM UDFs is Rust. To generate WebAssembly from rust, it's best to use the [`scylla-udf`](https://github.com/scylladb/scylla-rust-udf) Rust helper library, and follow the instructions present there.
 
-Install via npm:
-```
-npm install -g assemblyscript
-```
+As a short example, here's a sample Rust code which can be compiled to WebAssembly:
+```rust
+use scylla_udf::export_udf;
 
-Example source code:
-```assemblyscript
-export const _scylla_abi = [1]
-export function fib(n: i32): i32 {
-  if (n < 2) {
-    return n
-  }
-  return fib(n - 1) + fib(n - 2)
+#[export_udf]
+pub fn fib(n: i32) -> i32 {
+    if n < 2 {
+        n
+    } else {
+        fib(n - 1) + fib(n - 2)
+    }
 }
 ```
 
-Compile directly to WebAssembly Text Format with:
+The compilation instructions are described at https://github.com/scylladb/scylla-rust-udf but the commands will generally be:
 ```
-asc fib.ts --textFile fib.wat --optimize
+ cargo build --target=wasm32-wasi
+ wasm2wat target/wasm32-wasi/debug/fib.wasm > fib.wat
 ```
 
 #### C
@@ -118,7 +110,8 @@ Clang is capable of compiling C source code to wasm and it also supports useful 
 for using wasm-specific interfaces, like `__builtin_wasm_memory_size` and `__builtin_wasm_memory_grow`
 for memory management.
 
-Example source code:
+However, there is no C helper library yet, so implementing UDFs in C is in general much more difficult than in Rust.
+Just to implement the fib() function, you need something like this:
 
 ```c
 #include<stdlib.h>
@@ -166,36 +159,63 @@ long long fib(long long p) {
 int main(){}
 ```
 
-Compilation instructions:
+And compile it with:
 ```bash
  /path/to/wasm/supporting/c/compiler --sysroot=/path/to/wasi/sysroot -O2  --target=wasm32-wasi -Wl,--export=fib -Wl,--export=_scylla_abi -Wl,--export=_scylla_malloc -Wl,--export=_scylla_free -Wl,--no-entry fibnull.c -o fibnull.wasm
  wasm2wat fibnull.wasm > fibnull.wat
 ```
 
-#### Rust
+The main case when C may be the most convenient language of an UDF is when the UDF RETURNS NULL ON NULL INPUT and only takes WASM-compatible types (ints/doubles) as parameters and return values.
+In that case, the _scylla_free and _scylla_malloc don't need to be exported, _scylla_abi can be set to 1, and parameters/returns are not serialized:
 
-Rust ecosystem exposes a rather convenient way of generating WebAssembly, with the help of `cargo wasi` and `wasm_bindgen`.
+```c
+const int _scylla_abi = 1;
 
-As a short example, here's a sample Rust code which can be compiled to WebAssembly:
-```rust
-use wasm_bindgen::prelude::*;
-
-#[no_mangle]
-pub static _scylla_abi: u32 = 1;
-
-#[wasm_bindgen]
-pub fn fib(n: i32) -> i32 {
-    if n < 2 {
-        n
-    } else {
-        fib(n - 1) + fib(n - 2)
+long long fib(int n) {
+    if (n < 2) {
+        return n;
     }
+    return fib(n-1) + fib(n-2);
+}
+
+// using wasi in c/c++ requires adding a main function to the program
+int main(){}
+```
+
+Compilation instructions:
+```bash
+ /path/to/wasm/supporting/c/compiler --sysroot=/path/to/wasi/sysroot -O2  --target=wasm32-wasi -Wl,--export=fib -Wl,--export=_scylla_abi -Wl,--no-entry fib.c -o fib.wasm
+ wasm2wat fibnull.wasm > fibnull.wat
+```
+The compiled example can be viewed at test/cql-pytest/test_wasm.py::test_docs_c
+
+#### AssemblyScript
+
+AssemblyScript is a TypeScript-like language that compiles to WebAsembly.
+
+Install via npm:
+```
+npm install -g assemblyscript
+```
+
+Example source code:
+```assemblyscript
+export const _scylla_abi = [1]
+export function fib(n: i32): i32 {
+  if (n < 2) {
+    return n
+  }
+  return fib(n - 1) + fib(n - 2)
 }
 ```
 
-A more detailed guide and examples can be found here:
-https://bytecodealliance.github.io/cargo-wasi/hello-world.html
-https://rustwasm.github.io/wasm-bindgen/
+Compile directly to WebAssembly Text Format with:
+```
+asc fib.ts --textFile fib.wat --optimize
+```
+The compiled example can be viewed at test/cql-pytest/test_wasm.py::test_docs_assemblyscript
+
+Similarly to C, the AssemblyScript can only be conveniently used with "RETURNS NULL ON NULL INPUT" UDFs that only have WASM-compatible arguments/returns.
 
 ### Generating wat from wasm
 
