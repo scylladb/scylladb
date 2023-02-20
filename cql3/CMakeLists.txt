@@ -113,5 +113,6 @@ target_include_directories(cql3
     ${CMAKE_BINARY_DIR})
 target_link_libraries(cql3
     idl
+    wasmtime_bindings
     Seastar::seastar
     xxHash::xxhash)

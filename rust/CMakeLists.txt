@@ -51,14 +51,16 @@ endfunction(generate_cxxbridge)
 
 add_rust_library(rust_combined)
 
-set(cxx_header "${CMAKE_CURRENT_BINARY_DIR}/cxx.h")
+set(binding_gen_build_dir "${scylla_gen_build_dir}/rust")
+
+set(cxx_header "${binding_gen_build_dir}/cxx.h")
 add_custom_command(
   OUTPUT ${cxx_header}
   COMMAND ${CXXBRIDGE} --header --output ${cxx_header})
 generate_cxxbridge(wasmtime_bindings
   INPUT wasmtime_bindings/src/lib.rs
   INCLUDE ${cxx_header}
-  OUTPUT_DIR "${scylla_gen_build_dir}"
+  OUTPUT_DIR "${binding_gen_build_dir}"
   SOURCES wasmtime_bindings_sources)
 
 set_target_properties(Rust::rust_combined PROPERTIES
@@ -71,6 +73,6 @@ target_sources(wasmtime_bindings
     ${wasmtime_bindings_sources})
 target_include_directories(wasmtime_bindings
   INTERFACE
-    ${CMAKE_BINARY_DIR})
+    ${binding_gen_build_dir})
 target_link_libraries(wasmtime_bindings
   INTERFACE Rust::rust_combined)

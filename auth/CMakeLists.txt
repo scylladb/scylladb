@@ -27,5 +27,6 @@ target_link_libraries(auth
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
+    cql3
     idl
     wasmtime_bindings)
