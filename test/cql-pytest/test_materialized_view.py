@@ -713,32 +713,49 @@ def test_mv_override_clustering_order_quoted(cql, test_keyspace):
 
 # Cassandra requires that if we specify WITH CLUSTERING ORDER BY in the
 # materialized view definition, it must mention all clustering key columns
-# (in the example below, c and x). Scylla allows the user to leave out
-# some columns (in this case x) and only override the order of others (c).
-# Cassandra does NOT allow this, saying "Clustering key columns must exactly
-# match columns in CLUSTERING ORDER BY directive".
-# We check that if Scylla accepts this partial CLUSTERING ORDER BY, its
-# behavior is still correct (i.e., if a reverse order is specified for c,
-# it is honored):
-def test_mv_override_clustering_order_partial(cql, test_keyspace, scylla_only):
+# defined in the view's PRIMARY KEY, in that same order. If the columns are
+# mis-ordered or one is missing, the statement is rejected with the message
+# "Clustering key columns must exactly match columns in CLUSTERING ORDER BY
+# directive". The reason for this rejection is that CLUSTERING ORDER BY
+# with a misordered or partial list of clustering columns may wrongly suggest
+# that this list determines the order of clustering columns when comparing
+# them - when in fact the PRIMARY KEY specification controls that order.
+# The following test verifies that these bad WITH CLUSTERING ORDER BY
+# clauses are indeed rejected.
+# Reproduces #12936.
+@pytest.mark.xfail(reason="issue #12936")
+def test_mv_override_clustering_order_bad1(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'p int, c int, x int, y int, primary key (p,c)') as table:
-        # Explicitly override the clustering order of c, but say nothing
-        # about the order of the other clustering column, x.
-        with new_materialized_view(cql, table, '*', 'p, c, x', 'p is not null and c is not null and x is not null', 'with clustering order by (c DESC)') as mv:
-            for i in range(4):
-                cql.execute(f'INSERT INTO {table} (p,c,x,y) VALUES (1,{i},{i},{i})')
-            # The base table's clustering order is ascending, but in the view
-            # it should be descending.
-            assert list(cql.execute(f'SELECT y from {table}')) == [(0,),(1,),(2,),(3,)]
-            assert list(cql.execute(f'SELECT y from {mv}')) == [(3,),(2,),(1,),(0,)]
+        # Mis-ordered clustering columns: c,x on PRIMARY KEY, but
+        # x,c in WITH CLUSTERING ORDER:
+        with pytest.raises(InvalidRequest, match="CLUSTERING ORDER BY"):
+            with new_materialized_view(cql, table, '*', 'p, c, x', 'p is not null and c is not null and x is not null', 'WITH CLUSTERING ORDER BY (x ASC, c ASC)') as mv:
+                pass
+        # Missing clustering columns: c,x on PRIMARY KEY, but
+        # x or c in WITH CLUSTERING ORDER:
+        with pytest.raises(InvalidRequest, match="CLUSTERING ORDER BY"):
+            with new_materialized_view(cql, table, '*', 'p, c, x', 'p is not null and c is not null and x is not null', 'WITH CLUSTERING ORDER BY (c ASC)') as mv:
+                pass
+        with pytest.raises(InvalidRequest, match="CLUSTERING ORDER BY"):
+            with new_materialized_view(cql, table, '*', 'p, c, x', 'p is not null and c is not null and x is not null', 'WITH CLUSTERING ORDER BY (x ASC)') as mv:
+                pass
+        # Duplicate clustering column: c,x on PRIMARY KEY, but c,x,x
+        # (with same or different order for x) in WITH CLUSTERING ORDER:
+        for order in ['c ASC, x ASC, x ASC',
+                      'c ASC, x ASC, x DESC',
+                      'c ASC, c ASC, x ASC',
+                      'c ASC, c DESC, x ASC']:
+            with pytest.raises(InvalidRequest, match="CLUSTERING ORDER BY"):
+                with new_materialized_view(cql, table, '*', 'p, c, x', 'p is not null and c is not null and x is not null', f'WITH CLUSTERING ORDER BY ({order})') as mv:
+                    pass
 
 # Cassandra is strict about the WITH CLUSTERING ORDER BY clause in the
 # definition of the materialized view that must, if it exists, list all
-# the view's clustering keys. Scylla is less strict (as the test above
-# shows, some can be ommitted), but we should still not allow to list
-# spurious names of non-clustering keys in the CLUSTERING ORDER BY clause.
-# Reproduces #10767
-def test_mv_override_clustering_order_error(cql, test_keyspace):
+# the view's clustering keys. Scylla was less strict (the above test
+# test_mv_override_clustering_order_bad failed), but in any case we should
+# not allow to list spurious names of non-clustering keys in the CLUSTERING
+# ORDER BY clause. Reproduces #10767.
+def test_mv_override_clustering_order_bad2(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'p int, c int, x int, y int, primary key (p,c)') as table:
         # Only a non-clustering-key column y (clustering key c and x missing):
         with pytest.raises(InvalidRequest, match="CLUSTERING ORDER BY"):
