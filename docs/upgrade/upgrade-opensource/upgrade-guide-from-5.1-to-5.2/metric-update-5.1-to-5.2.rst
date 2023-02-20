@@ -55,3 +55,13 @@ The following metrics are renamed in ScyllaDB 5.2
      - scylla_memory_system_unspooled_dirty_bytes
    * - scylla_memory_virtual_dirty_bytes
      - scylla_memory_unspooled_dirty_bytes
+
+Reporting Latencies
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+ScyllaDB 5.2 comes with a new approach to reporting latencies, which are reported using histograms and summaries:
+
+* Histograms are reported per node.
+* Summaries are reported per shard and contain P50, P95, and P99 latency.
+
+For more information on Prometheus histograms and summaries, see the `Prometheus documentation <https://prometheus.io/docs/practices/histograms/>`_.
