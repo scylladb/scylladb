@@ -870,7 +870,13 @@ class ScyllaClusterManager:
         self.cluster.setLogger(self.logger)
         await self.runner.setup()
         self.site = aiohttp.web.UnixSite(self.runner, path=self.sock_path)
-        await self.site.start()
+        try:
+            await self.site.start()
+        except OSError as e:
+            if "AF_UNIX path too long" in str(e):
+                raise OSError(e.errno, "{} ({})".format(str(e), self.sock_path)) from None
+            else:
+                raise
         self.is_running = True
 
     async def _before_test(self, test_case_name: str) -> str:
