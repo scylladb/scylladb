@@ -387,10 +387,20 @@ target_link_libraries(scylla PRIVATE
     crypt
     xxHash::xxhash)
 
-target_link_libraries(scylla PRIVATE
-    -Wl,--build-id=sha1 # Force SHA1 build-id generation
-    # TODO: Use lld linker if it's available, otherwise gold, else bfd
-    -fuse-ld=lld)
+# Force SHA1 build-id generation
+set(default_linker_flags "-Wl,--build-id=sha")
+include(CheckLinkerFlag)
+foreach(linker "lld" "gold")
+    set(linker_flag "-fuse-ld=${linker}")
+    check_linker_flag(CXX ${linker_flag} "CXX_LINKER_HAVE_${linker}")
+    if(CXX_LINKER_HAVE_${linker})
+        string(APPEND default_linker_flags " ${linker_flag}")
+        break()
+    endif()
+endforeach()
+
+set(CMAKE_EXE_LINKER_FLAGS "${default_linker_flags}" CACHE INTERNAL "")
+
 # TODO: patch dynamic linker to match configure.py behavior
 
 target_compile_definitions(scylla PRIVATE HAVE_LZ4_COMPRESS_DEFAULT)
