@@ -8,12 +8,19 @@
 
 #pragma once
 
-#include "replica/database.hh"
 #include "sstables/shared_sstable.hh"
 
+#include <seastar/core/metrics_registration.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/semaphore.hh>
+
+using namespace seastar;
+
+namespace replica {
+class database;
+class table;
+}
 
 namespace db::view {
 

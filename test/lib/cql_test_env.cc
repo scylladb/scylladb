@@ -49,6 +49,7 @@
 #include "unit_test_service_levels_accessor.hh"
 #include "db/view/view_builder.hh"
 #include "db/view/node_view_update_backlog.hh"
+#include "db/view/view_update_generator.hh"
 #include "replica/distributed_loader.hh"
 // TODO: remove (#293)
 #include "message/messaging_service.hh"
