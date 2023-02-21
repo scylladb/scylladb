@@ -11,7 +11,6 @@ Restoring a keyspace from a backup requires all snapshot files of the tables, an
    The following procedure assumes data is restored to the same cluster that was backed-up:
 
    - same number of nodes
-   - same IPs
    - same token range per node
 
    The procedure restores each node using the backup file of the **same node**.
