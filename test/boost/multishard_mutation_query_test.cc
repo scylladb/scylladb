@@ -186,7 +186,15 @@ read_partitions_with_generic_paged_scan(distributed<replica::database>& db, sche
 
         const auto pkrange_begin_inclusive = res_builder.last_ckey() && res_builder.last_pkey_rows() < slice.partition_row_limit();
 
-        ranges->front() = dht::partition_range(dht::partition_range::bound(res_builder.last_pkey(), pkrange_begin_inclusive), ranges->front().end());
+        auto range_opt = ranges->front().trim_front(dht::partition_range::bound(res_builder.last_pkey(), pkrange_begin_inclusive), dht::ring_position_comparator(*s));
+        if (range_opt) {
+            ranges->front() = std::move(*range_opt);
+        } else {
+            ranges->erase(ranges->begin());
+            if (ranges->empty()) {
+                break;
+            }
+        }
 
         if (res_builder.last_ckey()) {
             auto ckranges = cmd.slice.default_row_ranges();
