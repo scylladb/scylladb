@@ -2118,7 +2118,7 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
     for (auto& [f, mode] : ftd) {
         // `f.remove_file()` resets known_size to 0, so remember the size here,
         // in order to subtract it from total_size_on_disk accurately.
-        size_t size = f.known_size();
+        auto size = f.known_size();
         try {
             if (f) {
                 co_await f.close();
