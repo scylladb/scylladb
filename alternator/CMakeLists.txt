@@ -22,6 +22,7 @@ target_include_directories(alternator
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_BINARY_DIR})
 target_link_libraries(alternator
+  cql3
   idl
   Seastar::seastar
   xxHash::xxhash)
