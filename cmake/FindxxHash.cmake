@@ -43,6 +43,7 @@ if(xxHash_FOUND)
       PROPERTIES
         IMPORTED_LOCATION ${xxhash_LIBRARY}
         INTERFACE_INCLUDE_DIRECTORIES ${xxhash_INCLUDE_DIRS}
+        # Hacks needed to expose internal APIs for xxhash dependencies
         INTERFACE_COMPILE_DEFINITIONS XXH_PRIVATE_API)
   endif()
 endif()

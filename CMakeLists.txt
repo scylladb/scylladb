@@ -229,7 +229,6 @@ set(scylla_sources
     redis/command_factory.cc
     redis/commands.cc
     redis/lolwut.cc
-    release.cc
     repair/repair.cc
     repair/row_level.cc
     replica/database.cc
@@ -322,7 +321,9 @@ add_subdirectory(sstables)
 add_subdirectory(test)
 add_subdirectory(types)
 add_subdirectory(utils)
-
+include(add_version_library)
+add_version_library(scylla_version
+    release.cc)
 add_executable(scylla
     ${scylla_sources}
     ${scylla_gen_sources})
@@ -334,6 +335,7 @@ target_link_libraries(scylla PRIVATE
     cql3
     idl
     schema
+    scylla_version
     sstables
     test-perf
     types
@@ -382,38 +384,31 @@ target_link_libraries(scylla PRIVATE
     snappy
     ${LUA_LIBRARIES}
     thrift
-    crypt)
+    crypt
+    xxHash::xxhash)
 
-target_link_libraries(scylla PRIVATE
-    -Wl,--build-id=sha1 # Force SHA1 build-id generation
-    # TODO: Use lld linker if it's available, otherwise gold, else bfd
-    -fuse-ld=lld)
+# Force SHA1 build-id generation
+set(default_linker_flags "-Wl,--build-id=sha")
+include(CheckLinkerFlag)
+foreach(linker "lld" "gold")
+    set(linker_flag "-fuse-ld=${linker}")
+    check_linker_flag(CXX ${linker_flag} "CXX_LINKER_HAVE_${linker}")
+    if(CXX_LINKER_HAVE_${linker})
+        string(APPEND default_linker_flags " ${linker_flag}")
+        break()
+    endif()
+endforeach()
+
+set(CMAKE_EXE_LINKER_FLAGS "${default_linker_flags}" CACHE INTERNAL "")
+
 # TODO: patch dynamic linker to match configure.py behavior
 
-# Hacks needed to expose internal APIs for xxhash dependencies
-target_compile_definitions(scylla PRIVATE XXH_PRIVATE_API HAVE_LZ4_COMPRESS_DEFAULT)
+target_compile_definitions(scylla PRIVATE HAVE_LZ4_COMPRESS_DEFAULT)
 
 target_include_directories(scylla PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${scylla_gen_build_dir}")
 
-###
-### Generate version file and supply appropriate compile definitions for release.cc
-###
-execute_process(COMMAND ${CMAKE_SOURCE_DIR}/SCYLLA-VERSION-GEN --output-dir "${CMAKE_BINARY_DIR}/gen" RESULT_VARIABLE scylla_version_gen_res)
-if(scylla_version_gen_res)
-    message(SEND_ERROR "Version file generation failed. Return code: ${scylla_version_gen_res}")
-endif()
-
-file(READ "${CMAKE_BINARY_DIR}/gen/SCYLLA-VERSION-FILE" scylla_version)
-string(STRIP "${scylla_version}" scylla_version)
-
-file(READ "${CMAKE_BINARY_DIR}/gen/SCYLLA-RELEASE-FILE" scylla_release)
-string(STRIP "${scylla_release}" scylla_release)
-
-get_property(release_cdefs SOURCE "${CMAKE_SOURCE_DIR}/release.cc" PROPERTY COMPILE_DEFINITIONS)
-list(APPEND release_cdefs "SCYLLA_VERSION=\"${scylla_version}\"" "SCYLLA_RELEASE=\"${scylla_release}\"")
-set_source_files_properties("${CMAKE_SOURCE_DIR}/release.cc" PROPERTIES COMPILE_DEFINITIONS "${release_cdefs}")
 
 # TODO: create cmake/ directory and move utilities (generate functions etc) there
 # TODO: Build tests if BUILD_TESTING=on (using CTest module)
