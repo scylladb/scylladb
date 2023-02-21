@@ -11,6 +11,7 @@
 #include "replica/database.hh"
 #include "db/view/view_builder.hh"
 #include "db/view/view_updating_consumer.hh"
+#include "db/view/view_update_generator.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_keyspace_view_types.hh"
 #include "db/config.hh"

@@ -9,6 +9,7 @@
 #include <seastar/core/coroutine.hh>
 
 #include "consumer.hh"
+#include "replica/database.hh"
 #include "mutation/mutation_source_metadata.hh"
 #include "service/priority_manager.hh"
 #include "db/view/view_update_generator.hh"

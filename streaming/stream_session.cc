@@ -31,7 +31,7 @@
 #include "db/view/view_update_checks.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptor/map.hpp>
-#include "../db/view/view_update_generator.hh"
+#include "replica/database.hh"
 #include "mutation/mutation_source_metadata.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "consumer.hh"
