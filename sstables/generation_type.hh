@@ -12,43 +12,48 @@
 #include <compare>
 #include <limits>
 #include <iostream>
+#include <variant>
 #include <seastar/core/sstring.hh>
+#include "utils/UUID.hh"
 
 namespace sstables {
 
-class generation_type {
-    int64_t _value;
-public:
+struct generation_type {
+    using impl_type = std::variant<int64_t, utils::UUID>;
+    impl_type value;
+
     generation_type() = delete;
 
-    explicit constexpr generation_type(int64_t value) noexcept: _value(value) {}
-    constexpr int64_t value() const noexcept { return _value; }
+    constexpr generation_type(const generation_type& gen) noexcept = default;
+    constexpr generation_type& operator=(const generation_type& gen) noexcept = default;
 
-    constexpr bool operator==(const generation_type& other) const noexcept { return _value == other._value; }
-    constexpr std::strong_ordering operator<=>(const generation_type& other) const noexcept { return _value <=> other._value; }
+    template <typename T>
+    explicit constexpr generation_type(const T& _value) noexcept: value(_value) {}
+
+    constexpr std::strong_ordering operator<=>(const generation_type& other) const noexcept = default;
 };
 
-constexpr generation_type generation_from_value(int64_t value) {
-    return generation_type{value};
+inline auto generation_value(const generation_type& generation) {
+    assert(false && "unimplemented"); // TODO(JS): implement
+    return 0;
 }
-constexpr int64_t generation_value(generation_type generation) {
-    return generation.value();
+
+template <typename T>
+generation_type generation_from_value(const T& v) noexcept {
+    return generation_type{v};
 }
 
 } //namespace sstables
 
 namespace seastar {
-template <typename string_type = sstring>
-string_type to_sstring(sstables::generation_type generation) {
-    return to_sstring(sstables::generation_value(generation));
-}
+sstring to_sstring(const sstables::generation_type& gen);
 } //namespace seastar
 
 namespace std {
 template <>
 struct hash<sstables::generation_type> {
     size_t operator()(const sstables::generation_type& generation) const noexcept {
-        return hash<int64_t>{}(generation.value());
+        return hash<sstables::generation_type::impl_type>{}(generation.value);
     }
 };
 
@@ -63,7 +68,7 @@ struct numeric_limits<sstables::generation_type> : public numeric_limits<int64_t
     }
 };
 
-[[maybe_unused]] static ostream& operator<<(ostream& s, const sstables::generation_type& generation) {
-    return s << generation.value();
+[[maybe_unused]] inline ostream& operator<<(ostream& s, const sstables::generation_type& generation) {
+     return s << to_sstring(generation);
 }
 } //namespace std
