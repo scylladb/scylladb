@@ -2282,6 +2282,11 @@ future<> sstable::change_state(sstring to, delayed_commit_changes* delay_commit)
     co_await _storage.change_state(*this, to, _generation, delay_commit);
 }
 
+future<> sstable::pick_up_from_upload(sstring to, generation_type new_generation) {
+    co_await _storage.change_state(*this, to, new_generation, nullptr);
+    _generation = std::move(new_generation);
+}
+
 future<> sstable::delayed_commit_changes::commit() {
     return parallel_for_each(_dirs, [] (sstring dir) {
         return sync_directory(dir);
