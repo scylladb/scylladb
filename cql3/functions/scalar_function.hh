@@ -10,26 +10,13 @@
 
 #pragma once
 
-#include "bytes.hh"
-#include "function.hh"
-#include <vector>
+#include "db/functions/scalar_function.hh"
 
 namespace cql3 {
 
 namespace functions {
 
-class scalar_function : public virtual function {
-public:
-    /**
-     * Applies this function to the specified parameter.
-     *
-     * @param parameters the input parameters
-     * @return the result of applying this function to the parameter
-     * @throws InvalidRequestException if this function cannot not be applied to the parameter
-     */
-    virtual bytes_opt execute(const std::vector<bytes_opt>& parameters) = 0;
-};
-
+using scalar_function = db::functions::scalar_function;
 
 }
 }
