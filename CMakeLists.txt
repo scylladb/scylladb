@@ -384,7 +384,8 @@ target_link_libraries(scylla PRIVATE
     snappy
     ${LUA_LIBRARIES}
     thrift
-    crypt)
+    crypt
+    xxHash::xxhash)
 
 target_link_libraries(scylla PRIVATE
     -Wl,--build-id=sha1 # Force SHA1 build-id generation
@@ -392,8 +393,7 @@ target_link_libraries(scylla PRIVATE
     -fuse-ld=lld)
 # TODO: patch dynamic linker to match configure.py behavior
 
-# Hacks needed to expose internal APIs for xxhash dependencies
-target_compile_definitions(scylla PRIVATE XXH_PRIVATE_API HAVE_LZ4_COMPRESS_DEFAULT)
+target_compile_definitions(scylla PRIVATE HAVE_LZ4_COMPRESS_DEFAULT)
 
 target_include_directories(scylla PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
