@@ -35,29 +35,6 @@ public:
         return tr != test_result::EXACT_MATCH;
     }
 
-    // Test all elements of toTest for assignment. If all are exact match, return exact match. If any is not assignable,
-    // return not assignable. Otherwise, return weakly assignable.
-    template <typename AssignmentTestablePtrRange>
-    static test_result test_all(data_dictionary::database db, const sstring& keyspace, const column_specification& receiver,
-                AssignmentTestablePtrRange&& to_test) {
-        test_result res = test_result::EXACT_MATCH;
-        for (auto&& rt : to_test) {
-            if (rt == nullptr) {
-                res = test_result::WEAKLY_ASSIGNABLE;
-                continue;
-            }
-
-            test_result t = rt->test_assignment(db, keyspace, receiver);
-            if (t == test_result::NOT_ASSIGNABLE) {
-                return test_result::NOT_ASSIGNABLE;
-            }
-            if (t == test_result::WEAKLY_ASSIGNABLE) {
-                res = test_result::WEAKLY_ASSIGNABLE;
-            }
-        }
-        return res;
-    }
-
     /**
      * @return whether this object can be assigned to the provided receiver. We distinguish
      * between 3 values: 
