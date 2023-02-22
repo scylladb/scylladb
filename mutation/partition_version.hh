@@ -109,6 +109,7 @@ class partition_version_ref;
 
 class partition_version : public anchorless_list_base_hook<partition_version> {
     partition_version_ref* _backref = nullptr;
+    schema_ptr _schema;
     mutation_partition_v2 _partition;
 
     friend class partition_version_ref;
@@ -120,9 +121,18 @@ public:
     }
 
     explicit partition_version(schema_ptr s) noexcept
-        : _partition(*s) { }
-    explicit partition_version(mutation_partition_v2 mp) noexcept
-        : _partition(std::move(mp)) { }
+        : _schema(std::move(s))
+        , _partition(*_schema)
+    {
+        assert(_schema);
+    }
+    explicit partition_version(mutation_partition_v2 mp, schema_ptr s) noexcept
+        : _schema(std::move(s))
+        , _partition(std::move(mp))
+    {
+        assert(_schema);
+    }
+
     partition_version(partition_version&& pv) noexcept;
     partition_version& operator=(partition_version&& pv) noexcept;
     ~partition_version();
@@ -138,7 +148,9 @@ public:
     bool is_referenced_from_entry() const;
     partition_version_ref& back_reference() const { return *_backref; }
 
-    size_t size_in_allocator(const schema& s, allocation_strategy& allocator) const;
+    size_t size_in_allocator(allocation_strategy& allocator) const;
+
+    const schema_ptr& get_schema() const noexcept { return _schema; }
 };
 
 using partition_version_range = anchorless_list_base_hook<partition_version>::range;
@@ -439,7 +451,7 @@ public:
     // Constructs a non-evictable entry holding empty partition
     partition_entry() = default;
     // Constructs a non-evictable entry
-    explicit partition_entry(mutation_partition_v2);
+    partition_entry(const schema&, mutation_partition_v2);
     partition_entry(const schema&, mutation_partition);
     // Returns a reference to partition_entry containing given pv,
     // assuming pv.is_referenced_from_entry().
@@ -592,6 +604,8 @@ public:
     // needs to be called with reclaiming disabled
     // Must not be called when is_locked().
     void upgrade(schema_ptr from, schema_ptr to, mutation_cleaner&, cache_tracker*);
+
+    const schema_ptr& get_schema() const noexcept { return _version->get_schema(); }
 
     // Snapshots with different values of phase will point to different partition_version objects.
     // When is_locked(), read() can only be called with a phase which is <= the phase of the current snapshot.
