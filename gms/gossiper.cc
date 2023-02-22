@@ -444,7 +444,7 @@ future<> gossiper::handle_shutdown_msg(inet_address from, std::optional<int64_t>
     if (generation_number_opt) {
         auto es = this->get_endpoint_state_for_endpoint_ptr(from);
         if (es) {
-            int local_generation = es->get_heart_beat_state().get_generation();
+            auto local_generation = es->get_heart_beat_state().get_generation();
             logger.info("Got shutdown message from {}, received_generation={}, local_generation={}",
                     from, generation_number_opt.value(), local_generation);
             if (local_generation != generation_number_opt.value()) {
@@ -565,8 +565,8 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, const endpoint
     auto es = this->get_endpoint_state_for_endpoint_ptr(node);
     if (es) {
         endpoint_state& local_state = *es;
-        int local_generation = local_state.get_heart_beat_state().get_generation();
-        int remote_generation = remote_state.get_heart_beat_state().get_generation();
+        auto local_generation = local_state.get_heart_beat_state().get_generation();
+        auto remote_generation = remote_state.get_heart_beat_state().get_generation();
         logger.trace("{} local generation {}, remote generation {}", node, local_generation, remote_generation);
         if (remote_generation > utils::get_generation_number() + MAX_GENERATION_DIFFERENCE) {
             // assume some peer has corrupted memory and is broadcasting an unbelievable generation about another peer (or itself)
@@ -1073,7 +1073,7 @@ std::set<inet_address> gossiper::get_unreachable_members() const {
 }
 
 version_type gossiper::get_max_endpoint_state_version(endpoint_state state) const noexcept {
-    int max_version = state.get_heart_beat_state().get_heart_beat_version();
+    auto max_version = state.get_heart_beat_state().get_heart_beat_version();
     for (auto& entry : state.get_application_state_map()) {
         auto& value = entry.second;
         max_version = std::max(max_version, value.version);
@@ -1161,7 +1161,7 @@ future<> gossiper::replicate(inet_address ep, application_state key, const versi
 future<> gossiper::advertise_removing(inet_address endpoint, locator::host_id host_id, locator::host_id local_host_id) {
     auto& state = get_endpoint_state(endpoint);
     // remember this node's generation
-    int generation = state.get_heart_beat_state().get_generation();
+    auto generation = state.get_heart_beat_state().get_generation();
     logger.info("Removing host: {}", host_id);
     auto ring_delay = std::chrono::milliseconds(_gcfg.ring_delay_ms);
     logger.info("Sleeping for {}ms to ensure {} does not change", ring_delay.count(), endpoint);
@@ -1220,8 +1220,8 @@ future<> gossiper::assassinate_endpoint(sstring address) {
                     throw std::runtime_error(format("Unable to calculate tokens for {}", endpoint));
                 }
 
-                int generation = ep_state.get_heart_beat_state().get_generation();
-                int heartbeat = ep_state.get_heart_beat_state().get_heart_beat_version();
+                auto generation = ep_state.get_heart_beat_state().get_generation();
+                auto heartbeat = ep_state.get_heart_beat_state().get_heart_beat_version();
                 auto ring_delay = std::chrono::milliseconds(gossiper._gcfg.ring_delay_ms);
                 logger.info("Sleeping for {} ms to ensure {} does not change", ring_delay.count(), endpoint);
                 // make sure it did not change
@@ -1253,13 +1253,13 @@ future<> gossiper::assassinate_endpoint(sstring address) {
     });
 }
 
-future<int> gossiper::get_current_generation_number(inet_address endpoint) {
+future<generation_type> gossiper::get_current_generation_number(inet_address endpoint) {
     return container().invoke_on(0, [endpoint] (auto&& gossiper) {
         return gossiper.get_endpoint_state(endpoint).get_heart_beat_state().get_generation();
     });
 }
 
-future<int> gossiper::get_current_heart_beat_version(inet_address endpoint) {
+future<version_type> gossiper::get_current_heart_beat_version(inet_address endpoint) {
     return container().invoke_on(0, [endpoint] (auto&& gossiper) {
         return gossiper.get_endpoint_state(endpoint).get_heart_beat_state().get_heart_beat_version();
     });
@@ -1411,7 +1411,7 @@ std::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_a
              * than the version passed in. In this case we also send the old
              * heart beat and throw it away on the receiver if it is redundant.
             */
-        int local_hb_version = eps.get_heart_beat_state().get_heart_beat_version();
+        auto local_hb_version = eps.get_heart_beat_state().get_heart_beat_version();
         if (local_hb_version > version) {
             reqd_endpoint_state.emplace(eps.get_heart_beat_state());
             logger.trace("local heartbeat version {} greater than {} for {}", local_hb_version, version, for_endpoint);
@@ -1460,13 +1460,13 @@ void gossiper::update_timestamp_for_nodes(const std::map<inet_address, endpoint_
         auto* local_endpoint_state = get_endpoint_state_for_endpoint_ptr(endpoint);
         if (local_endpoint_state) {
             bool update = false;
-            int local_generation = local_endpoint_state->get_heart_beat_state().get_generation();
-            int remote_generation = remote_endpoint_state.get_heart_beat_state().get_generation();
+            auto local_generation = local_endpoint_state->get_heart_beat_state().get_generation();
+            auto remote_generation = remote_endpoint_state.get_heart_beat_state().get_generation();
             if (remote_generation > local_generation) {
                 update = true;
             } else if (remote_generation == local_generation) {
                 auto local_version = get_max_endpoint_state_version(*local_endpoint_state);
-                int remote_version = remote_endpoint_state.get_heart_beat_state().get_heart_beat_version();
+                auto remote_version = remote_endpoint_state.get_heart_beat_state().get_heart_beat_version();
                 if (remote_version > local_version) {
                     update = true;
                 }
@@ -1496,7 +1496,7 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
 
     local_state.mark_dead();
     msg_addr id = get_msg_addr(addr);
-    int64_t generation = _endpoint_state_map[get_broadcast_address()].get_heart_beat_state().get_generation();
+    auto generation = _endpoint_state_map[get_broadcast_address()].get_heart_beat_state().get_generation();
     logger.debug("Sending a EchoMessage to {}, with generation_number={}", id, generation);
     // Do it in the background.
     (void)_messaging.send_gossip_echo(id, generation, std::chrono::milliseconds(15000)).then([this, addr] {
@@ -1781,7 +1781,7 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
              */
         if (es) {
             endpoint_state& ep_state_ptr = *es;
-            int local_generation = ep_state_ptr.get_heart_beat_state().get_generation();
+            auto local_generation = ep_state_ptr.get_heart_beat_state().get_generation();
             /* get the max version of all keys in the state associated with this endpoint */
             auto max_local_version = get_max_endpoint_state_version(ep_state_ptr);
             logger.trace("examine_gossiper(): ep={}, remote={}.{}, local={}.{}", ep,
@@ -2106,7 +2106,7 @@ future<> gossiper::do_stop_gossiping() {
             logger.info("My status = {}", get_gossip_status(*my_ep_state));
         }
         if (my_ep_state && !is_silent_shutdown_state(*my_ep_state)) {
-            int local_generation = my_ep_state->get_heart_beat_state().get_generation();
+            auto local_generation = my_ep_state->get_heart_beat_state().get_generation();
             logger.info("Announcing shutdown");
             add_local_application_state(application_state::STATUS, versioned_value::shutdown(true)).get();
             auto live_endpoints = _live_endpoints;

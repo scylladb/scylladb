@@ -21,24 +21,24 @@ namespace gms {
  */
 class heart_beat_state {
 private:
-    int32_t _generation;
-    int32_t _version;
+    generation_type _generation;
+    version_type _version;
 public:
     bool operator==(const heart_beat_state& other) const noexcept {
         return _generation == other._generation && _version == other._version;
     }
 
-    heart_beat_state(int32_t gen) noexcept
+    heart_beat_state(generation_type gen) noexcept
         : _generation(gen)
         , _version(0) {
     }
 
-    heart_beat_state(int32_t gen, int32_t ver) noexcept
+    heart_beat_state(generation_type gen, version_type ver) noexcept
         : _generation(gen)
         , _version(ver) {
     }
 
-    int32_t get_generation() const noexcept {
+    generation_type get_generation() const noexcept {
         return _generation;
     }
 
@@ -46,7 +46,7 @@ public:
         _version = version_generator::get_next_version();
     }
 
-    int32_t get_heart_beat_version() const noexcept {
+    version_type get_heart_beat_version() const noexcept {
         return _version;
     }
 
@@ -55,7 +55,7 @@ public:
     }
 
     void force_highest_possible_version_unsafe() noexcept {
-        _version = std::numeric_limits<int32_t>::max();
+        _version = std::numeric_limits<version_type>::max();
     }
 
     friend inline std::ostream& operator<<(std::ostream& os, const heart_beat_state& h) {
