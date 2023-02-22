@@ -1921,9 +1921,9 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
             auto m12_with_diff = m1;
             m12_with_diff.partition().apply(*s, m2.partition().difference(s, m1.partition()), app_stats);
             check_partitions_match(m12.partition(), m12_with_diff.partition(), *s);
-            check_partitions_match(mutation_partition{s}, m1.partition().difference(s, m1.partition()), *s);
-            check_partitions_match(m1.partition(), m1.partition().difference(s, mutation_partition{s}), *s);
-            check_partitions_match(mutation_partition{s}, mutation_partition{s}.difference(s, m1.partition()), *s);
+            check_partitions_match(mutation_partition{*s}, m1.partition().difference(s, m1.partition()), *s);
+            check_partitions_match(m1.partition(), m1.partition().difference(s, mutation_partition{*s}), *s);
+            check_partitions_match(mutation_partition{*s}, mutation_partition{*s}.difference(s, m1.partition()), *s);
         });
     });
 }

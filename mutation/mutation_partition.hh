@@ -1203,11 +1203,11 @@ public:
     static mutation_partition make_incomplete(const schema& s, tombstone t = {}) {
         return mutation_partition(incomplete_tag(), s, t);
     }
-    mutation_partition(schema_ptr s)
+    mutation_partition(const schema& s)
         : _rows()
-        , _row_tombstones(*s)
+        , _row_tombstones(s)
 #ifdef SEASTAR_DEBUG
-        , _schema_version(s->version())
+        , _schema_version(s.version())
 #endif
     { }
     mutation_partition(mutation_partition& other, copy_comparators_only)

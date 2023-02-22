@@ -1919,7 +1919,7 @@ bool row_marker::compact_and_expire(tombstone tomb, gc_clock::time_point now,
 mutation_partition mutation_partition::difference(schema_ptr s, const mutation_partition& other) const
 {
     check_schema(*s);
-    mutation_partition mp(s);
+    mutation_partition mp(*s);
     if (_tombstone > other._tombstone) {
         mp.apply(_tombstone);
     }
@@ -1979,7 +1979,7 @@ void mutation_partition::accept(const schema& s, mutation_partition_visitor& v) 
 void
 mutation_partition::upgrade(const schema& old_schema, const schema& new_schema) {
     // We need to copy to provide strong exception guarantees.
-    mutation_partition tmp(new_schema.shared_from_this());
+    mutation_partition tmp(new_schema);
     tmp.set_static_row_continuous(_static_row_continuous);
     converting_mutation_partition_applier v(old_schema.get_column_mapping(), new_schema, tmp);
     accept(old_schema, v);

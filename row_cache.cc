@@ -846,7 +846,7 @@ cache_entry& row_cache::find_or_create_incomplete(const partition_start& ps, row
 
 cache_entry& row_cache::find_or_create_missing(const dht::decorated_key& key) {
     return do_find_or_create_entry(key, nullptr, [&] (auto i, const partitions_type::bound_hint& hint) {
-        mutation_partition mp(_schema);
+        mutation_partition mp(*_schema);
         bool cont = i->continuous();
         partitions_type::iterator entry = _partitions.emplace_before(i, key.token().raw(), hint,
                 _schema, key, std::move(mp));
@@ -1035,7 +1035,7 @@ future<> row_cache::update(external_updater eu, replica::memtable& m) {
             // Partition is absent in underlying. First, insert a neutral partition entry.
             partitions_type::iterator entry = _partitions.emplace_before(cache_i, mem_e.key().token().raw(), hint,
                 cache_entry::evictable_tag(), _schema, dht::decorated_key(mem_e.key()),
-                partition_entry::make_evictable(*_schema, mutation_partition(_schema)));
+                partition_entry::make_evictable(*_schema, mutation_partition(*_schema)));
             entry->set_continuous(cache_i->continuous());
             _tracker.insert(*entry);
             mem_e.upgrade_schema(_schema, _tracker.memtable_cleaner());

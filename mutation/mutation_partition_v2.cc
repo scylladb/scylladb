@@ -510,7 +510,7 @@ mutation_partition_v2::apply_row_tombstone(const schema& schema, clustering_key_
 void
 mutation_partition_v2::apply_row_tombstone(const schema& schema, range_tombstone rt) {
     check_schema(schema);
-    mutation_partition mp(schema.shared_from_this());
+    mutation_partition mp(schema);
     mp.apply_row_tombstone(schema, std::move(rt));
     apply(schema, std::move(mp));
 }
@@ -919,7 +919,7 @@ void mutation_partition_v2::accept(const schema& s, mutation_partition_visitor& 
 void
 mutation_partition_v2::upgrade(const schema& old_schema, const schema& new_schema) {
     // We need to copy to provide strong exception guarantees.
-    mutation_partition tmp(new_schema.shared_from_this());
+    mutation_partition tmp(new_schema);
     tmp.set_static_row_continuous(_static_row_continuous);
     converting_mutation_partition_applier v(old_schema.get_column_mapping(), new_schema, tmp);
     accept(old_schema, v);
@@ -927,7 +927,7 @@ mutation_partition_v2::upgrade(const schema& old_schema, const schema& new_schem
 }
 
 mutation_partition mutation_partition_v2::as_mutation_partition(const schema& s) const {
-    mutation_partition tmp(s.shared_from_this());
+    mutation_partition tmp(s);
     tmp.set_static_row_continuous(_static_row_continuous);
     partition_builder v(s, tmp);
     accept(s, v);
