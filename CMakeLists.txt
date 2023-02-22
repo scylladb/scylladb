@@ -388,7 +388,7 @@ target_link_libraries(scylla PRIVATE
     xxHash::xxhash)
 
 # Force SHA1 build-id generation
-set(default_linker_flags "-Wl,--build-id=sha")
+set(default_linker_flags "-Wl,--build-id=sha1")
 include(CheckLinkerFlag)
 foreach(linker "lld" "gold")
     set(linker_flag "-fuse-ld=${linker}")
