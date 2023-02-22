@@ -36,43 +36,6 @@ find_package(xxHash REQUIRED)
 set(scylla_gen_build_dir "${CMAKE_BINARY_DIR}/gen")
 file(MAKE_DIRECTORY "${scylla_gen_build_dir}")
 
-# Generate C++ source files from thrift definitions
-function(scylla_generate_thrift)
-    set(one_value_args TARGET VAR IN_FILE OUT_DIR SERVICE)
-    cmake_parse_arguments(args "" "${one_value_args}" "" ${ARGN})
-
-    get_filename_component(in_file_name ${args_IN_FILE} NAME_WE)
-
-    set(aux_out_file_name ${args_OUT_DIR}/${in_file_name})
-    set(outputs
-        ${aux_out_file_name}_types.cpp
-        ${aux_out_file_name}_types.h
-        ${aux_out_file_name}_constants.cpp
-        ${aux_out_file_name}_constants.h
-        ${args_OUT_DIR}/${args_SERVICE}.cpp
-        ${args_OUT_DIR}/${args_SERVICE}.h)
-
-    add_custom_command(
-        DEPENDS
-            ${args_IN_FILE}
-            thrift
-        OUTPUT ${outputs}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${args_OUT_DIR}
-        COMMAND thrift -gen cpp:cob_style,no_skeleton -out "${args_OUT_DIR}" "${args_IN_FILE}")
-
-    add_custom_target(${args_TARGET}
-        DEPENDS ${outputs})
-
-    set(${args_VAR} ${outputs} PARENT_SCOPE)
-endfunction()
-
-scylla_generate_thrift(
-    TARGET scylla_thrift_gen_cassandra
-    VAR scylla_thrift_gen_cassandra_files
-    IN_FILE "${CMAKE_SOURCE_DIR}/interface/cassandra.thrift"
-    OUT_DIR ${scylla_gen_build_dir}
-    SERVICE Cassandra)
-
 
 set(scylla_sources
     absl-flat_hash_map.cc
@@ -287,15 +250,13 @@ set(scylla_sources
     validation.cc
     vint-serialization.cc
     zstd.cc)
-set(scylla_gen_sources
-    "${scylla_thrift_gen_cassandra_files}"
-    "${swagger_gen_files}")
 
 add_subdirectory(api)
 add_subdirectory(alternator)
 add_subdirectory(auth)
 add_subdirectory(cql3)
 add_subdirectory(idl)
+add_subdirectory(interface)
 add_subdirectory(redis)
 add_subdirectory(rust)
 add_subdirectory(schema)
@@ -308,7 +269,7 @@ add_version_library(scylla_version
     release.cc)
 add_executable(scylla
     ${scylla_sources}
-    ${scylla_gen_sources})
+    ${swagger_gen_files})
 
 target_link_libraries(scylla PRIVATE
     api
@@ -316,6 +277,7 @@ target_link_libraries(scylla PRIVATE
     alternator
     cql3
     idl
+    interface
     redis
     schema
     scylla_version
