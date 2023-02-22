@@ -34,4 +34,7 @@ target_link_libraries(test-perf
     wasmtime_bindings)
 
 add_subdirectory(lib)
-add_subdirectory(boost)
+
+if(BUILD_TESTING)
+    add_subdirectory(boost)
+endif()
