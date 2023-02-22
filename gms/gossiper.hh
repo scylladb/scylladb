@@ -284,7 +284,7 @@ public:
      * @param ep_state
      * @return
      */
-    int get_max_endpoint_state_version(endpoint_state state) const noexcept;
+    version_type get_max_endpoint_state_version(endpoint_state state) const noexcept;
 
 
 private:
@@ -404,7 +404,7 @@ public:
 
     std::set<gms::inet_address> get_nodes_with_host_id(locator::host_id host_id) const;
 
-    std::optional<endpoint_state> get_state_for_version_bigger_than(inet_address for_endpoint, int version);
+    std::optional<endpoint_state> get_state_for_version_bigger_than(inet_address for_endpoint, version_type version);
 
     /**
      * determine which endpoint started up earlier
@@ -458,10 +458,10 @@ private:
     future<> do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value);
     /* Request all the state for the endpoint in the g_digest */
 
-    void request_all(gossip_digest& g_digest, utils::chunked_vector<gossip_digest>& delta_gossip_digest_list, int remote_generation);
+    void request_all(gossip_digest& g_digest, utils::chunked_vector<gossip_digest>& delta_gossip_digest_list, generation_type remote_generation);
 
     /* Send all the data with version greater than max_remote_version */
-    void send_all(gossip_digest& g_digest, std::map<inet_address, endpoint_state>& delta_ep_state_map, int max_remote_version);
+    void send_all(gossip_digest& g_digest, std::map<inet_address, endpoint_state>& delta_ep_state_map, version_type max_remote_version);
 
 public:
     /*

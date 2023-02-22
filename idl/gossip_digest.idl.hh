@@ -7,6 +7,7 @@
  */
 
 #include "gms/inet_address_serializer.hh"
+#include "gms/version_generator.hh"
 
 namespace gms {
 enum class application_state:int {
@@ -29,7 +30,7 @@ enum class application_state:int {
 
 class versioned_value {
     sstring value();
-    int version();
+    gms::version_type version();
 };
 
 class heart_beat_state {

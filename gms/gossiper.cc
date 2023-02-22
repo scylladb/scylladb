@@ -154,8 +154,8 @@ void gossiper::do_sort(utils::chunked_vector<gossip_digest>& g_digest_list) {
     for (auto g_digest : g_digest_list) {
         auto ep = g_digest.get_endpoint();
         auto* ep_state = this->get_endpoint_state_for_endpoint_ptr(ep);
-        int version = ep_state ? this->get_max_endpoint_state_version(*ep_state) : 0;
-        int diff_version = ::abs(version - g_digest.get_max_version());
+        version_type version = ep_state ? this->get_max_endpoint_state_version(*ep_state) : version_type();
+        int32_t diff_version = ::abs(version.value() - g_digest.get_max_version());
         diff_digests.emplace_back(gossip_digest(ep, g_digest.get_generation(), diff_version));
     }
 
@@ -363,7 +363,7 @@ future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_
         std::map<inet_address, endpoint_state> delta_ep_state_map;
         for (auto g_digest : ack_msg_digest) {
             inet_address addr = g_digest.get_endpoint();
-            auto local_ep_state_ptr = this->get_state_for_version_bigger_than(addr, g_digest.get_max_version());
+            auto local_ep_state_ptr = this->get_state_for_version_bigger_than(addr, version_type(g_digest.get_max_version()));
             if (local_ep_state_ptr) {
                 delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
             }
@@ -583,8 +583,8 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, const endpoint
         } else if (remote_generation == local_generation) {
             if (listener_notification) {
                 // find maximum state
-                int local_max_version = this->get_max_endpoint_state_version(local_state);
-                int remote_max_version = this->get_max_endpoint_state_version(remote_state);
+                auto local_max_version = this->get_max_endpoint_state_version(local_state);
+                auto remote_max_version = this->get_max_endpoint_state_version(remote_state);
                 if (remote_max_version > local_max_version) {
                     // apply states, but do not notify since there is no major change
                     co_await this->apply_new_states(node, local_state, remote_state);
@@ -1092,8 +1092,8 @@ std::set<inet_address> gossiper::get_unreachable_members() const {
     return ret;
 }
 
-int gossiper::get_max_endpoint_state_version(endpoint_state state) const noexcept {
-    int max_version = state.get_heart_beat_state().get_heart_beat_version();
+version_type gossiper::get_max_endpoint_state_version(endpoint_state state) const noexcept {
+    auto max_version = version_type(state.get_heart_beat_state().get_heart_beat_version());
     for (auto& entry : state.get_application_state_map()) {
         auto& value = entry.second;
         max_version = std::max(max_version, value.version());
@@ -1122,7 +1122,7 @@ void gossiper::quarantine_endpoint(inet_address endpoint, clk::time_point quaran
 
 void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests) {
     int generation = 0;
-    int max_version = 0;
+    version_type max_version;
 
     // local epstate will be part of _endpoint_state_map
     utils::chunked_vector<inet_address> endpoints;
@@ -1137,7 +1137,7 @@ void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g
             generation = eps.get_heart_beat_state().get_generation();
             max_version = get_max_endpoint_state_version(eps);
         }
-        g_digests.push_back(gossip_digest(endpoint, generation, max_version));
+        g_digests.push_back(gossip_digest(endpoint, generation, max_version.value()));
     }
 #if 0
     if (logger.isTraceEnabled()) {
@@ -1418,7 +1418,7 @@ std::set<gms::inet_address> gossiper::get_nodes_with_host_id(locator::host_id ho
     return nodes;
 }
 
-std::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_address for_endpoint, int version) {
+std::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_address for_endpoint, version_type version) {
     std::optional<endpoint_state> reqd_endpoint_state;
     auto es = get_endpoint_state_for_endpoint_ptr(for_endpoint);
     if (es) {
@@ -1431,7 +1431,7 @@ std::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_a
              * than the version passed in. In this case we also send the old
              * heart beat and throw it away on the receiver if it is redundant.
             */
-        int local_hb_version = eps.get_heart_beat_state().get_heart_beat_version();
+        auto local_hb_version = version_type(eps.get_heart_beat_state().get_heart_beat_version());
         if (local_hb_version > version) {
             reqd_endpoint_state.emplace(eps.get_heart_beat_state());
             logger.trace("local heartbeat version {} greater than {} for {}", local_hb_version, version, for_endpoint);
@@ -1485,9 +1485,9 @@ void gossiper::update_timestamp_for_nodes(const std::map<inet_address, endpoint_
             if (remote_generation > local_generation) {
                 update = true;
             } else if (remote_generation == local_generation) {
-                int local_version = get_max_endpoint_state_version(*local_endpoint_state);
+                auto local_version = get_max_endpoint_state_version(*local_endpoint_state);
                 int remote_version = remote_endpoint_state.get_heart_beat_state().get_heart_beat_version();
-                if (remote_version > local_version) {
+                if (version_type(remote_version) > local_version) {
                     update = true;
                 }
             }
@@ -1757,15 +1757,15 @@ future<> gossiper::do_on_change_notifications(inet_address addr, const applicati
 }
 
 void gossiper::request_all(gossip_digest& g_digest,
-    utils::chunked_vector<gossip_digest>& delta_gossip_digest_list, int remote_generation) {
+    utils::chunked_vector<gossip_digest>& delta_gossip_digest_list, generation_type remote_generation) {
     /* We are here since we have no data for this endpoint locally so request everthing. */
-    delta_gossip_digest_list.emplace_back(g_digest.get_endpoint(), remote_generation, 0);
+    delta_gossip_digest_list.emplace_back(g_digest.get_endpoint(), remote_generation.value(), 0);
     logger.trace("request_all for {}", g_digest.get_endpoint());
 }
 
 void gossiper::send_all(gossip_digest& g_digest,
     std::map<inet_address, endpoint_state>& delta_ep_state_map,
-    int max_remote_version) {
+    version_type max_remote_version) {
     auto ep = g_digest.get_endpoint();
     logger.trace("send_all(): ep={}, version > {}", ep, max_remote_version);
     auto local_ep_state_ptr = get_state_for_version_bigger_than(ep, max_remote_version);
@@ -1789,8 +1789,8 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
         }
     }
     for (gossip_digest& g_digest : g_digest_list) {
-        int remote_generation = g_digest.get_generation();
-        int max_remote_version = g_digest.get_max_version();
+        auto remote_generation = generation_type(g_digest.get_generation());
+        auto max_remote_version = version_type(g_digest.get_max_version());
         /* Get state associated with the end point in digest */
         auto&& ep = g_digest.get_endpoint();
         auto es = get_endpoint_state_for_endpoint_ptr(ep);
@@ -1801,9 +1801,9 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
              */
         if (es) {
             endpoint_state& ep_state_ptr = *es;
-            int local_generation = ep_state_ptr.get_heart_beat_state().get_generation();
+            auto local_generation = generation_type(ep_state_ptr.get_heart_beat_state().get_generation());
             /* get the max version of all keys in the state associated with this endpoint */
-            int max_local_version = get_max_endpoint_state_version(ep_state_ptr);
+            auto max_local_version = get_max_endpoint_state_version(ep_state_ptr);
             logger.trace("examine_gossiper(): ep={}, remote={}.{}, local={}.{}", ep,
                 remote_generation, max_remote_version, local_generation, max_local_version);
             if (remote_generation == local_generation && max_remote_version == max_local_version) {
@@ -1815,7 +1815,7 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
                 request_all(g_digest, delta_gossip_digest_list, remote_generation);
             } else if (remote_generation < local_generation) {
                 /* send all data with generation = localgeneration and version > 0 */
-                send_all(g_digest, delta_ep_state_map, 0);
+                send_all(g_digest, delta_ep_state_map, version_type());
             } else if (remote_generation == local_generation) {
                 /*
                  * If the max remote version is greater then we request the
@@ -1829,7 +1829,7 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
                  */
                 if (max_remote_version > max_local_version) {
                     logger.trace("examine_gossiper(): requesting version > {} from {}", max_local_version, g_digest.get_endpoint());
-                    delta_gossip_digest_list.emplace_back(g_digest.get_endpoint(), remote_generation, max_local_version);
+                    delta_gossip_digest_list.emplace_back(g_digest.get_endpoint(), remote_generation.value(), max_local_version.value());
                 } else if (max_remote_version < max_local_version) {
                     /* send all data with generation = localgeneration and version > max_remote_version */
                     send_all(g_digest, delta_ep_state_map, max_remote_version);

@@ -36,7 +36,7 @@ namespace gms {
  */
 
 class versioned_value {
-    int _version;
+    version_type _version;
     sstring _value;
 public:
     // this must be a char that cannot be present in any token
@@ -60,7 +60,7 @@ public:
     // values for ApplicationState.REMOVAL_COORDINATOR
     static constexpr const char* REMOVAL_COORDINATOR = "REMOVER";
 
-    int version() const noexcept { return _version; };
+    version_type version() const noexcept { return _version; };
     const sstring& value() const noexcept { return _value; };
 public:
     bool operator==(const versioned_value& other) const noexcept {
@@ -69,7 +69,7 @@ public:
     }
 
 public:
-    versioned_value(const sstring& value, int version = version_generator::get_next_version().value())
+    versioned_value(const sstring& value, version_type version = version_generator::get_next_version())
         : _version(version), _value(value) {
 #if 0
         // blindly interning everything is somewhat suboptimal -- lots of VersionedValues are unique --
@@ -80,7 +80,7 @@ public:
 #endif
     }
 
-    versioned_value(sstring&& value, int version = version_generator::get_next_version().value()) noexcept
+    versioned_value(sstring&& value, version_type version = version_generator::get_next_version()) noexcept
         : _version(version), _value(std::move(value)) {
     }
 

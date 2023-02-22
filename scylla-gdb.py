@@ -4028,16 +4028,27 @@ class scylla_netw(gdb.Command):
                     gdb.write('   %s\n' % (conn['_stats']))
 
 
+def get_tagged_integer_type(i):
+    try:
+        return i['_value']
+    except gdb.error:
+        return i
+
+
+def get_gms_generation_or_version(i):
+    return get_tagged_integer_type(i)
+
+
 def get_gms_versioned_value(vv):
     try:
         return {
-            'version': vv['_version'],
-            'value': vv['_value']
+            'version': get_gms_generation_or_version(vv['_version']),
+            'value': vv['_value'],
         }
     except gdb.error:
         return {
             'version': vv['version'],
-            'value': vv['value']
+            'value': vv['value'],
         }
 
 
