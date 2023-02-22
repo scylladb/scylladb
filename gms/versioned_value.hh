@@ -58,7 +58,7 @@ public:
     // values for ApplicationState.REMOVAL_COORDINATOR
     static constexpr const char* REMOVAL_COORDINATOR = "REMOVER";
 
-    int version;
+    version_type version;
     sstring value;
 public:
     bool operator==(const versioned_value& other) const noexcept {
@@ -67,7 +67,7 @@ public:
     }
 
 public:
-    versioned_value(const sstring& value, int version = version_generator::get_next_version())
+    versioned_value(const sstring& value, version_type version = version_generator::get_next_version())
         : version(version), value(value) {
 #if 0
         // blindly interning everything is somewhat suboptimal -- lots of VersionedValues are unique --
@@ -78,7 +78,7 @@ public:
 #endif
     }
 
-    versioned_value(sstring&& value, int version = version_generator::get_next_version()) noexcept
+    versioned_value(sstring&& value, version_type version = version_generator::get_next_version()) noexcept
         : version(version), value(std::move(value)) {
     }
 
