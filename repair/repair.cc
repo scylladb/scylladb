@@ -588,16 +588,16 @@ shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::module_ptr m
 { }
 
 void shard_repair_task_impl::check_failed_ranges() {
-    rlogger.info("repair[{}]: shard {} stats: repair_reason={}, keyspace={}, tables={}, ranges_nr={}, {}",
-        id.uuid(), id.shard(), _reason, _status.keyspace, table_names(), ranges.size(), _stats.get_stats());
+    rlogger.info("repair[{}]: stats: repair_reason={}, keyspace={}, tables={}, ranges_nr={}, {}",
+        id.uuid(), _reason, _status.keyspace, table_names(), ranges.size(), _stats.get_stats());
     if (nr_failed_ranges) {
-        rlogger.warn("repair[{}]: shard {} failed - {} out of {} ranges failed", id.uuid(), id.shard(), nr_failed_ranges, ranges_size());
-        throw std::runtime_error(format("repair[{}] on shard {} failed to repair {} out of {} ranges", id.uuid(), id.shard(), nr_failed_ranges, ranges_size()));
+        rlogger.warn("repair[{}]: failed - {} out of {} ranges failed", id.uuid(), nr_failed_ranges, ranges_size());
+        throw std::runtime_error(format("repair[{}] on failed to repair {} out of {} ranges", id.uuid(), nr_failed_ranges, ranges_size()));
     } else {
         if (dropped_tables.size()) {
-            rlogger.warn("repair[{}]: shard {} completed successfully, keyspace={}, ignoring dropped tables={}", id.uuid(), id.shard(), _status.keyspace, dropped_tables);
+            rlogger.warn("repair[{}]: completed successfully, keyspace={}, ignoring dropped tables={}", id.uuid(), _status.keyspace, dropped_tables);
         } else {
-            rlogger.info("repair[{}]: shard {} completed successfully, keyspace={}", id.uuid(), id.shard(), _status.keyspace);
+            rlogger.info("repair[{}]: completed successfully, keyspace={}", id.uuid(), _status.keyspace);
         }
     }
 }
@@ -631,8 +631,8 @@ future<> shard_repair_task_impl::repair_range(const dht::token_range& range, ::t
         if (it == live_neighbors.end()) {
             nr_failed_ranges++;
             auto status = format("failed: mandatory neighbor={} is not alive", node);
-            rlogger.error("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-                    id.uuid(), ranges_index, ranges_size(), id.shard(), _status.keyspace, table_names(), range, neighbors, live_neighbors, status);
+            rlogger.error("repair[{}]: Repair {} out of {} ranges, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
+                    id.uuid(), ranges_index, ranges_size(), _status.keyspace, table_names(), range, neighbors, live_neighbors, status);
             // If the task is aborted, its state will change to failed. One can wait for this with task_manager::task::done().
             (void)abort();
             co_await coroutine::return_exception(std::runtime_error(format("Repair mandatory neighbor={} is not alive, keyspace={}, mandatory_neighbors={}",
@@ -642,8 +642,8 @@ future<> shard_repair_task_impl::repair_range(const dht::token_range& range, ::t
     if (live_neighbors.size() != neighbors.size()) {
         nr_failed_ranges++;
         auto status = live_neighbors.empty() ? "skipped" : "partial";
-        rlogger.warn("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-                id.uuid(), ranges_index, ranges_size(), id.shard(), _status.keyspace, table_names(), range, neighbors, live_neighbors, status);
+        rlogger.warn("repair[{}]: Repair {} out of {} ranges, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
+                id.uuid(), ranges_index, ranges_size(), _status.keyspace, table_names(), range, neighbors, live_neighbors, status);
         if (live_neighbors.empty()) {
             co_return;
         }
@@ -651,12 +651,12 @@ future<> shard_repair_task_impl::repair_range(const dht::token_range& range, ::t
     }
     if (neighbors.empty()) {
         auto status = "skipped_no_followers";
-        rlogger.warn("repair[{}]: Repair {} out of {} ranges,  shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-                id.uuid(), ranges_index, ranges_size(), id.shard(), _status.keyspace, table_names(), range, neighbors, live_neighbors, status);
+        rlogger.warn("repair[{}]: Repair {} out of {} ranges,  keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
+                id.uuid(), ranges_index, ranges_size(), _status.keyspace, table_names(), range, neighbors, live_neighbors, status);
         co_return;
     }
-    rlogger.debug("repair[{}]: Repair {} out of {} ranges, shard={}, keyspace={}, table={}, range={}, peers={}, live_peers={}",
-        id.uuid(), ranges_index, ranges_size(), id.shard(), _status.keyspace, table_names(), range, neighbors, live_neighbors);
+    rlogger.debug("repair[{}]: Repair {} out of {} ranges, keyspace={}, table={}, range={}, peers={}, live_peers={}",
+        id.uuid(), ranges_index, ranges_size(), _status.keyspace, table_names(), range, neighbors, live_neighbors);
     co_await mm.sync_schema(db.local(), neighbors);
     sstring cf;
     try {
