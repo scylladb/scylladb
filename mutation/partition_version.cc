@@ -34,6 +34,7 @@ static void remove_or_mark_as_unique_owner(partition_version* current, mutation_
 partition_version::partition_version(partition_version&& pv) noexcept
     : anchorless_list_base_hook(std::move(pv))
     , _backref(pv._backref)
+    , _schema(std::move(pv._schema))
     , _partition(std::move(pv._partition))
 {
     if (_backref) {
@@ -56,15 +57,20 @@ partition_version::~partition_version()
     if (_backref) {
         _backref->_version = nullptr;
     }
+    with_allocator(standard_allocator(), [&] {
+        // Destroying the schema_ptr can cause a destruction of the schema,
+        // so it has to happen in the allocator which schemas are allocated in.
+        _schema = nullptr;
+    });
 }
 
 stop_iteration partition_version::clear_gently(cache_tracker* tracker) noexcept {
     return _partition.clear_gently(tracker);
 }
 
-size_t partition_version::size_in_allocator(const schema& s, allocation_strategy& allocator) const {
+size_t partition_version::size_in_allocator(allocation_strategy& allocator) const {
     return allocator.object_memory_size_in_allocator(this) +
-           partition().external_memory_usage(s);
+           partition().external_memory_usage(*_schema);
 }
 
 namespace {
@@ -238,18 +244,18 @@ unsigned partition_snapshot::version_count()
     return count;
 }
 
-partition_entry::partition_entry(mutation_partition_v2 mp)
+partition_entry::partition_entry(const schema& s, mutation_partition_v2 mp)
 {
-    auto new_version = current_allocator().construct<partition_version>(std::move(mp));
+    auto new_version = current_allocator().construct<partition_version>(std::move(mp), s.shared_from_this());
     _version = partition_version_ref(*new_version);
 }
 
 partition_entry::partition_entry(const schema& s, mutation_partition mp)
-    : partition_entry(mutation_partition_v2(s, std::move(mp)))
+    : partition_entry(s, mutation_partition_v2(s, std::move(mp)))
 { }
 
 partition_entry::partition_entry(partition_entry::evictable_tag, const schema& s, mutation_partition&& mp)
-    : partition_entry([&] {
+    : partition_entry(s, [&] {
         mp.ensure_last_dummy(s);
         return mutation_partition_v2(s, std::move(mp));
     }())
@@ -328,8 +334,8 @@ partition_version& partition_entry::add_version(const schema& s, cache_tracker* 
     // to stay around (with tombstones and static rows) after fully evicted.
     // Such versions must be fully discontinuous, and thus have a dummy at the end.
     auto new_version = tracker
-                       ? current_allocator().construct<partition_version>(mutation_partition_v2::make_incomplete(s))
-                       : current_allocator().construct<partition_version>(mutation_partition_v2(s));
+                       ? current_allocator().construct<partition_version>(mutation_partition_v2::make_incomplete(s), s.shared_from_this())
+                       : current_allocator().construct<partition_version>(mutation_partition_v2(s), s.shared_from_this());
     new_version->partition().set_static_row_continuous(_version->partition().static_row_continuous());
     new_version->insert_before(*_version);
     set_version(new_version);
@@ -362,7 +368,7 @@ void partition_entry::apply(logalloc::region& r, mutation_cleaner& cleaner, cons
     if (s.version() != mp_schema.version()) {
         mp.upgrade(mp_schema, s);
     }
-    auto new_version = current_allocator().construct<partition_version>(std::move(mp));
+    auto new_version = current_allocator().construct<partition_version>(std::move(mp), s.shared_from_this());
     partition_snapshot_ptr snp; // Should die after new_version is inserted
     if (!_snapshot) {
         try {
@@ -568,7 +574,7 @@ mutation_partition partition_entry::squashed(const schema& s, is_evictable evict
 
 void partition_entry::upgrade(schema_ptr from, schema_ptr to, mutation_cleaner& cleaner, cache_tracker* tracker)
 {
-    auto new_version = current_allocator().construct<partition_version>(squashed(from, to, is_evictable(bool(tracker))));
+    auto new_version = current_allocator().construct<partition_version>(squashed(from, to, is_evictable(bool(tracker))), to);
     auto old_version = &*_version;
     set_version(new_version);
     if (tracker) {

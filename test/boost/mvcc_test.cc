@@ -221,7 +221,7 @@ mvcc_partition& mvcc_partition::operator+=(const mutation& m) {
 void mvcc_partition::apply(const mutation_partition& mp, schema_ptr mp_s) {
     with_allocator(region().allocator(), [&] {
         if (_evictable) {
-            apply_to_evictable(partition_entry(mutation_partition_v2(*mp_s, mp)), mp_s);
+            apply_to_evictable(partition_entry(*mp_s, mutation_partition_v2(*mp_s, mp)), mp_s);
         } else {
             logalloc::allocating_section as;
             as(region(), [&] {
@@ -249,7 +249,7 @@ mvcc_partition mvcc_container::make_not_evictable(const mutation_partition& mp) 
     return with_allocator(region().allocator(), [&] {
         logalloc::allocating_section as;
         return as(region(), [&] {
-            return mvcc_partition(_schema, partition_entry(mutation_partition_v2(*_schema, mp)), *this, false);
+            return mvcc_partition(_schema, partition_entry(*_schema, mutation_partition_v2(*_schema, mp)), *this, false);
         });
     });
 }
@@ -592,7 +592,7 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging_for_nonevictab
             {
                 mutation_application_stats app_stats;
                 logalloc::reclaim_lock rl(r);
-                auto e = partition_entry(mutation_partition_v2(*s, m3.partition()));
+                auto e = partition_entry(*s, mutation_partition_v2(*s, m3.partition()));
                 auto snap1 = e.read(r, cleaner, s, no_cache_tracker);
                 e.apply(r, cleaner, *s, m2.partition(), *s, app_stats);
                 auto snap2 = e.read(r, cleaner, s, no_cache_tracker);
@@ -1173,7 +1173,7 @@ public:
             , _tracker(t)
             , _r(r)
             , _e(_tracker ? partition_entry::make_evictable(*_schema, mutation_partition::make_incomplete(*_schema))
-                          : partition_entry(mutation_partition_v2(*_schema)))
+                          : partition_entry(*_schema, mutation_partition_v2(*_schema)))
     {
         if (_tracker) {
             _tracker->insert(_e);
@@ -1654,7 +1654,7 @@ SEASTAR_TEST_CASE(test_apply_is_atomic) {
             while (true) {
                 logalloc::reclaim_lock rl(r);
                 mutation_partition_v2 m2 = mutation_partition_v2(*second.schema(), second.partition());
-                auto e = partition_entry(mutation_partition_v2(*target.schema(), target.partition()));
+                auto e = partition_entry(*target.schema(), mutation_partition_v2(*target.schema(), target.partition()));
                 //auto snap1 = e.read(r, gen.schema());
 
                 alloc.fail_after(fail_offset++);
@@ -1703,7 +1703,7 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
             m3.partition().make_fully_continuous();
 
             {
-                auto e = partition_entry(mutation_partition_v2(*s, m1.partition()));
+                auto e = partition_entry(*s, mutation_partition_v2(*s, m1.partition()));
                 auto snap1 = e.read(r, cleaner, s, nullptr);
 
                 {
@@ -1724,7 +1724,7 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
             }
 
             {
-                auto e = partition_entry(mutation_partition_v2(*s, m1.partition()));
+                auto e = partition_entry(*s, mutation_partition_v2(*s, m1.partition()));
                 auto snap1 = e.read(r, cleaner, s, nullptr);
 
                 {
