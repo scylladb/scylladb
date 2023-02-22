@@ -86,8 +86,8 @@ public:
         : version(-1) {
     }
 
-    int compare_to(const versioned_value &value) const noexcept {
-        return version - value.version;
+    std::weak_ordering compare_to(const versioned_value &value) const noexcept {
+        return version <=> value.version;
     }
 
     friend inline std::ostream& operator<<(std::ostream& os, const versioned_value& x) {
