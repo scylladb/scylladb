@@ -74,13 +74,6 @@ scylla_generate_thrift(
     SERVICE Cassandra)
 
 
-# Generate C++ sources from ragel grammar files
-seastar_generate_ragel(
-    TARGET scylla_ragel_gen_protocol_parser
-    VAR scylla_ragel_gen_protocol_parser_file
-    IN_FILE "${CMAKE_SOURCE_DIR}/redis/protocol_parser.rl"
-    OUT_FILE ${scylla_gen_build_dir}/redis/protocol_parser.hh)
-
 set(scylla_sources
     absl-flat_hash_map.cc
     bytes.cc
@@ -218,19 +211,6 @@ set(scylla_sources
     tombstone_gc_options.cc
     tombstone_gc.cc
     reader_concurrency_semaphore.cc
-    redis/controller.cc
-    redis/server.cc
-    redis/query_processor.cc
-    redis/protocol_parser.rl
-    redis/keyspace_utils.cc
-    redis/options.cc
-    redis/stats.cc
-    redis/mutation_utils.cc
-    redis/query_utils.cc
-    redis/abstract_command.cc
-    redis/command_factory.cc
-    redis/commands.cc
-    redis/lolwut.cc
     repair/repair.cc
     repair/row_level.cc
     replica/database.cc
@@ -309,7 +289,6 @@ set(scylla_sources
     zstd.cc)
 set(scylla_gen_sources
     "${scylla_thrift_gen_cassandra_files}"
-    "${scylla_ragel_gen_protocol_parser_file}"
     "${swagger_gen_files}")
 
 add_subdirectory(api)
@@ -317,6 +296,7 @@ add_subdirectory(alternator)
 add_subdirectory(auth)
 add_subdirectory(cql3)
 add_subdirectory(idl)
+add_subdirectory(redis)
 add_subdirectory(rust)
 add_subdirectory(schema)
 add_subdirectory(sstables)
@@ -336,6 +316,7 @@ target_link_libraries(scylla PRIVATE
     alternator
     cql3
     idl
+    redis
     schema
     scylla_version
     sstables
