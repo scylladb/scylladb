@@ -8,6 +8,7 @@
 
 
 #include <boost/test/unit_test.hpp>
+#include "sstables/generation_type.hh"
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/thread.hh>
@@ -23,9 +24,7 @@ using namespace std::chrono_literals;
 
 SEASTAR_TEST_CASE(test_schema_changes) {
   return sstables::test_env::do_with_async([] (sstables::test_env& env) {
-    sstables::generation_type::int_t gen = 1;
-
-    std::map<std::tuple<sstables::sstable::version_types, schema_ptr>, std::tuple<shared_sstable, int>> cache;
+    std::map<std::tuple<sstables::sstable::version_types, schema_ptr>, shared_sstable> cache;
     for_each_schema_change([&] (schema_ptr base, const std::vector<mutation>& base_mutations,
                                 schema_ptr changed, const std::vector<mutation>& changed_mutations) {
         for (auto version : writable_sstable_versions) {
@@ -39,19 +38,14 @@ SEASTAR_TEST_CASE(test_schema_changes) {
                     mt->apply(m);
                 }
 
-                created_with_base_schema = make_sstable_easy(env, mt, env.manager().configure_writer(), gen, version, base_mutations.size());
+                created_with_base_schema = make_sstable_containing(env.make_sstable(base), mt);
 
-                created_with_changed_schema = env.make_sstable(changed, gen, version);
-                created_with_changed_schema->load().get();
-
-                cache.emplace(std::tuple { version, base }, std::tuple { created_with_base_schema, gen });
-                gen++;
+                cache.emplace(std::tuple { version, base }, created_with_base_schema);
             } else {
-                created_with_base_schema = std::get<shared_sstable>(it->second);
-
-                created_with_changed_schema = env.make_sstable(changed, std::get<int>(it->second), version);
-                created_with_changed_schema->load().get();
+                created_with_base_schema = it->second;
             }
+
+            created_with_changed_schema = env.reusable_sst(changed, created_with_base_schema).get();
 
             const auto pr = dht::partition_range::make_open_ended_both_sides();
 
