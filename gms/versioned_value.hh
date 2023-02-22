@@ -69,7 +69,7 @@ public:
     }
 
 public:
-    versioned_value(const sstring& value, int version = version_generator::get_next_version())
+    versioned_value(const sstring& value, int version = version_generator::get_next_version().value())
         : _version(version), _value(value) {
 #if 0
         // blindly interning everything is somewhat suboptimal -- lots of VersionedValues are unique --
@@ -80,7 +80,7 @@ public:
 #endif
     }
 
-    versioned_value(sstring&& value, int version = version_generator::get_next_version()) noexcept
+    versioned_value(sstring&& value, int version = version_generator::get_next_version().value()) noexcept
         : _version(version), _value(std::move(value)) {
     }
 

@@ -8,8 +8,12 @@
 
 #pragma once
 
+#include "utils/tagged_integer.hh"
+
 namespace gms {
 
-int get_generation_number();
+using generation_type = utils::tagged_integer<struct generation_type_tag, int32_t>;
+
+generation_type get_generation_number();
 
 }

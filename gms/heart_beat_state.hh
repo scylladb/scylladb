@@ -43,7 +43,7 @@ public:
     }
 
     void update_heart_beat() noexcept {
-        _version = version_generator::get_next_version();
+        _version = version_generator::get_next_version().value();
     }
 
     int32_t get_heart_beat_version() const noexcept {

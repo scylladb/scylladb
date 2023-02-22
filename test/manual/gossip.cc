@@ -98,7 +98,7 @@ int main(int ac, char ** av) {
 
             using namespace std::chrono;
             auto now = high_resolution_clock::now().time_since_epoch();
-            int generation_number = duration_cast<seconds>(now).count();
+            auto generation_number = gms::generation_type(duration_cast<seconds>(now).count());
             gossiper.local().start_gossiping(generation_number, app_states).get();
             static double load = 0.5;
             for (;;) {

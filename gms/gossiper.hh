@@ -19,6 +19,7 @@
 #include "utils/atomic_vector.hh"
 #include "utils/UUID.hh"
 #include "utils/fb_utilities.hh"
+#include "gms/generation-number.hh"
 #include "gms/versioned_value.hh"
 #include "gms/application_state.hh"
 #include "gms/endpoint_state.hh"
@@ -509,7 +510,7 @@ public:
      * existing nodes can talk to the replacing node. So the probability of
      * replacing node being talked to is pretty high.
      */
-    future<> start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states = {},
+    future<> start_gossiping(gms::generation_type generation_nbr, std::map<application_state, versioned_value> preload_local_states = {},
             gms::advertise_myself advertise = gms::advertise_myself::yes);
 
 public:

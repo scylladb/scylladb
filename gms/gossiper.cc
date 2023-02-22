@@ -1842,7 +1842,7 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
     }
 }
 
-future<> gossiper::start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states, gms::advertise_myself advertise) {
+future<> gossiper::start_gossiping(gms::generation_type generation_nbr, std::map<application_state, versioned_value> preload_local_states, gms::advertise_myself advertise) {
     co_await container().invoke_on_all([advertise] (gossiper& g) {
         if (!advertise) {
             g._advertise_myself = false;
@@ -1851,7 +1851,7 @@ future<> gossiper::start_gossiping(int generation_nbr, std::map<application_stat
 
     build_seeds_list();
     if (_force_gossip_generation() > 0) {
-        generation_nbr = _force_gossip_generation();
+        generation_nbr = gms::generation_type(_force_gossip_generation());
         logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
     }
     endpoint_state& local_state = _endpoint_state_map[get_broadcast_address()];

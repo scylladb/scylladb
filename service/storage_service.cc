@@ -1408,7 +1408,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
 
     slogger.info("Starting up server gossip");
 
-    auto generation_number = co_await _sys_ks.local().increment_and_get_generation();
+    auto generation_number = gms::generation_type(co_await _sys_ks.local().increment_and_get_generation());
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
     co_await _gossiper.start_gossiping(generation_number, app_states, advertise);
 
