@@ -23,8 +23,8 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
             fd::endpoint_state val;
             val.addrs = fmt::to_string(i.first);
             val.is_alive = i.second.is_alive();
-            val.generation = i.second.get_heart_beat_state().get_generation();
-            val.version = i.second.get_heart_beat_state().get_heart_beat_version();
+            val.generation = i.second.get_heart_beat_state().get_generation().value();
+            val.version = i.second.get_heart_beat_state().get_heart_beat_version().value();
             val.update_time = i.second.get_update_timestamp().time_since_epoch().count();
             for (auto a : i.second.get_application_state_map()) {
                 fd::version_value version_val;

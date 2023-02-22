@@ -97,6 +97,7 @@ class gossiper : public seastar::async_sharded_service<gossiper>, public seastar
 public:
     using clk = seastar::lowres_system_clock;
     using ignore_features_of_local_node = bool_class<class ignore_features_of_local_node_tag>;
+    using generation_for_nodes = std::unordered_map<gms::inet_address, generation_type>;
 private:
     using messaging_verb = netw::messaging_verb;
     using messaging_service = netw::messaging_service;
@@ -124,17 +125,17 @@ private:
     std::unordered_map<gms::inet_address, ack_msg_pending> _ack_handlers;
     bool _advertise_myself = true;
     // Map ip address and generation number
-    std::unordered_map<gms::inet_address, int32_t> _advertise_to_nodes;
+    generation_for_nodes _advertise_to_nodes;
     future<> _failure_detector_loop_done{make_ready_future<>()} ;
 
     rpc::no_wait_type background_msg(sstring type, noncopyable_function<future<>(gossiper&)> fn);
 
 public:
     // Get current generation number for the given nodes
-    future<std::unordered_map<gms::inet_address, int32_t>>
+    future<generation_for_nodes>
     get_generation_for_nodes(std::unordered_set<gms::inet_address> nodes);
     // Only respond echo message listed in nodes with the generation number
-    future<> advertise_to_nodes(std::unordered_map<gms::inet_address, int32_t> advertise_to_nodes = {});
+    future<> advertise_to_nodes(generation_for_nodes advertise_to_nodes = {});
     const sstring& get_cluster_name() const noexcept;
 
     const sstring& get_partitioner_name() const noexcept {
@@ -184,7 +185,7 @@ public:
     // Maximimum difference between remote generation value and generation
     // value this node would get if this node were restarted that we are
     // willing to accept about a peer.
-    static constexpr int64_t MAX_GENERATION_DIFFERENCE = 86400 * 365;
+    static constexpr generation_type::value_type MAX_GENERATION_DIFFERENCE = 86400 * 365;
     std::chrono::milliseconds fat_client_timeout;
 
     std::chrono::milliseconds quarantine_delay() const noexcept;
@@ -358,8 +359,8 @@ public:
     future<> assassinate_endpoint(sstring address);
 
 public:
-    future<int> get_current_generation_number(inet_address endpoint);
-    future<int> get_current_heart_beat_version(inet_address endpoint);
+    future<generation_type> get_current_generation_number(inet_address endpoint);
+    future<version_type> get_current_heart_beat_version(inet_address endpoint);
 
     bool is_gossip_only_member(inet_address endpoint);
     bool is_safe_for_bootstrap(inet_address endpoint);
@@ -409,7 +410,7 @@ public:
     /**
      * determine which endpoint started up earlier
      */
-    int compare_endpoint_startup(inet_address addr1, inet_address addr2);
+    generation_type::value_type compare_endpoint_startup(inet_address addr1, inet_address addr2);
 
     /**
      * Return the rpc address associated with an endpoint as a string.
@@ -616,7 +617,7 @@ public:
     int get_up_endpoint_count() const noexcept;
 private:
     future<> failure_detector_loop();
-    future<> failure_detector_loop_for_node(gms::inet_address node, int64_t gossip_generation, uint64_t live_endpoints_version);
+    future<> failure_detector_loop_for_node(gms::inet_address node, generation_type gossip_generation, uint64_t live_endpoints_version);
     future<> update_live_endpoints_version();
 };
 

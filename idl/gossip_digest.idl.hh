@@ -34,8 +34,8 @@ class versioned_value {
 };
 
 class heart_beat_state {
-    int32_t get_generation();
-    int32_t get_heart_beat_version();
+    gms::generation_type get_generation();
+    gms::version_type get_heart_beat_version();
 };
 
 class endpoint_state {
