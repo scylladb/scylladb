@@ -391,12 +391,12 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
         require_exist(file_name, true);
     };
 
-    auto component_basename = [&ks, &cf] (sstables::generation_type::int_t gen, component_type ctype) {
-        return sst::component_basename(ks, cf, sstables::get_highest_sstable_version(), generation_from_value(gen), sst::format_types::big, ctype);
+    auto component_basename = [&ks, &cf] (sstables::generation_type gen, component_type ctype) {
+        return sst::component_basename(ks, cf, sstables::get_highest_sstable_version(), gen, sst::format_types::big, ctype);
     };
 
-    auto gen_filename = [&sst_dir, &ks, &cf] (sstables::generation_type::int_t gen, component_type ctype) {
-        return sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(gen), sst::format_types::big, ctype);
+    auto gen_filename = [&sst_dir, &ks, &cf] (sstables::generation_type gen, component_type ctype) {
+        return sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), gen, sst::format_types::big, ctype);
     };
 
     touch_dir(pending_delete_dir);
@@ -409,33 +409,42 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
 
     const sstring toc_text = "TOC.txt\nData.db\n";
 
+    std::optional<sstables::generation_type> prev_gen;
+    std::vector<sstables::generation_type> gen;
+    size_t num_gens = 9;
+    gen.reserve(num_gens);
+    for (auto i = 0; i < num_gens; i++) {
+        prev_gen = replica::table::make_new_generation(prev_gen);
+        gen.emplace_back(*prev_gen);
+    }
+
     // Regular log file with single entry
-    write_file(gen_filename(2, component_type::TOC), toc_text);
-    touch_file(gen_filename(2, component_type::Data));
+    write_file(gen_filename(gen[2], component_type::TOC), toc_text);
+    touch_file(gen_filename(gen[2], component_type::Data));
     write_file(pending_delete_dir + "/sstables-2-2.log",
-               component_basename(2, component_type::TOC) + "\n");
+               component_basename(gen[2], component_type::TOC) + "\n");
 
     // Temporary log file with single entry
     write_file(pending_delete_dir + "/sstables-3-3.log.tmp",
-               component_basename(3, component_type::TOC) + "\n");
+               component_basename(gen[3], component_type::TOC) + "\n");
 
     // Regular log file with multiple entries
-    write_file(gen_filename(4, component_type::TOC), toc_text);
-    touch_file(gen_filename(4, component_type::Data));
-    write_file(gen_filename(5, component_type::TOC), toc_text);
-    touch_file(gen_filename(5, component_type::Data));
+    write_file(gen_filename(gen[4], component_type::TOC), toc_text);
+    touch_file(gen_filename(gen[4], component_type::Data));
+    write_file(gen_filename(gen[5], component_type::TOC), toc_text);
+    touch_file(gen_filename(gen[5], component_type::Data));
     write_file(pending_delete_dir + "/sstables-4-5.log",
-               component_basename(4, component_type::TOC) + "\n" +
-               component_basename(5, component_type::TOC) + "\n");
+               component_basename(gen[4], component_type::TOC) + "\n" +
+               component_basename(gen[5], component_type::TOC) + "\n");
 
     // Regular log file with multiple entries and some deleted sstables
-    write_file(gen_filename(6, component_type::TemporaryTOC), toc_text);
-    touch_file(gen_filename(6, component_type::Data));
-    write_file(gen_filename(7, component_type::TemporaryTOC), toc_text);
+    write_file(gen_filename(gen[6], component_type::TemporaryTOC), toc_text);
+    touch_file(gen_filename(gen[6], component_type::Data));
+    write_file(gen_filename(gen[7], component_type::TemporaryTOC), toc_text);
     write_file(pending_delete_dir + "/sstables-6-8.log",
-               component_basename(6, component_type::TOC) + "\n" +
-               component_basename(7, component_type::TOC) + "\n" +
-               component_basename(8, component_type::TOC) + "\n");
+               component_basename(gen[6], component_type::TOC) + "\n" +
+               component_basename(gen[7], component_type::TOC) + "\n" +
+               component_basename(gen[8], component_type::TOC) + "\n");
 
     do_with_cql_env_and_compaction_groups([&] (cql_test_env& e) {
         // Empty log file
@@ -445,24 +454,24 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
         require_exist(pending_delete_dir + "/sstables-1-1.log.tmp", false);
 
         // Regular log file with single entry
-        require_exist(gen_filename(2, component_type::TOC), false);
-        require_exist(gen_filename(2, component_type::Data), false);
+        require_exist(gen_filename(gen[2], component_type::TOC), false);
+        require_exist(gen_filename(gen[2], component_type::Data), false);
         require_exist(pending_delete_dir + "/sstables-2-2.log", false);
 
         // Temporary log file with single entry
         require_exist(pending_delete_dir + "/sstables-3-3.log.tmp", false);
 
         // Regular log file with multiple entries
-        require_exist(gen_filename(4, component_type::TOC), false);
-        require_exist(gen_filename(4, component_type::Data), false);
-        require_exist(gen_filename(5, component_type::TOC), false);
-        require_exist(gen_filename(5, component_type::Data), false);
+        require_exist(gen_filename(gen[4], component_type::TOC), false);
+        require_exist(gen_filename(gen[4], component_type::Data), false);
+        require_exist(gen_filename(gen[5], component_type::TOC), false);
+        require_exist(gen_filename(gen[5], component_type::Data), false);
         require_exist(pending_delete_dir + "/sstables-4-5.log", false);
 
         // Regular log file with multiple entries and some deleted sstables
-        require_exist(gen_filename(6, component_type::TemporaryTOC), false);
-        require_exist(gen_filename(6, component_type::Data), false);
-        require_exist(gen_filename(7, component_type::TemporaryTOC), false);
+        require_exist(gen_filename(gen[6], component_type::TemporaryTOC), false);
+        require_exist(gen_filename(gen[6], component_type::Data), false);
+        require_exist(gen_filename(gen[7], component_type::TemporaryTOC), false);
         require_exist(pending_delete_dir + "/sstables-6-8.log", false);
     }, db_cfg_ptr).get();
 }

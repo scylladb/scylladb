@@ -13,6 +13,7 @@
 #include <compare>
 #include <limits>
 #include <iostream>
+#include <boost/range/adaptors.hpp>
 #include <seastar/core/sstring.hh>
 
 namespace sstables {
@@ -39,6 +40,20 @@ constexpr generation_type generation_from_value(generation_type::int_t value) {
 }
 constexpr generation_type::int_t generation_value(generation_type generation) {
     return generation.value();
+}
+
+template <std::ranges::range Range, typename Target = std::vector<sstables::generation_type>>
+Target generations_from_values(const Range& values) {
+    return boost::copy_range<Target>(values | boost::adaptors::transformed([] (auto value) {
+        return generation_type(value);
+    }));
+}
+
+template <typename Target = std::vector<sstables::generation_type>>
+Target generations_from_values(std::initializer_list<generation_type::int_t> values) {
+    return boost::copy_range<Target>(values | boost::adaptors::transformed([] (auto value) {
+        return generation_type(value);
+    }));
 }
 
 } //namespace sstables
