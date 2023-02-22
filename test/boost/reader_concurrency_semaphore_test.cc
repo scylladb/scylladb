@@ -1356,11 +1356,13 @@ memory_limit_table create_memory_limit_table(cql_test_env& env, uint64_t target_
     const auto sstable_write_concurrency = 16;
 
     auto num_sstables = 0;
+    sstables::generation_type gen;
     parallel_for_each(boost::irange(0, sstable_write_concurrency), [&] (int i) {
         return seastar::async([&] {
             while (num_sstables != target_num_sstables) {
                 ++num_sstables;
-                auto sst = sst_man.make_sstable(s, sstables_dir.path().string(), sstables::generation_type{num_sstables}, sst_man.get_highest_supported_format(), sstables::sstable_format_types::big);
+                ++gen;
+                auto sst = sst_man.make_sstable(s, sstables_dir.path().string(), gen, sst_man.get_highest_supported_format(), sstables::sstable_format_types::big);
                 auto writer_cfg = sst_man.configure_writer("test");
                 sst->write_components(
                     make_flat_mutation_reader_from_mutations_v2(s, semaphore.make_tracking_only_permit(s.get(), "test", db::no_timeout), mut, s->full_slice()),

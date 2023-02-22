@@ -32,6 +32,17 @@ public:
 
     constexpr bool operator==(const generation_type& other) const noexcept { return _value == other._value; }
     constexpr std::strong_ordering operator<=>(const generation_type& other) const noexcept { return _value <=> other._value; }
+
+    generation_type& operator++() noexcept {
+        ++_value;
+        return *this;
+    }
+
+    generation_type operator++(int) noexcept {
+        auto ret = *this;
+        ++_value;
+        return ret;
+    }
 };
 
 constexpr generation_type generation_from_value(generation_type::value_type value) {

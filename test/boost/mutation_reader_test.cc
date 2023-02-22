@@ -17,6 +17,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/closeable.hh>
 
+#include "sstables/generation_type.hh"
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/mutation_assertions.hh"
@@ -1001,7 +1002,7 @@ SEASTAR_TEST_CASE(reader_selector_fast_forwarding_test) {
 static
 sstables::shared_sstable create_sstable(sstables::test_env& env, schema_ptr s, std::vector<mutation> mutations) {
     static thread_local auto tmp = tmpdir();
-    static int gen = 0;
+    static thread_local sstables::generation_type gen;
     return make_sstable_containing([&] {
         return env.make_sstable(s, tmp.path().string(), gen++);
     }, mutations);
