@@ -606,7 +606,7 @@ SEASTAR_TEST_CASE(check_read_indexes) {
         builder.set_min_index_interval(256);
         auto s = builder.build();
 
-        return env.reusable_sst(s, get_test_dir("summary_test", s), 1, version, big).then([&env] (auto sst) {
+        return env.reusable_sst(s, get_test_dir("summary_test", s), 1, version).then([&env] (auto sst) {
             return sstables::test(sst).read_indexes(env.make_reader_permit()).then([sst] (auto list) {
                 BOOST_REQUIRE(list.size() == 130);
                 return make_ready_future<>();
@@ -643,7 +643,7 @@ SEASTAR_TEST_CASE(check_multi_schema) {
                 .with_column("e", bytes_type);
             auto s = builder.build();
 
-            return env.reusable_sst(s, get_test_dir("multi_schema_test", s), 1, version, big).then([&env, s] (auto sst) {
+            return env.reusable_sst(s, get_test_dir("multi_schema_test", s), 1, version).then([&env, s] (auto sst) {
                 auto reader = make_lw_shared<flat_mutation_reader_v2>(sstable_reader_v2(sst, s, env.make_reader_permit()));
                 return read_mutation_from_flat_mutation_reader(*reader).then([reader, s] (mutation_opt m) {
                     BOOST_REQUIRE(m);
@@ -738,7 +738,7 @@ SEASTAR_TEST_CASE(test_sliced_mutation_reads) {
             .with_column("v2", set_of_ints_type);
         auto s = builder.build();
 
-        auto sst = env.reusable_sst(s, get_test_dir("sliced_mutation_reads", s), 1, version, big).get0();
+        auto sst = env.reusable_sst(s, get_test_dir("sliced_mutation_reads", s), 1, version).get0();
 
         {
             auto ps = partition_slice_builder(*s)
@@ -833,7 +833,7 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
         auto pkey = partition_key::from_exploded(*s, { int32_type->decompose(0) });
         auto dkey = dht::decorate_key(*s, std::move(pkey));
 
-        auto sst = env.reusable_sst(s, get_test_dir("wrong_range_tombstone_order", s), 1, version, big).get0();
+        auto sst = env.reusable_sst(s, get_test_dir("wrong_range_tombstone_order", s), 1, version).get0();
         auto reader = sstable_reader_v2(sst, s, env.make_reader_permit());
 
         using kind = mutation_fragment_v2::kind;
@@ -900,7 +900,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
             auto node1 = counter_id(utils::UUID("8379ab99-4507-4ab1-805d-ac85a863092b"));
             auto node2 = counter_id(utils::UUID("b8a6c3f3-e222-433f-9ce9-de56a8466e07"));
 
-            auto sst = env.reusable_sst(s, get_test_dir("counter_test", s), 5, version, big).get0();
+            auto sst = env.reusable_sst(s, get_test_dir("counter_test", s), 5, version).get0();
             auto reader = sstable_reader_v2(sst, s, env.make_reader_permit());
             auto close_reader = deferred_close(reader);
 
@@ -1024,7 +1024,7 @@ SEASTAR_TEST_CASE(test_promoted_index_read) {
                 .with_column("ck2", int32_type, column_kind::clustering_key)
                 .with_column("v", int32_type)
                 .build();
-        auto sst = env.reusable_sst(s, get_test_dir("promoted_index_read", s), 1, version, big).get0();
+        auto sst = env.reusable_sst(s, get_test_dir("promoted_index_read", s), 1, version).get0();
         auto pkey = partition_key::from_exploded(*s, { int32_type->decompose(0) });
         auto dkey = dht::decorate_key(*s, std::move(pkey));
 
@@ -1844,7 +1844,7 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
                 .with_column("v", int32_type)
                 .build();
 
-        auto sst = env.reusable_sst(s, get_test_dir("partition_skipping",s), 1, version, big).get0();
+        auto sst = env.reusable_sst(s, get_test_dir("partition_skipping",s), 1, version).get0();
 
         std::vector<dht::decorated_key> keys;
         for (int i = 0; i < 10; i++) {
@@ -2421,7 +2421,7 @@ SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
                     .with_column("c5", counter_type)
                     .build();
 
-            auto sst = env.reusable_sst(s, get_test_dir("wrong_counter_shard_order", s), 2, version, big).get0();
+            auto sst = env.reusable_sst(s, get_test_dir("wrong_counter_shard_order", s), 2, version).get0();
             auto reader = sstable_reader_v2(sst, s, env.make_reader_permit());
             auto close_reader = deferred_close(reader);
 
@@ -2528,7 +2528,7 @@ SEASTAR_TEST_CASE(test_old_format_non_compound_range_tombstone_is_read) {
                     .with_column("v", int32_type)
                     .build(schema_builder::compact_storage::yes);
 
-                auto sst = env.reusable_sst(s, get_test_dir("broken_non_compound_pi_and_range_tombstone", s), 1, version, big).get0();
+                auto sst = env.reusable_sst(s, get_test_dir("broken_non_compound_pi_and_range_tombstone", s), 1, version).get0();
 
                 auto pk = partition_key::from_exploded(*s, { int32_type->decompose(1) });
                 auto dk = dht::decorate_key(*s, pk);
@@ -2806,7 +2806,7 @@ SEASTAR_TEST_CASE(test_reads_cassandra_static_compact) {
             .build(schema_builder::compact_storage::yes);
 
         // INSERT INTO ks.cf (key, c1, c2) VALUES ('a', 'abc', 'cde');
-        auto sst = env.reusable_sst(s, get_test_dir("cassandra_static_compact", s), 1, sstables::sstable::version_types::mc, big).get0();
+        auto sst = env.reusable_sst(s, get_test_dir("cassandra_static_compact", s), 1, sstables::sstable::version_types::mc).get0();
         auto pkey = partition_key::from_exploded(*s, { utf8_type->decompose("a") });
         auto dkey = dht::decorate_key(*s, std::move(pkey));
         mutation m(s, dkey);
