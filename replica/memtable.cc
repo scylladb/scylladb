@@ -225,7 +225,7 @@ memtable::find_or_create_partition(const dht::decorated_key& key) {
     if (i == partitions.end() || !hint.match) {
         partitions_type::iterator entry = partitions.emplace_before(i,
                 key.token().raw(), hint,
-                _schema, dht::decorated_key(key), mutation_partition(_schema));
+                _schema, dht::decorated_key(key), mutation_partition(*_schema));
         ++nr_partitions;
         ++_table_stats.memtable_partition_insertions;
         if (!hint.emplace_keeps_iterators()) {
@@ -793,7 +793,7 @@ memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_han
     with_allocator(allocator(), [this, &m, &m_schema] {
         _allocating_section(*this, [&, this] {
             auto& p = find_or_create_partition_slow(m.key());
-            mutation_partition mp(m_schema);
+            mutation_partition mp(*m_schema);
             partition_builder pb(*m_schema, mp);
             m.partition().accept(*m_schema, pb);
             _stats_collector.update(*m_schema, mp);
