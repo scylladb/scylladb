@@ -23,7 +23,9 @@ public:
 private:
     value_type _value;
 public:
-    generation_type() = delete;
+    generation_type() noexcept
+        : _value(0)
+    {}
 
     explicit constexpr generation_type(value_type value) noexcept: _value(value) {}
     constexpr value_type value() const noexcept { return _value; }
