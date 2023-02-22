@@ -2132,7 +2132,7 @@ SEASTAR_TEST_CASE(test_v2_merging_in_non_evictable_snapshot) {
 
 static void clear(cache_tracker& tracker, const schema& s, mutation_partition_v2& p) {
     while (p.clear_gently(&tracker) == stop_iteration::no) {}
-    p = mutation_partition_v2(s.shared_from_this());
+    p = mutation_partition_v2(s);
     tracker.insert(p);
 }
 

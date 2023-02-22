@@ -89,10 +89,10 @@ public:
     static mutation_partition_v2 make_incomplete(const schema& s, tombstone t = {}) {
         return mutation_partition_v2(incomplete_tag(), s, t);
     }
-    mutation_partition_v2(schema_ptr s)
+    mutation_partition_v2(const schema& s)
         : _rows()
 #ifdef SEASTAR_DEBUG
-        , _schema_version(s->version())
+        , _schema_version(s.version())
 #endif
     { }
     mutation_partition_v2(mutation_partition_v2& other, copy_comparators_only)

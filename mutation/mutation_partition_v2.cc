@@ -66,7 +66,7 @@ mutation_partition_v2::mutation_partition_v2(const schema& s, mutation_partition
     auto&& tombstones = x.mutable_row_tombstones();
     if (!tombstones.empty()) {
         try {
-            mutation_partition_v2 p(s.shared_from_this());
+            mutation_partition_v2 p(s);
 
             for (auto&& t: tombstones) {
                 range_tombstone & rt = t.tombstone();

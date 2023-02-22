@@ -120,7 +120,7 @@ public:
     }
 
     explicit partition_version(schema_ptr s) noexcept
-        : _partition(std::move(s)) { }
+        : _partition(*s) { }
     explicit partition_version(mutation_partition_v2 mp) noexcept
         : _partition(std::move(mp)) { }
     partition_version(partition_version&& pv) noexcept;

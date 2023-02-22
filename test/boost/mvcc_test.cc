@@ -1173,7 +1173,7 @@ public:
             , _tracker(t)
             , _r(r)
             , _e(_tracker ? partition_entry::make_evictable(*_schema, mutation_partition::make_incomplete(*_schema))
-                          : partition_entry(mutation_partition_v2(_schema)))
+                          : partition_entry(mutation_partition_v2(*_schema)))
     {
         if (_tracker) {
             _tracker->insert(_e);
