@@ -1,5 +1,7 @@
 find_package(jsoncpp REQUIRED)
 
+add_subdirectory(lib)
+
 add_library(test-perf STATIC)
 target_sources(test-perf
   PRIVATE
@@ -10,10 +12,7 @@ target_sources(test-perf
     perf/perf.cc
     lib/alternator_test_env.cc
     lib/cql_test_env.cc
-    lib/log.cc
     lib/test_services.cc
-    lib/test_utils.cc
-    lib/tmpdir.cc
     lib/key_utils.cc
     lib/random_schema.cc
     lib/data_model.cc)
@@ -28,10 +27,12 @@ endif()
 target_link_libraries(test-perf
   PRIVATE
     idl
+    test-lib
     Seastar::seastar_perf_testing
     JsonCpp::JsonCpp
     xxHash::xxhash
     wasmtime_bindings)
 
-add_subdirectory(lib)
-add_subdirectory(boost)
+if(BUILD_TESTING)
+    add_subdirectory(boost)
+endif()

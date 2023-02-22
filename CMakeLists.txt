@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.18)
 
 project(scylla)
 
+include(CTest)
+
 list(APPEND CMAKE_MODULE_PATH
   ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
@@ -34,50 +36,6 @@ find_package(xxHash REQUIRED)
 set(scylla_gen_build_dir "${CMAKE_BINARY_DIR}/gen")
 file(MAKE_DIRECTORY "${scylla_gen_build_dir}")
 
-# Generate C++ source files from thrift definitions
-function(scylla_generate_thrift)
-    set(one_value_args TARGET VAR IN_FILE OUT_DIR SERVICE)
-    cmake_parse_arguments(args "" "${one_value_args}" "" ${ARGN})
-
-    get_filename_component(in_file_name ${args_IN_FILE} NAME_WE)
-
-    set(aux_out_file_name ${args_OUT_DIR}/${in_file_name})
-    set(outputs
-        ${aux_out_file_name}_types.cpp
-        ${aux_out_file_name}_types.h
-        ${aux_out_file_name}_constants.cpp
-        ${aux_out_file_name}_constants.h
-        ${args_OUT_DIR}/${args_SERVICE}.cpp
-        ${args_OUT_DIR}/${args_SERVICE}.h)
-
-    add_custom_command(
-        DEPENDS
-            ${args_IN_FILE}
-            thrift
-        OUTPUT ${outputs}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${args_OUT_DIR}
-        COMMAND thrift -gen cpp:cob_style,no_skeleton -out "${args_OUT_DIR}" "${args_IN_FILE}")
-
-    add_custom_target(${args_TARGET}
-        DEPENDS ${outputs})
-
-    set(${args_VAR} ${outputs} PARENT_SCOPE)
-endfunction()
-
-scylla_generate_thrift(
-    TARGET scylla_thrift_gen_cassandra
-    VAR scylla_thrift_gen_cassandra_files
-    IN_FILE "${CMAKE_SOURCE_DIR}/interface/cassandra.thrift"
-    OUT_DIR ${scylla_gen_build_dir}
-    SERVICE Cassandra)
-
-
-# Generate C++ sources from ragel grammar files
-seastar_generate_ragel(
-    TARGET scylla_ragel_gen_protocol_parser
-    VAR scylla_ragel_gen_protocol_parser_file
-    IN_FILE "${CMAKE_SOURCE_DIR}/redis/protocol_parser.rl"
-    OUT_FILE ${scylla_gen_build_dir}/redis/protocol_parser.hh)
 
 set(scylla_sources
     absl-flat_hash_map.cc
@@ -216,19 +174,6 @@ set(scylla_sources
     tombstone_gc_options.cc
     tombstone_gc.cc
     reader_concurrency_semaphore.cc
-    redis/controller.cc
-    redis/server.cc
-    redis/query_processor.cc
-    redis/protocol_parser.rl
-    redis/keyspace_utils.cc
-    redis/options.cc
-    redis/stats.cc
-    redis/mutation_utils.cc
-    redis/query_utils.cc
-    redis/abstract_command.cc
-    redis/command_factory.cc
-    redis/commands.cc
-    redis/lolwut.cc
     repair/repair.cc
     repair/row_level.cc
     replica/database.cc
@@ -305,16 +250,14 @@ set(scylla_sources
     validation.cc
     vint-serialization.cc
     zstd.cc)
-set(scylla_gen_sources
-    "${scylla_thrift_gen_cassandra_files}"
-    "${scylla_ragel_gen_protocol_parser_file}"
-    "${swagger_gen_files}")
 
 add_subdirectory(api)
 add_subdirectory(alternator)
 add_subdirectory(auth)
 add_subdirectory(cql3)
 add_subdirectory(idl)
+add_subdirectory(interface)
+add_subdirectory(redis)
 add_subdirectory(rust)
 add_subdirectory(schema)
 add_subdirectory(sstables)
@@ -326,7 +269,7 @@ add_version_library(scylla_version
     release.cc)
 add_executable(scylla
     ${scylla_sources}
-    ${scylla_gen_sources})
+    ${swagger_gen_files})
 
 target_link_libraries(scylla PRIVATE
     api
@@ -334,6 +277,8 @@ target_link_libraries(scylla PRIVATE
     alternator
     cql3
     idl
+    interface
+    redis
     schema
     scylla_version
     sstables
@@ -388,7 +333,7 @@ target_link_libraries(scylla PRIVATE
     xxHash::xxhash)
 
 # Force SHA1 build-id generation
-set(default_linker_flags "-Wl,--build-id=sha")
+set(default_linker_flags "-Wl,--build-id=sha1")
 include(CheckLinkerFlag)
 foreach(linker "lld" "gold")
     set(linker_flag "-fuse-ld=${linker}")
