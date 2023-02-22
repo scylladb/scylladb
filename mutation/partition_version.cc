@@ -329,7 +329,7 @@ partition_version& partition_entry::add_version(const schema& s, cache_tracker* 
     // Such versions must be fully discontinuous, and thus have a dummy at the end.
     auto new_version = tracker
                        ? current_allocator().construct<partition_version>(mutation_partition_v2::make_incomplete(s))
-                       : current_allocator().construct<partition_version>(mutation_partition_v2(s.shared_from_this()));
+                       : current_allocator().construct<partition_version>(mutation_partition_v2(s));
     new_version->partition().set_static_row_continuous(_version->partition().static_row_continuous());
     new_version->insert_before(*_version);
     set_version(new_version);
@@ -548,7 +548,7 @@ utils::coroutine partition_entry::apply_to_incomplete(const schema& s,
 
 mutation_partition_v2 partition_entry::squashed(schema_ptr from, schema_ptr to, is_evictable evictable)
 {
-    mutation_partition_v2 mp(to);
+    mutation_partition_v2 mp(*to);
     mp.set_static_row_continuous(_version->partition().static_row_continuous());
     for (auto&& v : _version->all_elements()) {
         auto older = mutation_partition_v2(*from, v.partition());
