@@ -99,7 +99,6 @@ struct sstable_writer_config {
     size_t promoted_index_auto_scale_threshold;
     uint64_t max_sstable_size = std::numeric_limits<uint64_t>::max();
     bool backup = false;
-    bool leave_unsealed = false;
     mutation_fragment_stream_validation_level validation_level;
     std::optional<db::replay_position> replay_position;
     std::optional<int> sstable_level;
