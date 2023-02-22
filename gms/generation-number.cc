@@ -8,6 +8,11 @@
 
 #include <cassert>
 #include <chrono>
+#include <utility>
+#include <exception>
+
+#include <fmt/format.h>
+
 #include "generation-number.hh"
 
 namespace gms {
@@ -20,6 +25,12 @@ generation_type get_generation_number() {
     // Make sure the clock didn't overflow the 32 bits value
     assert(ret.value() == generation_number);
     return ret;
+}
+
+void validate_gossip_generation(int64_t generation_number) {
+    if (!std::in_range<gms::generation_type::value_type>(generation_number)) {
+        throw std::out_of_range(fmt::format("gossip generation {} is out of range", generation_number));
+    }
 }
 
 }
