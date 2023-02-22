@@ -104,7 +104,7 @@ public:
     dht::token_range_vector ranges;
     std::vector<sstring> cfs;
     std::vector<table_id> table_ids;
-    repair_uniq_id id;
+    repair_uniq_id global_repair_id;
     std::vector<sstring> data_centers;
     std::vector<sstring> hosts;
     std::unordered_set<gms::inet_address> ignore_nodes;
