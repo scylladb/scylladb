@@ -14,6 +14,7 @@
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"
 #include "gms/gossip_digest_ack2.hh"
+#include "gms/version_generator.hh"
 #include "gms/versioned_value.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
@@ -416,8 +417,11 @@ future<> gossiper::handle_echo_msg(gms::inet_address from, std::optional<int64_t
             } else {
                 auto es = get_endpoint_state_for_endpoint_ptr(from);
                 if (es) {
-                    int64_t saved_generation_number = it->second;
-                    int64_t current_generation_number = generation_number_opt ?
+                    if (generation_number_opt) {
+                        debug_validate_gossip_generation(*generation_number_opt);
+                    }
+                    auto saved_generation_number = it->second;
+                    auto current_generation_number = generation_number_opt ?
                             generation_number_opt.value() : es->get_heart_beat_state().get_generation();
                     respond = saved_generation_number == current_generation_number;
                     logger.debug("handle_echo_msg: from={}, saved_generation_number={}, current_generation_number={}",
@@ -442,6 +446,7 @@ future<> gossiper::handle_shutdown_msg(inet_address from, std::optional<int64_t>
 
     auto permit = co_await this->lock_endpoint(from);
     if (generation_number_opt) {
+        debug_validate_gossip_generation(*generation_number_opt);
         auto es = this->get_endpoint_state_for_endpoint_ptr(from);
         if (es) {
             auto local_generation = es->get_heart_beat_state().get_generation();
@@ -757,7 +762,7 @@ future<> gossiper::update_live_endpoints_version() {
     });
 }
 
-future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, int64_t gossip_generation, uint64_t live_endpoints_version) {
+future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, generation_type gossip_generation, uint64_t live_endpoints_version) {
     auto last = gossiper::clk::now();
     auto diff = gossiper::clk::duration(0);
     auto echo_interval = std::chrono::milliseconds(2000);
@@ -1101,7 +1106,7 @@ void gossiper::quarantine_endpoint(inet_address endpoint, clk::time_point quaran
 }
 
 void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests) {
-    int generation = 0;
+    generation_type generation = 0;
     version_type max_version = 0;
 
     // local epstate will be part of _endpoint_state_map
@@ -1208,8 +1213,8 @@ future<> gossiper::assassinate_endpoint(sstring address) {
             auto permit = gossiper.lock_endpoint(endpoint).get0();
             auto es = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
             auto now = gossiper.now();
-            int gen = std::chrono::duration_cast<std::chrono::seconds>((now + std::chrono::seconds(60)).time_since_epoch()).count();
-            int ver = 9999;
+            generation_type gen = std::chrono::duration_cast<std::chrono::seconds>((now + std::chrono::seconds(60)).time_since_epoch()).count();
+            version_type ver = 9999;
             endpoint_state ep_state = es ? *es : endpoint_state(heart_beat_state(gen, ver));
             std::vector<dht::token> tokens;
             logger.warn("Assassinating {} via gossip", endpoint);
@@ -1822,7 +1827,7 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
     }
 }
 
-future<> gossiper::start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states, gms::advertise_myself advertise) {
+future<> gossiper::start_gossiping(generation_type generation_nbr, std::map<application_state, versioned_value> preload_local_states, gms::advertise_myself advertise) {
     co_await container().invoke_on_all([advertise] (gossiper& g) {
         if (!advertise) {
             g._advertise_myself = false;

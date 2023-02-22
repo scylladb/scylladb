@@ -125,17 +125,17 @@ private:
     std::unordered_map<gms::inet_address, ack_msg_pending> _ack_handlers;
     bool _advertise_myself = true;
     // Map ip address and generation number
-    std::unordered_map<gms::inet_address, int32_t> _advertise_to_nodes;
+    std::unordered_map<gms::inet_address, generation_type> _advertise_to_nodes;
     future<> _failure_detector_loop_done{make_ready_future<>()} ;
 
     rpc::no_wait_type background_msg(sstring type, noncopyable_function<future<>(gossiper&)> fn);
 
 public:
     // Get current generation number for the given nodes
-    future<std::unordered_map<gms::inet_address, int32_t>>
+    future<std::unordered_map<gms::inet_address, generation_type>>
     get_generation_for_nodes(std::list<gms::inet_address> nodes);
     // Only respond echo message listed in nodes with the generation number
-    future<> advertise_to_nodes(std::unordered_map<gms::inet_address, int32_t> advertise_to_nodes = {});
+    future<> advertise_to_nodes(std::unordered_map<gms::inet_address, generation_type> advertise_to_nodes = {});
     const sstring& get_cluster_name() const noexcept;
 
     const sstring& get_partitioner_name() const noexcept {
@@ -502,7 +502,7 @@ public:
      * existing nodes can talk to the replacing node. So the probability of
      * replacing node being talked to is pretty high.
      */
-    future<> start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states = {},
+    future<> start_gossiping(generation_type generation_nbr, std::map<application_state, versioned_value> preload_local_states = {},
             gms::advertise_myself advertise = gms::advertise_myself::yes);
 
 public:
@@ -588,7 +588,7 @@ private:
     netw::messaging_service& _messaging;
     sharded<db::system_keyspace>& _sys_ks;
     utils::updateable_value<uint32_t> _failure_detector_timeout_ms;
-    utils::updateable_value<int32_t> _force_gossip_generation;
+    utils::updateable_value<generation_type> _force_gossip_generation;
     gossip_config _gcfg;
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(inet_address endpoint) const;
@@ -608,7 +608,7 @@ public:
     int get_up_endpoint_count() const noexcept;
 private:
     future<> failure_detector_loop();
-    future<> failure_detector_loop_for_node(gms::inet_address node, int64_t gossip_generation, uint64_t live_endpoints_version);
+    future<> failure_detector_loop_for_node(gms::inet_address node, generation_type gossip_generation, uint64_t live_endpoints_version);
     future<> update_live_endpoints_version();
 };
 
