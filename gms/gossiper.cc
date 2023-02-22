@@ -1769,8 +1769,8 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
         }
     }
     for (gossip_digest& g_digest : g_digest_list) {
-        int remote_generation = g_digest.get_generation();
-        int max_remote_version = g_digest.get_max_version();
+        auto remote_generation = g_digest.get_generation();
+        auto max_remote_version = g_digest.get_max_version();
         /* Get state associated with the end point in digest */
         auto&& ep = g_digest.get_endpoint();
         auto es = get_endpoint_state_for_endpoint_ptr(ep);
