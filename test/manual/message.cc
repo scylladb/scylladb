@@ -56,8 +56,8 @@ public:
             auto from = netw::messaging_service::get_source(cinfo);
             auto ep1 = inet_address("1.1.1.1");
             auto ep2 = inet_address("2.2.2.2");
-            int32_t gen = 800;
-            int32_t ver = 900;
+            gms::generation_type gen(800);
+            gms::version_type ver(900);
             utils::chunked_vector<gms::gossip_digest> digests;
             digests.push_back(gms::gossip_digest(ep1, gen++, ver++));
             digests.push_back(gms::gossip_digest(ep2, gen++, ver++));
@@ -114,8 +114,8 @@ public:
         auto id = get_msg_addr();
         auto ep1 = inet_address("1.1.1.1");
         auto ep2 = inet_address("2.2.2.2");
-        int32_t gen = 100;
-        int32_t ver = 900;
+        gms::generation_type gen(100);
+        gms::version_type ver(900);
         utils::chunked_vector<gms::gossip_digest> digests;
         digests.push_back(gms::gossip_digest(ep1, gen++, ver++));
         digests.push_back(gms::gossip_digest(ep2, gen++, ver++));

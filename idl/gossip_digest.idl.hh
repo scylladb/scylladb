@@ -45,8 +45,8 @@ class endpoint_state {
 
 class gossip_digest {
     gms::inet_address get_endpoint();
-    int32_t get_generation();
-    int32_t get_max_version();
+    gms::generation_type get_generation();
+    gms::version_type get_max_version();
 };
 
 class gossip_digest_syn {
