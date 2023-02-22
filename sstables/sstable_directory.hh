@@ -65,29 +65,38 @@ public:
     };
 
     class components_lister {
+        struct scan_state {
+            using scan_multimap = std::unordered_multimap<generation_type, std::filesystem::path>;
+            using scan_descriptors = utils::chunked_vector<sstables::entry_descriptor>;
+            using scan_descriptors_map = std::unordered_map<generation_type, sstables::entry_descriptor>;
+
+            scan_multimap generations_found;
+            scan_descriptors temp_toc_found;
+            scan_descriptors_map descriptors;
+
+            // SSTable files to be deleted: things with a Temporary TOC, missing TOC files,
+            // TemporaryStatistics, etc. Not part of the scan state, because we want to do a 2-phase
+            // delete: maybe one of the shards will have signaled an error. And in the case of an error
+            // we don't want to delete anything.
+            std::unordered_set<sstring> files_for_removal;
+        };
+
+        void handle(sstables::entry_descriptor desc, std::filesystem::path filename);
+
         directory_lister _lister;
-    public:
+        std::unique_ptr<scan_state> _state;
+
         future<sstring> get();
-        components_lister(std::filesystem::path dir);
         future<> close();
+
+    public:
+        components_lister(std::filesystem::path dir);
+
+        future<> process(sstable_directory& directory, fs::path location, process_flags flags);
+        future<> commit();
     };
 
 private:
-    using scan_multimap = std::unordered_multimap<generation_type, std::filesystem::path>;
-    using scan_descriptors = utils::chunked_vector<sstables::entry_descriptor>;
-    using scan_descriptors_map = std::unordered_map<generation_type, sstables::entry_descriptor>;
-
-    struct scan_state {
-        scan_multimap generations_found;
-        scan_descriptors temp_toc_found;
-        scan_descriptors_map descriptors;
-    };
-
-    // SSTable files to be deleted: things with a Temporary TOC, missing TOC files,
-    // TemporaryStatistics, etc. Not part of the scan state, because we want to do a 2-phase
-    // delete: maybe one of the shards will have signaled an error. And in the case of an error
-    // we don't want to delete anything.
-    std::unordered_set<sstring> _files_for_removal;
 
     // prevents an object that respects a phaser (usually a table) from disappearing in the middle of the operation.
     // Will be destroyed when this object is destroyed.
@@ -98,6 +107,7 @@ private:
     std::filesystem::path _sstable_dir;
     ::io_priority_class _io_priority;
     io_error_handler_gen _error_handler_gen;
+    std::unique_ptr<components_lister> _lister;
 
     generation_type _max_generation_seen = generation_from_value(0);
     sstables::sstable_version_types _max_version_seen = sstables::sstable_version_types::ka;
@@ -121,7 +131,6 @@ private:
 
     future<> process_descriptor(sstables::entry_descriptor desc, process_flags flags);
     void validate(sstables::shared_sstable sst, process_flags flags) const;
-    void handle_component(scan_state& state, sstables::entry_descriptor desc, std::filesystem::path filename);
 
     template <typename Container, typename Func>
     future<> parallel_for_each_restricted(Container&& C, Func&& func);

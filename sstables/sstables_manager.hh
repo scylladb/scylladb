@@ -85,7 +85,7 @@ public:
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
             size_t buffer_size = default_sstable_buffer_size);
 
-    sstable_directory::components_lister get_components_lister(std::filesystem::path dir);
+    std::unique_ptr<sstable_directory::components_lister> get_components_lister(std::filesystem::path dir);
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
     const db::config& config() const { return _db_config; }
