@@ -1195,7 +1195,7 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         m12.apply(m1);
         m12.apply(m2);
 
-        auto m2_1 = m2.partition().difference(s, m1.partition());
+        auto m2_1 = m2.partition().difference(*s, m1.partition());
         BOOST_REQUIRE_EQUAL(m2_1.partition_tombstone(), tombstone());
         BOOST_REQUIRE(!m2_1.static_row().size());
         BOOST_REQUIRE(!m2_1.find_row(*s, ckey1));
@@ -1212,7 +1212,7 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         m12_1.partition().apply(*s, m2_1, *s, app_stats);
         BOOST_REQUIRE_EQUAL(m12, m12_1);
 
-        auto m1_2 = m1.partition().difference(s, m2.partition());
+        auto m1_2 = m1.partition().difference(*s, m2.partition());
         BOOST_REQUIRE_EQUAL(m1_2.partition_tombstone(), m12.partition().partition_tombstone());
         BOOST_REQUIRE(m1_2.find_row(*s, ckey1));
         BOOST_REQUIRE(m1_2.find_row(*s, ckey2));
@@ -1230,10 +1230,10 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         m12_2.partition().apply(*s, m1_2, *s, app_stats);
         BOOST_REQUIRE_EQUAL(m12, m12_2);
 
-        auto m3_12 = m3.partition().difference(s, m12.partition());
+        auto m3_12 = m3.partition().difference(*s, m12.partition());
         BOOST_REQUIRE(m3_12.empty());
 
-        auto m12_3 = m12.partition().difference(s, m3.partition());
+        auto m12_3 = m12.partition().difference(*s, m3.partition());
         BOOST_REQUIRE_EQUAL(m12_3.partition_tombstone(), m12.partition().partition_tombstone());
 
         mutation m123(s, partition_key::from_single_value(*s, "key1"));
@@ -1364,13 +1364,13 @@ SEASTAR_TEST_CASE(test_query_digest) {
 
                 auto m3 = m2;
                 {
-                    auto diff = m1.partition().difference(s, m2.partition());
+                    auto diff = m1.partition().difference(*s, m2.partition());
                     m3.partition().apply(*m3.schema(), std::move(diff), app_stats);
                 }
 
                 auto m4 = m1;
                 {
-                    auto diff = m2.partition().difference(s, m1.partition());
+                    auto diff = m2.partition().difference(*s, m1.partition());
                     m4.partition().apply(*m4.schema(), std::move(diff), app_stats);
                 }
 
@@ -1881,7 +1881,7 @@ SEASTAR_TEST_CASE(test_collection_cell_diff) {
         mutation m12 = m1;
         m12.apply(m2);
 
-        auto diff = m12.partition().difference(s, m1.partition());
+        auto diff = m12.partition().difference(*s, m1.partition());
         BOOST_REQUIRE(!diff.empty());
         BOOST_REQUIRE(m2.partition().equal(*s, diff));
     });
@@ -1919,11 +1919,11 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
             auto m12 = m1;
             m12.apply(m2);
             auto m12_with_diff = m1;
-            m12_with_diff.partition().apply(*s, m2.partition().difference(s, m1.partition()), app_stats);
+            m12_with_diff.partition().apply(*s, m2.partition().difference(*s, m1.partition()), app_stats);
             check_partitions_match(m12.partition(), m12_with_diff.partition(), *s);
-            check_partitions_match(mutation_partition{*s}, m1.partition().difference(s, m1.partition()), *s);
-            check_partitions_match(m1.partition(), m1.partition().difference(s, mutation_partition{*s}), *s);
-            check_partitions_match(mutation_partition{*s}, mutation_partition{*s}.difference(s, m1.partition()), *s);
+            check_partitions_match(mutation_partition{*s}, m1.partition().difference(*s, m1.partition()), *s);
+            check_partitions_match(m1.partition(), m1.partition().difference(*s, mutation_partition{*s}), *s);
+            check_partitions_match(mutation_partition{*s}, mutation_partition{*s}.difference(*s, m1.partition()), *s);
         });
     });
 }

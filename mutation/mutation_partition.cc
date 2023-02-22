@@ -1916,19 +1916,19 @@ bool row_marker::compact_and_expire(tombstone tomb, gc_clock::time_point now,
     return !is_missing() && _ttl != dead;
 }
 
-mutation_partition mutation_partition::difference(schema_ptr s, const mutation_partition& other) const
+mutation_partition mutation_partition::difference(const schema& s, const mutation_partition& other) const
 {
-    check_schema(*s);
-    mutation_partition mp(*s);
+    check_schema(s);
+    mutation_partition mp(s);
     if (_tombstone > other._tombstone) {
         mp.apply(_tombstone);
     }
-    mp._static_row = _static_row.difference(*s, column_kind::static_column, other._static_row);
+    mp._static_row = _static_row.difference(s, column_kind::static_column, other._static_row);
 
-    mp._row_tombstones = _row_tombstones.difference(*s, other._row_tombstones);
+    mp._row_tombstones = _row_tombstones.difference(s, other._row_tombstones);
 
     auto it_r = other._rows.begin();
-    rows_entry::compare cmp_r(*s);
+    rows_entry::compare cmp_r(s);
     for (auto&& r : _rows) {
         if (r.dummy()) {
             continue;
@@ -1936,12 +1936,12 @@ mutation_partition mutation_partition::difference(schema_ptr s, const mutation_p
         while (it_r != other._rows.end() && (it_r->dummy() || cmp_r(*it_r, r))) {
             ++it_r;
         }
-        if (it_r == other._rows.end() || !it_r->key().equal(*s, r.key())) {
-            mp.insert_row(*s, r.key(), r.row());
+        if (it_r == other._rows.end() || !it_r->key().equal(s, r.key())) {
+            mp.insert_row(s, r.key(), r.row());
         } else {
-            auto dr = r.row().difference(*s, column_kind::regular_column, it_r->row());
+            auto dr = r.row().difference(s, column_kind::regular_column, it_r->row());
             if (!dr.empty()) {
-                mp.insert_row(*s, r.key(), std::move(dr));
+                mp.insert_row(s, r.key(), std::move(dr));
             }
         }
     }

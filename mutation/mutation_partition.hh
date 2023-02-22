@@ -1398,7 +1398,7 @@ public:
     // Returns the minimal mutation_partition that when applied to "other" will
     // create a mutation_partition equal to the sum of other and this one.
     // This and other must both be governed by the same schema s.
-    mutation_partition difference(schema_ptr s, const mutation_partition& other) const;
+    mutation_partition difference(const schema& s, const mutation_partition& other) const;
 
     // Returns a subset of this mutation holding only information relevant for given clustering ranges.
     // Range tombstones will be trimmed to the boundaries of the clustering ranges.
