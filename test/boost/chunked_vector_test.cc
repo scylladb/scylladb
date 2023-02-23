@@ -149,7 +149,6 @@ public:
         }
         return *this;
     }
-    exception_safe_class& operator=(exception_safe_class&&) = default;
 };
 
 BOOST_AUTO_TEST_CASE(tests_constructor_exception_safety) {

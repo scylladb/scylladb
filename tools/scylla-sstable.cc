@@ -2298,7 +2298,6 @@ private:
             , _handler(std::move(schema), std::move(permit), _queue)
             , _thread([this] { _reader.Parse(_stream, _handler); })
         { }
-        impl(impl&&) = default;
         ~impl() {
             _thread.join().get();
         }
