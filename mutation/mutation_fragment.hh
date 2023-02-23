@@ -90,6 +90,9 @@ public:
     void apply(const schema& s, const deletable_row& r) {
         _row.apply(s, r);
     }
+    void apply(const schema& our_schema, const schema& their_schema, const deletable_row& r) {
+        _row.apply(our_schema, their_schema, r);
+    }
 
     position_in_partition_view position() const;
 
