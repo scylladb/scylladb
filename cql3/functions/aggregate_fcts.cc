@@ -34,6 +34,65 @@ namespace cql3::functions {
 }
 
 namespace {
+
+class internal_scalar_function : public scalar_function {
+    function_name _name;
+    data_type _return_type;
+    std::vector<data_type> _arg_types;
+    noncopyable_function<bytes_opt (const std::vector<bytes_opt>& parameters)> _func;
+public:
+    internal_scalar_function(
+            sstring name,
+            data_type return_type,
+            std::vector<data_type> arg_types,
+            noncopyable_function<bytes_opt (const std::vector<bytes_opt>& parameters)> func)
+            : _name(function_name::native_function(std::move(name)))
+            , _return_type(std::move(return_type))
+            , _arg_types(std::move(arg_types))
+            , _func(std::move(func)) {
+    }
+
+    virtual bytes_opt execute(const std::vector<bytes_opt>& parameters) override {
+        return _func(parameters);
+    }
+
+    virtual const function_name& name() const override {
+        return _name;
+    }
+
+    virtual const std::vector<data_type>& arg_types() const override {
+        return _arg_types;
+    }
+
+    virtual const data_type& return_type() const override {
+        return _return_type;
+    }
+
+    virtual bool is_pure() const override {
+        return true;
+    }
+
+    virtual bool is_native() const override {
+        return true;
+    }
+
+    virtual bool requires_thread() const override {
+        return false;
+    }
+
+    virtual bool is_aggregate() const override {
+        return false;
+    }
+
+    virtual void print(std::ostream& os) const override {
+        os << _name;
+    }
+
+    virtual sstring column_name(const std::vector<sstring>& column_names) const override {
+        return _name.name;
+    }
+};
+
 class impl_count_function : public aggregate_function::aggregate {
     int64_t _count = 0;
 public:
