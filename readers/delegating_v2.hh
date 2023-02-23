@@ -40,7 +40,7 @@ public:
     }
     virtual future<> fast_forward_to(position_range pr) override {
         _end_of_stream = false;
-        forward_buffer_to(pr.start());
+        clear_buffer();
         return _underlying->fast_forward_to(std::move(pr));
     }
     virtual future<> next_partition() override {

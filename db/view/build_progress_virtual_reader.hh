@@ -172,7 +172,7 @@ class build_progress_virtual_reader {
         }
 
         virtual future<> fast_forward_to(position_range range) override {
-            forward_buffer_to(range.start());
+            clear_buffer();
             _end_of_stream = false;
             return _underlying.fast_forward_to(std::move(range));
         }

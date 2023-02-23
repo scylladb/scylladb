@@ -175,7 +175,7 @@ class built_indexes_virtual_reader {
         }
 
         virtual future<> fast_forward_to(position_range range) override {
-            forward_buffer_to(range.start());
+            clear_buffer();
             _end_of_stream = false;
             // range contains index names (e.g., xyz) but the underlying table
             // contains view names (e.g., xyz_index) so we need to add the

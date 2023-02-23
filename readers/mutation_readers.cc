@@ -167,7 +167,7 @@ flat_mutation_reader_v2 make_forwardable(flat_mutation_reader_v2 m) {
             _current = std::move(pr);
             _end_of_stream = false;
             _current_has_content = false;
-            forward_buffer_to(_current.start());
+            clear_buffer();
             return make_ready_future<>();
         }
         virtual future<> next_partition() override {
@@ -267,7 +267,7 @@ flat_mutation_reader_v2 make_slicing_filtering_reader(flat_mutation_reader_v2 rd
         }
 
         virtual future<> fast_forward_to(position_range pr) override {
-            forward_buffer_to(pr.start());
+            clear_buffer();
             _end_of_stream = false;
             return _rd.fast_forward_to(std::move(pr));
         }
@@ -1544,7 +1544,7 @@ public:
         return _reader.fast_forward_to(pr);
     }
     virtual future<> fast_forward_to(position_range pr) override {
-        forward_buffer_to(pr.start());
+        clear_buffer();
         _end_of_stream = false;
         return _reader.fast_forward_to(std::move(pr));
     }
