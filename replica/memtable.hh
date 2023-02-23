@@ -33,7 +33,6 @@ namespace bi = boost::intrusive;
 namespace replica {
 
 class memtable_entry {
-    schema_ptr _schema;
     dht::decorated_key _key;
     partition_entry _pe;
     struct {
@@ -52,9 +51,8 @@ public:
     friend class memtable;
 
     memtable_entry(schema_ptr s, dht::decorated_key key, mutation_partition p)
-        : _schema(std::move(s))
-        , _key(std::move(key))
-        , _pe(*_schema, std::move(p))
+        : _key(std::move(key))
+        , _pe(*s, std::move(p))
     { }
 
     memtable_entry(memtable_entry&& o) noexcept;
@@ -65,8 +63,7 @@ public:
     dht::decorated_key& key() { return _key; }
     const partition_entry& partition() const { return _pe; }
     partition_entry& partition() { return _pe; }
-    const schema_ptr& schema() const { return _schema; }
-    schema_ptr& schema() { return _schema; }
+    const schema_ptr& schema() const { return _pe.get_schema(); }
     partition_snapshot_ptr snapshot(memtable& mtbl);
 
     // Makes the entry conform to given schema.
