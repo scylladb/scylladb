@@ -178,7 +178,10 @@ public:
             mutation_application_stats& app_stats);
     // Use in case this instance and p share the same schema.
     // Same guarantees as apply(const schema&, mutation_partition_v2&&, const schema&);
+    // Weak exception guarantees.
+    // Assumes this and p are not owned by a cache_tracker and non-evictable.
     void apply(const schema& s, mutation_partition_v2&& p, mutation_application_stats& app_stats);
+    void apply(const schema& s, mutation_partition&&, mutation_application_stats& app_stats);
 
     // Applies p to this instance.
     //
@@ -214,15 +217,6 @@ public:
             mutation_application_stats& app_stats);
     stop_iteration apply_monotonically(const schema& s, mutation_partition_v2&& p, cache_tracker*,
             mutation_application_stats& app_stats, preemption_check, apply_resume&, is_evictable);
-
-    // Weak exception guarantees.
-    // Assumes this and p are not owned by a cache_tracker and non-evictable.
-    void apply_weak(const schema& s, const mutation_partition& p, const schema& p_schema,
-                    mutation_application_stats& app_stats);
-    void apply_weak(const schema& s, mutation_partition&&,
-                    mutation_application_stats& app_stats);
-    void apply_weak(const schema& s, mutation_partition_view p, const schema& p_schema,
-                    mutation_application_stats& app_stats);
 
     // Converts partition to the new schema. When succeeds the partition should only be accessed
     // using the new schema.

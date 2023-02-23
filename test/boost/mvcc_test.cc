@@ -452,7 +452,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
                 }
 
                 auto expected = mutation_partition(*s, before);
-                expected.apply_weak(*s, std::move(expected_to_apply_slice), app_stats);
+                expected.apply(*s, std::move(expected_to_apply_slice), app_stats);
 
                 e += to_apply;
 

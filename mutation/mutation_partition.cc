@@ -243,21 +243,6 @@ void mutation_partition::ensure_last_dummy(const schema& s) {
     }
 }
 
-void mutation_partition::apply(const schema& s, const mutation_partition& p, const schema& p_schema,
-        mutation_application_stats& app_stats) {
-    apply_weak(s, p, p_schema, app_stats);
-}
-
-void mutation_partition::apply(const schema& s, mutation_partition&& p,
-        mutation_application_stats& app_stats) {
-    apply_weak(s, std::move(p), app_stats);
-}
-
-void mutation_partition::apply(const schema& s, mutation_partition_view p, const schema& p_schema,
-        mutation_application_stats& app_stats) {
-    apply_weak(s, p, p_schema, app_stats);
-}
-
 struct mutation_fragment_applier {
     const schema& _s;
     mutation_partition& _mp;
@@ -508,7 +493,7 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
 }
 
 void
-mutation_partition::apply_weak(const schema& s, mutation_partition_view p,
+mutation_partition::apply(const schema& s, mutation_partition_view p,
         const schema& p_schema, mutation_application_stats& app_stats) {
     // FIXME: Optimize
     mutation_partition p2(*this, copy_comparators_only{});
@@ -517,13 +502,13 @@ mutation_partition::apply_weak(const schema& s, mutation_partition_view p,
     apply_monotonically(s, std::move(p2), p_schema, app_stats);
 }
 
-void mutation_partition::apply_weak(const schema& s, const mutation_partition& p,
+void mutation_partition::apply(const schema& s, const mutation_partition& p,
         const schema& p_schema, mutation_application_stats& app_stats) {
     // FIXME: Optimize
     apply_monotonically(s, mutation_partition(p_schema, p), p_schema, app_stats);
 }
 
-void mutation_partition::apply_weak(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats) {
+void mutation_partition::apply(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats) {
     apply_monotonically(s, std::move(p), no_cache_tracker, app_stats);
 }
 
