@@ -789,6 +789,24 @@ SEASTAR_THREAD_TEST_CASE(test_make_nonforwardable) {
             check(std::move(rd));
         }
     }
+
+    // fast_forward_to()
+    {
+        const auto m1_range = dht::partition_range::make_singular(m1.decorated_key());
+        auto rd = make_reader({m1, m2}, false, m1_range);
+        rd.set_max_buffer_size(1);
+
+        rd.produces_partition_start(m1.decorated_key(), m1.partition().partition_tombstone());
+
+        const auto m2_range = dht::partition_range::make_singular(m2.decorated_key());
+        rd.fast_forward_to(m2_range);
+        rd.produces_partition_start(m2.decorated_key(), m2.partition().partition_tombstone());
+        rd.produces_row_with_key(m2.partition().clustered_rows().begin()->key());
+        rd.produces_partition_end();
+
+        rd.next_partition();
+        rd.produces_end_of_stream();
+    }
 }
 
 SEASTAR_TEST_CASE(test_abandoned_flat_mutation_reader_from_mutation) {

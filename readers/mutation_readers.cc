@@ -472,6 +472,8 @@ flat_mutation_reader_v2 make_nonforwardable(flat_mutation_reader_v2 r, bool sing
         virtual future<> fast_forward_to(const dht::partition_range& pr) override {
             _end_of_stream = false;
             clear_buffer();
+            _partition_is_open = false;
+            _static_row_done = false;
             return _underlying.fast_forward_to(pr);
         }
         virtual future<> close() noexcept override {
