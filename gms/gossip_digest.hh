@@ -51,13 +51,6 @@ public:
         return _max_version;
     }
 
-    int32_t compare_to(gossip_digest d) const {
-        if (_generation != d.get_generation()) {
-            return (_generation - d.get_generation());
-        }
-        return (_max_version - d.get_max_version());
-    }
-
     friend bool operator<(const gossip_digest& x, const gossip_digest& y) {
         if (x._generation != y._generation) {
             return x._generation < y._generation;
