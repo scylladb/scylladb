@@ -1581,6 +1581,16 @@ row::row(const schema& s, column_kind kind, const row& o) : _size(o._size)
     _cells.clone_from(o._cells, clone_cell_and_hash);
 }
 
+row row::construct(const schema& our_schema, const schema& their_schema, column_kind kind, const row& o) {
+    if (our_schema.version() == their_schema.version()) {
+        return row(our_schema, kind, o);
+    } else {
+        row r;
+        r.apply(our_schema, their_schema, kind, o);
+        return r;
+    }
+}
+
 row::~row() {
 }
 

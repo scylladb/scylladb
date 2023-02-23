@@ -97,6 +97,7 @@ public:
     row();
     ~row();
     row(const schema&, column_kind, const row&);
+    static row construct(const schema& our_schema, const schema& their_schema, column_kind, const row&);
     row(row&& other) noexcept;
     row& operator=(row&& other) noexcept;
     size_t size() const { return _size; }
@@ -824,6 +825,11 @@ public:
         : _deleted_at(other._deleted_at)
         , _marker(other._marker)
         , _cells(s, column_kind::regular_column, other._cells)
+    { }
+    deletable_row(const schema& our_schema, const schema& their_schema, const deletable_row& other)
+        : _deleted_at(other._deleted_at)
+        , _marker(other._marker)
+        , _cells(row::construct(our_schema, their_schema, column_kind::regular_column, other._cells))
     { }
     deletable_row(row_tombstone&& tomb, row_marker&& marker, row&& cells)
         : _deleted_at(std::move(tomb)), _marker(std::move(marker)), _cells(std::move(cells))
