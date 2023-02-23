@@ -120,12 +120,12 @@ inline Result squashed(const partition_version_ref& v, Map&& map, Reduce&& reduc
     return ::static_row(::squashed<row>(version(),
                          [&] (const mutation_partition_v2& mp) -> const row& {
                             if (digest_requested) {
-                                mp.static_row().prepare_hash(*_schema, column_kind::static_column);
+                                mp.static_row().prepare_hash(*schema(), column_kind::static_column);
                             }
                             return mp.static_row().get();
                          },
-                         [this] (const row& r) { return row(*_schema, column_kind::static_column, r); },
-                         [this] (row& a, const row& b) { a.apply(*_schema, column_kind::static_column, b); }));
+                         [this] (const row& r) { return row(*schema(), column_kind::static_column, r); },
+                         [this] (row& a, const row& b) { a.apply(*schema(), column_kind::static_column, b); }));
 }
 
 bool partition_snapshot::static_row_continuous() const {
@@ -141,12 +141,12 @@ tombstone partition_snapshot::partition_tombstone() const {
 mutation_partition partition_snapshot::squashed() const {
     return ::squashed<mutation_partition>(version(),
                                [this] (const mutation_partition_v2& mp) -> mutation_partition {
-                                   return mp.as_mutation_partition(*_schema);
+                                   return mp.as_mutation_partition(*schema());
                                },
                                [] (mutation_partition&& mp) { return std::move(mp); },
                                [this] (mutation_partition& a, const mutation_partition& b) {
                                    mutation_application_stats app_stats;
-                                   a.apply(*_schema, b, *_schema, app_stats);
+                                   a.apply(*schema(), b, *schema(), app_stats);
                                });
 }
 
@@ -604,7 +604,7 @@ partition_snapshot_ptr partition_entry::read(logalloc::region& r,
         }
     }
 
-    auto snp = make_lw_shared<partition_snapshot>(entry_schema, r, cleaner, this, tracker, phase);
+    auto snp = make_lw_shared<partition_snapshot>(r, cleaner, this, tracker, phase);
     _snapshot = snp.get();
     return partition_snapshot_ptr(std::move(snp));
 }
