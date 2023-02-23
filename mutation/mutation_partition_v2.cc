@@ -523,23 +523,7 @@ void mutation_partition_v2::apply(const schema& s, mutation_partition_v2&& p, mu
     apply_monotonically(s, mutation_partition_v2(s, std::move(p)), no_cache_tracker, app_stats, is_evictable::no);
 }
 
-void
-mutation_partition_v2::apply_weak(const schema& s, mutation_partition_view p,
-                                  const schema& p_schema, mutation_application_stats& app_stats) {
-    // FIXME: Optimize
-    mutation_partition p2(p_schema.shared_from_this());
-    partition_builder b(p_schema, p2);
-    p.accept(p_schema, b);
-    apply_monotonically(s, mutation_partition_v2(p_schema, std::move(p2)), p_schema, app_stats);
-}
-
-void mutation_partition_v2::apply_weak(const schema& s, const mutation_partition& p,
-                                       const schema& p_schema, mutation_application_stats& app_stats) {
-    // FIXME: Optimize
-    apply_monotonically(s, mutation_partition_v2(s, p), p_schema, app_stats);
-}
-
-void mutation_partition_v2::apply_weak(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats) {
+void mutation_partition_v2::apply(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats) {
     apply_monotonically(s, mutation_partition_v2(s, std::move(p)), no_cache_tracker, app_stats, is_evictable::no);
 }
 
@@ -557,7 +541,7 @@ mutation_partition_v2::apply_row_tombstone(const schema& schema, range_tombstone
     mutation_partition mp(schema.shared_from_this());
     mp.apply_row_tombstone(schema, std::move(rt));
     mutation_application_stats stats;
-    apply_weak(schema, std::move(mp), stats);
+    apply(schema, std::move(mp), stats);
 }
 
 void
