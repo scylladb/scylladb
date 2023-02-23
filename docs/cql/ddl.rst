@@ -746,9 +746,7 @@ CDC options
 
 .. versionadded:: 3.2 Scylla Open Source
 
-The following options are to be used with Change Data Capture. Available as an experimental feature from Scylla Open Source 3.2. 
-To use this feature, you must enable the :ref:`experimental tag <yaml_enabling_experimental_features>` in the scylla.yaml.
-
+The following options can be used with Change Data Capture.
 
 +---------------------------+-----------------+------------------------------------------------------------------------------------------------------------------------+
 | option                    |  default        | description                                                                                                            |
