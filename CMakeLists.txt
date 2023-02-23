@@ -348,8 +348,6 @@ set(CMAKE_EXE_LINKER_FLAGS "${default_linker_flags}" CACHE INTERNAL "")
 
 # TODO: patch dynamic linker to match configure.py behavior
 
-target_compile_definitions(scylla PRIVATE HAVE_LZ4_COMPRESS_DEFAULT)
-
 target_include_directories(scylla PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${scylla_gen_build_dir}")
