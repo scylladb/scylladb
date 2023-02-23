@@ -268,7 +268,6 @@ public:
         }
     };
 private:
-    schema_ptr _schema;
     // Either _version or _entry is non-null.
     partition_version_ref _version;
     partition_entry* _entry;
@@ -282,13 +281,12 @@ private:
     friend class partition_entry;
     friend class mutation_cleaner_impl;
 public:
-    explicit partition_snapshot(schema_ptr s,
-                                logalloc::region& region,
+    explicit partition_snapshot(logalloc::region& region,
                                 mutation_cleaner& cleaner,
                                 partition_entry* entry,
                                 cache_tracker* tracker, // non-null for evictable snapshots
                                 phase_type phase = default_phase)
-        : _schema(std::move(s)), _entry(entry), _phase(phase), _region(&region), _cleaner(&cleaner), _tracker(tracker) { }
+        : _entry(entry), _phase(phase), _region(&region), _cleaner(&cleaner), _tracker(tracker) { }
     partition_snapshot(const partition_snapshot&) = delete;
     partition_snapshot(partition_snapshot&&) = delete;
     partition_snapshot& operator=(const partition_snapshot&) = delete;
@@ -370,7 +368,7 @@ public:
         return !version()->next();
     }
 
-    const schema_ptr& schema() const { return _schema; }
+    const schema_ptr& schema() const { return version()->get_schema(); }
     logalloc::region& region() const { return *_region; }
     cache_tracker* tracker() const { return _tracker; }
     mutation_cleaner& cleaner() { return *_cleaner; }
