@@ -134,7 +134,9 @@ struct sstable_open_config {
     // fields respectively. Problematic sstables might fail to load. Set to
     // false if you want to disable this, to be able to read such sstables.
     // Should only be disabled for diagnostics purposes.
-    bool load_first_and_last_position_metadata = true;
+    // FIXME: Enable it by default once the root cause of large allocation when reading sstable in reverse is fixed.
+    //  Ref: https://github.com/scylladb/scylladb/issues/11642
+    bool load_first_and_last_position_metadata = false;
 };
 
 class sstable : public enable_lw_shared_from_this<sstable> {
