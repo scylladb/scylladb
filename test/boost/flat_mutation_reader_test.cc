@@ -746,10 +746,48 @@ SEASTAR_THREAD_TEST_CASE(test_make_nonforwardable) {
         return assert_that(std::move(result)).exact();
     };
 
+    const auto pk1 = s.make_pkey(1);
+    auto m1 = mutation(s.schema(), pk1);
+    m1.apply(s.make_row(permit, s.make_ckey(11), "value1"));
+
+    const auto pk2 = s.make_pkey(2);
+    auto m2 = mutation(s.schema(), pk2);
+    m2.apply(s.make_row(permit, s.make_ckey(22), "value2"));
+
+    const auto pk3 = s.make_pkey(3);
+    auto m3 = mutation(s.schema(), pk3);
+    m3.apply(s.make_row(permit, s.make_ckey(33), "value3"));
+
+    dht::ring_position_comparator cmp{*s.schema()};
+    BOOST_CHECK_EQUAL(cmp(m1.decorated_key(), m2.decorated_key()), std::strong_ordering::less);
+    BOOST_CHECK_EQUAL(cmp(m2.decorated_key(), m3.decorated_key()), std::strong_ordering::less);
+
     // no input -> no output
     {
         auto rd = make_reader({}, false, query::full_partition_range);
         rd.produces_end_of_stream();
+    }
+
+    // next_partition()
+    {
+        auto check = [&] (flat_reader_assertions_v2 rd) {
+            rd.produces_partition_start(m1.decorated_key(), m1.partition().partition_tombstone());
+            rd.next_partition();
+            rd.produces_partition_start(m2.decorated_key(), m2.partition().partition_tombstone());
+            rd.produces_row_with_key(m2.partition().clustered_rows().begin()->key());
+            rd.produces_partition_end();
+            rd.produces_end_of_stream();
+        };
+
+        // buffer is not empty
+        check(make_reader({m1, m2}, false, query::full_partition_range));
+
+        // buffer is empty
+        {
+            auto rd = make_reader({m1, m2}, false, query::full_partition_range);
+            rd.set_max_buffer_size(1);
+            check(std::move(rd));
+        }
     }
 }
 

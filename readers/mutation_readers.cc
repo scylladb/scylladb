@@ -461,6 +461,8 @@ flat_mutation_reader_v2 make_nonforwardable(flat_mutation_reader_v2 r, bool sing
             clear_buffer_to_next_partition();
             auto maybe_next_partition = make_ready_future<>();;
             if (is_buffer_empty()) {
+                _partition_is_open = false;
+                _static_row_done = false;
                 maybe_next_partition = _underlying.next_partition();
             }
           return maybe_next_partition.then([this] {
