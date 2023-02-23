@@ -523,24 +523,28 @@ public:
                const schema& mp_schema,
                mutation_application_stats& app_stats);
 
-    // Adds mutation_partition represented by "other" to the one represented
+    // Adds mutation_partition represented by "pe" to the one represented
     // by this entry.
     // This entry must be evictable.
+    // "pe" must be fully-continuous.
+    // (Alternatively: applies the "pe" memtable entry to "this" cache entry.)
     //
-    // The argument must be fully-continuous.
-    //
-    // The continuity of this entry remains unchanged. Information from "other"
+    // The continuity of this entry remains unchanged. Information from "pe"
     // which is incomplete in this instance is dropped. In other words, this
     // performs set intersection on continuity information, drops information
     // which falls outside of the continuity range, and applies regular merging
     // rules for the rest.
+    // (Rationale: updates from the memtable are only applied to intervals
+    // which were already in cache. The cache treats the entire sstable set as a
+    // single source -- it isn't able to store partial information only from a
+    // single sstable.)
     //
     // Weak exception guarantees.
-    // If an exception is thrown this and pe will be left in some valid states
+    // If an exception is thrown, "this" and "pe" will be left in some valid states
     // such that if the operation is retried (possibly many times) and eventually
     // succeeds the result will be as if the first attempt didn't fail.
     //
-    // The schema of pe must conform to s.
+    // The schema of "pe" must conform to "s".
     //
     // Returns a coroutine object representing the operation.
     // The coroutine must be resumed with the region being unlocked.
