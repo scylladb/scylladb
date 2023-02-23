@@ -275,7 +275,7 @@ future<> view_update_backlog_broker::on_change(gms::inet_address endpoint, gms::
         size_t current;
         size_t max;
         api::timestamp_type ticks;
-        const char* start_bound = value.value.data();
+        const char* start_bound = value.value().data();
         char* end_bound;
         for (auto* ptr : {&current, &max}) {
             *ptr = std::strtoull(start_bound, &end_bound, 10);
@@ -288,7 +288,7 @@ future<> view_update_backlog_broker::on_change(gms::inet_address endpoint, gms::
             return make_ready_future();
         }
         ticks = std::strtoll(start_bound, &end_bound, 10);
-        if (ticks == 0 || ticks == LLONG_MAX || end_bound != value.value.data() + value.value.size()) {
+        if (ticks == 0 || ticks == LLONG_MAX || end_bound != value.value().data() + value.value().size()) {
             return make_ready_future();
         }
         auto backlog = view_update_backlog_timestamped{db::view::update_backlog{current, max}, ticks};

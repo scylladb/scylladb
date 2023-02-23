@@ -1816,7 +1816,7 @@ storage_service::get_rpc_address(const inet_address& endpoint) const {
     if (endpoint != get_broadcast_address()) {
         auto* v = _gossiper.get_application_state_ptr(endpoint, gms::application_state::RPC_ADDRESS);
         if (v) {
-            return v->value;
+            return v->value();
         }
     }
     return fmt::to_string(endpoint);
@@ -2160,9 +2160,9 @@ future<> storage_service::handle_state_removing(inet_address endpoint, std::vect
                 throw std::runtime_error(err);
             }
             std::vector<sstring> coordinator;
-            boost::split(coordinator, value->value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
+            boost::split(coordinator, value->value(), boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
             if (coordinator.size() != 2) {
-                auto err = format("Can not split REMOVAL_COORDINATOR for endpoint={}, value={}", endpoint, value->value);
+                auto err = format("Can not split REMOVAL_COORDINATOR for endpoint={}, value={}", endpoint, value->value());
                 slogger.warn("{}", err);
                 throw std::runtime_error(err);
             }
@@ -2236,7 +2236,7 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
     slogger.debug("endpoint={} on_change:     app_state={}, versioned_value={}", endpoint, state, value);
     if (state == application_state::STATUS) {
         std::vector<sstring> pieces;
-        boost::split(pieces, value.value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
+        boost::split(pieces, value.value(), boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
         if (pieces.empty()) {
             slogger.warn("Fail to split status in on_change: endpoint={}, app_state={}, value={}", endpoint, state, value);
             co_return;
@@ -2274,7 +2274,7 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
                 slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
                 co_await notify_cql_change(endpoint, ep_state->is_cql_ready());
             } else if (state == application_state::INTERNAL_IP) {
-                co_await maybe_reconnect_to_preferred_ip(endpoint, inet_address(value.value));
+                co_await maybe_reconnect_to_preferred_ip(endpoint, inet_address(value.value()));
             }
         }
     }
@@ -2330,18 +2330,18 @@ future<> storage_service::update_table(gms::inet_address endpoint, sstring col, 
 future<> storage_service::do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value) {
     slogger.debug("Update system.peers table: endpoint={}, app_state={}, versioned_value={}", endpoint, state, value);
     if (state == application_state::RELEASE_VERSION) {
-        co_await update_table(endpoint, "release_version", value.value);
+        co_await update_table(endpoint, "release_version", value.value());
     } else if (state == application_state::DC) {
-        co_await update_table(endpoint, "data_center", value.value);
+        co_await update_table(endpoint, "data_center", value.value());
     } else if (state == application_state::RACK) {
-        co_await update_table(endpoint, "rack", value.value);
+        co_await update_table(endpoint, "rack", value.value());
     } else if (state == application_state::INTERNAL_IP) {
         auto col = sstring("preferred_ip");
         inet_address ep;
         try {
-            ep = gms::inet_address(value.value);
+            ep = gms::inet_address(value.value());
         } catch (...) {
-            slogger.error("fail to update {} for {}: invalid address {}", col, endpoint, value.value);
+            slogger.error("fail to update {} for {}: invalid address {}", col, endpoint, value.value());
             co_return;
         }
         co_await update_table(endpoint, col, ep.addr());
@@ -2349,18 +2349,18 @@ future<> storage_service::do_update_system_peers_table(gms::inet_address endpoin
         auto col = sstring("rpc_address");
         inet_address ep;
         try {
-            ep = gms::inet_address(value.value);
+            ep = gms::inet_address(value.value());
         } catch (...) {
-            slogger.error("fail to update {} for {}: invalid rcpaddr {}", col, endpoint, value.value);
+            slogger.error("fail to update {} for {}: invalid rcpaddr {}", col, endpoint, value.value());
             co_return;
         }
         co_await update_table(endpoint, col, ep.addr());
     } else if (state == application_state::SCHEMA) {
-        co_await update_table(endpoint, "schema_version", utils::UUID(value.value));
+        co_await update_table(endpoint, "schema_version", utils::UUID(value.value()));
     } else if (state == application_state::HOST_ID) {
-        co_await update_table(endpoint, "host_id", utils::UUID(value.value));
+        co_await update_table(endpoint, "host_id", utils::UUID(value.value()));
     } else if (state == application_state::SUPPORTED_FEATURES) {
-        co_await update_table(endpoint, "supported_features", value.value);
+        co_await update_table(endpoint, "supported_features", value.value());
     }
 }
 
@@ -2390,8 +2390,8 @@ locator::endpoint_dc_rack storage_service::get_dc_rack_for(inet_address endpoint
     auto* dc = _gossiper.get_application_state_ptr(endpoint, gms::application_state::DC);
     auto* rack = _gossiper.get_application_state_ptr(endpoint, gms::application_state::RACK);
     return locator::endpoint_dc_rack{
-        .dc = dc ? dc->value : locator::endpoint_dc_rack::default_location.dc,
-        .rack = rack ? rack->value : locator::endpoint_dc_rack::default_location.rack,
+        .dc = dc ? dc->value() : locator::endpoint_dc_rack::default_location.dc,
+        .rack = rack ? rack->value() : locator::endpoint_dc_rack::default_location.rack,
     };
 }
 

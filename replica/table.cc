@@ -2210,9 +2210,9 @@ table::cache_hit_rate table::get_hit_rate(const gms::gossiper& gossiper, gms::in
             float f = -1.0f; // missing state means old node
             if (state) {
                 sstring me = format("{}.{}", _schema->ks_name(), _schema->cf_name());
-                auto i = state->value.find(me);
+                auto i = state->value().find(me);
                 if (i != sstring::npos) {
-                    f = strtof(&state->value[i + me.size() + 1], nullptr);
+                    f = strtof(&state->value()[i + me.size() + 1], nullptr);
                 } else {
                     f = 0.0f; // empty state means that node has rebooted
                 }

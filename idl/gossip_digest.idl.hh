@@ -28,8 +28,8 @@ enum class application_state:int {
 };
 
 class versioned_value {
-    sstring value;
-    int version;
+    sstring value();
+    int version();
 };
 
 class heart_beat_state {

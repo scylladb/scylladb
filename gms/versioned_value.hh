@@ -36,6 +36,8 @@ namespace gms {
  */
 
 class versioned_value {
+    int _version;
+    sstring _value;
 public:
     // this must be a char that cannot be present in any token
     static constexpr char DELIMITER = ',';
@@ -58,17 +60,17 @@ public:
     // values for ApplicationState.REMOVAL_COORDINATOR
     static constexpr const char* REMOVAL_COORDINATOR = "REMOVER";
 
-    int version;
-    sstring value;
+    int version() const noexcept { return _version; };
+    const sstring& value() const noexcept { return _value; };
 public:
     bool operator==(const versioned_value& other) const noexcept {
-        return version == other.version &&
-               value   == other.value;
+        return _version == other._version &&
+               _value   == other._value;
     }
 
 public:
     versioned_value(const sstring& value, int version = version_generator::get_next_version())
-        : version(version), value(value) {
+        : _version(version), _value(value) {
 #if 0
         // blindly interning everything is somewhat suboptimal -- lots of VersionedValues are unique --
         // but harmless, and interning the non-unique ones saves significant memory.  (Unfortunately,
@@ -79,15 +81,15 @@ public:
     }
 
     versioned_value(sstring&& value, int version = version_generator::get_next_version()) noexcept
-        : version(version), value(std::move(value)) {
+        : _version(version), _value(std::move(value)) {
     }
 
     versioned_value() noexcept
-        : version(-1) {
+        : _version(-1) {
     }
 
     friend inline std::ostream& operator<<(std::ostream& os, const versioned_value& x) {
-        return os << "Value(" << x.value << "," << x.version <<  ")";
+        return os << "Value(" << x.value() << "," << x.version() <<  ")";
     }
 
     static sstring version_string(const std::initializer_list<sstring>& args) {
@@ -105,7 +107,7 @@ public:
     static std::optional<cdc::generation_id> cdc_generation_id_from_string(const sstring&);
 
     static versioned_value clone_with_higher_version(const versioned_value& value) noexcept {
-        return versioned_value(value.value);
+        return versioned_value(value.value());
     }
 
     static versioned_value bootstrapping(const std::unordered_set<dht::token>& tokens) {

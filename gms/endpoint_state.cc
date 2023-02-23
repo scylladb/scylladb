@@ -48,7 +48,7 @@ bool endpoint_state::is_cql_ready() const noexcept {
         return false;
     }
     try {
-        return boost::lexical_cast<int>(app_state->value);
+        return boost::lexical_cast<int>(app_state->value());
     } catch (...) {
         return false;
     }

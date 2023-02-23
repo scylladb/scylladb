@@ -599,7 +599,7 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, const endpoint
                     const auto& remote_key = item.first;
                     const auto& remote_value = item.second;
                     const versioned_value* local_value = local_state.get_application_state_ptr(remote_key);
-                    if (!local_value || remote_value.version > local_value->version) {
+                    if (!local_value || remote_value.version() > local_value->version()) {
                         logger.debug("Applying remote_state for node {} (remote generation = local generation), key={}, value={}",
                                 node, remote_key, remote_value);
                         local_state.add_application_state(remote_key, remote_value);
@@ -1096,7 +1096,7 @@ int gossiper::get_max_endpoint_state_version(endpoint_state state) const noexcep
     int max_version = state.get_heart_beat_state().get_heart_beat_version();
     for (auto& entry : state.get_application_state_map()) {
         auto& value = entry.second;
-        max_version = std::max(max_version, value.version);
+        max_version = std::max(max_version, value.version());
     }
     return max_version;
 }
@@ -1403,7 +1403,7 @@ locator::host_id gossiper::get_host_id(inet_address endpoint) const {
     if (!app_state) {
         throw std::runtime_error(format("Host {} does not have HOST_ID application_state", endpoint));
     }
-    return locator::host_id(utils::UUID(app_state->value));
+    return locator::host_id(utils::UUID(app_state->value()));
 }
 
 std::set<gms::inet_address> gossiper::get_nodes_with_host_id(locator::host_id host_id) const {
@@ -1411,7 +1411,7 @@ std::set<gms::inet_address> gossiper::get_nodes_with_host_id(locator::host_id ho
     for (auto& x : get_endpoint_states()) {
         auto node = x.first;
         auto app_state = get_application_state_ptr(node, application_state::HOST_ID);
-        if (app_state && host_id == locator::host_id(utils::UUID(app_state->value))) {
+        if (app_state && host_id == locator::host_id(utils::UUID(app_state->value()))) {
             nodes.insert(node);
         }
     }
@@ -1439,12 +1439,12 @@ std::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_a
         /* Accumulate all application states whose versions are greater than "version" variable */
         for (auto& entry : eps.get_application_state_map()) {
             auto& value = entry.second;
-            if (value.version > version) {
+            if (value.version() > version) {
                 if (!reqd_endpoint_state) {
                     reqd_endpoint_state.emplace(eps.get_heart_beat_state());
                 }
                 auto& key = entry.first;
-                logger.trace("Adding state of {}, {}: {}" , for_endpoint, key, value.value);
+                logger.trace("Adding state of {}, {}: {}" , for_endpoint, key, value.value());
                 reqd_endpoint_state->add_application_state(key, value);
             }
         }
@@ -1467,7 +1467,7 @@ sstring gossiper::get_rpc_address(const inet_address& endpoint) const {
     if (endpoint != get_broadcast_address()) {
         auto* v = get_application_state_ptr(endpoint, gms::application_state::RPC_ADDRESS);
         if (v) {
-            return v->value;
+            return v->value();
         }
     }
     return fmt::to_string(endpoint);
@@ -1718,7 +1718,7 @@ future<> gossiper::apply_new_states(inet_address addr, endpoint_state& local_sta
             }
 
             const versioned_value* local_val = local_state.get_application_state_ptr(remote_key);
-            if (!local_val || remote_value.version > local_val->version) {
+            if (!local_val || remote_value.version() > local_val->version()) {
                 changed.push_back(remote_key);
                 local_state.add_application_state(remote_key, remote_value);
             }
@@ -2275,7 +2275,7 @@ sstring gossiper::get_application_state_value(inet_address endpoint, application
     if (!v) {
         return {};
     }
-    return v->value;
+    return v->value();
 }
 
 /**
@@ -2305,7 +2305,7 @@ static std::string_view do_get_gossip_status(const gms::versioned_value* app_sta
     if (!app_state) {
         return gms::versioned_value::STATUS_UNKNOWN;
     }
-    const auto& value = app_state->value;
+    const auto& value = app_state->value();
     auto pos = value.find(',');
     if (!value.size() || !pos) {
         return gms::versioned_value::STATUS_UNKNOWN;
@@ -2438,7 +2438,7 @@ std::set<sstring> gossiper::get_supported_features(inet_address endpoint) const 
     if (!app_state) {
         return {};
     }
-    return feature_service::to_feature_set(app_state->value);
+    return feature_service::to_feature_set(app_state->value());
 }
 
 std::set<sstring> gossiper::get_supported_features(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, ignore_features_of_local_node ignore_local_node) const {
@@ -2512,8 +2512,8 @@ void gossiper::check_snitch_name_matches(sstring local_snitch_name) const {
             continue;
         }
 
-        if (remote_snitch_name->value != local_snitch_name) {
-            throw std::runtime_error(format("Snitch check failed. This node cannot join the cluster because it uses {} and not {}", local_snitch_name, remote_snitch_name->value));
+        if (remote_snitch_name->value() != local_snitch_name) {
+            throw std::runtime_error(format("Snitch check failed. This node cannot join the cluster because it uses {} and not {}", local_snitch_name, remote_snitch_name->value()));
         }
     }
 }
@@ -2535,11 +2535,11 @@ void gossiper::append_endpoint_state(std::stringstream& ss, const endpoint_state
         if (app_state == application_state::TOKENS) {
             continue;
         }
-        ss << "  " << app_state << ":" << versioned_val.version << ":" << versioned_val.value << "\n";
+        ss << "  " << app_state << ":" << versioned_val.version() << ":" << versioned_val.value() << "\n";
     }
     const auto& app_state_map = state.get_application_state_map();
     if (app_state_map.contains(application_state::TOKENS)) {
-        ss << "  TOKENS:" << app_state_map.at(application_state::TOKENS).version << ":<hidden>\n";
+        ss << "  TOKENS:" << app_state_map.at(application_state::TOKENS).version() << ":<hidden>\n";
     } else {
         ss << "  TOKENS: not present" << "\n";
     }

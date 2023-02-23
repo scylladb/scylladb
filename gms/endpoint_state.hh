@@ -140,7 +140,7 @@ public:
         if (!app_state) {
             return empty;
         }
-        const auto& value = app_state->value;
+        const auto& value = app_state->value();
         if (value.empty()) {
             return empty;
         }

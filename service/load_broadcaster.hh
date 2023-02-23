@@ -37,7 +37,7 @@ public:
 
     virtual future<> on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) override {
         if (state == gms::application_state::LOAD) {
-            _load_info[endpoint] = std::stod(value.value);
+            _load_info[endpoint] = std::stod(value.value());
         }
         return make_ready_future();
     }
