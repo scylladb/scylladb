@@ -807,6 +807,43 @@ SEASTAR_THREAD_TEST_CASE(test_make_nonforwardable) {
         rd.next_partition();
         rd.produces_end_of_stream();
     }
+
+    // single_partition
+    {
+        auto rd = make_reader({m1, m2}, true, query::full_partition_range);
+        rd.set_max_buffer_size(1);
+
+        rd.produces_partition_start(m1.decorated_key(), m1.partition().partition_tombstone());
+        rd.produces_row_with_key(m1.partition().clustered_rows().begin()->key());
+        rd.produces_partition_end();
+        rd.produces_end_of_stream();
+
+        rd.next_partition();
+        rd.produces_partition_start(m2.decorated_key(), m2.partition().partition_tombstone());
+        rd.produces_row_with_key(m2.partition().clustered_rows().begin()->key());
+        rd.produces_partition_end();
+        rd.produces_end_of_stream();
+
+        rd.next_partition();
+        rd.produces_end_of_stream();
+    }
+
+    // static row
+    {
+        s.add_static_row(m1, "test-static");
+        const auto m1_range = dht::partition_range::make_singular(m1.decorated_key());
+        auto rd = make_reader({m1, m2}, false, m1_range);
+        rd.set_max_buffer_size(1);
+        rd.produces_partition_start(m1.decorated_key(), m1.partition().partition_tombstone());
+        rd.produces_static_row(
+            {{s.schema()->get_column_definition(to_bytes("s1")), to_bytes("test-static")}});
+        rd.produces_row(
+            m1.partition().clustered_rows().begin()->key(),
+            {{s.schema()->get_column_definition(to_bytes("v")), to_bytes("value1")}}
+        );
+        rd.produces_partition_end();
+        rd.produces_end_of_stream();
+    }
 }
 
 SEASTAR_TEST_CASE(test_abandoned_flat_mutation_reader_from_mutation) {
