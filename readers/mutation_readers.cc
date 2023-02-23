@@ -411,15 +411,19 @@ flat_mutation_reader_v2 make_nonforwardable(flat_mutation_reader_v2 r, bool sing
         flat_mutation_reader_v2 _underlying;
         bool _single_partition;
         bool _static_row_done = false;
+        bool _partition_is_open = false;
         bool is_end_end_of_underlying_stream() const {
             return _underlying.is_buffer_empty() && _underlying.is_end_of_stream();
         }
         future<> on_end_of_underlying_stream() {
-            if (!_static_row_done) {
-                _static_row_done = true;
-                return _underlying.fast_forward_to(position_range::all_clustered_rows());
+            if (_partition_is_open) {
+                if (!_static_row_done) {
+                    _static_row_done = true;
+                    return _underlying.fast_forward_to(position_range::all_clustered_rows());
+                }
+                push_mutation_fragment(*_schema, _permit, partition_end());
+                _partition_is_open = false;
             }
-            push_mutation_fragment(*_schema, _permit, partition_end());
             if (_single_partition) {
                 _end_of_stream = true;
                 return make_ready_future<>();
@@ -440,6 +444,9 @@ flat_mutation_reader_v2 make_nonforwardable(flat_mutation_reader_v2 r, bool sing
         virtual future<> fill_buffer() override {
             return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
                 return fill_buffer_from(_underlying).then([this] (bool underlying_finished) {
+                    if (!_partition_is_open && !is_buffer_empty()) {
+                        _partition_is_open = true;
+                    }
                     if (underlying_finished) {
                         return on_end_of_underlying_stream();
                     }

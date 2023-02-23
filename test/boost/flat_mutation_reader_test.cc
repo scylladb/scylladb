@@ -38,6 +38,7 @@
 #include "readers/from_fragments_v2.hh"
 #include "readers/forwardable_v2.hh"
 #include "readers/compacting.hh"
+#include "readers/nonforwardable.hh"
 
 struct mock_consumer {
     struct result {
@@ -725,6 +726,31 @@ SEASTAR_TEST_CASE(test_make_forwardable) {
             test(rd2, ms[i]);
         }
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_make_nonforwardable) {
+    simple_schema s;
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    const auto permit = semaphore.make_permit();
+
+    auto make_reader = [&](std::vector<mutation> mutations,
+        bool single_partition,
+        const dht::partition_range& pr)
+    {
+        auto result = make_flat_mutation_reader_from_mutations_v2(s.schema(),
+            permit,
+            std::move(mutations),
+            pr,
+            streamed_mutation::forwarding::yes);
+        result = make_nonforwardable(std::move(result), single_partition);
+        return assert_that(std::move(result)).exact();
+    };
+
+    // no input -> no output
+    {
+        auto rd = make_reader({}, false, query::full_partition_range);
+        rd.produces_end_of_stream();
+    }
 }
 
 SEASTAR_TEST_CASE(test_abandoned_flat_mutation_reader_from_mutation) {
