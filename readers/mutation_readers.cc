@@ -428,11 +428,11 @@ flat_mutation_reader_v2 make_nonforwardable(flat_mutation_reader_v2 r, bool sing
                 _end_of_stream = true;
                 return make_ready_future<>();
             }
-          return _underlying.next_partition().then([this] {
-            return _underlying.fill_buffer().then([this] {
-                _end_of_stream = is_end_end_of_underlying_stream();
+            return _underlying.next_partition().then([this] {
+                return _underlying.fill_buffer().then([this] {
+                    _end_of_stream = is_end_end_of_underlying_stream();
+                });
             });
-          });
         }
         void reset_partition() {
             _partition_is_open = false;
@@ -467,9 +467,9 @@ flat_mutation_reader_v2 make_nonforwardable(flat_mutation_reader_v2 r, bool sing
                 reset_partition();
                 maybe_next_partition = _underlying.next_partition();
             }
-          return maybe_next_partition.then([this] {
-            _end_of_stream = is_end_end_of_underlying_stream();
-          });
+            return maybe_next_partition.then([this] {
+                _end_of_stream = is_end_end_of_underlying_stream();
+            });
         }
         virtual future<> fast_forward_to(const dht::partition_range& pr) override {
             _end_of_stream = false;
