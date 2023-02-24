@@ -1022,14 +1022,14 @@ thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> dow
 
 
 template <component_type Type, typename T>
-future<> sstable::read_simple(T& component, const io_priority_class& pc) {
+future<> sstable::read_simple(T& component, const io_priority_class& pc, unsigned file_stream_read_ahead) {
 
     auto file_path = filename(Type);
     sstlog.debug(("Reading " + sstable_version_constants::get_component_map(_version).at(Type) + " file {} ").c_str(), file_path);
-    return new_sstable_component_file(_read_error_handler, Type, open_flags::ro).then([this, &component] (file fi) {
+    return new_sstable_component_file(_read_error_handler, Type, open_flags::ro).then([this, &component, file_stream_read_ahead] (file fi) {
         auto fut = fi.size();
-        return fut.then([this, &component, fi = std::move(fi)] (uint64_t size) {
-            auto r = make_lw_shared<file_random_access_reader>(std::move(fi), size, sstable_buffer_size);
+        return fut.then([this, &component, fi = std::move(fi), file_stream_read_ahead] (uint64_t size) {
+            auto r = make_lw_shared<file_random_access_reader>(std::move(fi), size, sstable_buffer_size, file_stream_read_ahead);
             auto fut = parse(*_schema, _version, *r, component);
             return fut.finally([r] {
                 return r->close();
@@ -1088,7 +1088,7 @@ void sstable::write_simple(const T& component, const io_priority_class& pc) {
     });
 }
 
-template future<> sstable::read_simple<component_type::Filter>(sstables::filter& f, const io_priority_class& pc);
+template future<> sstable::read_simple<component_type::Filter>(sstables::filter& f, const io_priority_class& pc, unsigned file_stream_read_ahead);
 template void sstable::write_simple<component_type::Filter>(const sstables::filter& f, const io_priority_class& pc);
 
 template void sstable::write_simple<component_type::Summary>(const sstables::summary_ka&, const io_priority_class&);

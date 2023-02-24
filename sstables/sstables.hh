@@ -592,7 +592,7 @@ private:
     future<file> open_file(component_type, open_flags, file_open_options = {}) noexcept;
 
     template <component_type Type, typename T>
-    future<> read_simple(T& comp, const io_priority_class& pc);
+    future<> read_simple(T& comp, const io_priority_class& pc, unsigned file_stream_read_ahead = 4);
 
     template <component_type Type, typename T>
     void write_simple(const T& comp, const io_priority_class& pc);
