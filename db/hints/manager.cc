@@ -598,7 +598,8 @@ const column_mapping& manager::end_point_hints_manager::sender::get_column_mappi
     return cm_it->second;
 }
 
-bool manager::too_many_in_flight_hints_for(ep_key_type ep) const noexcept {
+bool manager::too_many_in_flight_hints_for(locator::node_ptr node) const noexcept {
+    auto ep = node->endpoint();
     // There is no need to check the DC here because if there is an in-flight hint for this end point then this means that
     // its DC has already been checked and found to be ok.
     return _stats.size_of_hints_in_progress > max_size_of_hints_in_progress && !utils::fb_utilities::is_me(ep) && hints_in_progress_for(ep) > 0 && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;

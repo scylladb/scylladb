@@ -564,9 +564,9 @@ public:
     /// Note that we can't consider the disk usage consumption here because the disk usage is not promissed to drop down shortly
     /// because it requires the remote node to be UP.
     ///
-    /// \param ep end point to check
+    /// \param node to check
     /// \return TRUE if we are allowed to generate hint to the given end point but there are too many in-flight hints
-    bool too_many_in_flight_hints_for(ep_key_type ep) const noexcept;
+    bool too_many_in_flight_hints_for(locator::node_ptr node) const noexcept;
 
     /// \brief Check if DC \param ep belongs to is "hintable"
     /// \param ep End point identificator
