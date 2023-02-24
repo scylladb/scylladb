@@ -1942,6 +1942,11 @@ future<> storage_service::node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, node_
     slogger.info("{}[{}]: Stopped heartbeat_updater", ops, uuid);
 }
 
+static
+void on_streaming_finished() {
+    utils::get_local_injector().inject("storage_service_streaming_sleep3", std::chrono::seconds{3}).get();
+}
+
 future<> storage_service::decommission() {
     return run_with_api_lock(sstring("decommission"), [] (storage_service& ss) {
         return seastar::async([&ss] {
@@ -2052,6 +2057,7 @@ future<> storage_service::decommission() {
                 // Step 4: Start to sync data
                 slogger.info("DECOMMISSIONING: unbootstrap starts");
                 ss.unbootstrap().get();
+                on_streaming_finished();
                 slogger.info("DECOMMISSIONING: unbootstrap done");
 
                 // Step 5: Become a group 0 non-voter before leaving the token ring.
@@ -2242,6 +2248,7 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
 
         // Step 5: Sync data for bootstrap
         _repair.local().bootstrap_with_repair(get_token_metadata_ptr(), bootstrap_tokens).get();
+        on_streaming_finished();
 
         // Step 6: Finish
         req.cmd = node_ops_cmd::bootstrap_done;
@@ -2366,7 +2373,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
             dht::boot_strapper bs(_db, _stream_manager, _abort_source, get_broadcast_address(), _sys_ks.local().local_dc_rack(), bootstrap_tokens, get_token_metadata_ptr());
             bs.bootstrap(streaming::stream_reason::replace, _gossiper, replace_address).get();
         }
-
+        on_streaming_finished();
 
         // Step 8: Finish
         req.cmd = node_ops_cmd::replace_done;
@@ -2514,6 +2521,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                             return make_ready_future<>();
                         });
                     }).get();
+                    on_streaming_finished();
 
 
                     // Step 6: Announce the node has left
@@ -2615,6 +2623,17 @@ std::chrono::seconds watchdog_timeout(const db::config& cfg) {
     return std::chrono::seconds(cfg.nodeops_watchdog_timeout_seconds());
 }
 
+void storage_service::on_node_ops_registered(node_ops_id ops_uuid) {
+    utils::get_local_injector().inject("storage_service_nodeops_prepare_handler_sleep3", std::chrono::seconds{3}).get();
+    utils::get_local_injector().inject("storage_service_nodeops_abort_after_1s", [this, ops_uuid] {
+        (void)with_gate(_async_gate, [this, ops_uuid] {
+            return seastar::sleep_abortable(std::chrono::seconds(1), _abort_source).then([this, ops_uuid] {
+                node_ops_singal_abort(ops_uuid);
+            });
+        });
+    });
+}
+
 future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req) {
     return seastar::async([this, coordinator, req = std::move(req)] () mutable {
         auto ops_uuid = req.ops_uuid;
@@ -2673,6 +2692,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             },
             [this, ops_uuid] () mutable { node_ops_singal_abort(ops_uuid); });
             _node_ops.emplace(ops_uuid, std::move(meta));
+            on_node_ops_registered(ops_uuid);
         } else if (req.cmd == node_ops_cmd::removenode_heartbeat) {
             slogger.debug("removenode[{}]: Updated heartbeat from coordinator={}", req.ops_uuid,  coordinator);
             node_ops_update_heartbeat(ops_uuid).get();
@@ -2724,6 +2744,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             },
             [this, ops_uuid] () mutable { node_ops_singal_abort(ops_uuid); });
             _node_ops.emplace(ops_uuid, std::move(meta));
+            on_node_ops_registered(ops_uuid);
         } else if (req.cmd == node_ops_cmd::decommission_heartbeat) {
             slogger.debug("decommission[{}]: Updated heartbeat from coordinator={}", req.ops_uuid,  coordinator);
             node_ops_update_heartbeat(ops_uuid).get();
@@ -2789,6 +2810,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             },
             [this, ops_uuid ] { node_ops_singal_abort(ops_uuid); });
             _node_ops.emplace(ops_uuid, std::move(meta));
+            on_node_ops_registered(ops_uuid);
         } else if (req.cmd == node_ops_cmd::replace_prepare_mark_alive) {
             // Wait for local node has marked replacing node as alive
             auto nodes = boost::copy_range<std::vector<inet_address>>(req.replace_nodes| boost::adaptors::map_values);
@@ -2844,6 +2866,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
             },
             [this, ops_uuid ] { node_ops_singal_abort(ops_uuid); });
             _node_ops.emplace(ops_uuid, std::move(meta));
+            on_node_ops_registered(ops_uuid);
         } else if (req.cmd == node_ops_cmd::bootstrap_heartbeat) {
             slogger.debug("bootstrap[{}]: Updated heartbeat from coordinator={}", req.ops_uuid, coordinator);
             node_ops_update_heartbeat(ops_uuid).get();
