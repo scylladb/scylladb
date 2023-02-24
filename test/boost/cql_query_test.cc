@@ -5191,6 +5191,36 @@ SEASTAR_TEST_CASE(test_parallelized_select_sum_group_by) {
     });
 }
 
+SEASTAR_TEST_CASE(test_parallelized_select_counter_type) {
+    return with_parallelized_aggregation_enabled_thread([](cql_test_env& e) {
+        auto& qp = e.local_qp();
+        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
+
+        e.execute_cql("CREATE TABLE tbl (k int, c counter, PRIMARY KEY (k));").get();
+        e.execute_cql("UPDATE tbl SET c = c + 4 WHERE k = 0;").get();
+        e.execute_cql("UPDATE tbl SET c = c + 2 WHERE k = 1;").get();
+
+        auto msg_sum = e.execute_cql("SELECT SUM(c) FROM tbl;").get();
+        assert_that(msg_sum).is_rows().with_rows({
+            {long_type->decompose(int64_t(6))}
+        });
+        auto msg_min = e.execute_cql("SELECT MIN(c) FROM tbl;").get();
+        assert_that(msg_min).is_rows().with_rows({
+            {long_type->decompose(int64_t(2))}
+        });
+        auto msg_max = e.execute_cql("SELECT MAX(c) FROM tbl;").get();
+        assert_that(msg_max).is_rows().with_rows({
+            {long_type->decompose(int64_t(4))}
+        });
+        auto msg_avg = e.execute_cql("SELECT AVG(c) FROM tbl;").get();
+        assert_that(msg_avg).is_rows().with_rows({
+            {long_type->decompose(int64_t(3))}
+        });
+
+        BOOST_CHECK_EQUAL(stat_parallelized + 4, qp.get_cql_stats().select_parallelized);
+    });
+}
+
 static future<> with_udf_and_parallel_aggregation_enabled_thread(std::function<void(cql_test_env&)>&& func) {
     auto db_cfg_ptr = make_shared<db::config>();
     auto& db_cfg = *db_cfg_ptr;
