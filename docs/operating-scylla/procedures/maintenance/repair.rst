@@ -15,6 +15,7 @@ As long as the cluster can satisfy the required consistency level (usually quoru
 
 * :doc:`Hinted Handoff </architecture/anti-entropy/hinted-handoff>`
 * :doc:`Read Repair </architecture/anti-entropy/read-repair>`
+* :doc:`Repair Based Node Operations </operating-scylla/procedures/cluster-management/repair-based-node-operation>`
 * Repair - described in the following sections
 
 Repair Overview
@@ -49,30 +50,6 @@ Row-level repair improves Scylla in two ways:
   * reading the data only once.
   * keeping the data in a temporary buffer.
   * using the cached data to calculate the checksum and send it to the replicas.
-
-Repair Base Operation
----------------------
-
-.. versionadded:: 4.0 Scylla Open Source (disabled)
-
-ScyllaDB has two mechanisms to synchronize data between nodes:
-
-* Streaming - used for cluster topology changes, such as adding or removing nodes.
-* Row Level Repair - an offline process that compares and syncs data between nodes .
-
-With *Repair Base Operation*, Scylla uses row-level repair as the unified underlying mechanism for repair operation **and** all node operations, e.g., bootstrap, decommission, remove node, replace node, rebuild node.
-
-This safer process makes the node operations resumable, syncing only the inconsistent data.
-Also, replaced nodes now accept writes, which means there is no longer a need to repair after replacing a node.
-
-**This feature is disabled by default.**
-
-
-You can enable or disable this feature with a configuration parameter in the *scylla.yaml*:
-
-.. code-block:: none
-
-   enable_repair_based_node_ops: [true|false]
 
 See also
 
