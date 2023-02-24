@@ -78,14 +78,7 @@ public:
 
     friend std::ostream& operator<<(std::ostream& out, const UUID& uuid);
 
-    bool operator==(const UUID& v) const noexcept {
-        return most_sig_bits == v.most_sig_bits
-                && least_sig_bits == v.least_sig_bits
-                ;
-    }
-    bool operator!=(const UUID& v) const noexcept {
-        return !(*this == v);
-    }
+    bool operator==(const UUID& v) const noexcept = default;
 
     // Please note that this comparator does not preserve timeuuid
     // monotonicity. For this reason you should avoid using it for
