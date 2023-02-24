@@ -66,7 +66,7 @@
 
 .. topic-box::
   :title: ScyllaDB Enterprise
-  :link: getting-started
+  :link: https://enterprise.docs.scylladb.com
   :image: /_static/img/mascots/scylla-enterprise.svg
   :class: topic-box--product,large-3,small-6
 
