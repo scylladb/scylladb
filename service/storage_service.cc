@@ -1816,9 +1816,11 @@ future<> storage_service::node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, utils
     } else {
         throw std::runtime_error(format("node_ops_cmd_heartbeat_updater: node_ops_cmd is not supported"));
     }
-    slogger.info("{}[{}]: Started heartbeat_updater", ops, uuid);
+    auto interval = std::chrono::seconds(_db.local().get_config().nodeops_heartbeat_interval_seconds());
+    slogger.info("{}[{}]: Started heartbeat_updater (interval={}s)", ops, uuid, interval.count());
     while (!(*heartbeat_updater_done)) {
         auto req = node_ops_cmd_request{cmd, uuid, {}, {}, {}};
+        auto next = std::chrono::steady_clock::now() + interval;
         try {
           co_await coroutine::parallel_for_each(nodes, [this, ops, uuid, &req] (const gms::inet_address& node) {
             return _messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([ops, uuid, node] (node_ops_cmd_response resp) {
@@ -1830,8 +1832,7 @@ future<> storage_service::node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, utils
             auto ep = std::current_exception();
             slogger.warn("{}[{}]: Failed to send heartbeat: {}", ops, uuid, ep);
         }
-        int nr_seconds = 10;
-        while (!(*heartbeat_updater_done) && nr_seconds--) {
+        while (!(*heartbeat_updater_done) && std::chrono::steady_clock::now() < next) {
             co_await sleep(std::chrono::seconds(1));
         }
     }
@@ -2370,6 +2371,11 @@ void storage_service::node_ops_cmd_check(gms::inet_address coordinator, const no
     }
 }
 
+static
+std::chrono::seconds watchdog_timeout(const db::config& cfg) {
+    return std::chrono::seconds(cfg.nodeops_watchdog_timeout_seconds());
+}
+
 future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req) {
     return seastar::async([this, coordinator, req = std::move(req)] () mutable {
         auto ops_uuid = req.ops_uuid;
@@ -2410,8 +2416,9 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 }
                 return update_pending_ranges(tmptr, format("removenode {}", req.leaving_nodes));
             }).get();
+            auto watchdog_interval = watchdog_timeout(_db.local().get_config());
             auto ops = seastar::make_shared<node_ops_info>(node_ops_info{ops_uuid, false, std::move(req.ignore_nodes)});
-            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ops), [this, coordinator, req = std::move(req)] () mutable {
+            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ops), watchdog_interval, [this, coordinator, req = std::move(req)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& node : req.leaving_nodes) {
                         slogger.info("removenode[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
@@ -2459,8 +2466,9 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 }
                 return update_pending_ranges(tmptr, format("decommission {}", req.leaving_nodes));
             }).get();
+            auto watchdog_interval = watchdog_timeout(_db.local().get_config());
             auto ops = seastar::make_shared<node_ops_info>(node_ops_info{ops_uuid, false, std::move(req.ignore_nodes)});
-            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ops), [this, coordinator, req = std::move(req)] () mutable {
+            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ops), watchdog_interval, [this, coordinator, req = std::move(req)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& node : req.leaving_nodes) {
                         slogger.info("decommission[{}]: Removed node={} as leaving node, coordinator={}", req.ops_uuid, node, coordinator);
@@ -2501,8 +2509,9 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 }
                 return make_ready_future<>();
             }).get();
+            auto watchdog_interval = watchdog_timeout(_db.local().get_config());
             auto ops = seastar::make_shared<node_ops_info>(node_ops_info{ops_uuid, false, std::move(req.ignore_nodes)});
-            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ops), [this, coordinator, req = std::move(req)] () mutable {
+            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ops), watchdog_interval, [this, coordinator, req = std::move(req)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& x: req.replace_nodes) {
                         auto existing_node = x.first;
@@ -2555,8 +2564,9 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                 }
                 return update_pending_ranges(tmptr, format("bootstrap {}", req.bootstrap_nodes));
             }).get();
+            auto watchdog_interval = watchdog_timeout(_db.local().get_config());
             auto ops = seastar::make_shared<node_ops_info>(node_ops_info{ops_uuid, false, std::move(req.ignore_nodes)});
-            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ops), [this, coordinator, req = std::move(req)] () mutable {
+            auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ops), watchdog_interval, [this, coordinator, req = std::move(req)] () mutable {
                 return mutate_token_metadata([this, coordinator, req = std::move(req)] (mutable_token_metadata_ptr tmptr) mutable {
                     for (auto& x: req.bootstrap_nodes) {
                         auto& endpoint = x.first;
@@ -3531,6 +3541,7 @@ node_ops_meta_data::node_ops_meta_data(
         utils::UUID ops_uuid,
         gms::inet_address coordinator,
         shared_ptr<node_ops_info> ops,
+        std::chrono::seconds watchdog_interval,
         std::function<future<> ()> abort_func,
         std::function<void ()> signal_func)
     : _ops_uuid(std::move(ops_uuid))
@@ -3539,7 +3550,10 @@ node_ops_meta_data::node_ops_meta_data(
     , _abort_source(seastar::make_shared<abort_source>())
     , _signal(std::move(signal_func))
     , _ops(std::move(ops))
-    , _watchdog([sig = _signal] { sig(); }) {
+    , _watchdog([sig = _signal] { sig(); })
+    , _watchdog_interval(watchdog_interval)
+{
+    slogger.debug("node_ops_meta_data: ops_uuid={} arm interval={}", _ops_uuid, _watchdog_interval.count());
     _watchdog.arm(_watchdog_interval);
 }
 
