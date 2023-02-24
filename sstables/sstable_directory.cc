@@ -62,8 +62,8 @@ sstable_directory::sstable_directory(sstables_manager& manager,
     , _unshared_remote_sstables(smp::count)
 {}
 
-void sstable_directory::components_lister::handle(sstables::entry_descriptor desc, fs::path filename) {
-    if ((generation_value(desc.generation) % smp::count) != this_shard_id()) {
+void sstable_directory::components_lister::handle(sstables::entry_descriptor desc, fs::path filename, seastar::shard_id shard_owner_hint) {
+    if (shard_owner_hint != this_shard_id()) {
         return;
     }
 
@@ -191,7 +191,8 @@ future<> sstable_directory::components_lister::process(sstable_directory& direct
                 break;
             }
             auto comps = sstables::entry_descriptor::make_descriptor(location.native(), name);
-            handle(std::move(comps), location / name);
+            shard_id hint = co_await sstable::shard_owner_hint(directory.manager(), directory.schema(), comps.sstdir, comps.generation, comps.version, comps.format);
+            handle(std::move(comps), location / name, hint);
         }
     } catch (...) {
         ex = std::current_exception();

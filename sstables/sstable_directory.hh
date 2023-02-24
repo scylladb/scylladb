@@ -81,7 +81,7 @@ public:
             std::unordered_set<sstring> files_for_removal;
         };
 
-        void handle(sstables::entry_descriptor desc, std::filesystem::path filename);
+        void handle(sstables::entry_descriptor desc, std::filesystem::path filename, seastar::shard_id shard_owner_hint);
 
         directory_lister _lister;
         std::unique_ptr<scan_state> _state;
@@ -201,6 +201,14 @@ public:
 
     std::filesystem::path sstable_dir() const noexcept {
         return _sstable_dir;
+    }
+
+    schema_ptr schema() const noexcept {
+        return _schema;
+    }
+
+    sstables_manager& manager() noexcept {
+        return _manager;
     }
 
     // When we compact sstables, we have to atomically instantiate the new
