@@ -123,6 +123,26 @@ wrap_function_autonull(null_handler nullhandler, Ret (*func)(Args...)) {
     };
 }
 
+template <typename Ret, typename... Args>
+shared_ptr<scalar_function>
+make_internal_scalar_function(sstring name, null_handler nullhandler, Ret (*func)(Args...)) {
+    return ::make_shared<internal_scalar_function>(
+            std::move(name),
+            data_type_for<Ret>(),
+            std::vector({data_type_for<Args>()...}),
+            wrap_function_autonull(nullhandler, func)
+    );
+}
+
+template <typename Lambda>
+requires std::is_class_v<Lambda>
+shared_ptr<scalar_function>
+make_internal_scalar_function(sstring name, null_handler nullhandler, Lambda func) {
+    // "+func" decays the lambda into a pointer-to-function, so that its signature
+    // can be inferred by the other overload.
+    return make_internal_scalar_function(std::move(name), nullhandler, +func);
+}
+
 class impl_count_function : public aggregate_function::aggregate {
     int64_t _count = 0;
 public:
