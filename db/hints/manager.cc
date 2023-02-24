@@ -694,10 +694,12 @@ bool manager::check_dc_for(ep_key_type ep) const noexcept {
     }
 }
 
-void manager::drain_for(gms::inet_address endpoint) {
+void manager::drain_for(locator::node_ptr node) {
     if (!started() || stopping() || draining_all()) {
         return;
     }
+
+    auto endpoint = node->endpoint();
 
     manager_logger.trace("on_leave_cluster: {} is removed/decommissioned", endpoint);
 

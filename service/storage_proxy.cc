@@ -6238,8 +6238,10 @@ future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spo
 void storage_proxy::on_join_cluster(const gms::inet_address& endpoint) {};
 
 void storage_proxy::on_leave_cluster(const gms::inet_address& endpoint) {
-    _hints_manager.drain_for(endpoint);
-    _hints_for_views_manager.drain_for(endpoint);
+    const auto& topo = _shared_token_metadata.get()->get_topology();
+    const auto node = topo.find_node(endpoint, locator::topology::must_exist::yes);
+    _hints_manager.drain_for(node);
+    _hints_for_views_manager.drain_for(node);
 }
 
 void storage_proxy::on_up(const gms::inet_address& endpoint) {};

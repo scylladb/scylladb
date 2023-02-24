@@ -748,8 +748,8 @@ public:
     /// In both cases - removes the corresponding hints' directories after all hints have been drained and erases the
     /// corresponding end_point_hints_manager objects.
     ///
-    /// \param endpoint node that left the cluster
-    void drain_for(gms::inet_address endpoint);
+    /// \param node that left the cluster
+    void drain_for(locator::node_ptr node);
 
 private:
     void update_backlog(size_t backlog, size_t max_backlog);
