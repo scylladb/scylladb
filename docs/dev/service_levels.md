@@ -34,7 +34,14 @@ SELECT * FROM  system_auth.role_attributes WHERE role='r' and attribute_name='se
     service_level text PRIMARY KEY,
     timeout duration,
     workload_type text)
+
+    CREATE TABLE system_distributed_everywhere.service_levels_v2 (
+    service_level text PRIMARY KEY,
+    timeout duration,
+    workload_type text)
 ```
+
+The table `system_distributed.service_levels` is the old one and should not be queried, since it may contain outdated configuration. Instead, the configuration is stored in `system_distributed_everywhere.service_levels_v2`.
 
 The table is used to store and distribute the service levels configuration.
 The table column names meanings are:
@@ -43,7 +50,7 @@ The table column names meanings are:
 *workload_type* - type of workload declared for this service level (unspecified, interactive or batch)
 
 ```
-select * from system_distributed.service_levels ;
+select * from system_distributed_everywhere.service_levels_v2 ;
 
  service_level | timeout | workload_type
 ---------------+---------+---------------
