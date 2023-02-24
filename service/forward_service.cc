@@ -34,6 +34,7 @@
 #include "service/pager/query_pagers.hh"
 #include "tracing/trace_state.hh"
 #include "tracing/tracing.hh"
+#include "types.hh"
 #include "utils/fb_utilities.hh"
 #include "service/storage_proxy.hh"
 
@@ -151,7 +152,12 @@ static std::vector<::shared_ptr<db::functions::aggregate_function>> get_function
     std::vector<::shared_ptr<db::functions::aggregate_function>> aggrs;
 
     auto name_as_type = [&] (const sstring& name) -> data_type {
-        return schema->get_column_definition(to_bytes(name))->type->underlying_type();
+        auto t = schema->get_column_definition(to_bytes(name))->type->underlying_type();
+
+        if (t->is_counter()) {
+            return long_type;
+        }
+        return t;
     };
 
     for (size_t i = 0; i < request.reduction_types.size(); i++) {
