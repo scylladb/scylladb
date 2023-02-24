@@ -548,9 +548,9 @@ public:
     }
 
     /// \brief Check if a hint may be generated to the give end point
-    /// \param ep end point to check
+    /// \param node to check
     /// \return true if we should generate the hint to the given end point if it becomes unavailable
-    bool can_hint_for(ep_key_type ep) const noexcept;
+    bool can_hint_for(locator::node_ptr node) const noexcept;
 
     /// \brief Check if there aren't too many in-flight hints
     ///

@@ -360,7 +360,7 @@ inline bool manager::have_ep_manager(ep_key_type ep) const noexcept {
 
 bool manager::store_hint(locator::node_ptr node, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
     const auto ep = node->endpoint();
-    if (stopping() || draining_all() || !started() || !can_hint_for(ep)) {
+    if (stopping() || draining_all() || !started() || !can_hint_for(node)) {
         manager_logger.trace("Can't store a hint to {}", ep);
         ++_stats.dropped;
         return false;
@@ -605,7 +605,8 @@ bool manager::too_many_in_flight_hints_for(locator::node_ptr node) const noexcep
     return _stats.size_of_hints_in_progress > max_size_of_hints_in_progress && !utils::fb_utilities::is_me(ep) && hints_in_progress_for(ep) > 0 && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
 }
 
-bool manager::can_hint_for(ep_key_type ep) const noexcept {
+bool manager::can_hint_for(locator::node_ptr node) const noexcept {
+    auto ep = node->endpoint();
     if (utils::fb_utilities::is_me(ep)) {
         return false;
     }
