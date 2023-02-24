@@ -2070,13 +2070,26 @@ future<> storage_service::decommission() {
                     slogger.info("decommission[{}]: became a group 0 non-voter", uuid);
                 }
 
-                // Step 6: Leave the token ring
+                // Step 6: Verify that other nodes didn't abort in the meantime.
+                // See https://github.com/scylladb/scylladb/issues/12989.
+                req.cmd = node_ops_cmd::query_pending_ops;
+                parallel_for_each(nodes, [&ss, req, uuid] (const gms::inet_address& node) {
+                    return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
+                        slogger.debug("decommission[{}]: Got query_pending_ops response from node={}, resp.pending_ops={}", uuid, node, resp.pending_ops);
+                        if (boost::find(resp.pending_ops, uuid) == resp.pending_ops.end()) {
+                            throw std::runtime_error(format("decommission[{}]: Node {} no longer tracks the operation", uuid, node));
+                        }
+                        return make_ready_future<>();
+                    });
+                }).get();
+
+                // Step 7: Leave the token ring
                 slogger.info("decommission[{}]: leaving token ring", uuid);
                 ss.leave_ring().get();
                 left_token_ring = true;
                 slogger.info("decommission[{}]: left token ring", uuid);
 
-                // Step 7: Finish token movement
+                // Step 8: Finish token movement
                 req.cmd = node_ops_cmd::decommission_done;
                 parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
                     return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
@@ -2523,14 +2536,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                     }).get();
                     on_streaming_finished();
 
-
-                    // Step 6: Announce the node has left
-                    ss._gossiper.advertise_token_removed(endpoint, host_id).get();
-                    std::unordered_set<token> tmp(tokens.begin(), tokens.end());
-                    ss.excise(std::move(tmp), endpoint).get();
-                    removed_from_token_ring = true;
-
-                    // Step 7: Finish token movement
+                    // Step 6: Finish token movement
                     req.cmd = node_ops_cmd::removenode_done;
                     parallel_for_each(nodes, [&ss, &req, uuid] (const gms::inet_address& node) {
                         return ss._messaging.local().send_node_ops_cmd(netw::msg_addr(node), req).then([uuid, node] (node_ops_cmd_response resp) {
@@ -2538,6 +2544,12 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
                             return make_ready_future<>();
                         });
                     }).get();
+
+                    // Step 7: Announce the node has left
+                    ss._gossiper.advertise_token_removed(endpoint, host_id).get();
+                    std::unordered_set<token> tmp(tokens.begin(), tokens.end());
+                    ss.excise(std::move(tmp), endpoint).get();
+                    removed_from_token_ring = true;
 
                     slogger.info("removenode[{}]: Finished token movement, node={}, sync_nodes={}, ignore_nodes={}", uuid, endpoint, nodes, ignore_nodes);
                 } catch (...) {
