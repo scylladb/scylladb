@@ -1274,6 +1274,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::SSTableOrigin: return "sstable_origin";
         case sstables::scylla_metadata_type::ScyllaVersion: return "scylla_version";
         case sstables::scylla_metadata_type::ScyllaBuildId: return "scylla_build_id";
+        case sstables::scylla_metadata_type::ShardOwnerHint: return "shard_owner_hint";
     }
     std::abort();
 }
@@ -1367,6 +1368,9 @@ public:
             _writer.EndObject();
         }
         _writer.EndObject();
+    }
+    void operator()(const sstables::scylla_metadata::shard_owner_hint& val) const {
+        _writer.Uint(val);
     }
     template <typename Size>
     void operator()(const sstables::disk_string<Size>& val) const {

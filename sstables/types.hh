@@ -529,6 +529,7 @@ enum class scylla_metadata_type : uint32_t {
     SSTableOrigin = 6,
     ScyllaBuildId = 7,
     ScyllaVersion = 8,
+    ShardOwnerHint = 9,
 };
 
 // UUID is used for uniqueness across nodes, such that an imported sstable
@@ -569,6 +570,7 @@ struct scylla_metadata {
     using sstable_origin = disk_string<uint32_t>;
     using scylla_build_id = disk_string<uint32_t>;
     using scylla_version = disk_string<uint32_t>;
+    using shard_owner_hint = uint32_t;
 
     disk_set_of_tagged_union<scylla_metadata_type,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>,
@@ -578,7 +580,8 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::LargeDataStats, large_data_stats>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::SSTableOrigin, sstable_origin>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScyllaBuildId, scylla_build_id>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScyllaVersion, scylla_version>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScyllaVersion, scylla_version>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ShardOwnerHint, shard_owner_hint>
             > data;
 
     sstable_enabled_features get_features() const {

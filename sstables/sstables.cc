@@ -1719,6 +1719,8 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
     scylla_metadata::scylla_build_id build_id;
     build_id.value = bytes(to_bytes_view(sstring_view(get_build_id())));
     _components->scylla_metadata->data.set<scylla_metadata_type::ScyllaBuildId>(std::move(build_id));
+    scylla_metadata::shard_owner_hint shard_owner_hint = shard;
+    _components->scylla_metadata->data.set<scylla_metadata_type::ShardOwnerHint>(std::move(shard_owner_hint));
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata, pc);
 }
