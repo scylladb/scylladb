@@ -12,6 +12,7 @@
 #include "types/types.hh"
 #include "types/tuple.hh"
 #include "cql3/functions/scalar_function.hh"
+#include "db/functions/stateless_aggregate_function.hh"
 #include "cql3/util.hh"
 #include "utils/big_decimal.hh"
 #include "aggregate_fcts.hh"
@@ -142,53 +143,6 @@ make_internal_scalar_function(sstring name, null_handler nullhandler, Lambda fun
     // can be inferred by the other overload.
     return make_internal_scalar_function(std::move(name), nullhandler, +func);
 }
-
-class impl_count_function : public aggregate_function::aggregate {
-    int64_t _count = 0;
-public:
-    virtual void reset() override {
-        _count = 0;
-    }
-    virtual opt_bytes compute() override {
-        return long_type->decompose(_count);
-    }
-    virtual void add_input(const std::vector<opt_bytes>& values) override {
-        ++_count;
-    }
-    virtual void set_accumulator(const opt_bytes& acc) override {
-        if (acc) {
-            _count = value_cast<int64_t>(long_type->deserialize(bytes_view(*acc)));
-        } else {
-            reset();
-        }
-    }
-    virtual opt_bytes get_accumulator() const override {
-        return long_type->decompose(_count);
-    }
-    virtual void reduce(const opt_bytes& acc) override {
-        if (acc) {
-            auto other = value_cast<int64_t>(long_type->deserialize(bytes_view(*acc)));
-            _count += other;
-        }
-    }
-};
-
-class count_rows_function final : public native_aggregate_function {
-public:
-    count_rows_function() : native_aggregate_function(COUNT_ROWS_FUNCTION_NAME, long_type, {}) {}
-    virtual bool is_reducible() const override {
-        return true;
-    }
-    virtual std::unique_ptr<aggregate> new_aggregate() override {
-        return std::make_unique<impl_count_function>();
-    }
-    virtual ::shared_ptr<aggregate_function> reducible_aggregate_function() override {
-        return ::make_shared<count_rows_function>();
-    };
-    virtual sstring column_name(const std::vector<sstring>& column_names) const override {
-        return "count";
-    }
-};
 
 // We need a wider accumulator for sum and average,
 // since summing the inputs can overflow the input type
@@ -954,7 +908,25 @@ std::ostream& user_aggregate::describe(std::ostream& os) const {
 
 shared_ptr<aggregate_function>
 aggregate_fcts::make_count_rows_function() {
-    return make_shared<count_rows_function>();
+    return make_shared<db::functions::stateless_aggregate_function_adapter>(
+        db::functions::stateless_aggregate_function{
+            .name = function_name::native_function(COUNT_ROWS_FUNCTION_NAME),
+            .column_name_override = "count",
+            .state_type = long_type,
+            .result_type = long_type,
+            .argument_types = {},
+            .initial_state = data_value(int64_t(0)).serialize(),
+            .aggregation_function = make_internal_scalar_function("count_step", return_any_nonnull, [] (int64_t accumulator) {
+                return accumulator + 1;
+            }),
+            .state_to_result_function = make_internal_scalar_function("count_finalizer", return_any_nonnull, [] (int64_t accumulator) {
+                return accumulator;
+            }),
+            .state_reduction_function = make_internal_scalar_function("count_reducer", return_any_nonnull, [] (int64_t acc1, int64_t acc2) {
+                return acc1 + acc2;
+            }),
+        }
+    );
 }
 
 shared_ptr<aggregate_function>
