@@ -41,6 +41,14 @@ future<> random_access_reader::seek(uint64_t pos) noexcept {
     }
 }
 
+future<> random_access_reader::skip(size_t n) noexcept {
+    try {
+        return _in->skip(n);
+    } catch (...) {
+        return current_exception_as_future();
+    }
+}
+
 future<> random_access_reader::close() noexcept {
     return futurize_invoke(close_if_needed, std::move(_in));
 }

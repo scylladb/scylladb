@@ -32,6 +32,8 @@ public:
 
     future<> seek(uint64_t pos) noexcept;
 
+    future<> skip(uint64_t n) noexcept;
+
     bool eof() const noexcept { return _in->eof(); }
 
     virtual future<> close() noexcept;
