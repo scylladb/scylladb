@@ -4028,6 +4028,19 @@ class scylla_netw(gdb.Command):
                     gdb.write('   %s\n' % (conn['_stats']))
 
 
+def get_gms_versioned_value(vv):
+    try:
+        return {
+            'version': vv['_version'],
+            'value': vv['_value']
+        }
+    except gdb.error:
+        return {
+            'version': vv['version'],
+            'value': vv['value']
+        }
+
+
 class scylla_gms(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla gms', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
@@ -4042,7 +4055,8 @@ class scylla_gms(gdb.Command):
         for (endpoint, state) in unordered_map(state_map):
             ip = ip_to_str(int(get_ip(endpoint)), byteorder=sys.byteorder)
             gdb.write('%s: (gms::endpoint_state*) %s (%s)\n' % (ip, state.address, state['_heart_beat_state']))
-            for app_state, value in std_map(state['_application_state']):
+            for app_state, vv in std_map(state['_application_state']):
+                value = get_gms_versioned_value(vv)
                 gdb.write('  %s: {version=%d, value=%s}\n' % (app_state, value['version'], value['value']))
 
 
