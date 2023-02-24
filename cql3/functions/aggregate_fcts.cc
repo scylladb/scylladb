@@ -93,6 +93,36 @@ public:
     }
 };
 
+// Called if any of the inputs is NULL
+using null_handler = bytes_opt (*)(const std::vector<bytes_opt>&);
+
+bytes_opt
+return_accumulator_on_null(const std::vector<bytes_opt>& args) {
+    return args[0];
+}
+
+bytes_opt
+return_any_nonnull(const std::vector<bytes_opt>& args) {
+    auto i = std::ranges::find_if(args, std::mem_fn(&bytes_opt::has_value));
+    return i != args.end() ? *i : bytes_opt();
+}
+
+template <typename Ret, typename... Args>
+noncopyable_function<bytes_opt (const std::vector<bytes_opt>&)>
+wrap_function_autonull(null_handler nullhandler, Ret (*func)(Args...)) {
+    return [nullhandler, func] (const std::vector<bytes_opt>& args) -> bytes_opt {
+        if (!std::all_of(args.begin(), args.end(), std::mem_fn(&bytes_opt::has_value))) {
+            return nullhandler(args);
+        }
+        using args_tuple_type = std::tuple<Args...>;
+        auto ret = std::invoke([&] <size_t... Indexes> (std::index_sequence<Indexes...>) {
+            return func(value_cast<std::tuple_element_t<Indexes, args_tuple_type>>(
+                         data_type_for<std::tuple_element_t<Indexes, args_tuple_type>>()->deserialize_value(*args[Indexes]))...);
+        }, std::index_sequence_for<Args...>());
+        return data_value(std::move(ret)).serialize_nonnull();
+    };
+}
+
 class impl_count_function : public aggregate_function::aggregate {
     int64_t _count = 0;
 public:
