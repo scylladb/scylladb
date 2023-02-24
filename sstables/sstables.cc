@@ -453,7 +453,7 @@ struct disk_set_of_tagged_union<TagType, Members...>::serdes {
     future<> lookup_and_parse(const schema& schema, sstable_version_types v, random_access_reader& in, TagType tag, uint32_t& size, disk_set& s, value_type& value) const {
         auto i = map.find(tag);
         if (i == map.end()) {
-            return in.read_exactly(size).discard_result();
+            return in.skip(size).discard_result();
         } else {
             return i->second->do_parse(schema, v, in, value).then([tag, &s, &value] () mutable {
                 s.data.emplace(tag, std::move(value));
