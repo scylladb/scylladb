@@ -633,7 +633,7 @@ public:
     }
 
     /// \brief Returns a set of replay positions for hint queues towards endpoints from the `target_hosts`.
-    sync_point::shard_rps calculate_current_sync_point(const std::vector<gms::inet_address>& target_hosts) const;
+    sync_point::shard_rps calculate_current_sync_point(const locator::node_set& target_hosts) const;
 
     /// \brief Waits until hint replay reach replay positions described in `rps`.
     future<> wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps);

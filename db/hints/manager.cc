@@ -157,10 +157,10 @@ void manager::forbid_hints_for_eps_with_pending_hints() {
     });
 }
 
-sync_point::shard_rps manager::calculate_current_sync_point(const std::vector<gms::inet_address>& target_hosts) const {
+sync_point::shard_rps manager::calculate_current_sync_point(const locator::node_set& target_hosts) const {
     sync_point::shard_rps rps;
-    for (auto addr : target_hosts) {
-        auto it = _ep_managers.find(addr);
+    for (auto node : target_hosts) {
+        auto it = _ep_managers.find(node->endpoint());
         if (it != _ep_managers.end()) {
             const end_point_hints_manager& ep_man = it->second;
             rps[ep_man.end_point_key()] = ep_man.last_written_replay_position();
