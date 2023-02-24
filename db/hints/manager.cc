@@ -358,7 +358,8 @@ inline bool manager::have_ep_manager(ep_key_type ep) const noexcept {
     return find_ep_manager(ep) != ep_managers_end();
 }
 
-bool manager::store_hint(ep_key_type ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
+bool manager::store_hint(locator::node_ptr node, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
+    const auto ep = node->endpoint();
     if (stopping() || draining_all() || !started() || !can_hint_for(ep)) {
         manager_logger.trace("Can't store a hint to {}", ep);
         ++_stats.dropped;
