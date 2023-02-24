@@ -19,6 +19,7 @@
 #include <seastar/core/abort_source.hh>
 #include "bytes_ostream.hh"
 #include "utils/UUID.hh"
+#include "utils/tagged_integer.hh"
 #include "internal.hh"
 #include "logical_clock.hh"
 
@@ -39,11 +40,11 @@ using server_id = internal::tagged_id<struct server_id_tag>;
 using group_id = raft::internal::tagged_id<struct group_id_tag>;
 
 // This type represents the raft term
-using term_t = internal::tagged_uint64<struct term_tag>;
+using term_t = utils::tagged_integer<struct term_tag, int64_t>;
 // This type represensts the index into the raft log
-using index_t = internal::tagged_uint64<struct index_tag>;
+using index_t = utils::tagged_integer<struct index_tag, uint64_t>;
 // Identifier for a read barrier request
-using read_id = internal::tagged_uint64<struct read_id_tag>;
+using read_id = utils::tagged_integer<struct read_id_tag, uint64_t>;
 
 // Opaque connection properties. May contain ip:port pair for instance.
 // This value is disseminated between cluster member

@@ -9,6 +9,7 @@
 #include "raft/raft.hh"
 
 #include "idl/uuid.idl.hh"
+#include "idl/utils.idl.hh"
 
 namespace raft {
 
@@ -17,11 +18,6 @@ namespace internal {
 template<typename Tag>
 struct tagged_id {
     utils::UUID id;
-};
-
-template<typename Tag>
-struct tagged_uint64 {
-    uint64_t get_value();
 };
 
 } // namespace internal

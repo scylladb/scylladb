@@ -59,7 +59,9 @@ set(idl_headers
   replica_exception.idl.hh
   per_partition_rate_limit_info.idl.hh
   position_in_partition.idl.hh
-  experimental/broadcast_tables_lang.idl.hh)
+  experimental/broadcast_tables_lang.idl.hh
+  utils.idl.hh
+  )
 
 foreach(idl_header ${idl_headers})
   compile_idl(${idl_header}

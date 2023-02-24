@@ -98,7 +98,7 @@ const log_entry& fsm::add_entry(T command) {
         tmp.enter_joint(command.current);
         command = std::move(tmp);
 
-        logger.trace("[{}] appending joint config entry at {}: {}", _my_id, _log.next_idx().get_value(), command);
+        logger.trace("[{}] appending joint config entry at {}: {}", _my_id, _log.next_idx(), command);
     }
 
     utils::get_local_injector().inject("fsm::add_entry/test-failure",
@@ -462,7 +462,7 @@ void fsm::maybe_commit() {
             // system then transitions to the new configuration.
             configuration cfg(_log.get_configuration());
             cfg.leave_joint();
-            logger.trace("[{}] appending non-joint config entry at {}: {}", _my_id, _log.next_idx().get_value(), cfg);
+            logger.trace("[{}] appending non-joint config entry at {}: {}", _my_id, _log.next_idx(), cfg);
             _log.emplace_back(seastar::make_lw_shared<log_entry>({_current_term, _log.next_idx(), std::move(cfg)}));
             leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
             // Leaving joint configuration may commit more entries

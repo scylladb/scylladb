@@ -893,7 +893,7 @@ class persistence {
         if (b == _stored_entries.end() || (*b)->idx >= idx) {
             return b;
         }
-        return b + std::min((idx - (*b)->idx).get_value(), _stored_entries.size());
+        return b + std::min(size_t(idx - (*b)->idx), _stored_entries.size());
     }
 
 public:
