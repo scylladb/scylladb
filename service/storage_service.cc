@@ -2296,6 +2296,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
             sync_nodes.push_back(node);
         }
     }
+    wait_for_normal_state_handled_on_boot(sync_nodes, "replace", uuid).get();
     sync_nodes.push_front(get_broadcast_address());
     auto sync_nodes_generations = _gossiper.get_generation_for_nodes(sync_nodes).get();
     // Map existing nodes to replacing nodes
