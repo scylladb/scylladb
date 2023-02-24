@@ -6,6 +6,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/distributed.hh>
+#include <seastar/core/reactor.hh>
 #include "types/map.hh"
 #include "sstables/sstables.hh"
 #include "test/lib/scylla_test_case.hh"
@@ -188,5 +189,51 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
             BOOST_REQUIRE(sst->get_shards_for_this_sstable().size() == smp::count);
         }
       }
+    });
+}
+
+SEASTAR_TEST_CASE(sstable_shard_owner_hint) {
+    return smp::invoke_on_all([] {
+        return test_env::do_with_async([](test_env &env) {
+            cell_locker_stats cl_stats;
+
+            auto s = schema_builder("tests", "test")
+                    .with_column("id", utf8_type, column_kind::partition_key)
+                    .with_column("value", int32_type).build();
+
+            auto tmp = tmpdir();
+            auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)]() mutable {
+                return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
+            };
+
+            auto make_insert = [&](partition_key key, api::timestamp_type ts) {
+                mutation m(s, key);
+                m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), ts);
+                return m;
+            };
+
+            std::vector<mutation> mutations;
+            mutations.reserve(1024);
+            for (auto i = 0; i < 1024; i++) {
+                auto pk = partition_key::from_exploded(*s, {to_bytes("alpha" + to_sstring(i))});
+                mutations.push_back(make_insert(std::move(pk), i));
+            }
+
+            auto sst = make_sstable_containing(sst_gen, std::move(mutations));
+
+            auto read_before = seastar::engine().get_io_stats().fstream_read_bytes;
+            auto started_at = std::chrono::high_resolution_clock::now();
+
+            seastar::shard_id shard_id_hint = sstable::shard_owner_hint(env.manager(), s, tmp.path().string(), sst->generation(), sst->get_version(), big).get0();
+
+            auto duration = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - started_at);
+
+            auto scylla_file_path = tmp.path() / fs::path(sst->component_basename(sstables::component_type::Scylla));
+            auto size = file_size(scylla_file_path.string()).get0();
+            testlog.info("read {} bytes out of {}, in {}us", engine().get_io_stats().fstream_read_bytes - read_before, size, std::chrono::duration_cast<std::chrono::microseconds>(duration).count());
+
+            BOOST_REQUIRE(seastar::engine().get_io_stats().fstream_read_bytes - read_before <= 4096);
+            BOOST_REQUIRE(shard_id_hint == this_shard_id());
+        });
     });
 }

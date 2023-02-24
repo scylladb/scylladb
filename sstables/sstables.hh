@@ -340,6 +340,16 @@ public:
         return _version;
     }
 
+    // Provides a hint on which shard owns a particular SSTable by partially
+    // reading the Scylla.DB component.
+    static future<seastar::shard_id>
+    shard_owner_hint(sstables_manager& manager,
+                     schema_ptr schema,
+                     sstring dir,
+                     generation_type generation,
+                     sstable_version_types v,
+                     sstable_format_types f);
+
     // Returns the total bytes of all components.
     uint64_t bytes_on_disk() const;
 

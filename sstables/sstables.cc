@@ -1725,6 +1725,38 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
     write_simple<component_type::Scylla>(*_components->scylla_metadata, pc);
 }
 
+struct scylla_metadata_shard_owner_hint {
+    disk_set_of_tagged_union<scylla_metadata_type,
+            // All other tags are missing, therefore they'll be skipped during parsing.
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ShardOwnerHint, scylla_metadata::shard_owner_hint>
+    > data;
+
+    template <typename Describer>
+    auto describe_type(sstable_version_types v, Describer f) { return f(data); }
+};
+
+future<seastar::shard_id>
+sstable::shard_owner_hint(sstables_manager& manager,
+                          schema_ptr schema,
+                          sstring dir,
+                          generation_type generation,
+                          sstable_version_types v,
+                          sstable_format_types f) {
+    auto sst = manager.make_sstable(std::move(schema), std::move(dir), std::move(generation), v, f, gc_clock::now(), default_io_error_handler_gen(), 4096);
+    seastar::shard_id shard_id = sst->generation().value() % smp::count; // guess owner if metadata is not available.
+
+    if (! co_await file_exists(sst->filename(component_type::Scylla))) {
+        co_return shard_id;
+    }
+
+    scylla_metadata_shard_owner_hint sm_shard_owner_hint;
+    co_await sst->read_simple<component_type::Scylla>(sm_shard_owner_hint, default_priority_class(), 0);
+
+    auto *shard_owner_hint = sm_shard_owner_hint.data.get<scylla_metadata_type::ShardOwnerHint, scylla_metadata::shard_owner_hint>();
+
+    co_return shard_owner_hint ? seastar::shard_id(*shard_owner_hint) : shard_id;
+}
+
 bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const {
     if (_version < sstables::sstable_version_types::md) {
         return true;
