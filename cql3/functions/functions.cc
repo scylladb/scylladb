@@ -337,7 +337,9 @@ functions::get(data_dictionary::database db,
     if (name.has_keyspace()
                 ? name == TOKEN_FUNCTION_NAME
                 : name.name == TOKEN_FUNCTION_NAME.name) {
-        return ::make_shared<token_fct>(db.find_schema(receiver_ks, receiver_cf));
+        auto fun = ::make_shared<token_fct>(db.find_schema(receiver_ks, receiver_cf));
+        validate_types(db, keyspace, fun, provided_args, receiver_ks, receiver_cf);
+        return fun;
     }
 
     if (name.has_keyspace()
