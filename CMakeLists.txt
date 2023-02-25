@@ -229,10 +229,6 @@ set(scylla_sources
     streaming/stream_transfer_task.cc
     table_helper.cc
     tasks/task_manager.cc
-    thrift/controller.cc
-    thrift/handler.cc
-    thrift/server.cc
-    thrift/thrift_validation.cc
     timeout_config.cc
     tools/scylla-types.cc
     tools/scylla-sstable.cc
@@ -265,6 +261,7 @@ add_subdirectory(rust)
 add_subdirectory(schema)
 add_subdirectory(sstables)
 add_subdirectory(test)
+add_subdirectory(thrift)
 add_subdirectory(types)
 add_subdirectory(utils)
 include(add_version_library)
@@ -280,12 +277,12 @@ target_link_libraries(scylla PRIVATE
     alternator
     cql3
     idl
-    interface
     redis
     schema
     scylla_version
     sstables
     test-perf
+    thrift
     types
     utils
     wasmtime_bindings)
@@ -329,7 +326,6 @@ target_link_libraries(scylla PRIVATE
     ZLIB::ZLIB
     ICU::uc
     systemd
-    Thrift::thrift
     zstd
     snappy
     ${LUA_LIBRARIES}
