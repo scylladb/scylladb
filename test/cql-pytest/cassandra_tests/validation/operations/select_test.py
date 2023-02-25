@@ -2630,14 +2630,12 @@ def testTokenFctRejectsInvalidColumnName(cql, test_keyspace):
         # Slightly different error messages in Scylla and Cassandra
         assert_invalid_message(cql, table, "name s1", "SELECT token(s1, k1) FROM %s")
 
-@pytest.mark.xfail(reason="issue #10448")
 def testTokenFctRejectsInvalidColumnType(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k1 uuid, k2 text, PRIMARY KEY ((k1, k2)))") as table:
         execute(cql, table, "INSERT INTO %s (k1, k2) VALUES (uuid(), 'k2')")
         assert_invalid_message(cql, table, "Type error: k2 cannot be passed as argument 0 of function system.token of type uuid",
                              "SELECT token(k2, k1) FROM %s")
 
-@pytest.mark.xfail(reason="issue #10448")
 def testTokenFctRejectsInvalidColumnCount(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k1 uuid, k2 text, PRIMARY KEY ((k1, k2)))") as table:
         execute(cql, table, "INSERT INTO %s (k1, k2) VALUES (uuid(), 'k2')")

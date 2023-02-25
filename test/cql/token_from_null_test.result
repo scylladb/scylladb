@@ -18,22 +18,10 @@ OK
 > INSERT INTO reproducer.t2 (pk) VALUES (1);
 OK
 > SELECT TOKEN(pk, a, b) FROM reproducer.t2;
-+--------------------------+
-| system.token(pk, a, b)   |
-|--------------------------|
-| null                     |
-+--------------------------+
+Error from server: code=2200 [Invalid query] message="Invalid number of arguments in call to function system.token: 1 required but 3 provided"
 > SELECT TOKEN(pk, b) FROM reproducer.t2;
-+-----------------------+
-| system.token(pk, b)   |
-|-----------------------|
-| null                  |
-+-----------------------+
+Error from server: code=2200 [Invalid query] message="Invalid number of arguments in call to function system.token: 1 required but 2 provided"
 > SELECT TOKEN(a, b) FROM reproducer.t2;
-+----------------------+
-| system.token(a, b)   |
-|----------------------|
-| null                 |
-+----------------------+
+Error from server: code=2200 [Invalid query] message="Invalid number of arguments in call to function system.token: 1 required but 2 provided"
 > 
 > DROP KEYSPACE reproducer;OK
