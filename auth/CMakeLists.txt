@@ -1,5 +1,5 @@
-add_library(auth STATIC)
-target_sources(auth
+add_library(scylla_auth STATIC)
+target_sources(scylla_auth
   PRIVATE
     allow_all_authenticator.cc
     allow_all_authorizer.cc
@@ -19,10 +19,10 @@ target_sources(auth
     service.cc
     standard_role_manager.cc
     transitional.cc)
-target_include_directories(auth
+target_include_directories(scylla_auth
   PUBLIC
     ${CMAKE_SOURCE_DIR})
-target_link_libraries(auth
+target_link_libraries(scylla_auth
   PUBLIC
     Seastar::seastar
     xxHash::xxhash
@@ -30,3 +30,16 @@ target_link_libraries(auth
     cql3
     idl
     wasmtime_bindings)
+
+add_library(auth INTERFACE)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+    target_link_libraries(auth INTERFACE
+        "$<LINK_LIBRARY:WHOLE_ARCHIVE,scylla_auth>")
+else()
+    add_dependencies(auth scylla_auth)
+    target_include_directories(auth INTERFACE
+        ${CMAKE_SOURCE_DIR})
+    target_link_options(auth INTERFACE
+        "$<$<CXX_COMPILER_ID:Clang>:SHELL:LINKER:-force_load $<TARGET_LINKER_FILE:scylla_auth>>"
+        "$<$<CXX_COMPILER_ID:GNU>:SHELL:LINKER:--whole-archive $<TARGET_LINKER_FILE:scylla_auth> LINKER:--no-whole-archive>")
+endif()
