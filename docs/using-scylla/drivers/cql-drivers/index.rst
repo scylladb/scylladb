@@ -49,6 +49,7 @@ Scylla supports the CQL binary protocol version 3, so any Apache Cassandra/CQL d
   * `DataStax Node.js Driver <https://github.com/datastax/nodejs-driver/>`_
   * `DataStax C++ Driver <https://github.com/datastax/cpp-driver/>`_
   * `DataStax PHP Driver  <https://github.com/datastax/php-driver/>`_
+  * `PHP extension <https://github.com/he4rt/scylladb-php-driver/>`_
   * `Rust <https://github.com/AlexPikalov/cdrs>`_
   * `Scala Phantom Project <https://github.com/outworkers/phantom>`_
 
