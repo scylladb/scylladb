@@ -31,6 +31,7 @@ find_package(ZLIB REQUIRED)
 find_package(ICU COMPONENTS uc i18n REQUIRED)
 find_package(absl REQUIRED)
 find_package(libdeflate REQUIRED)
+find_package(libxcrypt REQUIRED)
 find_package(Thrift REQUIRED)
 find_package(xxHash REQUIRED)
 
@@ -323,6 +324,7 @@ target_link_libraries(scylla PRIVATE
     absl::exponential_biased
     absl::throw_delegate
     # System libs
+    libxcrypt::libxcrypt
     libdeflate::libdeflate
     ZLIB::ZLIB
     ICU::uc
@@ -331,7 +333,6 @@ target_link_libraries(scylla PRIVATE
     zstd
     snappy
     ${LUA_LIBRARIES}
-    crypt
     xxHash::xxhash)
 
 # Force SHA1 build-id generation
