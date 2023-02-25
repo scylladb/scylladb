@@ -50,6 +50,9 @@ add_library(interface STATIC)
 target_sources(interface
   PRIVATE
     ${scylla_thrift_gen_cassandra_files})
+target_include_directories(interface
+  PUBLIC
+    ${scylla_gen_build_dir})
 if(thrift_version VERSION_LESS 0.11.0)
     target_compile_definitions(interface
       PUBLIC
