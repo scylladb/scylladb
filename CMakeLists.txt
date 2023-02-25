@@ -31,6 +31,7 @@ find_package(ZLIB REQUIRED)
 find_package(ICU COMPONENTS uc i18n REQUIRED)
 find_package(absl REQUIRED)
 find_package(libdeflate REQUIRED)
+find_package(Thrift REQUIRED)
 find_package(xxHash REQUIRED)
 
 set(scylla_gen_build_dir "${CMAKE_BINARY_DIR}/gen")
@@ -326,10 +327,10 @@ target_link_libraries(scylla PRIVATE
     ZLIB::ZLIB
     ICU::uc
     systemd
+    Thrift::thrift
     zstd
     snappy
     ${LUA_LIBRARIES}
-    thrift
     crypt
     xxHash::xxhash)
 
