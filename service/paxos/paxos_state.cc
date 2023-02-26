@@ -103,7 +103,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, tracing::trace_
                             auto ex = f2.get_exception();
                             logger.debug("Failed to get data or digest: {}. Ignored.", std::move(ex));
                         }
-                        auto upgrade_if_needed = [schema = std::move(schema)] (std::optional<proposal> p) mutable {
+                        auto upgrade_if_needed = [schema = std::move(schema)] (std::optional<proposal> p) {
                             if (!p || p->update.schema_version() == schema->version()) {
                                 return make_ready_future<std::optional<proposal>>(std::move(p));
                             }
@@ -115,7 +115,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, tracing::trace_
                             // for that version and upgrade the mutation with it.
                             logger.debug("Stored mutation references outdated schema version. "
                                 "Trying to upgrade the accepted proposal mutation to the most recent schema version.");
-                            return service::get_column_mapping(p->update.column_family_id(), p->update.schema_version()).then([schema = std::move(schema), p = std::move(p)] (const column_mapping& cm) {
+                            return service::get_column_mapping(p->update.column_family_id(), p->update.schema_version()).then([schema, p = std::move(p)] (const column_mapping& cm) {
                                 return make_ready_future<std::optional<proposal>>(proposal(p->ballot, freeze(p->update.unfreeze_upgrading(schema, cm))));
                             });
                         };
