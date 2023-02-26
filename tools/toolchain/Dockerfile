@@ -7,6 +7,7 @@ FROM docker.io/fedora:38
 # INSTALL - build *and* install it (to /usr/bin)
 # To change the argument, use --build-arg CLANG_BUILD=BUILD|INSTALL
 ARG CLANG_BUILD=""
+ARG TARGETARCH
 
 ADD ./install-dependencies.sh ./
 ADD ./seastar/install-dependencies.sh ./seastar/
@@ -24,6 +25,6 @@ RUN dnf -y update \
     && echo 'Defaults !requiretty' >> /etc/sudoers
 RUN mkdir -p /root/.m2/repository
 ENV JAVA8_HOME=/usr/lib/jvm/java-1.8.0-openjdk
-
-RUN chmod +x ./clang_lto_pgo.sh && ./clang_lto_pgo.sh
+ENV CLANG_ARCH=$TARGETARCH
+RUN if [ "$CLANG_ARCH" = "amd64" ] ; then (chmod +x ./clang_lto_pgo.sh && ./clang_lto_pgo.sh) else echo "Unsupported Arch ($CLANG_ARCH) for clang optimization" ; fi
 CMD /bin/bash

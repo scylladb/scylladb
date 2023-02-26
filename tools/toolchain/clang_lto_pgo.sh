@@ -1,5 +1,14 @@
 #!/bin/bash -uex
 
+if [ -z "${CLANG_ARCH}" ]; then
+    echo "CLANG_ARCH is not defined"
+    exit 0
+elif [ "${CLANG_ARCH}" != "amd64" ]; then
+	echo "clang optimization is only supported for x86_64 (amd64) at the moment."
+    exit 0
+fi
+
+
 if [ -z "${CLANG_BUILD}" ]; then
 	echo "Skip building optimized clang"
 	exit 0
@@ -15,14 +24,14 @@ else
 	exit 1
 fi
 # Which Scylla branch to train on
-SCYLLA_BRANCH=scylla-5.2.0-rc0
+SCYLLA_BRANCH=scylla-5.2.0-rc1
 
 # Which LLVM release to build to compile Scylla
 LLVM_SCYLLA_TAG=15.0.7
 
 # Which LLVM release to use to build clang.
 # TODO: Move to use Fedora 38 or above built-in clang 16
-LLVM_CLANG_TAG=16.0.0-rc2
+LLVM_CLANG_TAG=16.0.0-rc3
 
 if [ -d "/optimized_clang" ];
 then
@@ -35,49 +44,49 @@ cd "${DIR}"
 
 # Download the scylla codebase for training.
 # Scylla's dependencies are already installed.
-git clone https://github.com/scylladb/scylla --branch ${SCYLLA_BRANCH} --depth=1
-git -C scylla submodule update --init --depth=1
+git clone https://github.com/scylladb/scylla --branch ${SCYLLA_BRANCH} --depth=1 scylla-${CLANG_ARCH}
+git -C scylla-${CLANG_ARCH} submodule update --init --depth=1
 
 # Clone, patch and bootstrap the newest Clang and BOLT.
-git clone https://github.com/llvm/llvm-project --branch llvmorg-${LLVM_CLANG_TAG} --depth=1 stage-0
-cd stage-0
+git clone https://github.com/llvm/llvm-project --branch llvmorg-${LLVM_CLANG_TAG} --depth=1 stage-0-${CLANG_ARCH}
+cd stage-0-${CLANG_ARCH}
 
 cmake -B build -S llvm -DLLVM_ENABLE_PROJECTS='clang;lld;bolt' -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=X86 -G Ninja -DLLVM_ENABLE_RUNTIMES='compiler-rt' -DCOMPILER_RT_BUILD_SANITIZERS=OFF -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_TESTS=OFF
 cmake --build build --
 
-USE_NEW_COMPILER=(-DCMAKE_C_COMPILER="$DIR/stage-0/build/bin/clang" -DCMAKE_CXX_COMPILER="$DIR/stage-0/build/bin/clang++" -DLLVM_USE_LINKER="$DIR/stage-0/build/bin/ld.lld")
+USE_NEW_COMPILER=(-DCMAKE_C_COMPILER="$DIR/stage-0-${CLANG_ARCH}/build/bin/clang" -DCMAKE_CXX_COMPILER="$DIR/stage-0-${CLANG_ARCH}/build/bin/clang++" -DLLVM_USE_LINKER="$DIR/stage-0-${CLANG_ARCH}/build/bin/ld.lld")
 COMMON_OPTS=(-DLLVM_ENABLE_PROJECTS='clang' -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=X86 -G Ninja -DLLVM_ENABLE_LTO=Thin -DLLVM_BUILD_RUNTIME=OFF -DCLANG_DEFAULT_PIE_ON_LINUX=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_STATIC_LINK_CXX_STDLIB=ON -DLLVM_ENABLE_BINDINGS=OFF)
 
 # Build a PGO-optimized compiler using the boostrapped compiler.
 # Choose a version compatible with your system.
 # If you change it, remember to change clang-15 in the later part of the script to the appropriate name as well.
 git fetch --depth=1 origin tag llvmorg-${LLVM_SCYLLA_TAG}
-git worktree add ../stage-1 llvmorg-${LLVM_SCYLLA_TAG}
-cd ../stage-1
+git worktree add ../stage-1-${CLANG_ARCH} llvmorg-${LLVM_SCYLLA_TAG}
+cd ../stage-1-${CLANG_ARCH}
 cmake -B build -S llvm "${USE_NEW_COMPILER[@]}" "${COMMON_OPTS[@]}" -DLLVM_BUILD_INSTRUMENTED=IR
 cmake --build build -- bin/clang
 
 # First compilation: gathering a clang profile for PGO.
-cd ../scylla
+cd ../scylla-${CLANG_ARCH}
 rm -rf build build.ninja
-./configure.py --mode=dev --compiler=$(realpath ../stage-1/build/bin)/clang++ --disable-dpdk
+./configure.py --mode=dev --compiler=$(realpath ../stage-1-${CLANG_ARCH}/build/bin)/clang++ --disable-dpdk
 LLVM_PROFILE_FILE=$(realpath ../stage-1)/build/profiles/ir-%p-%m.profraw ninja build/dev/scylla
 
-cd ../stage-1
-../stage-0/build/bin/llvm-profdata merge build/profiles/ir-*.profraw -output=ir.prof
+cd ../stage-1-${CLANG_ARCH}
+../stage-0-${CLANG_ARCH}/build/bin/llvm-profdata merge build/profiles/ir-*.profraw -output=ir.prof
 rm -r build
 cmake -B build -S llvm "${USE_NEW_COMPILER[@]}" "${COMMON_OPTS[@]}" -DLLVM_BUILD_INSTRUMENTED=CSIR -DLLVM_PROFDATA_FILE=$(realpath ir.prof)
 cmake --build build -- bin/clang
 
 # Second compilation: gathering a clang profile for CSPGO
-cd ../scylla
+cd ../scylla-${CLANG_ARCH}
 rm -rf build build.ninja
-./configure.py --mode=dev --compiler=$(realpath ../stage-1/build/bin)/clang++ --disable-dpdk
-LLVM_PROFILE_FILE=$(realpath ../stage-1)/build/profiles/csir-%p-%m.profraw ninja build/dev/scylla
+./configure.py --mode=dev --compiler=$(realpath ../stage-1-${CLANG_ARCH}/build/bin)/clang++ --disable-dpdk
+LLVM_PROFILE_FILE=$(realpath ../stage-1-${CLANG_ARCH})/build/profiles/csir-%p-%m.profraw ninja build/dev/scylla
 
-cd ../stage-1
-../stage-0/build/bin/llvm-profdata merge build/profiles/csir-*.profraw -output=csir.prof
-../stage-0/build/bin/llvm-profdata merge ir.prof csir.prof -output=combined.prof
+cd ../stage-1-${CLANG_ARCH}
+../stage-0-${CLANG_ARCH}/build/bin/llvm-profdata merge build/profiles/csir-*.profraw -output=csir.prof
+../stage-0-${CLANG_ARCH}/build/bin/llvm-profdata merge ir.prof csir.prof -output=combined.prof
 rm -r build
 # -DLLVM_LIBDIR_SUFFIX=64 for Fedora compatibility
 cmake -B build -S llvm "${USE_NEW_COMPILER[@]}" "${COMMON_OPTS[@]}" -DLLVM_PROFDATA_FILE=$(realpath combined.prof) -DCMAKE_EXE_LINKER_FLAGS="-Wl,--emit-relocs" -DCMAKE_INSTALL_PREFIX=/usr -DLLVM_LIBDIR_SUFFIX=64
@@ -85,28 +94,28 @@ cmake --build build -- bin/clang
 
 mv build/bin/clang-15 build/bin/clang-15.prebolt
 mkdir build/profiles
-../stage-0/build/bin/llvm-bolt build/bin/clang-15.prebolt -o build/bin/clang-15 -instrument -instrumentation-file=$(realpath build/profiles)/prof -instrumentation-file-append-pid -conservative-instrumentation
+../stage-0-${CLANG_ARCH}/build/bin/llvm-bolt build/bin/clang-15.prebolt -o build/bin/clang-15 -instrument -instrumentation-file=$(realpath build/profiles)/prof -instrumentation-file-append-pid -conservative-instrumentation
 
 # Third compilation: gathering a clang profile for BOLT
-cd ../scylla
+cd ../scylla-${CLANG_ARCH}
 rm -rf build build.ninja
-./configure.py --mode=dev --compiler=$(realpath ../stage-1/build/bin)/clang++ --disable-dpdk
+./configure.py --mode=dev --compiler=$(realpath ../stage-1-${CLANG_ARCH}/build/bin)/clang++ --disable-dpdk
 ninja build/dev/scylla
 
-cd ../stage-1
-rm -rf ../scylla
-../stage-0/build/bin/merge-fdata build/profiles/*.fdata > prof.fdata
-../stage-0/build/bin/llvm-bolt build/bin/clang-15.prebolt -o build/bin/clang-15 -data=prof.fdata -reorder-functions=hfsort -reorder-blocks=ext-tsp -split-functions -split-all-cold -split-eh -dyno-stats
+cd ../stage-1-${CLANG_ARCH}
+rm -rf ../scylla-${CLANG_ARCH}
+../stage-0-${CLANG_ARCH}/build/bin/merge-fdata build/profiles/*.fdata > prof.fdata
+../stage-0-${CLANG_ARCH}/build/bin/llvm-bolt build/bin/clang-15.prebolt -o build/bin/clang-15 -data=prof.fdata -reorder-functions=hfsort -reorder-blocks=ext-tsp -split-functions -split-all-cold -split-eh -dyno-stats
 
 # Then use the below to replace your inferior compiler
 if [ "${CLANG_BUILD}" = "INSTALL" ]; then
     sudo mv /usr/bin/clang-15 /usr/bin/clang-15.old
-    sudo cp $DIR/stage-1/build/bin/clang-15 /usr/bin
+    sudo cp $DIR/stage-1-${CLANG_ARCH}/build/bin/clang-15 /usr/bin
     echo "optimizaed clang was copied to /usr/bin"
 else
-    sudo cp $DIR/stage-1/build/bin/clang-15 $DIR/
+    sudo cp $DIR/stage-1-${CLANG_ARCH}/build/bin/clang-15 $DIR/
     echo "optimized clang was copied"
 fi
 
 cd ../
-rm -rf $DIR/stage-0 $DIR/stage-1
+rm -rf $DIR/stage-0-${CLANG_ARCH} $DIR/stage-1-${CLANG_ARCH} $DIR/scylla-${CLANG_ARCH}
