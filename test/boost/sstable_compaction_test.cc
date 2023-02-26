@@ -5019,6 +5019,34 @@ SEASTAR_TEST_CASE(compaction_manager_stop_and_drain_race_test) {
     co_await cm.stop();
 }
 
+SEASTAR_TEST_CASE(test_print_shared_sstables_vector) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pks = ss.make_pkeys(2);
+        auto tmp = tmpdir();
+        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)] () {
+            return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
+        };
+
+        std::vector<sstables::shared_sstable> ssts(2);
+
+        auto mut0 = mutation(s, pks[0]);
+        mut0.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+        ssts[0] = make_sstable_containing(sst_gen, {std::move(mut0)});
+
+        auto mut1 = mutation(s, pks[1]);
+        mut1.partition().apply_insert(*s, ss.make_ckey(1), ss.new_timestamp());
+        ssts[1] = make_sstable_containing(sst_gen, {std::move(mut1)});
+
+        std::string msg = format("{}", ssts);
+        for (const auto& sst : ssts) {
+            auto gen_str = format("{}", sst->generation());
+            BOOST_REQUIRE(msg.find(gen_str) != std::string::npos);
+        }
+    });
+}
+
 static future<> run_incremental_compaction_test(sstables::offstrategy offstrategy, std::function<future<>(table_for_tests&, owned_ranges_ptr)> run_compaction) {
     return test_env::do_with_async([run_compaction = std::move(run_compaction), offstrategy] (test_env& env) {
         auto builder = schema_builder("tests", "test")

@@ -3370,6 +3370,12 @@ future<> remove_table_directory_if_has_no_snapshots(fs::path table_dir) {
     }
 }
 
+std::string to_string(const shared_sstable& sst, bool include_origin) {
+    return include_origin ?
+        fmt::format("{}:level={:d}:origin={}", sst->get_filename(), sst->get_sstable_level(), sst->get_origin()) :
+        fmt::format("{}:level={:d}", sst->get_filename(), sst->get_sstable_level());
+}
+
 } // namespace sstables
 
 namespace seastar {

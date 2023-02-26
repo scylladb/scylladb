@@ -428,11 +428,7 @@ public:
         }
     }
     formatted_sstables_list& operator+=(const shared_sstable& sst) {
-        if (_include_origin) {
-            _ssts.emplace_back(format("{}:level={:d}:origin={}", sst->get_filename(), sst->get_sstable_level(), sst->get_origin()));
-        } else {
-            _ssts.emplace_back(format("{}:level={:d}", sst->get_filename(), sst->get_sstable_level()));
-        }
+        _ssts.emplace_back(to_string(sst, _include_origin));
         return *this;
     }
     friend std::ostream& operator<<(std::ostream& os, const formatted_sstables_list& lst);
