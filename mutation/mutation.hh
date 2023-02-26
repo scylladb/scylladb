@@ -72,6 +72,8 @@ private:
         data(partition_key&& key, schema_ptr&& schema);
         data(schema_ptr&& schema, dht::decorated_key&& key, const mutation_partition& mp);
         data(schema_ptr&& schema, dht::decorated_key&& key, mutation_partition&& mp);
+
+        future<> clear_gently() noexcept;
     };
     std::unique_ptr<data> _ptr;
 private:
@@ -186,6 +188,8 @@ public:
     mutation compacted() const;
 
     size_t memory_usage(const ::schema& s) const;
+
+    future<> clear_gently() noexcept;
 };
 
 inline std::vector<mutation> make_mutation_vector(mutation&& m) {
