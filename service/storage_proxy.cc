@@ -1087,13 +1087,13 @@ class per_destination_mutation : public mutation_holder {
     std::unordered_map<gms::inet_address, lw_shared_ptr<const frozen_mutation>> _mutations;
     dht::token _token;
 public:
-    per_destination_mutation(const std::unordered_map<gms::inet_address, std::optional<mutation>>& mutations) {
+    per_destination_mutation(storage_proxy& sp, std::unordered_map<gms::inet_address, std::optional<mutation>>&& mutations) {
         for (auto&& m : mutations) {
             lw_shared_ptr<const frozen_mutation> fm;
             if (m.second) {
                 _schema = m.second.value().schema();
                 _token = m.second.value().token();
-                fm = make_lw_shared<const frozen_mutation>(freeze(m.second.value()));
+                fm = make_lw_shared<const frozen_mutation>(sp.freeze_and_destroy_mutation(std::move(*m.second)));
                 _size += fm->representation().size();
             }
             _mutations.emplace(m.first, std::move(fm));
@@ -3093,17 +3093,19 @@ frozen_mutation_and_schema storage_proxy::freeze_mutation_and_schema_and_destroy
 }
 
 future<>
-storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
+storage_proxy::mutate_locally(mutation&& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
     auto erm = _db.local().find_column_family(m.schema()).get_effective_replication_map();
-    auto apply = [this, erm, &m, tr_state, sync, timeout, smp_grp, rate_limit_info] (shard_id shard) {
+    auto s = m.schema();
+    auto token = m.token();
+    auto apply = [this, erm, m = freeze_and_destroy_mutation(std::move(m)), s, tr_state, sync, timeout, smp_grp, rate_limit_info] (shard_id shard) mutable {
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         auto shard_rate_limit = rate_limit_info;
         if (shard == this_shard_id()) {
             shard_rate_limit = adjust_rate_limit_for_local_operation(shard_rate_limit);
         }
         return _db.invoke_on(shard, {smp_grp, timeout},
-                [s = global_schema_ptr(m.schema()),
-                 m = freeze(m),
+                [s = global_schema_ptr(s),
+                 m = std::move(m),
                  gtr = tracing::global_trace_state_ptr(std::move(tr_state)),
                  erm,
                  timeout,
@@ -3112,7 +3114,7 @@ storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_sta
             return db.apply(s, m, gtr.get(), sync, timeout, shard_rate_limit);
         });
     };
-    return apply_on_shards(erm, *m.schema(), m.token(), std::move(apply));
+    return apply_on_shards(erm, *s, token, std::move(apply));
 }
 
 future<>
@@ -3135,8 +3137,8 @@ storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tra
 
 future<>
 storage_proxy::mutate_locally(std::vector<mutation> mutations, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
-    co_await coroutine::parallel_for_each(mutations, [&] (const mutation& m) mutable {
-            return mutate_locally(m, tr_state, db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info);
+    co_await coroutine::parallel_for_each(mutations, [&] (mutation& m) mutable {
+            return mutate_locally(std::move(m), tr_state, db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info);
     });
 }
 
@@ -3338,23 +3340,29 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
  */
 result<storage_proxy::response_id_type>
 storage_proxy::create_write_response_handler(const mutation& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
-    return create_write_response_handler_helper(m.schema(), m.token(), std::make_unique<shared_mutation>(m), cl, type, tr_state,
+    return create_write_response_handler_helper(m.schema(), m.token(), make_shared_mutation(m), cl, type, tr_state,
+            std::move(permit), allow_limit, is_cancellable::no);
+}
+
+result<storage_proxy::response_id_type>
+storage_proxy::create_write_response_handler(mutation&& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
+    return create_write_response_handler_helper(m.schema(), m.token(), make_shared_mutation(std::move(m)), cl, type, tr_state,
             std::move(permit), allow_limit, is_cancellable::no);
 }
 
 result<storage_proxy::response_id_type>
 storage_proxy::create_write_response_handler(const hint_wrapper& h, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
-    return create_write_response_handler_helper(h.mut.schema(), h.mut.token(), std::make_unique<hint_mutation>(h.mut), cl, type, tr_state,
+    return create_write_response_handler_helper(h.mut.schema(), h.mut.token(), make_shared_mutation<hint_mutation>(h.mut), cl, type, tr_state,
             std::move(permit), allow_limit, is_cancellable::yes);
 }
 
 result<storage_proxy::response_id_type>
-storage_proxy::create_write_response_handler(const read_repair_mutation& mut, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
+storage_proxy::create_write_response_handler(read_repair_mutation&& mut, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
     inet_address_vector_replica_set endpoints;
-    const auto& m = mut.value;
+    auto m = std::move(mut.value);
     endpoints.reserve(m.size());
     std::ranges::copy(m | std::views::keys, std::inserter(endpoints, endpoints.begin()));
-    auto mh = std::make_unique<per_destination_mutation>(m);
+    auto mh = std::make_unique<per_destination_mutation>(*this, std::move(m));
 
     slogger.trace("creating write handler for read repair token: {} endpoint: {}", mh->token(), endpoints);
     tracing::trace(tr_state, "Creating write handler for read repair token: {} endpoint: {}", mh->token(), endpoints);
@@ -3970,8 +3978,8 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
         }
 
         future<result<>> send_batchlog_mutation(mutation m, db::consistency_level cl = db::consistency_level::ONE) const {
-            return _p.mutate_prepare(std::array<mutation, 1>{std::move(m)}, cl, db::write_type::BATCH_LOG, _permit, [this] (const mutation& m, db::consistency_level cl, db::write_type type, service_permit permit) {
-                return _p.create_write_response_handler(_ermp, cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats, std::move(permit), std::monostate(), is_cancellable::no);
+            return _p.mutate_prepare_and_consume(std::array<mutation, 1>{std::move(m)}, cl, db::write_type::BATCH_LOG, _permit, [this] (mutation&& m, db::consistency_level cl, db::write_type type, service_permit permit) {
+                return _p.create_write_response_handler(_ermp, cl, type, _p.make_shared_mutation(std::move(m)), _batchlog_endpoints, {}, {}, _trace_state, _stats, std::move(permit), std::monostate(), is_cancellable::no);
             }).then(utils::result_wrap([this, cl] (unique_response_handler_vector ids) {
                 _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
                 return _p.mutate_begin(std::move(ids), cl, _trace_state, _timeout);
@@ -4010,7 +4018,11 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
                     return _p.mutate_begin(std::move(ids), _cl, _trace_state, _timeout);
                 })).then(utils::result_wrap([this] {
                     return utils::then_ok_result<result<>>(async_remove_from_batchlog());
-                }));
+                })).finally([this] {
+                    for (auto& mut : _mutations) {
+                        _p.destroy_mutation_gently(std::move(mut));
+                    }
+                });
             }));
         }
     };
