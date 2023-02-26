@@ -1804,11 +1804,12 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         tlogger.debug("cleaning out row cache");
     }));
     rebuild_statistics();
-    co_await coroutine::parallel_for_each(p->remove, [this, p] (pruner::removed_sstable& r) {
+    co_await coroutine::parallel_for_each(p->remove, [this, p] (pruner::removed_sstable& r) -> future<> {
         if (r.enable_backlog_tracker) {
             remove_sstable_from_backlog_tracker(r.cg.get_backlog_tracker(), r.sst);
         }
-        return sstables::sstable_directory::delete_atomically({r.sst});
+        co_await sstables::sstable_directory::delete_atomically({r.sst});
+        update_sstable_cleanup_state(r.sst, {});
     });
     co_return p->rp;
 }
