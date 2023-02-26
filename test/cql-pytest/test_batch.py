@@ -69,8 +69,7 @@ def test_error_is_raised_for_batch_size_above_threshold(cql, table1):
 # Passing injection_key in the body of the request ensures that the exception will be
 # thrown only for this test request and will not affect other requests that
 # the driver may send in the background.
-@pytest.mark.asyncio
-async def test_batch_with_error(cql, table1):
+def test_batch_with_error(cql, table1):
     injection_key = 'query_processor-parse_statement-test_failure'
     with scylla_inject_error(cql, injection_key, one_shot=False):
         # exceptions::exception_code::SERVER_ERROR, it gets converted to NoHostAvailable by the driver
