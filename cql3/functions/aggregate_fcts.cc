@@ -264,84 +264,22 @@ public:
 };
 
 template <typename Type>
-class impl_sum_function_for : public aggregate_function::aggregate {
-protected:
-    using accumulator_type = typename accumulator_for<Type>::type;
-    accumulator_type _sum{};
-public:
-    virtual void reset() override {
-        _sum = {};
-    }
-    virtual opt_bytes compute() override {
-        return data_type_for<Type>()->decompose(accumulator_for<Type>::narrow(_sum));
-    }
-    virtual void add_input(const std::vector<opt_bytes>& values) override {
-        if (!values[0]) {
-            return;
-        }
-        _sum += value_cast<Type>(data_type_for<Type>()->deserialize(*values[0]));
-    }
-    virtual void set_accumulator(const opt_bytes& acc) override {
-        if (acc) {
-            _sum = accumulator_for<Type>::deserialize(acc);
-        } else {
-            reset();
-        }
-    }
-    virtual opt_bytes get_accumulator() const override {
-        return accumulator_for<Type>::decompose(_sum);
-    }
-    virtual void reduce(const opt_bytes& acc) override {
-        if (acc) {
-            auto other = accumulator_for<Type>::deserialize(acc);
-            _sum += other;
-        }
-    }
-};
-
-template <typename Type>
-class impl_reducible_sum_function final : public impl_sum_function_for<Type> {
-public:
-    virtual bytes_opt compute() override {
-        return this->get_accumulator();
-    }
-};
-
-template <typename Type>
-class sum_function_for : public native_aggregate_function {
-public:
-    sum_function_for() : native_aggregate_function("sum", data_type_for<Type>(), { data_type_for<Type>() }) {}
-    sum_function_for(data_type return_type, std::vector<data_type> arg_types) 
-      : native_aggregate_function("sum", std::move(return_type), std::move(arg_types)) {}
-
-    virtual bool is_reducible() const override {
-        return true;
-    }
-
-    virtual std::unique_ptr<aggregate> new_aggregate() override {
-        return std::make_unique<impl_sum_function_for<Type>>();
-    }
-
-    virtual ::shared_ptr<aggregate_function> reducible_aggregate_function() override {
-        class reducible_sum_function : public sum_function_for<Type> {
-        public:
-            reducible_sum_function() : sum_function_for(accumulator_for<Type>::data_type(), { data_type_for<Type>() }) {}
-
-            virtual std::unique_ptr<aggregate> new_aggregate() override {
-                return std::make_unique<impl_reducible_sum_function<Type>>();
-            }
-        };
-
-        return ::make_shared<reducible_sum_function>();
-    };
-};
-
-
-template <typename Type>
 static
 shared_ptr<aggregate_function>
 make_sum_function() {
-    return make_shared<sum_function_for<Type>>();
+    using Acc = typename accumulator_for<Type>::type;
+    return make_shared<db::functions::stateless_aggregate_function_adapter>(
+        db::functions::stateless_aggregate_function{
+            .name = function_name::native_function("sum"),
+            .state_type = accumulator_for<Type>::data_type(),
+            .result_type = data_type_for<Type>(),
+            .argument_types = {data_type_for<Type>()},
+            .initial_state = accumulator_for<Type>::decompose(Acc(0)),
+            .aggregation_function = make_internal_scalar_function("sum_step", return_accumulator_on_null, [] (Acc acc, Type addend) -> Acc { return acc + addend; }),
+            .state_to_result_function = make_internal_scalar_function("sum_finalizer", return_any_nonnull, [] (Acc acc) -> Type { return accumulator_for<Type>::narrow(acc); }),
+            .state_reduction_function = make_internal_scalar_function("sum_reducer", return_any_nonnull, [] (Acc a1, Acc a2) -> Acc { return a1 + a2; }),
+        }
+    );
 }
 
 template <typename Type>
