@@ -3081,6 +3081,17 @@ void storage_proxy::destroy_mutation_gently(mutation&& m) {
     });
 }
 
+frozen_mutation storage_proxy::freeze_and_destroy_mutation(mutation&& m) {
+    auto fm = freeze(m);
+    destroy_mutation_gently(std::move(m));
+    return fm;
+}
+
+frozen_mutation_and_schema storage_proxy::freeze_mutation_and_schema_and_destroy_mutation(mutation&& m) {
+    auto s = m.schema();
+    return frozen_mutation_and_schema{freeze_and_destroy_mutation(std::move(m)), std::move(s)};
+}
+
 future<>
 storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
     auto erm = _db.local().find_column_family(m.schema()).get_effective_replication_map();
