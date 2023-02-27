@@ -389,55 +389,6 @@ struct aggregate_type_for<time_native_type> {
     using type = time_native_type::primary_type;
 };
 
-template <typename Type>
-class impl_count_function_for final : public aggregate_function::aggregate {
-   int64_t _count = 0;
-public:
-    virtual void reset() override {
-        _count = 0;
-    }
-    virtual opt_bytes compute() override {
-        return long_type->decompose(_count);
-    }
-    virtual void add_input(const std::vector<opt_bytes>& values) override {
-        if (!values[0]) {
-            return;
-        }
-        ++_count;
-    }
-    virtual void set_accumulator(const opt_bytes& acc) override {
-        if (acc) {
-            _count = value_cast<int64_t>(long_type->deserialize(bytes_view(*acc)));
-        } else {
-            reset();
-        }
-    }
-    virtual opt_bytes get_accumulator() const override {
-        return long_type->decompose(_count);
-    }
-    virtual void reduce(const opt_bytes& acc) override {
-        if (acc) {
-            auto other = value_cast<int64_t>(long_type->deserialize(bytes_view(*acc)));
-            _count += other;
-        }
-    }
-};
-
-template <typename Type>
-class count_function_for final : public native_aggregate_function {
-public:
-    count_function_for() : native_aggregate_function("count", long_type, { data_type_for<Type>() }) {}
-    virtual bool is_reducible() const override {
-        return true;
-    }
-    virtual std::unique_ptr<aggregate> new_aggregate() override {
-        return std::make_unique<impl_count_function_for<Type>>();
-    }
-    virtual ::shared_ptr<aggregate_function> reducible_aggregate_function() override {
-        return ::make_shared<count_function_for<Type>>();
-    };
-};
-
 /**
  * Creates a COUNT function for the specified type.
  *
@@ -446,7 +397,28 @@ public:
  */
 template <typename Type>
 static shared_ptr<aggregate_function> make_count_function() {
-    return make_shared<count_function_for<Type>>();
+    return make_shared<db::functions::stateless_aggregate_function_adapter>(
+        db::functions::stateless_aggregate_function{
+            .name = function_name::native_function("count"),
+            .state_type = long_type,
+            .result_type = long_type,
+            .argument_types = {data_type_for<Type>()},
+            .initial_state = data_value(int64_t(0)).serialize(),
+            .aggregation_function = ::make_shared<internal_scalar_function>(
+                    "count_step",
+                    long_type,
+                    std::vector<data_type>({long_type, data_type_for<Type>()}),
+                    [] (const std::vector<bytes_opt>& args) {
+                        if (!args[1]) {
+                            return args[0];
+                        }
+                        auto count = value_cast<int64_t>(long_type->deserialize(*args[0]));
+                        count += 1;
+                        return data_value(count).serialize();
+                    }),
+            .state_to_result_function = make_internal_scalar_function("count_finalizer", return_any_nonnull, [] (int64_t count) { return count; }),
+            .state_reduction_function = make_internal_scalar_function("count_reducer", return_any_nonnull, [] (int64_t c1, int64_t c2) { return c1 + c2; }),
+        });
 }
 }
 
