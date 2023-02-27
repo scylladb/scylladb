@@ -46,7 +46,7 @@ public:
         auto& dr = _m->partition().clustered_row(*_s, std::move(cr.key()));
         dr.apply(cr.tomb());
         dr.apply(cr.marker());
-        dr.cells().apply(*_s, column_kind::regular_column, std::move(cr.cells()));
+        dr.cells().apply_monotonically(*_s, column_kind::regular_column, std::move(cr.cells()));
         return stop_iteration::no;
     }
 

@@ -178,8 +178,6 @@ public:
 
     // Weak exception guarantees
     void apply(const schema&, column_kind, const row& src);
-    // Weak exception guarantees
-    void apply(const schema&, column_kind, row&& src);
     // Monotonic exception guarantees
     void apply_monotonically(const schema&, column_kind, row&& src);
 
@@ -851,11 +849,8 @@ public:
         _deleted_at.maybe_shadow(_marker);
     }
 
-    // Weak exception guarantees. After exception, both src and this will commute to the same value as
-    // they would should the exception not happen.
+    // Weak exception guarantees.
     void apply(const schema& s, const deletable_row& src);
-    void apply(const schema& s, deletable_row&& src);
-    void apply_monotonically(const schema& s, const deletable_row& src);
     void apply_monotonically(const schema& s, deletable_row&& src);
 public:
     row_tombstone deleted_at() const { return _deleted_at; }
@@ -990,7 +985,7 @@ public:
         _row.apply(t);
     }
     void apply_monotonically(const schema& s, rows_entry&& e) {
-        _row.apply(s, std::move(e._row));
+        _row.apply_monotonically(s, std::move(e._row));
     }
     bool empty() const {
         return _row.empty();

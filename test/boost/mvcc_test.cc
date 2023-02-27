@@ -46,7 +46,7 @@ static mutation_partition read_partition_from(const schema& schema, partition_sn
     do {
         testlog.trace("cur: {}", cur);
         p.clustered_row(schema, cur.position(), is_dummy(cur.dummy()), is_continuous(cur.continuous()))
-            .apply(schema, cur.row().as_deletable_row());
+            .apply_monotonically(schema, cur.row().as_deletable_row());
         auto after_pos = position_in_partition::after_key(schema, cur.position());
         auto before_pos = position_in_partition::before_key(cur.position());
         if (cur.range_tombstone()) {

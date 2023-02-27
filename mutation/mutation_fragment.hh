@@ -67,10 +67,10 @@ public:
     }
 
     void apply(const schema& s, clustering_row&& cr) {
-        _row.apply(s, std::move(cr._row));
+        _row.apply_monotonically(s, std::move(cr._row));
     }
     void apply(const schema& s, const clustering_row& cr) {
-        _row.apply(s, deletable_row(s, cr._row));
+        _row.apply_monotonically(s, deletable_row(s, cr._row));
     }
     void set_cell(const column_definition& def, atomic_cell_or_collection&& value) {
         _row.cells().apply(def, std::move(value));
@@ -85,7 +85,7 @@ public:
         _row.apply(std::move(t));
     }
     void apply(const schema& s, const rows_entry& r) {
-        _row.apply(s, deletable_row(s, r.row()));
+        _row.apply(s, r.row());
     }
     void apply(const schema& s, const deletable_row& r) {
         _row.apply(s, r);
@@ -149,7 +149,7 @@ public:
         _cells.apply(s, column_kind::static_column, r);
     }
     void apply(const schema& s, static_row&& sr) {
-        _cells.apply(s, column_kind::static_column, std::move(sr._cells));
+        _cells.apply_monotonically(s, column_kind::static_column, std::move(sr._cells));
     }
     void set_cell(const column_definition& def, atomic_cell_or_collection&& value) {
         _cells.apply(def, std::move(value));

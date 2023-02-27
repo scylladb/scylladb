@@ -269,7 +269,7 @@ struct mutation_fragment_applier {
     void operator()(const clustering_row& cr) {
         auto temp = clustering_row(_s, cr);
         auto& dr = _mp.clustered_row(_s, std::move(temp.key()));
-        dr.apply(_s, std::move(temp).as_deletable_row());
+        dr.apply_monotonically(_s, std::move(temp).as_deletable_row());
     }
 };
 
@@ -1147,14 +1147,6 @@ deletable_row::equal(column_kind kind, const schema& s, const deletable_row& oth
 }
 
 void deletable_row::apply(const schema& s, const deletable_row& src) {
-    apply_monotonically(s, src);
-}
-
-void deletable_row::apply(const schema& s, deletable_row&& src) {
-    apply_monotonically(s, std::move(src));
-}
-
-void deletable_row::apply_monotonically(const schema& s, const deletable_row& src) {
     _cells.apply(s, column_kind::regular_column, src._cells);
     _marker.apply(src._marker);
     _deleted_at.apply(src._deleted_at, _marker);
@@ -1632,10 +1624,6 @@ void row::apply(const schema& s, column_kind kind, const row& other) {
     other.for_each_cell([&] (column_id id, const cell_and_hash& c_a_h) {
         apply(s.column_at(kind, id), c_a_h.cell, c_a_h.hash);
     });
-}
-
-void row::apply(const schema& s, column_kind kind, row&& other) {
-    apply_monotonically(s, kind, std::move(other));
 }
 
 void row::apply_monotonically(const schema& s, column_kind kind, row&& other) {
