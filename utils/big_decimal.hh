@@ -12,6 +12,7 @@
 #include <boost/multiprecision/cpp_int.hpp>
 #include <ostream>
 #include <compare>
+#include <concepts>
 
 #include "bytes.hh"
 
@@ -29,6 +30,7 @@ public:
     explicit big_decimal(sstring_view text);
     big_decimal();
     big_decimal(int32_t scale, boost::multiprecision::cpp_int unscaled_value);
+    big_decimal(std::integral auto v) : big_decimal(0, v) {}
 
     int32_t scale() const { return _scale; }
     const boost::multiprecision::cpp_int& unscaled_value() const { return _unscaled_value; }
