@@ -96,9 +96,11 @@ void manager::register_metrics(const sstring& group_name) {
 future<> manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr) {
     _proxy_anchor = std::move(proxy_ptr);
     _gossiper_anchor = std::move(gossiper_ptr);
-    return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this] (fs::path datadir, directory_entry de) {
+    const auto& topo = _proxy_anchor->get_token_metadata_ptr()->get_topology();
+    return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this, &topo] (fs::path datadir, directory_entry de) {
         ep_key_type ep = ep_key_type(de.name);
-        if (!check_dc_for(ep)) {
+        auto node = topo.find_node(ep);
+        if (!check_dc_for(node)) {
             return make_ready_future<>();
         }
         return get_ep_manager(ep).populate_segments_to_replay();
@@ -626,7 +628,7 @@ bool manager::can_hint_for(locator::node_ptr node) const noexcept {
     }
 
     // check that the destination DC is "hintable"
-    if (!check_dc_for(ep)) {
+    if (!check_dc_for(node)) {
         manager_logger.trace("{}'s DC is not hintable", ep);
         return false;
     }
@@ -684,12 +686,12 @@ future<> manager::change_host_filter(host_filter filter) {
     });
 }
 
-bool manager::check_dc_for(ep_key_type ep) const noexcept {
+bool manager::check_dc_for(locator::node_ptr node) const noexcept {
     try {
         // If target's DC is not a "hintable" DCs - don't hint.
         // If there is an end point manager then DC has already been checked and found to be ok.
-        return _host_filter.is_enabled_for_all() || have_ep_manager(ep) ||
-               _host_filter.can_hint_for(_proxy_anchor->get_token_metadata_ptr()->get_topology(), ep);
+        return _host_filter.is_enabled_for_all() || have_ep_manager(node->endpoint()) ||
+               _host_filter.can_hint_for(_proxy_anchor->get_token_metadata_ptr()->get_topology(), node->endpoint());
     } catch (...) {
         // if we failed to check the DC - block this hint
         return false;

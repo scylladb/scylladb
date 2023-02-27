@@ -571,7 +571,7 @@ public:
     /// \brief Check if DC \param ep belongs to is "hintable"
     /// \param ep End point identificator
     /// \return TRUE if hints are allowed to be generated to \param ep.
-    bool check_dc_for(ep_key_type ep) const noexcept;
+    bool check_dc_for(locator::node_ptr node) const noexcept;
 
     /// \brief Checks if hints are disabled for all endpoints
     /// \return TRUE if hints are disabled.
