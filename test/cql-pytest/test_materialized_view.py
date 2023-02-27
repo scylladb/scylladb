@@ -258,7 +258,6 @@ def test_is_not_operator_must_be_null(cql, test_keyspace):
 # NOTE: if issue #8517 (IS NOT NULL in filters) is implemented, we will need to
 # replace this test by a test that checks that the filter works as expected,
 # both in ordinary base-table SELECT and in materialized-view definition.
-@pytest.mark.xfail(reason="issue #10365")
 def test_is_not_null_forbidden_in_filter(cql, test_keyspace, cassandra_bug):
     with new_test_table(cql, test_keyspace, 'p int primary key, xyz int') as table:
         # Check that "IS NOT NULL" is not supported in a regular (base table)
