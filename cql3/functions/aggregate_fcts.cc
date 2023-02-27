@@ -297,105 +297,71 @@ public:
         return x.div(y, big_decimal::rounding_mode::HALF_EVEN);
     }
 };
-
-template <typename Type>
-class impl_avg_function_for : public aggregate_function::aggregate {
-protected:
-   typename accumulator_for<Type>::type _sum{};
-   int64_t _count = 0;
-public:
-    virtual void reset() override {
-        _sum = {};
-        _count = 0;
-    }
-    virtual opt_bytes compute() override {
-        Type ret{};
-        if (_count) {
-            ret = impl_div_for_avg<Type>::div(_sum, _count);
-        }
-        return data_type_for<Type>()->decompose(ret);
-    }
-    virtual void add_input(const std::vector<opt_bytes>& values) override {
-        if (!values[0]) {
-            return;
-        }
-        ++_count;
-        _sum += value_cast<Type>(data_type_for<Type>()->deserialize(*values[0]));
-    }
-    virtual void set_accumulator(const opt_bytes& acc) override {
-        if (acc) {
-            data_type tuple_type = tuple_type_impl::get_instance({accumulator_for<Type>::data_type(), long_type});
-            auto tuple = value_cast<tuple_type_impl::native_type>(tuple_type->deserialize(bytes_view(*acc)));
-
-            _sum = accumulator_for<Type>::cast_to_accumulator(tuple[0]);
-            _count = value_cast<int64_t>(tuple[1]);
-        } else {
-            reset();
-        }
-    }
-    virtual opt_bytes get_accumulator() const override {
-        data_value tuple_val = make_tuple_value(
-            tuple_type_impl::get_instance({accumulator_for<Type>::data_type(), long_type}),
-            {accumulator_for<Type>::decompose_to_data_value(_sum), data_value(_count)}
-        );
-        return tuple_val.serialize();
-    }
-    virtual void reduce(const opt_bytes& acc) override {
-        if (acc) {
-            data_type tuple_type = tuple_type_impl::get_instance({accumulator_for<Type>::data_type(), long_type});
-            auto tuple = value_cast<tuple_type_impl::native_type>(tuple_type->deserialize(bytes_view(*acc)));
-
-            _sum += accumulator_for<Type>::cast_to_accumulator(tuple[0]);
-            _count += value_cast<int64_t>(tuple[1]);
-        }
-    }
-};
-
-template <typename Type>
-class impl_reducible_avg_function : public impl_avg_function_for<Type> {
-public:
-    virtual bytes_opt compute() override {
-        return this->get_accumulator();
-    }
-};
-
-template <typename Type>
-class avg_function_for : public native_aggregate_function {
-public:
-    avg_function_for() : native_aggregate_function("avg", data_type_for<Type>(), { data_type_for<Type>() }) {}
-    avg_function_for(data_type return_type, std::vector<data_type> arg_types) 
-      : native_aggregate_function("avg", std::move(return_type), std::move(arg_types)) {}
-
-    virtual bool is_reducible() const override {
-        return true;
-    }
-
-    virtual std::unique_ptr<aggregate> new_aggregate() override {
-        return std::make_unique<impl_avg_function_for<Type>>();
-    }
-
-    virtual ::shared_ptr<aggregate_function> reducible_aggregate_function() override {
-        class reducible_avg_function : public avg_function_for<Type> {
-        public:
-            reducible_avg_function() : avg_function_for(
-                tuple_type_impl::get_instance({accumulator_for<Type>::data_type(), long_type}), 
-                { data_type_for<Type>() }
-            ) {}
-
-            virtual std::unique_ptr<aggregate> new_aggregate() override {
-                return std::make_unique<impl_reducible_avg_function<Type>>();
-            }
-        };
-
-        return ::make_shared<reducible_avg_function>();
-    }
-};
-
 template <typename Type>
 static
 shared_ptr<aggregate_function>
 make_avg_function() {
-    return make_shared<avg_function_for<Type>>();
+    using sum_type = typename accumulator_for<Type>::type;
+    auto accumulator_tuple_type = tuple_type_impl::get_instance({data_type_for<sum_type>(), data_type_for<int64_t>()});
+    return make_shared<db::functions::stateless_aggregate_function_adapter>(
+        db::functions::stateless_aggregate_function{
+            .name = function_name::native_function("avg"),
+            .state_type = accumulator_tuple_type,
+            .result_type = data_type_for<Type>(),
+            .argument_types = {data_type_for<Type>()},
+            .initial_state = make_tuple_value(accumulator_tuple_type, std::vector({data_value(sum_type(0)), data_value(int64_t(0))})).serialize(),
+            .aggregation_function = ::make_shared<internal_scalar_function>(
+                    "avg_step",
+                    accumulator_tuple_type,
+                    std::vector<data_type>({accumulator_tuple_type, data_type_for<Type>()}),
+                    [accumulator_tuple_type] (const std::vector<bytes_opt>& args) -> bytes_opt {
+                        if (!args[0]) {
+                            return std::nullopt;
+                        }
+                        if (!args[1]) {
+                            return args[0];
+                        }
+                        data_value acc_value = accumulator_tuple_type->deserialize(*args[0]);
+                        std::vector<data_value> acc = value_cast<tuple_type_impl::native_type>(std::move(acc_value));
+                        auto sum = value_cast<sum_type>(acc[0]);
+                        auto count = value_cast<int64_t>(acc[1]);
+                        auto input = value_cast<Type>(data_type_for<Type>()->deserialize(*args[1]));
+                        sum += input;
+                        count += 1;
+                        acc[0] = data_value(std::move(sum));
+                        acc[1] = data_value(count);
+                        return make_tuple_value(accumulator_tuple_type, acc).serialize();
+                    }),
+            .state_to_result_function = ::make_shared<internal_scalar_function>(
+                    "avg_finalizer",
+                    data_type_for<Type>(),
+                    std::vector<data_type>({accumulator_tuple_type}),
+                    [accumulator_tuple_type] (const std::vector<bytes_opt>& args) -> bytes_opt {
+                        data_value acc_value = accumulator_tuple_type->deserialize(*args[0]);
+                        std::vector<data_value> acc = value_cast<tuple_type_impl::native_type>(std::move(acc_value));
+                        auto sum = value_cast<sum_type>(acc[0]);
+                        auto count = value_cast<int64_t>(acc[1]);
+                        auto result = count ? impl_div_for_avg<Type>::div(sum, count) : Type();
+                        return data_type_for<Type>()->decompose(result);
+                    }),
+            .state_reduction_function = ::make_shared<internal_scalar_function>(
+                    "avg_reducer",
+                    accumulator_tuple_type,
+                    std::vector<data_type>({accumulator_tuple_type, accumulator_tuple_type}),
+                    [accumulator_tuple_type] (const std::vector<bytes_opt>& args) -> bytes_opt {
+                        data_value acc1_value = accumulator_tuple_type->deserialize(*args[0]);
+                        std::vector<data_value> acc1 = value_cast<tuple_type_impl::native_type>(std::move(acc1_value));
+                        auto sum1 = value_cast<sum_type>(acc1[0]);
+                        auto count1 = value_cast<int64_t>(acc1[1]);
+                        data_value acc2_value = accumulator_tuple_type->deserialize(*args[1]);
+                        std::vector<data_value> acc2 = value_cast<tuple_type_impl::native_type>(std::move(acc2_value));
+                        auto sum2 = value_cast<sum_type>(acc2[0]);
+                        auto count2 = value_cast<int64_t>(acc2[1]);
+                        acc1[0] = data_value(sum1 + sum2);
+                        acc1[1] = data_value(count1 + count2);
+                        return make_tuple_value(accumulator_tuple_type, acc1).serialize();
+                    }),
+        });
 }
 
 template <typename T>
