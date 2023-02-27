@@ -15,6 +15,7 @@
 #include "db/config.hh"
 
 #include <boost/algorithm/string/trim.hpp>
+#include <seastar/core/coroutine.hh>
 
 logging::logger startlog("init");
 
@@ -78,14 +79,25 @@ void configurable::append_all(db::config& cfg, boost::program_options::options_d
     }
 }
 
-future<> configurable::init_all(const boost::program_options::variables_map& opts, const db::config& cfg, db::extensions& exts) {
-    return do_for_each(configurables(), [&](configurable& c) {
-        return c.initialize(opts, cfg, exts);
+future<configurable::notify_set> configurable::init_all(const boost::program_options::variables_map& opts, const db::config& cfg, db::extensions& exts) {
+    notify_set res;
+    for (auto& c : configurables()) {
+        auto f = co_await c.get().initialize_ex(opts, cfg, exts);
+        if (f) {
+            res._listeners.emplace_back(std::move(f));
+        }
+    }
+    co_return res;
+}
+
+future<configurable::notify_set> configurable::init_all(const db::config& cfg, db::extensions& exts) {
+    return do_with(boost::program_options::variables_map{}, [&](auto& opts) {
+        return init_all(opts, cfg, exts);
     });
 }
 
-future<> configurable::init_all(const db::config& cfg, db::extensions& exts) {
-    return do_with(boost::program_options::variables_map{}, [&](auto& opts) {
-        return init_all(opts, cfg, exts);
+future<> configurable::notify_set::notify_all(system_state e) {
+    co_return co_await do_for_each(_listeners, [e](const notify_func& c) {
+        return c(e);
     });
 }
