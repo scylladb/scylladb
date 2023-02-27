@@ -30,22 +30,10 @@ namespace tools {
 /// be able to load the schema(s), these survive the call.
 future<std::vector<schema_ptr>> load_schemas(std::string_view schema_str);
 
-/// Load exactly one schema from the specified string
-///
-/// If the string contains more or less then one schema, an exception will be
-/// thrown. See \ref load_schemas().
-future<schema_ptr> load_one_schema(std::string_view schema_str);
-
-/// Load the schema(s) from the specified path
-///
-/// Same as \ref load_schemas() except it loads the schema from
-/// the file at the specified path.
-future<std::vector<schema_ptr>> load_schemas_from_file(std::filesystem::path path);
-
 /// Load exactly one schema from the specified path
 ///
-/// Same as \ref load_one_schema() except it loads the schema from
-/// the file at the specified path.
+/// If the file at the specified path contains more or less then one schema,
+/// an exception will be thrown. See \ref load_schemas().
 future<schema_ptr> load_one_schema_from_file(std::filesystem::path path);
 
 /// Load the system schema, with the given keyspace and table

@@ -328,23 +328,6 @@ future<std::vector<schema_ptr>> load_schemas(std::string_view schema_str) {
     });
 }
 
-future<schema_ptr> load_one_schema(std::string_view schema_str) {
-    return async([schema_str] () mutable {
-        auto schemas = do_load_schemas(schema_str);
-        if (schemas.size() != 1) {
-            throw std::runtime_error(fmt::format("Schema string expected to contain exactly 1 schema, actually has {}", schemas.size()));
-        }
-        return std::move(schemas.front());
-    });
-
-}
-
-future<std::vector<schema_ptr>> load_schemas_from_file(std::filesystem::path path) {
-    return async([path] () mutable {
-        return do_load_schemas(read_file(path));
-    });
-}
-
 future<schema_ptr> load_one_schema_from_file(std::filesystem::path path) {
     return async([path] () mutable {
         auto schemas = do_load_schemas(read_file(path));
