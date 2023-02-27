@@ -156,6 +156,7 @@ private:
     mutation_fragment_v2() = default;
     explicit operator bool() const noexcept { return bool(_data); }
     void destroy_data() noexcept;
+    void reset_memory(const schema& s, std::optional<reader_resources> res = {});
     friend class optimized_optional<mutation_fragment_v2>;
 
     friend class position_in_partition;

@@ -1384,10 +1384,12 @@ constexpr uint64_t target_memory = uint64_t(1) << 28; // 256MB
 // The test fails by OOM crashing.
 // This test should be run with 256MB of memory.
 SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_no_oom) {
+#ifndef DEBUG
     if (memory::stats().total_memory() != target_memory) {
         std::cerr << "Test " << get_name() << " should be run with 256M of memory, make sure you invoke with -m256M" << std::endl;
         return make_ready_future<>();
     }
+#endif
 
     auto db_cfg_ptr = make_shared<db::config>();
     auto& db_cfg = *db_cfg_ptr;
@@ -1404,7 +1406,11 @@ SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_no_oom) {
         auto& db = env.local_db();
         auto& semaphore = db.get_reader_concurrency_semaphore();
 
+#ifdef DEBUG
+        const auto num_reads = 16;
+#else
         const auto num_reads = 128;
+#endif
 
         auto read_id = env.prepare("SELECT value FROM ks.tbl WHERE pk = ? AND ck = ?").get0();
 
@@ -1433,10 +1439,12 @@ SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_no_oom) {
 // failures were caused by the limiting mechanism.
 // This test should be run with 256M memory.
 SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_engages) {
+#ifndef DEBUG
     if (memory::stats().total_memory() != target_memory) {
         std::cerr << "Test " << get_name() << " should be run with 256M of memory, make sure you invoke with -m256M" << std::endl;
         return make_ready_future<>();
     }
+#endif
     auto db_cfg_ptr = make_shared<db::config>();
     auto& db_cfg = *db_cfg_ptr;
 

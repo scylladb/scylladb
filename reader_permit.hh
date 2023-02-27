@@ -276,7 +276,12 @@ public:
 
     T* allocate(size_t n) {
         auto p = _alloc.allocate(n);
-        _permit.consume(reader_resources::with_memory(n * sizeof(T)));
+        try {
+            _permit.consume(reader_resources::with_memory(n * sizeof(T)));
+        } catch (...) {
+            _alloc.deallocate(p, n);
+            throw;
+        }
         return p;
     }
     void deallocate(T* p, size_t n) {
