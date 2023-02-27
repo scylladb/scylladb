@@ -1158,6 +1158,12 @@ void deletable_row::apply_monotonically(const schema& s, deletable_row&& src) {
     _deleted_at.apply(src._deleted_at, _marker);
 }
 
+void deletable_row::apply(const schema& our_schema, const schema& src_schema, const deletable_row& src) {
+    _cells.apply(our_schema, src_schema, column_kind::regular_column, src._cells);
+    _marker.apply(src._marker);
+    _deleted_at.apply(src._deleted_at, _marker);
+}
+
 bool
 rows_entry::equal(const schema& s, const rows_entry& other) const {
     return equal(s, other, s);
@@ -1623,6 +1629,19 @@ void row::apply(const schema& s, column_kind kind, const row& other) {
     }
     other.for_each_cell([&] (column_id id, const cell_and_hash& c_a_h) {
         apply(s.column_at(kind, id), c_a_h.cell, c_a_h.hash);
+    });
+}
+
+void row::apply(const schema& our_schema, const schema& their_schema, column_kind kind, const row& other) {
+    if (our_schema.version() == their_schema.version()) [[likely]] {
+        return apply(our_schema, kind, other);
+    }
+    other.for_each_cell([&] (column_id id, const cell_and_hash& c_a_h) {
+        const column_definition& their_col = their_schema.column_at(kind, id);
+        const column_definition* our_col = our_schema.get_column_definition(their_col.name());
+        if (our_col) {
+            converting_mutation_partition_applier::append_cell(*this, kind, *our_col, their_col, c_a_h.cell);
+        }
     });
 }
 

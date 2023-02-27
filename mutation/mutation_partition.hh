@@ -178,6 +178,7 @@ public:
 
     // Weak exception guarantees
     void apply(const schema&, column_kind, const row& src);
+    void apply(const schema& from, const schema& to, column_kind kind, const row& other);
     // Monotonic exception guarantees
     void apply_monotonically(const schema&, column_kind, row&& src);
 
@@ -851,6 +852,7 @@ public:
 
     // Weak exception guarantees.
     void apply(const schema& s, const deletable_row& src);
+    void apply(const schema& from, const schema& to, const deletable_row& src);
     void apply_monotonically(const schema& s, deletable_row&& src);
 public:
     row_tombstone deleted_at() const { return _deleted_at; }
