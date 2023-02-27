@@ -4,7 +4,7 @@ import sys
 
 import run   # run.py in this directory
 
-print('Scylla is: ' + run.scylla + '.')
+print('Scylla is: ' + run.find_scylla() + '.')
 
 ssl = '--ssl' in sys.argv
 if ssl:
