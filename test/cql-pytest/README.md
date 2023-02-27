@@ -58,14 +58,14 @@ even before developing a feature (so-called "test-driven development").
 To maintain these benefits, we recommend that the following principles
 and practices be followed when writing new tests:
 
-1. **Keep each test fast**: Ideally each test function should take should
+1. **Keep each test fast**: Ideally each test function should
    take a fraction of a second. At the time of this writing, the entire
    cql-pytest test suite of over 800 test functions takes around 80
    seconds to run, on average 0.1 second per test. Always think if your
    test really requires inserting a million items or sleeping 5 seconds -
    usually it does NOT.
-   Short tests makes it easy and fun to run and rerun a single test during
-   development, and also also allow developers to run the entire cql-pytest
+   Short tests make it easy and fun to run and rerun a single test during
+   development, and also allow developers to run the entire cql-pytest
    test suite during development instead of trying to guess which test might
    break.
 
