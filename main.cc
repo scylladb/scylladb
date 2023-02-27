@@ -582,7 +582,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
-            configurable::init_all(opts, *cfg, *ext).get();
+            auto notify_set = configurable::init_all(opts, *cfg, *ext).get0();
+
+            auto stop_configurables = defer_verbose_shutdown("configurables", [&] {
+                notify_set.notify_all(configurable::system_state::stopped).get();
+            });
+
             cfg->setup_directories();
 
             // We're writing to a non-atomic variable here. But bool writes are atomic
@@ -1613,6 +1618,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             db.invoke_on_all([] (replica::database& db) {
                 db.revert_initial_system_read_concurrency_boost();
             }).get();
+
+            notify_set.notify_all(configurable::system_state::started).get();
 
             cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg);
 

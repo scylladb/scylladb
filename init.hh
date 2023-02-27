@@ -60,10 +60,35 @@ public:
         return initialize(map);
     }
 
+    /**
+     * State of initiating system for optional 
+     * notification callback to objects created by
+     * `initialize`
+     */
+    enum class system_state {
+        started,
+        stopped,
+    };
+
+    using notify_func = std::function<future<>(system_state)>;
+
+    /** Hooks should override this to allow adding a notification function to the startup sequence. */
+    virtual future<notify_func> initialize_ex(const boost::program_options::variables_map& map, const db::config& cfg, db::extensions& exts) {
+        return initialize(map, cfg, exts).then([] { return notify_func{}; });
+    }
+
+    class notify_set {
+    public:
+        future<> notify_all(system_state);
+    private:
+        friend class configurable;
+        std::vector<notify_func> _listeners;
+    };
+
     // visible for testing
     static std::vector<std::reference_wrapper<configurable>>& configurables();
-    static future<> init_all(const boost::program_options::variables_map&, const db::config&, db::extensions&);
-    static future<> init_all(const db::config&, db::extensions&);
+    static future<notify_set> init_all(const boost::program_options::variables_map&, const db::config&, db::extensions&);
+    static future<notify_set> init_all(const db::config&, db::extensions&);
     static void append_all(db::config&, boost::program_options::options_description_easy_init&);
 private:
     static void register_configurable(configurable &);

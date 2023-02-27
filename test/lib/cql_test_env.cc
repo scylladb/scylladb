@@ -65,6 +65,7 @@
 #include "db/schema_tables.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
+#include "init.hh"
 
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -453,10 +454,10 @@ public:
         return execute_cql(query).discard_result();
     }
 
-    static future<> do_with(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in) {
+    static future<> do_with(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, std::optional<cql_test_init_configurables> init_configurables) {
         using namespace std::filesystem;
 
-        return seastar::async([cfg_in = std::move(cfg_in), func] {
+        return seastar::async([cfg_in = std::move(cfg_in), init_configurables = std::move(init_configurables), func] {
             // disable reactor stall detection during startup
             auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
             smp::invoke_on_all([] {
@@ -534,6 +535,13 @@ public:
             if (!cfg->max_memory_for_unlimited_query_hard_limit.is_set()) {
                 cfg->max_memory_for_unlimited_query_hard_limit.set(uint64_t(query::result_memory_limiter::unlimited_result_size));
             }
+
+            auto notify_set = init_configurables
+                ? configurable::init_all(*cfg, init_configurables->extensions).get0()
+                : configurable::notify_set{}
+                ;
+
+            auto stop_configurables = defer([&] { notify_set.notify_all(configurable::system_state::stopped).get(); });
 
             sharded<locator::snitch_ptr> snitch;
             snitch.start(locator::snitch_config{}).get();
@@ -929,6 +937,8 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
+            notify_set.notify_all(configurable::system_state::started).get();
+
             single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, group0_client, raft_gr, sys_ks);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
@@ -971,16 +981,16 @@ public:
 
 std::atomic<bool> single_node_cql_env::active = { false };
 
-future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in) {
-    return single_node_cql_env::do_with(func, std::move(cfg_in));
+future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config cfg_in, std::optional<cql_test_init_configurables> init_configurables) {
+    return single_node_cql_env::do_with(func, std::move(cfg_in), std::move(init_configurables));
 }
 
-future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_test_config cfg_in, thread_attributes thread_attr) {
+future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, cql_test_config cfg_in, thread_attributes thread_attr, std::optional<cql_test_init_configurables> init_configurables) {
     return single_node_cql_env::do_with([func = std::move(func), thread_attr] (auto& e) {
         return seastar::async(thread_attr, [func = std::move(func), &e] {
             return func(e);
         });
-    }, std::move(cfg_in));
+    }, std::move(cfg_in), std::move(init_configurables));
 }
 
 reader_permit make_reader_permit(cql_test_env& env) {
