@@ -15,12 +15,11 @@
 
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
+#include "locator/topology_fwd.hh"
 
 namespace gms {
     class inet_address;
 } // namespace gms
-
-namespace locator { class topology; }
 
 namespace db {
 namespace hints {
@@ -58,7 +57,7 @@ public:
     // Parses hint filtering configuration from a list of DCs.
     static host_filter parse_from_dc_list(sstring opt);
 
-    bool can_hint_for(const locator::topology& topo, gms::inet_address ep) const;
+    bool can_hint_for(const locator::node_ptr& node) const;
 
     inline const std::unordered_set<sstring>& get_dcs() const {
         return _dcs;

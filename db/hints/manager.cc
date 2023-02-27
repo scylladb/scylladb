@@ -659,11 +659,14 @@ future<> manager::change_host_filter(host_filter filter) {
             // roll back in case of failure
             std::swap(_host_filter, filter);
 
+            const auto& topo = _proxy_anchor->get_token_metadata_ptr()->get_topology();
+
             // Iterate over existing hint directories and see if we can enable an endpoint manager
             // for some of them
-            return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this] (fs::path datadir, directory_entry de) {
+            return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this, &topo] (fs::path datadir, directory_entry de) {
                 const ep_key_type ep = ep_key_type(de.name);
-                if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(_proxy_anchor->get_token_metadata_ptr()->get_topology(), ep)) {
+                auto node = topo.find_node(ep);
+                if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(node)) {
                     return make_ready_future<>();
                 }
                 return get_ep_manager(ep).populate_segments_to_replay();
@@ -671,10 +674,11 @@ future<> manager::change_host_filter(host_filter filter) {
                 // Bring back the old filter. The finally() block will cause us to stop
                 // the additional ep_hint_managers that we started
                 _host_filter = std::move(filter);
-            }).finally([this] {
+            }).finally([this, &topo] {
                 // Remove endpoint managers which are rejected by the filter
-                return parallel_for_each(_ep_managers, [this] (auto& pair) {
-                    if (_host_filter.can_hint_for(_proxy_anchor->get_token_metadata_ptr()->get_topology(), pair.first)) {
+                return parallel_for_each(_ep_managers, [this, &topo] (auto& pair) {
+                    auto node = topo.find_node(pair.first);
+                    if (_host_filter.can_hint_for(node)) {
                         return make_ready_future<>();
                     }
                     return pair.second.stop(drain::no).finally([this, ep = pair.first] {
@@ -690,8 +694,7 @@ bool manager::check_dc_for(locator::node_ptr node) const noexcept {
     try {
         // If target's DC is not a "hintable" DCs - don't hint.
         // If there is an end point manager then DC has already been checked and found to be ok.
-        return _host_filter.is_enabled_for_all() || have_ep_manager(node->endpoint()) ||
-               _host_filter.can_hint_for(_proxy_anchor->get_token_metadata_ptr()->get_topology(), node->endpoint());
+        return _host_filter.is_enabled_for_all() || have_ep_manager(node->endpoint()) || _host_filter.can_hint_for(node);
     } catch (...) {
         // if we failed to check the DC - block this hint
         return false;
