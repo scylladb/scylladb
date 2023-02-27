@@ -68,7 +68,7 @@ public:
 
     // Makes the entry conform to given schema.
     // Must be called under allocating section of the region which owns the entry.
-    void upgrade_schema(const schema_ptr&, mutation_cleaner&);
+    void upgrade_schema(logalloc::region&, const schema_ptr&, mutation_cleaner&);
 
     size_t external_memory_usage_without_rows() const {
         return _key.key().external_memory_usage();
