@@ -150,8 +150,8 @@ template <typename T>
 struct accumulator_for;
 
 template <typename T>
-struct int128_accumulator_for {
-    using type = __int128;
+struct varint_accumulator_for {
+    using type = utils::multiprecision_int;
 
     static T narrow(type acc) {
         T ret = static_cast<T>(acc);
@@ -162,12 +162,7 @@ struct int128_accumulator_for {
     }
 
     static data_value decompose_to_data_value(const type& acc) {
-        uint64_t upper = acc >> 64;
-        uint64_t lower = acc;
-
-        utils::multiprecision_int value(upper);
-        value = (value << 64) + lower;
-        return value;
+        return acc;
     }
 
     static bytes_opt decompose(const data_value& value) {
@@ -180,11 +175,7 @@ struct int128_accumulator_for {
 
     static type cast_to_accumulator(const data_value& value) {
         auto mint = value_cast<utils::multiprecision_int>(value);
-        uint64_t upper = (uint64_t)(mint >> 64);
-        uint64_t lower = (uint64_t)mint;
-
-        __int128 result = upper;
-        return (result << 64) | lower;
+        return mint;
     }
 
     static type deserialize(const bytes_opt& acc) {
@@ -231,7 +222,7 @@ struct same_type_accumulator_for {
 
 template <typename T>
 struct accumulator_for : public std::conditional_t<std::is_integral_v<T>,
-                                                   int128_accumulator_for<T>,
+                                                   varint_accumulator_for<T>,
                                                    same_type_accumulator_for<T>>
 { };
 
@@ -357,7 +348,7 @@ template <typename Type>
 class impl_div_for_avg {
 public:
     static Type div(const typename accumulator_for<Type>::type& x, const int64_t y) {
-        return x/y;
+        return Type(x/y);
     }
 };
 
