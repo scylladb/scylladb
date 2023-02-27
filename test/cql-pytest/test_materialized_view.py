@@ -223,7 +223,7 @@ def test_static_columns_are_disallowed(cql, test_keyspace):
         mv = unique_name()
         try:
             with pytest.raises(InvalidRequest, match="[Ss]tatic column"):
-                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT p, s FROM {table} WHERE s IS NOT NULL PRIMARY KEY (p)")
+                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv} AS SELECT p, s FROM {table} PRIMARY KEY (p)")
         finally:
             cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
 
