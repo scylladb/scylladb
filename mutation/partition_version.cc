@@ -117,15 +117,20 @@ inline Result squashed(const partition_version_ref& v, Map&& map, Reduce&& reduc
 }
 
 ::static_row partition_snapshot::static_row(bool digest_requested) const {
-    return ::static_row(::squashed<row>(version(),
-                         [&] (const mutation_partition_v2& mp) -> const row& {
-                            if (digest_requested) {
-                                mp.static_row().prepare_hash(*schema(), column_kind::static_column);
-                            }
-                            return mp.static_row().get();
-                         },
-                         [this] (const row& r) { return row(*schema(), column_kind::static_column, r); },
-                         [this] (row& a, const row& b) { a.apply(*schema(), column_kind::static_column, b); }));
+    const partition_version* this_v = &*version();
+    partition_version* it = this_v->last();
+    if (digest_requested) {
+        it->partition().static_row().prepare_hash(*it->get_schema(), column_kind::static_column);
+    }
+    row r = row::construct(*this_v->get_schema(), *it->get_schema(), column_kind::static_column, it->partition().static_row().get());
+    while (it != this_v) {
+        it = it->prev();
+        if (digest_requested) {
+            it->partition().static_row().prepare_hash(*it->get_schema(), column_kind::static_column);
+        }
+        r.apply(*this_v->get_schema(), *it->get_schema(), column_kind::static_column, it->partition().static_row().get());
+    }
+    return ::static_row(std::move(r));
 }
 
 bool partition_snapshot::static_row_continuous() const {
