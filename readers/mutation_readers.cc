@@ -465,8 +465,12 @@ flat_mutation_reader_v2 make_nonforwardable(flat_mutation_reader_v2 r, bool sing
         }
         virtual future<> next_partition() override {
             clear_buffer_to_next_partition();
-            auto maybe_next_partition = make_ready_future<>();;
+            auto maybe_next_partition = make_ready_future<>();
             if (is_buffer_empty()) {
+                if (_end_of_stream || (_partition_is_open && _single_partition)) {
+                    _end_of_stream = true;
+                    return maybe_next_partition;
+                }
                 reset_partition();
                 maybe_next_partition = _underlying.next_partition();
             }
@@ -475,9 +479,13 @@ flat_mutation_reader_v2 make_nonforwardable(flat_mutation_reader_v2 r, bool sing
             });
         }
         virtual future<> fast_forward_to(const dht::partition_range& pr) override {
-            _end_of_stream = false;
             clear_buffer();
+            if (_single_partition) {
+                _end_of_stream = true;
+                return make_ready_future<>();
+            }
             reset_partition();
+            _end_of_stream = false;
             return _underlying.fast_forward_to(pr);
         }
         virtual future<> close() noexcept override {
