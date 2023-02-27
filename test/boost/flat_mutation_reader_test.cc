@@ -900,6 +900,35 @@ SEASTAR_THREAD_TEST_CASE(test_make_nonforwardable) {
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(test_make_nonforwardable_from_mutations_as_mutation_source) {
+    auto populate = [] (schema_ptr, const std::vector<mutation> &muts) {
+        return mutation_source([=] (
+            schema_ptr schema,
+            reader_permit permit,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            const io_priority_class&,
+            tracing::trace_state_ptr,
+            streamed_mutation::forwarding fwd_sm,
+            mutation_reader::forwarding) mutable {
+            auto squashed_muts = squash_mutations(muts);
+            const auto single_partition = squashed_muts.size() == 1;
+            auto reader = make_flat_mutation_reader_from_mutations_v2(schema,
+                std::move(permit),
+                std::move(squashed_muts),
+                range,
+                slice,
+                streamed_mutation::forwarding::yes);
+            reader = make_nonforwardable(std::move(reader), single_partition);
+            if (fwd_sm) {
+                reader = make_forwardable(std::move(reader));
+            }
+            return reader;
+        });
+    };
+    run_mutation_source_tests(populate);
+}
+
 SEASTAR_TEST_CASE(test_abandoned_flat_mutation_reader_from_mutation) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
