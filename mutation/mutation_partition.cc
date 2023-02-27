@@ -1146,22 +1146,42 @@ deletable_row::equal(column_kind kind, const schema& s, const deletable_row& oth
     return _cells.equal(kind, s, other._cells, other_schema);
 }
 
-void deletable_row::apply(const schema& s, const deletable_row& src) {
-    apply_monotonically(s, src);
-}
-
 void deletable_row::apply(const schema& s, deletable_row&& src) {
     apply_monotonically(s, std::move(src));
 }
 
-void deletable_row::apply_monotonically(const schema& s, const deletable_row& src) {
-    _cells.apply(s, column_kind::regular_column, src._cells);
+void deletable_row::apply(const schema& s, const deletable_row& src) {
+    apply_monotonically(s, src);
+}
+
+void deletable_row::apply(const schema& our_schema, const schema& their_schema, deletable_row&& src) {
+    apply_monotonically(our_schema, their_schema, std::move(src));
+}
+
+void deletable_row::apply(const schema& our_schema, const schema& their_schema, const deletable_row& src) {
+    apply_monotonically(our_schema, their_schema, src);
+}
+
+void deletable_row::apply_monotonically(const schema& s, deletable_row&& src) {
+    _cells.apply_monotonically(s, column_kind::regular_column, std::move(src._cells));
     _marker.apply(src._marker);
     _deleted_at.apply(src._deleted_at, _marker);
 }
 
-void deletable_row::apply_monotonically(const schema& s, deletable_row&& src) {
-    _cells.apply(s, column_kind::regular_column, std::move(src._cells));
+void deletable_row::apply_monotonically(const schema& s, const deletable_row& src) {
+    _cells.apply_monotonically(s, column_kind::regular_column, src._cells);
+    _marker.apply(src._marker);
+    _deleted_at.apply(src._deleted_at, _marker);
+}
+
+void deletable_row::apply_monotonically(const schema& our_schema, const schema& their_schema, deletable_row&& src) {
+    _cells.apply_monotonically(our_schema, their_schema, column_kind::regular_column, std::move(src._cells));
+    _marker.apply(src._marker);
+    _deleted_at.apply(src._deleted_at, _marker);
+}
+
+void deletable_row::apply_monotonically(const schema& our_schema, const schema& their_schema, const deletable_row& src) {
+    _cells.apply_monotonically(our_schema, their_schema, column_kind::regular_column, src._cells);
     _marker.apply(src._marker);
     _deleted_at.apply(src._deleted_at, _marker);
 }
@@ -1625,7 +1645,32 @@ row& row::operator=(row&& other) noexcept {
     return *this;
 }
 
+void row::apply(const schema& s, column_kind kind, row&& other) {
+    apply_monotonically(s, kind, std::move(other));
+}
+
 void row::apply(const schema& s, column_kind kind, const row& other) {
+    apply_monotonically(s, kind, other);
+}
+
+void row::apply(const schema& our_schema, const schema& their_schema, column_kind kind, row&& other) {
+    apply_monotonically(our_schema, their_schema, kind, std::move(other));
+};
+
+void row::apply(const schema& our_schema, const schema& their_schema, column_kind kind, const row& other) {
+    apply_monotonically(our_schema, their_schema, kind, other);
+};
+
+void row::apply_monotonically(const schema& s, column_kind kind, row&& other) {
+    if (other.empty()) {
+        return;
+    }
+    other.consume_with([&] (column_id id, cell_and_hash& c_a_h) {
+        apply_monotonically(s.column_at(kind, id), std::move(c_a_h.cell), std::move(c_a_h.hash));
+    });
+}
+
+void row::apply_monotonically(const schema& s, column_kind kind, const row& other) {
     if (other.empty()) {
         return;
     }
@@ -1634,16 +1679,29 @@ void row::apply(const schema& s, column_kind kind, const row& other) {
     });
 }
 
-void row::apply(const schema& s, column_kind kind, row&& other) {
-    apply_monotonically(s, kind, std::move(other));
-}
-
-void row::apply_monotonically(const schema& s, column_kind kind, row&& other) {
-    if (other.empty()) {
-        return;
+void row::apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind kind, row&& other) {
+    if (our_schema.version() == their_schema.version()) {
+        return apply_monotonically(our_schema, kind, std::move(other));
     }
     other.consume_with([&] (column_id id, cell_and_hash& c_a_h) {
-        apply_monotonically(s.column_at(kind, id), std::move(c_a_h.cell), std::move(c_a_h.hash));
+        const column_definition& their_col = their_schema.column_at(kind, id);
+        const column_definition* our_col = our_schema.get_column_definition(their_col.name());
+        if (our_col) {
+            converting_mutation_partition_applier::append_cell(*this, kind, *our_col, their_col, c_a_h.cell);
+        }
+    });
+}
+
+void row::apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind kind, const row& other) {
+    if (our_schema.version() == their_schema.version()) {
+        return apply_monotonically(our_schema, kind, other);
+    }
+    other.for_each_cell([&] (column_id id, const cell_and_hash& c_a_h) {
+        const column_definition& their_col = their_schema.column_at(kind, id);
+        const column_definition* our_col = our_schema.get_column_definition(their_col.name());
+        if (our_col) {
+            converting_mutation_partition_applier::append_cell(*this, kind, *our_col, their_col, c_a_h.cell);
+        }
     });
 }
 

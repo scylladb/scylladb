@@ -178,10 +178,15 @@ public:
 
     // Weak exception guarantees
     void apply(const schema&, column_kind, const row& src);
-    // Weak exception guarantees
     void apply(const schema&, column_kind, row&& src);
+    void apply(const schema& our_schema, const schema& their_schema, column_kind kind, const row& other);
+    void apply(const schema& our_schema, const schema& their_schema, column_kind kind, row&& other);
+
     // Monotonic exception guarantees
     void apply_monotonically(const schema&, column_kind, row&& src);
+    void apply_monotonically(const schema&, column_kind, const row& src);
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind, row&& src);
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind, const row& src);
 
     // Expires cells based on query_time. Expires tombstones based on gc_before
     // and max_purgeable. Removes cells covered by tomb.
@@ -852,10 +857,15 @@ public:
 
     // Weak exception guarantees. After exception, both src and this will commute to the same value as
     // they would should the exception not happen.
-    void apply(const schema& s, const deletable_row& src);
-    void apply(const schema& s, deletable_row&& src);
-    void apply_monotonically(const schema& s, const deletable_row& src);
-    void apply_monotonically(const schema& s, deletable_row&& src);
+    void apply(const schema&, deletable_row&& src);
+    void apply(const schema&, const deletable_row& src);
+    void apply(const schema& our_schema, const schema& their_schema, const deletable_row& src);
+    void apply(const schema& our_schema, const schema& their_schema, deletable_row&& src);
+
+    void apply_monotonically(const schema&, deletable_row&& src);
+    void apply_monotonically(const schema&, const deletable_row& src);
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, deletable_row&& src);
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, const deletable_row& src);
 public:
     row_tombstone deleted_at() const { return _deleted_at; }
     api::timestamp_type created_at() const { return _marker.timestamp(); }
