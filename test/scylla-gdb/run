@@ -8,7 +8,7 @@ import subprocess
 sys.path.insert(1, sys.path[0] + '/../cql-pytest')
 import run
 
-print('Scylla is: ' + run.scylla + '.')
+print('Scylla is: ' + run.find_scylla() + '.')
 
 # Gdb will only work if the executable was built with debug symbols
 # (e.g., Scylla's release or debug build modes mode, but not dev mode).

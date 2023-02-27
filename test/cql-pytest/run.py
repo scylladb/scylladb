@@ -162,17 +162,24 @@ import ssl
 # next to the location of this script, but this can be overridden by setting
 # a SCYLLA environment variable:
 source_path = os.path.realpath(os.path.join(__file__, '../../..'))
+scylla = None
 def find_scylla():
-    scyllas = glob.glob(os.path.join(source_path, 'build/*/scylla'))
-    if not scyllas:
-        print("Can't find a Scylla executable in {}.\nPlease build Scylla or set SCYLLA to the path of a Scylla executable.".format(source_path))
+    global scylla
+    global source_path
+    if scylla:
+        return scylla
+    if os.getenv('SCYLLA'):
+        scylla = os.path.abspath(os.getenv('SCYLLA'))
+    else:
+        scyllas = glob.glob(os.path.join(source_path, 'build/*/scylla'))
+        if not scyllas:
+            print("Can't find a Scylla executable in {}.\nPlease build Scylla or set SCYLLA to the path of a Scylla executable.".format(source_path))
+            exit(1)
+        scylla = max(scyllas, key=os.path.getmtime)
+    if not os.access(scylla, os.X_OK):
+        print("Cannot execute '{}'.\nPlease set SCYLLA to the path of a Scylla executable.".format(scylla))
         exit(1)
-    return max(scyllas, key=os.path.getmtime)
-
-scylla = os.path.abspath(os.getenv('SCYLLA') or find_scylla())
-if not os.access(scylla, os.X_OK):
-    print("Cannot execute '{}'.\nPlease set SCYLLA to the path of a Scylla executable.".format(scylla))
-    exit(1)
+    return scylla
 
 def run_scylla_cmd(pid, dir):
     ip = pid_to_ip(pid)

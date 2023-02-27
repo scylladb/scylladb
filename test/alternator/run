@@ -21,7 +21,7 @@ if '--aws' in sys.argv:
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-print('Scylla is: ' + run.scylla + '.')
+print('Scylla is: ' + run.find_scylla() + '.')
 
 # If the "--raft" option is given, switch to the experimental Raft-based
 # implementation of schema operations. When the experimental feature becomes

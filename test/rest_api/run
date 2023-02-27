@@ -6,7 +6,7 @@ import sys
 sys.path.insert(1, sys.path[0] + '/../cql-pytest')
 import run
 
-print('Scylla is: ' + run.scylla + '.')
+print('Scylla is: ' + run.find_scylla() + '.')
 
 ssl = '--ssl' in sys.argv
 if ssl:

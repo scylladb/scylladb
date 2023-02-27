@@ -6,7 +6,7 @@ import run
 
 import redis
 
-print('Scylla is: ' + run.scylla + '.')
+print('Scylla is: ' + run.find_scylla() + '.')
 
 REDIS_PORT = 6379
 
