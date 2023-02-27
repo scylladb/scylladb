@@ -39,7 +39,7 @@ private:
     cf_properties _properties;
     bool _if_not_exists;
 
-    view_ptr prepare_view(data_dictionary::database db) const;
+    std::pair<view_ptr, cql3::cql_warnings_vec> prepare_view(data_dictionary::database db) const;
 
 public:
     create_view_statement(
