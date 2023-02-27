@@ -167,21 +167,11 @@ public:
     // prefix must not be full
     void apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t);
     void apply_row_tombstone(const schema& schema, range_tombstone rt);
-    //
     // Applies p to current object.
-    //
-    // Commutative when this_schema == p_schema. If schemas differ, data in p which
-    // is not representable in this_schema is dropped, thus apply() loses commutativity.
-    //
-    // Weak exception guarantees.
-    void apply(const schema& this_schema, const mutation_partition_v2& p, const schema& p_schema,
-            mutation_application_stats& app_stats);
-    // Use in case this instance and p share the same schema.
-    // Same guarantees as apply(const schema&, mutation_partition_v2&&, const schema&);
     // Weak exception guarantees.
     // Assumes this and p are not owned by a cache_tracker and non-evictable.
-    void apply(const schema& s, mutation_partition_v2&& p, mutation_application_stats& app_stats);
-    void apply(const schema& s, mutation_partition&&, mutation_application_stats& app_stats);
+    void apply(const schema& s, mutation_partition&&);
+    void apply(const schema& s, mutation_partition_v2&& p, cache_tracker* = nullptr, is_evictable evictable = is_evictable::no);
 
     // Applies p to this instance.
     //
@@ -207,16 +197,8 @@ public:
     //
     // If is_preemptible::yes is passed, apply_resume must also be passed,
     // same instance each time until stop_iteration::yes is returned.
-    stop_iteration apply_monotonically(const schema& s, mutation_partition_v2&& p, cache_tracker*,
-            mutation_application_stats& app_stats, is_preemptible, apply_resume&, is_evictable);
-    stop_iteration apply_monotonically(const schema& s, mutation_partition_v2&& p, const schema& p_schema,
-            mutation_application_stats& app_stats, is_preemptible, apply_resume&, is_evictable);
-    stop_iteration apply_monotonically(const schema& s, mutation_partition_v2&& p, cache_tracker* tracker,
-            mutation_application_stats& app_stats, is_evictable);
-    stop_iteration apply_monotonically(const schema& s, mutation_partition_v2&& p, const schema& p_schema,
-            mutation_application_stats& app_stats);
-    stop_iteration apply_monotonically(const schema& s, mutation_partition_v2&& p, cache_tracker*,
-            mutation_application_stats& app_stats, preemption_check, apply_resume&, is_evictable);
+    stop_iteration apply_monotonically(const schema& this_schema, const schema& p_schema, mutation_partition_v2&& p,
+            cache_tracker*, mutation_application_stats& app_stats, preemption_check, apply_resume&, is_evictable);
 
     // Converts partition to the new schema. When succeeds the partition should only be accessed
     // using the new schema.

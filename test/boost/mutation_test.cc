@@ -1103,7 +1103,7 @@ SEASTAR_TEST_CASE(test_v2_apply_monotonically_is_monotonic_on_alloc_failures) {
                     m2 = mutation_partition_v2(s, second.partition());
                 });
                 auto check = defer([&] {
-                    m.apply_monotonically(s, std::move(m2), no_cache_tracker, app_stats, is_evictable::no);
+                    m.apply(s, std::move(m2));
                     assert_that(target.schema(), m).is_equal_to_compacted(expected.partition());
                 });
                 auto continuity_check = defer([&] {
@@ -1120,7 +1120,7 @@ SEASTAR_TEST_CASE(test_v2_apply_monotonically_is_monotonic_on_alloc_failures) {
                     }
                 });
                 apply_resume res;
-                if (m.apply_monotonically(s, std::move(m2), no_cache_tracker, app_stats, preempt_check, res, is_evictable::yes) == stop_iteration::yes) {
+                if (m.apply_monotonically(s, s, std::move(m2), no_cache_tracker, app_stats, preempt_check, res, is_evictable::yes) == stop_iteration::yes) {
                     continuity_check.cancel();
                     seastar::memory::local_failure_injector().cancel();
                 }
@@ -2102,7 +2102,7 @@ SEASTAR_TEST_CASE(test_v2_merging_in_non_evictable_snapshot) {
             auto to_apply = mutation_partition_v2(s, m2_v2);
 
             apply_resume res;
-            while (result_v2.apply_monotonically(s, std::move(to_apply), no_cache_tracker, app_stats,
+            while (result_v2.apply_monotonically(s, s, std::move(to_apply), no_cache_tracker, app_stats,
                     [&] () noexcept { return preempt(); }, res, is_evictable::no) == stop_iteration::no) {
                 seastar::thread::maybe_yield();
             }
@@ -2200,7 +2200,7 @@ SEASTAR_TEST_CASE(test_v2_merging_in_evictable_snapshot) {
             clear(tracker, s, result_v2);
         });
         apply_resume res;
-        while (result_v2.apply_monotonically(s, std::move(m2_v2), &tracker, app_stats, is_preemptible::yes, res,
+        while (result_v2.apply_monotonically(s, s, std::move(m2_v2), &tracker, app_stats, default_preemption_check(), res,
                                              is_evictable::yes) == stop_iteration::no) {
             seastar::thread::maybe_yield();
         }
@@ -2285,7 +2285,7 @@ SEASTAR_TEST_CASE(test_continuity_merging_past_last_entry_in_evictable) {
 
             mutation_application_stats app_stats;
             apply_resume resume;
-            m1_v2.apply_monotonically(s, std::move(m2_v2), nullptr, app_stats, is_preemptible::no, resume,
+            m1_v2.apply_monotonically(s, s, std::move(m2_v2), nullptr, app_stats, never_preempt(), resume,
                                       is_evictable::yes);
 
             BOOST_REQUIRE(m1_v2.is_fully_continuous());
@@ -2306,7 +2306,7 @@ SEASTAR_TEST_CASE(test_continuity_merging_past_last_entry_in_evictable) {
             // m2_v2:  --------------- 5 ==(rt)== 7 [rt] ---
             // m1_v2:  === 1 === 3 =========================
 
-            m1_v2.apply_monotonically(s, std::move(m2_v2), nullptr, app_stats, is_preemptible::no, resume, is_evictable::yes);
+            m1_v2.apply_monotonically(s, s, std::move(m2_v2), nullptr, app_stats, never_preempt(), resume, is_evictable::yes);
 
             BOOST_REQUIRE(m1_v2.is_fully_continuous());
             assert_that(ss.schema(), m1_v2).is_equal_to_compacted(s, (m1 + m2).partition());

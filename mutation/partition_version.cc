@@ -166,8 +166,7 @@ partition_snapshot::~partition_snapshot() {
 }
 
 void merge_versions(const schema& s, mutation_partition_v2& newer, mutation_partition_v2&& older, cache_tracker* tracker, is_evictable evictable) {
-    mutation_application_stats app_stats;
-    older.apply_monotonically(s, std::move(newer), tracker, app_stats, evictable);
+    older.apply(s, std::move(newer), tracker, evictable);
     newer = std::move(older);
 }
 
@@ -191,7 +190,7 @@ stop_iteration partition_snapshot::merge_partition_versions(mutation_application
                 _version_merging_state = apply_resume();
             }
             const auto do_stop_iteration = current->partition().apply_monotonically(*schema(),
-                std::move(prev->partition()), _tracker, local_app_stats, is_preemptible::yes, *_version_merging_state,
+                *schema(), std::move(prev->partition()), _tracker, local_app_stats, default_preemption_check(), *_version_merging_state,
                 is_evictable(bool(_tracker)));
             app_stats.row_hits += local_app_stats.row_hits;
             if (do_stop_iteration == stop_iteration::no) {
@@ -369,11 +368,11 @@ void partition_entry::apply(logalloc::region& r, mutation_cleaner& cleaner, cons
         try {
             apply_resume res;
             auto notify = cleaner.make_region_space_guard();
-            if (_version->partition().apply_monotonically(s,
+            if (_version->partition().apply_monotonically(s, s,
                       std::move(new_version->partition()),
                       no_cache_tracker,
                       app_stats,
-                      is_preemptible::yes,
+                      default_preemption_check(),
                       res,
                       is_evictable::no) == stop_iteration::yes) {
                 current_allocator().destroy(new_version);

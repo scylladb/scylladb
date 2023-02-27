@@ -75,8 +75,7 @@ mutation_partition_v2::mutation_partition_v2(const schema& s, mutation_partition
                         .set_range_tombstone(rt.tomb);
             }
 
-            mutation_application_stats app_stats;
-            apply_monotonically(s, std::move(p), s, app_stats);
+            apply(s, std::move(p));
         } catch (...) {
             _rows.clear_and_dispose(current_deleter<rows_entry>());
             throw;
@@ -118,17 +117,27 @@ struct fmt::formatter<apply_resume> : fmt::formatter<std::string_view> {
     }
 };
 
-stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutation_partition_v2&& p, cache_tracker* tracker,
-        mutation_application_stats& app_stats, is_preemptible preemptible, apply_resume& res, is_evictable evictable) {
-    return apply_monotonically(s, std::move(p), tracker, app_stats,
-        preemptible ? default_preemption_check() : never_preempt(), res, evictable);
+void mutation_partition_v2::apply(const schema& s, mutation_partition&& p) {
+    apply(s, mutation_partition_v2(s, std::move(p)));
+}
+void mutation_partition_v2::apply(const schema& s, mutation_partition_v2&& p, cache_tracker* tracker, is_evictable evictable) {
+    mutation_application_stats app_stats;
+    apply_resume res;
+    apply_monotonically(s, s, std::move(p), tracker, app_stats, never_preempt(), res, evictable);
 }
 
-stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutation_partition_v2&& p, cache_tracker* tracker,
+stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const schema& p_s, mutation_partition_v2&& p, cache_tracker* tracker,
         mutation_application_stats& app_stats, preemption_check need_preempt, apply_resume& res, is_evictable evictable) {
+    // FIXME: we want to merge versions with different schemas.
+    // As of now, apply_monotonically takes two schema arguments,
+    // but the functionality isn't implemented yet, and the two
+    // schemas must be equal.
+    // This comment and the below assert will be removed once cross-schema
+    // merging is implemented.
+    assert(s.version() == p_s.version());
 #ifdef SEASTAR_DEBUG
-    assert(s.version() == _schema_version);
-    assert(p._schema_version == _schema_version);
+    assert(_schema_version == s.version());
+    assert(p._schema_version == p_s.version());
 #endif
     _tombstone.apply(p._tombstone);
     _static_row.apply_monotonically(s, column_kind::static_column, std::move(p._static_row));
@@ -490,43 +499,6 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutat
     return stop_iteration::yes;
 }
 
-stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutation_partition_v2&& p, const schema& p_schema,
-        mutation_application_stats& app_stats, is_preemptible preemptible, apply_resume& res, is_evictable evictable) {
-    if (s.version() == p_schema.version()) {
-        return apply_monotonically(s, std::move(p), no_cache_tracker, app_stats,
-                                   preemptible ? default_preemption_check() : never_preempt(), res, evictable);
-    } else {
-        mutation_partition_v2 p2(s, p);
-        p2.upgrade(p_schema, s);
-        return apply_monotonically(s, std::move(p2), no_cache_tracker, app_stats, never_preempt(), res, evictable); // FIXME: make preemptible
-    }
-}
-
-stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutation_partition_v2&& p, cache_tracker *tracker,
-                                                       mutation_application_stats& app_stats, is_evictable evictable) {
-    apply_resume res;
-    return apply_monotonically(s, std::move(p), tracker, app_stats, is_preemptible::no, res, evictable);
-}
-
-stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutation_partition_v2&& p, const schema& p_schema,
-                                                       mutation_application_stats& app_stats) {
-    apply_resume res;
-    return apply_monotonically(s, std::move(p), p_schema, app_stats, is_preemptible::no, res, is_evictable::no);
-}
-
-void mutation_partition_v2::apply(const schema& s, const mutation_partition_v2& p, const schema& p_schema,
-                               mutation_application_stats& app_stats) {
-    apply_monotonically(s, mutation_partition_v2(p_schema, std::move(p)), p_schema, app_stats);
-}
-
-void mutation_partition_v2::apply(const schema& s, mutation_partition_v2&& p, mutation_application_stats& app_stats) {
-    apply_monotonically(s, mutation_partition_v2(s, std::move(p)), no_cache_tracker, app_stats, is_evictable::no);
-}
-
-void mutation_partition_v2::apply(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats) {
-    apply_monotonically(s, mutation_partition_v2(s, std::move(p)), no_cache_tracker, app_stats, is_evictable::no);
-}
-
 void
 mutation_partition_v2::apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t) {
     check_schema(schema);
@@ -540,8 +512,7 @@ mutation_partition_v2::apply_row_tombstone(const schema& schema, range_tombstone
     check_schema(schema);
     mutation_partition mp(schema.shared_from_this());
     mp.apply_row_tombstone(schema, std::move(rt));
-    mutation_application_stats stats;
-    apply(schema, std::move(mp), stats);
+    apply(schema, std::move(mp));
 }
 
 void
