@@ -587,8 +587,8 @@ public:
     /// \brief Get the number of in-flight (to the disk) hints to a given end point.
     /// \param ep End point identificator
     /// \return Number of hints in-flight to \param ep.
-    uint64_t hints_in_progress_for(ep_key_type ep) const noexcept {
-        auto it = find_ep_manager(ep);
+    uint64_t hints_in_progress_for(const locator::node_ptr& node) const noexcept {
+        auto it = find_ep_manager(node->endpoint());
         if (it == ep_managers_end()) {
             return 0;
         }
