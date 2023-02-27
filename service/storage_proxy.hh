@@ -317,6 +317,9 @@ private:
 
     // Needed by sstable cleanup fiber to wait for all ongoing writes to complete
     utils::phased_barrier _pending_writes_phaser;
+
+    // Gate for async work like destroying mutation in the background.
+    gate _async_gate;
 private:
     future<result<coordinator_query_result>> query_singular(lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector&& partition_ranges,
@@ -470,6 +473,8 @@ private:
         inet_address_vector_replica_set& merged,
         inet_address_vector_replica_set& l1,
         inet_address_vector_replica_set& l2) const;
+
+    void destroy_mutation_gently(mutation&& m);
 
 public:
     storage_proxy(distributed<replica::database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
