@@ -838,7 +838,7 @@ bool memtable::is_flushed() const noexcept {
     return bool(_underlying);
 }
 
-void memtable_entry::upgrade_schema(const schema_ptr& s, mutation_cleaner& cleaner) {
+void memtable_entry::upgrade_schema(logalloc::region& r, const schema_ptr& s, mutation_cleaner& cleaner) {
     if (schema() != s) {
         partition().upgrade(schema(), s, cleaner, no_cache_tracker);
     }
@@ -848,7 +848,7 @@ void memtable::upgrade_entry(memtable_entry& e) {
     if (e.schema() != _schema) {
         assert(!reclaiming_enabled());
         with_allocator(allocator(), [this, &e] {
-            e.upgrade_schema(_schema, cleaner());
+            e.upgrade_schema(region(), _schema, cleaner());
         });
     }
 }
