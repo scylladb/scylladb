@@ -144,15 +144,16 @@ tombstone partition_snapshot::partition_tombstone() const {
 }
 
 mutation_partition partition_snapshot::squashed() const {
-    return ::squashed<mutation_partition>(version(),
-                               [this] (const mutation_partition_v2& mp) -> mutation_partition {
-                                   return mp.as_mutation_partition(*schema());
-                               },
-                               [] (mutation_partition&& mp) { return std::move(mp); },
-                               [this] (mutation_partition& a, const mutation_partition& b) {
-                                   mutation_application_stats app_stats;
-                                   a.apply(*schema(), b, *schema(), app_stats);
-                               });
+    const partition_version* this_v = &*version();
+    mutation_partition mp(*this_v->get_schema());
+    for (auto it = this_v->last();; it = it->prev()) {
+       mutation_application_stats app_stats;
+       mp.apply(*this_v->get_schema(), it->partition().as_mutation_partition(*it->get_schema()), *it->get_schema(), app_stats);
+       if (it == this_v) {
+           break;
+       }
+    }
+    return mp;
 }
 
 tombstone partition_entry::partition_tombstone() const {
