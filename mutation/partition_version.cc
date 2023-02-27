@@ -572,15 +572,17 @@ mutation_partition partition_entry::squashed(const schema& s, is_evictable evict
         .as_mutation_partition(s);
 }
 
-void partition_entry::upgrade(schema_ptr from, schema_ptr to, mutation_cleaner& cleaner, cache_tracker* tracker)
+void partition_entry::upgrade(logalloc::region& r, schema_ptr from, schema_ptr to, mutation_cleaner& cleaner, cache_tracker* tracker)
 {
-    auto new_version = current_allocator().construct<partition_version>(squashed(from, to, is_evictable(bool(tracker))), to);
+  with_allocator(r.allocator(), [&] {
+    auto new_version = r.allocator().construct<partition_version>(squashed(from, to, is_evictable(bool(tracker))), to);
     auto old_version = &*_version;
     set_version(new_version);
     if (tracker) {
         tracker->insert(*new_version);
     }
     remove_or_mark_as_unique_owner(old_version, &cleaner);
+  });
 }
 
 partition_snapshot_ptr partition_entry::read(logalloc::region& r,
