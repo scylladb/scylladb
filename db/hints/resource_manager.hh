@@ -20,6 +20,7 @@
 #include "utils/small_vector.hh"
 #include "utils/updateable_value.hh"
 #include "enum_set.hh"
+#include "locator/topology_fwd.hh"
 
 // Usually we don't define namespace aliases in our headers
 // but this one is already entrenched.
@@ -46,7 +47,6 @@ class manager;
 
 class space_watchdog {
 private:
-    using ep_key_type = gms::inet_address;
     static const std::chrono::seconds _watchdog_period;
 
     struct manager_hash {
@@ -110,9 +110,9 @@ private:
     /// value.
     ///
     /// \param path directory to scan
-    /// \param ep_name end point ID (as a string)
+    /// \param node
     /// \return future that resolves when scanning is complete
-    future<> scan_one_ep_dir(fs::path path, manager& shard_manager, ep_key_type ep_key);
+    future<> scan_one_ep_dir(fs::path path, manager& shard_manager, locator::node_ptr node);
 };
 
 class resource_manager {

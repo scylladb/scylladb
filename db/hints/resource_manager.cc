@@ -91,18 +91,18 @@ future<> space_watchdog::stop() noexcept {
 }
 
 // Called under the end_point_hints_manager::file_update_mutex() of the corresponding end_point_hints_manager instance.
-future<> space_watchdog::scan_one_ep_dir(fs::path path, manager& shard_manager, ep_key_type ep_key) {
-    return do_with(std::move(path), [this, ep_key, &shard_manager] (fs::path& path) {
+future<> space_watchdog::scan_one_ep_dir(fs::path path, manager& shard_manager, locator::node_ptr node) {
+    return do_with(std::move(path), [this, node, &shard_manager] (fs::path& path) {
         // It may happen that we get here and the directory has already been deleted in the context of manager::drain_for().
         // In this case simply bail out.
-        return file_exists(path.native()).then([this, ep_key, &shard_manager, &path] (bool exists) {
+        return file_exists(path.native()).then([this, node, &shard_manager, &path] (bool exists) {
             if (!exists) {
                 return make_ready_future<>();
             } else {
-                return lister::scan_dir(path, lister::dir_entry_types::of<directory_entry_type::regular>(), [this, ep_key, &shard_manager] (fs::path dir, directory_entry de) {
+                return lister::scan_dir(path, lister::dir_entry_types::of<directory_entry_type::regular>(), [this, node, &shard_manager] (fs::path dir, directory_entry de) {
                     // Put the current end point ID to state.eps_with_pending_hints when we see the second hints file in its directory
                     if (_files_count == 1) {
-                        shard_manager.add_ep_with_pending_hints(ep_key);
+                        shard_manager.add_ep_with_pending_hints(node->endpoint());
                     }
                     ++_files_count;
 
@@ -146,13 +146,16 @@ void space_watchdog::on_timer() {
                 // not hintable).
                 // If exists - let's take a file update lock so that files are not changed under our feet. Otherwise, simply
                 // continue to enumeration - there is no one to change them.
+                const auto& topo = shard_manager.get_topology();
+                auto ep = gms::inet_address(de.name);
+                auto node = topo.find_node(ep);
                 auto it = shard_manager.find_ep_manager(de.name);
                 if (it != shard_manager.ep_managers_end()) {
-                    return with_file_update_mutex(it->second, [this, &shard_manager, dir = std::move(dir), ep_name = std::move(de.name)] () mutable {
-                        return scan_one_ep_dir(dir / ep_name, shard_manager, ep_key_type(ep_name));
+                    return with_file_update_mutex(it->second, [this, &shard_manager, dir = std::move(dir), ep_name = std::move(de.name), node = std::move(node)] () mutable {
+                        return scan_one_ep_dir(dir / ep_name, shard_manager, std::move(node));
                     });
                 } else {
-                    return scan_one_ep_dir(dir / de.name, shard_manager, ep_key_type(de.name));
+                    return scan_one_ep_dir(dir / de.name, shard_manager, std::move(node));
                 }
             }).get();
         }
