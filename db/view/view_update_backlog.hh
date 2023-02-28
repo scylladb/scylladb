@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <compare>
 #include <cstddef>
 #include <limits>
 
@@ -28,28 +29,11 @@ struct update_backlog {
         return float(current) / float(max);
     }
 
-    friend bool operator==(const update_backlog& lhs, const update_backlog& rhs) {
-        return lhs.relative_size() == rhs.relative_size();
+    std::partial_ordering operator<=>(const update_backlog &rhs) const {
+        return relative_size() <=> rhs.relative_size();
     }
-
-    friend bool operator<(const update_backlog& lhs, const update_backlog& rhs) {
-        return lhs.relative_size() < rhs.relative_size();
-    }
-
-    friend bool operator!=(const update_backlog& lhs, const update_backlog& rhs) {
-        return !(lhs == rhs);
-    }
-
-    friend bool operator<=(const update_backlog& lhs, const update_backlog& rhs) {
-        return !(rhs < lhs);
-    }
-
-    friend bool operator>(const update_backlog& lhs, const update_backlog& rhs) {
-        return rhs < lhs;
-    }
-
-    friend bool operator>=(const update_backlog& lhs, const update_backlog& rhs) {
-        return !(lhs < rhs);
+    bool operator==(const update_backlog& rhs) const {
+        return relative_size() == rhs.relative_size();
     }
 
     static update_backlog no_backlog() {
