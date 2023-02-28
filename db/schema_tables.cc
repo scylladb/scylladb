@@ -132,14 +132,7 @@ struct qualified_name {
             , table_name(s->cf_name())
     { }
 
-    bool operator<(const qualified_name& o) const {
-        return keyspace_name < o.keyspace_name
-               || (keyspace_name == o.keyspace_name && table_name < o.table_name);
-    }
-
-    bool operator==(const qualified_name& o) const {
-        return keyspace_name == o.keyspace_name && table_name == o.table_name;
-    }
+    auto operator<=>(const qualified_name&) const = default;
 };
 
 static future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy, const qualified_name& table, schema_ptr s);

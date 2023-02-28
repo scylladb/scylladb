@@ -42,18 +42,7 @@ struct replay_position {
         }
     }
 
-    bool operator<(const replay_position & r) const {
-        return id < r.id ? true : (r.id < id ? false : pos < r.pos);
-    }
-    bool operator<=(const replay_position & r) const {
-        return !(r < *this);
-    }
-    bool operator==(const replay_position & r) const {
-        return id == r.id && pos == r.pos;
-    }
-    bool operator!=(const replay_position & r) const {
-        return !(*this == r);
-    }
+    auto operator<=>(const replay_position&) const noexcept = default;
 
     unsigned shard_id() const {
         return unsigned(id >> max_ts_bits);
