@@ -1745,9 +1745,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
   }
 }
 
-using main_func_type = std::function<int(int, char**)>;
 static const auto& get_tools() {
-    static const std::vector<std::pair<std::string_view, main_func_type>> tools{
+    using main_func_type = std::function<int(int, char**)>;
+    struct tool {
+        std::string_view name;
+        main_func_type func;
+    };
+    static const std::vector<tool> tools{
         {"server", scylla_main},
         {"types", tools::scylla_types_main},
         {"sstable", tools::scylla_sstable_main},
@@ -1774,10 +1778,10 @@ int main(int ac, char** av) {
     if (exec_name.empty() || exec_name[0] == '-') {
         main_func = scylla_main;
     } else if (auto tool = std::ranges::find_if(get_tools(), [exec_name] (auto& tool) {
-                               return tool.first == exec_name;
+                               return tool.name == exec_name;
                            });
                tool != std::ranges::end(get_tools())) {
-        main_func = tool->second;
+        main_func = tool->func;
         // shift args to consume the recognized tool name
         std::shift_left(av + 1, av + ac, 1);
         --ac;
