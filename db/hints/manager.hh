@@ -740,6 +740,8 @@ private:
     bool have_ep_manager(ep_key_type ep) const noexcept;
 
 public:
+    const locator::topology& get_topology() const noexcept;
+
     /// \brief Initiate the draining when we detect that the node has left the cluster.
     ///
     /// If the node that has left is the current node - drains all pending hints to all nodes.

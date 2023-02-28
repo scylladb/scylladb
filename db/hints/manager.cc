@@ -701,6 +701,10 @@ bool manager::check_dc_for(locator::node_ptr node) const noexcept {
     }
 }
 
+const locator::topology& manager::get_topology() const noexcept {
+    return _proxy_anchor->get_token_metadata_ptr()->get_topology();
+}
+
 void manager::drain_for(locator::node_ptr node) {
     if (!started() || stopping() || draining_all()) {
         return;
