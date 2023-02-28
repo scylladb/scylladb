@@ -1745,25 +1745,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
   }
 }
 
-static const auto& get_tools() {
-    using main_func_type = std::function<int(int, char**)>;
-    struct tool {
-        std::string_view name;
-        main_func_type func;
-        std::string_view desc;
-    };
-    static const std::vector<tool> tools{
-        {"server", scylla_main, "the scylladb server"},
-        {"types", tools::scylla_types_main, "a command-line tool to examine values belonging to scylla types"},
-        {"sstable", tools::scylla_sstable_main, "a multifunctional command-line tool to examine the content of sstables"},
-        {"perf-fast-forward", perf::scylla_fast_forward_main, "run performance tests by fast forwarding the reader on this server"},
-        {"perf-row-cache-update", perf::scylla_row_cache_update_main, "run performance tests by updating row cache on this server"},
-        {"perf-simple-query", perf::scylla_simple_query_main, "run performance tests by sending simple queries to this server"},
-        {"perf-sstable", perf::scylla_sstable_main, "run performance tests by exercising sstable related operations on this server"},
-    };
-    return tools;
-}
-
 int main(int ac, char** av) {
     // early check to avoid triggering
     if (!cpu_sanity()) {
@@ -1775,13 +1756,29 @@ int main(int ac, char** av) {
         exec_name = av[1];
     }
 
-    std::function<int(int, char**)> main_func;
+    using main_func_type = std::function<int(int, char**)>;
+    struct tool {
+        std::string_view name;
+        main_func_type func;
+        std::string_view desc;
+    };
+    const tool tools[] = {
+        {"server", scylla_main, "the scylladb server"},
+        {"types", tools::scylla_types_main, "a command-line tool to examine values belonging to scylla types"},
+        {"sstable", tools::scylla_sstable_main, "a multifunctional command-line tool to examine the content of sstables"},
+        {"perf-fast-forward", perf::scylla_fast_forward_main, "run performance tests by fast forwarding the reader on this server"},
+        {"perf-row-cache-update", perf::scylla_row_cache_update_main, "run performance tests by updating row cache on this server"},
+        {"perf-simple-query", perf::scylla_simple_query_main, "run performance tests by sending simple queries to this server"},
+        {"perf-sstable", perf::scylla_sstable_main, "run performance tests by exercising sstable related operations on this server"},
+    };
+
+    main_func_type main_func;
     if (exec_name.empty() || exec_name[0] == '-') {
         main_func = scylla_main;
-    } else if (auto tool = std::ranges::find_if(get_tools(), [exec_name] (auto& tool) {
+    } else if (auto tool = std::ranges::find_if(tools, [exec_name] (auto& tool) {
                                return tool.name == exec_name;
                            });
-               tool != std::ranges::end(get_tools())) {
+               tool != std::ranges::end(tools)) {
         main_func = tool->func;
         // shift args to consume the recognized tool name
         std::shift_left(av + 1, av + ac, 1);
@@ -1817,7 +1814,7 @@ int main(int ac, char** av) {
         return 0;
     }
     if (preinit_vm["list-tools"].as<bool>()) {
-        for (auto& tool : get_tools()) {
+        for (auto& tool : tools) {
             fmt::print("{} - {}\n", tool.name, tool.desc);
         }
         return 0;
