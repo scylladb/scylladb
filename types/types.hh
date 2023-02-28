@@ -860,8 +860,16 @@ size_t hash_value(const shared_ptr<const abstract_type>& x) {
     return std::hash<const abstract_type*>()(x.get());
 }
 
+struct no_match_for_native_data_type {};
+
+template <typename T>
+inline constexpr auto data_type_for_v = no_match_for_native_data_type();
+
 template <typename Type>
-shared_ptr<const abstract_type> data_type_for();
+inline
+shared_ptr<const abstract_type> data_type_for() {
+    return data_type_for_v<Type>;
+}
 
 class serialized_compare {
     data_type _type;
@@ -925,125 +933,26 @@ extern thread_local const shared_ptr<const abstract_type> counter_type;
 extern thread_local const shared_ptr<const abstract_type> duration_type;
 extern thread_local const data_type empty_type;
 
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<int8_t>() {
-    return byte_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<int16_t>() {
-    return short_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<int32_t>() {
-    return int32_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<int64_t>() {
-    return long_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<sstring>() {
-    return utf8_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<bytes>() {
-    return bytes_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<utils::UUID>() {
-    return uuid_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<date_type_native_type>() {
-    return date_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<simple_date_native_type>() {
-    return simple_date_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<db_clock::time_point>() {
-    return timestamp_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<ascii_native_type>() {
-    return ascii_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<time_native_type>() {
-    return time_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<timeuuid_native_type>() {
-    return timeuuid_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<net::inet_address>() {
-    return inet_addr_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<bool>() {
-    return boolean_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<float>() {
-    return float_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<double>() {
-    return double_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<utils::multiprecision_int>() {
-    return varint_type;
-}
-
-template <>
-inline
-shared_ptr<const abstract_type> data_type_for<big_decimal>() {
-    return decimal_type;
-}
-
-template<>
-inline
-shared_ptr<const abstract_type> data_type_for<cql_duration>() {
-    return duration_type;
-}
+template <> inline thread_local const data_type& data_type_for_v<int8_t> = byte_type;
+template <> inline thread_local const data_type& data_type_for_v<int16_t> = short_type;
+template <> inline thread_local const data_type& data_type_for_v<int32_t> = int32_type;
+template <> inline thread_local const data_type& data_type_for_v<int64_t> = long_type;
+template <> inline thread_local const data_type& data_type_for_v<sstring> = utf8_type;
+template <> inline thread_local const data_type& data_type_for_v<bytes> = bytes_type;
+template <> inline thread_local const data_type& data_type_for_v<utils::UUID> = uuid_type;
+template <> inline thread_local const data_type& data_type_for_v<date_type_native_type> = date_type;
+template <> inline thread_local const data_type& data_type_for_v<simple_date_native_type> = simple_date_type;
+template <> inline thread_local const data_type& data_type_for_v<db_clock::time_point> = timestamp_type;
+template <> inline thread_local const data_type& data_type_for_v<ascii_native_type> = ascii_type;
+template <> inline thread_local const data_type& data_type_for_v<time_native_type> = time_type;
+template <> inline thread_local const data_type& data_type_for_v<timeuuid_native_type> = timeuuid_type;
+template <> inline thread_local const data_type& data_type_for_v<net::inet_address> = inet_addr_type;
+template <> inline thread_local const data_type& data_type_for_v<bool> = boolean_type;
+template <> inline thread_local const data_type& data_type_for_v<float> = float_type;
+template <> inline thread_local const data_type& data_type_for_v<double> = double_type;
+template <> inline thread_local const data_type& data_type_for_v<utils::multiprecision_int> = varint_type;
+template <> inline thread_local const data_type& data_type_for_v<big_decimal> = decimal_type;
+template <> inline thread_local const data_type& data_type_for_v<cql_duration> = duration_type;
 
 namespace std {
 
