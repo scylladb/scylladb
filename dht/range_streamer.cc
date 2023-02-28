@@ -20,6 +20,7 @@
 #include "db/config.hh"
 #include <seastar/core/semaphore.hh>
 #include <boost/range/adaptors.hpp>
+#include "utils/stall_free.hh"
 
 namespace dht {
 
@@ -231,6 +232,7 @@ future<> range_streamer::add_ranges(const sstring& keyspace_name, locator::effec
     }
 
     std::unordered_map<inet_address, dht::token_range_vector> range_fetch_map = get_range_fetch_map(ranges_for_keyspace, _source_filters, keyspace_name);
+    utils::clear_gently(ranges_for_keyspace).get();
 
     if (logger.is_enabled(logging::log_level::debug)) {
         for (auto& x : range_fetch_map) {
