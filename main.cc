@@ -1746,8 +1746,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 }
 
 using main_func_type = std::function<int(int, char**)>;
-static main_func_type lookup_main_func(std::string_view name) {
-    std::pair<std::string_view, main_func_type> funcs[] = {
+static const auto& get_tools() {
+    static const std::vector<std::pair<std::string_view, main_func_type>> tools{
         {"server", scylla_main},
         {"types", tools::scylla_types_main},
         {"sstable", tools::scylla_sstable_main},
@@ -1756,13 +1756,7 @@ static main_func_type lookup_main_func(std::string_view name) {
         {"perf-simple-query", perf::scylla_simple_query_main},
         {"perf-sstable", perf::scylla_sstable_main},
     };
-    auto found = std::ranges::find_if(funcs, [name] (auto& name_and_func) {
-        return name_and_func.first == name;
-    });
-    if (found == std::end(funcs)) {
-        return {};
-    }
-    return found->second;
+    return tools;
 }
 
 int main(int ac, char** av) {
@@ -1779,13 +1773,15 @@ int main(int ac, char** av) {
     std::function<int(int, char**)> main_func;
     if (exec_name.empty() || exec_name[0] == '-') {
         main_func = scylla_main;
-    } else {
-        main_func = lookup_main_func(exec_name);
+    } else if (auto tool = std::ranges::find_if(get_tools(), [exec_name] (auto& tool) {
+                               return tool.first == exec_name;
+                           });
+               tool != std::ranges::end(get_tools())) {
+        main_func = tool->second;
         // shift args to consume the recognized tool name
         std::shift_left(av + 1, av + ac, 1);
         --ac;
-    }
-    if (!main_func) {
+    } else {
         fmt::print("error: unrecognized first argument: expected it to be \"server\", a regular command-line argument or a valid tool name (see `scylla --list-tools`), but got {}\n", exec_name);
         return 1;
     }
