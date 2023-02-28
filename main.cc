@@ -1750,11 +1750,12 @@ static const auto& get_tools() {
     struct tool {
         std::string_view name;
         main_func_type func;
+        std::string_view desc;
     };
     static const std::vector<tool> tools{
         {"server", scylla_main},
-        {"types", tools::scylla_types_main},
-        {"sstable", tools::scylla_sstable_main},
+        {"types", tools::scylla_types_main, "a command-line tool to examine values belonging to scylla types"},
+        {"sstable", tools::scylla_sstable_main, "a multifunctional command-line tool to examine the content of sstables"},
         {"perf-fast-forward", perf::scylla_fast_forward_main},
         {"perf-row-cache-update", perf::scylla_row_cache_update_main},
         {"perf-simple-query", perf::scylla_simple_query_main},
@@ -1816,10 +1817,9 @@ int main(int ac, char** av) {
         return 0;
     }
     if (preinit_vm["list-tools"].as<bool>()) {
-        fmt::print(
-                "types - a command-line tool to examine values belonging to scylla types\n"
-                "sstable - a multifunctional command-line tool to examine the content of sstables\n"
-        );
+        for (auto& tool : get_tools()) {
+            fmt::print("{} - {}\n", tool.name, tool.desc);
+        }
         return 0;
     }
 
