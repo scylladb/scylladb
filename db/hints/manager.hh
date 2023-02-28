@@ -595,8 +595,8 @@ public:
         return it->second.hints_in_progress();
     }
 
-    void add_ep_with_pending_hints(ep_key_type key) {
-        _eps_with_pending_hints.insert(key);
+    void add_ep_with_pending_hints(locator::node_ptr node) {
+        _eps_with_pending_hints.insert(node->endpoint());
     }
 
     void clear_eps_with_pending_hints() {
