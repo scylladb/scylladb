@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <compare>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -442,12 +443,13 @@ public:
         std::swap(*this, other);
     }
 
-    bool operator==(const small_vector& other) const noexcept {
-        return size() == other.size() && std::equal(_begin, _end, other.begin());
+    auto operator<=>(const small_vector& other) const noexcept requires std::three_way_comparable<T> {
+        return std::lexicographical_compare_three_way(this->begin(), this->end(),
+                                                      other.begin(), other.end());
     }
 
-    bool operator!=(const small_vector& other) const noexcept {
-        return !(*this == other);
+    bool operator==(const small_vector& other) const noexcept {
+        return size() == other.size() && std::equal(_begin, _end, other.begin());
     }
 };
 

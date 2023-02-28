@@ -380,6 +380,34 @@ BOOST_AUTO_TEST_CASE(exception_safety) {
     BOOST_REQUIRE_EQUAL(fails_on_copy::live, 0);
 }
 
+BOOST_AUTO_TEST_CASE(compare) {
+    {
+        auto lhs = utils::small_vector<int, 4>({1, 2, 3, 4});
+        auto rhs = utils::small_vector<int, 4>({1, 3, 3, 4});
+        BOOST_CHECK_LT(lhs, rhs);
+    }
+    {
+        auto lhs = utils::small_vector<int, 4>({1, 2, 3, 4});
+        auto rhs = utils::small_vector<int, 4>({1, 3, 4});
+        BOOST_CHECK_LT(lhs, rhs);
+    }
+    {
+        auto lhs = utils::small_vector<int, 4>({1, 2, 3, 4});
+        auto rhs = utils::small_vector<int, 4>({1, 3, 4});
+        BOOST_CHECK_LT(lhs, rhs);
+    }
+    {
+        auto lhs = utils::small_vector<int, 4>({4, 2, 1});
+        auto rhs = utils::small_vector<int, 4>({1, 3, 3, 4});
+        BOOST_CHECK_GT(lhs, rhs);
+    }
+    {
+        auto lhs = utils::small_vector<int, 4>({4, 2, 1});
+        auto rhs = utils::small_vector<int, 4>({1, 3, 3, 4});
+        BOOST_CHECK_GE(lhs, rhs);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(resize) {
     auto vec = utils::small_vector<int, 4>();
     vec.emplace_back(1);
