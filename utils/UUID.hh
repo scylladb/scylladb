@@ -191,21 +191,7 @@ inline std::strong_ordering uuid_tri_compare_timeuuid(bytes_view o1, bytes_view 
 template<typename Tag>
 struct tagged_uuid {
     utils::UUID id;
-    bool operator==(const tagged_uuid& o) const noexcept {
-        return id == o.id;
-    }
-    bool operator<(const tagged_uuid& o) const noexcept {
-        return id < o.id;
-    }
-    bool operator>(const tagged_uuid& o) const noexcept {
-        return id > o.id;
-    }
-    bool operator<=(const tagged_uuid& o) const noexcept {
-        return id <= o.id;
-    }
-    bool operator>=(const tagged_uuid& o) const noexcept {
-        return id >= o.id;
-    }
+    std::strong_ordering operator<=>(const tagged_uuid&) const noexcept = default;
     explicit operator bool() const noexcept {
         // The default constructor sets the id to nil, which is
         // guaranteed to not match any valid id.
