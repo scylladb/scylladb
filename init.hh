@@ -7,6 +7,8 @@
  */
 #pragma once
 
+#include <any>
+
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/distributed.hh>
@@ -34,6 +36,32 @@ extern logging::logger startlog;
 class bad_configuration_error : public std::exception {};
 
 std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg);
+
+class service_set {
+public:
+    service_set();
+    ~service_set();
+    template<typename... Args>
+    service_set(seastar::sharded<Args>&... args) 
+        : service_set()
+    {
+        (void)std::initializer_list<int>{ (add(args), 0)...};
+    }
+    template<typename T>
+    void add(seastar::sharded<T>& t) {
+        add(std::any{std::addressof(t)});
+    }
+    template<typename T>
+    seastar::sharded<T>& find() const {
+        return *std::any_cast<seastar::sharded<T>*>(find(typeid(seastar::sharded<T>*)));
+    }
+private:
+    void add(std::any);
+    std::any find(const std::type_info&) const;
+
+    class impl;
+    std::unique_ptr<impl> _impl;
+};
 
 /**
  * Very simplistic config registry. Allows hooking in a config object
@@ -77,6 +105,10 @@ public:
         return initialize(map, cfg, exts).then([] { return notify_func{}; });
     }
 
+    virtual future<notify_func> initialize_ex(const boost::program_options::variables_map& map, const db::config& cfg, db::extensions& exts, const service_set&) {
+        return initialize_ex(map, cfg, exts);
+    }
+
     class notify_set {
     public:
         future<> notify_all(system_state);
@@ -87,8 +119,8 @@ public:
 
     // visible for testing
     static std::vector<std::reference_wrapper<configurable>>& configurables();
-    static future<notify_set> init_all(const boost::program_options::variables_map&, const db::config&, db::extensions&);
-    static future<notify_set> init_all(const db::config&, db::extensions&);
+    static future<notify_set> init_all(const boost::program_options::variables_map&, const db::config&, db::extensions&, const service_set& = {});
+    static future<notify_set> init_all(const db::config&, db::extensions&, const service_set& = {});
     static void append_all(db::config&, boost::program_options::options_description_easy_init&);
 private:
     static void register_configurable(configurable &);

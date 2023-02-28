@@ -581,7 +581,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
-            auto notify_set = configurable::init_all(opts, *cfg, *ext).get0();
+            auto notify_set = configurable::init_all(opts, *cfg, *ext, service_set(
+                db, ss, mm, proxy, feature_service, messaging, qp, bm
+            )).get0();
 
             auto stop_configurables = defer_verbose_shutdown("configurables", [&] {
                 notify_set.notify_all(configurable::system_state::stopped).get();

@@ -536,8 +536,18 @@ public:
                 cfg->max_memory_for_unlimited_query_hard_limit.set(uint64_t(query::result_memory_limiter::unlimited_result_size));
             }
 
+            sharded<cql3::query_processor> qp;
+            sharded<gms::feature_service> feature_service;
+            sharded<netw::messaging_service> ms;
+            distributed<service::migration_manager> mm;
+            sharded<service::storage_service> ss;
+            distributed<db::batchlog_manager> bm;
+            distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
+
             auto notify_set = init_configurables
-                ? configurable::init_all(*cfg, init_configurables->extensions).get0()
+                ? configurable::init_all(*cfg, init_configurables->extensions, service_set(
+                    db, ss, mm, proxy, feature_service, ms, qp, bm
+                )).get0()
                 : configurable::notify_set{}
                 ;
 
@@ -575,13 +585,11 @@ public:
             sl_controller.start(std::ref(auth_service), qos::service_level_options{}).get();
             auto stop_sl_controller = defer([&sl_controller] { sl_controller.stop().get(); });
             sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
-            sharded<cql3::query_processor> qp;
 
             auto sys_ks = seastar::sharded<db::system_keyspace>();
             sys_ks.start(std::ref(qp), std::ref(db)).get();
             auto stop_sys_kd = defer([&sys_ks] { sys_ks.stop().get(); });
 
-            sharded<netw::messaging_service> ms;
             // don't start listening so tests can be run in parallel
             ms.start(listen, std::move(7000)).get();
             auto stop_ms = defer([&ms] { ms.stop().get(); });
@@ -596,7 +604,6 @@ public:
             auto stop_sys_dist_ks = defer([&sys_dist_ks] { sys_dist_ks.stop().get(); });
 
             gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg, cfg_in.disabled_features);
-            sharded<gms::feature_service> feature_service;
             feature_service.start(fcfg).get();
             auto stop_feature_service = defer([&] { feature_service.stop().get(); });
 
@@ -628,8 +635,6 @@ public:
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
 
-            distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
-            distributed<service::migration_manager> mm;
             sharded<cql3::cql_config> cql_config;
             cql_config.start(cql3::cql_config::default_tag{}).get();
             auto stop_cql_config = defer([&] { cql_config.stop().get(); });
@@ -777,13 +782,11 @@ public:
             db::batchlog_manager_config bmcfg;
             bmcfg.replay_rate = 100000000;
             bmcfg.write_request_timeout = 2s;
-            distributed<db::batchlog_manager> bm;
             bm.start(std::ref(qp), std::ref(sys_ks), bmcfg).get();
             auto stop_bm = defer([&bm] {
                 bm.stop().get();
             });
 
-            sharded<service::storage_service> ss;
             ss.start(std::ref(abort_sources), std::ref(db),
                 std::ref(gossiper),
                 std::ref(sys_ks),
