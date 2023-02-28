@@ -23,6 +23,7 @@
 #include "utils/small_vector.hh"
 #include "query_class_config.hh"
 #include "db/per_partition_rate_limit_info.hh"
+#include "query_id.hh"
 #include "utils/UUID.hh"
 #include "bytes.hh"
 #include "cql_serialization_format.hh"
@@ -30,8 +31,6 @@
 class position_in_partition_view;
 class position_in_partition;
 class partition_slice_builder;
-
-using query_id = utils::tagged_uuid<struct query_id_tag>;
 
 namespace query {
 
