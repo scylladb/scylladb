@@ -242,9 +242,9 @@ future<> range_streamer::add_ranges(const sstring& keyspace_name, locator::effec
 }
 
 future<> range_streamer::stream_async() {
-    auto nr_ranges_remaining = nr_ranges_to_stream();
-    _nr_total_ranges = nr_ranges_remaining;
-    logger.info("{} starts, nr_ranges_remaining={}", _description, nr_ranges_remaining);
+    _nr_ranges_remaining = nr_ranges_to_stream();
+    _nr_total_ranges = _nr_ranges_remaining;
+    logger.info("{} starts, nr_ranges_remaining={}", _description, _nr_ranges_remaining);
     auto start = lowres_clock::now();
     return do_for_each(_to_stream, [this, description = _description] (auto& stream) {
         const auto& keyspace = stream.first;
@@ -272,7 +272,7 @@ future<> range_streamer::stream_async() {
                     logger.info("{} with {} for keyspace={}, streaming [{}, {}) out of {} ranges",
                             description, source, keyspace,
                             nr_ranges_streamed, nr_ranges_streamed + ranges_to_stream.size(), nr_ranges_total);
-                    nr_ranges_streamed += ranges_to_stream.size();
+                    auto ranges_streamed = ranges_to_stream.size();
                     if (_nr_rx_added) {
                         sp.request_ranges(source, keyspace, ranges_to_stream);
                     } else if (_nr_tx_added) {
@@ -281,11 +281,12 @@ future<> range_streamer::stream_async() {
                     sp.execute().discard_result().get();
                     ranges_to_stream.clear();
                     // Update finished percentage
-                    auto remaining = nr_ranges_to_stream();
-                    float percentage = _nr_total_ranges == 0 ? 1 : (_nr_total_ranges - remaining) / (float)_nr_total_ranges;
+                    nr_ranges_streamed += ranges_streamed;
+                    _nr_ranges_remaining -= ranges_streamed;
+                    float percentage = _nr_total_ranges == 0 ? 1 : (_nr_total_ranges - _nr_ranges_remaining) / (float)_nr_total_ranges;
                     _stream_manager.local().update_finished_percentage(_reason, percentage);
                     logger.info("Finished {} out of {} ranges for {}, finished percentage={}",
-                            _nr_total_ranges - remaining, _nr_total_ranges, _reason, percentage);
+                            _nr_total_ranges - _nr_ranges_remaining, _nr_total_ranges, _reason, percentage);
                 };
                 try {
                     for (auto it = range_vec.begin(); it < range_vec.end();) {
