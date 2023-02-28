@@ -8,7 +8,7 @@
 
 #include "utils/UUID.hh"
 #include "schema/schema_fwd.hh"
-#include "query-request.hh"
+#include "query_id.hh"
 #include "locator/host_id.hh"
 #include "tasks/types.hh"
 
