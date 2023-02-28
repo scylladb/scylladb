@@ -21,8 +21,25 @@ def test_count_empty_eq(cql, table1):
     p = unique_key_int()
     assert [(0,)] == list(cql.execute(f"select count(*) from {table1} where p = {p}"))
     # The aggregation "0" for no results is true for count(), but not all
-    # aggregators - min() returns null for no results:
+    # aggregators - min() returns null for no results, while sum() returns
+    # 0 for no results (see issue #13027):
     assert [(None,)] == list(cql.execute(f"select min(v) from {table1} where p = {p}"))
+    assert [(0,)] == list(cql.execute(f"select sum(v) from {table1} where p = {p}"))
+
+# Above in test_count_empty_eq() we tested that aggregates return some value -
+# sometimes 0 and sometimes null - when aggregating no data. If we select
+# not just the aggregate but also something else like p, the result is even
+# more bizarre: we get a null for p. One might argue that if there are no
+# rows we should have just got back nothing in return - just like Cassandra
+# does for GROUP BY (see below tests for #12477), but Cassandra doesn't do
+# this, and this test accepts Cassandra's (and Scylla's) behavior here as
+# being correct.
+# See issue #13027.
+def test_count_and_p_empty_eq(cql, table1):
+    p = unique_key_int()
+    assert [(None,0)] == list(cql.execute(f"select p, count(*) from {table1} where p = {p}"))
+    assert [(None,None)] == list(cql.execute(f"select p, min(v) from {table1} where p = {p}"))
+    assert [(None,0)] == list(cql.execute(f"select p, sum(v) from {table1} where p = {p}"))
 
 # The query "p = null" also matches no row so should have a count 0, but
 # it's a special case where no partition belongs to the query range so the
@@ -35,13 +52,13 @@ def test_count_empty_eq_null(cql, table1, scylla_only):
     assert [(0,)] == list(cql.execute(f"select count(*) from {table1} where p = null"))
     # A more complex list of aggregators, some return zero and some null
     # for an empty result set:
-    assert [(0,0,None)] == list(cql.execute(f"select count(*), count(v), min(v) from {table1} where p = null"))
+    assert [(0,0,None,0)] == list(cql.execute(f"select count(*), count(v), min(v), sum(v) from {table1} where p = null"))
 
 # Another special case of a query which matches no partition - an IN with
 # an empty list. Reproduces #12475.
 def test_count_empty_in(cql, table1):
     assert [(0,)] == list(cql.execute(f"select count(*) from {table1} where p in ()"))
-    assert [(0,0,None)] == list(cql.execute(f"select count(*), count(v), min(v) from {table1} where p in ()"))
+    assert [(0,0,None,0)] == list(cql.execute(f"select count(*), count(v), min(v), sum(v) from {table1} where p in ()"))
 
 # Simple test of counting the number of rows in a single partition
 def test_count_in_partition(cql, table1):
