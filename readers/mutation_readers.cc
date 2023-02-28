@@ -171,12 +171,15 @@ flat_mutation_reader_v2 make_forwardable(flat_mutation_reader_v2 m) {
             return make_ready_future<>();
         }
         virtual future<> next_partition() override {
+            clear_buffer_to_next_partition();
+            if (!is_buffer_empty()) {
+                co_return;
+            }
             _end_of_stream = false;
             if (!_next || !_next->is_partition_start()) {
                 co_await _underlying.next_partition();
                 _next = {};
             }
-            clear_buffer_to_next_partition();
             _current = {
                 position_in_partition::for_partition_start(),
                 position_in_partition(position_in_partition::after_static_row_tag_t())

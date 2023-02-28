@@ -728,6 +728,49 @@ SEASTAR_TEST_CASE(test_make_forwardable) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_make_forwardable_next_partition) {
+    simple_schema s;
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    const auto permit = semaphore.make_permit();
+
+    auto make_reader = [&](std::vector<mutation> mutations, const dht::partition_range& pr) {
+        auto result = make_flat_mutation_reader_from_mutations_v2(s.schema(),
+            permit,
+            std::move(mutations),
+            pr,
+            streamed_mutation::forwarding::yes);
+        return assert_that(std::move(result)).exact();
+    };
+
+    const auto pk1 = s.make_pkey(1);
+    auto m1 = mutation(s.schema(), pk1);
+    s.add_static_row(m1, "test-static-1");
+
+    const auto pk2 = s.make_pkey(2);
+    auto m2 = mutation(s.schema(), pk2);
+    s.add_static_row(m2, "test-static-2");
+
+    dht::ring_position_comparator cmp{*s.schema()};
+    BOOST_CHECK_EQUAL(cmp(m1.decorated_key(), m2.decorated_key()), std::strong_ordering::less);
+
+    auto rd = make_reader({m1, m2}, query::full_partition_range);
+    rd.fill_buffer().get();
+    rd.next_partition();
+    rd.produces_partition_start(m1.decorated_key(), m1.partition().partition_tombstone());
+    rd.produces_static_row(
+        {{s.schema()->get_column_definition(to_bytes("s1")), to_bytes("test-static-1")}});
+    rd.produces_end_of_stream();
+
+    rd.next_partition();
+    rd.produces_partition_start(m2.decorated_key(), m2.partition().partition_tombstone());
+    rd.produces_static_row(
+        {{s.schema()->get_column_definition(to_bytes("s1")), to_bytes("test-static-2")}});
+    rd.produces_end_of_stream();
+
+    rd.next_partition();
+    rd.produces_end_of_stream();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_make_nonforwardable) {
     simple_schema s;
     tests::reader_concurrency_semaphore_wrapper semaphore;
