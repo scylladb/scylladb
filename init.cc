@@ -79,10 +79,10 @@ void configurable::append_all(db::config& cfg, boost::program_options::options_d
     }
 }
 
-future<configurable::notify_set> configurable::init_all(const boost::program_options::variables_map& opts, const db::config& cfg, db::extensions& exts) {
+future<configurable::notify_set> configurable::init_all(const boost::program_options::variables_map& opts, const db::config& cfg, db::extensions& exts, const service_set& services) {
     notify_set res;
     for (auto& c : configurables()) {
-        auto f = co_await c.get().initialize_ex(opts, cfg, exts);
+        auto f = co_await c.get().initialize_ex(opts, cfg, exts, services);
         if (f) {
             res._listeners.emplace_back(std::move(f));
         }
@@ -90,9 +90,9 @@ future<configurable::notify_set> configurable::init_all(const boost::program_opt
     co_return res;
 }
 
-future<configurable::notify_set> configurable::init_all(const db::config& cfg, db::extensions& exts) {
+future<configurable::notify_set> configurable::init_all(const db::config& cfg, db::extensions& exts, const service_set& services) {
     return do_with(boost::program_options::variables_map{}, [&](auto& opts) {
-        return init_all(opts, cfg, exts);
+        return init_all(opts, cfg, exts, services);
     });
 }
 
@@ -100,4 +100,29 @@ future<> configurable::notify_set::notify_all(system_state e) {
     co_return co_await do_for_each(_listeners, [e](const notify_func& c) {
         return c(e);
     });
+}
+
+class service_set::impl {
+public:
+    void add(std::any value) {
+        _services.emplace(value.type(), value);
+    }
+    std::any find(const std::type_info& type) const {
+        return _services.at(type);
+    }
+private:
+    std::unordered_map<std::type_index, std::any> _services;
+};
+
+service_set::service_set()
+    : _impl(std::make_unique<impl>())
+{}
+service_set::~service_set() = default;
+
+void service_set::add(std::any value) {
+    _impl->add(std::move(value));
+} 
+
+std::any service_set::find(const std::type_info& type) const {
+    return _impl->find(type);
 }
