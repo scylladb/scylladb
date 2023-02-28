@@ -10,6 +10,7 @@
 
 #include "log.hh"
 #include "message/messaging_service.hh"
+#include "seastar/coroutine/maybe_yield.hh"
 #include "streaming/stream_session.hh"
 #include "streaming/prepare_message.hh"
 #include "streaming/stream_result_future.hh"
@@ -329,6 +330,7 @@ future<prepare_message> stream_session::prepare(std::vector<stream_request> requ
             }
         }
         add_transfer_ranges(std::move(request.keyspace), std::move(request.ranges), std::move(request.column_families));
+        co_await coroutine::maybe_yield();
     }
     for (auto& summary : summaries) {
         sslog.debug("[Stream #{}] prepare stream_summary={}", plan_id, summary);
@@ -356,7 +358,7 @@ future<prepare_message> stream_session::prepare(std::vector<stream_request> requ
     if (_stream_result) {
         _stream_result->handle_session_prepared(shared_from_this());
     }
-    return make_ready_future<prepare_message>(std::move(prepare));
+    co_return prepare;
 }
 
 void stream_session::follower_start_sent() {
