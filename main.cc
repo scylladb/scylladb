@@ -1753,13 +1753,13 @@ static const auto& get_tools() {
         std::string_view desc;
     };
     static const std::vector<tool> tools{
-        {"server", scylla_main},
+        {"server", scylla_main, "the scylladb server"},
         {"types", tools::scylla_types_main, "a command-line tool to examine values belonging to scylla types"},
         {"sstable", tools::scylla_sstable_main, "a multifunctional command-line tool to examine the content of sstables"},
-        {"perf-fast-forward", perf::scylla_fast_forward_main},
-        {"perf-row-cache-update", perf::scylla_row_cache_update_main},
-        {"perf-simple-query", perf::scylla_simple_query_main},
-        {"perf-sstable", perf::scylla_sstable_main},
+        {"perf-fast-forward", perf::scylla_fast_forward_main, "run performance tests by fast forwarding the reader on this server"},
+        {"perf-row-cache-update", perf::scylla_row_cache_update_main, "run performance tests by updating row cache on this server"},
+        {"perf-simple-query", perf::scylla_simple_query_main, "run performance tests by sending simple queries to this server"},
+        {"perf-sstable", perf::scylla_sstable_main, "run performance tests by exercising sstable related operations on this server"},
     };
     return tools;
 }
