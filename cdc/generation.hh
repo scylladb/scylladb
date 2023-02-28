@@ -56,9 +56,7 @@ public:
     stream_id(dht::token, size_t);
 
     bool is_set() const;
-    bool operator==(const stream_id&) const;
-    bool operator!=(const stream_id&) const;
-    bool operator<(const stream_id&) const;
+    auto operator<=>(const stream_id&) const noexcept = default;
 
     uint8_t version() const;
     size_t index() const;

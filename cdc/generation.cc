@@ -108,18 +108,6 @@ bool stream_id::is_set() const {
     return !_value.empty();
 }
 
-bool stream_id::operator==(const stream_id& o) const {
-    return _value == o._value;
-}
-
-bool stream_id::operator!=(const stream_id& o) const {
-    return !(*this == o);
-}
-
-bool stream_id::operator<(const stream_id& o) const {
-    return _value < o._value;
-}
-
 static int64_t bytes_to_int64(bytes_view b, size_t offset) {
     assert(b.size() >= offset + sizeof(int64_t));
     int64_t res;
