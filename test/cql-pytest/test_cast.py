@@ -25,6 +25,10 @@
 # CQL allows to put an int value in a place where a blob value is expected
 # and it will be automatically converted without any explicit casting.
 
+# Scylla's support for these casts is richer than Cassandra's, that's
+# why some of the tests are marked scylla_only.
+# For example Scylla allows expressions like `blob_col = (blob)(int)123`,
+# but Cassandra rejects them.
 
 import pytest
 from cassandra.protocol import InvalidRequest
@@ -61,11 +65,10 @@ def test_cast_int_literal_to_blob_with_blob_cast(cql, table1):
         cql.execute(f"INSERT INTO {table1} (pk, blob_col) VALUES ({pk}, (blob)123)")
 
 # Putting (int) before the integer specifies the exact type and it's possible to cast the value.
-# This type of assignment isn't currently allowed, will work in the future.
-def test_cast_int_literal_with_type_hint_to_blob(cql, table1):
+def test_cast_int_literal_with_type_hint_to_blob(cql, table1, scylla_only):
     pk = unique_key_int()
-    with pytest.raises(InvalidRequest, match='blob'):
-        cql.execute(f"INSERT INTO {table1} (pk, blob_col) VALUES ({pk}, (int)1234)")
+    cql.execute(f"INSERT INTO {table1} (pk, blob_col) VALUES ({pk}, (int)1234)")
+    assert list(cql.execute(f"SELECT pk, blob_col FROM {table1} WHERE pk = {pk}")) == [(pk, int(1234).to_bytes(4, 'big'))]
 
 # Converting an int to blob is allowed, but converting a blob to int isn't.
 # An int can always be converted to a valid blob, but blobs might have wrong amount of bytes
@@ -100,29 +103,26 @@ def test_cast_bigint_token_to_blobl(cql, table1):
     assert list(cql.execute(f"SELECT pk, blob_col FROM {table1} WHERE pk = {pk}")) == [(pk, int(8821045555241575141).to_bytes(8, 'big'))]
 
 # Doing (blob)(int)4321 should be allowed - the (int) specifies an exact type for the constant, and an int can be cast to blob.
-# Will work in the future.
-def test_cast_int_with_type_hint_to_blob_explicit(cql, table1):
+def test_cast_int_with_type_hint_to_blob_explicit(cql, table1, scylla_only):
     pk = unique_key_int()
-    with pytest.raises(InvalidRequest, match='blob'):
-        cql.execute(f"INSERT INTO {table1} (pk, blob_col) VALUES ({pk}, (blob)(int)4321)")
+    cql.execute(f"INSERT INTO {table1} (pk, blob_col) VALUES ({pk}, (blob)(int)4321)")
+    assert list(cql.execute(f"SELECT pk, blob_col FROM {table1} WHERE pk = {pk}")) == [(pk, int(4321).to_bytes(4, 'big'))]
 
 # Passing (int)123432 as an argument of type blob should be allowed - it's a value of int type, so it can be implicitly cast to blob.
-# Will work in the future.
-def test_cast_int_literal_with_type_hint_to_blob_func_arg(cql, table1):
+def test_cast_int_literal_with_type_hint_to_blob_func_arg(cql, table1, scylla_only):
     pk = unique_key_int()
-    with pytest.raises(InvalidRequest, match='blob'):
-        cql.execute(f"INSERT INTO {table1} (pk, blob_col) VALUES ({pk}, blobasint((int)123432))")
+    cql.execute(f"INSERT INTO {table1} (pk, blob_col) VALUES ({pk}, blobasint((int)123432))")
+    assert list(cql.execute(f"SELECT pk, blob_col FROM {table1} WHERE pk = {pk}")) == [(pk, int(123432).to_bytes(4, 'big'))]
 
 # Passing (blob)(int)567 as an argument of type blob should be allowed - same as (int)123432
-# Will work in the future.
-def test_cast_int_literal_with_type_hint_to_blob_func_arg_explicit(cql, table1):
+def test_cast_int_literal_with_type_hint_to_blob_func_arg_explicit(cql, table1, scylla_only):
     pk = unique_key_int()
-    with pytest.raises(InvalidRequest, match='blob'):
-        cql.execute(f"INSERT INTO {table1} (pk, blob_col) VALUES ({pk}, blobasint((blob)(int)567))")
+    cql.execute(f"INSERT INTO {table1} (pk, blob_col) VALUES ({pk}, blobasint((blob)(int)567))")
+    assert list(cql.execute(f"SELECT pk, blob_col FROM {table1} WHERE pk = {pk}")) == [(pk, int(567).to_bytes(4, 'big'))]
 
 # Executing the function blobasint(bigint) should fail. The bigint has 8 bytes, but blobasint expects 4 bytes.
-# For now it fails on the cast, but in the future the cast will work and it should fail when executing blobasint.
-def test_blobasint_with_bigint_arg(cql, table1):
+# The cast itself is valid - a bigint can be cast to blob, but then executing the function should fail.
+def test_blobasint_with_bigint_arg(cql, table1, scylla_only):
     pk = unique_key_int()
     with pytest.raises(InvalidRequest, match='blob'):
         cql.execute(f"INSERT INTO {table1} (pk, blob_col) VALUES ({pk}, blobasint((bigint)1234))")
@@ -135,19 +135,17 @@ def test_blobasint_with_blobasint_arg(cql, table1):
     assert list(cql.execute(f"SELECT pk, blob_col FROM {table1} WHERE pk = {pk}")) == [(pk, 0xFEEDF00D.to_bytes(4, 'big'))]
 
 # Long cast that should work just like the other examples.
-# Will work in the future.
-def test_cast_long_chain(cql, table1):
+def test_cast_long_chain(cql, table1, scylla_only):
     pk = unique_key_int()
-    with pytest.raises(InvalidRequest, match='blob'):
-        cql.execute(f"INSERT INTO {table1} (pk, blob_col) VALUES ({pk}, (blob)(blob)(blob)(blob)(blob)(blob)(blob)(blob)(tinyint)42)")
+    cql.execute(f"INSERT INTO {table1} (pk, blob_col) VALUES ({pk}, (blob)(blob)(blob)(blob)(blob)(blob)(blob)(blob)(tinyint)42)")
+    assert list(cql.execute(f"SELECT pk, blob_col FROM {table1} WHERE pk = {pk}")) == [(pk, int(42).to_bytes(1, 'big'))]
 
 # Casting should also work in a WHERE comparison.
-# Will work in the future.
-def test_cast_int_to_blob_in_where_clause(cql, table1):
+def test_cast_int_to_blob_in_where_clause(cql, table1, scylla_only):
     pk = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (pk, blob_col) VALUES ({pk}, 0x00BA0BAB)") 
-    with pytest.raises(InvalidRequest, match='blob'):
-        cql.execute(f"SELECT pk FROM {table1} WHERE pk = {pk} AND blob_col = (blob)(int)12192683 ALLOW FILTERING")
+    oobaobab_rows = cql.execute(f"SELECT pk FROM {table1} WHERE pk = {pk} AND blob_col = (blob)(int)12192683 ALLOW FILTERING")
+    assert list(oobaobab_rows) == [(pk,)]
 
 # Test type hints using C-style casts.
 # toDate() has overloads, so preparing toDate(?) can't infer the type for ?.

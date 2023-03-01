@@ -798,8 +798,12 @@ cast_prepare_expression(const cast& c, data_dictionary::database db, const sstri
     // This means that the cast is correct - we can take the binary representation of c.arg value and
     // reinterpret it as a value of type receiver->type without any problems.
 
+    // Prepare the argument using cast_type_receiver.
+    // Using this receiver makes it possible to write things like: (blob)(int)1234
+    // Using the original receiver wouldn't work in such cases - it would complain
+    // that untyped_constant(1234) isn't a valid blob constant.
     return cast{
-        .arg = prepare_expression(c.arg, db, keyspace, schema_opt, receiver),
+        .arg = prepare_expression(c.arg, db, keyspace, schema_opt, cast_type_receiver),
         .type = receiver->type,
     };
 }
