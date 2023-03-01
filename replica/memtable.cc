@@ -868,7 +868,7 @@ std::ostream& operator<<(std::ostream& out, memtable& mt) {
 }
 
 std::ostream& operator<<(std::ostream& out, const memtable_entry& mt) {
-    return out << "{" << mt.key() << ": " << partition_entry::printer(*mt.schema(), mt.partition()) << "}";
+    return out << "{" << mt.key() << ": " << partition_entry::printer(mt.partition()) << "}";
 }
 
 }

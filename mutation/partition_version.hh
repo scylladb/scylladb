@@ -613,10 +613,9 @@ public:
         partition_snapshot::phase_type phase = partition_snapshot::default_phase);
 
     class printer {
-        const schema& _schema;
         const partition_entry& _partition_entry;
     public:
-        printer(const schema& s, const partition_entry& pe) : _schema(s), _partition_entry(pe) { }
+        printer(const partition_entry& pe) : _partition_entry(pe) { }
         printer(const printer&) = delete;
         printer(printer&&) = delete;
 

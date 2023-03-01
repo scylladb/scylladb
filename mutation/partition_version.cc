@@ -644,7 +644,7 @@ std::ostream& operator<<(std::ostream& out, const partition_entry::printer& p) {
                 }
                 out << ") ";
             }
-            out << fmt::ptr(v) << ": " << mutation_partition_v2::printer(p._schema, v->partition());
+            out << fmt::ptr(v) << ": " << mutation_partition_v2::printer(*v->get_schema(), v->partition());
             v = v->next();
             first = false;
         }
