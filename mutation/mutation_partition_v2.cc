@@ -128,19 +128,17 @@ void mutation_partition_v2::apply(const schema& s, mutation_partition_v2&& p, ca
 
 stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const schema& p_s, mutation_partition_v2&& p, cache_tracker* tracker,
         mutation_application_stats& app_stats, preemption_check need_preempt, apply_resume& res, is_evictable evictable) {
-    // FIXME: we want to merge versions with different schemas.
-    // As of now, apply_monotonically takes two schema arguments,
-    // but the functionality isn't implemented yet, and the two
-    // schemas must be equal.
-    // This comment and the below assert will be removed once cross-schema
-    // merging is implemented.
-    assert(s.version() == p_s.version());
 #ifdef SEASTAR_DEBUG
     assert(_schema_version == s.version());
     assert(p._schema_version == p_s.version());
 #endif
+    bool same_schema = s.version() == p_s.version();
     _tombstone.apply(p._tombstone);
-    _static_row.apply_monotonically(s, column_kind::static_column, std::move(p._static_row));
+    if (same_schema) [[likely]] {
+        _static_row.apply_monotonically(s, column_kind::static_column, std::move(p._static_row));
+    } else {
+        _static_row.apply_monotonically(s, p_s, column_kind::static_column, std::move(p._static_row));
+    }
     _static_row_continuous |= p._static_row_continuous;
 
     rows_entry::tri_compare cmp(s);
@@ -315,8 +313,8 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const
 
                 if (need_preempt()) {
                     auto s1 = alloc_strategy_unique_ptr<rows_entry>(
-                            current_allocator().construct<rows_entry>(s,
-                                 position_in_partition::after_key(s, lb_i->position()), is_dummy::yes, is_continuous::no));
+                            current_allocator().construct<rows_entry>(p_s,
+                                 position_in_partition::after_key(p_s, lb_i->position()), is_dummy::yes, is_continuous::no));
                     alloc_strategy_unique_ptr<rows_entry> s2;
                     if (lb_i->position().is_clustering_row()) {
                         s2 = alloc_strategy_unique_ptr<rows_entry>(
@@ -355,8 +353,8 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const
             if (next_interval_loaded) {
                 // FIXME: Avoid reallocation
                 s1 = alloc_strategy_unique_ptr<rows_entry>(
-                    current_allocator().construct<rows_entry>(s,
-                        position_in_partition::after_key(s, src_e.position()), is_dummy::yes, is_continuous::no));
+                    current_allocator().construct<rows_entry>(p_s,
+                        position_in_partition::after_key(p_s, src_e.position()), is_dummy::yes, is_continuous::no));
                 if (src_e.position().is_clustering_row()) {
                     s2 = alloc_strategy_unique_ptr<rows_entry>(
                             current_allocator().construct<rows_entry>(s,
@@ -369,31 +367,41 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const
                 }
             }
 
-            rows_type::key_grabber pi_kg(p_i);
-            lb_i = _rows.insert_before(i, std::move(pi_kg));
+            if (same_schema) [[likely]] {
+                rows_type::key_grabber pi_kg(p_i);
+                lb_i = _rows.insert_before(i, std::move(pi_kg));
+            } else {
+                // FIXME: avoid cell reallocation.
+                // We are copying the row to make exception safety simpler,
+                // but it's not inherently necessary and could be avoided.
+                auto new_e = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(s, p_s, src_e));
+                lb_i = _rows.insert_before(i, std::move(new_e));
+                lb_i->swap(src_e);
+                p_i = p._rows.erase_and_dispose(p_i, del);
+            }
             p_sentinel = std::move(s1);
             this_sentinel = std::move(s2);
 
-            // Check if src_e falls into a continuous range.
+            // Check if src_e (now: lb_i) fell into a continuous range.
             // The range past the last entry is also always implicitly continuous.
             if (i == _rows.end() || i->continuous()) {
                 tombstone i_rt = i != _rows.end() ? i->range_tombstone() : tombstone();
                 // Cannot apply only-row range tombstone falling into a continuous range without inserting extra entry.
                 // Should not occur in practice due to the "older versions are evicted first" rule.
                 // Never occurs in non-evictable snapshots because they are continuous.
-                if (!src_e.continuous() && src_e.range_tombstone() > i_rt) {
-                    if (src_e.dummy()) {
+                if (!lb_i->continuous() && lb_i->range_tombstone() > i_rt) {
+                    if (lb_i->dummy()) {
                         lb_i->set_range_tombstone(i_rt);
                     } else {
                         position_in_partition_view i_pos = i != _rows.end() ? i->position()
                                 : position_in_partition_view::after_all_clustered_rows();
                         // See the "no singular tombstones" rule.
                         mplog.error("Cannot merge entry {} with rt={}, cont=0 into continuous range before {} with rt={}",
-                                src_e.position(), src_e.range_tombstone(), i_pos, i_rt);
+                                lb_i->position(), lb_i->range_tombstone(), i_pos, i_rt);
                         abort();
                     }
                 } else {
-                    lb_i->set_range_tombstone(src_e.range_tombstone() + i_rt);
+                    lb_i->set_range_tombstone(lb_i->range_tombstone() + i_rt);
                 }
                 lb_i->set_continuous(true);
             }
@@ -405,8 +413,8 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const
             if (next_interval_loaded) {
                 // FIXME: Avoid reallocation
                 s1 = alloc_strategy_unique_ptr<rows_entry>(
-                        current_allocator().construct<rows_entry>(s,
-                            position_in_partition::after_key(s, src_e.position()), is_dummy::yes, is_continuous::no));
+                        current_allocator().construct<rows_entry>(p_s,
+                            position_in_partition::after_key(p_s, src_e.position()), is_dummy::yes, is_continuous::no));
                 if (src_e.position().is_clustering_row()) {
                     s2 = alloc_strategy_unique_ptr<rows_entry>(
                             current_allocator().construct<rows_entry>(s, s1->position(), is_dummy::yes, is_continuous::yes));
@@ -444,18 +452,26 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, const
                 }
             }
             if (tracker) {
-                // Newer evictable versions store complete rows
-                i->row() = std::move(src_e.row());
-                // Need to preserve the LRU link of the later version in case it's
-                // the last dummy entry which holds the partition entry linked in LRU.
-                i->swap(src_e);
+                if (same_schema) [[likely]] {
+                    // Newer evictable versions store complete rows
+                    i->row() = std::move(src_e.row());
+                    // Need to preserve the LRU link of the later version in case it's
+                    // the last dummy entry which holds the partition entry linked in LRU.
+                    i->swap(src_e);
+                } else {
+                    i->apply_monotonically(s, p_s, std::move(src_e));
+                }
                 tracker->remove(src_e);
             } else {
                 // Avoid row compaction if no newer range tombstone.
                 do_compact = (src_e.range_tombstone() + src_e.row().deleted_at().regular()) >
                             (i->range_tombstone() + i->row().deleted_at().regular());
                 memory::on_alloc_point();
-                i->apply_monotonically(s, std::move(src_e));
+                if (same_schema) [[likely]] {
+                    i->apply_monotonically(s, std::move(src_e));
+                } else {
+                    i->apply_monotonically(s, p_s, std::move(src_e));
+                }
             }
             ++app_stats.row_hits;
             p_i = p._rows.erase_and_dispose(p_i, del);
