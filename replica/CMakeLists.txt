@@ -14,5 +14,6 @@ target_include_directories(replica
 target_link_libraries(replica
   PUBLIC
     db
+    wasmtime_bindings
     Seastar::seastar
     xxHash::xxhash)

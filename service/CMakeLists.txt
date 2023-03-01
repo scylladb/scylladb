@@ -1,0 +1,37 @@
+add_library(service STATIC)
+target_sources(service
+  PRIVATE
+    broadcast_tables/experimental/lang.cc
+    client_state.cc
+    forward_service.cc
+    migration_manager.cc
+    misc_services.cc
+    pager/paging_state.cc
+    pager/query_pagers.cc
+    paxos/paxos_state.cc
+    paxos/prepare_response.cc
+    paxos/prepare_summary.cc
+    paxos/proposal.cc
+    priority_manager.cc
+    qos/qos_common.cc
+    qos/service_level_controller.cc
+    qos/standard_service_level_distributed_data_accessor.cc
+    raft/discovery.cc
+    raft/group0_state_machine.cc
+    raft/raft_group0.cc
+    raft/raft_group0_client.cc
+    raft/raft_group_registry.cc
+    raft/raft_rpc.cc
+    raft/raft_sys_table_storage.cc
+    storage_proxy.cc
+    storage_service.cc)
+target_include_directories(service
+  PUBLIC
+    ${CMAKE_SOURCE_DIR})
+target_link_libraries(service
+  PUBLIC
+    db
+    Seastar::seastar
+    xxHash::xxhash
+  PRIVATE
+    mutation)

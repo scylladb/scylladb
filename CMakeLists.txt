@@ -42,95 +42,32 @@ file(MAKE_DIRECTORY "${scylla_gen_build_dir}")
 set(scylla_sources
     absl-flat_hash_map.cc
     bytes.cc
-    cdc/cdc_partitioner.cc
-    cdc/generation.cc
-    cdc/log.cc
-    cdc/metadata.cc
-    cdc/split.cc
     client_data.cc
     clocks-impl.cc
     collection_mutation.cc
-    compaction/compaction.cc
-    compaction/compaction_manager.cc
-    compaction/compaction_strategy.cc
-    compaction/leveled_compaction_strategy.cc
-    compaction/size_tiered_compaction_strategy.cc
-    compaction/task_manager_module.cc
-    compaction/time_window_compaction_strategy.cc
     compress.cc
     converting_mutation_partition_applier.cc
     counters.cc
     data_dictionary/data_dictionary.cc
-    dht/boot_strapper.cc
-    dht/i_partitioner.cc
-    dht/murmur3_partitioner.cc
-    dht/range_streamer.cc
-    dht/token.cc
     direct_failure_detector/failure_detector.cc
     duration.cc
     exceptions/exceptions.cc
     frozen_schema.cc
     generic_server.cc
-    gms/application_state.cc
-    gms/endpoint_state.cc
-    gms/failure_detector.cc
-    gms/feature_service.cc
-    gms/gossip_digest_ack2.cc
-    gms/gossip_digest_ack.cc
-    gms/gossip_digest_syn.cc
-    gms/gossiper.cc
-    gms/inet_address.cc
-    gms/versioned_value.cc
-    gms/version_generator.cc
     debug.cc
     index/secondary_index.cc
     index/secondary_index_manager.cc
     init.cc
     keys.cc
-    locator/abstract_replication_strategy.cc
-    locator/azure_snitch.cc
-    locator/simple_strategy.cc
-    locator/local_strategy.cc
-    locator/network_topology_strategy.cc
-    locator/everywhere_replication_strategy.cc
-    locator/token_metadata.cc
-    locator/snitch_base.cc
-    locator/simple_snitch.cc
-    locator/rack_inferring_snitch.cc
-    locator/gossiping_property_file_snitch.cc
-    locator/production_snitch_base.cc
-    locator/ec2_snitch.cc
-    locator/ec2_multi_region_snitch.cc
-    locator/gce_snitch.cc
-    locator/topology.cc
-    locator/util.cc
-    lang/lua.cc
-    lang/wasm.cc
-    lang/wasm_instance_cache.cc
     main.cc
     message/messaging_service.cc
     multishard_mutation_query.cc
     mutation_query.cc
-    mutation_writer/feed_writers.cc
-    mutation_writer/multishard_writer.cc
-    mutation_writer/partition_based_splitting_writer.cc
-    mutation_writer/shard_based_splitting_writer.cc
-    mutation_writer/timestamp_based_splitting_writer.cc
     partition_slice_builder.cc
     querier.cc
     query.cc
     query_ranges_to_vnodes.cc
     query-result-set.cc
-    raft/fsm.cc
-    raft/log.cc
-    raft/raft.cc
-    raft/server.cc
-    raft/tracker.cc
-    readers/combined.cc
-    readers/multishard.cc
-    readers/mutation_reader.cc
-    readers/mutation_readers.cc
-    service/broadcast_tables/experimental/lang.cc
     tombstone_gc_options.cc
     tombstone_gc.cc
     reader_concurrency_semaphore.cc
@@ -139,48 +76,10 @@ set(scylla_sources
     row_cache.cc
     schema_mutations.cc
     serializer.cc
-    service/client_state.cc
-    service/forward_service.cc
-    service/migration_manager.cc
-    service/misc_services.cc
-    service/pager/paging_state.cc
-    service/pager/query_pagers.cc
-    service/paxos/paxos_state.cc
-    service/paxos/prepare_response.cc
-    service/paxos/prepare_summary.cc
-    service/paxos/proposal.cc
-    service/priority_manager.cc
-    service/qos/qos_common.cc
-    service/qos/service_level_controller.cc
-    service/qos/standard_service_level_distributed_data_accessor.cc
-    service/raft/discovery.cc
-    service/raft/group0_state_machine.cc
-    service/raft/raft_group0.cc
-    service/raft/raft_group0_client.cc
-    service/raft/raft_group_registry.cc
-    service/raft/raft_rpc.cc
-    service/raft/raft_sys_table_storage.cc
-    service/storage_proxy.cc
-    service/storage_service.cc
     sstables_loader.cc
     table_helper.cc
     tasks/task_manager.cc
     timeout_config.cc
-    tools/scylla-types.cc
-    tools/scylla-sstable.cc
-    tools/schema_loader.cc
-    tools/utils.cc
-    tools/lua_sstable_consumer.cc
-    tracing/tracing.cc
-    tracing/trace_keyspace_helper.cc
-    tracing/trace_state.cc
-    tracing/traced_file.cc
-    transport/controller.cc
-    transport/cql_protocol_extension.cc
-    transport/event.cc
-    transport/event_notifier.cc
-    transport/messages/result_message.cc
-    transport/server.cc
     unimplemented.cc
     validation.cc
     vint-serialization.cc
@@ -190,18 +89,31 @@ add_subdirectory(api)
 add_subdirectory(alternator)
 add_subdirectory(db)
 add_subdirectory(auth)
+add_subdirectory(cdc)
+add_subdirectory(compaction)
 add_subdirectory(cql3)
+add_subdirectory(dht)
+add_subdirectory(gms)
 add_subdirectory(idl)
 add_subdirectory(interface)
+add_subdirectory(lang)
+add_subdirectory(locator)
 add_subdirectory(mutation)
+add_subdirectory(mutation_writer)
+add_subdirectory(readers)
 add_subdirectory(redis)
 add_subdirectory(replica)
+add_subdirectory(raft)
 add_subdirectory(rust)
 add_subdirectory(schema)
+add_subdirectory(service)
 add_subdirectory(sstables)
 add_subdirectory(streaming)
 add_subdirectory(test)
 add_subdirectory(thrift)
+add_subdirectory(tools)
+add_subdirectory(tracing)
+add_subdirectory(transport)
 add_subdirectory(types)
 add_subdirectory(utils)
 include(add_version_library)
@@ -216,20 +128,32 @@ target_link_libraries(scylla PRIVATE
     auth
     alternator
     db
+    cdc
+    compaction
     cql3
+    dht
+    gms
     idl
+    lang
+    locator
     mutation
+    mutation_writer
+    raft
+    readers
     redis
     replica
     schema
     scylla_version
+    service
     sstables
     streaming
     test-perf
     thrift
+    tools
+    tracing
+    transport
     types
-    utils
-    wasmtime_bindings)
+    utils)
 target_link_libraries(Boost::regex
   INTERFACE
     ICU::i18n)
@@ -272,7 +196,6 @@ target_link_libraries(scylla PRIVATE
     systemd
     zstd
     snappy
-    ${LUA_LIBRARIES}
     xxHash::xxhash)
 
 # Force SHA1 build-id generation

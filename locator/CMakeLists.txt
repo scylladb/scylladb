@@ -1,0 +1,29 @@
+add_library(locator STATIC)
+target_sources(locator
+  PRIVATE
+    abstract_replication_strategy.cc
+    azure_snitch.cc
+    simple_strategy.cc
+    local_strategy.cc
+    network_topology_strategy.cc
+    everywhere_replication_strategy.cc
+    token_metadata.cc
+    snitch_base.cc
+    simple_snitch.cc
+    rack_inferring_snitch.cc
+    gossiping_property_file_snitch.cc
+    production_snitch_base.cc
+    ec2_snitch.cc
+    ec2_multi_region_snitch.cc
+    gce_snitch.cc
+    topology.cc
+    util.cc)
+target_include_directories(locator
+  PUBLIC
+    ${CMAKE_SOURCE_DIR})
+target_link_libraries(locator
+  PUBLIC
+    Seastar::seastar
+    xxHash::xxhash
+  PRIVATE
+    db)
