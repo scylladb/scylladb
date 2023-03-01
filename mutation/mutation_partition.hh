@@ -1007,6 +1007,9 @@ public:
     void apply_monotonically(const schema& s, rows_entry&& e) {
         _row.apply(s, std::move(e._row));
     }
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, rows_entry&& e) {
+        _row.apply_monotonically(our_schema, their_schema, std::move(e._row));
+    }
     bool empty() const {
         return _row.empty();
     }
