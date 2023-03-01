@@ -1825,6 +1825,10 @@ static cql3::raw_value evaluate(const bind_variable& bind_var, const evaluation_
     }
 
     if (value.is_unset_value()) {
+        if (bind_var.disallow_unset_value) {
+            throw exceptions::invalid_request_exception(format("Invalid unset value for {}", bind_var.receiver->name));
+        }
+
         return cql3::raw_value::make_unset_value();
     }
 

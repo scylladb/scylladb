@@ -692,7 +692,8 @@ bind_variable_prepare_expression(const bind_variable& bv, data_dictionary::datab
 {   
     return bind_variable {
         .bind_index = bv.bind_index,
-        .receiver = receiver
+        .receiver = receiver,
+        .disallow_unset_value = bv.disallow_unset_value
     };
 }
 

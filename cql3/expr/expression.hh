@@ -359,6 +359,8 @@ struct bind_variable {
     // Contains value type and other useful information.
     ::lw_shared_ptr<column_specification> receiver;
 
+    bool disallow_unset_value = false;
+
     friend bool operator==(const bind_variable&, const bind_variable&) = default;
 };
 
