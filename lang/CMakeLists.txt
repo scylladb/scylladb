@@ -3,6 +3,7 @@ target_sources(lang
   PRIVATE
     lua.cc
     wasm.cc
+    wasm_alien_thread_runner.cc
     wasm_instance_cache.cc)
 target_include_directories(lang
   PUBLIC
