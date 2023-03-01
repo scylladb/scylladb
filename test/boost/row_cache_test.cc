@@ -950,6 +950,7 @@ SEASTAR_TEST_CASE(test_eviction_after_schema_change) {
             rd.fill_buffer().get();
         }
 
+        tracker.cleaner().drain().get0();
         while (tracker.region().evict_some() == memory::reclaiming_result::reclaimed_something) ;
 
         // The partition should be evictable after schema change
