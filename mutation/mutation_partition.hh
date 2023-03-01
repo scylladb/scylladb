@@ -389,6 +389,14 @@ public:
     }
 
     // Weak exception guarantees
+    void apply(const schema& our_schema, const schema& their_schema, column_kind kind, const lazy_row& src) {
+        if (src.empty()) {
+            return;
+        }
+        maybe_create().apply(our_schema, their_schema, kind, src.get_existing());
+    }
+
+    // Weak exception guarantees
     void apply(const schema& s, column_kind kind, row&& src) {
         if (src.empty()) {
             return;
