@@ -305,7 +305,7 @@ def testListWithUnsetValues(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT l FROM %s WHERE k = 10"), [l])
 
         # select with in clause
-        assert_invalid_message(cql, table, "Invalid unset value for column k", "SELECT * FROM %s WHERE k IN ?", UNSET_VALUE)
+        assert_invalid_message(cql, table, "Invalid unset value for", "SELECT * FROM %s WHERE k IN ?", UNSET_VALUE)
         # The following cannot be tested with the Python driver because it
         # captures this case before sending it to the server.
         #assert_invalid_message(cql, table, "Invalid unset value for column k", "SELECT * FROM %s WHERE k IN (?)", UNSET_VALUE)

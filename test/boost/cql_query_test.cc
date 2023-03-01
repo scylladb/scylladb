@@ -5322,7 +5322,7 @@ SEASTAR_TEST_CASE(test_null_and_unset_in_collections) {
         };
 
         auto check_unset_msg = [](std::experimental::source_location loc = std::experimental::source_location::current()) {
-            return exception_predicate::message_equals("unset value is not supported inside collections", loc);
+            return exception_predicate::message_contains("unset value", loc);
         };
 
         // Test null when specified inside a collection literal

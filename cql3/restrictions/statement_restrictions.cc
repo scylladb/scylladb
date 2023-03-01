@@ -326,13 +326,18 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
 statement_restrictions::statement_restrictions(data_dictionary::database db,
         schema_ptr schema,
         statements::statement_type type,
-        const expr::expression& where_clause,
+        const expr::expression& where_clause_in,
         prepare_context& ctx,
         bool selects_only_static_columns,
         bool for_view,
         bool allow_filtering)
     : statement_restrictions(schema, allow_filtering)
 {
+    // Bind markers with UNSET_VALUE are not allowed inside the WHERE clause.
+    // They are used to set fields in INSERT and UPDATE, but they don't fit
+    // in the WHERE clause.
+    expr::expression where_clause = expr::make_unset_value_forbidden(where_clause_in);
+
     for (auto&& relation_expr : boolean_factors(where_clause)) {
         const expr::binary_operator* relation_binop = expr::as_if<expr::binary_operator>(&relation_expr);
 
