@@ -32,22 +32,30 @@
 
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_clear_inactive_reads) {
     simple_schema s;
+    std::vector<reader_permit> permits;
     std::vector<reader_concurrency_semaphore::inactive_read_handle> handles;
 
     {
         reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
         auto stop_sem = deferred_stop(semaphore);
+        auto clear_permits = defer([&permits] { permits.clear(); });
 
         for (int i = 0; i < 10; ++i) {
-            handles.emplace_back(semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout))));
+            permits.emplace_back(semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout));
+            handles.emplace_back(semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), permits.back())));
         }
 
         BOOST_REQUIRE(std::all_of(handles.begin(), handles.end(), [] (const reader_concurrency_semaphore::inactive_read_handle& handle) { return bool(handle); }));
+        BOOST_REQUIRE(std::all_of(permits.begin(), permits.end(), [] (const reader_permit& permit) { return permit.get_state() == reader_permit::state::inactive; }));
 
         semaphore.clear_inactive_reads();
 
         BOOST_REQUIRE(std::all_of(handles.begin(), handles.end(), [] (const reader_concurrency_semaphore::inactive_read_handle& handle) { return !bool(handle); }));
+        BOOST_REQUIRE(std::all_of(permits.begin(), permits.end(), [] (const reader_permit& permit) { return permit.get_state() == reader_permit::state::evicted; }));
 
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().inactive_reads, 0);
+
+        permits.clear();
         handles.clear();
 
         for (int i = 0; i < 10; ++i) {
@@ -1607,4 +1615,33 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_blessed_read_goes_ina
 
     // Upon being registered as inactive, the permit should loose the blessed status
     BOOST_REQUIRE_EQUAL(semaphore.get_blessed_permit(), 0);
+}
+
+// Check that `stop()` correctly evicts all inactive reads.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_stop_with_inactive_reads) {
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
+
+    simple_schema ss;
+    auto s = ss.schema();
+
+    auto permit = reader_permit_opt(semaphore.obtain_permit(s.get(), get_name(), 1024, db::no_timeout).get());
+
+    auto handle = semaphore.register_inactive_read(make_empty_flat_reader_v2(s, *permit));
+
+    BOOST_REQUIRE(handle);
+    BOOST_REQUIRE_EQUAL(permit->get_state(), reader_permit::state::inactive);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().inactive_reads, 1);
+
+    // Using BOOST_CHECK_* because an exception thrown here causes a segfault,
+    // due to the stop future not being waited for.
+    auto stop_f = semaphore.stop();
+    BOOST_CHECK(!stop_f.available());
+    BOOST_CHECK(eventually_true([&] { return !semaphore.get_stats().inactive_reads; }));
+    BOOST_CHECK(!handle);
+    BOOST_CHECK_EQUAL(permit->get_state(), reader_permit::state::evicted);
+
+    // Stop waits on all permits, so we need to destroy the permit before we can
+    // wait on the stop future.
+    permit = {};
+    stop_f.get();
 }
