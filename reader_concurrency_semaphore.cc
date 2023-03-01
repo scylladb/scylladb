@@ -745,10 +745,7 @@ bool reader_concurrency_semaphore::try_evict_one_inactive_read(evict_reason reas
 
 void reader_concurrency_semaphore::clear_inactive_reads() {
     while (!_inactive_reads.empty()) {
-        auto& ir = _inactive_reads.front();
-        close_reader(std::move(ir.reader));
-        // Destroying the read unlinks it too.
-        std::unique_ptr<inactive_read> _(&*_inactive_reads.begin());
+        evict(_inactive_reads.front(), evict_reason::manual);
     }
 }
 
