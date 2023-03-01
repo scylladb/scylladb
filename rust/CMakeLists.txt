@@ -73,6 +73,6 @@ target_sources(wasmtime_bindings
     ${wasmtime_bindings_sources})
 target_include_directories(wasmtime_bindings
   INTERFACE
-    ${binding_gen_build_dir})
+    ${scylla_gen_build_dir})
 target_link_libraries(wasmtime_bindings
   INTERFACE Rust::rust_combined)
