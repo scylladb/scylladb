@@ -120,8 +120,7 @@ include(add_version_library)
 add_version_library(scylla_version
     release.cc)
 add_executable(scylla
-    ${scylla_sources}
-    ${swagger_gen_files})
+    ${scylla_sources})
 
 target_link_libraries(scylla PRIVATE
     api
