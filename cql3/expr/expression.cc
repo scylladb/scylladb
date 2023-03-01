@@ -1476,7 +1476,7 @@ expression search_and_replace(const expression& e,
                     };
                 },
                 [&] (const binary_operator& oper) -> expression {
-                    return binary_operator(recurse(oper.lhs), oper.op, recurse(oper.rhs));
+                    return binary_operator(recurse(oper.lhs), oper.op, recurse(oper.rhs), oper.order);
                 },
                 [&] (const column_mutation_attribute& cma) -> expression {
                     return column_mutation_attribute{cma.kind, recurse(cma.column)};
