@@ -216,7 +216,3 @@ set(CMAKE_EXE_LINKER_FLAGS "${default_linker_flags}" CACHE INTERNAL "")
 target_include_directories(scylla PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${scylla_gen_build_dir}")
-
-
-# TODO: create cmake/ directory and move utilities (generate functions etc) there
-# TODO: Build tests if BUILD_TESTING=on (using CTest module)
