@@ -1377,7 +1377,9 @@ memory_limit_table create_memory_limit_table(cql_test_env& env, uint64_t target_
     return {s, std::move(sstables_dir), std::move(dk.key()), std::move(ck), std::move(value)};
 }
 
+#ifndef DEBUG
 constexpr uint64_t target_memory = uint64_t(1) << 28; // 256MB
+#endif
 
 // Check that the memory consumption limiting mechanism of the semaphore does
 // prevent OOM crashes.
