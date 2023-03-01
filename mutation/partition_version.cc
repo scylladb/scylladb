@@ -630,15 +630,16 @@ mutation_partition partition_entry::squashed(const schema& s, is_evictable evict
 
 void partition_entry::upgrade(logalloc::region& r, schema_ptr to, mutation_cleaner& cleaner, cache_tracker* tracker)
 {
-  with_allocator(r.allocator(), [&] {
-    auto new_version = r.allocator().construct<partition_version>(squashed_v2(*to, is_evictable(bool(tracker))), to);
-    auto old_version = &*_version;
-    set_version(new_version);
-    if (tracker) {
-        tracker->insert(*new_version);
-    }
-    remove_or_mark_as_unique_owner(old_version, &cleaner);
-  });
+    with_allocator(r.allocator(), [&] {
+        auto phase = partition_snapshot::max_phase;
+        if (_snapshot) {
+            phase = _snapshot->_phase;
+        }
+        // The destruction of this snapshot pointer will trigger a background merge
+        // of the old version into the new version.
+        partition_snapshot_ptr snp = read(r, cleaner, tracker, phase);
+        add_version(*to, tracker);
+    });
 }
 
 partition_snapshot_ptr partition_entry::read(logalloc::region& r,
