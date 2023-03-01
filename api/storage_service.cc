@@ -458,6 +458,14 @@ static future<json::json_return_type> describe_ring_as_json(sharded<service::sto
     co_return json::json_return_type(stream_range_as_array(co_await ss.local().describe_ring(keyspace), token_range_endpoints_to_json));
 }
 
+static std::vector<table_id> get_table_ids(const std::vector<table_info>& table_infos) {
+    std::vector<table_id> table_ids{table_infos.size()};
+    boost::transform(table_infos, table_ids.begin(), [] (const auto& ti) {
+        return ti.id;
+    });
+    return table_ids;
+}
+
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<cdc::generation_service>& cdc_gs, sharded<db::system_keyspace>& sys_ks) {
     ss::local_hostid.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto id = ctx.db.local().get_config().host_id;
@@ -672,12 +680,8 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
         apilog.debug("force_keyspace_compaction: keyspace={} tables={}", keyspace, table_infos);
 
-        std::vector<table_id> table_ids{table_infos.size()};
-        boost::transform(table_infos, table_ids.begin(), [] (const auto& ti) {
-            return ti.id;
-        });
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), db, table_ids);
+        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), db, get_table_ids(table_infos));
         try {
             co_await task->done();
         } catch (...) {
