@@ -780,8 +780,9 @@ cast_prepare_expression(const cast& c, data_dictionary::database db, const sstri
     data_type cast_type = cast_get_prepared_type(c, db, keyspace);
 
     if (!receiver) {
-        // TODO: It is possible to infer the type of a cast (it's a given)
-        return std::nullopt;
+        sstring receiver_name = format("cast({}){:user}", cast_type->cql3_type_name(), c.arg);
+        receiver = make_lw_shared<column_specification>(
+            keyspace, "unknown_cf", ::make_shared<column_identifier>(receiver_name, true), cast_type);
     }
 
     // casted_spec_of creates a receiver with type equal to c.type

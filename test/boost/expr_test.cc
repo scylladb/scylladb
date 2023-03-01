@@ -1394,6 +1394,31 @@ BOOST_AUTO_TEST_CASE(prepare_cast_text_int) {
                         exceptions::invalid_request_exception);
 }
 
+// Test that preparing `(text)?` without a receiver works.
+// Here (text) serves as a type hint that specifies the type of the bind variable.
+// This syntax is useful for passing bind variables in places where it's impossible
+// to infer the type from context, for example as an argument for a function
+// with multiple overloads.
+BOOST_AUTO_TEST_CASE(prepare_cast_bind_var_no_receiver) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression cast_expr =
+        cast{.arg = bind_variable{.bind_index = 0, .receiver = nullptr}, .type = cql3_type::raw::from(utf8_type)};
+
+    expression prepared = prepare_expression(cast_expr, db, "test_ks", table_schema.get(), nullptr);
+
+    // Can't do a direct comparison because we don't have prepared.arg.receiver
+    BOOST_REQUIRE(is<cast>(prepared) && is<bind_variable>(as<cast>(prepared).arg));
+    ::lw_shared_ptr<column_specification> bind_var_receiver = as<bind_variable>(as<cast>(prepared).arg).receiver;
+    BOOST_REQUIRE(bind_var_receiver->type == utf8_type);
+
+    expression expected = cast{.arg = bind_variable{.bind_index = 0, .receiver = bind_var_receiver}, .type = utf8_type};
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+
+    BOOST_REQUIRE(expr::type_of(prepared) == utf8_type);
+}
+
 BOOST_AUTO_TEST_CASE(prepare_null) {
     schema_ptr table_schema = make_simple_test_schema();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
