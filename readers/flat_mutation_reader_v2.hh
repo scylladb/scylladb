@@ -153,7 +153,6 @@ public:
         void reserve_additional(size_t n) {
             _buffer.reserve(_buffer.size() + n);
         }
-        void forward_buffer_to(const position_in_partition& pos);
         void clear_buffer_to_next_partition();
         template<typename Source>
         future<bool> fill_buffer_from(Source&);
@@ -722,7 +721,7 @@ flat_mutation_reader_v2 transform(flat_mutation_reader_v2 r, T t) {
             return _reader.fast_forward_to(pr);
         }
         virtual future<> fast_forward_to(position_range pr) override {
-            forward_buffer_to(pr.start());
+            clear_buffer();
             _end_of_stream = false;
             return _reader.fast_forward_to(std::move(pr));
         }

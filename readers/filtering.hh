@@ -54,7 +54,7 @@ public:
         return _rd.fast_forward_to(pr);
     }
     virtual future<> fast_forward_to(position_range pr) override {
-        forward_buffer_to(pr.start());
+        clear_buffer();
         _end_of_stream = false;
         return _rd.fast_forward_to(std::move(pr));
     }
