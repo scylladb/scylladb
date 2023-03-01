@@ -696,7 +696,7 @@ public:
 };
 
 partition_snapshot_ptr memtable_entry::snapshot(memtable& mtbl) {
-    return _pe.read(mtbl.region(), mtbl.cleaner(), schema(), no_cache_tracker);
+    return _pe.read(mtbl.region(), mtbl.cleaner(), no_cache_tracker);
 }
 
 flat_mutation_reader_v2_opt
