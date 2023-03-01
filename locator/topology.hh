@@ -20,6 +20,7 @@
 
 #include "locator/types.hh"
 #include "inet_address_vectors.hh"
+#include "utils/fb_utilities.hh"
 
 using namespace seastar;
 
@@ -71,11 +72,30 @@ public:
         return _datacenters;
     }
 
+    // Get dc/rack location of the local node
+    const endpoint_dc_rack& get_location() const noexcept {
+        return get_location(utils::fb_utilities::get_broadcast_address());
+    }
+    // Get dc/rack location of a node identified by endpoint
     const endpoint_dc_rack& get_location(const inet_address& ep) const;
-    sstring get_rack() const;
-    sstring get_rack(inet_address ep) const;
-    sstring get_datacenter() const;
-    sstring get_datacenter(inet_address ep) const;
+
+    // Get datacenter of the local node
+    const sstring& get_datacenter() const noexcept {
+        return get_location().dc;
+    }
+    // Get datacenter of a node identified by endpoint
+    const sstring& get_datacenter(inet_address ep) const {
+        return get_location(ep).dc;
+    }
+
+    // Get rack of the local node
+    const sstring& get_rack() const noexcept {
+        return get_location().rack;
+    }
+    // Get rack of a node identified by endpoint
+    const sstring& get_rack(inet_address ep) const {
+        return get_location(ep).rack;
+    }
 
     auto get_local_dc_filter() const noexcept {
         return [ this, local_dc = get_datacenter() ] (inet_address ep) {

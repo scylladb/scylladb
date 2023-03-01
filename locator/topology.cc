@@ -137,27 +137,6 @@ const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
     return endpoint_dc_rack::default_location;
 }
 
-// FIXME -- both methods below should rather return data from the
-// get_location() result, but to make it work two things are to be fixed:
-// - topology should be aware of internal-ip conversions
-// - topology should be pre-populated with data loaded from system ks
-
-sstring topology::get_rack() const {
-    return get_rack(utils::fb_utilities::get_broadcast_address());
-}
-
-sstring topology::get_rack(inet_address ep) const {
-    return get_location(ep).rack;
-}
-
-sstring topology::get_datacenter() const {
-    return get_datacenter(utils::fb_utilities::get_broadcast_address());
-}
-
-sstring topology::get_datacenter(inet_address ep) const {
-    return get_location(ep).dc;
-}
-
 void topology::sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const {
     if (_sort_by_proximity) {
         std::sort(addresses.begin(), addresses.end(), [this, &address](inet_address& a1, inet_address& a2) {
