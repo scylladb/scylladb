@@ -558,30 +558,29 @@ utils::coroutine partition_entry::apply_to_incomplete(const schema& s,
     });
 }
 
-mutation_partition_v2 partition_entry::squashed(schema_ptr from, schema_ptr to, is_evictable evictable)
+mutation_partition_v2 partition_entry::squashed_v2(const schema& to, is_evictable evictable)
 {
-    mutation_partition_v2 mp(*to);
+    mutation_partition_v2 mp(to);
     mp.set_static_row_continuous(_version->partition().static_row_continuous());
     for (auto&& v : _version->all_elements()) {
-        auto older = mutation_partition_v2(*from, v.partition());
-        if (from->version() != to->version()) {
-            older.upgrade(*from, *to);
+        auto older = mutation_partition_v2(*v.get_schema(), v.partition());
+        if (v.get_schema()->version() != to.version()) {
+            older.upgrade(*v.get_schema(), to);
         }
-        merge_versions(*to, mp, std::move(older), no_cache_tracker, evictable);
+        merge_versions(to, mp, std::move(older), no_cache_tracker, evictable);
     }
     return mp;
 }
 
 mutation_partition partition_entry::squashed(const schema& s, is_evictable evictable)
 {
-    return squashed(s.shared_from_this(), s.shared_from_this(), evictable)
-        .as_mutation_partition(s);
+    return squashed_v2(s, evictable).as_mutation_partition(s);
 }
 
 void partition_entry::upgrade(logalloc::region& r, schema_ptr from, schema_ptr to, mutation_cleaner& cleaner, cache_tracker* tracker)
 {
   with_allocator(r.allocator(), [&] {
-    auto new_version = r.allocator().construct<partition_version>(squashed(from, to, is_evictable(bool(tracker))), to);
+    auto new_version = r.allocator().construct<partition_version>(squashed_v2(*to, is_evictable(bool(tracker))), to);
     auto old_version = &*_version;
     set_version(new_version);
     if (tracker) {

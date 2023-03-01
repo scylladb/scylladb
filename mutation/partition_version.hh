@@ -595,7 +595,7 @@ public:
         return *_version;
     }
 
-    mutation_partition_v2 squashed(schema_ptr from, schema_ptr to, is_evictable);
+    mutation_partition_v2 squashed_v2(const schema& to, is_evictable);
     mutation_partition squashed(const schema&, is_evictable);
     tombstone partition_tombstone() const;
 
