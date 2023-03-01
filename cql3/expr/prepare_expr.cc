@@ -731,26 +731,31 @@ bind_variable_prepare_expression(const bind_variable& bv, data_dictionary::datab
     };
 }
 
-static
-sstring
-cast_display_name(const cast& c) {
-    return format("({}){}", std::get<shared_ptr<cql3_type::raw>>(c.type), c.arg);
+static data_type cast_get_prepared_type(const cast& c, data_dictionary::database db, const sstring& keyspace) {
+    data_type cast_type = std::visit(overloaded_functor {
+        [&](const shared_ptr<cql3_type::raw>& raw_type) { return raw_type->prepare(db, keyspace).get_type(); },
+        [](const data_type& prepared_type) {return prepared_type;}
+    }, c.type);
+
+    return cast_type;
 }
 
 static
 lw_shared_ptr<column_specification>
 casted_spec_of(const cast& c, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
-    auto& type = std::get<shared_ptr<cql3_type::raw>>(c.type);
+    data_type cast_type = cast_get_prepared_type(c, db, keyspace);
+
+    sstring display_name = format("({}){}", cast_type->cql3_type_name(), c.arg);
+
     return make_lw_shared<column_specification>(receiver.ks_name, receiver.cf_name,
-            ::make_shared<column_identifier>(cast_display_name(c), true), type->prepare(db, keyspace).get_type());
+            ::make_shared<column_identifier>(display_name, true), cast_type);
 }
 
 static
 assignment_testable::test_result
 cast_test_assignment(const cast& c, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
-    auto type = std::get<shared_ptr<cql3_type::raw>>(c.type);
     try {
-        auto&& casted_type = type->prepare(db, keyspace).get_type();
+        data_type casted_type = cast_get_prepared_type(c, db, keyspace);
         if (receiver.type == casted_type) {
             return assignment_testable::test_result::EXACT_MATCH;
         } else if (receiver.type->is_value_compatible_with(*casted_type)) {
@@ -772,11 +777,12 @@ cast_test_assignment(const cast& c, data_dictionary::database db, const sstring&
 static
 std::optional<expression>
 cast_prepare_expression(const cast& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
+    data_type cast_type = cast_get_prepared_type(c, db, keyspace);
+
     if (!receiver) {
         // TODO: It is possible to infer the type of a cast (it's a given)
         return std::nullopt;
     }
-    auto type = std::get<shared_ptr<cql3_type::raw>>(c.type);
 
     // casted_spec_of creates a receiver with type equal to c.type
     lw_shared_ptr<column_specification> cast_type_receiver = casted_spec_of(c, db, keyspace, *receiver);
@@ -785,7 +791,7 @@ cast_prepare_expression(const cast& c, data_dictionary::database db, const sstri
     // test_assignment uses is_value_compatible_with to check if the binary representation is compatible
     // between the two types.
     if (!is_assignable(test_assignment(c.arg, db, keyspace, *cast_type_receiver))) {
-        throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", c.arg, type));
+        throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", c.arg, cast_type->as_cql3_type()));
     }
 
     // Then check if a value of type c.type can be assigned(converted) to the receiver type.
