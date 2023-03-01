@@ -609,7 +609,6 @@ public:
     // When is_locked(), read() can only be called with a phase which is <= the phase of the current snapshot.
     partition_snapshot_ptr read(logalloc::region& region,
         mutation_cleaner&,
-        schema_ptr entry_schema,
         cache_tracker*,
         partition_snapshot::phase_type phase = partition_snapshot::default_phase);
 

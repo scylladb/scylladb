@@ -385,7 +385,7 @@ void partition_entry::apply(logalloc::region& r, mutation_cleaner& cleaner, cons
                 return;
             } else {
                 // Apply was preempted. Let the cleaner finish the job when snapshot dies
-                snp = read(r, cleaner, s.shared_from_this(), no_cache_tracker);
+                snp = read(r, cleaner, no_cache_tracker);
                 // FIXME: Store res in the snapshot as an optimization to resume from where we left off.
             }
         } catch (...) {
@@ -423,14 +423,14 @@ utils::coroutine partition_entry::apply_to_incomplete(const schema& s,
     // So we cannot allow erasing when preemptible.
     bool can_move = !preemptible && !pe._snapshot;
 
-    auto src_snp = pe.read(reg, pe_cleaner, s.shared_from_this(), no_cache_tracker);
+    auto src_snp = pe.read(reg, pe_cleaner, no_cache_tracker);
     partition_snapshot_ptr prev_snp;
     if (preemptible) {
         // Reads must see prev_snp until whole update completes so that writes
         // are not partially visible.
-        prev_snp = read(reg, tracker.cleaner(), s.shared_from_this(), &tracker, phase - 1);
+        prev_snp = read(reg, tracker.cleaner(), &tracker, phase - 1);
     }
-    auto dst_snp = read(reg, tracker.cleaner(), s.shared_from_this(), &tracker, phase);
+    auto dst_snp = read(reg, tracker.cleaner(), &tracker, phase);
     dst_snp->lock();
 
     // Once we start updating the partition, we must keep all snapshots until the update completes,
@@ -584,7 +584,7 @@ void partition_entry::upgrade(schema_ptr from, schema_ptr to, mutation_cleaner& 
 }
 
 partition_snapshot_ptr partition_entry::read(logalloc::region& r,
-    mutation_cleaner& cleaner, schema_ptr entry_schema, cache_tracker* tracker, partition_snapshot::phase_type phase)
+    mutation_cleaner& cleaner, cache_tracker* tracker, partition_snapshot::phase_type phase)
 {
     if (_snapshot) {
         if (_snapshot->_phase == phase) {
@@ -599,7 +599,7 @@ partition_snapshot_ptr partition_entry::read(logalloc::region& r,
             return snp;
         } else { // phase > _snapshot->_phase
             with_allocator(r.allocator(), [&] {
-                add_version(*entry_schema, tracker);
+                add_version(*get_schema(), tracker);
             });
         }
     }
