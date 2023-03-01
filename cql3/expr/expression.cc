@@ -1521,6 +1521,20 @@ expression search_and_replace(const expression& e,
     }
 }
 
+expression make_unset_value_forbidden(const expression& e) {
+    return search_and_replace(e, [](const expression& to_maybe_replace) -> std::optional<expression> {
+        if (auto bind_var = as_if<bind_variable>(&to_maybe_replace)) {
+            return bind_variable {
+                .bind_index = bind_var->bind_index,
+                .receiver = bind_var->receiver,
+                .disallow_unset_value = true
+            };
+        }
+
+        return std::nullopt;
+    });
+}
+
 std::ostream& operator<<(std::ostream& s, oper_t op) {
     switch (op) {
     case oper_t::EQ:
