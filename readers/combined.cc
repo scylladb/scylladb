@@ -733,7 +733,7 @@ future<> merging_reader<P>::fast_forward_to(const dht::partition_range& pr) {
 
 template <FragmentProducer P>
 future<> merging_reader<P>::fast_forward_to(position_range pr) {
-    forward_buffer_to(pr.start());
+    clear_buffer();
     _end_of_stream = false;
     return _merger.fast_forward_to(std::move(pr));
 }

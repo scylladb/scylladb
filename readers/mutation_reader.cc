@@ -385,11 +385,6 @@ flat_mutation_reader_v2::~flat_mutation_reader_v2() {
     }
 }
 
-void flat_mutation_reader_v2::impl::forward_buffer_to(const position_in_partition& pos) {
-    clear_buffer();
-    _buffer_size = compute_buffer_size(*_schema, _buffer);
-}
-
 void flat_mutation_reader_v2::impl::clear_buffer_to_next_partition() {
     auto next_partition_start = std::find_if(_buffer.begin(), _buffer.end(), [] (const mutation_fragment_v2& mf) {
         return mf.is_partition_start();

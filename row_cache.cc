@@ -347,8 +347,9 @@ future<> read_context::create_underlying() {
     });
 }
 
-static flat_mutation_reader_v2 read_directly_from_underlying(read_context& reader) {
+static flat_mutation_reader_v2 read_directly_from_underlying(read_context& reader, mutation_fragment_v2 partition_start) {
     auto res = make_delegating_reader(reader.underlying().underlying());
+    res.unpop_mutation_fragment(std::move(partition_start));
     res.upgrade_schema(reader.schema());
     return make_nonforwardable(std::move(res), true);
 }
@@ -381,8 +382,7 @@ private:
                 });
             } else {
                 _cache._tracker.on_mispopulate();
-                _reader = read_directly_from_underlying(*_read_context);
-                this->push_mutation_fragment(std::move(*mfopt));
+                _reader = read_directly_from_underlying(*_read_context, std::move(*mfopt));
             }
           });
         });
@@ -507,15 +507,13 @@ public:
         , _read_context(ctx)
     {}
 
-    using read_result = std::tuple<flat_mutation_reader_v2_opt, mutation_fragment_v2_opt>;
-
-    future<read_result> operator()() {
+    future<flat_mutation_reader_v2_opt> operator()() {
         return _reader.move_to_next_partition().then([this] (auto&& mfopt) mutable {
             {
                 if (!mfopt) {
                     return _cache._read_section(_cache._tracker.region(), [&] {
                         this->handle_end_of_stream();
-                        return make_ready_future<read_result>(read_result(std::nullopt, std::nullopt));
+                        return make_ready_future<flat_mutation_reader_v2_opt>(std::nullopt);
                     });
                 }
                 _cache.on_partition_miss();
@@ -526,14 +524,12 @@ public:
                         cache_entry& e = _cache.find_or_create_incomplete(ps, _reader.creation_phase(),
                                                                this->can_set_continuity() ? &*_last_key : nullptr);
                         _last_key = row_cache::previous_entry_pointer(key);
-                        return make_ready_future<read_result>(
-                                read_result(e.read(_cache, _read_context, _reader.creation_phase()), std::nullopt));
+                        return make_ready_future<flat_mutation_reader_v2_opt>(e.read(_cache, _read_context, _reader.creation_phase()));
                     });
                 } else {
                     _cache._tracker.on_mispopulate();
                     _last_key = row_cache::previous_entry_pointer(key);
-                    return make_ready_future<read_result>(
-                            read_result(read_directly_from_underlying(_read_context), std::move(mfopt)));
+                    return make_ready_future<flat_mutation_reader_v2_opt>(read_directly_from_underlying(_read_context, std::move(*mfopt)));
                 }
             }
         });
@@ -637,12 +633,8 @@ private:
     }
 
     future<flat_mutation_reader_v2_opt> read_from_secondary() {
-        return _secondary_reader().then([this] (range_populating_reader::read_result&& res) {
-            auto&& [fropt, ps] = res;
+        return _secondary_reader().then([this] (flat_mutation_reader_v2_opt&& fropt) {
             if (fropt) {
-                if (ps) {
-                    push_mutation_fragment(std::move(*ps));
-                }
                 return make_ready_future<flat_mutation_reader_v2_opt>(std::move(fropt));
             } else {
                 _secondary_in_progress = false;

@@ -59,7 +59,7 @@ public:
         }
 
         _end_of_stream = false;
-        forward_buffer_to(pr.start());
+        clear_buffer();
         return _underlying->fast_forward_to(std::move(pr));
     }
 
