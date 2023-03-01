@@ -745,7 +745,7 @@ lw_shared_ptr<column_specification>
 casted_spec_of(const cast& c, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     data_type cast_type = cast_get_prepared_type(c, db, keyspace);
 
-    sstring display_name = format("({}){}", cast_type->cql3_type_name(), c.arg);
+    sstring display_name = format("({}){:user}", cast_type->cql3_type_name(), c.arg);
 
     return make_lw_shared<column_specification>(receiver.ks_name, receiver.cf_name,
             ::make_shared<column_identifier>(display_name, true), cast_type);
@@ -791,13 +791,13 @@ cast_prepare_expression(const cast& c, data_dictionary::database db, const sstri
     // test_assignment uses is_value_compatible_with to check if the binary representation is compatible
     // between the two types.
     if (!is_assignable(test_assignment(c.arg, db, keyspace, *cast_type_receiver))) {
-        throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", c.arg, cast_type->as_cql3_type()));
+        throw exceptions::invalid_request_exception(format("Cannot cast value {:user} to type {}", c.arg, cast_type->as_cql3_type()));
     }
 
     // Then check if a value of type c.type can be assigned(converted) to the receiver type.
     // cast_test_assignment also uses is_value_compatible_with to check binary representation compatibility.
     if (!is_assignable(cast_test_assignment(c, db, keyspace, *receiver))) {
-        throw exceptions::invalid_request_exception(format("Cannot assign value {} to {} of type {}", c, receiver->name, receiver->type->as_cql3_type()));
+        throw exceptions::invalid_request_exception(format("Cannot assign value {:user} to {} of type {}", c, receiver->name, receiver->type->as_cql3_type()));
     }
 
     // Now we know that c.arg is compatible with c.type, and c.type is compatible with receiver->type.
