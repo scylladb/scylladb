@@ -80,21 +80,7 @@ class static_row;
 // When the partition_snapshot is destroyed partition_versions are squashed
 // together to minimize the amount of elements on the list.
 //
-// Scene IV. Schema upgrade
-//   pv    pv --- pv
-//   ^     ^      ^
-//   |     |      |
-//   pe    ps(u)  ps
-// When there is a schema upgrade the list of partition versions pointed to
-// by partition_entry is replaced by a new single partition_version that is a
-// result of squashing and upgrading the old versions.
-// Old versions not used by any partition snapshot are removed. The first
-// partition snapshot on the list is marked as unique which means that upon
-// its destruction it won't attempt to squash versions but instead remove
-// the unused ones and pass the "unique owner" mark the next snapshot on the
-// list (if there is any).
-//
-// Scene V. partition_entry eviction
+// Scene IV. partition_entry eviction
 //   pv
 //   ^
 //   |
@@ -104,12 +90,110 @@ class static_row;
 // upgrade scenario. The unused ones are destroyed right away and the first
 // snapshot on the list is marked as unique owner so that on its destruction
 // it continues removal of the partition versions.
+//
+
+// Schema upgrades
+//
+// After a schema change (e.g. a column is removed), the layout of existing
+// rows in memory becomes outdated and has to be adjusted before they are
+// emitted by a query expecting the newer schema.
+//
+// Rows can be upgraded on the fly during queries. But upgrades have a high CPU
+// cost, so we want them to happen only once. The upgraded row should be saved
+// in memory so that future queries don't have to upgrade it again.
+// And it should replace the old row as soon as possible (when there
+// the row is no longer reachable through the old schema) to conserve memory.
+//
+// This behavior is akin to MVCC. A schema upgrade can be thought of as a
+// special kind of update which affects all rows, and the MVCC machinery can be
+// naturally hijacked to implement it.
+//
+// Currently, we do it as follows:
+//
+// - Each MVCC version has its own schema pointer. Versions in the same chain
+//   can be of different schemas.
+//
+// - The schema of a partition entry is defined as the schema of the newest version.
+//   A partition entry upgrade is performed simply by inserting a new empty version with
+//   the new schema. (And triggering a background version merge by creating and immediately
+//   destroying a snapshot pointing at the previous newest version).
+//   Due to this, schemas of versions in the chain are ordered chronologically.
+//   (The order is important because it's forbidden to upgrade to an older version,
+//   because that's lossy -- e.g. a new column can be lost).
+//
+// - On read, the cursor upgrades rows on the fly to the cursor's schema.
+//   If the cursor reads the latest version, the upgraded rows are written to the latest
+//   version.
+//
+// - When versions are merged, rows are upgraded to the newer schema, the result of the
+//   merge has the newer schema.
+//
+//   This one is tricky. A natural idea is to merge older versions into the newer version,
+//   (upgrading rows when moving/copying them between versions), so that after a merge
+//   only the new version is left. But usually we want to merge in the other direction.
+//
+//   (When an database write arrives, we want to merge it into the existing
+//   older version, so that it has a cost proportional to the size of the
+//   write, not to the size of the existing version, which can be arbitrarily
+//   large. Doing otherwise would invite quadratic behaviour)
+//
+//   The merging algorithm is already very complicated and making it work in both
+//   directions (or adding a separate algorithm specifically for upgrades) would
+//   complicate things even further.
+//
+//   So instead, when two versions of different schema are merged, the older version
+//   (which also has the older schema) is first upgraded to the newer schema in a special
+//   upgrade process which only uses regular newer-into-older merging.
+//   This is done by appending a fresh empty version with the newer schema after
+//   the version-to-be-upgraded, and merging the version-to-be-upgraded into the new one.
+//   In the end, only the new version with the newer schema is left.
+//
+//   Technically the above procedure temporarily violates the rule that schema versions
+//   in the chain are ordered chronologically (which is needed for correctness).
+//   So while the above is happening, the version-to-be-upgraded has _is_being_upgraded set.
+//   A version with _is_being_upgraded is understood to be special in that its
+//   schema is older than its next neighbour's, and care is taken so that the
+//   neighbour isn't recursively downgraded back to the older schema.
+//   A version with _is_being_upgraded can be viewed together with its next() as
+//   conceptually a single version with the schema of next().
+//
+// The typical upgrade sequence, illustrated:
+//   1. Initial state:
+//        pv1 (s1)
+//        ^
+//        |
+//        pe
+//   2. partition_entry::upgrade(s2) is called. Empty pv2 is added.
+//        pv2 (s2) -- pv1 (s1)
+//        ^           ^
+//        |           |
+//        pe          ps1 (created and instantly dropped, so that merging is initiated)
+//   3. Some time later, mutation_cleaner calls merge_partition_versions(ps1).
+//      Merge of pv2 and pv1 is attempted.
+//      Schemas differ, so instead an upgrade of pv1 is initiated. Empty pv1' is added.
+//      pv1 is now conceptually "owned" by pv1', and no snapshot is allowed to point to it
+//      after this point.
+//        pv2 (s2) -- pv1 (s1, _is_being_upgraded) -- pv1' (s2)
+//        ^                                           ^
+//        |                                           |
+//        pe                                          ps1
+//   4. Eventually pv1 is fully upgrade-merged into pv1' and destroyed.
+//        pv2 (s2) -- pv1' (s2)
+//        ^           ^
+//        |           |
+//        pe          ps1
+//   5. Upgrade over, further merge proceeds as usual. Eventually pv2 is fully merged into pv1'.
+//        pv1' (s2)
+//        ^
+//        |
+//        pe
 
 class partition_version_ref;
 
 class partition_version : public anchorless_list_base_hook<partition_version> {
     partition_version_ref* _backref = nullptr;
     schema_ptr _schema;
+    bool _is_being_upgraded = false;
     mutation_partition_v2 _partition;
 
     friend class partition_version_ref;

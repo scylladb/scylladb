@@ -35,6 +35,7 @@ partition_version::partition_version(partition_version&& pv) noexcept
     : anchorless_list_base_hook(std::move(pv))
     , _backref(pv._backref)
     , _schema(std::move(pv._schema))
+    , _is_being_upgraded(pv._is_being_upgraded)
     , _partition(std::move(pv._partition))
 {
     if (_backref) {
@@ -182,14 +183,39 @@ void merge_versions(const schema& s, mutation_partition_v2& newer, mutation_part
     newer = std::move(older);
 }
 
+// Inserts a new version after pv.
+// Used only when upgrading the schema of pv.
+static partition_version& append_version(partition_version& pv, const schema& s, cache_tracker* tracker) {
+    // Every evictable version must have a dummy entry at the end so that
+    // it can be tracked in the LRU. It is also needed to allow old versions
+    // to stay around (with tombstones and static rows) after fully evicted.
+    // Such versions must be fully discontinuous, and thus have a dummy at the end.
+    auto new_version = tracker
+                       ? current_allocator().construct<partition_version>(mutation_partition_v2::make_incomplete(s), s.shared_from_this())
+                       : current_allocator().construct<partition_version>(mutation_partition_v2(s), s.shared_from_this());
+    new_version->partition().set_static_row_continuous(pv.partition().static_row_continuous());
+    new_version->insert_after(pv);
+    if (tracker) {
+        tracker->insert(*new_version);
+    }
+    return *new_version;
+}
+
 stop_iteration partition_snapshot::merge_partition_versions(mutation_application_stats& app_stats) {
     partition_version_ref& v = version();
     if (!v.is_unique_owner()) {
         // Shift _version to the oldest unreferenced version and then keep merging left hand side into it.
         // This is good for performance because in case we were at the latest version
         // we leave it for incoming writes and they don't have to create a new one.
+        //
+        // If `current->next()` has a different schema than `current`, it will have
+        // to be upgraded before being merged with `current`.
+        // If its upgrade is already in progress, it would be wasteful (though legal)
+        // to initiate its upgrade again, so we stop shifting.
+        //
+        // See the documentation in partition_version.hh for additional info about upgrades.
         partition_version* current = &*v;
-        while (current->next() && !current->next()->is_referenced()) {
+        while (current->next() && !current->next()->is_referenced() && !current->next()->_is_being_upgraded) {
             current = current->next();
             _version = partition_version_ref(*current);
             _version_merging_state.reset();
@@ -201,8 +227,32 @@ stop_iteration partition_snapshot::merge_partition_versions(mutation_application
             if (!_version_merging_state) {
                 _version_merging_state = apply_resume();
             }
-            const auto do_stop_iteration = current->partition().apply_monotonically(*schema(),
-                *schema(), std::move(prev->partition()), _tracker, local_app_stats, default_preemption_check(), *_version_merging_state,
+            if (!prev->_is_being_upgraded && prev->get_schema()->version() != current->get_schema()->version()) {
+                // The versions we are attempting to merge have different schemas.
+                // In this scenario the older version has to be upgraded before
+                // being merged with the newer one.
+                //
+                // This is done by adding a fresh empty version (with the newer
+                // schema) after `current` and merging `current` into the new
+                // version.
+                //
+                // While the upgrade is happening, `_is_being_upgraded` is set
+                // in the version which is being upgraded, to mark it as having
+                // older schema than its `next()` (and therefore violating the
+                // normal chronological schema order).  This is necessary
+                // precisely for the above `if`, so that after resuming a
+                // preempted upgrade we can simply continue, instead of
+                // (illegally) initiating an upgrade of the special fresh
+                // version back to the old schema.
+                //
+                // See the documentation in partition_version.hh for additional info about upgrades.
+                current = &append_version(*current, *prev->get_schema(), _tracker);
+                _version = partition_version_ref(*current);
+                prev = current->prev();
+                prev->_is_being_upgraded = true;
+            }
+            const auto do_stop_iteration = current->partition().apply_monotonically(*current->get_schema(),
+                *prev->get_schema(), std::move(prev->partition()), _tracker, local_app_stats, default_preemption_check(), *_version_merging_state,
                 is_evictable(bool(_tracker)));
             app_stats.row_hits += local_app_stats.row_hits;
             if (do_stop_iteration == stop_iteration::no) {
@@ -211,6 +261,7 @@ stop_iteration partition_snapshot::merge_partition_versions(mutation_application
             // If do_stop_iteration is yes, we have to remove the previous version.
             // It now appears as fully continuous because it is empty.
             _version_merging_state.reset();
+            prev->_is_being_upgraded = false;
             if (prev->is_referenced()) {
                 _version.release();
                 prev->back_reference() = partition_version_ref(*current, prev->back_reference().is_unique_owner());
@@ -233,7 +284,7 @@ stop_iteration partition_snapshot::slide_to_oldest() noexcept {
         _entry = nullptr;
     }
     partition_version* current = &*v;
-    while (current->next() && !current->next()->is_referenced()) {
+    while (current->next() && !current->next()->is_referenced() && !current->next()->_is_being_upgraded) {
         current = current->next();
         _version = partition_version_ref(*current);
     }
