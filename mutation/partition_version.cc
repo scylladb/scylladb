@@ -201,23 +201,36 @@ stop_iteration partition_snapshot::merge_partition_versions(mutation_application
             if (!_version_merging_state) {
                 _version_merging_state = apply_resume();
             }
-            const auto do_stop_iteration = current->partition().apply_monotonically(*schema(),
-                *schema(), std::move(prev->partition()), _tracker, local_app_stats, default_preemption_check(), *_version_merging_state,
+
+            partition_version* merged_from = prev;
+            partition_version* merged_into = current;
+            if (prev->get_schema()->version() != current->get_schema()->version()) {
+                std::swap(merged_from, merged_into);
+            }
+
+            const auto do_stop_iteration = merged_into->partition().apply_monotonically(*merged_into->get_schema(),
+                *merged_from->get_schema(), std::move(merged_from->partition()), _tracker, local_app_stats, default_preemption_check(), *_version_merging_state,
                 is_evictable(bool(_tracker)));
             app_stats.row_hits += local_app_stats.row_hits;
             if (do_stop_iteration == stop_iteration::no) {
                 return stop_iteration::no;
             }
-            // If do_stop_iteration is yes, we have to remove the previous version.
+            // If do_stop_iteration is yes, we have to remove the merged-from version.
             // It now appears as fully continuous because it is empty.
             _version_merging_state.reset();
             if (prev->is_referenced()) {
-                _version.release();
-                prev->back_reference() = partition_version_ref(*current, prev->back_reference().is_unique_owner());
-                current_allocator().destroy(prev);
+                partition_version_ref& prev_ref = prev->back_reference();
+                bool unique_owner = prev_ref.is_unique_owner();
+                merged_into->back_reference().release();
+                prev_ref = partition_version_ref(*merged_into, unique_owner);
+                current_allocator().destroy(merged_from);
                 return stop_iteration::yes;
             }
-            current_allocator().destroy(prev);
+            if (merged_into->is_referenced()) {
+                merged_into->back_reference().release();
+            }
+            _version = partition_version_ref(*merged_into);
+            current_allocator().destroy(merged_from);
         }
     }
     return stop_iteration::yes;
