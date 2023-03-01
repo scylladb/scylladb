@@ -31,6 +31,8 @@ find_package(ZLIB REQUIRED)
 find_package(ICU COMPONENTS uc i18n REQUIRED)
 find_package(absl REQUIRED)
 find_package(libdeflate REQUIRED)
+find_package(libxcrypt REQUIRED)
+find_package(Thrift REQUIRED)
 find_package(xxHash REQUIRED)
 
 set(scylla_gen_build_dir "${CMAKE_BINARY_DIR}/gen")
@@ -59,43 +61,12 @@ set(scylla_sources
     converting_mutation_partition_applier.cc
     counters.cc
     data_dictionary/data_dictionary.cc
-    db/consistency_level.cc
-    db/system_keyspace.cc
-    db/virtual_table.cc
-    db/system_distributed_keyspace.cc
-    db/size_estimates_virtual_reader.cc
-    db/schema_tables.cc
-    db/cql_type_parser.cc
-    db/legacy_schema_migrator.cc
-    db/commitlog/commitlog.cc
-    db/commitlog/commitlog_replayer.cc
-    db/commitlog/commitlog_entry.cc
-    db/data_listeners.cc
-    db/hints/manager.cc
-    db/hints/resource_manager.cc
-    db/hints/host_filter.cc
-    db/hints/sync_point.cc
-    db/config.cc
-    db/extensions.cc
-    db/heat_load_balance.cc
-    db/large_data_handler.cc
-    db/marshal/type_parser.cc
-    db/batchlog_manager.cc
-    db/tags/utils.cc
-    db/view/view.cc
-    db/view/view_update_generator.cc
-    db/view/row_locking.cc
-    db/sstables-format-selector.cc
-    db/snapshot-ctl.cc
-    db/rate_limiter.cc
-    db/per_partition_rate_limit_options.cc
     dht/boot_strapper.cc
     dht/i_partitioner.cc
     dht/murmur3_partitioner.cc
     dht/range_streamer.cc
     dht/token.cc
     direct_failure_detector/failure_detector.cc
-    replica/distributed_loader.cc
     duration.cc
     exceptions/exceptions.cc
     frozen_schema.cc
@@ -139,18 +110,6 @@ set(scylla_sources
     main.cc
     message/messaging_service.cc
     multishard_mutation_query.cc
-    mutation/atomic_cell.cc
-    mutation/canonical_mutation.cc
-    mutation/frozen_mutation.cc
-    mutation/mutation.cc
-    mutation/mutation_fragment.cc
-    mutation/mutation_partition.cc
-    mutation/mutation_partition_serializer.cc
-    mutation/mutation_partition_v2.cc
-    mutation/mutation_partition_view.cc
-    mutation/partition_version.cc
-    mutation/range_tombstone.cc
-    mutation/range_tombstone_list.cc
     mutation_query.cc
     mutation_writer/feed_writers.cc
     mutation_writer/multishard_writer.cc
@@ -177,12 +136,6 @@ set(scylla_sources
     reader_concurrency_semaphore.cc
     repair/repair.cc
     repair/row_level.cc
-    replica/database.cc
-    replica/table.cc
-    replica/distributed_loader.cc
-    replica/memtable.cc
-    replica/exceptions.cc
-    replica/dirty_memory_manager.cc
     row_cache.cc
     schema_mutations.cc
     serializer.cc
@@ -210,27 +163,8 @@ set(scylla_sources
     service/storage_proxy.cc
     service/storage_service.cc
     sstables_loader.cc
-    streaming/consumer.cc
-    streaming/progress_info.cc
-    streaming/session_info.cc
-    streaming/stream_coordinator.cc
-    streaming/stream_manager.cc
-    streaming/stream_plan.cc
-    streaming/stream_reason.cc
-    streaming/stream_receive_task.cc
-    streaming/stream_request.cc
-    streaming/stream_result_future.cc
-    streaming/stream_session.cc
-    streaming/stream_session_state.cc
-    streaming/stream_summary.cc
-    streaming/stream_task.cc
-    streaming/stream_transfer_task.cc
     table_helper.cc
     tasks/task_manager.cc
-    thrift/controller.cc
-    thrift/handler.cc
-    thrift/server.cc
-    thrift/thrift_validation.cc
     timeout_config.cc
     tools/scylla-types.cc
     tools/scylla-sstable.cc
@@ -254,15 +188,20 @@ set(scylla_sources
 
 add_subdirectory(api)
 add_subdirectory(alternator)
+add_subdirectory(db)
 add_subdirectory(auth)
 add_subdirectory(cql3)
 add_subdirectory(idl)
 add_subdirectory(interface)
+add_subdirectory(mutation)
 add_subdirectory(redis)
+add_subdirectory(replica)
 add_subdirectory(rust)
 add_subdirectory(schema)
 add_subdirectory(sstables)
+add_subdirectory(streaming)
 add_subdirectory(test)
+add_subdirectory(thrift)
 add_subdirectory(types)
 add_subdirectory(utils)
 include(add_version_library)
@@ -276,14 +215,18 @@ target_link_libraries(scylla PRIVATE
     api
     auth
     alternator
+    db
     cql3
     idl
-    interface
+    mutation
     redis
+    replica
     schema
     scylla_version
     sstables
+    streaming
     test-perf
+    thrift
     types
     utils
     wasmtime_bindings)
@@ -322,6 +265,7 @@ target_link_libraries(scylla PRIVATE
     absl::exponential_biased
     absl::throw_delegate
     # System libs
+    libxcrypt::libxcrypt
     libdeflate::libdeflate
     ZLIB::ZLIB
     ICU::uc
@@ -329,8 +273,6 @@ target_link_libraries(scylla PRIVATE
     zstd
     snappy
     ${LUA_LIBRARIES}
-    thrift
-    crypt
     xxHash::xxhash)
 
 # Force SHA1 build-id generation
