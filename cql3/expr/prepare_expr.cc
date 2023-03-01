@@ -763,6 +763,12 @@ cast_test_assignment(const cast& c, data_dictionary::database db, const sstring&
     }
 }
 
+// expr::cast shows up when the user uses a C-style cast with destination type in parenthesis.
+// For example: `(int)1242` or `(blob)(int)1337`.
+// Currently such casts are very limited. Casting using this syntax is only allowed when the
+// binary representation doesn't change during the cast. This means that it's legal to cast
+// an int to blob (the bytes don't change), but it's illegal to cast an int to bigint (4 bytes -> 8 bytes).
+// This limitation simplifies things - we can just reinterpret the value as the destination type.
 static
 std::optional<expression>
 cast_prepare_expression(const cast& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
@@ -771,12 +777,27 @@ cast_prepare_expression(const cast& c, data_dictionary::database db, const sstri
         return std::nullopt;
     }
     auto type = std::get<shared_ptr<cql3_type::raw>>(c.type);
-    if (!is_assignable(test_assignment(c.arg, db, keyspace, *casted_spec_of(c, db, keyspace, *receiver)))) {
+
+    // casted_spec_of creates a receiver with type equal to c.type
+    lw_shared_ptr<column_specification> cast_type_receiver = casted_spec_of(c, db, keyspace, *receiver);
+
+    // First check if the casted expression can be assigned(converted) to the type specified in the cast.
+    // test_assignment uses is_value_compatible_with to check if the binary representation is compatible
+    // between the two types.
+    if (!is_assignable(test_assignment(c.arg, db, keyspace, *cast_type_receiver))) {
         throw exceptions::invalid_request_exception(format("Cannot cast value {} to type {}", c.arg, type));
     }
+
+    // Then check if a value of type c.type can be assigned(converted) to the receiver type.
+    // cast_test_assignment also uses is_value_compatible_with to check binary representation compatibility.
     if (!is_assignable(cast_test_assignment(c, db, keyspace, *receiver))) {
         throw exceptions::invalid_request_exception(format("Cannot assign value {} to {} of type {}", c, receiver->name, receiver->type->as_cql3_type()));
     }
+
+    // Now we know that c.arg is compatible with c.type, and c.type is compatible with receiver->type.
+    // This means that the cast is correct - we can take the binary representation of c.arg value and
+    // reinterpret it as a value of type receiver->type without any problems.
+
     return cast{
         .arg = prepare_expression(c.arg, db, keyspace, schema_opt, receiver),
         .type = receiver->type,
