@@ -505,7 +505,7 @@ void evict_with_consistency_check(mvcc_container& ms, mvcc_partition& e, const m
         testlog.trace("evicting");
         auto ret = ms.tracker()->evict_from_lru_shallow();
 
-        testlog.trace("entry: {}", partition_entry::printer(s, e.entry()));
+        testlog.trace("entry: {}", partition_entry::printer(e.entry()));
 
         auto p = e.squashed();
         auto cont = p.get_continuity(s);
@@ -553,7 +553,7 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging) {
                 auto snap2 = e.read();
                 e += m3;
 
-                testlog.trace("e: {}", partition_entry::printer(*e.schema(), e.entry()));
+                testlog.trace("e: {}", partition_entry::printer(e.entry()));
 
                 auto expected = e.squashed();
                 auto snap = e.read();
@@ -2005,7 +2005,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_with_dummies) {
             }
         });
 
-        testlog.trace("entry @{}: {}", __LINE__, partition_entry::printer(*s, e.entry()));
+        testlog.trace("entry @{}: {}", __LINE__, partition_entry::printer(e.entry()));
 
         mutation m2(s, ss.make_pkey());
         // This one covers the dummy row for before(3) and before(2), marking the range [1, 3] as continuous.
@@ -2020,7 +2020,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_with_dummies) {
         e += m3;
         auto snp3 = e.read();
 
-        testlog.trace("entry @{}: {}", __LINE__, partition_entry::printer(*s, e.entry()));
+        testlog.trace("entry @{}: {}", __LINE__, partition_entry::printer(e.entry()));
 
         auto expected = m0 + m1 + m2 + m3;
 
