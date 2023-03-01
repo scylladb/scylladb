@@ -25,6 +25,11 @@ def table2(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int, c int, PRIMARY KEY (p, c)") as table:
         yield table
 
+@pytest.fixture(scope="module")
+def table3(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int, c int, r int, PRIMARY KEY (p, c)") as table:
+        yield table
+
 # A basic test that in a prepared statement with three assignments, one
 # bound by an UNSET_VALUE is simply not done, but the other ones are.
 # Try all 2^3 combinations of a 3 column updates with each one set to either
@@ -197,3 +202,24 @@ def test_unset_insert_where_lwt(cql, table2):
     stmt = cql.prepare(f'INSERT INTO {table2} (p, c) VALUES ({p}, ?) IF NOT EXISTS')
     with pytest.raises(InvalidRequest, match="unset"):
         cql.execute(stmt, [UNSET_VALUE])
+
+# Like test_unset_insert_where, but using UPDATE
+# Python driver doesn't allow sending an UNSET_VALUE for the partition key,
+# so only the clustering key is tested.
+def test_unset_update_where(cql, table3):
+    stmt = cql.prepare(f"UPDATE {table3} SET r = 42 WHERE p = 0 AND c = ?")
+
+    with pytest.raises(InvalidRequest, match="unset"):
+        cql.execute(stmt, [UNSET_VALUE])
+
+# Like test_unset_insert_where_lwt, but using UPDATE
+# Python driver doesn't allow sending an UNSET_VALUE for the partition key,
+# so only the clustering key is tested.
+def test_unset_update_where_lwt(cql, table3):
+    stmt = cql.prepare(f"UPDATE {table3} SET r = 42 WHERE p = 0 AND c = ? IF r = ?")
+
+    with pytest.raises(InvalidRequest, match="unset"):
+        cql.execute(stmt, [UNSET_VALUE, 2])
+
+    with pytest.raises(InvalidRequest, match="unset"):
+        cql.execute(stmt, [1, UNSET_VALUE])
