@@ -1297,7 +1297,7 @@ indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     return read_posting_list(qp, options, get_limit(options), state, now, timeout, false).then(utils::result_wrap(
-            [this, now, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
+            [this, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
         auto rs = cql3::untyped_result_set(rows);
         dht::partition_range_vector partition_ranges;
         partition_ranges.reserve(rs.size());
@@ -1344,7 +1344,7 @@ indexed_table_select_statement::find_index_clustering_rows(query_processor& qp, 
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     return read_posting_list(qp, options, get_limit(options), state, now, timeout, true).then(utils::result_wrap(
-            [this, now, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
+            [this, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
 
         auto rs = cql3::untyped_result_set(rows);
         std::vector<primary_key> primary_keys;

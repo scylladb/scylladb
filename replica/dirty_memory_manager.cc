@@ -241,7 +241,7 @@ future<> dirty_memory_manager::shutdown() {
 }
 
 future<> dirty_memory_manager::flush_one(replica::memtable_list& mtlist, flush_permit&& permit) noexcept {
-    return mtlist.seal_active_memtable(std::move(permit)).handle_exception([this, schema = mtlist.back()->schema()] (std::exception_ptr ep) {
+    return mtlist.seal_active_memtable(std::move(permit)).handle_exception([schema = mtlist.back()->schema()] (std::exception_ptr ep) {
         dblog.error("Failed to flush memtable, {}:{} - {}", schema->ks_name(), schema->cf_name(), ep);
         return make_exception_future<>(ep);
     });
@@ -287,7 +287,7 @@ future<> dirty_memory_manager::flush_when_needed() {
                 // Do not wait. The semaphore will protect us against a concurrent flush. But we
                 // want to start a new one as soon as the permits are destroyed and the semaphore is
                 // made ready again, not when we are done with the current one.
-                (void)this->flush_one(mtlist, std::move(permit)).handle_exception([this] (std::exception_ptr ex) {
+                (void)this->flush_one(mtlist, std::move(permit)).handle_exception([] (std::exception_ptr ex) {
                     dblog.error("Flushing memtable returned unexpected error: {}", ex);
                 });
                 return make_ready_future<>();

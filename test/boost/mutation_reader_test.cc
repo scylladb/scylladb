@@ -1371,7 +1371,7 @@ SEASTAR_TEST_CASE(test_trim_clustering_row_ranges_to) {
             BOOST_FAIL(fmt::format("Unexpected result\nexpected {}\ngot {}\ncalled from {}:{}", expected_ranges, actual_ranges, sl.file_name(), sl.line()));
         }
     };
-    const auto check_reversed = [&schema, &check] (std::vector<range> ranges, key key, std::vector<range> output_ranges, bool reversed = false,
+    const auto check_reversed = [&check] (std::vector<range> ranges, key key, std::vector<range> output_ranges, bool reversed = false,
             std::source_location sl = std::source_location::current()) {
         return check(std::move(ranges), std::move(key), std::move(output_ranges), true, sl);
     };
@@ -2061,7 +2061,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
 
         auto reader_sharder_remote_controls__ = prepare_multishard_reader_for_read_ahead_test(s, make_reader_permit(env));
         auto&& reader = reader_sharder_remote_controls__.reader;
-        auto&& sharder = reader_sharder_remote_controls__.sharder;
         auto&& remote_controls = reader_sharder_remote_controls__.remote_controls;
 
         // This will read shard 0's buffer only
@@ -2119,7 +2118,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pe
 
         auto reader_sharder_remote_controls_pr = prepare_multishard_reader_for_read_ahead_test(s, make_reader_permit(env));
         auto&& reader = reader_sharder_remote_controls_pr.reader;
-        auto&& sharder = reader_sharder_remote_controls_pr.sharder;
         auto&& remote_controls = reader_sharder_remote_controls_pr.remote_controls;
         auto&& pr = reader_sharder_remote_controls_pr.pr;
 
@@ -2215,7 +2213,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
         // single fragment can fit into it at a time.
         const auto max_buffer_size = size_t{1};
 
-        auto factory = [db = &env.db(), max_buffer_size] (
+        auto factory = [db = &env.db()] (
                 schema_ptr schema,
                 reader_permit permit,
                 const dht::partition_range& range,
@@ -2980,7 +2978,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_self_validation) {
     auto last_fragment_position = position_in_partition(first_buffer.back().position());
     first_buffer.emplace_back(*s.schema(), permit, s.make_row_v2(permit, s.make_ckey(second_buffer_ck), "v"));
 
-    auto make_second_buffer = [&s, permit, &max_buffer_size, second_buffer_ck] (dht::decorated_key pkey, std::optional<int> first_ckey = {}) mutable {
+    auto make_second_buffer = [&s, permit, &max_buffer_size] (dht::decorated_key pkey, std::optional<int> first_ckey = {}) mutable {
         auto ckey = first_ckey ? *first_ckey : second_buffer_ck;
         std::deque<mutation_fragment_v2> second_buffer;
         second_buffer.emplace_back(*s.schema(), permit, partition_start{std::move(pkey), {}});

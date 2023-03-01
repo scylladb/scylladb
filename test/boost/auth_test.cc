@@ -64,8 +64,8 @@ authenticate(cql_test_env& env, std::string_view username, std::string_view pass
             auth::authenticator::credentials_map{
                     {auth::authenticator::USERNAME_KEY, sstring(username)},
                     {auth::authenticator::PASSWORD_KEY, sstring(password)}},
-            [&a, &c, username](const auto& credentials) {
-        return a.authenticate(credentials).then([&c, username](auth::authenticated_user u) {
+            [&a, &c](const auto& credentials) {
+        return a.authenticate(credentials).then([&c](auth::authenticated_user u) {
             c.set_login(std::move(u));
             return c.check_user_can_login().then([&c] { return *c.user(); });
         });

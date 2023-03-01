@@ -1139,7 +1139,6 @@ future<> raft_cluster<Clock>::elect_new_leader(size_t new_leader) {
 template <typename Clock>
 future<> raft_cluster<Clock>::free_election() {
     tlogger.debug("Running free election");
-    size_t node = 0;
     size_t loops = 0;
     for (;; loops++) {
         co_await seastar::sleep(_tick_delta);   // Wait for election rpc exchanges
@@ -1270,7 +1269,6 @@ future<> raft_cluster<Clock>::partition(::partition p) {
     std::unordered_set<size_t> partition_servers;
     std::optional<size_t> next_leader;
     for (auto s: p) {
-        size_t id;
         if (std::holds_alternative<struct leader>(s)) {
             next_leader = std::get<struct leader>(s).id;
             partition_servers.insert(*next_leader);

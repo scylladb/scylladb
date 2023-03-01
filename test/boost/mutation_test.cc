@@ -2740,7 +2740,6 @@ void run_compaction_data_stream_split_test(const schema& schema, reader_permit p
     auto get_max_purgeable = [] (const dht::decorated_key&) {
         return api::max_timestamp;
     };
-    auto gc_grace_seconds = schema.gc_grace_seconds();
     auto consumer = compact_for_compaction_v2<survived_compacted_fragments_consumer, purged_compacted_fragments_consumer>(
             schema,
             query_time,

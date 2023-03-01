@@ -3438,7 +3438,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                             slice, actual, ::join(",\n", possible_versions)));
                     }
                 }
-            }).finally([&, id] {
+            }).finally([&] {
                 done = true;
             });
         });

@@ -66,7 +66,7 @@ SEASTAR_TEST_CASE(test_user_type) {
             return e.execute_cql("insert into cf (id, t) values (1, (1001, 2001, 'abc1'));").discard_result();
         }).then([&e] {
             return e.execute_cql("select t.my_int, t.my_bigint, t.my_text from cf where id = 1;");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
+        }).then([] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows()
                 .with_rows({
                      {int32_type->decompose(int32_t(1001)), long_type->decompose(int64_t(2001)), utf8_type->decompose(sstring("abc1"))},
@@ -75,7 +75,7 @@ SEASTAR_TEST_CASE(test_user_type) {
             return e.execute_cql("update cf set t = { my_int: 1002, my_bigint: 2002, my_text: 'abc2' } where id = 1;").discard_result();
         }).then([&e] {
             return e.execute_cql("select t.my_int, t.my_bigint, t.my_text from cf where id = 1;");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
+        }).then([] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows()
                 .with_rows({
                      {int32_type->decompose(int32_t(1002)), long_type->decompose(int64_t(2002)), utf8_type->decompose(sstring("abc2"))},
@@ -84,7 +84,7 @@ SEASTAR_TEST_CASE(test_user_type) {
             return e.execute_cql("insert into cf (id, t) values (2, (frozen<ut1>)(2001, 3001, 'abc4'));").discard_result();
         }).then([&e] {
             return e.execute_cql("select t from cf where id = 2;");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
+        }).then([] (shared_ptr<cql_transport::messages::result_message> msg) {
             auto ut = user_type_impl::get_instance("ks", to_bytes("ut1"),
                         {to_bytes("my_int"), to_bytes("my_bigint"), to_bytes("my_text")},
                         {int32_type, long_type, utf8_type}, false);

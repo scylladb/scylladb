@@ -87,7 +87,7 @@ repair_rows_on_wire make_random_repair_rows_on_wire(random_mutation_generator& g
         m2->apply(mut);
         auto reader = mutation_fragment_v1_stream(m2->make_flat_reader(s, permit));
         std::list<frozen_mutation_fragment> mfs;
-        reader.consume_pausable([&input, s, &mfs](mutation_fragment mf) {
+        reader.consume_pausable([s, &mfs](mutation_fragment mf) {
             if ((mf.is_partition_start() && !mf.as_partition_start().partition_tombstone()) || mf.is_end_of_partition()) {
                 // Stream of mutations coming from the wire doesn't contain partition_end
                 // fragments. partition_start can be sent only if it contains a tombstone.

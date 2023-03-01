@@ -56,22 +56,21 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
                 auto cpu0_dc = make_lw_shared<sstring>();
                 auto cpu0_rack = make_lw_shared<sstring>();
                 auto res = make_lw_shared<bool>(true);
-                auto my_address = utils::fb_utilities::get_broadcast_address();
 
                 return snitch.invoke_on(0,
                         [cpu0_dc, cpu0_rack,
-                         res, my_address] (snitch_ptr& inst) {
+                         res] (snitch_ptr& inst) {
                     *cpu0_dc =inst->get_datacenter();
                     *cpu0_rack = inst->get_rack();
-                }).then([&snitch, cpu0_dc, cpu0_rack, res, my_address] {
+                }).then([&snitch, cpu0_dc, cpu0_rack, res] {
                     return snitch.invoke_on_all(
                             [cpu0_dc, cpu0_rack,
-                             res, my_address] (snitch_ptr& inst) {
+                             res] (snitch_ptr& inst) {
                         if (*cpu0_dc != inst->get_datacenter() ||
                             *cpu0_rack != inst->get_rack()) {
                             *res = false;
                         }
-                    }).then([&snitch, res] {
+                    }).then([res] {
                         if (!*res) {
                             BOOST_ERROR("Data center or Rack do not match on "
                                         "different shards");

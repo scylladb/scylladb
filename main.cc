@@ -984,7 +984,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             service_memory_limiter.start(memory::stats().total_memory()).get();
-            auto stop_mem_limiter = defer_verbose_shutdown("service_memory_limiter", [&service_memory_limiter] {
+            auto stop_mem_limiter = defer_verbose_shutdown("service_memory_limiter", [] {
                 // Uncomment this once services release all the memory on stop
                 // service_memory_limiter.stop().get();
             });

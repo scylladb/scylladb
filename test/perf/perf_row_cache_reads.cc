@@ -222,7 +222,7 @@ void test_scan_with_range_delete_over_rows() {
 
 int main(int argc, char** argv) {
     app_template app;
-    return app.run(argc, argv, [&app] {
+    return app.run(argc, argv, [] {
         return seastar::async([&] {
             engine().at_exit([] {
                 cancelled = true;

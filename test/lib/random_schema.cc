@@ -665,7 +665,7 @@ value_generator::atomic_value_generator value_generator::get_atomic_value_genera
 value_generator::generator value_generator::get_generator(const abstract_type& type) {
     auto it = _regular_value_generators.find(&type);
     if (it != _regular_value_generators.end()) {
-        return [this, gen = it->second] (std::mt19937& engine) -> data_model::mutation_description::value {
+        return [gen = it->second] (std::mt19937& engine) -> data_model::mutation_description::value {
             return gen(engine, 0, no_size_in_bytes_limit).serialize_nonnull();
         };
     }

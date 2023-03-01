@@ -1033,10 +1033,6 @@ static void test_clustering_slices(tests::reader_concurrency_semaphore_wrapper& 
         return clustering_key::from_deeply_exploded(*s, components);
     };
 
-    auto make_pk = [&] (sstring key) {
-        return dht::decorate_key(*s, partition_key::from_single_value(*s, to_bytes(key)));
-    };
-
     auto partition_count = 3;
     auto keys = tests::generate_partition_keys(partition_count, s);
     std::sort(keys.begin(), keys.end(), dht::ring_position_less_comparator(*s));
@@ -2042,7 +2038,7 @@ public:
         // The pre-existing assumption here is that the type of all the primary key components is blob.
         // So we generate partition keys and take the single blob component and save it as a random blob value.
         auto keys = tests::generate_partition_keys(n_blobs, _schema, _local_shard_only, tests::key_size{_external_blob_size, _external_blob_size});
-        _blobs =  boost::copy_range<std::vector<bytes>>(keys | boost::adaptors::transformed([this] (const dht::decorated_key& dk) { return dk.key().explode().front(); }));
+        _blobs =  boost::copy_range<std::vector<bytes>>(keys | boost::adaptors::transformed([] (const dht::decorated_key& dk) { return dk.key().explode().front(); }));
     }
 
     void set_key_cardinality(size_t n_keys) {

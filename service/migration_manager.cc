@@ -1034,7 +1034,6 @@ future<> migration_manager::maybe_sync(const schema_ptr& s, netw::messaging_serv
         } else {
             return container().invoke_on(0, [gs = global_schema_ptr(s), endpoint] (migration_manager& local_mm) {
                 schema_ptr s = gs.get();
-                schema_registry_entry& e = *s->registry_entry();
                 mlogger.debug("Syncing schema of {}.{} (v={}) with {}", s->ks_name(), s->cf_name(), s->version(), endpoint);
                 return local_mm.merge_schema_from(endpoint);
             });

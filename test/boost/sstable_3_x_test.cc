@@ -708,12 +708,6 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
         return tombstone{api::timestamp_type{ts}, gc_clock::time_point(gc_clock::duration(tp))};
     };
 
-    auto make_clustering_range = [] (clustering_key_prefix&& start, clustering_key_prefix&& end) {
-        return query::clustering_range::make(
-            query::clustering_range::bound(std::move(start), true),
-            query::clustering_range::bound(std::move(end), true));
-    };
-
     auto make_assertions = [] (flat_mutation_reader_v2 rd) {
         rd.set_max_buffer_size(1);
         return std::move(assert_that(std::move(rd)).ignore_deletion_time());
@@ -4911,7 +4905,6 @@ SEASTAR_TEST_CASE(test_regular_and_shadowable_deletion) {
     mutation mut2{s, partition_key::from_deeply_exploded(*s, {0})};
     {
         auto& clustered_row = mut2.partition().clustered_row(*s, ckey);
-        gc_clock::time_point tp {gc_clock::duration(1540230880)};
         clustered_row.apply(row_marker{api::timestamp_type{1540230874370002}});
         clustered_row.apply(make_tombstone(1540230874370001, 1540251167));
         clustered_row.apply(shadowable_tombstone(make_tombstone(1540230874370002, 1540251216)));
@@ -5300,7 +5293,7 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
     mt->apply(p);
 
     bool logged = false;
-    auto f = [&logged, &expected, &pk, &threshold](const schema& sc, const sstables::key& partition_key,
+    auto f = [&logged, &pk, &threshold](const schema& sc, const sstables::key& partition_key,
                      const clustering_key_prefix* clustering_key, uint64_t rows_count,
                      const column_definition* cdef, uint64_t cell_size, uint64_t collection_elements) {
         BOOST_REQUIRE_GT(rows_count, threshold);
@@ -5352,7 +5345,7 @@ static void test_sstable_too_many_collection_elements_f(int elements, uint64_t t
     mt->apply(p);
 
     bool logged = false;
-    auto f = [&logged, &expected, &pk, &threshold](const schema& sc, const sstables::key& partition_key,
+    auto f = [&logged, &pk, &threshold](const schema& sc, const sstables::key& partition_key,
                      const clustering_key_prefix* clustering_key, uint64_t rows_count,
                      const column_definition* cdef, uint64_t cell_size, uint64_t collection_elements) {
         BOOST_REQUIRE_GT(collection_elements, threshold);

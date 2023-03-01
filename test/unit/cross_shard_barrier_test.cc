@@ -91,7 +91,7 @@ public:
 
 int main(int argc, char **argv) {
     app_template app;
-    return app.run(argc, argv, [&app] {
+    return app.run(argc, argv, [] {
         if (smp::count < 2) {
             std::cerr << "Cannot run test with smp::count < 2";
             return make_ready_future<>();

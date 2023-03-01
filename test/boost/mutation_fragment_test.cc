@@ -612,7 +612,6 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator_mixed_api_usage
     const auto dkeys = ss.make_pkeys(3);
     const auto& dk_ = dkeys[0];
     const auto& dk0 = dkeys[1];
-    const auto& dk1 = dkeys[2];
     const auto ck0 = ss.make_ckey(0);
     const auto ck1 = ss.make_ckey(1);
     const auto ck2 = ss.make_ckey(2);

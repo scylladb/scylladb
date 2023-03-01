@@ -59,7 +59,7 @@ struct simple_position_reader_queue : public position_reader_queue {
     }
 
     virtual future<> close() noexcept override {
-        return do_for_each(_it, _rs.end(), [this] (reader_bounds& rb) {
+        return do_for_each(_it, _rs.end(), [] (reader_bounds& rb) {
             auto r = std::move(rb.r);
             return r.close();
         }).finally([this] {

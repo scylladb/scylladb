@@ -27,7 +27,6 @@ using minutes = std::chrono::minutes;
 using steady_clock = std::chrono::steady_clock;
 
 constexpr milliseconds sleep_msec(10); // Injection time sleep 10 msec
-constexpr minutes future_mins(10);     // Far in future        10 mins
 
 SEASTAR_TEST_CASE(test_inject_noop) {
     utils::error_injection<false> errinj;
@@ -39,7 +38,6 @@ SEASTAR_TEST_CASE(test_inject_noop) {
     BOOST_ASSERT(errinj.enabled_injections().empty());
     BOOST_ASSERT(errinj.enter("error") == false);
 
-    auto start_time = steady_clock::now();
     auto f = errinj.inject("noop2", sleep_msec);
     BOOST_REQUIRE(f.available() && !f.failed());
     return make_ready_future<>();

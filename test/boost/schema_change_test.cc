@@ -746,7 +746,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
     cql_test_config cfg_in(db_cfg_ptr);
     cfg_in.disabled_features = std::move(disabled_features);
 
-    return do_with_cql_env_thread([regenerate, expected_digests = std::move(expected_digests), extra_schema_changes = std::move(extra_schema_changes)] (cql_test_env& e) {
+    return do_with_cql_env_thread([expected_digests = std::move(expected_digests), extra_schema_changes = std::move(extra_schema_changes)] (cql_test_env& e) {
         if (regenerate) {
             // Exercise many different kinds of schema changes.
             e.execute_cql(

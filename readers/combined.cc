@@ -589,7 +589,7 @@ future<> mutation_reader_merger::fast_forward_to(const dht::partition_range& pr)
     for (auto it = _all_readers.begin(); it != _all_readers.end(); ++it) {
         _next.emplace_back(it, mutation_fragment_v2::kind::partition_end);
     }
-    return parallel_for_each(_all_readers, [this, &pr] (flat_mutation_reader_v2& mr) {
+    return parallel_for_each(_all_readers, [&pr] (flat_mutation_reader_v2& mr) {
         return mr.fast_forward_to(pr);
     }).then([this, &pr] {
         add_readers(_selector->fast_forward_to(pr));
@@ -598,7 +598,7 @@ future<> mutation_reader_merger::fast_forward_to(const dht::partition_range& pr)
 
 future<> mutation_reader_merger::fast_forward_to(position_range pr) {
     prepare_forwardable_readers();
-    return parallel_for_each(_next, [this, pr = std::move(pr)] (reader_and_last_fragment_kind rk) {
+    return parallel_for_each(_next, [pr = std::move(pr)] (reader_and_last_fragment_kind rk) {
         return rk.reader->fast_forward_to(pr);
     });
 }
@@ -1110,7 +1110,7 @@ public:
         _forwarded_to = pr;
         _pr_end = _forwarded_to->end();
 
-        return parallel_for_each(_unpeeked_readers, [this, pr = std::move(pr)] (reader_iterator it) {
+        return parallel_for_each(_unpeeked_readers, [pr = std::move(pr)] (reader_iterator it) {
             return it->reader.fast_forward_to(pr);
         });
     }

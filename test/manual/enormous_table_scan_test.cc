@@ -54,7 +54,7 @@ public:
                 return clustering_key::from_single_value(*_schema, std::move(ck_data));
             };
 
-            auto ck_to_int = [this] (const clustering_key& ck) -> int64_t {
+            auto ck_to_int = [] (const clustering_key& ck) -> int64_t {
                 auto exploded = ck.explode();
                 assert(exploded.size() == 1);
                 return value_cast<int64_t>(long_type->deserialize(exploded[0]));

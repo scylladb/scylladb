@@ -379,7 +379,7 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
                         sstring tmp = "hej bubba cow";
                         return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
                                     dst.write(tmp.data(), tmp.size());
-                                }).then([&log, set, count](auto h) {
+                                }).then([set, count](auto h) {
                                     BOOST_CHECK_NE(db::replay_position(), h.rp());
                                     set->put(std::move(h));
                                     if (set->size() == 1) {
@@ -445,7 +445,7 @@ SEASTAR_TEST_CASE(test_commitlog_entry_corruption){
                         sstring tmp = "hej bubba cow";
                         return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
                                     dst.write(tmp.data(), tmp.size());
-                                }).then([&log, rps](rp_handle h) {
+                                }).then([rps](rp_handle h) {
                                     BOOST_CHECK_NE(h.rp(), db::replay_position());
                                     rps->push_back(h.release());
                                 });
@@ -455,7 +455,7 @@ SEASTAR_TEST_CASE(test_commitlog_entry_corruption){
                         auto segments = log.get_active_segment_names();
                         BOOST_REQUIRE(!segments.empty());
                         auto seg = segments[0];
-                        return corrupt_segment(seg, rps->at(1).pos + 4, 0x451234ab).then([seg, rps, &log] {
+                        return corrupt_segment(seg, rps->at(1).pos + 4, 0x451234ab).then([seg, rps] {
                             return db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, service::get_local_commitlog_priority(), [rps](db::commitlog::buffer_and_replay_position buf_rp) {
                                 auto&& [buf, rp] = buf_rp;
                                 BOOST_CHECK_EQUAL(rp, rps->at(0));
@@ -485,7 +485,7 @@ SEASTAR_TEST_CASE(test_commitlog_chunk_corruption){
                         sstring tmp = "hej bubba cow";
                         return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
                                     dst.write(tmp.data(), tmp.size());
-                                }).then([&log, rps](rp_handle h) {
+                                }).then([rps](rp_handle h) {
                                     BOOST_CHECK_NE(h.rp(), db::replay_position());
                                     rps->push_back(h.release());
                                 });
@@ -495,7 +495,7 @@ SEASTAR_TEST_CASE(test_commitlog_chunk_corruption){
                         auto segments = log.get_active_segment_names();
                         BOOST_REQUIRE(!segments.empty());
                         auto seg = segments[0];
-                        return corrupt_segment(seg, rps->at(0).pos - 4, 0x451234ab).then([seg, rps, &log] {
+                        return corrupt_segment(seg, rps->at(0).pos - 4, 0x451234ab).then([seg, rps] {
                             return db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, service::get_local_commitlog_priority(), [rps](db::commitlog::buffer_and_replay_position buf_rp) {
                                 BOOST_FAIL("Should not reach");
                                 return make_ready_future<>();
@@ -524,7 +524,7 @@ SEASTAR_TEST_CASE(test_commitlog_reader_produce_exception){
                         sstring tmp = "hej bubba cow";
                         return log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
                                     dst.write(tmp.data(), tmp.size());
-                                }).then([&log, rps](rp_handle h) {
+                                }).then([rps](rp_handle h) {
                                     BOOST_CHECK_NE(h.rp(), db::replay_position());
                                     rps->push_back(h.release());
                                 });
@@ -616,7 +616,7 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
         auto s = table.schema();
         auto memtables = table.active_memtables();
 
-        auto add_entry = [&db, &cl, s] (const partition_key& key) mutable {
+        auto add_entry = [&cl, s] (const partition_key& key) mutable {
             auto md = tests::data_model::mutation_description(key.explode());
             md.add_clustered_cell({}, "v", to_bytes("val"));
             auto m = md.build(s);
@@ -851,7 +851,6 @@ SEASTAR_TEST_CASE(test_commitlog_shutdown_during_wait) {
 
     rp_set rps;
     std::deque<rp_set> queue;
-    size_t n = 0;
 
     // uncomment for verbosity
     //logging::logger_registry().set_logger_level("commitlog", logging::log_level::debug);

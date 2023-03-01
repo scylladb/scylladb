@@ -1647,7 +1647,7 @@ SEASTAR_TEST_CASE(writer_handles_subsequent_range_tombstone_changes_without_tomb
     // gets incorrectly loaded as before_all_prefixed instead of
     // after_all_prefixed. This leads to incorrect order of mutations.
     return test_env::do_with_async([] (test_env& env) {
-        for (const auto version : writable_sstable_versions) {
+        for ([[maybe_unused]] const auto version : writable_sstable_versions) {
             schema_ptr s = schema_builder("ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck1", bytes_type, column_kind::clustering_key)

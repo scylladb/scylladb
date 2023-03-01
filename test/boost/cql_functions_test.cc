@@ -48,7 +48,7 @@ SEASTAR_TEST_CASE(test_functions) {
             return e.execute_cql("insert into cf (p1, c1, tu) values ('key1', 3, now());").discard_result();
         }).then([&e] {
             return e.execute_cql("select tu from cf where p1 in ('key1');");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
+        }).then([] (shared_ptr<cql_transport::messages::result_message> msg) {
             using namespace cql_transport::messages;
             struct validator : result_message::visitor {
                 std::vector<bytes_opt> res;
@@ -75,7 +75,7 @@ SEASTAR_TEST_CASE(test_functions) {
             BOOST_REQUIRE_EQUAL(boost::distance(v.res | boost::adaptors::uniqued), 3);
         }).then([&] {
             return e.execute_cql("select sum(c1), count(c1) from cf where p1 = 'key1';");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
+        }).then([] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({
@@ -84,7 +84,7 @@ SEASTAR_TEST_CASE(test_functions) {
                  });
         }).then([&] {
             return e.execute_cql("select count(*) from cf where p1 = 'key1';");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
+        }).then([] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({
@@ -92,7 +92,7 @@ SEASTAR_TEST_CASE(test_functions) {
                  });
         }).then([&] {
             return e.execute_cql("select count(1) from cf where p1 = 'key1';");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
+        }).then([] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({
@@ -103,7 +103,7 @@ SEASTAR_TEST_CASE(test_functions) {
             return e.execute_cql("insert into cf (p1, c1) values ((text)'key2', 7);").discard_result();
         }).then([&e] {
             return e.execute_cql("select c1 from cf where p1 = 'key2';");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
+        }).then([] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({

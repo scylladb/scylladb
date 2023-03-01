@@ -3861,11 +3861,7 @@ future<> storage_service::node_ops_abort(node_ops_id ops_uuid) {
                 as->request_abort();
             }
         }
-
-        for (auto it = _node_ops.begin(); it != _node_ops.end(); it = _node_ops.erase(it)) {
-            node_ops_meta_data& meta = it->second;
-        }
-
+        _node_ops.clear();
         co_return;
     }
 

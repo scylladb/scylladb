@@ -229,7 +229,7 @@ SEASTAR_TEST_CASE(compact) {
                 return env.make_sstable(s, tmpdir_path,
                         (*gen)++, sstables::get_highest_sstable_version(), sstables::sstable::format_types::big);
             };
-            return compact_sstables(sstables::compaction_descriptor(std::move(sstables), default_priority_class()), cf, new_sstable).then([&env, s, generation, cf, tmpdir_path] (auto) {
+            return compact_sstables(sstables::compaction_descriptor(std::move(sstables), default_priority_class()), cf, new_sstable).then([&env, s, cf, tmpdir_path] (auto) {
                 // Verify that the compacted sstable has the right content. We expect to see:
                 //  name  | age | height
                 // -------+-----+--------
@@ -432,7 +432,7 @@ static future<> check_compacted_sstables(test_env& env, sstring tmpdir_path, uns
 
         return with_closeable(std::move(reader), [generations, s, keys] (flat_mutation_reader_v2& reader) {
             return do_for_each(*generations, [&reader, keys] (unsigned long generation) mutable {
-                return read_mutation_from_flat_mutation_reader(reader).then([generation, keys] (mutation_opt m) {
+                return read_mutation_from_flat_mutation_reader(reader).then([keys] (mutation_opt m) {
                     BOOST_REQUIRE(m);
                     keys->push_back(m->key());
                 });
@@ -992,8 +992,6 @@ SEASTAR_TEST_CASE(check_overlapping) {
 SEASTAR_TEST_CASE(tombstone_purge_test) {
     BOOST_REQUIRE(smp::count == 1);
     return test_env::do_with_async([] (test_env& env) {
-        cell_locker_stats cl_stats;
-
         // In a column family with gc_grace_seconds set to 0, check that a tombstone
         // is purged after compaction.
         auto builder = schema_builder("tests", "tombstone_purge")
@@ -1925,8 +1923,6 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
 
 SEASTAR_TEST_CASE(compaction_correctness_with_partitioned_sstable_set) {
     return test_env::do_with_async([] (test_env& env) {
-        cell_locker_stats cl_stats;
-
         auto builder = schema_builder("tests", "tombstone_purge")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", int32_type);
@@ -2092,7 +2088,7 @@ std::vector<mutation_fragment_v2> write_corrupt_sstable(test_env& env, sstable& 
     config.validation_level = mutation_fragment_stream_validation_level::partition_region; // this test violates key order on purpose
     auto writer = sst.get_writer(*schema, local_keys.size(), config, encoding_stats{});
 
-    auto make_static_row = [&, schema, ts] {
+    auto make_static_row = [&, schema] {
         auto r = row{};
         auto cdef = schema->static_column_at(0);
         auto ac = atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)));
@@ -2100,7 +2096,7 @@ std::vector<mutation_fragment_v2> write_corrupt_sstable(test_env& env, sstable& 
         return static_row(*schema, std::move(r));
     };
 
-    auto make_clustering_row = [&, schema, ts] (unsigned i) {
+    auto make_clustering_row = [&, schema] (unsigned i) {
         auto r = row{};
         auto cdef = schema->regular_column_at(0);
         auto ac = atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)));
@@ -2108,7 +2104,7 @@ std::vector<mutation_fragment_v2> write_corrupt_sstable(test_env& env, sstable& 
         return clustering_row(clustering_key::from_single_value(*schema, int32_type->decompose(data_value(int(i)))), {}, {}, std::move(r));
     };
 
-    auto write_partition = [&, schema, ts] (int pk, bool is_corrupt) {
+    auto write_partition = [&, schema] (int pk, bool is_corrupt) {
         auto dkey = local_keys.at(pk);
 
         testlog.trace("Writing partition {}", dkey.key().with_schema(*schema));
@@ -2182,7 +2178,7 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
     db_cfg.enable_commitlog(false);
 
     return do_with_cql_env([this] (cql_test_env& cql_env) -> future<> {
-        return test_env::do_with_async([this, &cql_env] (test_env& env) {
+        return test_env::do_with_async([this] (test_env& env) {
             auto schema = schema_builder("ks", get_name())
                     .with_column("pk", utf8_type, column_kind::partition_key)
                     .with_column("ck", int32_type, column_kind::clustering_key)
@@ -2282,7 +2278,7 @@ SEASTAR_THREAD_TEST_CASE(scrub_validate_mode_validate_reader_test) {
         return mutation_fragment_v2(*schema, permit, partition_end());
     };
 
-    auto make_static_row = [&, schema, ts] {
+    auto make_static_row = [&, schema] {
         auto r = row{};
         auto cdef = schema->static_column_at(0);
         auto ac = atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)));
@@ -2290,7 +2286,7 @@ SEASTAR_THREAD_TEST_CASE(scrub_validate_mode_validate_reader_test) {
         return mutation_fragment_v2(*schema, permit, static_row(*schema, std::move(r)));
     };
 
-    auto make_clustering_row = [&, schema, ts] (unsigned i) {
+    auto make_clustering_row = [&, schema] (unsigned i) {
         auto r = row{};
         auto cdef = schema->regular_column_at(0);
         auto ac = atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)));
@@ -2380,7 +2376,7 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
     db_cfg.enable_commitlog(false);
 
     return do_with_cql_env([this] (cql_test_env& cql_env) -> future<> {
-        return test_env::do_with_async([this, &cql_env] (test_env& env) {
+        return test_env::do_with_async([this] (test_env& env) {
             auto schema = schema_builder("ks", get_name())
                     .with_column("pk", utf8_type, column_kind::partition_key)
                     .with_column("ck", int32_type, column_kind::clustering_key)
@@ -2474,7 +2470,7 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
     db_cfg.enable_commitlog(false);
 
     return do_with_cql_env([this] (cql_test_env& cql_env) -> future<> {
-        return test_env::do_with_async([this, &cql_env] (test_env& env) {
+        return test_env::do_with_async([this] (test_env& env) {
             auto schema = schema_builder("ks", get_name())
                     .with_column("pk", utf8_type, column_kind::partition_key)
                     .with_column("ck", int32_type, column_kind::clustering_key)
@@ -2585,7 +2581,7 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
     };
     for (auto qmode : quarantine_modes) {
         co_await do_with_cql_env([this, qmode] (cql_test_env& cql_env) {
-            return test_env::do_with_async([this, qmode, &cql_env] (test_env& env) {
+            return test_env::do_with_async([this, qmode] (test_env& env) {
                 auto schema = schema_builder("ks", get_name())
                         .with_column("pk", utf8_type, column_kind::partition_key)
                         .with_column("ck", int32_type, column_kind::clustering_key)
@@ -2866,7 +2862,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
         return mutation_fragment_v2(*schema, permit, partition_start(std::move(dkey), {}));
     };
 
-    auto make_static_row = [&, schema, ts] {
+    auto make_static_row = [&, schema] {
         auto r = row{};
         auto cdef = schema->static_column_at(0);
         auto ac = atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)));
@@ -2874,7 +2870,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
         return mutation_fragment_v2(*schema, permit, static_row(*schema, std::move(r)));
     };
 
-    auto make_clustering_row = [&, schema, ts] (unsigned i) {
+    auto make_clustering_row = [&, schema] (unsigned i) {
         auto r = row{};
         auto cdef = schema->regular_column_at(0);
         auto ac = atomic_cell::make_live(*cdef.type, ts, cdef.type->decompose(data_value(1)));
@@ -2936,8 +2932,6 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
 
 SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
     return test_env::do_with_async([] (test_env& env) {
-        cell_locker_stats cl_stats;
-
         auto builder = schema_builder("tests", "sstable_run_based_compaction_test")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", int32_type);
@@ -3069,8 +3063,6 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
 
 SEASTAR_TEST_CASE(compaction_strategy_aware_major_compaction_test) {
     return test_env::do_with_async([] (test_env& env) {
-        cell_locker_stats cl_stats;
-
         auto s = schema_builder("tests", "compaction_strategy_aware_major_compaction_test")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", int32_type).build();
@@ -3115,8 +3107,6 @@ SEASTAR_TEST_CASE(compaction_strategy_aware_major_compaction_test) {
 
 SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy) {
     return test_env::do_with_async([] (test_env& env) {
-        cell_locker_stats cl_stats;
-
         auto builder = schema_builder("tests", "backlog_tracker_correctness_after_changing_compaction_strategy")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", int32_type);
@@ -3220,8 +3210,6 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
 SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
     BOOST_REQUIRE(smp::count == 1);
     return test_env::do_with_async([] (test_env& env) {
-        cell_locker_stats cl_stats;
-
         auto builder = schema_builder("tests", "purged_tombstone_consumer_sstable_test")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", int32_type);
@@ -3272,7 +3260,6 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
 
             auto gc_now = gc_clock::now();
             gc_before = gc_now - s->gc_grace_seconds();
-            auto gc_grace_seconds = s->gc_grace_seconds();
 
             auto cfc = compact_for_compaction_v2<compacting_sstable_writer_test, compacting_sstable_writer_test>(
                 *s, gc_now, max_purgeable_func, tombstone_gc_state(nullptr), std::move(cr), std::move(purged_cr));
@@ -3378,8 +3365,6 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
  */
 SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
     return test_env::do_with_async([] (test_env& env) {
-        cell_locker_stats cl_stats;
-
         // In a column family with gc_grace_seconds set to 0, check that a tombstone
         // is purged after compaction.
         auto builder = schema_builder("tests", "incremental_compaction_data_resurrection_test")
@@ -4674,7 +4659,7 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
         };
         auto manager = compaction_manager(std::move(cfg), as, task_manager);
 
-        auto add_sstable = [&env, &manager, gen = make_lw_shared<unsigned>(1)] (table_for_tests& t, uint64_t data_size, int level) {
+        auto add_sstable = [&env, gen = make_lw_shared<unsigned>(1)] (table_for_tests& t, uint64_t data_size, int level) {
             auto sst = env.make_sstable(t.schema(), "", (*gen)++, la, big);
             auto key = tests::generate_partition_key(t.schema()).key();
             sstables::test(sst).set_values_for_leveled_strategy(data_size, level, 0 /*max ts*/, key, key);
@@ -4772,7 +4757,7 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
     return test_env::do_with_async([] (test_env& env) {
         constexpr size_t all_files = 64;
 
-        auto get_cleanup_jobs = [&env, &all_files] (sstables::compaction_strategy_type compaction_strategy_type,
+        auto get_cleanup_jobs = [&env] (sstables::compaction_strategy_type compaction_strategy_type,
                                                     std::map<sstring, sstring> strategy_options = {},
                                                     const api::timestamp_clock::duration step_base = 0ms,
                                                     unsigned sstable_level = 0) {
