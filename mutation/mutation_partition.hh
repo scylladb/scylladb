@@ -422,6 +422,14 @@ public:
         get_existing().apply_monotonically(s, kind, std::move(src.get_existing()));
     }
 
+    // Monotonic exception guarantees
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind kind, lazy_row&& src) {
+        if (src.empty()) {
+            return;
+        }
+        maybe_create().apply_monotonically(our_schema, their_schema, kind, std::move(src.get_existing()));
+    }
+
     // Expires cells based on query_time. Expires tombstones based on gc_before
     // and max_purgeable. Removes cells covered by tomb.
     // Returns true iff there are any live cells left.
