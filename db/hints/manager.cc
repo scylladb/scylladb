@@ -348,7 +348,7 @@ future<hints_store_ptr> manager::end_point_hints_manager::get_or_load() {
 
 manager::end_point_hints_manager& manager::get_ep_manager(const locator::node_ptr& node) {
     const auto ep = node->endpoint();
-    auto it = find_ep_manager(ep);
+    auto it = find_ep_manager(node);
     if (it == ep_managers_end()) {
         manager_logger.trace("Creating an ep_manager for {}", ep);
         manager::end_point_hints_manager& ep_man = _ep_managers.emplace(ep, end_point_hints_manager(ep, *this)).first->second;
@@ -359,8 +359,7 @@ manager::end_point_hints_manager& manager::get_ep_manager(const locator::node_pt
 }
 
 inline bool manager::have_ep_manager(const locator::node_ptr& node) const noexcept {
-    const auto ep = node->endpoint();
-    return find_ep_manager(ep) != ep_managers_end();
+    return find_ep_manager(node) != ep_managers_end();
 }
 
 bool manager::store_hint(locator::node_ptr node, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
@@ -616,7 +615,7 @@ bool manager::can_hint_for(locator::node_ptr node) const noexcept {
         return false;
     }
 
-    auto it = find_ep_manager(ep);
+    auto it = find_ep_manager(node);
     if (it != ep_managers_end() && (it->second.stopping() || !it->second.can_hint())) {
         return false;
     }
@@ -718,9 +717,9 @@ void manager::drain_for(locator::node_ptr node) {
     manager_logger.trace("on_leave_cluster: {} is removed/decommissioned", endpoint);
 
     // Future is waited on indirectly in `stop()` (via `_draining_eps_gate`).
-    (void)with_gate(_draining_eps_gate, [this, endpoint] {
-        return with_semaphore(drain_lock(), 1, [this, endpoint] {
-            return futurize_invoke([this, endpoint] () {
+    (void)with_gate(_draining_eps_gate, [this, node, endpoint] {
+        return with_semaphore(drain_lock(), 1, [this, node, endpoint] {
+            return futurize_invoke([this, node, endpoint] () {
                 if (utils::fb_utilities::is_me(endpoint)) {
                     set_draining_all();
                     return parallel_for_each(_ep_managers, [] (auto& pair) {
@@ -733,7 +732,7 @@ void manager::drain_for(locator::node_ptr node) {
                         _ep_managers.clear();
                     });
                 } else {
-                    ep_managers_map_type::iterator ep_manager_it = find_ep_manager(endpoint);
+                    ep_managers_map_type::iterator ep_manager_it = find_ep_manager(node);
                     if (ep_manager_it != ep_managers_end()) {
                         return ep_manager_it->second.stop(drain::yes).finally([this, endpoint, &ep_man = ep_manager_it->second] {
                             return with_file_update_mutex(ep_man, [&ep_man] {

@@ -149,7 +149,7 @@ void space_watchdog::on_timer() {
                 const auto& topo = shard_manager.get_topology();
                 auto ep = gms::inet_address(de.name);
                 auto node = topo.find_node(ep);
-                auto it = shard_manager.find_ep_manager(de.name);
+                auto it = shard_manager.find_ep_manager(node);
                 if (it != shard_manager.ep_managers_end()) {
                     return with_file_update_mutex(it->second, [this, &shard_manager, dir = std::move(dir), ep_name = std::move(de.name), node = std::move(node)] () mutable {
                         return scan_one_ep_dir(dir / ep_name, shard_manager, std::move(node));
