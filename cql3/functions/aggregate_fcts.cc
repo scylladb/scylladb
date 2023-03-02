@@ -225,43 +225,6 @@ struct accumulator_for : public std::conditional_t<std::is_integral_v<T>,
                                                    same_type_accumulator_for<T>>
 { };
 
-class impl_user_aggregate : public aggregate_function::aggregate {
-    ::shared_ptr<scalar_function> _sfunc;
-    ::shared_ptr<scalar_function> _rfunc;
-    ::shared_ptr<scalar_function> _finalfunc;
-    const bytes_opt _initcond;
-    bytes_opt _acc;
-public:
-    impl_user_aggregate(bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> rfunc, ::shared_ptr<scalar_function> finalfunc)
-            : _sfunc(std::move(sfunc))
-            , _rfunc(std::move(rfunc))
-            , _finalfunc(std::move(finalfunc))
-            , _initcond(std::move(initcond))
-            , _acc(_initcond)
-        {}
-    virtual void reset() override {
-        _acc = _initcond;
-    }
-    virtual opt_bytes compute() override {
-        return _finalfunc ? _finalfunc->execute(std::vector<bytes_opt>{_acc}) : _acc;
-    }
-    virtual void add_input(const std::vector<opt_bytes>& values) override {
-        std::vector<bytes_opt> args{_acc};
-        args.insert(args.end(), values.begin(), values.end());
-        _acc = _sfunc->execute(args);
-    }
-    virtual void set_accumulator(const opt_bytes& acc) override {
-        _acc = acc;
-    }
-    virtual opt_bytes get_accumulator() const override {
-        return _acc;
-    }
-    virtual void reduce(const opt_bytes& acc) override {
-        std::vector<bytes_opt> args{_acc, acc};
-        _acc = _rfunc->execute(args);
-    }
-};
-
 template <typename Type>
 static
 shared_ptr<aggregate_function>
@@ -437,53 +400,44 @@ static data_type uda_return_type(const ::shared_ptr<scalar_function>& ffunc, con
 }
 
 user_aggregate::user_aggregate(function_name fname, bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> reducefunc, ::shared_ptr<scalar_function> finalfunc)
-        : abstract_function(std::move(fname), state_arg_types_to_uda_arg_types(sfunc->arg_types()), uda_return_type(finalfunc, sfunc))
-        , _initcond(std::move(initcond))
-        , _sfunc(std::move(sfunc))
-        , _reducefunc(std::move(reducefunc))
-        , _finalfunc(std::move(finalfunc))
-{}
-
-std::unique_ptr<aggregate_function::aggregate> user_aggregate::new_aggregate() {
-    return std::make_unique<impl_user_aggregate>(_initcond, _sfunc, _reducefunc, _finalfunc);
+        : stateless_aggregate_function_adapter(db::functions::stateless_aggregate_function{
+                .name = fname,
+                .state_type = sfunc->return_type(),
+                .result_type = finalfunc ? finalfunc->return_type() : sfunc->return_type(),
+                .argument_types = std::vector(std::next(sfunc->arg_types().begin()), sfunc->arg_types().end()),
+                .initial_state = std::move(initcond),
+                .aggregation_function = std::move(sfunc),
+                .state_to_result_function = std::move(finalfunc),
+                .state_reduction_function = std::move(reducefunc),
+          }) {
 }
 
-::shared_ptr<aggregate_function> user_aggregate::reducible_aggregate_function() {
-    auto name = _name;
-    name.name += "_reducible";
-    return ::make_shared<user_aggregate>(name, _initcond, _sfunc, _reducefunc, nullptr);
-}
-
-bool user_aggregate::is_pure() const { return _sfunc->is_pure() && (!_finalfunc || _finalfunc->is_pure()); }
-bool user_aggregate::is_native() const { return false; }
-bool user_aggregate::is_aggregate() const { return true; }
-bool user_aggregate::is_reducible() const { return _reducefunc != nullptr; }
-bool user_aggregate::requires_thread() const { return _sfunc->requires_thread() || (_finalfunc && _finalfunc->requires_thread()); }
-bool user_aggregate::has_finalfunc() const { return _finalfunc != nullptr; }
+bool user_aggregate::has_finalfunc() const { return _agg.state_to_result_function != nullptr; }
 
 std::ostream& user_aggregate::describe(std::ostream& os) const {
     auto ks = cql3::util::maybe_quote(name().keyspace);
     auto na = cql3::util::maybe_quote(name().name);
 
     os << "CREATE AGGREGATE " << ks << "." << na << "(";
-    for (size_t i = 0; i < _arg_types.size(); i++) {
+    auto a = arg_types();
+    for (size_t i = 0; i < a.size(); i++) {
         if (i > 0) {
             os << ", ";
         }
-        os << _arg_types[i]->cql3_type_name();
+        os << a[i]->cql3_type_name();
     }
     os << ")\n";
 
-    os << "SFUNC " << cql3::util::maybe_quote(_sfunc->name().name) << "\n"
-       << "STYPE " << _sfunc->return_type()->cql3_type_name();
+    os << "SFUNC " << cql3::util::maybe_quote(_agg.aggregation_function->name().name) << "\n"
+       << "STYPE " << _agg.aggregation_function->return_type()->cql3_type_name();
     if (is_reducible()) {
-        os << "\n" << "REDUCEFUNC " << cql3::util::maybe_quote(_reducefunc->name().name);
+        os << "\n" << "REDUCEFUNC " << cql3::util::maybe_quote(_agg.state_reduction_function->name().name);
     }
     if (has_finalfunc()) {
-        os << "\n" << "FINALFUNC " << cql3::util::maybe_quote(_finalfunc->name().name);
+        os << "\n" << "FINALFUNC " << cql3::util::maybe_quote(_agg.state_to_result_function->name().name);
     }
-    if (_initcond) {
-        os << "\n" << "INITCOND " << _sfunc->return_type()->deserialize(bytes_view(*_initcond)).to_parsable_string();
+    if (_agg.initial_state) {
+        os << "\n" << "INITCOND " << _agg.aggregation_function->return_type()->deserialize(bytes_view(*_agg.initial_state)).to_parsable_string();
     }
     os << ";";
 
