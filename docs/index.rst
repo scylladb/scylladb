@@ -13,7 +13,7 @@
   :image: /_static/img/mascots/scylla-docs.svg
   :search_box:
 
-  The most up-to-date documents for the fastest, best performing, high availability NoSQL database.
+  New to ScyllaDB? Start `here <https://cloud.docs.scylladb.com/stable/scylladb-basics/>`_!
 
 .. raw:: html
 
@@ -26,16 +26,7 @@
   <div class="grid-x grid-margin-x hs">
 
 .. topic-box::
-  :title: New to ScyllaDB? Start here!
-  :link: https://cloud.docs.scylladb.com/stable/scylladb-basics/
-  :class: large-4
-  :anchor: ScyllaDB Basics
-
-  Learn the essentials of ScyllaDB.
-
-
-.. topic-box::
-  :title: Let us manage your DB
+  :title: ScyllaDB Cloud
   :link: https://cloud.docs.scylladb.com
   :class: large-4
   :anchor: ScyllaDB Cloud Documentation
@@ -43,12 +34,20 @@
   Simplify application development with ScyllaDB Cloud - a fully managed database-as-a-service.
 
 .. topic-box::
-  :title: Manage your own DB
+  :title: ScyllaDB Enterprise
+  :link: https://enterprise.docs.scylladb.com
+  :class: large-4
+  :anchor: ScyllaDB Enterprise Documentation
+
+  Deploy and manage ScyllaDB's most stable enterprise-grade database with premium features and 24/7 support.
+
+.. topic-box::
+  :title: ScyllaDB Open Source
   :link: getting-started
   :class: large-4
-  :anchor: ScyllaDB Open Source and Enterprise Documentation
+  :anchor: ScyllaDB Open Source Documentation
 
-  Deploy and manage your database in your own environment.
+  Deploy and manage your database in your environment.
 
 
 .. raw:: html
@@ -59,40 +58,16 @@
 
   <div class="topics-grid topics-grid--products">
 
-      <h2 class="topics-grid__title">Our Products</h2>
+      <h2 class="topics-grid__title">Other Products</h2>
 
       <div class="grid-container full">
           <div class="grid-x grid-margin-x">
 
 .. topic-box::
-  :title: ScyllaDB Enterprise
-  :link: https://enterprise.docs.scylladb.com
-  :image: /_static/img/mascots/scylla-enterprise.svg
-  :class: topic-box--product,large-3,small-6
-
-  ScyllaDB’s most stable high-performance enterprise-grade NoSQL database.
-
-.. topic-box::
-  :title: ScyllaDB Open Source
-  :link: getting-started
-  :image: /_static/img/mascots/scylla-opensource.svg
-  :class: topic-box--product,large-3,small-6
-
-  A high-performance NoSQL database with a close-to-the-hardware, shared-nothing approach.
-
-.. topic-box::
-  :title: ScyllaDB Cloud
-  :link: https://cloud.docs.scylladb.com
-  :image: /_static/img/mascots/scylla-cloud.svg
-  :class: topic-box--product,large-3,small-6
-
-  A fully managed NoSQL database as a service powered by ScyllaDB Enterprise.
-
-.. topic-box::
   :title: ScyllaDB Alternator
   :link: https://docs.scylladb.com/stable/alternator/alternator.html
   :image: /_static/img/mascots/scylla-alternator.svg
-  :class: topic-box--product,large-3,small-6
+  :class: topic-box--product,large-4,small-6
 
   Open source Amazon DynamoDB-compatible API.
 
@@ -100,7 +75,7 @@
   :title: ScyllaDB Monitoring Stack
   :link: https://monitoring.docs.scylladb.com
   :image: /_static/img/mascots/scylla-monitor.svg
-  :class: topic-box--product,large-3,small-6
+  :class: topic-box--product,large-4,small-6
 
   Complete open source monitoring solution for your ScyllaDB clusters.
 
@@ -108,7 +83,7 @@
   :title: ScyllaDB Manager
   :link: https://manager.docs.scylladb.com
   :image: /_static/img/mascots/scylla-manager.svg
-  :class: topic-box--product,large-3,small-6
+  :class: topic-box--product,large-4,small-6
 
   Hassle-free ScyllaDB NoSQL database management for scale-out clusters.
 
@@ -116,7 +91,7 @@
   :title: ScyllaDB Drivers
   :link: https://docs.scylladb.com/stable/using-scylla/drivers/
   :image: /_static/img/mascots/scylla-drivers.svg
-  :class: topic-box--product,large-3,small-6
+  :class: topic-box--product,large-4,small-6
 
   Shard-aware drivers for superior performance. 
 
@@ -124,7 +99,7 @@
   :title: ScyllaDB Operator
   :link: https://operator.docs.scylladb.com
   :image: /_static/img/mascots/scylla-enterprise.svg
-  :class: topic-box--product,large-3,small-6
+  :class: topic-box--product,large-4,small-6
 
   Easily run and manage your ScyllaDB cluster on Kubernetes.
 
