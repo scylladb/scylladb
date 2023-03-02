@@ -27,6 +27,8 @@ target_link_libraries(test-perf
     xxHash::xxhash
     wasmtime_bindings)
 
+add_subdirectory(perf)
+
 if(BUILD_TESTING)
     add_subdirectory(boost)
 endif()
