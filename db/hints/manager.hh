@@ -604,8 +604,8 @@ public:
         _eps_with_pending_hints.reserve(_ep_managers.size());
     }
 
-    bool has_ep_with_pending_hints(ep_key_type key) const {
-        return _eps_with_pending_hints.contains(key);
+    bool has_ep_with_pending_hints(locator::node_ptr node) const {
+        return _eps_with_pending_hints.contains(node->endpoint());
     }
 
     size_t ep_managers_size() const {
