@@ -18,7 +18,6 @@
 #include "aggregate_fcts.hh"
 #include "user_aggregate.hh"
 #include "functions.hh"
-#include "native_aggregate_function.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/multiprecision_int.hh"
 #include <cstddef>
