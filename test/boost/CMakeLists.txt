@@ -2,15 +2,18 @@ function(add_scylla_test name)
   cmake_parse_arguments(parsed_args
     ""
     "KIND"
-    "LIBRARIES"
+    "LIBRARIES;SOURCES"
     ${ARGN})
   if(parsed_args_KIND)
     set(kind ${parsed_args_KIND})
   else()
     set(kind "SEASTAR")
   endif()
-
-  set(src "${name}.cc")
+  if(parsed_args_SOURCES)
+    set(src "${parsed_args_SOURCES}")
+  else()
+    set(src "${name}.cc")
+  endif()
   add_executable(${name} ${src})
   target_include_directories(${name}
     PRIVATE
