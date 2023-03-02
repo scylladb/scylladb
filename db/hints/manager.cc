@@ -334,7 +334,7 @@ manager::end_point_hints_manager::~end_point_hints_manager() {
 
 future<hints_store_ptr> manager::end_point_hints_manager::get_or_load() {
     if (!_hints_store_anchor) {
-        return _shard_manager.store_factory().get_or_load(_key->endpoint(), [this] (const gms::inet_address&) noexcept {
+        return _shard_manager.store_factory().get_or_load(_key, [this] (const key_type&) noexcept {
             return add_store();
         }).then([this] (hints_store_ptr log_ptr) {
             _hints_store_anchor = log_ptr;
