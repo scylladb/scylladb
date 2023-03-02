@@ -91,7 +91,7 @@ private:
 public:
     class end_point_hints_manager {
     public:
-        using key_type = gms::inet_address;
+        using key_type = locator::node_ptr;
 
         class sender {
             // Important: clock::now() must be noexcept.

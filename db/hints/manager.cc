@@ -98,7 +98,7 @@ future<> manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr
     _gossiper_anchor = std::move(gossiper_ptr);
     const auto& topo = _proxy_anchor->get_token_metadata_ptr()->get_topology();
     return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this, &topo] (fs::path datadir, directory_entry de) {
-        ep_key_type ep = ep_key_type(de.name);
+        auto ep = gms::inet_address(de.name);
         auto node = topo.find_node(ep);
         if (!check_dc_for(node)) {
             return make_ready_future<>();
@@ -151,8 +151,7 @@ void manager::forbid_hints_for_eps_with_pending_hints() {
     manager_logger.trace("space_watchdog: Going to block hints to: {}", _eps_with_pending_hints);
     boost::for_each(_ep_managers, [this] (auto& pair) {
         end_point_hints_manager& ep_man = pair.second;
-        auto node = get_topology().find_node(ep_man.end_point_key());
-        if (has_ep_with_pending_hints(node)) {
+        if (has_ep_with_pending_hints(ep_man.end_point_key())) {
             ep_man.forbid_hints();
         } else {
             ep_man.allow_hints();
@@ -166,7 +165,7 @@ sync_point::shard_rps manager::calculate_current_sync_point(const locator::node_
         auto it = _ep_managers.find(node);
         if (it != _ep_managers.end()) {
             const end_point_hints_manager& ep_man = it->second;
-            rps[ep_man.end_point_key()] = ep_man.last_written_replay_position();
+            rps[ep_man.end_point_key()->endpoint()] = ep_man.last_written_replay_position();
         }
     }
     return rps;
@@ -335,7 +334,7 @@ manager::end_point_hints_manager::~end_point_hints_manager() {
 
 future<hints_store_ptr> manager::end_point_hints_manager::get_or_load() {
     if (!_hints_store_anchor) {
-        return _shard_manager.store_factory().get_or_load(_key, [this] (const key_type&) noexcept {
+        return _shard_manager.store_factory().get_or_load(_key->endpoint(), [this] (const gms::inet_address&) noexcept {
             return add_store();
         }).then([this] (hints_store_ptr log_ptr) {
             _hints_store_anchor = log_ptr;
@@ -351,7 +350,7 @@ manager::end_point_hints_manager& manager::get_ep_manager(const locator::node_pt
     auto it = find_ep_manager(node);
     if (it == ep_managers_end()) {
         manager_logger.trace("Creating an ep_manager for {}", ep);
-        manager::end_point_hints_manager& ep_man = _ep_managers.emplace(node, end_point_hints_manager(ep, *this)).first->second;
+        manager::end_point_hints_manager& ep_man = _ep_managers.emplace(node, end_point_hints_manager(node, *this)).first->second;
         ep_man.start();
         return ep_man;
     }
@@ -541,9 +540,9 @@ future<> manager::end_point_hints_manager::sender::do_send_one_mutation(frozen_m
     return futurize_invoke([this, m = std::move(m), &natural_endpoints] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
-        if (boost::range::find(natural_endpoints, end_point_key()) != natural_endpoints.end()) {
+        if (boost::range::find(natural_endpoints, end_point_key()->endpoint()) != natural_endpoints.end()) {
             manager_logger.trace("Sending directly to {}", end_point_key());
-            return _proxy.send_hint_to_endpoint(std::move(m), end_point_key());
+            return _proxy.send_hint_to_endpoint(std::move(m), end_point_key()->endpoint());
         } else {
             manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", end_point_key());
             return _proxy.send_hint_to_all_replicas(std::move(m));
@@ -557,13 +556,13 @@ bool manager::end_point_hints_manager::sender::can_send() noexcept {
     }
 
     try {
-        auto ep_state_ptr = _gossiper. get_endpoint_state_for_endpoint_ptr(end_point_key());
+        auto ep_state_ptr = _gossiper. get_endpoint_state_for_endpoint_ptr(end_point_key()->endpoint());
         if (ep_state_ptr && ep_state_ptr->is_alive()) {
             _state.remove(state::ep_state_left_the_ring);
             return true;
         } else {
             if (!_state.contains(state::ep_state_left_the_ring)) {
-                _state.set_if<state::ep_state_left_the_ring>(!_shard_manager.local_db().get_token_metadata().is_normal_token_owner(end_point_key()));
+                _state.set_if<state::ep_state_left_the_ring>(!_shard_manager.local_db().get_token_metadata().is_normal_token_owner(end_point_key()->endpoint()));
             }
             // send the hints out if the destination Node is part of the ring - we will send to all new replicas in this case
             return _state.contains(state::ep_state_left_the_ring);
@@ -666,7 +665,7 @@ future<> manager::change_host_filter(host_filter filter) {
             // Iterate over existing hint directories and see if we can enable an endpoint manager
             // for some of them
             return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this, &topo] (fs::path datadir, directory_entry de) {
-                const ep_key_type ep = ep_key_type(de.name);
+                const auto ep = gms::inet_address(de.name);
                 auto node = topo.find_node(ep);
                 if (_ep_managers.contains(node) || !_host_filter.can_hint_for(node)) {
                     return make_ready_future<>();
