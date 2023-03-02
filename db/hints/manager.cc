@@ -163,7 +163,7 @@ void manager::forbid_hints_for_eps_with_pending_hints() {
 sync_point::shard_rps manager::calculate_current_sync_point(const locator::node_set& target_hosts) const {
     sync_point::shard_rps rps;
     for (auto node : target_hosts) {
-        auto it = _ep_managers.find(node->endpoint());
+        auto it = _ep_managers.find(node);
         if (it != _ep_managers.end()) {
             const end_point_hints_manager& ep_man = it->second;
             rps[ep_man.end_point_key()] = ep_man.last_written_replay_position();
@@ -187,11 +187,11 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
 
     bool was_aborted = false;
     co_await coroutine::parallel_for_each(_ep_managers, [&was_aborted, &rps, &local_as] (auto& p) {
-        const auto addr = p.first;
+        const auto node = p.first;
         auto& ep_man = p.second;
 
         db::replay_position rp;
-        auto it = rps.find(addr);
+        auto it = rps.find(node->endpoint());
         if (it != rps.end()) {
             rp = it->second;
         }
@@ -351,7 +351,7 @@ manager::end_point_hints_manager& manager::get_ep_manager(const locator::node_pt
     auto it = find_ep_manager(node);
     if (it == ep_managers_end()) {
         manager_logger.trace("Creating an ep_manager for {}", ep);
-        manager::end_point_hints_manager& ep_man = _ep_managers.emplace(ep, end_point_hints_manager(ep, *this)).first->second;
+        manager::end_point_hints_manager& ep_man = _ep_managers.emplace(node, end_point_hints_manager(ep, *this)).first->second;
         ep_man.start();
         return ep_man;
     }
@@ -668,7 +668,7 @@ future<> manager::change_host_filter(host_filter filter) {
             return lister::scan_dir(_hints_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [this, &topo] (fs::path datadir, directory_entry de) {
                 const ep_key_type ep = ep_key_type(de.name);
                 auto node = topo.find_node(ep);
-                if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(node)) {
+                if (_ep_managers.contains(node) || !_host_filter.can_hint_for(node)) {
                     return make_ready_future<>();
                 }
                 return get_ep_manager(node).populate_segments_to_replay();
@@ -676,15 +676,15 @@ future<> manager::change_host_filter(host_filter filter) {
                 // Bring back the old filter. The finally() block will cause us to stop
                 // the additional ep_hint_managers that we started
                 _host_filter = std::move(filter);
-            }).finally([this, &topo] {
+            }).finally([this] {
                 // Remove endpoint managers which are rejected by the filter
-                return parallel_for_each(_ep_managers, [this, &topo] (auto& pair) {
-                    auto node = topo.find_node(pair.first);
+                return parallel_for_each(_ep_managers, [this] (auto& pair) {
+                    auto node = pair.first;
                     if (_host_filter.can_hint_for(node)) {
                         return make_ready_future<>();
                     }
-                    return pair.second.stop(drain::no).finally([this, ep = pair.first] {
-                        _ep_managers.erase(ep);
+                    return pair.second.stop(drain::no).finally([this, node] {
+                        _ep_managers.erase(node);
                     });
                 });
             });
@@ -734,11 +734,11 @@ void manager::drain_for(locator::node_ptr node) {
                 } else {
                     ep_managers_map_type::iterator ep_manager_it = find_ep_manager(node);
                     if (ep_manager_it != ep_managers_end()) {
-                        return ep_manager_it->second.stop(drain::yes).finally([this, endpoint, &ep_man = ep_manager_it->second] {
+                        return ep_manager_it->second.stop(drain::yes).finally([this, node, &ep_man = ep_manager_it->second] {
                             return with_file_update_mutex(ep_man, [&ep_man] {
                                 return remove_file(ep_man.hints_dir().c_str());
-                            }).finally([this, endpoint] {
-                                _ep_managers.erase(endpoint);
+                            }).finally([this, node] {
+                                _ep_managers.erase(node);
                             });
                         });
                     }
