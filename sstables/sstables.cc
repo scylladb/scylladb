@@ -2224,29 +2224,42 @@ future<> sstable::filesystem_storage::move(const sstable& sst, sstring new_dir, 
     }
 }
 
-future<> sstable::move_to_new_dir(sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
-    co_await _storage.move(*this, std::move(new_dir), new_generation, delay_commit);
-    _generation = std::move(new_generation);
-}
-
-future<> sstable::filesystem_storage::quarantine(const sstable& sst, delayed_commit_changes* delay_commit) {
+future<> sstable::filesystem_storage::change_state(const sstable& sst, sstring to, generation_type new_generation, delayed_commit_changes* delay_commit) {
     auto path = fs::path(dir);
-    if (path.filename().native() == staging_dir) {
-        path = path.parent_path();
+    auto current = path.filename().native();
+
+    // Moving between states means moving between basedir/state subdirectories.
+    // However, normal state maps to the basedir itself and thus there's no way
+    // to check if current is normal_dir. The best that can be done here is to
+    // check that it's not anything else
+    if (current == staging_dir || current == upload_dir || current == quarantine_dir) {
+        if (to == quarantine_dir && current != staging_dir) {
+            // Legacy exception -- quarantine from anything but staging
+            // moves to the current directory quarantine subdir
+            path = path / to;
+        } else {
+            path = path.parent_path() / to;
+        }
+    } else {
+        current = normal_dir;
+        path = path / to;
     }
-    // Note: moving a sstable in a snapshot or in the uploads dir to quarantine
-    // will move it into a "quarantine" subdirectory of its current directory.
-    auto new_dir = (path / sstables::quarantine_dir).native();
-    sstlog.info("Moving SSTable {} to quarantine in {}", sst.get_filename(), new_dir);
-    co_await move(sst, std::move(new_dir), sst.generation(), delay_commit);
+
+    if (current == to) {
+        co_return; // Already there
+    }
+
+    sstlog.info("Moving sstable {} to {} in {}", sst.get_filename(), to, path);
+    co_await move(sst, path.native(), std::move(new_generation), delay_commit);
 }
 
-future<> sstable::move_to_quarantine(delayed_commit_changes* delay_commit) {
-    if (is_quarantined()) {
-        return make_ready_future<>();
-    }
+future<> sstable::change_state(sstring to, delayed_commit_changes* delay_commit) {
+    co_await _storage.change_state(*this, to, _generation, delay_commit);
+}
 
-    return _storage.quarantine(*this, delay_commit);
+future<> sstable::pick_up_from_upload(sstring to, generation_type new_generation) {
+    co_await _storage.change_state(*this, to, new_generation, nullptr);
+    _generation = std::move(new_generation);
 }
 
 future<> sstable::delayed_commit_changes::commit() {

@@ -74,7 +74,7 @@ class distributed_loader {
     static future<> lock_table(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring cf_name);
     static future<size_t> make_sstables_available(sstables::sstable_directory& dir,
             sharded<replica::database>& db, sharded<db::view::view_update_generator>& view_update_generator,
-            std::filesystem::path datadir, sstring ks, sstring cf);
+            bool needs_view_update, sstring ks, sstring cf);
     static future<> populate_keyspace(distributed<replica::database>& db, sstring datadir, sstring ks_name);
     static future<> cleanup_column_family_temp_sst_dirs(sstring sstdir);
     static future<> handle_sstables_pending_delete(sstring pending_deletes_dir);

@@ -1136,7 +1136,7 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
                     auto idx = tests::random::get_int<size_t>(0, sstables.size() - 1);
                     testlog.debug("Moving sstable #{} out of {} to quarantine", idx, sstables.size());
                     auto sst = sstables[idx];
-                    co_await sst->move_to_quarantine();
+                    co_await sst->change_state(sstables::quarantine_dir);
                     found |= true;
                 });
                 co_return found;
@@ -1190,7 +1190,7 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
                     }
                     auto idx = tests::random::get_int<size_t>(0, sstables.size() - 1);
                     auto sst = sstables[idx];
-                    co_await sst->move_to_quarantine();
+                    co_await sst->change_state(sstables::quarantine_dir);
                 });
             });
         }
