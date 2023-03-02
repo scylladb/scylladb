@@ -1349,7 +1349,6 @@ warnings = [
     '-Wno-overloaded-virtual',
     '-Wno-stringop-overflow',
     '-Wno-unused-command-line-argument',
-    '-Wno-defaulted-function-deleted',
     '-Wno-redeclared-class-member',
     '-Wno-unsupported-friend',
     '-Wno-delete-non-abstract-non-virtual-dtor',
