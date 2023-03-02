@@ -1671,9 +1671,9 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 
         align = f.disk_write_dma_alignment();
         auto is_overwrite = false;
+        auto existing_size = f.known_size();
 
         if ((flags & open_flags::dsync) != open_flags{}) {
-            auto existing_size = f.known_size();
             is_overwrite = true;
             // would be super nice if we just could mmap(/dev/zero) and do sendto
             // instead of this, but for now we must do explicit buffer writes.
@@ -1683,8 +1683,6 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             if (existing_size > max_size) {
                 co_await f.truncate(max_size);
             } else if (existing_size < max_size) {
-                totals.total_size_on_disk += (max_size - existing_size);
-
                 clogger.trace("Pre-writing {} of {} KB to segment {}", (max_size - existing_size)/1024, max_size/1024, filename);
 
                 // re-open without o_dsync for pre-alloc. The reason/rationale
@@ -1731,6 +1729,12 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         } else {
             co_await f.truncate(max_size);
         }
+
+        // #12810 - we did not update total_size_on_disk unless o_dsync was 
+        // on. So kept running with total == 0 -> free for all in creating new segment.
+        // Always update total_size_on_disk. Will wrap-around iff existing_size > max_size. 
+        // That is ok.
+        totals.total_size_on_disk += (max_size - existing_size);
 
         if (cfg.extensions && !cfg.extensions->commitlog_file_extensions().empty()) {
             for (auto * ext : cfg.extensions->commitlog_file_extensions()) {
@@ -2118,7 +2122,7 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
     for (auto& [f, mode] : ftd) {
         // `f.remove_file()` resets known_size to 0, so remember the size here,
         // in order to subtract it from total_size_on_disk accurately.
-        size_t size = f.known_size();
+        auto size = f.known_size();
         try {
             if (f) {
                 co_await f.close();
