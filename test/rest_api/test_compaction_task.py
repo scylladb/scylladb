@@ -4,7 +4,7 @@ import sys
 sys.path.insert(1, sys.path[0] + '/../cql-pytest')
 from util import new_test_table, new_test_keyspace
 from rest_util import set_tmp_task_ttl
-from task_manager_utils import wait_for_task, list_tasks
+from task_manager_utils import wait_for_task, list_tasks, check_child_parent_relationship
 
 def test_major_keyspace_compaction_task(cql, this_dc, rest_api):
     long_time = 1000000000
@@ -25,5 +25,9 @@ def test_major_keyspace_compaction_task(cql, this_dc, rest_api):
                 assert tasks, "compaction task was not created"
 
                 # Check if all tasks finished successfully.
-                failed = [task["task_id"] for task in tasks if wait_for_task(rest_api, task["task_id"])["state"] != "done"]
+                statuses = [wait_for_task(rest_api, task["task_id"]) for task in tasks]
+                failed = [task["task_id"] for task in statuses if task["state"] != "done"]
                 assert not failed, f"tasks with ids {failed} failed"
+
+                for top_level_task in statuses:
+                    check_child_parent_relationship(rest_api, top_level_task)
