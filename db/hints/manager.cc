@@ -358,7 +358,8 @@ manager::end_point_hints_manager& manager::get_ep_manager(const locator::node_pt
     return it->second;
 }
 
-inline bool manager::have_ep_manager(ep_key_type ep) const noexcept {
+inline bool manager::have_ep_manager(const locator::node_ptr& node) const noexcept {
+    const auto ep = node->endpoint();
     return find_ep_manager(ep) != ep_managers_end();
 }
 
@@ -696,7 +697,7 @@ bool manager::check_dc_for(locator::node_ptr node) const noexcept {
     try {
         // If target's DC is not a "hintable" DCs - don't hint.
         // If there is an end point manager then DC has already been checked and found to be ok.
-        return _host_filter.is_enabled_for_all() || have_ep_manager(node->endpoint()) || _host_filter.can_hint_for(node);
+        return _host_filter.is_enabled_for_all() || have_ep_manager(node) || _host_filter.can_hint_for(node);
     } catch (...) {
         // if we failed to check the DC - block this hint
         return false;
