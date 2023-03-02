@@ -5,6 +5,7 @@ target_sources(utils
   PRIVATE
     UUID_gen.cc
     arch/powerpc/crc32-vpmsum/crc32_wrapper.cc
+    arch/powerpc/crc32-vpmsum/crc32.S
     array-search.cc
     ascii.cc
     base64.cc
