@@ -113,3 +113,6 @@ add_scylla_test(bptree_test
 add_scylla_test(utf8_test
   KIND BOOST
   LIBRARIES utils)
+add_scylla_test(expr_test
+  KIND BOOST
+  LIBRARIES cql3)

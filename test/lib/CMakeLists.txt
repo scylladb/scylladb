@@ -6,6 +6,7 @@ target_sources(test-lib
     tmpdir.cc
     alternator_test_env.cc
     cql_test_env.cc
+    expr_test_utils.cc
     test_services.cc
     key_utils.cc
     random_schema.cc
