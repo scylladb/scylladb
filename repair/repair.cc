@@ -177,9 +177,8 @@ static std::vector<table_id> get_table_ids(const replica::database& db, const ss
     table_ids.reserve(tables.size());
     for (auto& table : tables) {
         thread::maybe_yield();
-        // FIXME: fix indentation
         try {
-        table_ids.push_back(db.find_uuid(keyspace, table));
+            table_ids.push_back(db.find_uuid(keyspace, table));
         } catch (replica::no_such_column_family&) {
             rlogger.warn("Column family {} does not exist in keyspace {}", table, keyspace);
         }
@@ -1123,14 +1122,13 @@ future<> user_requested_repair_task_impl::run() {
         bool needs_flush_before_repair = false;
         if (db.features().tombstone_gc_options) {
             for (auto& table: cfs) {
-              // FIXME: fix indentation
-              if (const auto* cf = find_column_family_if_exists(db, keyspace, table)) {
-                auto s = cf->schema();
-                const auto& options = s->tombstone_gc_options();
-                if (options.mode() == tombstone_gc_mode::repair) {
-                    needs_flush_before_repair = true;
+                if (const auto* cf = find_column_family_if_exists(db, keyspace, table)) {
+                    auto s = cf->schema();
+                    const auto& options = s->tombstone_gc_options();
+                    if (options.mode() == tombstone_gc_mode::repair) {
+                        needs_flush_before_repair = true;
+                    }
                 }
-              }
             }
         }
 
