@@ -736,7 +736,7 @@ private:
         return _local_db;
     }
 
-    end_point_hints_manager& get_ep_manager(ep_key_type ep);
+    end_point_hints_manager& get_ep_manager(const locator::node_ptr& node);
     bool have_ep_manager(ep_key_type ep) const noexcept;
 
 public:

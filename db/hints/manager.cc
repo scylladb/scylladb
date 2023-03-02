@@ -103,7 +103,7 @@ future<> manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr
         if (!check_dc_for(node)) {
             return make_ready_future<>();
         }
-        return get_ep_manager(ep).populate_segments_to_replay();
+        return get_ep_manager(node).populate_segments_to_replay();
     }).then([this] {
         return compute_hints_dir_device_id();
     }).then([this] {
@@ -346,7 +346,8 @@ future<hints_store_ptr> manager::end_point_hints_manager::get_or_load() {
     return make_ready_future<hints_store_ptr>(_hints_store_anchor);
 }
 
-manager::end_point_hints_manager& manager::get_ep_manager(ep_key_type ep) {
+manager::end_point_hints_manager& manager::get_ep_manager(const locator::node_ptr& node) {
+    const auto ep = node->endpoint();
     auto it = find_ep_manager(ep);
     if (it == ep_managers_end()) {
         manager_logger.trace("Creating an ep_manager for {}", ep);
@@ -373,7 +374,7 @@ bool manager::store_hint(locator::node_ptr node, schema_ptr s, lw_shared_ptr<con
         manager_logger.trace("Going to store a hint to {}", ep);
         tracing::trace(tr_state, "Going to store a hint to {}", ep);
 
-        return get_ep_manager(ep).store_hint(std::move(s), std::move(fm), tr_state);
+        return get_ep_manager(node).store_hint(std::move(s), std::move(fm), tr_state);
     } catch (...) {
         manager_logger.trace("Failed to store a hint to {}: {}", ep, std::current_exception());
         tracing::trace(tr_state, "Failed to store a hint to {}: {}", ep, std::current_exception());
@@ -670,7 +671,7 @@ future<> manager::change_host_filter(host_filter filter) {
                 if (_ep_managers.contains(ep) || !_host_filter.can_hint_for(node)) {
                     return make_ready_future<>();
                 }
-                return get_ep_manager(ep).populate_segments_to_replay();
+                return get_ep_manager(node).populate_segments_to_replay();
             }).handle_exception([this, filter = std::move(filter)] (auto ep) mutable {
                 // Bring back the old filter. The finally() block will cause us to stop
                 // the additional ep_hint_managers that we started
