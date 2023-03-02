@@ -346,10 +346,9 @@ future<hints_store_ptr> manager::end_point_hints_manager::get_or_load() {
 }
 
 manager::end_point_hints_manager& manager::get_ep_manager(const locator::node_ptr& node) {
-    const auto ep = node->endpoint();
     auto it = find_ep_manager(node);
     if (it == ep_managers_end()) {
-        manager_logger.trace("Creating an ep_manager for {}", ep);
+        manager_logger.trace("Creating an ep_manager for {}", node);
         manager::end_point_hints_manager& ep_man = _ep_managers.emplace(node, end_point_hints_manager(node, *this)).first->second;
         ep_man.start();
         return ep_man;
@@ -362,21 +361,20 @@ inline bool manager::have_ep_manager(const locator::node_ptr& node) const noexce
 }
 
 bool manager::store_hint(locator::node_ptr node, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
-    const auto ep = node->endpoint();
     if (stopping() || draining_all() || !started() || !can_hint_for(node)) {
-        manager_logger.trace("Can't store a hint to {}", ep);
+        manager_logger.trace("Can't store a hint to {}", node);
         ++_stats.dropped;
         return false;
     }
 
     try {
-        manager_logger.trace("Going to store a hint to {}", ep);
-        tracing::trace(tr_state, "Going to store a hint to {}", ep);
+        manager_logger.trace("Going to store a hint to {}", node);
+        tracing::trace(tr_state, "Going to store a hint to {}", node);
 
         return get_ep_manager(node).store_hint(std::move(s), std::move(fm), tr_state);
     } catch (...) {
-        manager_logger.trace("Failed to store a hint to {}: {}", ep, std::current_exception());
-        tracing::trace(tr_state, "Failed to store a hint to {}: {}", ep, std::current_exception());
+        manager_logger.trace("Failed to store a hint to {}: {}", node, std::current_exception());
+        tracing::trace(tr_state, "Failed to store a hint to {}: {}", node, std::current_exception());
 
         ++_stats.errors;
         return false;
@@ -602,15 +600,13 @@ const column_mapping& manager::end_point_hints_manager::sender::get_column_mappi
 }
 
 bool manager::too_many_in_flight_hints_for(locator::node_ptr node) const noexcept {
-    auto ep = node->endpoint();
     // There is no need to check the DC here because if there is an in-flight hint for this end point then this means that
     // its DC has already been checked and found to be ok.
-    return _stats.size_of_hints_in_progress > max_size_of_hints_in_progress && !utils::fb_utilities::is_me(ep) && hints_in_progress_for(node) > 0 && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
+    return _stats.size_of_hints_in_progress > max_size_of_hints_in_progress && node->is_local() && hints_in_progress_for(node) > 0 && local_gossiper().get_endpoint_downtime(node->endpoint()) <= _max_hint_window_us;
 }
 
 bool manager::can_hint_for(locator::node_ptr node) const noexcept {
-    auto ep = node->endpoint();
-    if (utils::fb_utilities::is_me(ep)) {
+    if (node->is_local()) {
         return false;
     }
 
@@ -624,19 +620,19 @@ bool manager::can_hint_for(locator::node_ptr node) const noexcept {
     //
     // In the worst case there's going to be (_max_size_of_hints_in_progress + N - 1) in-flight hints, where N is the total number Nodes in the cluster.
     if (_stats.size_of_hints_in_progress > max_size_of_hints_in_progress && hints_in_progress_for(node) > 0) {
-        manager_logger.trace("size_of_hints_in_progress {} hints_in_progress_for({}) {}", _stats.size_of_hints_in_progress, ep, hints_in_progress_for(node));
+        manager_logger.trace("size_of_hints_in_progress {} hints_in_progress_for({}) {}", _stats.size_of_hints_in_progress, node, hints_in_progress_for(node));
         return false;
     }
 
     // check that the destination DC is "hintable"
     if (!check_dc_for(node)) {
-        manager_logger.trace("{}'s DC is not hintable", ep);
+        manager_logger.trace("{}'s DC is not hintable", node);
         return false;
     }
 
     // check if the end point has been down for too long
-    if (local_gossiper().get_endpoint_downtime(ep) > _max_hint_window_us) {
-        manager_logger.trace("{} is down for {}, not hinting", ep, local_gossiper().get_endpoint_downtime(ep));
+    if (local_gossiper().get_endpoint_downtime(node->endpoint()) > _max_hint_window_us) {
+        manager_logger.trace("{} is down for {}, not hinting", node, local_gossiper().get_endpoint_downtime(node->endpoint()));
         return false;
     }
 
@@ -986,9 +982,9 @@ future<> manager::end_point_hints_manager::sender::wait_until_hints_are_replayed
 
     // When the future resolves, the endpoint manager is not guaranteed to exist anymore
     // therefore we cannot capture `this`
-    auto ep = end_point_key();
-    return (**ptr).get_future().finally([sub = std::move(sub), ep] {
-        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): returning afther the future was satisfied", ep);
+    auto node = end_point_key();
+    return (**ptr).get_future().finally([sub = std::move(sub), node] {
+        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): returning afther the future was satisfied", node);
     });
 }
 
