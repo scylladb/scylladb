@@ -2276,10 +2276,15 @@ public:
             struct stats {
                 // take the pre-reserved memory into account, as seastar only returns
                 // the stats of memory managed by the seastar allocator, but we instruct
-                // it to reserve addition memory for system.
-                uint64_t total = db::config::wasm_udf_reserved_memory;
+                // it to reserve addition memory for non-seastar allocator on per-shard
+                // basis.
+                uint64_t total = 0;
                 uint64_t free = 0;
-                static stats reduce(stats a, stats b) { return stats{a.total + b.total, a.free + b.free}; }
+                static stats reduce(stats a, stats b) {
+                    return stats{
+                        a.total + b.total + db::config::wasm_udf_reserved_memory,
+                        a.free + b.free};
+                    };
             };
             return map_reduce_shards<stats>([] () {
                 const auto& s = memory::stats();
