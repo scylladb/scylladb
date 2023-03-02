@@ -1,0 +1,17 @@
+add_library(tools STATIC)
+target_sources(tools
+  PRIVATE
+    scylla-types.cc
+    scylla-sstable.cc
+    schema_loader.cc
+    utils.cc
+    lua_sstable_consumer.cc)
+target_include_directories(tools
+  PUBLIC
+    ${CMAKE_SOURCE_DIR})
+target_link_libraries(tools
+  PUBLIC
+    Seastar::seastar
+    xxHash::xxhash
+  PRIVATE
+    db)

@@ -1,0 +1,17 @@
+add_library(cdc STATIC)
+target_sources(cdc
+  PRIVATE
+    cdc_partitioner.cc
+    generation.cc
+    log.cc
+    metadata.cc
+    split.cc)
+target_include_directories(cdc
+  PUBLIC
+    ${CMAKE_SOURCE_DIR})
+target_link_libraries(cdc
+  PUBLIC
+    Seastar::seastar
+    xxHash::xxhash
+  PRIVATE
+    replica)

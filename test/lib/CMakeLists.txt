@@ -3,7 +3,14 @@ target_sources(test-lib
   PRIVATE
     log.cc
     test_utils.cc
-    tmpdir.cc)
+    tmpdir.cc
+    alternator_test_env.cc
+    cql_test_env.cc
+    expr_test_utils.cc
+    test_services.cc
+    key_utils.cc
+    random_schema.cc
+    data_model.cc)
 target_include_directories(test-lib
   PUBLIC
     ${CMAKE_SOURCE_DIR})

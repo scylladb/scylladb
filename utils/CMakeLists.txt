@@ -1,8 +1,11 @@
+find_package(cryptopp REQUIRED)
+
 add_library(utils STATIC)
 target_sources(utils
   PRIVATE
     UUID_gen.cc
     arch/powerpc/crc32-vpmsum/crc32_wrapper.cc
+    arch/powerpc/crc32-vpmsum/crc32.S
     array-search.cc
     ascii.cc
     base64.cc
@@ -45,4 +48,6 @@ target_include_directories(utils
 target_link_libraries(utils
   PUBLIC
     Seastar::seastar
-    xxHash::xxhash)
+    xxHash::xxhash
+  PRIVATE
+    cryptopp)

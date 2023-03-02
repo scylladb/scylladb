@@ -9,13 +9,7 @@ target_sources(test-perf
     perf/perf_row_cache_update.cc
     perf/perf_simple_query.cc
     perf/perf_sstable.cc
-    perf/perf.cc
-    lib/alternator_test_env.cc
-    lib/cql_test_env.cc
-    lib/test_services.cc
-    lib/key_utils.cc
-    lib/random_schema.cc
-    lib/data_model.cc)
+    perf/perf.cc)
 target_include_directories(test-perf
   PUBLIC
     ${CMAKE_SOURCE_DIR})
@@ -32,6 +26,8 @@ target_link_libraries(test-perf
     JsonCpp::JsonCpp
     xxHash::xxhash
     wasmtime_bindings)
+
+add_subdirectory(perf)
 
 if(BUILD_TESTING)
     add_subdirectory(boost)
