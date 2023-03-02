@@ -31,6 +31,7 @@ enum class cql_binary_opcode : uint8_t {
     AUTH_CHALLENGE = 14,
     AUTH_RESPONSE  = 15,
     AUTH_SUCCESS   = 16,
+    OPCODES_COUNT
 };
 
 class response {
