@@ -1342,10 +1342,7 @@ warnings = [
     '-Wno-tautological-compare',
     '-Wno-parentheses-equality',
     '-Wno-c++11-narrowing',
-    '-Wno-sometimes-uninitialized',
-    '-Wno-return-stack-address',
     '-Wno-missing-braces',
-    '-Wno-overflow',
     '-Wno-noexcept-type',
     '-Wno-nonnull-compare',
     '-Wno-error=cpp',
@@ -1353,24 +1350,20 @@ warnings = [
     '-Wno-overloaded-virtual',
     '-Wno-stringop-overflow',
     '-Wno-unused-command-line-argument',
-    '-Wno-defaulted-function-deleted',
     '-Wno-redeclared-class-member',
     '-Wno-unsupported-friend',
     '-Wno-delete-non-abstract-non-virtual-dtor',
     '-Wno-braced-scalar-init',
     '-Wno-implicit-int-float-conversion',
     '-Wno-delete-abstract-non-virtual-dtor',
-    '-Wno-uninitialized-const-reference',
     # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=77728
     '-Wno-psabi',
     '-Wno-narrowing',
-    '-Wno-array-bounds',
     '-Wno-nonnull',
     '-Wno-catch-value',
     '-Wno-stringop-overread', # false positives with gcc 12
     '-Wno-uninitialized',  # false positives with gcc 12,
     '-Wno-missing-attributes', # something in seastar's memory.cc, TBD,
-    '-Wno-use-after-free', # false positives with gcc 12
     '-Wno-dangling-pointer', # false positives with gcc 12
 ]
 
