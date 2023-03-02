@@ -64,6 +64,7 @@ namespace cql_transport {
 
 class request_reader;
 class response;
+enum class cql_binary_opcode : uint8_t;
 
 enum class cql_compression {
     none,
@@ -112,26 +113,28 @@ struct cql_server_config {
 
 class cql_server : public seastar::peering_sharded_service<cql_server>, public generic_server::server {
 private:
-    struct transport_stats {
-        // server stats
-        uint64_t connects;
-        uint64_t connections;
-        uint64_t requests_served;
-        uint32_t requests_serving;
-        uint64_t requests_blocked_memory;
-        uint64_t requests_shed;
+    struct request_kind_stats {
+        uint64_t count = 0;
+        uint64_t request_size = 0;
+        uint64_t response_size = 0;
+    };
 
-        // cql message stats
-        uint64_t startups;
-        uint64_t auth_responses;
-        uint64_t options_requests;
-        uint64_t query_requests;
-        uint64_t prepare_requests;
-        uint64_t execute_requests;
-        uint64_t batch_requests;
-        uint64_t register_requests;
+    struct transport_stats {
+        transport_stats(int num_op) : _cql_requests_stats(num_op) {}
+
+        // server stats
+        uint64_t connects = 0;
+        uint64_t connections = 0;
+        uint64_t requests_served = 0;
+        uint32_t requests_serving = 0;
+        uint64_t requests_blocked_memory = 0;
+        uint64_t requests_shed = 0;
 
         std::unordered_map<exceptions::exception_code, uint64_t> errors;
+
+        request_kind_stats& get_cql_opcode_stats(cql_binary_opcode op) { return _cql_requests_stats[static_cast<uint8_t>(op)]; }
+    private:
+        std::vector<request_kind_stats> _cql_requests_stats;
     };
 private:
     class event_notifier;
@@ -146,7 +149,7 @@ private:
     seastar::metrics::metric_groups _metrics;
     std::unique_ptr<event_notifier> _notifier;
 private:
-    transport_stats _stats = {};
+    transport_stats _stats;
     auth::service& _auth_service;
     qos::service_level_controller& _sl_controller;
     gms::gossiper& _gossiper;
