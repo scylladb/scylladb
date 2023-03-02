@@ -5,7 +5,8 @@ project(scylla)
 include(CTest)
 
 list(APPEND CMAKE_MODULE_PATH
-  ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake
+  ${CMAKE_CURRENT_SOURCE_DIR}/seastar/cmake)
 
 set(CMAKE_BUILD_TYPE "${CMAKE_BUILD_TYPE}" CACHE
     STRING "Choose the type of build." FORCE)
