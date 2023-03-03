@@ -47,8 +47,19 @@ UUID::UUID(sstring_view uuid) {
     sstring most = sstring(uuid_string.begin(), uuid_string.begin() + size);
     sstring least = sstring(uuid_string.begin() + size, uuid_string.end());
     int base = 16;
-    this->most_sig_bits = std::stoull(most, nullptr, base);
-    this->least_sig_bits = std::stoull(least, nullptr, base);
+    try {
+        std::size_t pos = 0;
+        this->most_sig_bits = std::stoull(most, &pos, base);
+        if (pos != most.size()) {
+            throw std::invalid_argument("");
+        }
+        this->least_sig_bits = std::stoull(least, &pos, base);
+        if (pos != least.size()) {
+            throw std::invalid_argument("");
+        }
+    } catch (const std::logic_error&) {
+        throw marshal_exception(format("invalid UUID: '{}'", uuid));
+    }
 }
 
 }
