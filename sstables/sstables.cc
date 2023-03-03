@@ -960,7 +960,7 @@ void sstable::filesystem_storage::open(sstable& sst, const io_priority_class& pc
         // the generation of a sstable that exists.
         w.close();
         remove_file(file_path).get();
-        throw std::runtime_error(format("SSTable write failed due to existence of TOC file for generation {:d} of {}.{}", sst._generation.value(), sst._schema->ks_name(), sst._schema->cf_name()));
+        throw std::runtime_error(format("SSTable write failed due to existence of TOC file for generation {:d} of {}.{}", sst._generation, sst._schema->ks_name(), sst._schema->cf_name()));
     }
 
     for (auto&& key : sst._recognized_components) {
@@ -2381,8 +2381,8 @@ static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sst
     } else {
         throw malformed_sstable_exception(seastar::format("invalid version for file {}. Name doesn't match any known version.", fname));
     }
-    generation_type::value_type generation_value = boost::lexical_cast<generation_type::value_type>(generation);
-    return entry_descriptor(sstdir, ks, cf, generation_from_value(generation_value), version, sstable::format_from_sstring(format), sstable::component_from_sstring(version, component));
+    generation_type generation_value = boost::lexical_cast<generation_type>(generation);
+    return entry_descriptor(sstdir, ks, cf, generation_value, version, sstable::format_from_sstring(format), sstable::component_from_sstring(version, component));
 }
 
 entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname) {

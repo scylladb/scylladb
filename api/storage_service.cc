@@ -1269,7 +1269,8 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                             ss::sstable info;
 
                             info.timestamp = t;
-                            info.generation = sstables::generation_value(sstable->generation());
+                            // TODO: tchaikov uuid
+                            info.generation = std::get<int64_t>(sstables::generation_value(sstable->generation()));
                             info.level = sstable->get_sstable_level();
                             info.size = sstable->bytes_on_disk();
                             info.data_size = sstable->ondisk_data_size();

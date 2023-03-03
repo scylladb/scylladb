@@ -401,6 +401,40 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
     co_return new_sstables.size();
 }
 
+std::unique_ptr<sstables::generation_generator>
+create_generation_generator(bool uuid_sstable_identifiers_enabled,
+                            sstables::generation_type highest_generation) {
+    if (uuid_sstable_identifiers_enabled) {
+        return std::make_unique<sstables::uuid_generation_generator>();
+    }
+    auto generation_base = int64_t(highest_generation) / smp::count + 1;
+    return std::make_unique<sstables::int_generation_generator>(
+        generation_base * smp::count + this_shard_id());
+}
+
+class sstable_creator {
+    replica::table& _table;
+    fs::path _dir;
+    std::unique_ptr<sstables::generation_generator> _generation_generator;
+public:
+    sstable_creator(replica::table& table,
+                    fs::path dir,
+                    std::unique_ptr<sstables::generation_generator> generation_generator)
+        : _table{table}
+        , _dir{dir}
+        , _generation_generator{std::move(generation_generator)} {}
+    sstables::shared_sstable operator()() {
+        auto& sstm = _table.get_sstables_manager();
+        return sstm.make_sstable(_table.schema(),
+                                 _dir.native(),
+                                 _generation_generator->generate(),
+                                 sstm.get_highest_supported_format(),
+                                 sstables::sstable_format_types::big,
+                                 gc_clock::now(),
+                                 &error_handler_gen_for_upload_dir);
+    }
+};
+
 sstables::shared_sstable make_sstable(replica::table& table, fs::path dir, sstables::generation_type::value_type generation_value) {
     auto& sstm = table.get_sstables_manager();
     return sstm.make_sstable(table.schema(), dir.native(), sstables::generation_from_value(generation_value), sstm.get_highest_supported_format(), sstables::sstable_format_types::big, gc_clock::now(), &error_handler_gen_for_upload_dir);
@@ -434,26 +468,19 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         };
         process_sstable_dir(directory, flags).get();
 
-        auto generation = highest_generation_seen(directory).get0();
-        auto shard_generation_base = sstables::generation_value(generation) / smp::count + 1;
-
-        // We still want to do our best to keep the generation numbers shard-friendly.
-        // Each destination shard will manage its own generation counter.
-        std::vector<std::atomic<sstables::generation_type::value_type>> shard_gen(smp::count);
-        for (shard_id s = 0; s < smp::count; ++s) {
-            shard_gen[s].store(shard_generation_base * smp::count + s, std::memory_order_relaxed);
-        }
-
-        reshard(directory, db, ks, cf, [&global_table, upload, &shard_gen] (shard_id shard) mutable {
-            // we need generation calculated by instance of cf at requested shard
-            auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
-            return make_sstable(*global_table, upload, gen);
-        }, service::get_local_streaming_priority()).get();
-
-        reshape(directory, db, sstables::reshape_mode::strict, ks, cf, [global_table, upload, &shard_gen] (shard_id shard) {
-            auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
-            return make_sstable(*global_table, upload, gen);
-        }, [] (const sstables::shared_sstable&) { return true; }, service::get_local_streaming_priority()).get();
+        sharded<sstable_creator> sst_creator;
+        sst_creator.start(
+            std::ref(*global_table), upload,
+            sharded_parameter(create_generation_generator,
+                              db.local().get_config().uuid_sstable_identifiers_enabled(),
+                              highest_generation_seen(directory).get0())).get();
+        auto compaction_sstable_creator = [&sst_creator] (shard_id) {
+            return sst_creator.local()();
+        };
+        reshard(directory, db, ks, cf, compaction_sstable_creator, service::get_local_streaming_priority()).get();
+        reshape(directory, db, sstables::reshape_mode::strict, ks, cf, compaction_sstable_creator,
+                [] (const sstables::shared_sstable&) { return true; },
+                service::get_local_streaming_priority()).get();
 
         // Move to staging directory to avoid clashes with future uploads. Unique generation number ensures no collisions.
         const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), db.local().get_token_metadata(), *global_table, streaming::stream_reason::repair).get0();
@@ -574,7 +601,9 @@ public:
         }
 
         co_await smp::invoke_on_all([this] {
-            _global_table->update_sstables_known_generation(_highest_generation);
+            if (!_db.local().get_config().uuid_sstable_identifiers_enabled()) {
+                _global_table->update_sstables_known_generation(_highest_generation);
+            }
             return _global_table->disable_auto_compaction();
         });
 

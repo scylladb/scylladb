@@ -63,7 +63,7 @@ sstable_directory::sstable_directory(sstables_manager& manager,
 {}
 
 void sstable_directory::components_lister::handle(sstables::entry_descriptor desc, fs::path filename) {
-    if ((generation_value(desc.generation) % smp::count) != this_shard_id()) {
+    if (desc.generation.shard() != this_shard_id()) {
         return;
     }
 

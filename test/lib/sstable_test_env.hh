@@ -84,7 +84,7 @@ public:
     }
 
     struct sst_not_found : public std::runtime_error {
-        sst_not_found(const sstring& dir, sstables::generation_type::value_type generation)
+        sst_not_found(const sstring& dir, sstables::generation_type generation)
             : std::runtime_error(format("no versions of sstable generation {} found in {}", generation, dir))
         {}
     };

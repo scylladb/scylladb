@@ -65,6 +65,12 @@ public:
 
     }
 
+    unsigned shard(unsigned shard_count) const noexcept {
+        assert(is_timestamp());
+        uint64_t shard_bits = (uint64_t)least_sig_bits >> 32;
+        return shard_bits * 0xFF % shard_count;
+    }
+
     // This matches Java's UUID.toString() actual implementation. Note that
     // that method's documentation suggest something completely different!
     sstring to_sstring() const {

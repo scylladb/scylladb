@@ -8,18 +8,24 @@
 
 #pragma once
 
+#include "utils/UUID.hh"
+#include <boost/algorithm/string/classification.hpp>
 #include <fmt/core.h>
 #include <cstdint>
 #include <compare>
 #include <limits>
 #include <iostream>
+#include <memory>
+#include <boost/algorithm/string/split.hpp>
 #include <seastar/core/sstring.hh>
+#include <stdexcept>
+#include <string>
 
 namespace sstables {
 
 class generation_type {
 public:
-    using value_type = int64_t;
+    using value_type = std::variant<int64_t, utils::UUID>;
 private:
     value_type _value;
 public:
@@ -27,21 +33,44 @@ public:
         : _value(0)
     {}
 
+    explicit constexpr generation_type(int64_t value) noexcept: _value(value) {}
+    explicit constexpr generation_type(utils::UUID value) noexcept: _value(value) {}
     explicit constexpr generation_type(value_type value) noexcept: _value(value) {}
     constexpr value_type value() const noexcept { return _value; }
-
+    constexpr bool is_uuid_based() const noexcept {
+        return _value.index() == 1;
+    }
+    constexpr operator int64_t() const noexcept {
+        assert(_value.index() == 0);
+        return std::get<int64_t>(_value);
+    }
+    constexpr operator utils::UUID() const noexcept {
+        assert(_value.index() == 1);
+        return std::get<utils::UUID>(_value);
+    }
+    constexpr shard_id shard() const noexcept {
+        if (is_uuid_based()) {
+            return utils::UUID(*this).shard(smp::count);
+        } else {
+            return int64_t(*this) / smp::count;
+        }
+    }
     constexpr bool operator==(const generation_type& other) const noexcept { return _value == other._value; }
     constexpr std::strong_ordering operator<=>(const generation_type& other) const noexcept { return _value <=> other._value; }
-
-    generation_type& operator++() noexcept {
-        ++_value;
-        return *this;
-    }
-
-    generation_type operator++(int) noexcept {
-        auto ret = *this;
-        ++_value;
-        return ret;
+    friend std::istream& operator>>(std::istream& in, generation_type& generation) {
+        sstring token;
+        in >> token;
+        try {
+            if (auto dash = token.find('-'); dash != token.npos) {
+                generation = generation_type{utils::UUID{token}};
+            } else {
+                generation = generation_type{std::stol(token)};
+            }
+        }  catch (const std::invalid_argument&) {
+            in.setstate(std::ios_base::failbit);
+            throw;
+        }
+        return in;
     }
 };
 
@@ -52,14 +81,30 @@ constexpr generation_type::value_type generation_value(generation_type generatio
     return generation.value();
 }
 
-} //namespace sstables
+class generation_generator {
+public:
+    virtual generation_type generate() = 0;
+    virtual ~generation_generator() = default;
+};
 
-namespace seastar {
-template <typename string_type = sstring>
-string_type to_sstring(sstables::generation_type generation) {
-    return to_sstring(sstables::generation_value(generation));
-}
-} //namespace seastar
+class int_generation_generator final : public generation_generator {
+    std::atomic<int64_t> _last_generation;
+public:
+    int_generation_generator(int64_t last_generation)
+        : _last_generation{last_generation} {}
+    generation_type generate() final {
+        return generation_type{_last_generation.fetch_add(smp::count, std::memory_order_relaxed)};
+    }
+};
+
+class uuid_generation_generator : public generation_generator {
+public:
+    generation_type generate() final {
+        return generation_type{utils::UUID_gen::get_time_UUID()};
+    }
+};
+
+} //namespace sstables
 
 namespace std {
 template <>
@@ -85,6 +130,8 @@ template <>
 struct fmt::formatter<sstables::generation_type> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const sstables::generation_type& generation, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{}", generation.value());
+        return std::visit([&ctx] (auto&& v) {
+            return fmt::format_to(ctx.out(), "{}", v);
+        }, generation.value());
     }
 };
