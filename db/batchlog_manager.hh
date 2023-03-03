@@ -35,6 +35,8 @@ class query_processor;
 
 namespace db {
 
+class system_keyspace;
+
 struct batchlog_manager_config {
     std::chrono::duration<double> write_request_timeout;
     uint64_t replay_rate = std::numeric_limits<uint64_t>::max();
@@ -56,6 +58,7 @@ private:
 
     size_t _total_batches_replayed = 0;
     cql3::query_processor& _qp;
+    db::system_keyspace& _sys_ks;
     db_clock::duration _write_request_timeout;
     uint64_t _replay_rate;
     shared_future<> _started;
@@ -70,7 +73,7 @@ public:
     // Takes a QP, not a distributes. Because this object is supposed
     // to be per shard and does no dispatching beyond delegating the the
     // shard qp (which is what you feed here).
-    batchlog_manager(cql3::query_processor&, batchlog_manager_config config);
+    batchlog_manager(cql3::query_processor&, db::system_keyspace& sys_ks, batchlog_manager_config config);
 
     future<> start();
     // abort the replay loop and return its future.

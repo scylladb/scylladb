@@ -1163,7 +1163,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             bm_cfg.replay_rate = cfg->batchlog_replay_throttle_in_kb() * 1000;
             bm_cfg.delay = std::chrono::milliseconds(cfg->ring_delay_ms());
 
-            bm.start(std::ref(qp), bm_cfg).get();
+            bm.start(std::ref(qp), std::ref(sys_ks), bm_cfg).get();
 
             if (raft_gr.local().is_enabled()) {
                 auto my_raft_id = raft::server_id{cfg->host_id.uuid()};

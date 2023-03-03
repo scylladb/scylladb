@@ -770,7 +770,7 @@ public:
             bmcfg.replay_rate = 100000000;
             bmcfg.write_request_timeout = 2s;
             distributed<db::batchlog_manager> bm;
-            bm.start(std::ref(qp), bmcfg).get();
+            bm.start(std::ref(qp), std::ref(sys_ks), bmcfg).get();
             auto stop_bm = defer([&bm] {
                 bm.stop().get();
             });

@@ -43,8 +43,9 @@ static logging::logger blogger("batchlog_manager");
 const uint32_t db::batchlog_manager::replay_interval;
 const uint32_t db::batchlog_manager::page_size;
 
-db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, batchlog_manager_config config)
+db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_keyspace& sys_ks, batchlog_manager_config config)
         : _qp(qp)
+        , _sys_ks(sys_ks)
         , _write_request_timeout(std::chrono::duration_cast<db_clock::duration>(config.write_request_timeout))
         , _replay_rate(config.replay_rate)
         , _started(make_ready_future<>())
