@@ -1298,7 +1298,7 @@ bool gossiper::is_gossip_only_member(inet_address endpoint) {
     if (!es) {
         return false;
     }
-    return !is_dead_state(*es) && !get_token_metadata_ptr()->is_normal_token_owner(endpoint);
+    return !is_dead_state(*es) && !get_token_metadata_ptr()->is_normal_token_owner(endpoint) && !is_seed(endpoint);
 }
 
 clk::time_point gossiper::get_expire_time_for_endpoint(inet_address endpoint) const noexcept {
