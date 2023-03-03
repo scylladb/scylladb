@@ -1447,17 +1447,6 @@ future<> system_keyspace::save_truncation_record(const replica::column_family& c
     return save_truncation_record(cf.schema()->id(), truncated_at, rp);
 }
 
-future<db::replay_position> system_keyspace::get_truncated_position(table_id cf_id, uint32_t shard) {
-    return get_truncated_position(std::move(cf_id)).then([shard](replay_positions positions) {
-       for (auto& rp : positions) {
-           if (shard == rp.shard_id()) {
-               return make_ready_future<db::replay_position>(rp);
-           }
-       }
-       return make_ready_future<db::replay_position>();
-    });
-}
-
 future<replay_positions> system_keyspace::get_truncated_position(table_id cf_id) {
     return get_truncation_record(cf_id).then([](truncation_record e) {
         return make_ready_future<replay_positions>(e.positions);
