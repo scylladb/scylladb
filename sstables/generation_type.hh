@@ -38,13 +38,6 @@ constexpr int64_t generation_value(generation_type generation) {
 
 } //namespace sstables
 
-namespace seastar {
-template <typename string_type = sstring>
-string_type to_sstring(sstables::generation_type generation) {
-    return to_sstring(sstables::generation_value(generation));
-}
-} //namespace seastar
-
 namespace std {
 template <>
 struct hash<sstables::generation_type> {
