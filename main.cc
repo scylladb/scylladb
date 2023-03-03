@@ -1148,14 +1148,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     qp.set_wasm_instance_cache(&wasm_instance_cache.local());
                 }).get();
             }
-            supervisor::notify("initializing batchlog manager");
-            db::batchlog_manager_config bm_cfg;
-            bm_cfg.write_request_timeout = cfg->write_request_timeout_in_ms() * 1ms;
-            bm_cfg.replay_rate = cfg->batchlog_replay_throttle_in_kb() * 1000;
-            bm_cfg.delay = std::chrono::milliseconds(cfg->ring_delay_ms());
-
-            bm.start(std::ref(qp), bm_cfg).get();
-
             sstables::init_metrics().get();
 
             // FIXME -- this sys_ks start should really be up above, where its instance
@@ -1164,6 +1156,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return sys_ks.start(snitch.local());
             }).get();
             cfg->host_id = sys_ks.local().load_local_host_id().get0();
+
+            supervisor::notify("initializing batchlog manager");
+            db::batchlog_manager_config bm_cfg;
+            bm_cfg.write_request_timeout = cfg->write_request_timeout_in_ms() * 1ms;
+            bm_cfg.replay_rate = cfg->batchlog_replay_throttle_in_kb() * 1000;
+            bm_cfg.delay = std::chrono::milliseconds(cfg->ring_delay_ms());
+
+            bm.start(std::ref(qp), bm_cfg).get();
 
             if (raft_gr.local().is_enabled()) {
                 auto my_raft_id = raft::server_id{cfg->host_id.uuid()};
