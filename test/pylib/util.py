@@ -61,6 +61,7 @@ async def wait_for_cql_and_get_hosts(cql: Session, servers: list[ServerInfo], de
     """
     ip_set = set(str(srv.ip_addr) for srv in servers)
     async def get_hosts() -> Optional[list[Host]]:
+        cql.cluster.refresh_nodes()
         hosts = cql.cluster.metadata.all_hosts()
         remaining = ip_set - {h.address for h in hosts}
         if not remaining:
