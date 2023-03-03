@@ -22,19 +22,20 @@ class database;
 namespace db {
 
 class commitlog;
+class system_keyspace;
 
 class commitlog_replayer {
 public:
     commitlog_replayer(commitlog_replayer&&) noexcept;
     ~commitlog_replayer();
 
-    static future<commitlog_replayer> create_replayer(seastar::sharded<replica::database>&);
+    static future<commitlog_replayer> create_replayer(seastar::sharded<replica::database>&, seastar::sharded<db::system_keyspace>&);
 
     future<> recover(std::vector<sstring> files, sstring fname_prefix);
     future<> recover(sstring file, sstring fname_prefix);
 
 private:
-    commitlog_replayer(seastar::sharded<replica::database>&);
+    commitlog_replayer(seastar::sharded<replica::database>&, seastar::sharded<db::system_keyspace>&);
 
     class impl;
     std::unique_ptr<impl> _impl;

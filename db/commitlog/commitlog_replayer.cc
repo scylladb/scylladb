@@ -48,7 +48,7 @@ class db::commitlog_replayer::impl {
 
     friend class db::commitlog_replayer;
 public:
-    impl(seastar::sharded<replica::database>& db);
+    impl(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks);
 
     future<> init();
 
@@ -102,12 +102,14 @@ public:
     }
 
     seastar::sharded<replica::database>& _db;
+    seastar::sharded<db::system_keyspace>& _sys_ks;
     shard_rpm_map _rpm;
     shard_rp_map _min_pos;
 };
 
-db::commitlog_replayer::impl::impl(seastar::sharded<replica::database>& db)
+db::commitlog_replayer::impl::impl(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks)
     : _db(db)
+    , _sys_ks(sys_ks)
 {}
 
 future<> db::commitlog_replayer::impl::init() {
@@ -299,8 +301,8 @@ future<> db::commitlog_replayer::impl::process(stats* s, commitlog::buffer_and_r
     return make_ready_future<>();
 }
 
-db::commitlog_replayer::commitlog_replayer(seastar::sharded<replica::database>& db)
-    : _impl(std::make_unique<impl>(db))
+db::commitlog_replayer::commitlog_replayer(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks)
+    : _impl(std::make_unique<impl>(db, sys_ks))
 {}
 
 db::commitlog_replayer::commitlog_replayer(commitlog_replayer&& r) noexcept
@@ -310,8 +312,8 @@ db::commitlog_replayer::commitlog_replayer(commitlog_replayer&& r) noexcept
 db::commitlog_replayer::~commitlog_replayer()
 {}
 
-future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(seastar::sharded<replica::database>& db) {
-    return do_with(commitlog_replayer(db), [](auto&& rp) {
+future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks) {
+    return do_with(commitlog_replayer(db, sys_ks), [](auto&& rp) {
         auto f = rp._impl->init();
         return f.then([rp = std::move(rp)]() mutable {
             return make_ready_future<commitlog_replayer>(std::move(rp));

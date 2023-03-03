@@ -1242,7 +1242,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 auto paths = sch_cl->get_segments_to_replay().get();
                 if (!paths.empty()) {
                     supervisor::notify("replaying schema commit log");
-                    auto rp = db::commitlog_replayer::create_replayer(db).get0();
+                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks).get0();
                     rp.recover(paths, db::schema_tables::COMMITLOG_FILENAME_PREFIX).get();
                     supervisor::notify("replaying schema commit log - flushing memtables");
                     db.invoke_on_all([] (replica::database& db) {
@@ -1268,7 +1268,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 auto paths = cl->get_segments_to_replay().get();
                 if (!paths.empty()) {
                     supervisor::notify("replaying commit log");
-                    auto rp = db::commitlog_replayer::create_replayer(db).get0();
+                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks).get0();
                     rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
                     supervisor::notify("replaying commit log - flushing memtables");
                     db.invoke_on_all([] (replica::database& db) {
