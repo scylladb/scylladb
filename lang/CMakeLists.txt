@@ -6,7 +6,9 @@ target_sources(lang
     wasm_instance_cache.cc)
 target_include_directories(lang
   PUBLIC
-    ${CMAKE_SOURCE_DIR})
+    ${CMAKE_SOURCE_DIR}
+  PRIVATE
+    ${LUA_INCLUDE_DIR})
 target_link_libraries(lang
   PUBLIC
     wasmtime_bindings
