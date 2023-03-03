@@ -125,16 +125,16 @@ future<> db::commitlog_replayer::impl::init() {
                 }
             }
         }
-    }, [](replica::database& db) {
-        return do_with(shard_rpm_map{}, [&db](shard_rpm_map& map) {
-            return parallel_for_each(db.get_column_families(), [&map](auto& cfp) {
+    }, [this](replica::database& db) {
+        return do_with(shard_rpm_map{}, [this, &db](shard_rpm_map& map) {
+            return parallel_for_each(db.get_column_families(), [this, &map](auto& cfp) {
                 auto uuid = cfp.first;
                 // We do this on each cpu, for each CF, which technically is a little wasteful, but the values are
                 // cached, this is only startup, and it makes the code easier.
                 // Get all truncation records for the CF and initialize max rps if
                 // present. Cannot do this on demand, as there may be no sstables to
                 // mark the CF as "needed".
-                return db::system_keyspace::get_truncated_position(uuid).then([&map, uuid](std::vector<db::replay_position> tpps) {
+                return _sys_ks.local().get_truncated_position(uuid).then([&map, uuid](std::vector<db::replay_position> tpps) {
                     for (auto& p : tpps) {
                         rlogger.trace("CF {} truncated at {}", uuid, p);
                         auto& pp = map[p.shard_id()][uuid];
