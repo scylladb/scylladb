@@ -1392,12 +1392,12 @@ typedef utils::UUID truncation_key;
 typedef std::unordered_map<truncation_key, truncation_record> truncation_map;
 
 future<truncation_record> system_keyspace::get_truncation_record(table_id cf_id) {
-    if (qctx->qp().db().get_config().ignore_truncation_record.is_set()) {
+    if (_db.local().get_config().ignore_truncation_record.is_set()) {
         truncation_record r{truncation_record::current_magic};
         return make_ready_future<truncation_record>(std::move(r));
     }
     sstring req = format("SELECT * from system.{} WHERE table_uuid = ?", TRUNCATED);
-    return qctx->qp().execute_internal(req, {cf_id.uuid()}, cql3::query_processor::cache_internal::yes).then([](::shared_ptr<cql3::untyped_result_set> rs) {
+    return execute_cql(req, {cf_id.uuid()}).then([](::shared_ptr<cql3::untyped_result_set> rs) {
         truncation_record r{truncation_record::current_magic};
 
         for (const cql3::untyped_result_set_row& row : *rs) {

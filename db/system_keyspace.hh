@@ -334,7 +334,6 @@ public:
     static future<> save_truncation_record(const replica::column_family&, db_clock::time_point truncated_at, db::replay_position);
     future<replay_positions> get_truncated_position(table_id);
     future<db_clock::time_point> get_truncated_at(table_id);
-    static future<truncation_record> get_truncation_record(table_id cf_id);
 
     /**
      * Return a map of stored tokens to IP addresses
@@ -382,6 +381,8 @@ private:
      * Sets the local host ID explicitly.  Used only internally when intializing the host_id
      */
     future<locator::host_id> set_local_random_host_id();
+    future<truncation_record> get_truncation_record(table_id cf_id);
+
 public:
     static api::timestamp_type schema_creation_timestamp();
 
