@@ -1300,6 +1300,23 @@ future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
                     addrs.insert(x.first);
                 }
             }
+            // The unreachable endpoints may be reachable via seed
+            // nodes if their IP addresses have changed. Try them as well.
+            // Use get_seeds() since _seeds state is curated by
+            // remove_endpoint() and is_gossip_only_member().
+            auto all_seeds = get_seeds();
+            for (auto&& x : all_seeds) {
+                if (_unreachable_endpoints.contains(x)) {
+                    // We are already contacting this endpoint
+                    continue;
+                }
+                auto es = get_endpoint_state_for_endpoint_ptr(x);
+                if (es && es->is_alive()) {
+                    // The endpoint is already live
+                    continue;
+                }
+                addrs.insert(x);
+            }
             logger.trace("do_gossip_to_unreachable_member: live_endpoint nr={} unreachable_endpoints nr={}",
                 live_endpoint_count, unreachable_endpoint_count);
             return send_gossip(message, addrs);
