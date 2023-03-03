@@ -66,7 +66,7 @@ const std::set<inet_address>& gossiper::get_seeds() const noexcept {
 }
 
 std::chrono::milliseconds gossiper::quarantine_delay() const noexcept {
-    auto delay = std::max(unsigned(30000), _gcfg.ring_delay_ms);
+    auto delay = std::max(unsigned(5000), _gcfg.ring_delay_ms);
     auto ring_delay = std::chrono::milliseconds(delay);
     return ring_delay * 2;
 }
@@ -902,7 +902,8 @@ void gossiper::run() {
                     logger.debug("Set live nodes to talk: endpoint_state_map={}, all_live_nodes={}, endpoints_to_talk_with={}",
                             _endpoint_state_map.size(), _live_endpoints, _endpoints_to_talk_with);
                 }
-                if (_endpoints_to_talk_with.empty()) {
+                if (_endpoints_to_talk_with.empty() ||
+                        _live_endpoints.size() < get_token_metadata_ptr()->get_all_endpoints().size()) {
                     auto nodes = std::vector<inet_address>(_seeds.begin(), _seeds.end());
                     logger.debug("No live nodes yet: try initial contact point nodes={}", nodes);
                     if (!nodes.empty()) {
