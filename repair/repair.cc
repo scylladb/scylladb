@@ -144,6 +144,29 @@ static std::vector<sstring> list_column_families(const replica::database& db, co
     return ret;
 }
 
+[[maybe_unused]] static const replica::column_family* find_column_family_if_exists(const replica::database& db, std::string_view ks_name, std::string_view cf_name, bool warn = true) {
+    try {
+        auto uuid = db.find_uuid(std::move(ks_name), std::move(cf_name));
+        return &db.find_column_family(uuid);
+    } catch (replica::no_such_column_family&) {
+        if (warn) {
+            rlogger.warn("{}", std::current_exception());
+        }
+        return nullptr;
+    }
+}
+
+[[maybe_unused]] static const replica::column_family* find_column_family_if_exists(const replica::database& db, const table_id& uuid, bool warn = true) {
+    try {
+        return &db.find_column_family(uuid);
+    } catch (...) {
+        if (warn) {
+            rlogger.warn("{}", std::current_exception());
+        }
+        return nullptr;
+    }
+}
+
 std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x) {
     return os << format("[id={}, uuid={}]", x.id, x.uuid());
 }
