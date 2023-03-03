@@ -52,6 +52,22 @@ BOOST_AUTO_TEST_CASE(test_from_string) {
     check("e596c2f2-d29d-44a0-bb89-0a90ff928490");
     check("f28f86f5-cbc2-4526-ba25-db90c226ec6a");
     check("ce84997b-6ea2-4468-9f02-8a65abf4141a");
+
+    // shorter than 16 bytes
+    BOOST_CHECK_THROW(UUID(""), marshal_exception);
+    BOOST_CHECK_THROW(UUID("dead-beef"), marshal_exception);
+    // longer than 16 bytes
+    BOOST_CHECK_THROW(UUID("ce84997b-6ea2-4468-9f02-8a65abf4141-long-long-ago"), marshal_exception);
+    // unconvertible string
+    BOOST_CHECK_THROW(UUID("hellowol-dea2-4468-9f02-8a65abf4141a"), marshal_exception);
+    // trailing garbage in msb
+    BOOST_CHECK_THROW(UUID("ce84997b-6ea2-wxyz-9f02-8a65abf4141a"), marshal_exception);
+    // trailing garbage in lsb
+    BOOST_CHECK_THROW(UUID("ce84997b-6ea2-4468-9f02-8a65abf4wxyz"), marshal_exception);
+    // spaces at the beginning
+    BOOST_CHECK_THROW(UUID("   4997b-6ea2-wxyz-9f02-8a65abf4141a"), marshal_exception);
+    // spaces at the end
+    BOOST_CHECK_THROW(UUID("ce84997b-6ea2-4468-9f02-8a65abf4    "), marshal_exception);
 }
 
 BOOST_AUTO_TEST_CASE(test_make_random_uuid) {
