@@ -190,8 +190,8 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
 
         auto size = data.size();
 
-        return map_reduce(*fms, [written_at] (canonical_mutation& fm) {
-            return system_keyspace::get_truncated_at(fm.column_family_id()).then([written_at, &fm] (db_clock::time_point t) ->
+        return map_reduce(*fms, [this, written_at] (canonical_mutation& fm) {
+            return _sys_ks.get_truncated_at(fm.column_family_id()).then([written_at, &fm] (db_clock::time_point t) ->
                     std::optional<std::reference_wrapper<canonical_mutation>> {
                 if (written_at > t) {
                     return { std::ref(fm) };
