@@ -74,7 +74,7 @@ SEASTAR_TEST_CASE(test_builder_with_large_partition) {
                       "primary key (v, c, p)").get();
 
         f.get();
-        auto built = e.get_system_keyspace().load_built_views().get0();
+        auto built = e.get_system_keyspace().local().load_built_views().get0();
         BOOST_REQUIRE_EQUAL(built.size(), 1);
         BOOST_REQUIRE_EQUAL(built[0].second, sstring("vcf"));
 
@@ -109,7 +109,7 @@ SEASTAR_TEST_CASE(test_builder_with_large_partition_2) {
                       "primary key (p, c)").get();
 
         f.get();
-        auto built = e.get_system_keyspace().load_built_views().get0();
+        auto built = e.get_system_keyspace().local().load_built_views().get0();
         BOOST_REQUIRE_EQUAL(built.size(), 1);
         BOOST_REQUIRE_EQUAL(built[0].second, sstring("vcf"));
 
@@ -134,7 +134,7 @@ SEASTAR_TEST_CASE(test_builder_with_multiple_partitions) {
                       "primary key (v, c, p)").get();
 
         f.get();
-        auto built = e.get_system_keyspace().load_built_views().get0();
+        auto built = e.get_system_keyspace().local().load_built_views().get0();
         BOOST_REQUIRE_EQUAL(built.size(), 1);
         BOOST_REQUIRE_EQUAL(built[0].second, sstring("vcf"));
 
@@ -158,7 +158,7 @@ SEASTAR_TEST_CASE(test_builder_with_multiple_partitions_of_batch_size_rows) {
                       "primary key (v, c, p)").get();
 
         f.get();
-        auto built = e.get_system_keyspace().load_built_views().get0();
+        auto built = e.get_system_keyspace().local().load_built_views().get0();
         BOOST_REQUIRE_EQUAL(built.size(), 1);
         BOOST_REQUIRE_EQUAL(built[0].second, sstring("vcf"));
 
@@ -191,7 +191,7 @@ SEASTAR_TEST_CASE(test_builder_view_added_during_ongoing_build) {
 
         f2.get();
         f1.get();
-        auto built = e.get_system_keyspace().load_built_views().get0();
+        auto built = e.get_system_keyspace().local().load_built_views().get0();
         BOOST_REQUIRE_EQUAL(built.size(), 2);
 
         auto msg = e.execute_cql("select count(*) from vcf1 where v = 0").get0();
@@ -249,7 +249,7 @@ SEASTAR_TEST_CASE(test_builder_across_tokens_with_large_partitions) {
 
         f2.get();
         f1.get();
-        auto built = e.get_system_keyspace().load_built_views().get0();
+        auto built = e.get_system_keyspace().local().load_built_views().get0();
         BOOST_REQUIRE_EQUAL(built.size(), 2);
 
         auto msg = e.execute_cql("select count(*) from vcf1 where v = 0").get0();
@@ -292,7 +292,7 @@ SEASTAR_TEST_CASE(test_builder_across_tokens_with_small_partitions) {
         f2.get();
         f1.get();
 
-        auto built = e.get_system_keyspace().load_built_views().get0();
+        auto built = e.get_system_keyspace().local().load_built_views().get0();
         BOOST_REQUIRE_EQUAL(built.size(), 2);
 
         auto msg = e.execute_cql("select count(*) from vcf1 where v = 0").get0();
@@ -322,7 +322,7 @@ SEASTAR_TEST_CASE(test_builder_with_tombstones) {
                       "primary key ((v, p), c1, c2)").get();
 
         f.get();
-        auto built = e.get_system_keyspace().load_built_views().get0();
+        auto built = e.get_system_keyspace().local().load_built_views().get0();
         BOOST_REQUIRE_EQUAL(built.size(), 1);
 
         auto msg = e.execute_cql("select * from vcf").get0();
@@ -881,6 +881,6 @@ SEASTAR_TEST_CASE(test_load_view_build_progress_with_values_missing) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         cquery_nofail(e, format("INSERT INTO system.{} (keyspace_name, view_name, cpu_id) VALUES ('ks', 'v', {})",
                 db::system_keyspace::v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS, this_shard_id()));
-        BOOST_REQUIRE(e.get_system_keyspace().load_view_build_progress().get0().empty());
+        BOOST_REQUIRE(e.get_system_keyspace().local().load_view_build_progress().get0().empty());
     });
 }

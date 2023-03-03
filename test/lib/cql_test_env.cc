@@ -430,8 +430,8 @@ public:
         return _group0_registry;
     }
 
-    virtual db::system_keyspace& get_system_keyspace() override {
-        return _sys_ks.local();
+    virtual sharded<db::system_keyspace>& get_system_keyspace() override {
+        return _sys_ks;
     }
 
     virtual future<> refresh_client_state() override {
