@@ -101,12 +101,9 @@ public:
         return j != i->second.end() ? j->second : replay_position();
     }
 
-    seastar::sharded<replica::database>&
-        _db;
-    shard_rpm_map
-        _rpm;
-    shard_rp_map
-        _min_pos;
+    seastar::sharded<replica::database>& _db;
+    shard_rpm_map _rpm;
+    shard_rp_map _min_pos;
 };
 
 db::commitlog_replayer::impl::impl(seastar::sharded<replica::database>& db)
