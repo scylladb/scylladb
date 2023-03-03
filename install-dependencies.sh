@@ -203,6 +203,32 @@ node_exporter_url() {
     echo "https://github.com/prometheus/node_exporter/releases/download/v$NODE_EXPORTER_VERSION/$(node_exporter_filename)"
 }
 
+declare -A MINIO_ARCH=(
+    ["x86_64"]=amd64
+    ["aarch64"]=arm64
+    ["s390x"]=s390x
+)
+MINIO_BINARIES_DIR=/usr/local/bin
+
+minio_server_url() {
+    echo "https://dl.minio.io/server/minio/release/linux-${MINIO_ARCH[$(arch)]}/minio"
+}
+
+minio_client_url() {
+    echo "https://dl.min.io/client/mc/release/linux-${MINIO_ARCH[$(arch)]}/mc"
+}
+
+minio_download_jobs() {
+    cfile=$(mktemp)
+    echo $(curl -s "$(minio_server_url).sha256sum" | cut -f1 -d' ') "${MINIO_BINARIES_DIR}/minio" > $cfile
+    echo $(curl -s "$(minio_client_url).sha256sum" | cut -f1 -d' ') "${MINIO_BINARIES_DIR}/mc" >> $cfile
+    sha256sum -c $cfile | fgrep FAILED | sed \
+        -e 's/:.*$//g' \
+        -e "s#${MINIO_BINARIES_DIR}/minio#$(minio_server_url) -o ${MINIO_BINARIES_DIR}/minio#" \
+        -e "s#${MINIO_BINARIES_DIR}/mc#$(minio_client_url) -o ${MINIO_BINARIES_DIR}/mc#"
+    rm -f ${cfile}
+}
+
 print_usage() {
     echo "Usage: install-dependencies.sh [OPTION]..."
     echo ""
@@ -345,4 +371,13 @@ elif [ "$ID" == "arch" ]; then
         popd > /dev/null || exit 1
     fi
     echo -e "Configure example:\n\t./configure.py\n\tninja release"
+fi
+
+CURL_ARGS=$(minio_download_jobs)
+if [ ! -z "${CURL_ARGS}" ]; then
+    curl -fSL --remove-on-error --parallel --parallel-immediate ${CURL_ARGS}
+    chmod +x "${MINIO_BINARIES_DIR}/minio"
+    chmod +x "${MINIO_BINARIES_DIR}/mc"
+else
+    echo "Minio server and client are up-to-date, skipping download"
 fi
