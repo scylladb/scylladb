@@ -583,7 +583,7 @@ class ScyllaCluster:
     async def uninstall(self) -> None:
         """Stop running servers and uninstall all servers"""
         self.is_dirty = True
-        self.logger.info("Uninstalling cluster")
+        self.logger.info("Uninstalling cluster %s", self)
         await self.stop()
         await asyncio.gather(*(srv.uninstall() for srv in self.stopped.values()))
         await asyncio.gather(*(self.host_registry.release_host(Host(ip))
@@ -593,6 +593,7 @@ class ScyllaCluster:
         """Release all IPs leased from the host registry by this cluster.
         Call this function only if the cluster is stopped and will not be started again."""
         assert not self.running
+        self.logger.info("Cluster %s releases ips %s", self, self.leased_ips)
         while self.leased_ips:
             ip = self.leased_ips.pop()
             await self.host_registry.release_host(Host(ip))
@@ -785,7 +786,6 @@ class ScyllaCluster:
 
     async def server_start(self, server_id: ServerNum) -> ActionReturn:
         """Start a stopped server"""
-        self.logger.info("Cluster %s starting server %s", self, server_id)
         if server_id in self.running:
             return ScyllaCluster.ActionReturn(success=True,
                                               msg=f"{self.running[server_id]} already running")
@@ -793,6 +793,8 @@ class ScyllaCluster:
             return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
         self.is_dirty = True
         server = self.stopped.pop(server_id)
+        self.logger.info("Cluster %s starting server %s ip %s", self,
+                         server_id, server.ip_addr)
         server.seeds = self._seeds()
         # Put the server in `running` before starting it.
         # Starting may fail and if we didn't add it now it might leak.
