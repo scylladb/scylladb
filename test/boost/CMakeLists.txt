@@ -104,6 +104,16 @@ add_scylla_test(small_vector_test
   KIND BOOST)
 add_scylla_test(top_k_test
   KIND BOOST)
+add_scylla_test(transport_test
+  KIND BOOST)
+add_scylla_test(type_json_test
+  KIND BOOST
+  LIBRARIES
+    cql3
+    types
+    utils)
+add_scylla_test(types_test
+  KIND BOOST)
 add_scylla_test(vint_serialization_test
   KIND BOOST
   LIBRARIES utils)
@@ -113,6 +123,10 @@ add_scylla_test(bptree_test
 add_scylla_test(utf8_test
   KIND BOOST
   LIBRARIES utils)
+add_scylla_test(user_function_test
+  KIND BOOST)
+add_scylla_test(user_types_test
+  KIND BOOST)
 add_scylla_test(expr_test
   KIND BOOST
   LIBRARIES cql3)
