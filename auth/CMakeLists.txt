@@ -1,3 +1,5 @@
+include(add_whole_archive)
+
 add_library(scylla_auth STATIC)
 target_sources(scylla_auth
   PRIVATE
@@ -31,15 +33,4 @@ target_link_libraries(scylla_auth
     idl
     wasmtime_bindings)
 
-add_library(auth INTERFACE)
-if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
-    target_link_libraries(auth INTERFACE
-        "$<LINK_LIBRARY:WHOLE_ARCHIVE,scylla_auth>")
-else()
-    add_dependencies(auth scylla_auth)
-    target_include_directories(auth INTERFACE
-        ${CMAKE_SOURCE_DIR})
-    target_link_options(auth INTERFACE
-        "$<$<CXX_COMPILER_ID:Clang>:SHELL:LINKER:-force_load $<TARGET_LINKER_FILE:scylla_auth>>"
-        "$<$<CXX_COMPILER_ID:GNU>:SHELL:LINKER:--whole-archive $<TARGET_LINKER_FILE:scylla_auth> LINKER:--no-whole-archive>")
-endif()
+add_whole_archive(auth scylla_auth)
