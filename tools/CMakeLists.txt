@@ -9,6 +9,7 @@ target_sources(tools
 target_include_directories(tools
   PUBLIC
     ${CMAKE_SOURCE_DIR}
+    ${RAPIDJSON_INCLUDE_DIRS}
   PRIVATE
     ${LUA_INCLUDE_DIR})
 target_link_libraries(tools

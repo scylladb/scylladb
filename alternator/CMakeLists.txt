@@ -20,7 +20,9 @@ target_sources(alternator
 target_include_directories(alternator
   PUBLIC
     ${CMAKE_SOURCE_DIR}
-    ${CMAKE_BINARY_DIR})
+    ${CMAKE_BINARY_DIR}
+  PRIVATE
+    ${RAPIDJSON_INCLUDE_DIRS})
 target_link_libraries(alternator
   cql3
   idl

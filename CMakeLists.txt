@@ -35,6 +35,7 @@ find_package(ICU COMPONENTS uc i18n REQUIRED)
 find_package(absl REQUIRED)
 find_package(libdeflate REQUIRED)
 find_package(libxcrypt REQUIRED)
+find_package(RapidJSON REQUIRED)
 find_package(Thrift REQUIRED)
 find_package(xxHash REQUIRED)
 

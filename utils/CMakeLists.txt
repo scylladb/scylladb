@@ -44,7 +44,8 @@ target_sources(utils
     uuid.cc)
 target_include_directories(utils
   PUBLIC
-    ${CMAKE_SOURCE_DIR})
+    ${CMAKE_SOURCE_DIR}
+    ${RAPIDJSON_INCLUDE_DIRS})
 target_link_libraries(utils
   PUBLIC
     Seastar::seastar
