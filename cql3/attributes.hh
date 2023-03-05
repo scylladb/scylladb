@@ -45,7 +45,7 @@ public:
 
     int64_t get_timestamp(int64_t now, const query_options& options);
 
-    int32_t get_time_to_live(const query_options& options);
+    std::optional<int32_t> get_time_to_live(const query_options& options);
 
     db::timeout_clock::duration get_timeout(const query_options& options) const;
 

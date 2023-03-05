@@ -161,7 +161,7 @@ def testInsertWithAStaticColumn(cql, test_keyspace, forceFlush):
                              "INSERT INTO %s (partitionKey, clustering_2, staticValue) VALUES (0, 0, 'A')")
 
 # Reproduces #6447 and #12243:
-@pytest.mark.xfail(reason="Issue #6447, #12243")
+@pytest.mark.xfail(reason="Issue #12243")
 def testInsertWithDefaultTtl(cql, test_keyspace):
     secondsPerMinute = 60
     with create_table(cql, test_keyspace, f"(a int PRIMARY KEY, b int) WITH default_time_to_live = {10*secondsPerMinute}") as table:

@@ -93,7 +93,7 @@ public:
     };
     // Note: value (mutation) only required to contain the rows we are interested in
 private:
-    const gc_clock::duration _ttl;
+    const std::optional<gc_clock::duration> _ttl;
     // For operations that require a read-before-write, stores prefetched cell values.
     // For CAS statements, stores values of conditioned columns.
     // Is a reference to an outside prefetch_data container since a CAS BATCH statement
@@ -106,7 +106,7 @@ public:
     const query_options& _options;
 
     update_parameters(const schema_ptr schema_, const query_options& options,
-            api::timestamp_type timestamp, gc_clock::duration ttl, const prefetch_data& prefetched)
+            api::timestamp_type timestamp, std::optional<gc_clock::duration> ttl, const prefetch_data& prefetched)
         : _ttl(ttl)
         , _prefetched(prefetched)
         , _timestamp(timestamp)
@@ -127,11 +127,7 @@ public:
     }
 
     atomic_cell make_cell(const abstract_type& type, const raw_value_view& value, atomic_cell::collection_member cm = atomic_cell::collection_member::no) const {
-        auto ttl = _ttl;
-
-        if (ttl.count() <= 0) {
-            ttl = _schema->default_time_to_live();
-        }
+        auto ttl = this->ttl();
 
         return value.with_value([&] (const FragmentedView auto& v) {
             if (ttl.count() > 0) {
@@ -143,11 +139,7 @@ public:
     };
 
     atomic_cell make_cell(const abstract_type& type, const managed_bytes_view& value, atomic_cell::collection_member cm = atomic_cell::collection_member::no) const {
-        auto ttl = _ttl;
-
-        if (ttl.count() <= 0) {
-            ttl = _schema->default_time_to_live();
-        }
+        auto ttl = this->ttl();
 
         if (ttl.count() > 0) {
             return atomic_cell::make_live(type, _timestamp, value, _local_deletion_time + ttl, ttl, cm);
@@ -169,7 +161,7 @@ public:
     }
 
     gc_clock::duration ttl() const {
-        return _ttl.count() > 0 ? _ttl : _schema->default_time_to_live();
+        return _ttl.value_or(_schema->default_time_to_live());
     }
 
     gc_clock::time_point expiry() const {
