@@ -15,6 +15,7 @@
 #include "cql3/util.hh"
 #include "validation.hh"
 #include "db/consistency_level_validations.hh"
+#include <optional>
 #include <seastar/core/shared_ptr.hh>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
@@ -92,8 +93,9 @@ bool modification_statement::is_timestamp_set() const {
     return attrs->is_timestamp_set();
 }
 
-gc_clock::duration modification_statement::get_time_to_live(const query_options& options) const {
-    return gc_clock::duration(attrs->get_time_to_live(options));
+std::optional<gc_clock::duration> modification_statement::get_time_to_live(const query_options& options) const {
+    std::optional<int32_t> ttl = attrs->get_time_to_live(options);
+    return ttl ? std::make_optional<gc_clock::duration>(*ttl) : std::nullopt;
 }
 
 future<> modification_statement::check_access(query_processor& qp, const service::client_state& state) const {

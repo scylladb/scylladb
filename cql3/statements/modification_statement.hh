@@ -128,7 +128,7 @@ public:
 
     bool is_timestamp_set() const;
 
-    gc_clock::duration get_time_to_live(const query_options& options) const;
+    std::optional<gc_clock::duration> get_time_to_live(const query_options& options) const;
 
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 

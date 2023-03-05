@@ -10,6 +10,7 @@
 
 #include "cql3/attributes.hh"
 #include "cql3/column_identifier.hh"
+#include <optional>
 
 namespace cql3 {
 
@@ -56,16 +57,16 @@ int64_t attributes::get_timestamp(int64_t now, const query_options& options) {
     }
 }
 
-int32_t attributes::get_time_to_live(const query_options& options) {
+std::optional<int32_t> attributes::get_time_to_live(const query_options& options) {
     if (!_time_to_live.has_value())
-        return 0;
+        return std::nullopt;
 
     cql3::raw_value tval = expr::evaluate(*_time_to_live, options);
     if (tval.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value of TTL");
     }
     if (tval.is_unset_value()) {
-        return 0;
+        return std::nullopt;
     }
 
     int32_t ttl;
