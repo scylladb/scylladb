@@ -7,6 +7,7 @@
 #############################################################################
 
 from util import new_test_table, unique_key_int
+from cassandra.query import UNSET_VALUE
 import pytest
 import time
 
@@ -45,10 +46,25 @@ def test_basic_default_ttl(cql, table_ttl_1):
 # ttl set for the table. Here we check that also in the special case of
 # "using ttl 0" (which means the item should never expire) it also overrides
 # the default TTL. Reproduces issue #9842.
-@pytest.mark.xfail(reason="Issue #9842")
 def test_default_ttl_0_override(cql, table_ttl_100):
     p = unique_key_int()
     cql.execute(f'INSERT INTO {table_ttl_100} (p, v) VALUES ({p}, 1) USING TTL 0')
     # We can immediately check that this item's TTL is "null", meaning it
     # will never expire. There's no need to have any sleeps.
     assert list(cql.execute(f'SELECT ttl(v) from {table_ttl_100} where p={p}')) == [(None,)]
+
+# Whereas a zero TTL overrides the default TTL, an unset TTL doesn't - and
+# leaves the default TTL. This means that the text in Cassandra's NEWS.txt
+# which claims that "an unset bind ttl is treated as 'unlimited'" is not
+# accurate - it's only unlimited if there is no default TTL for the table,
+# and if there is, this default TTL is used instead of unlimited. In other
+# words, an UNSET_VALUE TTL behaves exactly like not specifying a TTL at all.
+# See also test_unset.py::test_unset_ttl()
+def test_default_ttl_unset_override(cql, table_ttl_100):
+    p = unique_key_int()
+    stmt = cql.prepare(f'INSERT INTO {table_ttl_100} (p, v) VALUES ({p}, 1) USING TTL ?')
+    cql.execute(stmt, [UNSET_VALUE])
+    # At this point, reading ttl(v) would normally return 99, but it's
+    # possible in case of delays to be somewhat lower. But it wouldn't
+    # be None - which would mean that the item will never expire.
+    assert list(cql.execute(f'SELECT ttl(v) from {table_ttl_100} where p={p}')) != [(None,)]

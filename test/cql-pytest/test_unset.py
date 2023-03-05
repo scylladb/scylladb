@@ -110,6 +110,10 @@ def test_unset_list_append(cql, table1, cassandra_bug):
 
 # According to Cassandra's NEWS.txt, "an unset bind ttl is treated as
 # 'unlimited'". It shouldn't skip the write.
+# Note that the NEWS.txt is not accurate: An unset ttl isn't really treated
+# as unlimited, but rather as the default ttl set on the table. The default
+# ttl is usually unlimited, but not always. We test that case in
+# test_ttl.py::test_default_ttl_unset()
 def test_unset_ttl(cql, table1):
     p = unique_key_int()
     # First write using a normal TTL:
