@@ -840,7 +840,7 @@ bool memtable::is_flushed() const noexcept {
 
 void memtable_entry::upgrade_schema(logalloc::region& r, const schema_ptr& s, mutation_cleaner& cleaner) {
     if (schema() != s) {
-        partition().upgrade(r, schema(), s, cleaner, no_cache_tracker);
+        partition().upgrade(r, s, cleaner, no_cache_tracker);
     }
 }
 
