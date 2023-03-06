@@ -190,6 +190,7 @@ experimental:
   Alternator streams also differ in some respects from DynamoDB Streams:
   * The number of separate "shards" in Alternator's streams is significantly
     larger than is typical on DynamoDB.
+    <https://github.com/scylladb/scylla/issues/13080>
   * While in DynamoDB data usually appears in the stream less than a second
     after it was written, in Alternator Streams there is currently a 10
     second delay by default.
