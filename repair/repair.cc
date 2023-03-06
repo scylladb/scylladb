@@ -1533,7 +1533,11 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                 rs.get_metrics().removenode_total_ranges = nr_ranges_total;
             }).get();
         }
-        rlogger.info("{}: started with keyspaces={}, leaving_node={}", op, ks_erms | boost::adaptors::map_keys, leaving_node);
+        auto get_ignore_nodes = [ops] () -> std::list<gms::inet_address>& {
+            static std::list<gms::inet_address> no_ignore_nodes;
+            return ops ? ops->ignore_nodes : no_ignore_nodes;
+        };
+        rlogger.info("{}: started with keyspaces={}, leaving_node={}, ignore_nodes={}", op, ks_erms | boost::adaptors::map_keys, leaving_node, get_ignore_nodes());
         for (const auto& [keyspace_name, erm] : ks_erms) {
             if (!db.has_keyspace(keyspace_name)) {
                 rlogger.info("{}: keyspace={} does not exist any more, ignoring it", op, keyspace_name);
@@ -1650,10 +1654,8 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                 neighbors_set.erase(myip);
                 neighbors_set.erase(leaving_node);
                 // Remove nodes in ignore_nodes
-                if (ops) {
-                    for (const auto& node : ops->ignore_nodes) {
-                        neighbors_set.erase(node);
-                    }
+                for (const auto& node : get_ignore_nodes()) {
+                    neighbors_set.erase(node);
                 }
                 auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(neighbors_set |
                     boost::adaptors::filtered([&local_dc, &topology] (const gms::inet_address& node) {
