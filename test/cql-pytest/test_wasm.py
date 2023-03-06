@@ -23,7 +23,7 @@ def scylla_with_wasm_only(scylla_only, cql, test_keyspace):
     try:
         f42 = unique_name()
         f42_body = f'(module(func ${f42} (param $n i64) (result i64)(return i64.const 42))(export "{f42}" (func ${f42})))'
-        res = cql.execute(f"CREATE FUNCTION {test_keyspace}.{f42} (input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE xwasm AS '{f42_body}'")
+        res = cql.execute(f"CREATE FUNCTION {test_keyspace}.{f42} (input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{f42_body}'")
         cql.execute(f"DROP FUNCTION {test_keyspace}.{f42}")
     except NoHostAvailable as err:
         if "not enabled" in str(err):
@@ -59,7 +59,7 @@ def test_fib(cql, test_keyspace, table1, scylla_with_wasm_only):
   (export "{fib_name}" (func ${fib_name}))
 )
 """
-    src = f"(input bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE xwasm AS '{fib_source}'"
+    src = f"(input bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE wasm AS '{fib_source}'"
     with new_function(cql, test_keyspace, src, fib_name):
         cql.execute(f"INSERT INTO {table1} (p) VALUES (10)")
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{fib_name}(p) AS result FROM {table} WHERE p = 10")]
@@ -133,7 +133,7 @@ def test_fib_called_on_null(cql, test_keyspace, table1, scylla_with_wasm_only):
     table = table1
     fib_name = unique_name()
     fib_source = read_function_from_file('fib', fib_name)
-    src = f"(input bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE xwasm AS '{fib_source}'"
+    src = f"(input bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE wasm AS '{fib_source}'"
     with new_function(cql, test_keyspace, src, fib_name):
         cql.execute(f"INSERT INTO {table1} (p) VALUES (3)")
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{fib_name}(p) AS result FROM {table} WHERE p = 3")]
@@ -173,7 +173,7 @@ def test_infinite_loop(cql, test_keyspace, table1, scylla_with_wasm_only):
   (export "_scylla_abi" (global 0))
   (data $.rodata (i32.const 1024) "\\01"))
 """
-    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE xwasm AS '{inf_loop_source}'"
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{inf_loop_source}'"
     with new_function(cql, test_keyspace, src, inf_loop_name):
         cql.execute(f"INSERT INTO {table} (p,i) VALUES (10, 10)")
         import time
@@ -204,7 +204,7 @@ def test_f64_param(cql, test_keyspace, table1, scylla_with_wasm_only):
   (export "_scylla_abi" (global 0))
   (data $.rodata (i32.const 1024) "\\01"))
 """
-    src = f"(input double) RETURNS NULL ON NULL INPUT RETURNS double LANGUAGE xwasm AS '{dec_double_source}'"
+    src = f"(input double) RETURNS NULL ON NULL INPUT RETURNS double LANGUAGE wasm AS '{dec_double_source}'"
     with new_function(cql, test_keyspace, src, dec_double_name):
         cql.execute(f"INSERT INTO {table} (p,d) VALUES (17,17.015625)")
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{dec_double_name}(d) AS result FROM {table} WHERE p = 17")]
@@ -231,7 +231,7 @@ def test_f32_param(cql, test_keyspace, table1, scylla_with_wasm_only):
   (export "_scylla_abi" (global 0))
   (data $.rodata (i32.const 1024) "\\01"))
 """
-    src = f"(input float) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE xwasm AS '{inc_float_source}'"
+    src = f"(input float) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE wasm AS '{inc_float_source}'"
     with new_function(cql, test_keyspace, src, inc_float_name):
         cql.execute(f"INSERT INTO {table} (p, f) VALUES (121, 121.00390625)")
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{inc_float_name}(f) AS result FROM {table} WHERE p = 121")]
@@ -257,7 +257,7 @@ def test_bool_negate(cql, test_keyspace, table1, scylla_with_wasm_only):
   (export "_scylla_abi" (global 0))
   (data $.rodata (i32.const 1024) "\\01"))
 """
-    src = f"(input boolean) RETURNS NULL ON NULL INPUT RETURNS boolean LANGUAGE xwasm AS '{negate_source}'"
+    src = f"(input boolean) RETURNS NULL ON NULL INPUT RETURNS boolean LANGUAGE wasm AS '{negate_source}'"
     with new_function(cql, test_keyspace, src, negate_name):
         cql.execute(f"INSERT INTO {table} (p, bl) VALUES (19, true)")
         cql.execute(f"INSERT INTO {table} (p, bl) VALUES (21, false)")
@@ -288,7 +288,7 @@ def test_short_ints(cql, test_keyspace, table1, scylla_with_wasm_only):
   (export "_scylla_abi" (global 0))
   (data $.rodata (i32.const 1024) "\\01"))
 """
-    src = f"(input tinyint, input2 tinyint) RETURNS NULL ON NULL INPUT RETURNS tinyint LANGUAGE xwasm AS '{plus_source}'"
+    src = f"(input tinyint, input2 tinyint) RETURNS NULL ON NULL INPUT RETURNS tinyint LANGUAGE wasm AS '{plus_source}'"
     with new_function(cql, test_keyspace, src, plus_name):
         cql.execute(f"INSERT INTO {table} (p, t, t2, s, s2) VALUES (42, 42, 24, 33, 55)")
         cql.execute(f"INSERT INTO {table} (p, t, t2, s, s2) VALUES (43, 120, 112, 32000, 24001)")
@@ -298,7 +298,7 @@ def test_short_ints(cql, test_keyspace, table1, scylla_with_wasm_only):
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{plus_name}(t, t2) AS result FROM {table} WHERE p = 43")]
         assert len(res) == 1 and res[0].result == -24
     # A similar run for 16bit ints - note that the exact same source code is used
-    src = f"(input smallint, input2 smallint) RETURNS NULL ON NULL INPUT RETURNS smallint LANGUAGE xwasm AS '{plus_source}'"
+    src = f"(input smallint, input2 smallint) RETURNS NULL ON NULL INPUT RETURNS smallint LANGUAGE wasm AS '{plus_source}'"
     with new_function(cql, test_keyspace, src, plus_name):
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{plus_name}(s, s2) AS result FROM {table} WHERE p = 42")]
         assert len(res) == 1 and res[0].result == 88
@@ -307,7 +307,7 @@ def test_short_ints(cql, test_keyspace, table1, scylla_with_wasm_only):
         assert len(res) == 1 and res[0].result == -9535
     # Check whether we can use a different function under the same name
     plus42_source = read_function_from_file('plus42', plus_name)
-    plus42_src = f"(input smallint, input2 smallint) RETURNS NULL ON NULL INPUT RETURNS smallint LANGUAGE xwasm AS '{plus42_source}'"
+    plus42_src = f"(input smallint, input2 smallint) RETURNS NULL ON NULL INPUT RETURNS smallint LANGUAGE wasm AS '{plus42_source}'"
     # Repeat a number of times so the wasm instances get cached on all shards
     with new_function(cql, test_keyspace, src, plus_name):
         for _ in range(100):
@@ -336,7 +336,7 @@ def test_short_ints(cql, test_keyspace, table1, scylla_with_wasm_only):
   (export "_scylla_abi" (global 0))
   (data (;0;) (i32.const 1024) "\\01"))
 """
-    plusplus_src = f"(input smallint, input2 smallint, input3 smallint) RETURNS NULL ON NULL INPUT RETURNS smallint LANGUAGE xwasm AS '{plusplus_source}'"
+    plusplus_src = f"(input smallint, input2 smallint, input3 smallint) RETURNS NULL ON NULL INPUT RETURNS smallint LANGUAGE wasm AS '{plusplus_source}'"
     # Repeat a number of times so the wasm instances get cached on all shards
     with new_function(cql, test_keyspace, src, plus_name):
         for _ in range(100):
@@ -383,7 +383,7 @@ def test_9_params(cql, test_keyspace, table1, scylla_with_wasm_only):
   (data $.rodata (i32.const 1024) "\\01"))
 
 """
-    src = f"(a int, b int, c int, d int, e int, f int, g int, h int, i int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE xwasm AS '{sum9_source}'"
+    src = f"(a int, b int, c int, d int, e int, f int, g int, h int, i int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{sum9_source}'"
     with new_function(cql, test_keyspace, src, sum9_name):
         cql.execute(f"INSERT INTO {table} (p, i, i2) VALUES (777, 1,2)")
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{sum9_name}(i,i2,i2,i,i2,i,i2,i,i2) AS result FROM {table} WHERE p = 777")]
@@ -452,7 +452,7 @@ def test_pow(cql, test_keyspace, table1, scylla_with_wasm_only):
   (export "_scylla_abi" (global 0))
   (data $.rodata (i32.const 1024) "\\01"))
 """
-    src = f"(base int, pow int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE xwasm AS '{pow_source}'"
+    src = f"(base int, pow int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{pow_source}'"
     with new_function(cql, test_keyspace, src, pow_name):
         cql.execute(f"INSERT INTO {table} (p, i, i2) VALUES (311, 3, 11)")
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{pow_name}(i, i2) AS result FROM {table} WHERE p = 311")]
@@ -465,7 +465,7 @@ def test_compilable(cql, test_keyspace, table1, scylla_with_wasm_only):
 Dear wasmtime compiler, please return a function which returns its float argument increased by 1
 """
     with pytest.raises(InvalidRequest, match="Compilation failed"):
-      cql.execute(f"CREATE FUNCTION {test_keyspace}.i_was_not_exported (input float) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE xwasm "
+      cql.execute(f"CREATE FUNCTION {test_keyspace}.i_was_not_exported (input float) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE wasm "
                 f"AS '{wrong_source}'")
 
 # Test that not exporting a function with matching name
@@ -485,7 +485,7 @@ def test_not_exported(cql, test_keyspace, table1, scylla_with_wasm_only):
   (elem (;0;) (i32.const 0) func))
 """
     with pytest.raises(InvalidRequest, match="not found"):
-        cql.execute(f"CREATE FUNCTION {test_keyspace}.i_was_not_exported (input float) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE xwasm "
+        cql.execute(f"CREATE FUNCTION {test_keyspace}.i_was_not_exported (input float) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE wasm "
                 f"AS '{wrong_source}'")
 
 # Test that trying to use something that is exported, but is not a function, won't work
@@ -509,7 +509,7 @@ def test_not_a_function(cql, test_keyspace, table1, scylla_with_wasm_only):
   (data $.rodata (i32.const 1024) "\\01"))
 """
     with pytest.raises(InvalidRequest, match="not a function"):
-        cql.execute(f"CREATE FUNCTION {test_keyspace}.memory (input float) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE xwasm "
+        cql.execute(f"CREATE FUNCTION {test_keyspace}.memory (input float) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE wasm "
                 f"AS '{wrong_source}'")
 
 # Test that the function should accept only the correct number and types of params
@@ -533,16 +533,16 @@ def test_validate_params(cql, test_keyspace, table1, scylla_with_wasm_only):
   (export "_scylla_abi" (global 0))
   (data $.rodata (i32.const 1024) "\\01"))
 """
-    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE xwasm AS '{inc_float_source}'"
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE wasm AS '{inc_float_source}'"
     with new_function(cql, test_keyspace, src, inc_float_name):
         cql.execute(f"INSERT INTO {table} (p, i, f, txt) VALUES (700, 7, 7., 'oi')")
         with pytest.raises(InvalidRequest, match="type mismatch"):
             cql.execute(f"SELECT {test_keyspace}.{inc_float_name}(i) AS result FROM {table} WHERE p = 700")
-    src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE xwasm AS '{inc_float_source}'"
+    src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{inc_float_source}'"
     with new_function(cql, test_keyspace, src, inc_float_name):
         with pytest.raises(InvalidRequest, match="failed"):
             cql.execute(f"SELECT {test_keyspace}.{inc_float_name}(txt) AS result FROM {table} WHERE p = 700")
-    src = f"(input float) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE xwasm AS '{inc_float_source}'"
+    src = f"(input float) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{inc_float_source}'"
     with new_function(cql, test_keyspace, src, inc_float_name):
         with pytest.raises(InvalidRequest, match="Expected i32, got f32"):
             cql.execute(f"SELECT {test_keyspace}.{inc_float_name}(f) AS result FROM {table} WHERE p = 700")
@@ -576,7 +576,7 @@ def test_word_double(cql, test_keyspace, table1, scylla_with_wasm_only):
     table = table1
     dbl_name = unique_name()
     dbl_source = read_function_from_file('dbl', dbl_name)
-    src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS text LANGUAGE xwasm AS '{dbl_source}'"
+    src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS text LANGUAGE wasm AS '{dbl_source}'"
     with new_function(cql, test_keyspace, src, dbl_name):
         cql.execute(f"INSERT INTO {table1} (p, txt) VALUES (1000, 'doggo')")
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{dbl_name}(txt) AS result FROM {table} WHERE p = 1000")]
@@ -622,7 +622,7 @@ def test_abi_v2(cql, test_keyspace, table1, scylla_with_wasm_only):
     table = table1
     ri_name = unique_name()
     ri_source = read_function_from_file('return_input', ri_name)
-    text_src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS text LANGUAGE xwasm AS '{ri_source}'"
+    text_src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS text LANGUAGE wasm AS '{ri_source}'"
     with new_function(cql, test_keyspace, text_src, ri_name):
         cql.execute(f"INSERT INTO {table1} (p, txt) VALUES (2000, 'doggo')")
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{ri_name}(txt) AS result FROM {table} WHERE p = 2000")]
@@ -873,7 +873,7 @@ def test_UDA(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
   (export "_scylla_abi" (global 0))
   (data (;0;) (i32.const 1024) "\\01"))
 """
-    sum_src = f"(acc tuple<int, int>, input int) CALLED ON NULL INPUT RETURNS tuple<int,int> LANGUAGE xwasm AS '{sum_source}'"
+    sum_src = f"(acc tuple<int, int>, input int) CALLED ON NULL INPUT RETURNS tuple<int,int> LANGUAGE wasm AS '{sum_source}'"
 
     div_name = unique_name()
     div_source = f"""
@@ -977,7 +977,7 @@ def test_UDA(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
   (export "_scylla_abi" (global 0))
   (data (;0;) (i32.const 1024) "\\01"))
 """
-    div_src = f"(acc tuple<int, int>) CALLED ON NULL INPUT RETURNS float LANGUAGE xwasm AS '{div_source}'"
+    div_src = f"(acc tuple<int, int>) CALLED ON NULL INPUT RETURNS float LANGUAGE wasm AS '{div_source}'"
     for i in range(20):
       cql.execute(f"INSERT INTO {table} (p, i, i2) VALUES ({i}, {i}, {i})")
     with new_function(cql, test_keyspace, sum_src, sum_name), new_function(cql, test_keyspace, div_src, div_name):
@@ -1043,7 +1043,7 @@ def test_mem_grow(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
   (export "_scylla_abi" (global 0))
   (data (;0;) (i32.const 1024) "\\01"))
 """
-    src = f"(pages int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE xwasm AS '{mem_grow_source}'"
+    src = f"(pages int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{mem_grow_source}'"
     with new_function(cql, test_keyspace, src, mem_grow_name):
         cql.execute(f"INSERT INTO {table} (p, i) VALUES (8, 8)")
         for i in range(512):
@@ -1085,7 +1085,7 @@ def test_drop(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
   (export "_scylla_abi" (global 0))
   (data (;0;) (i32.const 1024) "\\01"))
 """
-    src = f"(input bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE xwasm AS '{ret_source}'"
+    src = f"(input bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE wasm AS '{ret_source}'"
     cql.execute(f"INSERT INTO {table} (p) VALUES (42)")
     for _ in range(10):
         ret_name = "ret_" + unique_name()
@@ -1099,7 +1099,7 @@ def test_counter(cql, test_keyspace, scylla_only):
     schema = "p int, c counter, PRIMARY KEY (p)"
     ri_counter_name = unique_name()
     ri_counter_source = read_function_from_file('return_input', ri_counter_name)
-    src = f"(input counter) RETURNS NULL ON NULL INPUT RETURNS counter LANGUAGE xwasm AS '{ri_counter_source}'"
+    src = f"(input counter) RETURNS NULL ON NULL INPUT RETURNS counter LANGUAGE wasm AS '{ri_counter_source}'"
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"UPDATE {table} SET c = c + 2  WHERE p = 42;")
         with new_function(cql, test_keyspace, src, ri_counter_name):
@@ -1143,7 +1143,7 @@ def test_docs_assemblyscript(cql, test_keyspace, table1, scylla_only):
  )
 )
 """
-    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE xwasm AS '{fib_source}'"
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{fib_source}'"
     with new_function(cql, test_keyspace, src, fib_name):
         cql.execute(f"INSERT INTO {table} (p, i) VALUES (42, 10)")
         assert cql.execute(f"SELECT {test_keyspace}.{fib_name}(i) AS result FROM {table} WHERE p = 42").one().result == 55
@@ -1199,7 +1199,7 @@ def test_docs_c(cql, test_keyspace, table1, scylla_only):
   (export "{fib_name}" (func 2))
   (data (;0;) (i32.const 1024) "\\01"))
 """
-    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE xwasm AS '{fib_source}'"
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE wasm AS '{fib_source}'"
     with new_function(cql, test_keyspace, src, fib_name):
         cql.execute(f"INSERT INTO {table} (p, i) VALUES (42, 9)")
         assert cql.execute(f"SELECT {test_keyspace}.{fib_name}(i) AS result FROM {table} WHERE p = 42").one().result == 34

@@ -4,10 +4,9 @@ This document describes the details of WASM language support in user-defined fun
 
 ## Experimental status
 
-Before the design of WebAssembly integration and ABI is finalized, it's only available in experimental mode.
-User-defined functions are already experimental at the time of this writing, but in order to be ready
-for backward incompatible changes, the language accepted by CQL is currently named "xwasm".
-Once the ABI is set in stone, it should be changed to "wasm".
+WebAssembly UDFs are still experimental due to insufficient testing. If backwards incompatible changes
+to the ABI are implemented in the future, they should be submitted as new ABI-versions, and use the same
+LANGUAGE clause ("wasm") in the CQL statements.
 
 ## ABI versions
 
@@ -226,7 +225,7 @@ For those who want to use precompiled WASM modules, it's enough to translate WAS
 Here's how a `wasm` function can be declared:
 
 ```cql
-CREATE FUNCTION ks.fib (input bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE xwasm
+CREATE FUNCTION ks.fib (input bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE wasm
 AS '(module
   (func $fib (param $n i64) (result i64)
     (if
