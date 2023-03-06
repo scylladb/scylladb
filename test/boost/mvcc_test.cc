@@ -2033,3 +2033,104 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_with_dummies) {
         evict_with_consistency_check(ms, e, expected.partition());
     });
 }
+
+SEASTAR_TEST_CASE(test_gentle_schema_upgrades) {
+    return seastar::async([] {
+        auto ts1 = api::new_timestamp();
+        auto ts_drop = api::new_timestamp();
+        auto ts2 = api::new_timestamp();
+
+        auto s1 = schema_builder("ks", "cf")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("ck", utf8_type, column_kind::clustering_key)
+            .with_column("s1", utf8_type, column_kind::static_column)
+            .with_column("s2", utf8_type, column_kind::static_column)
+            .with_column("v1", utf8_type, column_kind::regular_column)
+            .with_column("v2", utf8_type, column_kind::regular_column)
+            .with_column("v3", utf8_type, column_kind::regular_column)
+            .with_column("v4", utf8_type, column_kind::regular_column)
+            .build();
+        auto s2 = schema_builder(s1)
+            .remove_column("s1")
+            .remove_column("v3")
+            .without_column("v4", ts_drop).with_column("v4", utf8_type)
+            .with_column("v5", utf8_type)
+            .build();
+
+        auto m1 = std::invoke([s1, ts1] {
+            auto x = mutation(s1, partition_key::from_single_value(*s1, serialized(0)));
+            auto ck = clustering_key::from_single_value(*s1, serialized(0));
+            x.set_static_cell("s1", "s1_value", ts1);
+            x.set_static_cell("s2", "s2_value", ts1);
+            x.set_clustered_cell(ck, "v1", "v1_value", ts1);
+            x.set_clustered_cell(ck, "v2", "v2_value", ts1);
+            x.set_clustered_cell(ck, "v3", "v3_value", ts1);
+            x.set_clustered_cell(ck, "v4", "v4_value", ts1);
+            x.partition().set_static_row_continuous(false);
+            x.partition().ensure_last_dummy(*s1);
+            return x;
+        });
+
+        auto m2 = std::invoke([s2, ts2] {
+            auto x = mutation(s2, partition_key::from_single_value(*s2, serialized(0)));
+            auto ck = clustering_key::from_single_value(*s2, serialized(0));
+            x.set_clustered_cell(ck, "v2", "v2_value_new", ts2);
+            x.set_clustered_cell(ck, "v5", "v5_value_new", ts2);
+            x.partition().set_static_row_continuous(false);
+            x.partition().ensure_last_dummy(*s2);
+            return x;
+        });
+
+        auto expected = std::invoke([s2, ts1, ts2] {
+            auto x = mutation(s2, partition_key::from_single_value(*s2, serialized(0)));
+            auto ck = clustering_key::from_single_value(*s2, serialized(0));
+            x.set_static_cell("s2", "s2_value", ts1);
+            x.set_clustered_cell(ck, "v1", "v1_value", ts1);
+            x.set_clustered_cell(ck, "v2", "v2_value_new", ts2);
+            x.set_clustered_cell(ck, "v5", "v5_value_new", ts2);
+            x.partition().set_static_row_continuous(false);
+            x.partition().ensure_last_dummy(*s2);
+            return x;
+        });
+
+        {
+            // Test that the version merge is lazy.
+            // (This is not important and might be changed in the future.
+            // We often run some operations synchronously and only put them
+            // in the background after they preempt for the first time.)
+            mvcc_container ms(s1);
+            auto e = ms.make_evictable(m1.partition());
+            e.upgrade(s2);
+            BOOST_REQUIRE(e.entry().version()->next());
+            // Test that the upgrade initiated the merge.
+            ms.cleaner().drain().get();
+            BOOST_REQUIRE(!e.entry().version()->next());
+        }
+        {
+            // Test that the on-the-fly merge gives the expected result.
+            mvcc_container ms(s1);
+            auto e = ms.make_evictable(m1.partition());
+            auto rd1 = e.read();
+            e.upgrade(s2);
+            auto rd2 = e.read();
+            e += m2;
+            auto rd3 = e.read();
+
+            assert_that(s1, read_using_cursor(*rd1)).is_equal_to(*s1, m1.partition());
+
+            auto rd2_expected = mutation_partition(*s1, m1.partition());
+            rd2_expected.upgrade(*s1, *s2);
+            assert_that(s2, read_using_cursor(*rd2)).is_equal_to(rd2_expected);
+
+            assert_that(s2, read_using_cursor(*rd3)).is_equal_to(*s2, expected.partition());
+
+            rd1 = {};
+            rd2 = {};
+            // Merge versions.
+            ms.cleaner().drain().get();
+            BOOST_REQUIRE(!e.entry().version()->next());
+            // Test that the background merge gives the expected result.
+            assert_that(s2, read_using_cursor(*rd3)).is_equal_to(*s2, expected.partition());
+        }
+    });
+}
