@@ -972,6 +972,12 @@ public:
         , _range_tombstone(e._range_tombstone)
         , _flags(e._flags)
     { }
+    rows_entry(const schema& our_schema, const schema& their_schema, const rows_entry& e)
+        : _key(e._key)
+        , _row(our_schema, their_schema, e._row)
+        , _range_tombstone(e._range_tombstone)
+        , _flags(e._flags)
+    { }
     // Valid only if !dummy()
     clustering_key& key() {
         return _key;
