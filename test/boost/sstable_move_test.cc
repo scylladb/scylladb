@@ -53,6 +53,21 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move) {
     sst = env.reusable_sst(uncompressed_schema(), cur_dir, gen).get0();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_sstable_move_idempotent) {
+    tmpdir tmp;
+    auto env = test_env();
+    auto stop_env = defer([&env] { env.stop().get(); });
+
+    auto [ sst, cur_dir ] = copy_sst_to_tmpdir(tmp.path(), env, uncompressed_schema(), fs::path(uncompressed_dir()), 1);
+    sstring old_path = test(sst).storage_prefix();
+    touch_directory(format("{}/{}", old_path, sstables::staging_dir)).get();
+    sst->change_state(sstables::staging_dir).get();
+    sst->change_state(sstables::normal_dir).get();
+    BOOST_REQUIRE(sstable_directory::compare_sstable_storage_prefix(old_path, test(sst).storage_prefix()));
+
+    sst->close_files().get();
+}
+
 // Simulate a crashed create_links.
 // This implementation simulates create_links;
 // ideally, we should have error injection points in create_links

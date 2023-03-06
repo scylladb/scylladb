@@ -384,27 +384,44 @@ sstable_directory::retrieve_shared_sstables() {
     return std::exchange(_shared_sstable_info, {});
 }
 
+bool sstable_directory::compare_sstable_storage_prefix(const sstring& prefix_a, const sstring& prefix_b) noexcept {
+    size_t size_a = prefix_a.size();
+    if (prefix_a.back() == '/') {
+        size_a--;
+    }
+    size_t size_b = prefix_b.size();
+    if (prefix_b.back() == '/') {
+        size_b--;
+    }
+    return size_a == size_b && sstring::traits_type::compare(prefix_a.begin(), prefix_b.begin(), size_a) == 0;
+}
+
 future<> sstable_directory::delete_atomically(std::vector<shared_sstable> ssts) {
     if (ssts.empty()) {
         return make_ready_future<>();
     }
     return seastar::async([ssts = std::move(ssts)] {
-        sstring sstdir;
+        shared_sstable first = nullptr;
         min_max_tracker<generation_type> gen_tracker;
 
         for (const auto& sst : ssts) {
             gen_tracker.update(sst->generation());
 
-            if (sstdir.empty()) {
-                sstdir = sst->_storage.prefix();
+            if (first == nullptr) {
+                first = sst;
             } else {
                 // All sstables are assumed to be in the same column_family, hence
-                // sharing their base directory.
-                assert (sstdir == sst->_storage.prefix());
+                // sharing their base directory. Since lexicographical comparison of
+                // paths is not the same as their actualy equivalence, this should
+                // rather check for fs::equivalent call on _storage.prefix()-s. But
+                // since we know that the worst thing filesystem storage driver can
+                // do is to prepend/drop the trailing slash, it should be enough to
+                // compare prefixes of both ... prefixes
+                assert(compare_sstable_storage_prefix(first->_storage.prefix(), sst->_storage.prefix()));
             }
         }
 
-        sstring pending_delete_dir = sstdir + "/" + sstable::pending_delete_dir_basename();
+        sstring pending_delete_dir = first->_storage.prefix() + "/" + sstable::pending_delete_dir_basename();
         sstring pending_delete_log = format("{}/sstables-{}-{}.log", pending_delete_dir, gen_tracker.min(), gen_tracker.max());
         sstring tmp_pending_delete_log = pending_delete_log + ".tmp";
         sstlog.trace("Writing {}", tmp_pending_delete_log);
