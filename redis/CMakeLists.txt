@@ -30,4 +30,6 @@ target_include_directories(redis
 target_link_libraries(redis
   PUBLIC
     Seastar::seastar
-    xxHash::xxhash)
+    xxHash::xxhash
+  PRIVATE
+    db)

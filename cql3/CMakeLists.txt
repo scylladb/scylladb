@@ -1,5 +1,7 @@
 include(generate_cql_grammar)
 
+find_package(ANTLR3 REQUIRED)
+
 generate_cql_grammar(
   GRAMMAR Cql.g
   SOURCES cql_grammar_srcs)
@@ -112,7 +114,9 @@ target_include_directories(cql3
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_BINARY_DIR})
 target_link_libraries(cql3
+  PUBLIC
     idl
     wasmtime_bindings
     Seastar::seastar
-    xxHash::xxhash)
+    xxHash::xxhash
+    ANTLR3::antlr3)
