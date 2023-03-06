@@ -1324,7 +1324,7 @@ void row_cache::upgrade_entry(cache_entry& e) {
     if (e.schema() != _schema && !e.partition().is_locked()) {
         auto& r = _tracker.region();
         assert(!r.reclaiming_enabled());
-        e.partition().upgrade(r, e.schema(), _schema, _tracker.cleaner(), &_tracker);
+        e.partition().upgrade(r, _schema, _tracker.cleaner(), &_tracker);
     }
 }
 

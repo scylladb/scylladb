@@ -577,7 +577,7 @@ mutation_partition partition_entry::squashed(const schema& s, is_evictable evict
     return squashed_v2(s, evictable).as_mutation_partition(s);
 }
 
-void partition_entry::upgrade(logalloc::region& r, schema_ptr from, schema_ptr to, mutation_cleaner& cleaner, cache_tracker* tracker)
+void partition_entry::upgrade(logalloc::region& r, schema_ptr to, mutation_cleaner& cleaner, cache_tracker* tracker)
 {
   with_allocator(r.allocator(), [&] {
     auto new_version = r.allocator().construct<partition_version>(squashed_v2(*to, is_evictable(bool(tracker))), to);

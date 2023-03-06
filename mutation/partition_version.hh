@@ -601,7 +601,7 @@ public:
 
     // needs to be called with reclaiming disabled
     // Must not be called when is_locked().
-    void upgrade(logalloc::region& r, schema_ptr from, schema_ptr to, mutation_cleaner&, cache_tracker*);
+    void upgrade(logalloc::region& r, schema_ptr to, mutation_cleaner&, cache_tracker*);
 
     const schema_ptr& get_schema() const noexcept { return _version->get_schema(); }
 
