@@ -504,7 +504,7 @@ public:
     mutation_assertion next_mutation() {
         auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
         BOOST_REQUIRE(bool(mo));
-        return mutation_assertion(std::move(*mo));
+        return assert_that(std::move(*mo));
     }
 
     future<> fill_buffer() {

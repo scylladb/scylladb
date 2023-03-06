@@ -21,6 +21,7 @@ extern logging::logger testlog;
 class mutation_partition_assertion {
     schema_ptr _schema;
     mutation_partition _m;
+    std::source_location _sl;
 private:
     static mutation_partition compacted(const schema& s, const mutation_partition& m) {
         mutation_partition res(s, m);
@@ -28,15 +29,20 @@ private:
         res.compact_for_compaction(s, always_gc, key, gc_clock::time_point::min(), tombstone_gc_state(nullptr));
         return res;
     }
+    void fail(std::string s) {
+        BOOST_FAIL(format("{}:{}: {}", _sl.file_name(), _sl.line(), s));
+    }
 public:
-    mutation_partition_assertion(schema_ptr s, mutation_partition&& m)
+    mutation_partition_assertion(schema_ptr s, mutation_partition&& m, std::source_location sl)
         : _schema(s)
         , _m(std::move(m))
+        , _sl(sl)
     { }
 
-    mutation_partition_assertion(schema_ptr s, const mutation_partition& m)
+    mutation_partition_assertion(schema_ptr s, const mutation_partition& m, std::source_location sl)
         : _schema(s)
         , _m(*s, m)
+        , _sl(sl)
     { }
 
     // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
@@ -49,17 +55,17 @@ public:
     mutation_partition_assertion& is_equal_to(const schema& s, const mutation_partition& other,
             const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
         if (ck_ranges) {
-            mutation_partition_assertion(_schema, _m.sliced(*_schema, *ck_ranges))
+            mutation_partition_assertion(_schema, _m.sliced(*_schema, *ck_ranges), _sl)
                 .is_equal_to(s, other.sliced(s, *ck_ranges));
             return *this;
         }
         if (!_m.equal(*_schema, other, s)) {
-            BOOST_FAIL(format("Mutations differ, expected {}\n ...but got: {}",
-                              mutation_partition::printer(s, other), mutation_partition::printer(*_schema, _m)));
+            fail(format("Mutations differ, expected {}\n ...but got: {}",
+                        mutation_partition::printer(s, other), mutation_partition::printer(*_schema, _m)));
         }
         if (!other.equal(s, _m, *_schema)) {
-            BOOST_FAIL(format("Mutation inequality is not symmetric for {}\n ...and: {}",
-                              mutation_partition::printer(s, other), mutation_partition::printer(*_schema, _m)));
+            fail(format("Mutation inequality is not symmetric for {}\n ...and: {}",
+                        mutation_partition::printer(s, other), mutation_partition::printer(*_schema, _m)));
         }
         return *this;
     }
@@ -67,7 +73,7 @@ public:
     mutation_partition_assertion& is_equal_to_compacted(const schema& s,
                                                         const mutation_partition& other,
                                                         const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
-        mutation_partition_assertion(s.shared_from_this(), compacted(s, _m))
+        mutation_partition_assertion(s.shared_from_this(), compacted(s, _m), _sl)
             .is_equal_to(compacted(s, other), ck_ranges);
         return *this;
     }
@@ -83,8 +89,8 @@ public:
 
     mutation_partition_assertion& is_not_equal_to(const schema& s, const mutation_partition& other) {
         if (_m.equal(*_schema, other, s)) {
-            BOOST_FAIL(format("Mutations equal but expected to differ: {}\n ...and: {}",
-                              mutation_partition::printer(s, other), mutation_partition::printer(*_schema, _m)));
+            fail(format("Mutations equal but expected to differ: {}\n ...and: {}",
+                        mutation_partition::printer(s, other), mutation_partition::printer(*_schema, _m)));
         }
         return *this;
     }
@@ -93,78 +99,86 @@ public:
         if (!_m.equal_continuity(*_schema, other)) {
             auto expected = other.get_continuity(*_schema, is_continuous::yes);
             auto got = _m.get_continuity(*_schema, is_continuous::yes);
-            BOOST_FAIL(format("Continuity doesn't match, expected: {}\nbut got: {}, mutation before: {}\n ...and after: {}",
-                              expected, got, mutation_partition::printer(*_schema, other), mutation_partition::printer(*_schema, _m)));
+            fail(format("Continuity doesn't match, expected: {}\nbut got: {}, mutation before: {}\n ...and after: {}",
+                        expected, got, mutation_partition::printer(*_schema, other), mutation_partition::printer(*_schema, _m)));
         }
         return *this;
     }
 
     mutation_partition_assertion& is_continuous(const position_range& r, is_continuous cont = is_continuous::yes) {
         if (!_m.check_continuity(*_schema, r, cont)) {
-            BOOST_FAIL(format("Expected range {} to be {} in {}", r, cont ? "continuous" : "discontinuous", mutation_partition::printer(*_schema, _m)));
+            fail(format("Expected range {} to be {} in {}", r, cont ? "continuous" : "discontinuous", mutation_partition::printer(*_schema, _m)));
         }
         return *this;
     }
 };
 
+#define ASSERT_THAT_MP(s, mp) assert_that(s, mp, std::source_location::current())
+
 static inline
-mutation_partition_assertion assert_that(schema_ptr s, const mutation_partition& mp) {
-    return {std::move(s), mp};
+mutation_partition_assertion assert_that(schema_ptr s, const mutation_partition& mp, std::source_location sl = std::source_location::current()) {
+    return {std::move(s), mp, sl};
 }
 
 static inline
-mutation_partition_assertion assert_that(schema_ptr s, const mutation_partition_v2& mp) {
-    return {s, mp.as_mutation_partition(*s)};
+mutation_partition_assertion assert_that(schema_ptr s, const mutation_partition_v2& mp, std::source_location sl = std::source_location::current()) {
+    return {s, mp.as_mutation_partition(*s), sl};
 }
 
 class mutation_assertion {
     mutation _m;
+    std::source_location _sl;
+
+    void fail(std::string s) {
+        BOOST_FAIL(format("{}:{}: {}", _sl.file_name(), _sl.line(), s));
+    }
 public:
-    mutation_assertion(mutation m)
+    mutation_assertion(mutation m, std::source_location sl)
         : _m(std::move(m))
+        , _sl(sl)
     { }
 
     // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
     mutation_assertion& is_equal_to(const mutation& other, const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
         if (ck_ranges) {
-            mutation_assertion(_m.sliced(*ck_ranges)).is_equal_to(other.sliced(*ck_ranges));
+            mutation_assertion(_m.sliced(*ck_ranges), _sl).is_equal_to(other.sliced(*ck_ranges));
             return *this;
         }
         if (_m != other) {
-            BOOST_FAIL(format("Mutations differ, expected {}\n ...but got: {}", other, _m));
+            fail(format("Mutations differ, expected {}\n ...but got: {}", other, _m));
         }
         if (other != _m) {
-            BOOST_FAIL(format("Mutation inequality is not symmetric for {}\n ...and: {}", other, _m));
+            fail(format("Mutation inequality is not symmetric for {}\n ...and: {}", other, _m));
         }
         return *this;
     }
 
     mutation_assertion& is_equal_to_compacted(const mutation& other, const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
-        mutation_assertion(_m.compacted()).is_equal_to(other.compacted(), ck_ranges);
+        mutation_assertion(_m.compacted(), _sl).is_equal_to(other.compacted(), ck_ranges);
         return *this;
     }
 
     mutation_assertion& is_not_equal_to(const mutation& other) {
         if (_m == other) {
-            BOOST_FAIL(format("Mutations equal but expected to differ: {}\n ...and: {}", other, _m));
+            fail(format("Mutations equal but expected to differ: {}\n ...and: {}", other, _m));
         }
         return *this;
     }
 
     mutation_assertion& has_schema(schema_ptr s) {
         if (_m.schema() != s) {
-            BOOST_FAIL(format("Expected mutation of schema {}, but got {}", *s, *_m.schema()));
+            fail(format("Expected mutation of schema {}, but got {}", *s, *_m.schema()));
         }
         return *this;
     }
 
     mutation_assertion& has_same_continuity(const mutation& other) {
-        assert_that(_m.schema(), _m.partition()).has_same_continuity(other.partition());
+        assert_that(_m.schema(), _m.partition(), _sl).has_same_continuity(other.partition());
         return *this;
     }
 
     mutation_assertion& is_continuous(const position_range& r, is_continuous cont = is_continuous::yes) {
-        assert_that(_m.schema(), _m.partition()).is_continuous(r, cont);
+        assert_that(_m.schema(), _m.partition(), _sl).is_continuous(r, cont);
         return *this;
     }
 
@@ -173,43 +187,48 @@ public:
         mutation m2 = _m;
         m2.upgrade(new_schema);
         BOOST_REQUIRE(m2.schema() == new_schema);
-        mutation_assertion(m2).is_equal_to(_m);
+        mutation_assertion(m2, _sl).is_equal_to(_m);
 
         mutation m3 = m2;
         m3.upgrade(_m.schema());
         BOOST_REQUIRE(m3.schema() == _m.schema());
-        mutation_assertion(m3).is_equal_to(_m);
-        mutation_assertion(m3).is_equal_to(m2);
+        mutation_assertion(m3, _sl).is_equal_to(_m);
+        mutation_assertion(m3, _sl).is_equal_to(m2);
     }
 };
 
 static inline
-mutation_assertion assert_that(mutation m) {
-    return { std::move(m) };
+mutation_assertion assert_that(mutation m, std::source_location sl = std::source_location::current()) {
+    return { std::move(m), sl };
 }
 
 class mutation_opt_assertions {
     mutation_opt _mo;
+    std::source_location _sl;
+
+    void fail(std::string s) {
+        BOOST_FAIL(format("{}:{}: {}", _sl.file_name(), _sl.line(), s));
+    }
 public:
-    mutation_opt_assertions(mutation_opt mo) : _mo(std::move(mo)) {}
+    mutation_opt_assertions(mutation_opt mo, std::source_location sl) : _mo(std::move(mo)), _sl(sl) {}
 
     mutation_assertion has_mutation() {
         if (!_mo) {
-            BOOST_FAIL("Expected engaged mutation_opt, but found not");
+            fail("Expected engaged mutation_opt, but found not");
         }
-        return { *_mo };
+        return { *_mo, _sl };
     }
 
     void has_no_mutation() {
         if (_mo) {
-            BOOST_FAIL("Expected disengaged mutation_opt");
+            fail("Expected disengaged mutation_opt");
         }
     }
 };
 
 static inline
-mutation_opt_assertions assert_that(mutation_opt mo) {
-    return { std::move(mo) };
+mutation_opt_assertions assert_that(mutation_opt mo, std::source_location sl = std::source_location::current()) {
+    return { std::move(mo), sl };
 }
 
 class validating_consumer {
