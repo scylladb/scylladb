@@ -307,6 +307,8 @@ struct node_ops_cmd_request {
     }
 };
 
+std::ostream& operator<<(std::ostream& out, const node_ops_cmd_request& req);
+
 struct node_ops_cmd_response {
     // Mandatory field, set by all cmds
     bool ok;

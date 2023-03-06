@@ -1880,3 +1880,8 @@ std::ostream& operator<<(std::ostream& out, node_ops_cmd cmd) {
             return out << "unknown cmd (" << static_cast<std::underlying_type_t<node_ops_cmd>>(cmd) << ")";
     }
 }
+
+std::ostream& operator<<(std::ostream& out, const node_ops_cmd_request& req) {
+    return out << fmt::format("{}[{}]: ignore_nodes={}, leaving_nodes={}, replace_nodes={}, bootstrap_nodes={}, repair_tables={}",
+            req.cmd, req.ops_uuid, req.ignore_nodes, req.leaving_nodes, req.replace_nodes, req.bootstrap_nodes, req.repair_tables);
+}
