@@ -312,6 +312,7 @@ else
     rsystemd="$HOME/.config/systemd/user"
     rdoc="$rprefix/share/doc"
     rdata="$rprefix"
+    rhkdata="$rprefix/scylla-housekeeping"
 fi
 
 # scylla-conf
@@ -435,6 +436,7 @@ install -m755 -d "$rdata"/commitlog
 install -m755 -d "$rdata"/hints
 install -m755 -d "$rdata"/view_hints
 install -m755 -d "$rdata"/coredump
+install -m755 -d "$rhkdata"
 install -m755 -d "$rprefix"/swagger-ui
 cp -r swagger-ui/dist "$rprefix"/swagger-ui
 install -d -m755 -d "$rprefix"/api
@@ -479,6 +481,13 @@ EOS
 EnvironmentFile=
 EnvironmentFile=$sysconfdir/scylla-housekeeping
 EOS
+            if ! $packaging; then
+                cat << EOS > "$retc"/systemd/system/scylla-housekeeping-$i.service.d/offline.conf
+[Service]
+ExecStart=
+ExecStart=$rprefix/scripts/scylla-housekeeping --uuid-file \$UUID_FILE -q -c \$CONFIG_FILE version --mode ${i:0:1}
+EOS
+            fi
         done
     fi
 elif ! $without_systemd; then
@@ -515,6 +524,39 @@ StandardError=
 StandardError=inherit
 EOS
     fi
+    for i in daily restart; do
+        install -d -m755 "$rsystemd"/scylla-housekeeping-$i.service.d
+        if [ $i = "daily" ]; then
+            mode="d"
+        else
+            mode="r"
+        fi
+        if [ -d /var/log/journal ]; then
+            cat << EOS > "$rsystemd"/scylla-housekeeping-$i.service.d/nonroot.conf
+[Service]
+EnvironmentFile=
+EnvironmentFile=$(realpath -m "$rsysconfdir/scylla-housekeeping")
+ExecStart=
+ExecStart=$rprefix/scripts/scylla-housekeeping --uuid-file \$UUID_FILE -q -c \$CONFIG_FILE version --mode ${i:0:1}
+User=
+Group=
+EOS
+        else
+            cat << EOS > "$rsystemd"/scylla-housekeeping-$i.service.d/nonroot.conf
+[Service]
+EnvironmentFile=
+EnvironmentFile=$(realpath -m "$rsysconfdir/scylla-housekeeping")
+ExecStart=
+ExecStart=$rprefix/scripts/scylla-housekeeping --uuid-file \$UUID_FILE -q -c \$CONFIG_FILE version --mode ${i:0:1}
+User=
+Group=
+StandardOutput=
+StandardOutput=file:$rprefix/scylla-housekeeping-$i.log
+StandardError=
+StandardError=inherit
+EOS
+        fi
+    done
 fi
 
 
@@ -525,7 +567,6 @@ SYSCONFDIR="$sysconfdir"
 EOS
     fi
     install -m755 -d "$rusr/bin"
-    install -m755 -d "$rhkdata"
     ln -srf "$rprefix/bin/scylla" "$rusr/bin/scylla"
     ln -srf "$rprefix/bin/iotune" "$rusr/bin/iotune"
     ln -srf "$rprefix/bin/scyllatop" "$rusr/bin/scyllatop"
@@ -609,6 +650,8 @@ if $nonroot; then
     if [ ! -d /var/log/journal ] || $supervisor_log_to_stdout; then
         sed -i -e "s#--log-to-stdout 0#--log-to-stdout 1#g" $rsysconfdir/scylla-server
     fi
+    sed -i -e "s#/var/lib/scylla-housekeeping#$rprefix/scylla-housekeeping#g" $rsysconfdir/scylla-housekeeping
+    sed -i -e "s#/etc/scylla.d#$retc/scylla.d#g" $rsysconfdir/scylla-housekeeping
     # nonroot install is also 'offline install'
     touch $rprefix/SCYLLA-OFFLINE-FILE
     touch $rprefix/SCYLLA-NONROOT-FILE
@@ -620,6 +663,7 @@ elif ! $packaging; then
     if $supervisor_log_to_stdout; then
         sed -i -e "s#--log-to-stdout 0#--log-to-stdout 1#g" $rsysconfdir/scylla-server
     fi
+    sed -i -e "s#REPO_FILES=.*#REPO_FILES=#g" $rsysconfdir/scylla-housekeeping
     # run install.sh without --packaging is 'offline install'
     touch $rprefix/SCYLLA-OFFLINE-FILE
     nousr=
