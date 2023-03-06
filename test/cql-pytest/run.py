@@ -365,7 +365,7 @@ def run_pytest(pytest_dir, additional_parameters):
         run_pytest_pids = set()
         os.chdir(pytest_dir)
         os.setsid()
-        os.execvp(os.path.join(source_path, 'test/pytest'), ['pytest',
+        os.execvp('pytest', ['pytest',
             '-o', 'junit_family=xunit2'] + additional_parameters)
         exit(1)
     # parent:
