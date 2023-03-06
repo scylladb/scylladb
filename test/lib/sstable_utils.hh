@@ -222,6 +222,10 @@ public:
     static fs::path filename(const sstable& sst, component_type c) {
         return fs::path(sst.filename(c));
     }
+
+    sstring storage_prefix() const {
+        return _sst->_storage.prefix();
+    }
 };
 
 inline auto replacer_fn_no_op() {
