@@ -220,15 +220,12 @@ SEASTAR_TEST_CASE(compact) {
     auto s = builder.build();
     table_for_tests cf(env.manager(), s);
     auto close_cf = deferred_stop(cf);
-    tmpdir dir;
-    sstring tmpdir_path = dir.path().string();
 
-        open_sstables(env, s, "test/resource/sstables/compaction", {1,2,3}).then([&env, tmpdir_path, s, cf, generation] (auto sstables) mutable {
-            auto new_sstable = [&env, gen = make_lw_shared<unsigned>(generation), s, tmpdir_path] {
-                return env.make_sstable(s, tmpdir_path,
-                        (*gen)++, sstables::get_highest_sstable_version(), sstables::sstable::format_types::big);
+        open_sstables(env, s, "test/resource/sstables/compaction", {1,2,3}).then([&env, s, cf, generation] (auto sstables) mutable {
+            auto new_sstable = [&env, gen = make_lw_shared<unsigned>(generation), s] {
+                return env.make_sstable(s, (*gen)++);
             };
-            return compact_sstables(sstables::compaction_descriptor(std::move(sstables), default_priority_class()), cf, new_sstable).then([&env, s, cf, tmpdir_path] (auto) {
+            return compact_sstables(sstables::compaction_descriptor(std::move(sstables), default_priority_class()), cf, new_sstable).then([&env, s, cf] (auto) {
                 // Verify that the compacted sstable has the right content. We expect to see:
                 //  name  | age | height
                 // -------+-----+--------
@@ -236,7 +233,7 @@ SEASTAR_TEST_CASE(compact) {
                 //    tom |  20 |    180
                 //   john |  20 |   deleted
                 //   nadav - deleted partition
-                return open_sstable(env, s, tmpdir_path, generation).then([&env, s] (shared_sstable sst) {
+                return env.reusable_sst(s, generation).then([&env, s] (shared_sstable sst) {
                     auto reader = make_lw_shared<flat_mutation_reader_v2>(sstable_reader(sst, s, env.make_reader_permit())); // reader holds sst and s alive.
                     return read_mutation_from_flat_mutation_reader(*reader).then([reader, s] (mutation_opt m) {
                         BOOST_REQUIRE(m);
