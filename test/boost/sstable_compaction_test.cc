@@ -419,13 +419,13 @@ static future<> compact_sstables(test_env& env, sstring tmpdir_path, std::vector
     });
 }
 
-static future<> check_compacted_sstables(test_env& env, sstring tmpdir_path, unsigned long generation, std::vector<unsigned long> compacted_generations) {
+static future<> check_compacted_sstables(test_env& env, unsigned long generation, std::vector<unsigned long> compacted_generations) {
     auto s = make_shared_schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type);
 
     auto generations = make_lw_shared<std::vector<unsigned long>>(std::move(compacted_generations));
 
-    return open_sstable(env, s, tmpdir_path, generation).then([&env, s, generations] (shared_sstable sst) {
+    return env.reusable_sst(s, generation).then([&env, s, generations] (shared_sstable sst) {
         auto reader = sstable_reader(sst, s, env.make_reader_permit()); // reader holds sst and s alive.
         auto keys = make_lw_shared<std::vector<partition_key>>();
 
@@ -469,24 +469,24 @@ SEASTAR_TEST_CASE(compact_02) {
         // E.g.: generations 18, 19, 20 and 21 will be compacted into generation 22.
         return compact_sstables(env, tmpdir_path, { 18, 19, 20, 21 }, 22).then([&env, tmpdir_path] {
             // Check that generation 22 contains all keys of generations 18, 19, 20 and 21.
-            return check_compacted_sstables(env, tmpdir_path, 22, { 18, 19, 20, 21 });
+            return check_compacted_sstables(env, 22, { 18, 19, 20, 21 });
         }).then([&env, tmpdir_path] {
             return compact_sstables(env, tmpdir_path, { 23, 24, 25, 26 }, 27).then([&env, tmpdir_path] {
-                return check_compacted_sstables(env, tmpdir_path, 27, { 23, 24, 25, 26 });
+                return check_compacted_sstables(env, 27, { 23, 24, 25, 26 });
             });
         }).then([&env, tmpdir_path] {
             return compact_sstables(env, tmpdir_path, { 28, 29, 30, 31 }, 32).then([&env, tmpdir_path] {
-                return check_compacted_sstables(env, tmpdir_path, 32, { 28, 29, 30, 31 });
+                return check_compacted_sstables(env, 32, { 28, 29, 30, 31 });
             });
         }).then([&env, tmpdir_path] {
             return compact_sstables(env, tmpdir_path, { 33, 34, 35, 36 }, 37).then([&env, tmpdir_path] {
-                return check_compacted_sstables(env, tmpdir_path, 37, { 33, 34, 35, 36 });
+                return check_compacted_sstables(env, 37, { 33, 34, 35, 36 });
             });
         }).then([&env, tmpdir_path] {
             // In this step, we compact 4 compacted sstables.
             return compact_sstables(env, tmpdir_path, { 22, 27, 32, 37 }, 38, false).then([&env, tmpdir_path] {
                 // Check that the compacted sstable contains all keys.
-                return check_compacted_sstables(env, tmpdir_path, 38,
+                return check_compacted_sstables(env, 38,
                     { 18, 19, 20, 21, 23, 24, 25, 26, 28, 29, 30, 31, 33, 34, 35, 36 });
             });
         });
