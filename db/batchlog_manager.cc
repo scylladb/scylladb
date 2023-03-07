@@ -43,8 +43,9 @@ static logging::logger blogger("batchlog_manager");
 const uint32_t db::batchlog_manager::replay_interval;
 const uint32_t db::batchlog_manager::page_size;
 
-db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, batchlog_manager_config config)
+db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_keyspace& sys_ks, batchlog_manager_config config)
         : _qp(qp)
+        , _sys_ks(sys_ks)
         , _write_request_timeout(std::chrono::duration_cast<db_clock::duration>(config.write_request_timeout))
         , _replay_rate(config.replay_rate)
         , _started(make_ready_future<>())
@@ -189,8 +190,8 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
 
         auto size = data.size();
 
-        return map_reduce(*fms, [written_at] (canonical_mutation& fm) {
-            return system_keyspace::get_truncated_at(fm.column_family_id()).then([written_at, &fm] (db_clock::time_point t) ->
+        return map_reduce(*fms, [this, written_at] (canonical_mutation& fm) {
+            return _sys_ks.get_truncated_at(fm.column_family_id()).then([written_at, &fm] (db_clock::time_point t) ->
                     std::optional<std::reference_wrapper<canonical_mutation>> {
                 if (written_at > t) {
                     return { std::ref(fm) };

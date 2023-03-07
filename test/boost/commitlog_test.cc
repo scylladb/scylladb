@@ -637,7 +637,7 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
         {
             auto paths = cl.get_active_segment_names();
             BOOST_REQUIRE(!paths.empty());
-            auto rp = db::commitlog_replayer::create_replayer(env.db()).get0();
+            auto rp = db::commitlog_replayer::create_replayer(env.db(), env.get_system_keyspace()).get0();
             rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
         }
 
