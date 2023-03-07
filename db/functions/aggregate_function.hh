@@ -27,11 +27,8 @@ protected:
 private:
     shared_ptr<aggregate_function> _reducible;
 private:
-    class aggregate_adapter;
     static shared_ptr<aggregate_function> make_reducible_variant(stateless_aggregate_function saf);
 public:
-    class aggregate;
-
     explicit aggregate_function(stateless_aggregate_function saf, bool reducible_variant = false);
 
     /**
@@ -39,7 +36,7 @@ public:
      *
      * @return a new <code>Aggregate</code> instance.
      */
-    std::unique_ptr<aggregate> new_aggregate();
+    const stateless_aggregate_function& get_aggregate() const;
 
     /**
      * Checks wheather the function can be distributed and is able to reduce states.
@@ -70,41 +67,6 @@ public:
     virtual bool is_aggregate() const override;
     virtual void print(std::ostream& os) const override;
     virtual sstring column_name(const std::vector<sstring>& column_names) const override;
-
-    /**
-     * An aggregation operation.
-     */
-    class aggregate {
-    public:
-        using opt_bytes = aggregate_function::opt_bytes;
-
-        virtual ~aggregate() {}
-
-        /**
-         * Adds the specified input to this aggregate.
-         *
-         * @param values the values to add to the aggregate.
-         */
-        virtual void add_input(const std::vector<opt_bytes>& values) = 0;
-
-        /**
-         * Computes and returns the aggregate current value.
-         *
-         * @return the aggregate current value.
-         */
-        virtual opt_bytes compute() = 0;
-
-        virtual void set_accumulator(const opt_bytes& acc) = 0;
-
-        virtual opt_bytes get_accumulator() const = 0;
-
-        virtual void reduce(const opt_bytes& acc) = 0;
-
-        /**
-         * Reset this aggregate.
-         */
-        virtual void reset() = 0;
-    };
 };
 
 }
