@@ -649,6 +649,7 @@ aggregate_fcts::make_count_rows_function() {
 
 shared_ptr<aggregate_function>
 aggregate_fcts::make_max_function(data_type io_type) {
+    io_type = io_type->without_reversed().shared_from_this();
     auto max = ::make_shared<internal_scalar_function>("max_step", io_type, std::vector({io_type, io_type}), [io_type] (const std::vector<bytes_opt>& args) -> bytes_opt {
         if (!args[0]) {
             return args[1];
@@ -676,6 +677,7 @@ aggregate_fcts::make_max_function(data_type io_type) {
 
 shared_ptr<aggregate_function>
 aggregate_fcts::make_min_function(data_type io_type) {
+    io_type = io_type->without_reversed().shared_from_this();
     auto min = ::make_shared<internal_scalar_function>("min_step", io_type, std::vector({io_type, io_type}), [io_type] (const std::vector<bytes_opt>& args) -> bytes_opt {
         if (!args[0]) {
             return args[1];
