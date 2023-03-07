@@ -1338,19 +1338,13 @@ warnings = [
     '-Wall',
     '-Werror',
     '-Wno-mismatched-tags',  # clang-only
-    '-Wno-maybe-uninitialized',  # false positives on gcc 5
     '-Wno-tautological-compare',
     '-Wno-parentheses-equality',
     '-Wno-c++11-narrowing',
     '-Wno-missing-braces',
-    '-Wno-noexcept-type',
-    '-Wno-nonnull-compare',
-    '-Wno-error=cpp',
     '-Wno-ignored-attributes',
     '-Wno-overloaded-virtual',
-    '-Wno-stringop-overflow',
     '-Wno-unused-command-line-argument',
-    '-Wno-redeclared-class-member',
     '-Wno-unsupported-friend',
     '-Wno-delete-non-abstract-non-virtual-dtor',
     '-Wno-braced-scalar-init',
@@ -1360,10 +1354,8 @@ warnings = [
     '-Wno-psabi',
     '-Wno-narrowing',
     '-Wno-nonnull',
-    '-Wno-catch-value',
     '-Wno-stringop-overread', # false positives with gcc 12
     '-Wno-uninitialized',  # false positives with gcc 12,
-    '-Wno-missing-attributes', # something in seastar's memory.cc, TBD,
     '-Wno-dangling-pointer', # false positives with gcc 12
 ]
 

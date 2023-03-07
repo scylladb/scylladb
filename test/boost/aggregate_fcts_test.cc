@@ -235,12 +235,12 @@ SEASTAR_TEST_CASE(test_reverse_type_aggregation) {
         e.execute_cql("INSERT INTO test(p, c, v) VALUES (1, 2, 1)").get();
 
         {
-            auto tp = db_clock::from_time_t({ 0 }) + std::chrono::milliseconds(1);
+            auto tp = db_clock::from_time_t(0) + std::chrono::milliseconds(1);
             auto msg = e.execute_cql("SELECT min(c) FROM test").get0();
             assert_that(msg).is_rows().with_size(1).with_row({{timestamp_type->decompose(tp)}});
         }
         {
-            auto tp = db_clock::from_time_t({ 0 }) + std::chrono::milliseconds(2);
+            auto tp = db_clock::from_time_t(0) + std::chrono::milliseconds(2);
             auto msg = e.execute_cql("SELECT max(c) FROM test").get0();
             assert_that(msg).is_rows().with_size(1).with_row({{timestamp_type->decompose(tp)}});
         }
