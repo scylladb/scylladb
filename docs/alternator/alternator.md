@@ -50,6 +50,13 @@ these default locations can overridden by specifying
 `--alternator-encryption-options keyfile="..."` and
 `--alternator-encryption-options certificate="..."`.
 
+By default, Scylla saves a snapshot of deleted tables. But Alternator does
+not offer an API to restore these snapshots, so these snapshots are not useful
+and waste disk space - deleting a table does not recover any disk space.
+It is therefore recommended to disable this automatic-snapshotting feature
+by configuring the **auto_snapshot** option to `false`.
+See also <https://github.com/scylladb/scylladb/issues/5283>.
+
 DynamoDB applications specify a single "endpoint" address, e.g.,
 `dynamodb.us-east-1.amazonaws.com`. Behind the scenes, a DNS server and/or
 load balancers distribute the connections to many different backend nodes.
