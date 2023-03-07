@@ -1906,11 +1906,12 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
         tracing::trace_state_ptr tr_state,
         gc_clock::time_point now) const {
     auto base_token = m.token();
+    auto m_schema = m.schema();
     db::view::view_update_builder builder = db::view::make_view_update_builder(
             *this,
             base,
             std::move(views),
-            make_flat_mutation_reader_from_mutations_v2(m.schema(), std::move(permit), std::move(m)),
+            make_flat_mutation_reader_from_mutations_v2(std::move(m_schema), std::move(permit), std::move(m)),
             std::move(existings),
             now);
 
