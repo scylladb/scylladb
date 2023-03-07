@@ -135,15 +135,6 @@ public:
         });
     }
 
-    template <typename T, typename Func>
-    static inline auto do_with(T&& rval, Func&& func) {
-        return seastar::do_with(test_env(), std::forward<T>(rval), [func = std::move(func)] (test_env& env, T& val) mutable {
-            return futurize_invoke(func, env, val).finally([&env] {
-                return env.stop();
-            });
-        });
-    }
-
     static inline future<> do_with_async(noncopyable_function<void (test_env&)> func, test_env_config cfg = {}) {
         return seastar::async([func = std::move(func), cfg = std::move(cfg)] () mutable {
             test_env env(std::move(cfg));
