@@ -175,10 +175,10 @@ static ss::token_range token_range_endpoints_to_json(const dht::token_range_endp
     return r;
 }
 
-using ks_cf_func = std::function<future<json::json_return_type>(http_context&, std::unique_ptr<request>, sstring, std::vector<table_info>)>;
+using ks_cf_func = std::function<future<json::json_return_type>(http_context&, std::unique_ptr<http::request>, sstring, std::vector<table_info>)>;
 
 static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
-    return [&ctx, f = std::move(f)](std::unique_ptr<request> req) {
+    return [&ctx, f = std::move(f)](std::unique_ptr<http::request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
         return f(ctx, std::move(req), std::move(keyspace), std::move(table_infos));
@@ -243,7 +243,7 @@ future<json::json_return_type> set_tables_autocompaction(http_context& ctx, cons
 }
 
 void set_transport_controller(http_context& ctx, routes& r, cql_transport::controller& ctl) {
-    ss::start_native_transport.set(r, [&ctl](std::unique_ptr<request> req) {
+    ss::start_native_transport.set(r, [&ctl](std::unique_ptr<http::request> req) {
         return smp::submit_to(0, [&] {
             return ctl.start_server();
         }).then([] {
@@ -251,7 +251,7 @@ void set_transport_controller(http_context& ctx, routes& r, cql_transport::contr
         });
     });
 
-    ss::stop_native_transport.set(r, [&ctl](std::unique_ptr<request> req) {
+    ss::stop_native_transport.set(r, [&ctl](std::unique_ptr<http::request> req) {
         return smp::submit_to(0, [&] {
             return ctl.request_stop_server();
         }).then([] {
@@ -259,7 +259,7 @@ void set_transport_controller(http_context& ctx, routes& r, cql_transport::contr
         });
     });
 
-    ss::is_native_transport_running.set(r, [&ctl] (std::unique_ptr<request> req) {
+    ss::is_native_transport_running.set(r, [&ctl] (std::unique_ptr<http::request> req) {
         return smp::submit_to(0, [&] {
             return !ctl.listen_addresses().empty();
         }).then([] (bool running) {
@@ -275,7 +275,7 @@ void unset_transport_controller(http_context& ctx, routes& r) {
 }
 
 void set_rpc_controller(http_context& ctx, routes& r, thrift_controller& ctl) {
-    ss::stop_rpc_server.set(r, [&ctl](std::unique_ptr<request> req) {
+    ss::stop_rpc_server.set(r, [&ctl](std::unique_ptr<http::request> req) {
         return smp::submit_to(0, [&] {
             return ctl.request_stop_server();
         }).then([] {
@@ -283,7 +283,7 @@ void set_rpc_controller(http_context& ctx, routes& r, thrift_controller& ctl) {
         });
     });
 
-    ss::start_rpc_server.set(r, [&ctl](std::unique_ptr<request> req) {
+    ss::start_rpc_server.set(r, [&ctl](std::unique_ptr<http::request> req) {
         return smp::submit_to(0, [&] {
             return ctl.start_server();
         }).then([] {
@@ -291,7 +291,7 @@ void set_rpc_controller(http_context& ctx, routes& r, thrift_controller& ctl) {
         });
     });
 
-    ss::is_rpc_server_running.set(r, [&ctl] (std::unique_ptr<request> req) {
+    ss::is_rpc_server_running.set(r, [&ctl] (std::unique_ptr<http::request> req) {
         return smp::submit_to(0, [&] {
             return !ctl.listen_addresses().empty();
         }).then([] (bool running) {
@@ -307,7 +307,7 @@ void unset_rpc_controller(http_context& ctx, routes& r) {
 }
 
 void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
-    ss::repair_async.set(r, [&ctx, &repair](std::unique_ptr<request> req) {
+    ss::repair_async.set(r, [&ctx, &repair](std::unique_ptr<http::request> req) {
         static std::vector<sstring> options = {"primaryRange", "parallelism", "incremental",
                 "jobThreads", "ranges", "columnFamilies", "dataCenters", "hosts", "ignore_nodes", "trace",
                 "startToken", "endToken" };
@@ -329,13 +329,13 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
                 });
     });
 
-    ss::get_active_repair_async.set(r, [&repair] (std::unique_ptr<request> req) {
+    ss::get_active_repair_async.set(r, [&repair] (std::unique_ptr<http::request> req) {
         return repair.local().get_active_repairs().then([] (std::vector<int> res) {
             return make_ready_future<json::json_return_type>(res);
         });
     });
 
-    ss::repair_async_status.set(r, [&repair] (std::unique_ptr<request> req) {
+    ss::repair_async_status.set(r, [&repair] (std::unique_ptr<http::request> req) {
         return repair.local().get_status(boost::lexical_cast<int>( req->get_query_param("id")))
                 .then_wrapped([] (future<repair_status>&& fut) {
             ss::ns_repair_async_status::return_type_wrapper res;
@@ -348,7 +348,7 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
         });
     });
 
-    ss::repair_await_completion.set(r, [&repair] (std::unique_ptr<request> req) {
+    ss::repair_await_completion.set(r, [&repair] (std::unique_ptr<http::request> req) {
         int id;
         using clock = std::chrono::steady_clock;
         clock::time_point expire;
@@ -381,13 +381,13 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair) {
         });
     });
 
-    ss::force_terminate_all_repair_sessions.set(r, [&repair] (std::unique_ptr<request> req) {
+    ss::force_terminate_all_repair_sessions.set(r, [&repair] (std::unique_ptr<http::request> req) {
         return repair.local().abort_all().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::force_terminate_all_repair_sessions_new.set(r, [&repair] (std::unique_ptr<request> req) {
+    ss::force_terminate_all_repair_sessions_new.set(r, [&repair] (std::unique_ptr<http::request> req) {
         return repair.local().abort_all().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
@@ -405,7 +405,7 @@ void unset_repair(http_context& ctx, routes& r) {
 }
 
 void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>& sst_loader) {
-    ss::load_new_ss_tables.set(r, [&ctx, &sst_loader](std::unique_ptr<request> req) {
+    ss::load_new_ss_tables.set(r, [&ctx, &sst_loader](std::unique_ptr<http::request> req) {
         auto ks = validate_keyspace(ctx, req->param);
         auto cf = req->get_query_param("cf");
         auto stream = req->get_query_param("load_and_stream");
@@ -436,7 +436,7 @@ void unset_sstables_loader(http_context& ctx, routes& r) {
 }
 
 void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_builder>& vb) {
-    ss::view_build_statuses.set(r, [&ctx, &vb] (std::unique_ptr<request> req) {
+    ss::view_build_statuses.set(r, [&ctx, &vb] (std::unique_ptr<http::request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto view = req->param["view"];
         return vb.local().view_build_statuses(std::move(keyspace), std::move(view)).then([] (std::unordered_map<sstring, sstring> status) {
@@ -456,18 +456,18 @@ static future<json::json_return_type> describe_ring_as_json(sharded<service::sto
 }
 
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<cdc::generation_service>& cdc_gs, sharded<db::system_keyspace>& sys_ks) {
-    ss::local_hostid.set(r, [&ctx](std::unique_ptr<request> req) {
+    ss::local_hostid.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto id = ctx.db.local().get_config().host_id;
         return make_ready_future<json::json_return_type>(id.to_sstring());
     });
 
-    ss::get_tokens.set(r, [&ctx] (std::unique_ptr<request> req) {
+    ss::get_tokens.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return make_ready_future<json::json_return_type>(stream_range_as_array(ctx.get_token_metadata().sorted_tokens(), [](const dht::token& i) {
            return boost::lexical_cast<std::string>(i);
         }));
     });
 
-    ss::get_node_tokens.set(r, [&ctx] (std::unique_ptr<request> req) {
+    ss::get_node_tokens.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         gms::inet_address addr(req->param["endpoint"]);
         return make_ready_future<json::json_return_type>(stream_range_as_array(ctx.get_token_metadata().get_tokens(addr), [](const dht::token& i) {
            return boost::lexical_cast<std::string>(i);
@@ -478,7 +478,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return ctx.db.local().commitlog()->active_config().commit_log_location;
     });
 
-    ss::get_token_endpoint.set(r, [&ss] (std::unique_ptr<request> req) {
+    ss::get_token_endpoint.set(r, [&ss] (std::unique_ptr<http::request> req) {
         return make_ready_future<json::json_return_type>(stream_range_as_array(ss.local().get_token_to_endpoint_map(), [](const auto& i) {
             storage_service_json::mapper val;
             val.key = boost::lexical_cast<std::string>(i.first);
@@ -487,7 +487,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         }));
     });
 
-    ss::toppartitions_generic.set(r, [&ctx] (std::unique_ptr<request> req) {
+    ss::toppartitions_generic.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         bool filters_provided = false;
 
         std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters {};
@@ -574,7 +574,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return ctx.db.local().get_config().saved_caches_directory();
     });
 
-    ss::get_range_to_endpoint_map.set(r, [&ctx, &ss](std::unique_ptr<request> req) -> future<json::json_return_type> {
+    ss::get_range_to_endpoint_map.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req->param);
         std::vector<ss::maplist_mapper> res;
         co_return stream_range_as_array(co_await ss.local().get_range_to_address_map(keyspace),
@@ -597,7 +597,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::get_pending_range_to_endpoint_map.set(r, [&ctx](std::unique_ptr<request> req) {
+    ss::get_pending_range_to_endpoint_map.set(r, [&ctx](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         auto keyspace = validate_keyspace(ctx, req->param);
@@ -605,7 +605,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return make_ready_future<json::json_return_type>(res);
     });
 
-    ss::describe_any_ring.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
+    ss::describe_any_ring.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) {
         // Find an arbitrary non-system keyspace.
         auto keyspaces = ctx.db.local().get_non_local_strategy_keyspaces();
         if (keyspaces.empty()) {
@@ -615,7 +615,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return describe_ring_as_json(ss, ks);
     });
 
-    ss::describe_ring.set(r, [&ctx, &ss](std::unique_ptr<request> req) {
+    ss::describe_ring.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) {
         return describe_ring_as_json(ss, validate_keyspace(ctx, req->param));
     });
 
@@ -624,11 +624,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return map_to_key_value(ctx.get_token_metadata().get_endpoint_to_host_id_map_for_reading(), res);
     });
 
-    ss::get_load.set(r, [&ctx](std::unique_ptr<request> req) {
+    ss::get_load.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return get_cf_stats(ctx, &replica::column_family_stats::live_disk_space_used);
     });
 
-    ss::get_load_map.set(r, [&ctx] (std::unique_ptr<request> req) {
+    ss::get_load_map.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return ctx.lmeter.get_load_map().then([] (auto&& load_map) {
             std::vector<ss::map_string_double> res;
             for (auto i : load_map) {
@@ -641,7 +641,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::get_current_generation_number.set(r, [&g](std::unique_ptr<request> req) {
+    ss::get_current_generation_number.set(r, [&g](std::unique_ptr<http::request> req) {
         gms::inet_address ep(utils::fb_utilities::get_broadcast_address());
         return g.get_current_generation_number(ep).then([](int res) {
             return make_ready_future<json::json_return_type>(res);
@@ -654,7 +654,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 req.get_query_param("key")));
     });
 
-    ss::cdc_streams_check_and_repair.set(r, [&cdc_gs] (std::unique_ptr<request> req) {
+    ss::cdc_streams_check_and_repair.set(r, [&cdc_gs] (std::unique_ptr<http::request> req) {
         if (!cdc_gs.local_is_initialized()) {
             throw std::runtime_error("get_cdc_generation_service: not initialized yet");
         }
@@ -663,7 +663,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<request> req) -> future<json::json_return_type> {
+    ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto& db = ctx.db;
         auto keyspace = validate_keyspace(ctx, req->param);
         auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
@@ -685,7 +685,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json_void();
     });
 
-    ss::force_keyspace_cleanup.set(r, [&ctx, &ss](std::unique_ptr<request> req) -> future<json::json_return_type> {
+    ss::force_keyspace_cleanup.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto& db = ctx.db;
         auto keyspace = validate_keyspace(ctx, req->param);
         auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
@@ -719,7 +719,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json::json_return_type(0);
     });
 
-    ss::perform_keyspace_offstrategy_compaction.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<table_info> table_infos) -> future<json::json_return_type> {
+    ss::perform_keyspace_offstrategy_compaction.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) -> future<json::json_return_type> {
         apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, table_infos);
         bool res = false;
         try {
@@ -738,7 +738,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json::json_return_type(res);
     }));
 
-    ss::upgrade_sstables.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<request> req, sstring keyspace, std::vector<table_info> table_infos) -> future<json::json_return_type> {
+    ss::upgrade_sstables.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) -> future<json::json_return_type> {
         auto& db = ctx.db;
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
@@ -760,7 +760,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return json::json_return_type(0);
     }));
 
-    ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<request> req) -> future<json::json_return_type> {
+    ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
         apilog.info("perform_keyspace_flush: keyspace={} tables={}", keyspace, column_families);
@@ -774,21 +774,21 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
 
-    ss::decommission.set(r, [&ss](std::unique_ptr<request> req) {
+    ss::decommission.set(r, [&ss](std::unique_ptr<http::request> req) {
         apilog.info("decommission");
         return ss.local().decommission().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::move.set(r, [&ss] (std::unique_ptr<request> req) {
+    ss::move.set(r, [&ss] (std::unique_ptr<http::request> req) {
         auto new_token = req->get_query_param("new_token");
         return ss.local().move(new_token).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::remove_node.set(r, [&ss](std::unique_ptr<request> req) {
+    ss::remove_node.set(r, [&ss](std::unique_ptr<http::request> req) {
         auto host_id = validate_host_id(req->get_query_param("host_id"));
         std::vector<sstring> ignore_nodes_strs= split(req->get_query_param("ignore_nodes"), ",");
         apilog.info("remove_node: host_id={} ignore_nodes={}", host_id, ignore_nodes_strs);
@@ -814,19 +814,19 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::get_removal_status.set(r, [&ss](std::unique_ptr<request> req) {
+    ss::get_removal_status.set(r, [&ss](std::unique_ptr<http::request> req) {
         return ss.local().get_removal_status().then([] (auto status) {
             return make_ready_future<json::json_return_type>(status);
         });
     });
 
-    ss::force_remove_completion.set(r, [&ss](std::unique_ptr<request> req) {
+    ss::force_remove_completion.set(r, [&ss](std::unique_ptr<http::request> req) {
         return ss.local().force_remove_completion().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::set_logging_level.set(r, [](std::unique_ptr<request> req) {
+    ss::set_logging_level.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         auto class_qualifier = req->get_query_param("class_qualifier");
@@ -834,7 +834,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::get_logging_levels.set(r, [](std::unique_ptr<request> req) {
+    ss::get_logging_levels.set(r, [](std::unique_ptr<http::request> req) {
         std::vector<ss::mapper> res;
         for (auto i : logging::logger_registry().get_all_logger_names()) {
             ss::mapper log;
@@ -845,19 +845,19 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return make_ready_future<json::json_return_type>(res);
     });
 
-    ss::get_operation_mode.set(r, [&ss](std::unique_ptr<request> req) {
+    ss::get_operation_mode.set(r, [&ss](std::unique_ptr<http::request> req) {
         return ss.local().get_operation_mode().then([] (auto mode) {
             return make_ready_future<json::json_return_type>(format("{}", mode));
         });
     });
 
-    ss::is_starting.set(r, [&ss](std::unique_ptr<request> req) {
+    ss::is_starting.set(r, [&ss](std::unique_ptr<http::request> req) {
         return ss.local().get_operation_mode().then([] (auto mode) {
             return make_ready_future<json::json_return_type>(mode <= service::storage_service::mode::STARTING);
         });
     });
 
-    ss::get_drain_progress.set(r, [&ctx](std::unique_ptr<request> req) {
+    ss::get_drain_progress.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return ctx.db.map_reduce(adder<replica::database::drain_progress>(), [] (auto& db) {
             return db.get_drain_progress();
         }).then([] (auto&& progress) {
@@ -866,13 +866,13 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::drain.set(r, [&ss](std::unique_ptr<request> req) {
+    ss::drain.set(r, [&ss](std::unique_ptr<http::request> req) {
         apilog.info("drain");
         return ss.local().drain().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
-    ss::truncate.set(r, [&ctx](std::unique_ptr<request> req) {
+    ss::truncate.set(r, [&ctx](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         auto keyspace = validate_keyspace(ctx, req->param);
@@ -890,34 +890,34 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return map_keys(ctx.db.local().get_keyspaces());
     });
 
-    ss::stop_gossiping.set(r, [&ss](std::unique_ptr<request> req) {
+    ss::stop_gossiping.set(r, [&ss](std::unique_ptr<http::request> req) {
         apilog.info("stop_gossiping");
         return ss.local().stop_gossiping().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::start_gossiping.set(r, [&ss](std::unique_ptr<request> req) {
+    ss::start_gossiping.set(r, [&ss](std::unique_ptr<http::request> req) {
         apilog.info("start_gossiping");
         return ss.local().start_gossiping().then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    ss::is_gossip_running.set(r, [&ss](std::unique_ptr<request> req) {
+    ss::is_gossip_running.set(r, [&ss](std::unique_ptr<http::request> req) {
         return ss.local().is_gossip_running().then([] (bool running){
             return make_ready_future<json::json_return_type>(running);
         });
     });
 
 
-    ss::stop_daemon.set(r, [](std::unique_ptr<request> req) {
+    ss::stop_daemon.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::is_initialized.set(r, [&ss, &g](std::unique_ptr<request> req) {
+    ss::is_initialized.set(r, [&ss, &g](std::unique_ptr<http::request> req) {
         return ss.local().get_operation_mode().then([&g] (auto mode) {
             bool is_initialized = mode >= service::storage_service::mode::STARTING;
             if (mode == service::storage_service::mode::NORMAL) {
@@ -927,42 +927,42 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::join_ring.set(r, [](std::unique_ptr<request> req) {
+    ss::join_ring.set(r, [](std::unique_ptr<http::request> req) {
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::is_joined.set(r, [&ss] (std::unique_ptr<request> req) {
+    ss::is_joined.set(r, [&ss] (std::unique_ptr<http::request> req) {
         return ss.local().get_operation_mode().then([] (auto mode) {
             return make_ready_future<json::json_return_type>(mode >= service::storage_service::mode::JOINING);
         });
     });
 
-    ss::set_stream_throughput_mb_per_sec.set(r, [](std::unique_ptr<request> req) {
+    ss::set_stream_throughput_mb_per_sec.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         auto value = req->get_query_param("value");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::get_stream_throughput_mb_per_sec.set(r, [](std::unique_ptr<request> req) {
+    ss::get_stream_throughput_mb_per_sec.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
-    ss::get_compaction_throughput_mb_per_sec.set(r, [&ctx](std::unique_ptr<request> req) {
+    ss::get_compaction_throughput_mb_per_sec.set(r, [&ctx](std::unique_ptr<http::request> req) {
         int value = ctx.db.local().get_config().compaction_throughput_mb_per_sec();
         return make_ready_future<json::json_return_type>(value);
     });
 
-    ss::set_compaction_throughput_mb_per_sec.set(r, [](std::unique_ptr<request> req) {
+    ss::set_compaction_throughput_mb_per_sec.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         auto value = req->get_query_param("value");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::is_incremental_backups_enabled.set(r, [&ctx](std::unique_ptr<request> req) {
+    ss::is_incremental_backups_enabled.set(r, [&ctx](std::unique_ptr<http::request> req) {
         // If this is issued in parallel with an ongoing change, we may see values not agreeing.
         // Reissuing is asking for trouble, so we will just return true upon seeing any true value.
         return ctx.db.map_reduce(adder<bool>(), [] (replica::database& db) {
@@ -978,7 +978,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::set_incremental_backups_enabled.set(r, [&ctx](std::unique_ptr<request> req) {
+    ss::set_incremental_backups_enabled.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto val_str = req->get_query_param("value");
         bool value = (val_str == "True") || (val_str == "true") || (val_str == "1");
         return ctx.db.invoke_on_all([value] (replica::database& db) {
@@ -999,7 +999,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::rebuild.set(r, [&ss](std::unique_ptr<request> req) {
+    ss::rebuild.set(r, [&ss](std::unique_ptr<http::request> req) {
         auto source_dc = req->get_query_param("source_dc");
         apilog.info("rebuild: source_dc={}", source_dc);
         return ss.local().rebuild(std::move(source_dc)).then([] {
@@ -1007,34 +1007,34 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::bulk_load.set(r, [](std::unique_ptr<request> req) {
+    ss::bulk_load.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         auto path = req->param["path"];
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::bulk_load_async.set(r, [](std::unique_ptr<request> req) {
+    ss::bulk_load_async.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         auto path = req->param["path"];
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::reschedule_failed_deletions.set(r, [](std::unique_ptr<request> req) {
+    ss::reschedule_failed_deletions.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::sample_key_range.set(r, [](std::unique_ptr<request> req) {
+    ss::sample_key_range.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         std::vector<sstring> res;
         return make_ready_future<json::json_return_type>(res);
     });
 
-    ss::reset_local_schema.set(r, [&sys_ks](std::unique_ptr<request> req) {
+    ss::reset_local_schema.set(r, [&sys_ks](std::unique_ptr<http::request> req) {
         // FIXME: We should truncate schema tables if more than one node in the cluster.
         auto& sp = service::get_storage_proxy();
         auto& fs = sp.local().features();
@@ -1044,7 +1044,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::set_trace_probability.set(r, [](std::unique_ptr<request> req) {
+    ss::set_trace_probability.set(r, [](std::unique_ptr<http::request> req) {
         auto probability = req->get_query_param("probability");
         apilog.info("set_trace_probability: probability={}", probability);
         return futurize_invoke([probability] {
@@ -1066,7 +1066,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::get_trace_probability.set(r, [](std::unique_ptr<request> req) {
+    ss::get_trace_probability.set(r, [](std::unique_ptr<http::request> req) {
         return make_ready_future<json::json_return_type>(tracing::tracing::get_local_tracing_instance().get_trace_probability());
     });
 
@@ -1079,7 +1079,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return res;
     });
 
-    ss::set_slow_query.set(r, [](std::unique_ptr<request> req) {
+    ss::set_slow_query.set(r, [](std::unique_ptr<http::request> req) {
         auto enable = req->get_query_param("enable");
         auto ttl = req->get_query_param("ttl");
         auto threshold = req->get_query_param("threshold");
@@ -1107,7 +1107,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         }
     });
 
-    ss::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
+    ss::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
 
@@ -1115,7 +1115,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return set_tables_autocompaction(ctx, keyspace, tables, true);
     });
 
-    ss::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
+    ss::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto keyspace = validate_keyspace(ctx, req->param);
         auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
 
@@ -1123,7 +1123,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return set_tables_autocompaction(ctx, keyspace, tables, false);
     });
 
-    ss::deliver_hints.set(r, [](std::unique_ptr<request> req) {
+    ss::deliver_hints.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         auto host = req->get_query_param("host");
@@ -1138,53 +1138,53 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return g.get_partitioner_name();
     });
 
-    ss::get_tombstone_warn_threshold.set(r, [](std::unique_ptr<request> req) {
+    ss::get_tombstone_warn_threshold.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
-    ss::set_tombstone_warn_threshold.set(r, [](std::unique_ptr<request> req) {
+    ss::set_tombstone_warn_threshold.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         auto debug_threshold = req->get_query_param("debug_threshold");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::get_tombstone_failure_threshold.set(r, [](std::unique_ptr<request> req) {
+    ss::get_tombstone_failure_threshold.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
-    ss::set_tombstone_failure_threshold.set(r, [](std::unique_ptr<request> req) {
+    ss::set_tombstone_failure_threshold.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         auto debug_threshold = req->get_query_param("debug_threshold");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::get_batch_size_failure_threshold.set(r, [](std::unique_ptr<request> req) {
+    ss::get_batch_size_failure_threshold.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
-    ss::set_batch_size_failure_threshold.set(r, [](std::unique_ptr<request> req) {
+    ss::set_batch_size_failure_threshold.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         auto threshold = req->get_query_param("threshold");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::set_hinted_handoff_throttle_in_kb.set(r, [](std::unique_ptr<request> req) {
+    ss::set_hinted_handoff_throttle_in_kb.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         auto debug_threshold = req->get_query_param("throttle");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::get_metrics_load.set(r, [&ctx](std::unique_ptr<request> req) {
+    ss::get_metrics_load.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return get_cf_stats(ctx, &replica::column_family_stats::live_disk_space_used);
     });
 
@@ -1192,26 +1192,26 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return ss.local().get_exception_count();
     });
 
-    ss::get_total_hints_in_progress.set(r, [](std::unique_ptr<request> req) {
+    ss::get_total_hints_in_progress.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
-    ss::get_total_hints.set(r, [](std::unique_ptr<request> req) {
+    ss::get_total_hints.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
-    ss::get_ownership.set(r, [&ss] (std::unique_ptr<request> req) {
+    ss::get_ownership.set(r, [&ss] (std::unique_ptr<http::request> req) {
         return ss.local().get_ownership().then([] (auto&& ownership) {
             std::vector<storage_service_json::mapper> res;
             return make_ready_future<json::json_return_type>(map_to_key_value(ownership, res));
         });
     });
 
-    ss::get_effective_ownership.set(r, [&ctx, &ss] (std::unique_ptr<request> req) {
+    ss::get_effective_ownership.set(r, [&ctx, &ss] (std::unique_ptr<http::request> req) {
         auto keyspace_name = req->param["keyspace"] == "null" ? "" : validate_keyspace(ctx, req->param);
         return ss.local().effective_ownership(keyspace_name).then([] (auto&& ownership) {
             std::vector<storage_service_json::mapper> res;
@@ -1219,7 +1219,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         });
     });
 
-    ss::sstable_info.set(r, [&ctx] (std::unique_ptr<request> req) {
+    ss::sstable_info.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         auto ks = api::req_param<sstring>(*req, "keyspace", {}).value;
         auto cf = api::req_param<sstring>(*req, "cf", {}).value;
 
@@ -1354,7 +1354,7 @@ enum class scrub_status {
 };
 
 void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_ctl) {
-    ss::get_snapshot_details.set(r, [&snap_ctl](std::unique_ptr<request> req) {
+    ss::get_snapshot_details.set(r, [&snap_ctl](std::unique_ptr<http::request> req) {
         return snap_ctl.local().get_snapshot_details().then([] (std::unordered_map<sstring, std::vector<db::snapshot_ctl::snapshot_details>>&& result) {
             std::function<future<>(output_stream<char>&&)> f = [result = std::move(result)](output_stream<char>&& s) {
                 return do_with(output_stream<char>(std::move(s)), true, [&result] (output_stream<char>& s, bool& first){
@@ -1391,7 +1391,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         });
     });
 
-    ss::take_snapshot.set(r, [&ctx, &snap_ctl](std::unique_ptr<request> req) -> future<json::json_return_type> {
+    ss::take_snapshot.set(r, [&ctx, &snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         apilog.info("take_snapshot: {}", req->query_parameters);
         auto tag = req->get_query_param("tag");
         auto column_families = split(req->get_query_param("cf"), ",");
@@ -1424,7 +1424,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         }
     });
 
-    ss::del_snapshot.set(r, [&snap_ctl](std::unique_ptr<request> req) -> future<json::json_return_type> {
+    ss::del_snapshot.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         apilog.info("del_snapshot: {}", req->query_parameters);
         auto tag = req->get_query_param("tag");
         auto column_family = req->get_query_param("cf");
@@ -1439,13 +1439,13 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         }
     });
 
-    ss::true_snapshots_size.set(r, [&snap_ctl](std::unique_ptr<request> req) {
+    ss::true_snapshots_size.set(r, [&snap_ctl](std::unique_ptr<http::request> req) {
         return snap_ctl.local().true_snapshots_size().then([] (int64_t size) {
             return make_ready_future<json::json_return_type>(size);
         });
     });
 
-    ss::scrub.set(r, [&ctx, &snap_ctl] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+    ss::scrub.set(r, [&ctx, &snap_ctl] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto& db = ctx.db;
         auto rp = req_params({
             {"keyspace", {mandatory::yes}},

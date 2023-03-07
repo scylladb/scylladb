@@ -42,7 +42,7 @@ static std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_ha
 }
 
 void set_compaction_manager(http_context& ctx, routes& r) {
-    cm::get_compactions.set(r, [&ctx] (std::unique_ptr<request> req) {
+    cm::get_compactions.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return ctx.db.map_reduce0([](replica::database& db) {
             std::vector<cm::summary> summaries;
             const compaction_manager& cm = db.get_compaction_manager();
@@ -64,7 +64,7 @@ void set_compaction_manager(http_context& ctx, routes& r) {
         });
     });
 
-    cm::get_pending_tasks_by_table.set(r, [&ctx] (std::unique_ptr<request> req) {
+    cm::get_pending_tasks_by_table.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return ctx.db.map_reduce0([](replica::database& db) {
             return do_with(std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash>(), [&db](std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash>& tasks) {
                 return do_for_each(db.get_column_families(), [&tasks](const std::pair<table_id, seastar::lw_shared_ptr<replica::table>>& i) -> future<> {
@@ -90,14 +90,14 @@ void set_compaction_manager(http_context& ctx, routes& r) {
         });
     });
 
-    cm::force_user_defined_compaction.set(r, [] (std::unique_ptr<request> req) {
+    cm::force_user_defined_compaction.set(r, [] (std::unique_ptr<http::request> req) {
         //TBD
         // FIXME
         warn(unimplemented::cause::API);
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    cm::stop_compaction.set(r, [&ctx] (std::unique_ptr<request> req) {
+    cm::stop_compaction.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         auto type = req->get_query_param("type");
         return ctx.db.invoke_on_all([type] (replica::database& db) {
             auto& cm = db.get_compaction_manager();
@@ -107,7 +107,7 @@ void set_compaction_manager(http_context& ctx, routes& r) {
         });
     });
 
-    cm::stop_keyspace_compaction.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+    cm::stop_keyspace_compaction.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto ks_name = validate_keyspace(ctx, req->param);
         auto table_names = parse_tables(ks_name, ctx, req->query_parameters, "tables");
         if (table_names.empty()) {
@@ -126,31 +126,31 @@ void set_compaction_manager(http_context& ctx, routes& r) {
         co_return json_void();
     });
 
-    cm::get_pending_tasks.set(r, [&ctx] (std::unique_ptr<request> req) {
+    cm::get_pending_tasks.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return map_reduce_cf(ctx, int64_t(0), [](replica::column_family& cf) {
             return cf.estimate_pending_compactions();
         }, std::plus<int64_t>());
     });
 
-    cm::get_completed_tasks.set(r, [&ctx] (std::unique_ptr<request> req) {
+    cm::get_completed_tasks.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return get_cm_stats(ctx, &compaction_manager::stats::completed_tasks);
     });
 
-    cm::get_total_compactions_completed.set(r, [] (std::unique_ptr<request> req) {
+    cm::get_total_compactions_completed.set(r, [] (std::unique_ptr<http::request> req) {
         // FIXME
         // We are currently dont have an API for compaction
         // so returning a 0 as the number of total compaction is ok
         return make_ready_future<json::json_return_type>(0);
     });
 
-    cm::get_bytes_compacted.set(r, [] (std::unique_ptr<request> req) {
+    cm::get_bytes_compacted.set(r, [] (std::unique_ptr<http::request> req) {
         //TBD
         // FIXME
         warn(unimplemented::cause::API);
         return make_ready_future<json::json_return_type>(0);
     });
 
-    cm::get_compaction_history.set(r, [&ctx] (std::unique_ptr<request> req) {
+    cm::get_compaction_history.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         std::function<future<>(output_stream<char>&&)> f = [&ctx](output_stream<char>&& s) {
             return do_with(output_stream<char>(std::move(s)), true, [&ctx] (output_stream<char>& s, bool& first){
                 return s.write("[").then([&ctx, &s, &first] {
@@ -184,7 +184,7 @@ void set_compaction_manager(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(std::move(f));
     });
 
-    cm::get_compaction_info.set(r, [] (std::unique_ptr<request> req) {
+    cm::get_compaction_info.set(r, [] (std::unique_ptr<http::request> req) {
         //TBD
         // FIXME
         warn(unimplemented::cause::API);

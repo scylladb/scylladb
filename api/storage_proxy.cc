@@ -184,18 +184,18 @@ sum_timer_stats_storage_proxy(distributed<proxy>& d,
 }
 
 void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_service>& ss) {
-    sp::get_total_hints.set(r, [](std::unique_ptr<request> req)  {
+    sp::get_total_hints.set(r, [](std::unique_ptr<http::request> req)  {
         //TBD
         unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
-    sp::get_hinted_handoff_enabled.set(r, [](std::unique_ptr<request> req)  {
+    sp::get_hinted_handoff_enabled.set(r, [](std::unique_ptr<http::request> req)  {
         const auto& filter = service::get_storage_proxy().local().get_hints_host_filter();
         return make_ready_future<json::json_return_type>(!filter.is_disabled_for_all());
     });
 
-    sp::set_hinted_handoff_enabled.set(r, [](std::unique_ptr<request> req)  {
+    sp::set_hinted_handoff_enabled.set(r, [](std::unique_ptr<http::request> req)  {
         auto enable = req->get_query_param("enable");
         auto filter = (enable == "true" || enable == "1")
                 ? db::hints::host_filter(db::hints::host_filter::enabled_for_all_tag {})
@@ -207,7 +207,7 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
         });
     });
 
-    sp::get_hinted_handoff_enabled_by_dc.set(r, [](std::unique_ptr<request> req)  {
+    sp::get_hinted_handoff_enabled_by_dc.set(r, [](std::unique_ptr<http::request> req)  {
         std::vector<sstring> res;
         const auto& filter = service::get_storage_proxy().local().get_hints_host_filter();
         const auto& dcs = filter.get_dcs();
@@ -216,7 +216,7 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
         return make_ready_future<json::json_return_type>(res);
     });
 
-    sp::set_hinted_handoff_enabled_by_dc_list.set(r, [](std::unique_ptr<request> req)  {
+    sp::set_hinted_handoff_enabled_by_dc_list.set(r, [](std::unique_ptr<http::request> req)  {
         auto dcs = req->get_query_param("dcs");
         auto filter = db::hints::host_filter::parse_from_dc_list(std::move(dcs));
         return service::get_storage_proxy().invoke_on_all([filter = std::move(filter)] (service::storage_proxy& sp) {
@@ -226,33 +226,33 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
         });
     });
 
-    sp::get_max_hint_window.set(r, [](std::unique_ptr<request> req)  {
+    sp::get_max_hint_window.set(r, [](std::unique_ptr<http::request> req)  {
         //TBD
         unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
-    sp::set_max_hint_window.set(r, [](std::unique_ptr<request> req)  {
+    sp::set_max_hint_window.set(r, [](std::unique_ptr<http::request> req)  {
         //TBD
         unimplemented();
         auto enable = req->get_query_param("ms");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    sp::get_max_hints_in_progress.set(r, [](std::unique_ptr<request> req)  {
+    sp::get_max_hints_in_progress.set(r, [](std::unique_ptr<http::request> req)  {
         //TBD
         unimplemented();
         return make_ready_future<json::json_return_type>(1);
     });
 
-    sp::set_max_hints_in_progress.set(r, [](std::unique_ptr<request> req)  {
+    sp::set_max_hints_in_progress.set(r, [](std::unique_ptr<http::request> req)  {
         //TBD
         unimplemented();
         auto enable = req->get_query_param("qs");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    sp::get_hints_in_progress.set(r, [](std::unique_ptr<request> req)  {
+    sp::get_hints_in_progress.set(r, [](std::unique_ptr<http::request> req)  {
         //TBD
         unimplemented();
         return make_ready_future<json::json_return_type>(0);
@@ -262,7 +262,7 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
         return ctx.db.local().get_config().request_timeout_in_ms()/1000.0;
     });
 
-    sp::set_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
+    sp::set_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
         //TBD
         unimplemented();
         auto enable = req->get_query_param("timeout");
@@ -273,7 +273,7 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
         return ctx.db.local().get_config().read_request_timeout_in_ms()/1000.0;
     });
 
-    sp::set_read_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
+    sp::set_read_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
         //TBD
         unimplemented();
         auto enable = req->get_query_param("timeout");
@@ -284,7 +284,7 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
         return ctx.db.local().get_config().write_request_timeout_in_ms()/1000.0;
     });
 
-    sp::set_write_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
+    sp::set_write_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
         //TBD
         unimplemented();
         auto enable = req->get_query_param("timeout");
@@ -295,7 +295,7 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
         return ctx.db.local().get_config().counter_write_request_timeout_in_ms()/1000.0;
     });
 
-    sp::set_counter_write_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
+    sp::set_counter_write_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
         //TBD
         unimplemented();
         auto enable = req->get_query_param("timeout");
@@ -306,7 +306,7 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
         return ctx.db.local().get_config().cas_contention_timeout_in_ms()/1000.0;
     });
 
-    sp::set_cas_contention_timeout.set(r, [](std::unique_ptr<request> req)  {
+    sp::set_cas_contention_timeout.set(r, [](std::unique_ptr<http::request> req)  {
         //TBD
         unimplemented();
         auto enable = req->get_query_param("timeout");
@@ -317,7 +317,7 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
         return ctx.db.local().get_config().range_request_timeout_in_ms()/1000.0;
     });
 
-    sp::set_range_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
+    sp::set_range_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
         //TBD
         unimplemented();
         auto enable = req->get_query_param("timeout");
@@ -328,32 +328,32 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
         return ctx.db.local().get_config().truncate_request_timeout_in_ms()/1000.0;
     });
 
-    sp::set_truncate_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
+    sp::set_truncate_rpc_timeout.set(r, [](std::unique_ptr<http::request> req)  {
         //TBD
         unimplemented();
         auto enable = req->get_query_param("timeout");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    sp::reload_trigger_classes.set(r, [](std::unique_ptr<request> req)  {
+    sp::reload_trigger_classes.set(r, [](std::unique_ptr<http::request> req)  {
         //TBD
         unimplemented();
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    sp::get_read_repair_attempted.set(r, [&ctx](std::unique_ptr<request> req)  {
+    sp::get_read_repair_attempted.set(r, [&ctx](std::unique_ptr<http::request> req)  {
         return sum_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::read_repair_attempts);
     });
 
-    sp::get_read_repair_repaired_blocking.set(r, [&ctx](std::unique_ptr<request> req)  {
+    sp::get_read_repair_repaired_blocking.set(r, [&ctx](std::unique_ptr<http::request> req)  {
         return sum_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::read_repair_repaired_blocking);
     });
 
-    sp::get_read_repair_repaired_background.set(r, [&ctx](std::unique_ptr<request> req)  {
+    sp::get_read_repair_repaired_background.set(r, [&ctx](std::unique_ptr<http::request> req)  {
         return sum_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::read_repair_repaired_background);
     });
 
-    sp::get_schema_versions.set(r, [&ss](std::unique_ptr<request> req)  {
+    sp::get_schema_versions.set(r, [&ss](std::unique_ptr<http::request> req)  {
         return ss.local().describe_schema_versions().then([] (auto result) {
             std::vector<sp::mapper_list> res;
             for (auto e : result) {
@@ -366,122 +366,122 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
         });
     });
 
-    sp::get_cas_read_timeouts.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_cas_read_timeouts.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timed_rate_as_long(ctx.sp, &proxy::stats::cas_read_timeouts);
     });
 
-    sp::get_cas_read_unavailables.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_cas_read_unavailables.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timed_rate_as_long(ctx.sp, &proxy::stats::cas_read_unavailables);
     });
 
-    sp::get_cas_write_timeouts.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_cas_write_timeouts.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timed_rate_as_long(ctx.sp, &proxy::stats::cas_write_timeouts);
     });
 
-    sp::get_cas_write_unavailables.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_cas_write_unavailables.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timed_rate_as_long(ctx.sp, &proxy::stats::cas_write_unavailables);
     });
 
-    sp::get_cas_write_metrics_unfinished_commit.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_cas_write_metrics_unfinished_commit.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_stats(ctx.sp, &proxy::stats::cas_write_unfinished_commit);
     });
 
-    sp::get_cas_write_metrics_contention.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_cas_write_metrics_contention.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_estimated_histogram(ctx, &proxy::stats::cas_write_contention);
     });
 
-    sp::get_cas_write_metrics_condition_not_met.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_cas_write_metrics_condition_not_met.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_stats(ctx.sp, &proxy::stats::cas_write_condition_not_met);
     });
 
-    sp::get_cas_write_metrics_failed_read_round_optimization.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_cas_write_metrics_failed_read_round_optimization.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_stats(ctx.sp, &proxy::stats::cas_failed_read_round_optimization);
     });
 
-    sp::get_cas_read_metrics_unfinished_commit.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_cas_read_metrics_unfinished_commit.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_stats(ctx.sp, &proxy::stats::cas_read_unfinished_commit);
     });
 
-    sp::get_cas_read_metrics_contention.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_cas_read_metrics_contention.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_estimated_histogram(ctx, &proxy::stats::cas_read_contention);
     });
 
-    sp::get_read_metrics_timeouts.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_read_metrics_timeouts.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timed_rate_as_long(ctx.sp, &service::storage_proxy_stats::stats::read_timeouts);
     });
 
-    sp::get_read_metrics_unavailables.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_read_metrics_unavailables.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timed_rate_as_long(ctx.sp, &service::storage_proxy_stats::stats::read_unavailables);
     });
 
-    sp::get_range_metrics_timeouts.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_range_metrics_timeouts.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timed_rate_as_long(ctx.sp, &service::storage_proxy_stats::stats::range_slice_timeouts);
     });
 
-    sp::get_range_metrics_unavailables.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_range_metrics_unavailables.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timed_rate_as_long(ctx.sp, &service::storage_proxy_stats::stats::range_slice_unavailables);
     });
 
-    sp::get_write_metrics_timeouts.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_write_metrics_timeouts.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timed_rate_as_long(ctx.sp, &service::storage_proxy_stats::stats::write_timeouts);
     });
 
-    sp::get_write_metrics_unavailables.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_write_metrics_unavailables.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timed_rate_as_long(ctx.sp, &service::storage_proxy_stats::stats::write_unavailables);
     });
 
-    sp::get_read_metrics_timeouts_rates.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_read_metrics_timeouts_rates.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timed_rate_as_obj(ctx.sp, &service::storage_proxy_stats::stats::read_timeouts);
     });
 
-    sp::get_read_metrics_unavailables_rates.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_read_metrics_unavailables_rates.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timed_rate_as_obj(ctx.sp, &service::storage_proxy_stats::stats::read_unavailables);
     });
 
-    sp::get_range_metrics_timeouts_rates.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_range_metrics_timeouts_rates.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timed_rate_as_obj(ctx.sp, &service::storage_proxy_stats::stats::range_slice_timeouts);
     });
 
-    sp::get_range_metrics_unavailables_rates.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_range_metrics_unavailables_rates.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timed_rate_as_obj(ctx.sp, &service::storage_proxy_stats::stats::range_slice_unavailables);
     });
 
-    sp::get_write_metrics_timeouts_rates.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_write_metrics_timeouts_rates.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timed_rate_as_obj(ctx.sp, &service::storage_proxy_stats::stats::write_timeouts);
     });
 
-    sp::get_write_metrics_unavailables_rates.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_write_metrics_unavailables_rates.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timed_rate_as_obj(ctx.sp, &service::storage_proxy_stats::stats::write_unavailables);
     });
 
-    sp::get_range_metrics_latency_histogram_depricated.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_range_metrics_latency_histogram_depricated.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_histogram_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::range);
     });
 
-    sp::get_write_metrics_latency_histogram_depricated.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_write_metrics_latency_histogram_depricated.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_histogram_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::write);
     });
 
-    sp::get_read_metrics_latency_histogram_depricated.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_read_metrics_latency_histogram_depricated.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_histogram_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::read);
     });
 
-    sp::get_range_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_range_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timer_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::range);
     });
 
-    sp::get_write_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_write_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timer_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::write);
     });
-    sp::get_cas_write_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_cas_write_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timer_stats(ctx.sp, &proxy::stats::cas_write);
     });
 
-    sp::get_cas_read_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_cas_read_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timer_stats(ctx.sp, &proxy::stats::cas_read);
     });
 
-    sp::get_view_write_metrics_latency_histogram.set(r, [](std::unique_ptr<request> req) {
+    sp::get_view_write_metrics_latency_histogram.set(r, [](std::unique_ptr<http::request> req) {
         //TBD
         // FIXME
         // No View metrics are available, so just return empty moving average
@@ -489,30 +489,30 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
         return make_ready_future<json::json_return_type>(get_empty_moving_average());
     });
 
-    sp::get_read_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_read_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timer_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::read);
     });
 
-    sp::get_read_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_read_estimated_histogram.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_estimated_histogram(ctx, &service::storage_proxy_stats::stats::read);
     });
 
-    sp::get_read_latency.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_read_latency.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return total_latency(ctx, &service::storage_proxy_stats::stats::read);
     });
-    sp::get_write_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_write_estimated_histogram.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_estimated_histogram(ctx, &service::storage_proxy_stats::stats::write);
     });
 
-    sp::get_write_latency.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_write_latency.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return total_latency(ctx, &service::storage_proxy_stats::stats::write);
     });
 
-    sp::get_range_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_range_estimated_histogram.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return sum_timer_stats_storage_proxy(ctx.sp, &service::storage_proxy_stats::stats::range);
     });
 
-    sp::get_range_latency.set(r, [&ctx](std::unique_ptr<request> req) {
+    sp::get_range_latency.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return total_latency(ctx, &service::storage_proxy_stats::stats::range);
     });
 }
