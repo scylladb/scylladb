@@ -38,3 +38,6 @@ def test_major_keyspace_compaction_task(cql, this_dc, rest_api):
 
 def test_major_column_family_compaction_task(cql, this_dc, rest_api):
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"column_family/major_compaction/{keyspace}:{table}"))
+
+def test_cleanup_keyspace_compaction_task(cql, this_dc, rest_api):
+    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_cleanup/{keyspace}"))
