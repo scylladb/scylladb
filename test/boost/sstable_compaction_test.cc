@@ -4660,7 +4660,7 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
         auto manager = compaction_manager(std::move(cfg), as, task_manager);
 
         auto add_sstable = [&env, gen = make_lw_shared<unsigned>(1)] (table_for_tests& t, uint64_t data_size, int level) {
-            auto sst = env.make_sstable(t.schema(), "", (*gen)++, la, big);
+            auto sst = env.make_sstable(t.schema(), env.tempdir().path().native(), (*gen)++, la, big);
             auto key = tests::generate_partition_key(t.schema()).key();
             sstables::test(sst).set_values_for_leveled_strategy(data_size, level, 0 /*max ts*/, key, key);
             assert(sst->data_size() == data_size);
