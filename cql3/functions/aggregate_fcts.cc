@@ -12,7 +12,7 @@
 #include "types/types.hh"
 #include "types/tuple.hh"
 #include "cql3/functions/scalar_function.hh"
-#include "db/functions/stateless_aggregate_function.hh"
+#include "db/functions/aggregate_function.hh"
 #include "cql3/util.hh"
 #include "utils/big_decimal.hh"
 #include "aggregate_fcts.hh"
@@ -163,7 +163,7 @@ static
 shared_ptr<aggregate_function>
 make_sum_function() {
     using Acc = accumulator_for<Type>;
-    return make_shared<db::functions::stateless_aggregate_function_adapter>(
+    return make_shared<db::functions::aggregate_function>(
         db::functions::stateless_aggregate_function{
             .name = function_name::native_function("sum"),
             .state_type = data_type_for<accumulator_for<Type>>(),
@@ -198,7 +198,7 @@ shared_ptr<aggregate_function>
 make_avg_function() {
     using sum_type = accumulator_for<Type>;
     auto accumulator_tuple_type = tuple_type_impl::get_instance({data_type_for<sum_type>(), data_type_for<int64_t>()});
-    return make_shared<db::functions::stateless_aggregate_function_adapter>(
+    return make_shared<db::functions::aggregate_function>(
         db::functions::stateless_aggregate_function{
             .name = function_name::native_function("avg"),
             .state_type = accumulator_tuple_type,
@@ -292,7 +292,7 @@ struct aggregate_type_for<time_native_type> {
  */
 template <typename Type>
 static shared_ptr<aggregate_function> make_count_function() {
-    return make_shared<db::functions::stateless_aggregate_function_adapter>(
+    return make_shared<db::functions::aggregate_function>(
         db::functions::stateless_aggregate_function{
             .name = function_name::native_function("count"),
             .state_type = long_type,
@@ -333,7 +333,7 @@ static data_type uda_return_type(const ::shared_ptr<scalar_function>& ffunc, con
 }
 
 user_aggregate::user_aggregate(function_name fname, bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> reducefunc, ::shared_ptr<scalar_function> finalfunc)
-        : stateless_aggregate_function_adapter(db::functions::stateless_aggregate_function{
+        : aggregate_function(db::functions::stateless_aggregate_function{
                 .name = fname,
                 .state_type = sfunc->return_type(),
                 .result_type = finalfunc ? finalfunc->return_type() : sfunc->return_type(),
@@ -379,7 +379,7 @@ std::ostream& user_aggregate::describe(std::ostream& os) const {
 
 shared_ptr<aggregate_function>
 aggregate_fcts::make_count_rows_function() {
-    return make_shared<db::functions::stateless_aggregate_function_adapter>(
+    return make_shared<db::functions::aggregate_function>(
         db::functions::stateless_aggregate_function{
             .name = function_name::native_function(COUNT_ROWS_FUNCTION_NAME),
             .column_name_override = "count",
@@ -412,7 +412,7 @@ aggregate_fcts::make_max_function(data_type io_type) {
         }
         return std::max(*args[0], *args[1], io_type->as_less_comparator());
     });
-    return ::make_shared<db::functions::stateless_aggregate_function_adapter>(
+    return ::make_shared<db::functions::aggregate_function>(
         db::functions::stateless_aggregate_function{
             .name = function_name::native_function("max"),
             .state_type = io_type,
@@ -440,7 +440,7 @@ aggregate_fcts::make_min_function(data_type io_type) {
         }
         return std::min(*args[0], *args[1], io_type->as_less_comparator());
     });
-    return ::make_shared<db::functions::stateless_aggregate_function_adapter>(
+    return ::make_shared<db::functions::aggregate_function>(
         db::functions::stateless_aggregate_function{
             .name = function_name::native_function("min"),
             .state_type = io_type,
