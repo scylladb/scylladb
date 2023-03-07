@@ -2973,6 +2973,10 @@
                "type":"string",
                "description":"Partition key"
             },
+            "shard":{
+               "type":"long",
+               "description":"The shard handling the returned partition"
+            },
             "count":{
                "type":"long",
                "description":"Number of read/write operations"

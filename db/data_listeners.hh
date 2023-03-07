@@ -66,9 +66,10 @@ public:
 struct toppartitions_item_key {
     schema_ptr schema;
     dht::decorated_key key;
+    unsigned shard;
 
-    toppartitions_item_key(const schema_ptr& schema, const dht::decorated_key& key) : schema(schema), key(key) {}
-    toppartitions_item_key(const toppartitions_item_key& key) noexcept : schema(key.schema), key(key.key) {}
+    toppartitions_item_key(const schema_ptr& schema, const dht::decorated_key& key, unsigned shard) : schema(schema), key(key), shard(shard) {}
+    toppartitions_item_key(const toppartitions_item_key& key) noexcept : schema(key.schema), key(key.key), shard(key.shard) {}
 
     struct hash {
         size_t operator()(const toppartitions_item_key& k) const {
@@ -89,10 +90,11 @@ struct toppartitions_item_key {
 struct toppartitions_global_item_key {
     global_schema_ptr schema;
     dht::decorated_key key;
+    unsigned shard;
 
-    toppartitions_global_item_key(toppartitions_item_key&& tik) : schema(std::move(tik.schema)), key(std::move(tik.key)) {}
+    toppartitions_global_item_key(toppartitions_item_key&& tik) : schema(std::move(tik.schema)), key(std::move(tik.key)), shard(tik.shard) {}
     operator toppartitions_item_key() const {
-        return toppartitions_item_key(schema, key);
+        return toppartitions_item_key(schema, key, shard);
     }
 
     struct hash {

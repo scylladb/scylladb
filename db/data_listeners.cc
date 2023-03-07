@@ -75,7 +75,7 @@ flat_mutation_reader_v2 toppartitions_data_listener::on_read(const schema_ptr& s
         return make_filtering_reader(std::move(rd), [zis = this->weak_from_this(), s = std::move(s)] (const dht::decorated_key& dk) {
             // The data query may be executing after the toppartitions_data_listener object has been removed, so check
             if (zis) {
-                zis->_top_k_read.append(toppartitions_item_key{s, dk});
+                zis->_top_k_read.append(toppartitions_item_key{s, dk, this_shard_id()});
             }
             return true;
         });
@@ -89,7 +89,7 @@ void toppartitions_data_listener::on_write(const schema_ptr& s, const frozen_mut
     
     if (include_all || _keyspace_filters.contains(s->ks_name()) || _table_filters.contains({s->ks_name(), s->cf_name()})) {
         dblog.trace("toppartitions_data_listener::on_write: {}.{}", s->ks_name(), s->cf_name());
-        _top_k_write.append(toppartitions_item_key{s, m.decorated_key(*s)});
+        _top_k_write.append(toppartitions_item_key{s, m.decorated_key(*s), this_shard_id()});
     }
 }
 
