@@ -1305,8 +1305,8 @@ SEASTAR_TEST_CASE(test_key_count_estimation) {
                 mt->apply(m);
             }
 
-            tmpdir dir;
-            shared_sstable sst = make_sstable_easy(env, dir.path(), mt, env.manager().configure_writer(), 1, version, pks.size());
+            auto _ = env.tempdir().make_sweeper();
+            shared_sstable sst = make_sstable_easy(env, env.tempdir().path(), mt, env.manager().configure_writer(), 1, version, pks.size());
 
             auto max_est = sst->get_estimated_key_count();
             testlog.trace("count = {}", count);
@@ -1655,8 +1655,8 @@ SEASTAR_TEST_CASE(writer_handles_subsequent_range_tombstone_changes_without_tomb
             flat_mutation_reader_v2 input_reader = make_flat_mutation_reader_from_fragments(s, p, std::move(fragments));
             deferred_close dc1{input_reader};
             sstable_writer_config cfg = env.manager().configure_writer();
-            tmpdir dir;
-            shared_sstable sstable = env.make_sstable(s, dir.path().string(), 0);
+            auto _ = env.tempdir().make_sweeper();
+            shared_sstable sstable = env.make_sstable(s, env.tempdir().path().string(), 0);
             encoding_stats es;
             sstable->write_components(std::move(input_reader), 1, s, cfg, es).get();
             sstable->load().get();

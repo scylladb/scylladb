@@ -3850,8 +3850,8 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
             return m;
         };
 
-        auto tmp = tmpdir();
-        table_for_tests cf(env.manager(), s, tmp.path().string());
+        auto _ = env.tempdir().make_sweeper();
+        table_for_tests cf(env.manager(), s, env.tempdir().path().string());
         auto close_cf = deferred_stop(cf);
         cf->start();
 
@@ -4738,13 +4738,13 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
             builder.set_compaction_strategy_options(std::move(strategy_options));
             auto s = builder.build();
 
-            auto tmp = tmpdir();
+            auto _ = env.tempdir().make_sweeper();
             auto keys = tests::generate_partition_keys(all_files, s);
 
-            table_for_tests cf(env.manager(), s, tmp.path().string());
+            table_for_tests cf(env.manager(), s, env.tempdir().path().string());
             auto close_cf = deferred_stop(cf);
-            auto sst_gen = [&env, &cf, s, &tmp]() mutable {
-                return env.make_sstable(s, tmp.path().string(), column_family_test::calculate_generation_for_new_table(*cf),
+            auto sst_gen = [&env, &cf, s]() mutable {
+                return env.make_sstable(s, env.tempdir().path().string(), column_family_test::calculate_generation_for_new_table(*cf),
                                         sstables::get_highest_sstable_version(), big);
             };
 
