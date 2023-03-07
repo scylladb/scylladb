@@ -215,7 +215,6 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutat
     alloc_strategy_unique_ptr<rows_entry> p_sentinel;
     alloc_strategy_unique_ptr<rows_entry> this_sentinel;
     auto insert_sentinel_back = defer([&] {
-        // Insert this_sentinel before sentinel so that the former lands before the latter in LRU.
         if (this_sentinel) {
             assert(p_i != p._rows.end());
             auto rt = this_sentinel->range_tombstone();
