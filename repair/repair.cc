@@ -25,6 +25,7 @@
 #include "service/migration_manager.hh"
 #include "partition_range_compat.hh"
 #include "gms/feature_service.hh"
+#include "utils/error_injection.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -1080,6 +1081,12 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
     co_return id.id;
 }
 
+void inject_table_drop(sstring name, replica::database& db) {
+    utils::get_local_injector().inject(name, [&db] () -> future<> {
+        co_await db.drop_table_on_all_shards(db.container(), "repair_while_table_is_dropped_keyspace", "table_to_be_dropped");
+    });
+}
+
 future<> user_requested_repair_task_impl::run() {
     auto module = dynamic_pointer_cast<repair_module>(_module);
     auto& rs = module->get_repair_service();
@@ -1091,6 +1098,7 @@ future<> user_requested_repair_task_impl::run() {
             cfs = std::move(_cfs), ranges = std::move(_ranges), hosts = std::move(_hosts), data_centers = std::move(_data_centers), ignore_nodes = std::move(_ignore_nodes)] () mutable {
         auto uuid = node_ops_id{id.uuid().uuid()};
 
+        inject_table_drop("user_requested_repair_drop_table_start", db);
         bool needs_flush_before_repair = false;
         if (db.features().tombstone_gc_options) {
             for (auto& table: cfs) {
@@ -1102,6 +1110,7 @@ future<> user_requested_repair_task_impl::run() {
             }
         }
 
+        inject_table_drop("user_requested_repair_drop_table_flush", db);
         bool hints_batchlog_flushed = false;
         auto participants = get_hosts_participating_in_repair(germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
         if (needs_flush_before_repair) {
@@ -1136,6 +1145,7 @@ future<> user_requested_repair_task_impl::run() {
             rlogger.info("repair[{}]: Skipped sending repair_flush_hints_batchlog to nodes={}", uuid, participants);
         }
 
+        inject_table_drop("user_requested_repair_drop_table_set_off_strategy_updater", db);
         std::vector<future<>> repair_results;
         repair_results.reserve(smp::count);
         auto table_ids = get_table_ids(db, keyspace, cfs);
@@ -1181,6 +1191,7 @@ future<> user_requested_repair_task_impl::run() {
             throw std::runtime_error("aborted by user request");
         }
 
+        inject_table_drop("user_requested_repair_drop_table_start_shard_tasks", db);
         for (auto shard : boost::irange(unsigned(0), smp::count)) {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed,
                     data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_info, germs] (repair_service& local_repair) mutable -> future<> {
@@ -1192,6 +1203,7 @@ future<> user_requested_repair_task_impl::run() {
             });
             repair_results.push_back(std::move(f));
         }
+        inject_table_drop("user_requested_repair_drop_table_wait_for_shard_tasks", db);
         when_all(repair_results.begin(), repair_results.end()).then([] (std::vector<future<>> results) mutable {
             std::vector<sstring> errors;
             for (unsigned shard = 0; shard < results.size(); shard++) {
