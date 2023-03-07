@@ -39,7 +39,7 @@ SEASTAR_TEST_CASE(test_schema_changes) {
                     mt->apply(m);
                 }
 
-                created_with_base_schema = make_sstable_easy(env, env.tempdir().path(), mt, env.manager().configure_writer(), gen, version, base_mutations.size());
+                created_with_base_schema = make_sstable_easy(env, mt, env.manager().configure_writer(), gen, version, base_mutations.size());
 
                 created_with_changed_schema = env.make_sstable(changed, env.tempdir().path().string(), gen, version, sstables::sstable::format_types::big);
                 created_with_changed_schema->load().get();

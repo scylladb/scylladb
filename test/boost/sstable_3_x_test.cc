@@ -5110,7 +5110,7 @@ SEASTAR_TEST_CASE(test_sstable_reader_on_unknown_column) {
         auto _ = env.tempdir().make_sweeper();
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = index_block_size;
-        auto sst = make_sstable_easy(env, env.tempdir().path(), mt, cfg, 1, version);
+        auto sst = make_sstable_easy(env, mt, cfg, 1, version);
 
         BOOST_REQUIRE_EXCEPTION(
             assert_that(sst->make_reader(read_schema, env.make_reader_permit(), query::full_partition_range, read_schema->full_slice()))
