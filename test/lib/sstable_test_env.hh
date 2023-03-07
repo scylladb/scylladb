@@ -55,6 +55,7 @@ class test_env {
         db::nop_large_data_handler nop_ld_handler;
         test_env_sstables_manager mgr;
         reader_concurrency_semaphore semaphore;
+        unsigned generation = 1;
 
         impl(test_env_config cfg);
         impl(impl&&) = delete;
@@ -81,6 +82,10 @@ public:
             sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
             size_t buffer_size = default_sstable_buffer_size, gc_clock::time_point now = gc_clock::now()) {
         return make_sstable(std::move(schema), _impl->dir.path().native(), generation, std::move(v), std::move(f), buffer_size, now);
+    }
+
+    shared_sstable make_sstable(schema_ptr schema, sstable::version_types v = sstables::get_highest_sstable_version()) {
+        return make_sstable(std::move(schema), _impl->generation++, std::move(v));
     }
 
     struct sst_not_found : public std::runtime_error {
