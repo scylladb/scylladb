@@ -77,7 +77,11 @@ shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, 
         mt->apply(m);
     }
 
-    return make_sstable_easy(env, dir_path, mt, cfg, 1, version, mutations.size(), query_time);
+    auto sst = env.make_sstable(s, dir_path.string(), 1, version, sstable_format_types::big, default_sstable_buffer_size, query_time);
+    auto mr = mt->make_flat_reader(s, env.make_reader_permit());
+    sst->write_components(std::move(mr), mutations.size(), s, cfg, mt->get_encoding_stats()).get();
+    sst->load().get();
+    return sst;
 }
 
 shared_sstable make_sstable_easy(test_env& env, const fs::path& path, flat_mutation_reader_v2 rd, sstable_writer_config cfg,
