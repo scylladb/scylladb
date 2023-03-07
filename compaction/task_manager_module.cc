@@ -11,17 +11,17 @@
 
 namespace compaction {
 
-future<> run_on_table(sstring op, replica::database& db, std::string_view keyspace, table_id ti, std::function<future<> (replica::table&)> func) {
+future<> run_on_table(sstring op, replica::database& db, std::string_view keyspace, table_info ti, std::function<future<> (replica::table&)> func) {
     std::exception_ptr ex;
         // FIXME: fix indentation
-        tasks::tmlogger.debug("Starting {} on {}.{}", op, keyspace, ti);
+        tasks::tmlogger.debug("Starting {} on {}.{}", op, keyspace, ti.name);
         try {
-            co_await func(db.find_column_family(ti));
+            co_await func(db.find_column_family(ti.id));
         } catch (const replica::no_such_column_family& e) {
-            tasks::tmlogger.warn("Skipping {} of {}.{}: {}", op, keyspace, ti, e.what());
+            tasks::tmlogger.warn("Skipping {} of {}.{}: {}", op, keyspace, ti.name, e.what());
         } catch (...) {
             ex = std::current_exception();
-            tasks::tmlogger.error("Failed {} of {}.{}: {}", op, keyspace, ti, ex);
+            tasks::tmlogger.error("Failed {} of {}.{}: {}", op, keyspace, ti.name, ex);
         }
         if (ex) {
             co_await coroutine::return_exception_ptr(std::move(ex));
@@ -29,7 +29,7 @@ future<> run_on_table(sstring op, replica::database& db, std::string_view keyspa
 }
 
 // Run on all tables, skipping dropped tables
-future<> run_on_existing_tables(sstring op, replica::database& db, std::string_view keyspace, const std::vector<table_id> local_tables, std::function<future<> (replica::table&)> func) {
+future<> run_on_existing_tables(sstring op, replica::database& db, std::string_view keyspace, const std::vector<table_info> local_tables, std::function<future<> (replica::table&)> func) {
     for (const auto& ti : local_tables) {
         co_await run_on_table(op, db, keyspace, ti, func);
     }
@@ -50,9 +50,9 @@ tasks::is_internal shard_major_keyspace_compaction_task_impl::is_internal() cons
 
 future<> shard_major_keyspace_compaction_task_impl::run() {
     // Major compact smaller tables first, to increase chances of success if low on space.
-    std::ranges::sort(_local_tables, std::less<>(), [&] (const table_id& ti) {
+    std::ranges::sort(_local_tables, std::less<>(), [&] (const table_info& ti) {
         try {
-            return _db.find_column_family(ti).get_stats().live_disk_space_used;
+            return _db.find_column_family(ti.id).get_stats().live_disk_space_used;
         } catch (const replica::no_such_column_family& e) {
             return int64_t(-1);
         }
@@ -65,7 +65,7 @@ future<> shard_major_keyspace_compaction_task_impl::run() {
 future<> cleanup_keyspace_compaction_task_impl::run() {
     co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
         auto& module = db.get_compaction_manager().get_task_manager_module();
-        auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>({_status.id, _status.shard}, _status.keyspace, _status.id, db, _table_ids);
+        auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>({_status.id, _status.shard}, _status.keyspace, _status.id, db, _table_infos);
         co_await task->done();
     });
 }
@@ -76,9 +76,9 @@ tasks::is_internal shard_cleanup_keyspace_compaction_task_impl::is_internal() co
 
 future<> shard_cleanup_keyspace_compaction_task_impl::run() {
     // Cleanup smaller tables first, to increase chances of success if low on space.
-    std::ranges::sort(_local_tables, std::less<>(), [&] (const table_id& ti) {
+    std::ranges::sort(_local_tables, std::less<>(), [&] (const table_info& ti) {
         try {
-            return _db.find_column_family(ti).get_stats().live_disk_space_used;
+            return _db.find_column_family(ti.id).get_stats().live_disk_space_used;
         } catch (const replica::no_such_column_family& e) {
             return int64_t(-1);
         }

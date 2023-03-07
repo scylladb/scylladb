@@ -1025,7 +1025,10 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
         auto [ks, cf] = parse_fully_qualified_cf_name(req->param["name"]);
         auto keyspace = validate_keyspace(ctx, ks);
-        std::vector<table_id> table_infos = {ctx.db.local().find_uuid(ks, cf)};
+        std::vector<::table_info> table_infos = {::table_info{
+            .id = ctx.db.local().find_uuid(ks, cf),
+            .name = cf
+        }};
 
         auto& compaction_module = ctx.db.local().get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), ctx.db, std::move(table_infos));

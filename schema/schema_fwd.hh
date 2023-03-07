@@ -25,6 +25,11 @@ using schema_ptr = seastar::lw_shared_ptr<const schema>;
 
 using table_id = utils::tagged_uuid<struct table_id_tag>;
 
+struct table_info {
+    table_id id;
+    sstring name;
+};
+
 // Cluster-wide identifier of schema version of particular table.
 //
 // The version changes the value not only on structural changes but also

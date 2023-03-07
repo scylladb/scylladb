@@ -57,12 +57,12 @@ protected:
 class major_keyspace_compaction_task_impl : public major_compaction_task_impl {
 private:
     sharded<replica::database>& _db;
-    std::vector<table_id> _table_infos;
+    std::vector<table_info> _table_infos;
 public:
     major_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             sharded<replica::database>& db,
-            std::vector<table_id> table_infos) noexcept
+            std::vector<table_info> table_infos) noexcept
         : major_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
         , _table_infos(std::move(table_infos))
@@ -74,13 +74,13 @@ protected:
 class shard_major_keyspace_compaction_task_impl : public major_compaction_task_impl {
 private:
     replica::database& _db;
-    std::vector<table_id> _local_tables;
+    std::vector<table_info> _local_tables;
 public:
     shard_major_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             tasks::task_id parent_id,
             replica::database& db,
-            std::vector<table_id> local_tables) noexcept
+            std::vector<table_info> local_tables) noexcept
         : major_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _local_tables(std::move(local_tables))
@@ -115,15 +115,15 @@ protected:
 class cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_impl {
 private:
     sharded<replica::database>& _db;
-    std::vector<table_id> _table_ids;
+    std::vector<table_info> _table_infos;
 public:
     cleanup_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             sharded<replica::database>& db,
-            std::vector<table_id> table_ids) noexcept
+            std::vector<table_info> table_infos) noexcept
         : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
-        , _table_ids(std::move(table_ids))
+        , _table_infos(std::move(table_infos))
     {}
 protected:
     virtual future<> run() override;
@@ -132,13 +132,13 @@ protected:
 class shard_cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_impl {
 private:
     replica::database& _db;
-    std::vector<table_id> _local_tables;
+    std::vector<table_info> _local_tables;
 public:
     shard_cleanup_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             tasks::task_id parent_id,
             replica::database& db,
-            std::vector<table_id> local_tables) noexcept
+            std::vector<table_info> local_tables) noexcept
         : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _local_tables(std::move(local_tables))
@@ -173,13 +173,13 @@ protected:
 class offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_task_impl {
 private:
     sharded<replica::database>& _db;
-    std::vector<table_id> _table_infos;
+    std::vector<table_info> _table_infos;
     bool& _needed;
 public:
     offstrategy_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             sharded<replica::database>& db,
-            std::vector<table_id> table_infos,
+            std::vector<table_info> table_infos,
             bool& needed) noexcept
         : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
@@ -193,14 +193,14 @@ protected:
 class shard_offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_task_impl {
 private:
     replica::database& _db;
-    std::vector<table_id> _table_infos;
+    std::vector<table_info> _table_infos;
     bool& _needed;
 public:
     shard_offstrategy_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             tasks::task_id parent_id,
             replica::database& db,
-            std::vector<table_id> table_infos,
+            std::vector<table_info> table_infos,
             bool& needed) noexcept
         : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", parent_id)
         , _db(db)
@@ -237,13 +237,13 @@ protected:
 class upgrade_sstables_compaction_task_impl : public rewrite_sstables_compaction_task_impl {
 private:
     sharded<replica::database>& _db;
-    std::vector<table_id> _table_infos;
+    std::vector<table_info> _table_infos;
     bool _exclude_current_version;
 public:
     upgrade_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             sharded<replica::database>& db,
-            std::vector<table_id> table_infos,
+            std::vector<table_info> table_infos,
             bool exclude_current_version) noexcept
         : rewrite_sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
@@ -257,14 +257,14 @@ protected:
 class shard_upgrade_sstables_compaction_task_impl : public rewrite_sstables_compaction_task_impl {
 private:
     replica::database& _db;
-    std::vector<table_id> _table_infos;
+    std::vector<table_info> _table_infos;
     bool _exclude_current_version;
 public:
     shard_upgrade_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             tasks::task_id parent_id,
             replica::database& db,
-            std::vector<table_id> table_infos,
+            std::vector<table_info> table_infos,
             bool exclude_current_version) noexcept
         : rewrite_sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", parent_id)
         , _db(db)
