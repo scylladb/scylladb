@@ -10,8 +10,9 @@ import time
 
 # Use the util.py library from ../cql-pytest:
 sys.path.insert(1, sys.path[0] + '/../cql-pytest')
-from util import unique_name, new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index
+from util import unique_name, new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index, new_named_test_table
 from rest_util import new_test_snapshot, scylla_inject_error
+from task_manager_utils import list_tasks, wait_for_task
 
 # "keyspace" function: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace. The keyspace is created with RF=1,
@@ -480,3 +481,34 @@ def test_storage_service_system_keyspace_repair(rest_api):
     resp = rest_api.send("GET", "task_manager/list_module_tasks/repair")
     resp.raise_for_status()
     assert not [stats for stats in resp.json() if stats["sequence_number"] == sequence_number], "Repair task for keyspace with local replication strategy was created"
+
+def test_repair_while_table_is_dropped(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}", "repair_while_table_is_dropped_keyspace") as keyspace:
+        schema = 'p int, v int, primary key (p)'
+        with new_test_table(cql, keyspace, schema) as t0:
+            stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
+            cql.execute(stmt, [0, 1])
+            cql.execute(stmt, [1, 5])
+
+            for injection_type in ["start", "flush", "set_off_strategy_updater", "start_shard_tasks", "wait_for_shard_tasks"]:
+                injection = "user_requested_repair_drop_table_" + injection_type
+
+                with scylla_inject_error(rest_api, injection):
+                    with new_named_test_table(cql, keyspace, "table_to_be_dropped", schema) as table_to_be_dropped:
+                        stmt1 = cql.prepare(f"INSERT INTO {table_to_be_dropped} (p, v) VALUES (?, ?)")
+                        cql.execute(stmt1, [8, 2])
+                        cql.execute(stmt1, [1, 3])
+
+                        # Start repair.
+                        resp = rest_api.send("POST", f"storage_service/repair_async/{keyspace}")
+                        resp.raise_for_status()
+                        sequence_number = resp.json()
+
+                        # Get id of a task that corresponds to this repair.
+                        task_ids = [task["task_id"] for task in list_tasks(rest_api, "repair") if task["sequence_number"] == sequence_number]
+                        assert len(task_ids) == 1, f"There should be exactly one task with sequence number {sequence_number}"
+                        task_id = task_ids[0]
+
+                        # Check if it task finished successfully.
+                        status = wait_for_task(rest_api, task_id)
+                        assert status["state"] == "done"
