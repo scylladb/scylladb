@@ -25,9 +25,12 @@ using namespace sstables;
 using namespace std::chrono_literals;
 
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts) {
+    return make_sstable_containing(sst_factory(), std::move(muts));
+}
+
+sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, std::vector<mutation> muts) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
 
-    auto sst = sst_factory();
     schema_ptr s = muts[0].schema();
     auto mt = make_lw_shared<replica::memtable>(s);
 

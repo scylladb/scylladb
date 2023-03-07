@@ -26,6 +26,7 @@ using namespace sstables;
 using namespace std::chrono_literals;
 
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts);
+sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, std::vector<mutation> muts);
 
 inline future<> write_memtable_to_sstable_for_test(replica::memtable& mt, sstables::shared_sstable sst) {
     return write_memtable_to_sstable(mt, sst, sst->manager().configure_writer("memtable"));
