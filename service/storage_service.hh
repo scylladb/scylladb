@@ -99,12 +99,13 @@ class node_ops_meta_data {
     std::function<void ()> _signal;
     shared_ptr<node_ops_info> _ops;
     seastar::timer<lowres_clock> _watchdog;
-    std::chrono::seconds _watchdog_interval{120};
+    std::chrono::seconds _watchdog_interval;
 public:
     explicit node_ops_meta_data(
             node_ops_id ops_uuid,
             gms::inet_address coordinator,
             std::list<gms::inet_address> ignore_nodes,
+            std::chrono::seconds watchdog_interval,
             std::function<future<> ()> abort_func,
             std::function<void ()> signal_func);
     shared_ptr<node_ops_info> get_ops_info();
@@ -161,6 +162,8 @@ private:
     seastar::condition_variable _node_ops_abort_cond;
     named_semaphore _node_ops_abort_sem{1, named_semaphore_exception_factory{"node_ops_abort_sem"}};
     future<> _node_ops_abort_thread;
+    void node_ops_insert(node_ops_id, gms::inet_address coordinator, std::list<inet_address> ignore_nodes,
+                         std::function<future<>()> abort_func);
     future<> node_ops_update_heartbeat(node_ops_id ops_uuid);
     future<> node_ops_done(node_ops_id ops_uuid);
     future<> node_ops_abort(node_ops_id ops_uuid);
@@ -697,6 +700,7 @@ public:
     future<node_ops_cmd_response> node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req);
     void node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req);
     future<> node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, node_ops_id uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done);
+    void on_node_ops_registered(node_ops_id);
 
     future<mode> get_operation_mode();
 

@@ -388,6 +388,8 @@ public:
     named_value<bool> force_schema_commit_log;
 
     named_value<uint32_t> task_ttl_seconds;
+    named_value<uint32_t> nodeops_watchdog_timeout_seconds;
+    named_value<uint32_t> nodeops_heartbeat_interval_seconds;
 
     named_value<bool> cache_index_pages;
 
