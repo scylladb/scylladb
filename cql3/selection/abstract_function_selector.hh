@@ -35,11 +35,13 @@ protected:
 public:
     static shared_ptr<factory> new_factory(shared_ptr<functions::function> fun, shared_ptr<selector_factories> factories);
 
-    abstract_function_selector(shared_ptr<functions::function> fun, std::vector<shared_ptr<selector>> arg_selectors)
+    // If reserve_extra_arg is set, the internal buffer used for holding function argument lists is enlarged to account for
+    // an aggregate function's accumulator.
+    abstract_function_selector(shared_ptr<functions::function> fun, std::vector<shared_ptr<selector>> arg_selectors, bool reserve_extra_arg = false)
             : _fun(std::move(fun)), _arg_selectors(std::move(arg_selectors)),
               _requires_thread(boost::algorithm::any_of(_arg_selectors, [] (auto& s) { return s->requires_thread(); })
                     || _fun->requires_thread()) {
-        _args.resize(_arg_selectors.size());
+        _args.resize(_arg_selectors.size() + unsigned(reserve_extra_arg));
     }
 
     virtual bool requires_thread() const override;
@@ -74,8 +76,10 @@ protected:
 
     shared_ptr<const T> fun() const { return _tfun; }
 public:
-    abstract_function_selector_for(shared_ptr<T> fun, std::vector<shared_ptr<selector>> arg_selectors)
-            : abstract_function_selector(fun, std::move(arg_selectors))
+    // If reserve_extra_arg is set, the internal buffer used for holding function argument lists is enlarged to account for
+    // an aggregate function's accumulator.
+    abstract_function_selector_for(shared_ptr<T> fun, std::vector<shared_ptr<selector>> arg_selectors, bool reserve_extra_arg = false)
+            : abstract_function_selector(fun, std::move(arg_selectors), reserve_extra_arg)
             , _tfun(dynamic_pointer_cast<T>(fun)) {
     }
 
