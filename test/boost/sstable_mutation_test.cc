@@ -400,7 +400,6 @@ mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr
 
 SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
     return test_env::do_with_async([] (test_env& env) {
-        auto dir = tmpdir();
         auto s = make_shared_schema({}, "ks", "cf",
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
@@ -416,7 +415,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
         mt->apply(std::move(m));
 
         auto sst = env.make_sstable(s,
-                dir.path().string(),
+                env.tempdir().path().string(),
                 1 /* generation */,
                 sstables::get_highest_sstable_version(),
                 sstables::sstable::format_types::big);
@@ -842,7 +841,6 @@ SEASTAR_TEST_CASE(buffer_overflow) {
 SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
    return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
-        auto dir = tmpdir();
         schema_builder builder("ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c", int32_type, column_kind::clustering_key);
@@ -860,7 +858,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
         mt->apply(std::move(m));
 
         auto sst = env.make_sstable(s,
-                                dir.path().string(),
+                                env.tempdir().path().string(),
                                 1 /* generation */,
                                 version,
                                 sstables::sstable::format_types::big);
@@ -877,7 +875,6 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
 SEASTAR_TEST_CASE(test_has_partition_key) {
     return test_env::do_with_async([] (test_env& env) {
         for (const auto version : writable_sstable_versions) {
-            auto dir = tmpdir();
             schema_builder builder("ks", "cf");
             builder.with_column("p", utf8_type, column_kind::partition_key);
             builder.with_column("c", int32_type, column_kind::clustering_key);
@@ -895,7 +892,7 @@ SEASTAR_TEST_CASE(test_has_partition_key) {
             mt->apply(std::move(m));
 
             auto sst = env.make_sstable(s,
-                                    dir.path().string(),
+                                    env.tempdir().path().string(),
                                     1 /* generation */,
                                     version,
                                     sstables::sstable::format_types::big);
@@ -922,7 +919,6 @@ static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst, reader
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
     return test_env::do_with_async([] (test_env& env) {
-        auto dir = tmpdir();
         schema_builder builder("ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c1", int32_type, column_kind::clustering_key);
@@ -959,14 +955,13 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
         cfg.promoted_index_block_size = 1;
         cfg.promoted_index_auto_scale_threshold = 0; // disable auto-scaling
 
-        auto sst = make_sstable_easy(env, dir.path(), mt, cfg);
+        auto sst = make_sstable_easy(env, env.tempdir().path(), mt, cfg);
         assert_that(get_index_reader(sst, env.make_reader_permit())).has_monotonic_positions(*s);
     });
 }
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_with_auto_scaling) {
     return test_env::do_with_async([] (test_env& env) {
-        auto dir = tmpdir();
         schema_builder builder("ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c1", int32_type, column_kind::clustering_key);
@@ -996,7 +991,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_with_auto_scaling) {
         cfg.promoted_index_block_size = 1;
         cfg.promoted_index_auto_scale_threshold = 100;  // set to a low value to trigger auto-scaling
 
-        auto sst = make_sstable_easy(env, dir.path(), mt, cfg);
+        auto sst = make_sstable_easy(env, env.tempdir().path(), mt, cfg);
         assert_that(get_index_reader(sst, env.make_reader_permit())).has_monotonic_positions(*s);
     });
 }
@@ -1004,7 +999,6 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_with_auto_scaling) {
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
    return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
-        auto dir = tmpdir();
         schema_builder builder("ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c1", int32_type, column_kind::clustering_key);
@@ -1040,7 +1034,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1;
 
-        auto sst = make_sstable_easy(env, dir.path(), mt, cfg, 1, version);
+        auto sst = make_sstable_easy(env, env.tempdir().path(), mt, cfg, 1, version);
 
         {
             assert_that(get_index_reader(sst, env.make_reader_permit())).has_monotonic_positions(*s);
@@ -1059,7 +1053,6 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
    return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
-        auto dir = tmpdir();
         schema_builder builder("ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c1", int32_type, column_kind::clustering_key);
@@ -1091,7 +1084,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1;
 
-        auto sst = make_sstable_easy(env, dir.path(), mt, cfg, 1, version);
+        auto sst = make_sstable_easy(env, env.tempdir().path(), mt, cfg, 1, version);
 
         {
             assert_that(get_index_reader(sst, env.make_reader_permit())).has_monotonic_positions(*s);
@@ -1110,7 +1103,6 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
 SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
    return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
-        auto dir = tmpdir();
         int id = 0;
         for (auto& compact : { schema_builder::compact_storage::no, schema_builder::compact_storage::yes }) {
             const auto generation = id++;
@@ -1139,7 +1131,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
             sstable_writer_config cfg = env.manager().configure_writer();
             cfg.promoted_index_block_size = 1;
 
-            auto sst = make_sstable_easy(env, dir.path(), mt, cfg, generation, version);
+            auto sst = make_sstable_easy(env, env.tempdir().path(), mt, cfg, generation, version);
 
             {
                 auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_starting_with({ck})).build();
@@ -1155,7 +1147,6 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
 SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound_dense_schemas) {
    return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
-        auto dir = tmpdir();
         schema_builder builder("ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c", int32_type, column_kind::clustering_key);
@@ -1176,7 +1167,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
         mt->apply(m);
         sstable_writer_config cfg = env.manager().configure_writer();
 
-        auto sst = make_sstable_easy(env, dir.path(), mt, cfg, 1, version);
+        auto sst = make_sstable_easy(env, env.tempdir().path(), mt, cfg, 1, version);
 
         {
             auto slice = partition_slice_builder(*s).build();
@@ -1191,7 +1182,6 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
 SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_key) {
    return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
-        auto dir = tmpdir();
         schema_builder builder("ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("v", int32_type);
@@ -1208,7 +1198,7 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = 1;
 
-        auto sst = make_sstable_easy(env, dir.path(), mt, cfg, 1, version);
+        auto sst = make_sstable_easy(env, env.tempdir().path(), mt, cfg, 1, version);
         assert_that(get_index_reader(sst, env.make_reader_permit())).is_empty(*s);
       }
     });
@@ -1217,7 +1207,6 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
 SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_position) {
    return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
-        auto dir = tmpdir();
         simple_schema ss;
         auto s = ss.schema();
 
@@ -1247,7 +1236,7 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
         auto combined_permit = env.make_reader_permit();
         auto mr = make_combined_reader(s, combined_permit,
             mt1->make_flat_reader(s, combined_permit), mt2->make_flat_reader(s, combined_permit));
-        auto sst = make_sstable_easy(env, dir.path(), std::move(mr), env.manager().configure_writer(), 1, version);
+        auto sst = make_sstable_easy(env, env.tempdir().path(), std::move(mr), env.manager().configure_writer(), 1, version);
 
         assert_that(sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit()))
             .produces(m1 + m2)
@@ -1368,7 +1357,6 @@ SEASTAR_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) {
   return test_env::do_with_async([] (test_env& env) {
     // We create a sequence of partitions such that first we have a partition with a very long key, then
     // series of partitions with small keys. This should result in large index page.
-    auto dir = tmpdir();
 
     simple_schema ss;
     auto s = ss.schema();
@@ -1418,7 +1406,7 @@ SEASTAR_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) {
     }
 
     sstable_writer_config cfg = env.manager().configure_writer();
-    auto sst = make_sstable_easy(env, dir.path(), mt, cfg);
+    auto sst = make_sstable_easy(env, env.tempdir().path(), mt, cfg);
 
     auto pr = dht::partition_range::make_singular(small_keys[0]);
 
@@ -1443,8 +1431,6 @@ SEASTAR_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) {
 
 SEASTAR_TEST_CASE(test_reading_serialization_header) {
   return test_env::do_with_async([] (test_env& env) {
-    auto dir = tmpdir();
-
     auto random_int32_value = [] {
         return int32_type->decompose(tests::random::get_int<int32_t>());
     };
@@ -1485,11 +1471,11 @@ SEASTAR_TEST_CASE(test_reading_serialization_header) {
         // SSTable class has way too many responsibilities. In particular, it mixes the reading and
         // writting parts. Let's use a separate objects for writing and reading to ensure that nothing
         // carries over that wouldn't normally be read from disk.
-        auto sst = env.make_sstable(s, dir.path().string(), 1, sstable::version_types::mc, sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(s, env.tempdir().path().string(), 1, sstable::version_types::mc, sstables::sstable::format_types::big);
         sst->write_components(mt->make_flat_reader(s, env.make_reader_permit()), 2, s, env.manager().configure_writer(), mt->get_encoding_stats()).get();
     }
 
-    auto sst = env.make_sstable(s, dir.path().string(), 1, sstable::version_types::mc, sstables::sstable::format_types::big);
+    auto sst = env.make_sstable(s, env.tempdir().path().string(), 1, sstable::version_types::mc, sstables::sstable::format_types::big);
     sst->load().get();
 
     auto hdr = sst->get_serialization_header();
@@ -1549,8 +1535,6 @@ SEASTAR_THREAD_TEST_CASE(test_merging_encoding_stats) {
 // Reproducer for #4206
 SEASTAR_TEST_CASE(test_counter_header_size) {
   return test_env::do_with_async([] (test_env& env) {
-    auto dir = tmpdir();
-
     auto s = schema_builder("ks", "counter_test")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck", int32_type, column_kind::clustering_key)
@@ -1579,7 +1563,7 @@ SEASTAR_TEST_CASE(test_counter_header_size) {
     mt->apply(m);
 
     for (const auto version : writable_sstable_versions) {
-        auto sst = make_sstable_easy(env, dir.path(), mt, env.manager().configure_writer(), 1, version);
+        auto sst = make_sstable_easy(env, env.tempdir().path(), mt, env.manager().configure_writer(), 1, version);
         assert_that(sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit()))
             .produces(m)
             .produces_end_of_stream();
