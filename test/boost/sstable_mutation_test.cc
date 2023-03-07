@@ -415,7 +415,6 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
         mt->apply(std::move(m));
 
         auto sst = env.make_sstable(s,
-                env.tempdir().path().string(),
                 1 /* generation */,
                 sstables::get_highest_sstable_version(),
                 sstables::sstable::format_types::big);
@@ -858,7 +857,6 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
         mt->apply(std::move(m));
 
         auto sst = env.make_sstable(s,
-                                env.tempdir().path().string(),
                                 1 /* generation */,
                                 version,
                                 sstables::sstable::format_types::big);
@@ -892,7 +890,6 @@ SEASTAR_TEST_CASE(test_has_partition_key) {
             mt->apply(std::move(m));
 
             auto sst = env.make_sstable(s,
-                                    env.tempdir().path().string(),
                                     1 /* generation */,
                                     version,
                                     sstables::sstable::format_types::big);
@@ -1471,11 +1468,11 @@ SEASTAR_TEST_CASE(test_reading_serialization_header) {
         // SSTable class has way too many responsibilities. In particular, it mixes the reading and
         // writting parts. Let's use a separate objects for writing and reading to ensure that nothing
         // carries over that wouldn't normally be read from disk.
-        auto sst = env.make_sstable(s, env.tempdir().path().string(), 1, sstable::version_types::mc, sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(s, 1, sstable::version_types::mc, sstables::sstable::format_types::big);
         sst->write_components(mt->make_flat_reader(s, env.make_reader_permit()), 2, s, env.manager().configure_writer(), mt->get_encoding_stats()).get();
     }
 
-    auto sst = env.make_sstable(s, env.tempdir().path().string(), 1, sstable::version_types::mc, sstables::sstable::format_types::big);
+    auto sst = env.make_sstable(s, 1, sstable::version_types::mc, sstables::sstable::format_types::big);
     sst->load().get();
 
     auto hdr = sst->get_serialization_header();
@@ -1656,7 +1653,7 @@ SEASTAR_TEST_CASE(writer_handles_subsequent_range_tombstone_changes_without_tomb
             deferred_close dc1{input_reader};
             sstable_writer_config cfg = env.manager().configure_writer();
             auto _ = env.tempdir().make_sweeper();
-            shared_sstable sstable = env.make_sstable(s, env.tempdir().path().string(), 0);
+            shared_sstable sstable = env.make_sstable(s, 0);
             encoding_stats es;
             sstable->write_components(std::move(input_reader), 1, s, cfg, es).get();
             sstable->load().get();
