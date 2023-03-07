@@ -429,6 +429,8 @@ static std::chrono::seconds confidence_interval(data_dictionary::database db) {
     return std::chrono::seconds(db.get_config().alternator_streams_time_window_s());
 }
 
+using namespace std::chrono_literals;
+
 // Dynamo docs says no data shall live longer than 24h.
 static constexpr auto dynamodb_streams_max_window = 24h;
 

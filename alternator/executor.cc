@@ -56,6 +56,8 @@
 #include "db/schema_tables.hh"
 #include "utils/rjson.hh"
 
+using namespace std::chrono_literals;
+
 logging::logger elogger("alternator-executor");
 
 namespace alternator {
