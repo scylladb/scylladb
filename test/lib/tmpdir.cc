@@ -21,6 +21,15 @@ void tmpdir::remove() noexcept {
     }
 }
 
+tmpdir::sweeper::~sweeper() {
+    memory::scoped_critical_alloc_section dfg;
+    if (!_tmpd._path.empty()) {
+        for (const auto& ent : fs::directory_iterator(_tmpd._path)) {
+            fs::remove_all(ent.path());
+        }
+    }
+}
+
 tmpdir::tmpdir()
     : _path(fs::temp_directory_path() / fs::path(fmt::format(FMT_STRING("scylla-{}"), utils::make_random_uuid()))) {
     fs::create_directories(_path);
