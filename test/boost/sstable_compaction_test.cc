@@ -1552,10 +1552,6 @@ SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", int32_type).build();
 
-        auto sst_gen = [&env, s, gen = make_lw_shared<unsigned>(1)] () mutable {
-            return env.make_sstable(s, (*gen)++, sstables::get_highest_sstable_version(), big);
-        };
-
         auto make_insert = [&] (partition_key key, api::timestamp_type t) {
             mutation m(s, key);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), t);
@@ -1571,14 +1567,14 @@ SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
         for (api::timestamp_type t = 0; t < 3; t++) {
             auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(t))});
             auto mut = make_insert(std::move(key), t);
-            sstables.push_back(make_sstable_containing(sst_gen, {std::move(mut)}));
+            sstables.push_back(make_sstable_containing(env.make_sstable(s), {std::move(mut)}));
         }
         // Decrement the timestamp to simulate a timestamp in the past hour
         for (api::timestamp_type t = 3; t < 5; t++) {
             // And add progressively more cells into each sstable
             auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(t))});
             auto mut = make_insert(std::move(key), t);
-            sstables.push_back(make_sstable_containing(sst_gen, {std::move(mut)}));
+            sstables.push_back(make_sstable_containing(env.make_sstable(s), {std::move(mut)}));
         }
 
         std::map<sstring, sstring> options;
@@ -1625,7 +1621,7 @@ SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
             for (int i = 0 ; i < r ; i++) {
                 mutations.push_back(make_insert(key, tstamp + r));
             }
-            sstables.push_back(make_sstable_containing(sst_gen, std::move(mutations)));
+            sstables.push_back(make_sstable_containing(env.make_sstable(s), std::move(mutations)));
         }
 
         // Reset the buckets, overfill it now
@@ -2175,12 +2171,8 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
                     .with_column("v", int32_type).build();
             auto permit = env.make_reader_permit();
 
-            auto sst_gen = [&env, schema, gen = make_lw_shared<unsigned>(1)] () mutable {
-                return env.make_sstable(schema, (*gen)++);
-            };
-
             auto scrubbed_mt = make_lw_shared<replica::memtable>(schema);
-            auto sst = sst_gen();
+            auto sst = env.make_sstable(schema);
 
             testlog.info("Writing sstable {}", sst->get_filename());
 
@@ -2372,12 +2364,8 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
                     .with_column("v", int32_type).build();
             auto permit = env.make_reader_permit();
 
-            auto sst_gen = [&env, schema, gen = make_lw_shared<unsigned>(1)] () mutable {
-                return env.make_sstable(schema, (*gen)++);
-            };
-
             std::vector<mutation_fragment_v2> scrubbed_fragments;
-            auto sst = sst_gen();
+            auto sst = env.make_sstable(schema);
 
             const auto corrupt_fragments = write_corrupt_sstable(env, *sst, permit, [&] (mutation_fragment_v2&& mf, bool is_corrupt) {
                 if (!is_corrupt) {
@@ -2465,12 +2453,8 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
                     .with_column("v", int32_type).build();
             auto permit = env.make_reader_permit();
 
-            auto sst_gen = [&env, schema, gen = make_lw_shared<unsigned>(1)] () mutable {
-                return env.make_sstable(schema, (*gen)++);
-            };
-
             auto scrubbed_mt = make_lw_shared<replica::memtable>(schema);
-            auto sst = sst_gen();
+            auto sst = env.make_sstable(schema);
 
             testlog.info("Writing sstable {}", sst->get_filename());
 
@@ -2575,12 +2559,8 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
                         .with_column("v", int32_type).build();
                 auto permit = env.make_reader_permit();
 
-                auto sst_gen = [&env, schema, gen = make_lw_shared<unsigned>(1)] () mutable {
-                    return env.make_sstable(schema, (*gen)++);
-                };
-
                 auto scrubbed_mt = make_lw_shared<replica::memtable>(schema);
-                auto sst = sst_gen();
+                auto sst = env.make_sstable(schema);
 
                 testlog.info("Writing sstable {}", sst->get_filename());
 
@@ -3051,9 +3031,6 @@ SEASTAR_TEST_CASE(compaction_strategy_aware_major_compaction_test) {
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", int32_type).build();
 
-        auto sst_gen = [&env, s, gen = make_lw_shared<unsigned>(1)] () mutable {
-            return env.make_sstable(s, (*gen)++, sstables::get_highest_sstable_version(), big);
-        };
         auto make_insert = [&] (partition_key key) {
             mutation m(s, key);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), api::timestamp_type(0));
@@ -3061,9 +3038,9 @@ SEASTAR_TEST_CASE(compaction_strategy_aware_major_compaction_test) {
         };
 
         auto alpha = partition_key::from_exploded(*s, {to_bytes("alpha")});
-        auto sst = make_sstable_containing(sst_gen, {make_insert(alpha)});
+        auto sst = make_sstable_containing(env.make_sstable(s), {make_insert(alpha)});
         sst->set_sstable_level(2);
-        auto sst2 = make_sstable_containing(sst_gen, {make_insert(alpha)});
+        auto sst2 = make_sstable_containing(env.make_sstable(s), {make_insert(alpha)});
         sst2->set_sstable_level(3);
         auto candidates = std::vector<sstables::shared_sstable>({ sst, sst2 });
 
@@ -3196,10 +3173,6 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
         builder.set_gc_grace_seconds(0);
         auto s = builder.build();
 
-        auto sst_gen = [&env, s, gen = make_lw_shared<unsigned>(1)] () mutable {
-            return env.make_sstable(s, (*gen)++, sstables::get_highest_sstable_version(), big);
-        };
-
         class compacting_sstable_writer_test {
             shared_sstable& _sst;
             sstable_writer _writer;
@@ -3231,8 +3204,8 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
                 return max_purgeable_ts;
             };
 
-            auto non_purged = sst_gen();
-            auto purged_only = sst_gen();
+            auto non_purged = env.make_sstable(s);
+            auto purged_only = env.make_sstable(s);
 
             auto cr = compacting_sstable_writer_test(s, non_purged, env.manager());
             auto purged_cr = compacting_sstable_writer_test(s, purged_only, env.manager());
@@ -3310,8 +3283,8 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
             auto [mut3, mut3_tombstone] = make_delete(alpha);
 
             std::vector<shared_sstable> sstables = {
-                make_sstable_containing(sst_gen, {mut1, mut2}),
-                make_sstable_containing(sst_gen, {mut3})
+                make_sstable_containing(env.make_sstable(s), {mut1, mut2}),
+                make_sstable_containing(env.make_sstable(s), {mut3})
             };
 
             forward_jump_clocks(std::chrono::seconds(ttl));
@@ -3538,10 +3511,6 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
         // check it is disabled
         BOOST_REQUIRE(cf->is_auto_compaction_disabled_by_user());
 
-        // generate a few sstables
-        auto sst_gen = [&env, s, gen = make_lw_shared<unsigned>(1)] () mutable {
-            return env.make_sstable(s, (*gen)++, sstables::get_highest_sstable_version(), big);
-        };
         auto make_insert = [&] (const dht::decorated_key& key) {
             mutation m(s, key);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 1 /* ts */);
@@ -3551,7 +3520,7 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
         const auto keys = tests::generate_partition_keys(1, s);
         for (auto i = 0; i < 2 * min_threshold; ++i) {
             auto mut = make_insert(keys[0]);
-            auto sst = make_sstable_containing(sst_gen, {mut});
+            auto sst = make_sstable_containing(env.make_sstable(s), {mut});
             cf->add_sstable_and_update_cache(sst).wait();
         }
 
@@ -4951,13 +4920,10 @@ SEASTAR_TEST_CASE(check_table_sstable_set_includes_maintenance_sstables) {
         simple_schema ss;
         auto s = ss.schema();
         auto pks = ss.make_pkeys(1);
-        auto sst_gen = [&env, s] () {
-            return env.make_sstable(s, 1, sstables::get_highest_sstable_version(), big);
-        };
 
         auto mut1 = mutation(s, pks[0]);
         mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
-        auto sst = make_sstable_containing(sst_gen, {std::move(mut1)});
+        auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)});
 
         table_for_tests cf(env.manager(), s);
         auto close_cf = deferred_stop(cf);

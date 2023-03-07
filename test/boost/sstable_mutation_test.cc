@@ -414,10 +414,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
         auto mt = make_lw_shared<replica::memtable>(s);
         mt->apply(std::move(m));
 
-        auto sst = env.make_sstable(s,
-                1 /* generation */,
-                sstables::get_highest_sstable_version(),
-                sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(s);
         write_memtable_to_sstable_for_test(*mt, sst).get();
         sst->load().get();
         auto mut = with_closeable(sst->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice()), [] (auto& mr) {
@@ -856,10 +853,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
         auto mt = make_lw_shared<replica::memtable>(s);
         mt->apply(std::move(m));
 
-        auto sst = env.make_sstable(s,
-                                1 /* generation */,
-                                version,
-                                sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(s, version);
         write_memtable_to_sstable_for_test(*mt, sst).get();
         sst->load().get();
         auto mut = with_closeable(sst->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice()), [] (auto& mr) {
@@ -889,10 +883,7 @@ SEASTAR_TEST_CASE(test_has_partition_key) {
             auto mt = make_lw_shared<replica::memtable>(s);
             mt->apply(std::move(m));
 
-            auto sst = env.make_sstable(s,
-                                    1 /* generation */,
-                                    version,
-                                    sstables::sstable::format_types::big);
+            auto sst = env.make_sstable(s, version);
             write_memtable_to_sstable_for_test(*mt, sst).get();
             auto hk = sstables::sstable::make_hashed_key(*s, dk.key());
             sst->load().get();
