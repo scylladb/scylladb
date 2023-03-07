@@ -143,102 +143,35 @@ make_internal_scalar_function(sstring name, null_handler nullhandler, Lambda fun
     return make_internal_scalar_function(std::move(name), nullhandler, +func);
 }
 
+template<typename NarrowT, typename WideT>
+NarrowT
+narrow(WideT acc) {
+    NarrowT ret = static_cast<NarrowT>(acc);
+    if (static_cast<WideT>(ret) != acc) {
+        throw exceptions::overflow_error_exception("Sum overflow. Values should be casted to a wider type.");
+    }
+    return ret;
+}
+
 // We need a wider accumulator for sum and average,
 // since summing the inputs can overflow the input type
 template <typename T>
-struct accumulator_for;
-
-template <typename T>
-struct varint_accumulator_for {
-    using type = utils::multiprecision_int;
-
-    static T narrow(type acc) {
-        T ret = static_cast<T>(acc);
-        if (static_cast<type>(ret) != acc) {
-            throw exceptions::overflow_error_exception("Sum overflow. Values should be casted to a wider type.");
-        }
-        return ret;
-    }
-
-    static data_value decompose_to_data_value(const type& acc) {
-        return acc;
-    }
-
-    static bytes_opt decompose(const data_value& value) {
-        return varint_type->decompose(value);
-    }
-
-    static bytes_opt decompose(const type& acc) {
-        return varint_type->decompose(decompose_to_data_value(acc));
-    }
-
-    static type cast_to_accumulator(const data_value& value) {
-        auto mint = value_cast<utils::multiprecision_int>(value);
-        return mint;
-    }
-
-    static type deserialize(const bytes_opt& acc) {
-        return cast_to_accumulator(varint_type->deserialize(*acc));
-    }
-
-    static shared_ptr<const abstract_type> data_type() {
-        return varint_type;
-    }
-};
-
-template <typename T>
-struct same_type_accumulator_for {
-    using type = T;
-
-    static T narrow(type acc) {
-        return acc;
-    }
-
-    static data_value decompose_to_data_value(const type& acc) {
-        return narrow(acc);
-    }
-
-    static bytes_opt decompose(const data_value& value) {
-        return data_type_for<type>()->decompose(value);
-    }
-
-    static bytes_opt decompose(const type& acc) {
-        return data_type_for<type>()->decompose(decompose_to_data_value(acc));
-    }
-
-    static type cast_to_accumulator(const data_value& value) {
-        return value_cast<type>(value);
-    }
-
-    static type deserialize(const bytes_opt& acc) {
-        return cast_to_accumulator(data_type_for<type>()->deserialize(*acc));
-    }
-
-    static shared_ptr<const abstract_type> data_type() {
-        return data_type_for<T>();
-    }
-};
-
-template <typename T>
-struct accumulator_for : public std::conditional_t<std::is_integral_v<T>,
-                                                   varint_accumulator_for<T>,
-                                                   same_type_accumulator_for<T>>
-{ };
+using accumulator_for = std::conditional_t<std::is_integral_v<T>, utils::multiprecision_int, T>;
 
 template <typename Type>
 static
 shared_ptr<aggregate_function>
 make_sum_function() {
-    using Acc = typename accumulator_for<Type>::type;
+    using Acc = accumulator_for<Type>;
     return make_shared<db::functions::stateless_aggregate_function_adapter>(
         db::functions::stateless_aggregate_function{
             .name = function_name::native_function("sum"),
-            .state_type = accumulator_for<Type>::data_type(),
+            .state_type = data_type_for<accumulator_for<Type>>(),
             .result_type = data_type_for<Type>(),
             .argument_types = {data_type_for<Type>()},
-            .initial_state = accumulator_for<Type>::decompose(Acc(0)),
+            .initial_state = data_type_for<accumulator_for<Type>>()->decompose(Acc(0)),
             .aggregation_function = make_internal_scalar_function("sum_step", return_accumulator_on_null, [] (Acc acc, Type addend) -> Acc { return acc + addend; }),
-            .state_to_result_function = make_internal_scalar_function("sum_finalizer", return_any_nonnull, [] (Acc acc) -> Type { return accumulator_for<Type>::narrow(acc); }),
+            .state_to_result_function = make_internal_scalar_function("sum_finalizer", return_any_nonnull, [] (Acc acc) -> Type { return narrow<Type>(acc); }),
             .state_reduction_function = make_internal_scalar_function("sum_reducer", return_any_nonnull, [] (Acc a1, Acc a2) -> Acc { return a1 + a2; }),
         }
     );
@@ -247,7 +180,7 @@ make_sum_function() {
 template <typename Type>
 class impl_div_for_avg {
 public:
-    static Type div(const typename accumulator_for<Type>::type& x, const int64_t y) {
+    static Type div(const accumulator_for<Type>& x, const int64_t y) {
         return Type(x/y);
     }
 };
@@ -263,7 +196,7 @@ template <typename Type>
 static
 shared_ptr<aggregate_function>
 make_avg_function() {
-    using sum_type = typename accumulator_for<Type>::type;
+    using sum_type = accumulator_for<Type>;
     auto accumulator_tuple_type = tuple_type_impl::get_instance({data_type_for<sum_type>(), data_type_for<int64_t>()});
     return make_shared<db::functions::stateless_aggregate_function_adapter>(
         db::functions::stateless_aggregate_function{
