@@ -1309,15 +1309,15 @@ SEASTAR_TEST_CASE(test_key_count_estimation) {
             int count = 10'000;
             std::vector<dht::decorated_key> all_pks = tests::generate_partition_keys(count + 2, s, local_shard_only::yes, tests::key_size{8, 8});
             std::vector<dht::decorated_key> pks(all_pks.begin() + 1, all_pks.end() - 1);
-            std::vector<mutation> muts;
+            auto mt = make_lw_shared<replica::memtable>(s);
             for (auto pk : pks) {
                 mutation m(s, pk);
                 m.set_clustered_cell(clustering_key::make_empty(), bytes("v"), data_value(int32_t(1)), 1 /* ts */);
-                muts.push_back(std::move(m));
+                mt->apply(m);
             }
 
             tmpdir dir;
-            shared_sstable sst = make_sstable(env, s, dir.path().string(), muts, env.manager().configure_writer(), version);
+            shared_sstable sst = make_sstable_easy(env, dir.path(), mt, env.manager().configure_writer(), 1, version, pks.size());
 
             auto max_est = sst->get_estimated_key_count();
             testlog.trace("count = {}", count);
