@@ -11,6 +11,7 @@
 #include "gms/gossiper.hh"
 
 namespace api {
+using namespace seastar::httpd;
 using namespace json;
 
 void set_gossiper(http_context& ctx, routes& r, gms::gossiper& g) {

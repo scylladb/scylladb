@@ -47,6 +47,9 @@
 #include "sstables_loader.hh"
 #include "db/view/view_builder.hh"
 
+using namespace seastar::httpd;
+using namespace std::chrono_literals;
+
 extern logging::logger apilog;
 
 namespace std {

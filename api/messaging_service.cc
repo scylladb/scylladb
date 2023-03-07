@@ -13,6 +13,7 @@
 #include <iostream>
 #include <sstream>
 
+using namespace seastar::httpd;
 using namespace httpd::messaging_service_json;
 using namespace netw;
 

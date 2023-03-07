@@ -13,6 +13,7 @@
 #include <boost/algorithm/string/replace.hpp>
 
 namespace api {
+using namespace seastar::httpd;
 
 template<class T>
 json::json_return_type get_json_return_type(const T& val) {

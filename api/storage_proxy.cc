@@ -20,6 +20,7 @@ namespace api {
 
 namespace sp = httpd::storage_proxy_json;
 using proxy = service::storage_proxy;
+using namespace seastar::httpd;
 using namespace json;
 
 utils::time_estimated_histogram timed_rate_moving_average_summary_merge(utils::time_estimated_histogram a, const utils::timed_rate_moving_average_summary_and_histogram& b) {

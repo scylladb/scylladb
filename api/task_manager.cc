@@ -22,6 +22,7 @@ namespace api {
 
 namespace tm = httpd::task_manager_json;
 using namespace json;
+using namespace seastar::httpd;
 
 inline bool filter_tasks(tasks::task_manager::task_ptr task, std::unordered_map<sstring, sstring>& query_params) {
     return (!query_params.contains("keyspace") || query_params["keyspace"] == task->get_status().keyspace) &&

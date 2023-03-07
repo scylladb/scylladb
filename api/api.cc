@@ -35,6 +35,7 @@
 logging::logger apilog("api");
 
 namespace api {
+using namespace seastar::httpd;
 
 static std::unique_ptr<reply> exception_reply(std::exception_ptr eptr) {
     try {

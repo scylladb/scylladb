@@ -19,6 +19,7 @@
 namespace api {
 
 using namespace json;
+using namespace seastar::httpd;
 namespace hh = httpd::hinted_handoff_json;
 
 void set_hinted_handoff(http_context& ctx, routes& r, gms::gossiper& g) {

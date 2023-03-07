@@ -14,6 +14,7 @@
 
 namespace api {
 using namespace json;
+using namespace seastar::httpd;
 
 void set_authorization_cache(http_context& ctx, routes& r, sharded<auth::service> &auth_service) {
     httpd::authorization_cache_json::authorization_cache_reset.set(r, [&auth_service] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {

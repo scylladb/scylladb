@@ -16,6 +16,7 @@
 #include "replica/database.hh"
 
 namespace api {
+using namespace seastar::httpd;
 
 static logging::logger alogger("lsa-api");
 
