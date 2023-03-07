@@ -94,6 +94,12 @@ public:
         {}
     };
 
+    // reusable_sst() opens the requested sstable for reading only (sstables are
+    // immutable, so an existing sstable cannot be opened for writing).
+    // It returns a future because opening requires reading from disk, and
+    // therefore may block. The future value is a shared sstable - a reference-
+    // counting pointer to an sstable - allowing for the returned handle to
+    // be passed around until no longer needed.
     future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation,
             sstable::version_types version, sstable::format_types f = sstable::format_types::big) {
         auto sst = make_sstable(std::move(schema), dir, generation, version, f);

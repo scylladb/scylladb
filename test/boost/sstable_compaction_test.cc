@@ -91,23 +91,13 @@ atomic_cell make_atomic_cell(data_type dt, bytes_view value, uint32_t ttl = 0, u
 
 ////////////////////////////////  Test basic compaction support
 
-// open_sstable() opens the requested sstable for reading only (sstables are
-// immutable, so an existing sstable cannot be opened for writing).
-// It returns a future because opening requires reading from disk, and
-// therefore may block. The future value is a shared sstable - a reference-
-// counting pointer to an sstable - allowing for the returned handle to
-// be passed around until no longer needed.
-static future<sstables::shared_sstable> open_sstable(test_env& env, schema_ptr schema, sstring dir, unsigned long generation) {
-    return env.reusable_sst(std::move(schema), dir, generation);
-}
-
 // open_sstables() opens several generations of the same sstable, returning,
 // after all the tables have been open, their vector.
 static future<std::vector<sstables::shared_sstable>> open_sstables(test_env& env, schema_ptr s, sstring dir, std::vector<unsigned long> generations) {
     return do_with(std::vector<sstables::shared_sstable>(),
             [&env, dir = std::move(dir), generations = std::move(generations), s] (auto& ret) mutable {
         return parallel_for_each(generations, [&env, &ret, &dir, s] (unsigned long generation) {
-            return open_sstable(env, s, dir, generation).then([&ret] (sstables::shared_sstable sst) {
+            return env.reusable_sst(s, dir, generation).then([&ret] (sstables::shared_sstable sst) {
                 ret.push_back(std::move(sst));
             });
         }).then([&ret] {
