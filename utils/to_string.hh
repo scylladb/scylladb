@@ -152,15 +152,8 @@ std::ostream& operator<<(std::ostream& os, const std::optional<T>& opt) {
     return os;
 }
 
-static inline std::ostream& operator<<(std::ostream& os, const std::strong_ordering& order) {
-    if (order > 0) {
-        os << "gt";
-    } else if (order < 0) {
-        os << "lt";
-    } else {
-        os << "eq";
-    }
-    return os;
-}
+std::ostream& operator<<(std::ostream& os, const std::strong_ordering& order);
+std::ostream& operator<<(std::ostream& os, const std::weak_ordering& order);
+std::ostream& operator<<(std::ostream& os, const std::partial_ordering& order);
 
-}
+} // namespace std

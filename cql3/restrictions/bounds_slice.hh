@@ -11,7 +11,7 @@
 #pragma once
 
 #include <seastar/core/shared_ptr.hh>
-#include "to_string.hh"
+#include "utils/to_string.hh"
 #include "exceptions/exceptions.hh"
 #include "index/secondary_index_manager.hh"
 #include "cql3/expr/expression.hh"

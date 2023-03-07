@@ -16,7 +16,7 @@
 #include "mutation_writer/multishard_writer.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/sharder.hh"
-#include "to_string.hh"
+#include "utils/to_string.hh"
 #include "utils/xx_hasher.hh"
 #include "utils/UUID.hh"
 #include "utils/hash.hh"

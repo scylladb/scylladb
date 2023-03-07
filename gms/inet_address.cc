@@ -15,7 +15,7 @@
 #include <seastar/core/print.hh>
 #include <seastar/core/future.hh>
 #include "inet_address.hh"
-#include "to_string.hh"
+#include "utils/to_string.hh"
 
 using namespace seastar;
 

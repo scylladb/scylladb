@@ -12,7 +12,7 @@
 #include "tracing/trace_state.hh"
 #include "tracing/trace_keyspace_helper.hh"
 #include "service/storage_proxy.hh"
-#include "to_string.hh"
+#include "utils/to_string.hh"
 #include "timestamp.hh"
 
 #include "cql3/values.hh"

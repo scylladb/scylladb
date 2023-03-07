@@ -10,7 +10,7 @@
 #include "abstract_function_selector.hh"
 #include "aggregate_function_selector.hh"
 #include "scalar_function_selector.hh"
-#include "to_string.hh"
+#include "utils/to_string.hh"
 #include "cql3/selection/selector_factories.hh"
 #include "cql3/functions/abstract_function.hh"
 

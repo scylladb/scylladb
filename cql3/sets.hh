@@ -14,7 +14,7 @@
 #include "maps.hh"
 #include "column_specification.hh"
 #include "column_identifier.hh"
-#include "to_string.hh"
+#include "utils/to_string.hh"
 #include <unordered_set>
 
 namespace cql3 {

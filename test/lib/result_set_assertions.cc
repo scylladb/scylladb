@@ -9,7 +9,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include "test/lib/result_set_assertions.hh"
-#include "to_string.hh"
+#include "utils/to_string.hh"
 
 static inline
 sstring to_sstring(const bytes& b) {

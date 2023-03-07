@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 #include "raft.hh"
-#include "to_string.hh"
+#include "utils/to_string.hh"
 
 namespace raft {
 

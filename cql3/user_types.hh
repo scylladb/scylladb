@@ -14,7 +14,7 @@
 #include "column_specification.hh"
 #include "column_identifier.hh"
 #include "operation.hh"
-#include "to_string.hh"
+#include "utils/to_string.hh"
 
 namespace cql3 {
 

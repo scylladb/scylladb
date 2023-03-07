@@ -16,7 +16,7 @@
 #include "version_generator.hh"
 #include "gms/inet_address.hh"
 #include "dht/i_partitioner.hh"
-#include "to_string.hh"
+#include "utils/to_string.hh"
 #include "version.hh"
 #include "cdc/generation_id.hh"
 #include <unordered_set>
