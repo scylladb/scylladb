@@ -17,7 +17,7 @@
 namespace cql3 {
 namespace functions {
 
-class user_aggregate : public db::functions::stateless_aggregate_function_adapter, public data_dictionary::keyspace_element {
+class user_aggregate : public db::functions::aggregate_function, public data_dictionary::keyspace_element {
 public:
     user_aggregate(function_name fname, bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> reducefunc, ::shared_ptr<scalar_function> finalfunc);
     bool has_finalfunc() const;
