@@ -59,8 +59,8 @@ unique_key_int.i = 0
 #   with new_test_keyspace(cql, '...') as keyspace:
 # This is not a fixture - see those in conftest.py.
 @contextmanager
-def new_test_keyspace(cql, opts):
-    keyspace = unique_name()
+def new_test_keyspace(cql, opts, keyspace=""):
+    keyspace = unique_name() if keyspace == "" else keyspace
     cql.execute("CREATE KEYSPACE " + keyspace + " " + opts)
     try:
         yield keyspace
@@ -88,6 +88,15 @@ def new_test_table(cql, keyspace, schema, extra=""):
     finally:
         cql.execute("DROP TABLE " + table)
         previously_used_table_names.append(table_name)
+
+@contextmanager
+def new_named_test_table(cql, keyspace, table_name, schema, extra=""):
+    table = keyspace + "." + table_name
+    cql.execute("CREATE TABLE " + table + "(" + schema + ")" + extra)
+    try:
+        yield table
+    finally:
+        cql.execute("DROP TABLE IF EXISTS " + table)
 
 # A utility function for creating a new temporary user-defined type.
 @contextmanager
