@@ -1,6 +1,8 @@
 add_library(test-lib)
 target_sources(test-lib
   PRIVATE
+    cql_assertions.cc
+    exception_utils.cc
     log.cc
     test_utils.cc
     tmpdir.cc
