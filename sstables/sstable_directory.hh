@@ -133,6 +133,8 @@ private:
 private:
     future<> process_descriptor(sstables::entry_descriptor desc, process_flags flags);
     void validate(sstables::shared_sstable sst, process_flags flags) const;
+    future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc) const;
+    future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc, process_flags flags) const;
 
     template <typename Container, typename Func>
     requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>

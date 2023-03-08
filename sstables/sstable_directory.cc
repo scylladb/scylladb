@@ -110,19 +110,29 @@ void sstable_directory::validate(sstables::shared_sstable sst, process_flags fla
     }
 }
 
+future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc) const {
+    auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
+    co_await sst->load(_io_priority);
+    co_return sst;
+}
+
+future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc, process_flags flags) const {
+    auto sst = co_await load_sstable(std::move(desc));
+    validate(sst, flags);
+    if (flags.need_mutate_level) {
+        dirlog.trace("Mutating {} to level 0\n", sst->get_filename());
+        co_await sst->mutate_sstable_level(0);
+    }
+    co_return sst;
+}
+
 future<>
 sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_flags flags) {
     if (desc.version > _max_version_seen) {
         _max_version_seen = desc.version;
     }
 
-    auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
-    co_await sst->load(_io_priority);
-    validate(sst, flags);
-    if (flags.need_mutate_level) {
-        dirlog.trace("Mutating {} to level 0\n", sst->get_filename());
-        co_await sst->mutate_sstable_level(0);
-    }
+    auto sst = co_await load_sstable(desc, flags);
 
     if (flags.sort_sstables_according_to_owner) {
         co_await sort_sstable(sst);
