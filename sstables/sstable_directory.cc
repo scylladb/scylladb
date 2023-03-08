@@ -132,18 +132,17 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_f
         _max_version_seen = desc.version;
     }
 
-    auto sst = co_await load_sstable(desc, flags);
-
     if (flags.sort_sstables_according_to_owner) {
-        co_await sort_sstable(sst);
+        co_await sort_sstable(std::move(desc), flags);
     } else {
-        dirlog.debug("Added {} to unsorted sstables list", sst->get_filename());
-        _unsorted_sstables.push_back(sst);
+        dirlog.debug("Added {} to unsorted sstables list", sstable_filename(desc));
+        _unsorted_sstables.push_back(co_await load_sstable(std::move(desc), flags));
     }
 }
 
 future<>
-sstable_directory::sort_sstable(sstables::shared_sstable sst) {
+sstable_directory::sort_sstable(sstables::entry_descriptor desc, process_flags flags) {
+    auto sst = co_await load_sstable(desc, flags);
     sstables::foreign_sstable_open_info info = co_await sst->get_open_info();
 
     auto shards = sst->get_shards_for_this_sstable();
@@ -159,6 +158,10 @@ sstable_directory::sort_sstable(sstables::shared_sstable sst) {
         dirlog.trace("{} identified as a shared SSTable", sst->get_filename());
         _shared_sstable_info.push_back(std::move(info));
     }
+}
+
+sstring sstable_directory::sstable_filename(const sstables::entry_descriptor& desc) const {
+    return sstable::filename(_sstable_dir.native(), _schema->ks_name(), _schema->cf_name(), desc.version, desc.generation, desc.format, component_type::Data);
 }
 
 generation_type

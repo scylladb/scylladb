@@ -142,7 +142,10 @@ private:
     future<> load_foreign_sstables(sstable_info_vector info_vec);
 
     // Sort the sstable according to owner
-    future<> sort_sstable(sstables::shared_sstable sst);
+    future<> sort_sstable(sstables::entry_descriptor desc, process_flags flags);
+
+    // Returns filename for a SSTable from its entry_descriptor.
+    sstring sstable_filename(const sstables::entry_descriptor& desc) const;
 public:
     sstable_directory(sstables_manager& manager,
             schema_ptr schema,
