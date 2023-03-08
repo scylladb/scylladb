@@ -22,6 +22,7 @@ namespace api {
 
 namespace tm = httpd::task_manager_json;
 using namespace json;
+using namespace seastar::httpd;
 
 inline bool filter_tasks(tasks::task_manager::task_ptr task, std::unordered_map<sstring, sstring>& query_params) {
     return (!query_params.contains("keyspace") || query_params["keyspace"] == task->get_status().keyspace) &&
@@ -108,12 +109,12 @@ future<full_task_status> retrieve_status(const tasks::task_manager::foreign_task
 }
 
 void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
-    tm::get_modules.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+    tm::get_modules.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         std::vector<std::string> v = boost::copy_range<std::vector<std::string>>(ctx.tm.local().get_modules() | boost::adaptors::map_keys);
         co_return v;
     });
 
-    tm::get_tasks.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+    tm::get_tasks.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         using chunked_stats = utils::chunked_vector<task_stats>;
         auto internal = tasks::is_internal{req_param<bool>(*req, "internal", false)};
         std::vector<chunked_stats> res = co_await ctx.tm.map([&req, internal] (tasks::task_manager& tm) {
@@ -147,7 +148,7 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
         co_return std::move(f);
     });
 
-    tm::get_task_status.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+    tm::get_task_status.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
         auto task = co_await tasks::task_manager::invoke_on_task(ctx.tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
             auto state = task->get_status().state;
@@ -160,7 +161,7 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
         co_return make_status(s);
     });
 
-    tm::abort_task.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+    tm::abort_task.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
         co_await tasks::task_manager::invoke_on_task(ctx.tm, id, [] (tasks::task_manager::task_ptr task) -> future<> {
             if (!task->is_abortable()) {
@@ -171,7 +172,7 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
         co_return json_void();
     });
 
-    tm::wait_task.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+    tm::wait_task.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
         auto task = co_await tasks::task_manager::invoke_on_task(ctx.tm, id, std::function([] (tasks::task_manager::task_ptr task) {
             return task->done().then_wrapped([task] (auto f) {
@@ -184,7 +185,7 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
         co_return make_status(s);
     });
 
-    tm::get_task_status_recursively.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+    tm::get_task_status_recursively.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto& _ctx = ctx;
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
         std::queue<tasks::task_manager::foreign_task_ptr> q;
@@ -225,7 +226,7 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
         co_return f;
     });
 
-    tm::get_and_update_ttl.set(r, [&cfg] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+    tm::get_and_update_ttl.set(r, [&cfg] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         uint32_t ttl = cfg.task_ttl_seconds();
         co_await cfg.task_ttl_seconds.set_value_on_all_shards(req->query_parameters["ttl"], utils::config_file::config_source::API);
         co_return json::json_return_type(ttl);

@@ -13,6 +13,7 @@
 #include <vector>
 
 namespace api {
+using namespace seastar::httpd;
 
 template<typename T>
 static auto acquire_cl_metric(http_context& ctx, std::function<T (db::commitlog*)> func) {

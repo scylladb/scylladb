@@ -15,6 +15,7 @@
 #include "utils/fb_utilities.hh"
 
 namespace api {
+using namespace seastar::httpd;
 
 void set_endpoint_snitch(http_context& ctx, routes& r, sharded<locator::snitch_ptr>& snitch) {
     static auto host_or_broadcast = [](const_req req) {

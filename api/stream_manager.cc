@@ -14,6 +14,7 @@
 #include "gms/gossiper.hh"
 
 namespace api {
+using namespace seastar::httpd;
 
 namespace hs = httpd::stream_manager_json;
 

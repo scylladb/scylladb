@@ -15,6 +15,7 @@
 #include <seastar/core/future-util.hh>
 
 namespace api {
+using namespace seastar::httpd;
 
 namespace hf = httpd::error_injection_json;
 

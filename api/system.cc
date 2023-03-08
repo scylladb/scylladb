@@ -17,6 +17,7 @@
 extern logging::logger apilog;
 
 namespace api {
+using namespace seastar::httpd;
 
 namespace hs = httpd::system_json;
 

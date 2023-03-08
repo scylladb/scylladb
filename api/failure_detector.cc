@@ -11,7 +11,9 @@
 #include "gms/failure_detector.hh"
 #include "gms/application_state.hh"
 #include "gms/gossiper.hh"
+
 namespace api {
+using namespace seastar::httpd;
 
 namespace fd = httpd::failure_detector_json;
 

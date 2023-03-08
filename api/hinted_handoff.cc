@@ -19,10 +19,11 @@
 namespace api {
 
 using namespace json;
+using namespace seastar::httpd;
 namespace hh = httpd::hinted_handoff_json;
 
 void set_hinted_handoff(http_context& ctx, routes& r, gms::gossiper& g) {
-    hh::create_hints_sync_point.set(r, [&ctx, &g] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+    hh::create_hints_sync_point.set(r, [&ctx, &g] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto parse_hosts_list = [&g] (sstring arg) {
             std::vector<sstring> hosts_str = split(arg, ",");
             std::vector<gms::inet_address> hosts;
@@ -52,7 +53,7 @@ void set_hinted_handoff(http_context& ctx, routes& r, gms::gossiper& g) {
         });
     });
 
-    hh::get_hints_sync_point.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+    hh::get_hints_sync_point.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         db::hints::sync_point sync_point;
         const sstring encoded = req->get_query_param("id");
         try {
@@ -93,42 +94,42 @@ void set_hinted_handoff(http_context& ctx, routes& r, gms::gossiper& g) {
         });
     });
 
-    hh::list_endpoints_pending_hints.set(r, [] (std::unique_ptr<request> req) {
+    hh::list_endpoints_pending_hints.set(r, [] (std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         std::vector<sstring> res;
         return make_ready_future<json::json_return_type>(res);
     });
 
-    hh::truncate_all_hints.set(r, [] (std::unique_ptr<request> req) {
+    hh::truncate_all_hints.set(r, [] (std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         sstring host = req->get_query_param("host");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    hh::schedule_hint_delivery.set(r, [] (std::unique_ptr<request> req) {
+    hh::schedule_hint_delivery.set(r, [] (std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         sstring host = req->get_query_param("host");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    hh::pause_hints_delivery.set(r, [] (std::unique_ptr<request> req) {
+    hh::pause_hints_delivery.set(r, [] (std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         sstring pause = req->get_query_param("pause");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    hh::get_create_hint_count.set(r, [] (std::unique_ptr<request> req) {
+    hh::get_create_hint_count.set(r, [] (std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         sstring host = req->get_query_param("host");
         return make_ready_future<json::json_return_type>(0);
     });
 
-    hh::get_not_stored_hints_count.set(r, [] (std::unique_ptr<request> req) {
+    hh::get_not_stored_hints_count.set(r, [] (std::unique_ptr<http::request> req) {
         //TBD
         unimplemented();
         sstring host = req->get_query_param("host");
