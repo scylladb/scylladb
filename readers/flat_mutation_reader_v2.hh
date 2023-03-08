@@ -229,9 +229,7 @@ public:
         // entirely and never reach the consumer.
         void consume_pausable_in_thread(Consumer consumer, Filter filter) {
             while (true) {
-                if (need_preempt()) {
-                    seastar::thread::yield();
-                }
+                thread::maybe_yield();
                 if (is_buffer_empty()) {
                     if (is_end_of_stream()) {
                         return;
