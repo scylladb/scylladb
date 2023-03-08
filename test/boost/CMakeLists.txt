@@ -1,4 +1,20 @@
-function(add_scylla_test name)
+#
+ # Add a scylla unit test
+ #
+ # add_scylla_test(<test_name>
+ #   [KIND <kind>]
+ #   [SOUCES <src>...])
+ #
+ # kind can be:
+ # * SEASTAR - a unit test that depends on the scylla sources and the
+ #   seastar test framework.
+ # * BOOST - a unit test that only depends on the listed sources and the
+ #   Boost test framework
+ # test_name should map to a source file, such that ${test_name}.cc
+ # is a valid source file. If this isn't the case, please use the SOURCE
+ # param.
+ #
+ function(add_scylla_test name)
   cmake_parse_arguments(parsed_args
     ""
     "KIND"
