@@ -173,7 +173,8 @@ target_link_libraries(scylla PRIVATE
     utils)
 target_link_libraries(Boost::regex
   INTERFACE
-    ICU::i18n)
+    ICU::i18n
+    ICU::uc)
 
 target_link_libraries(scylla PRIVATE
     seastar
