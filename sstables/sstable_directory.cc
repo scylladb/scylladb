@@ -144,7 +144,9 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_f
 
 future<>
 sstable_directory::sort_sstable(sstables::shared_sstable sst) {
-    return sst->get_open_info().then([sst, this] (sstables::foreign_sstable_open_info info) {
+    sstables::foreign_sstable_open_info info = co_await sst->get_open_info();
+
+        // FIXME: indentation.
         auto shards = sst->get_shards_for_this_sstable();
         if (shards.size() == 1) {
             if (shards[0] == this_shard_id()) {
@@ -158,8 +160,6 @@ sstable_directory::sort_sstable(sstables::shared_sstable sst) {
             dirlog.trace("{} identified as a shared SSTable", sst->get_filename());
             _shared_sstable_info.push_back(std::move(info));
         }
-        return make_ready_future<>();
-    });
 }
 
 generation_type
