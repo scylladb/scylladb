@@ -140,6 +140,9 @@ private:
     requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>
     future<> parallel_for_each_restricted(Container&& C, Func&& func);
     future<> load_foreign_sstables(sstable_info_vector info_vec);
+
+    // Sort the sstable according to owner
+    future<> sort_sstable(sstables::shared_sstable sst);
 public:
     sstable_directory(sstables_manager& manager,
             schema_ptr schema,
@@ -175,9 +178,6 @@ public:
     // (commit_file_removals()) has to be issued. This is to make sure that all instances of this
     // class in a sharded service have the opportunity to validate its files.
     future<> process_sstable_dir(process_flags flags);
-
-    // Sort the sstable according to owner
-    future<> sort_sstable(sstables::shared_sstable sst);
 
     // If files were scheduled to be removed, they will be removed after this call.
     future<> commit_directory_changes();
