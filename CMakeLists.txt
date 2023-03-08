@@ -53,15 +53,12 @@ set(scylla_sources
     compress.cc
     converting_mutation_partition_applier.cc
     counters.cc
-    data_dictionary/data_dictionary.cc
     direct_failure_detector/failure_detector.cc
     duration.cc
     exceptions/exceptions.cc
     frozen_schema.cc
     generic_server.cc
     debug.cc
-    index/secondary_index.cc
-    index/secondary_index_manager.cc
     init.cc
     keys.cc
     main.cc
@@ -76,8 +73,6 @@ set(scylla_sources
     tombstone_gc_options.cc
     tombstone_gc.cc
     reader_concurrency_semaphore.cc
-    repair/repair.cc
-    repair/row_level.cc
     row_cache.cc
     schema_mutations.cc
     serializer.cc
@@ -97,9 +92,11 @@ add_subdirectory(auth)
 add_subdirectory(cdc)
 add_subdirectory(compaction)
 add_subdirectory(cql3)
+add_subdirectory(data_dictionary)
 add_subdirectory(dht)
 add_subdirectory(gms)
 add_subdirectory(idl)
+add_subdirectory(index)
 add_subdirectory(interface)
 add_subdirectory(lang)
 add_subdirectory(locator)
@@ -109,6 +106,7 @@ add_subdirectory(readers)
 add_subdirectory(redis)
 add_subdirectory(replica)
 add_subdirectory(raft)
+add_subdirectory(repair)
 add_subdirectory(rust)
 add_subdirectory(schema)
 add_subdirectory(service)
@@ -135,9 +133,11 @@ target_link_libraries(scylla PRIVATE
     cdc
     compaction
     cql3
+    data_dictionary
     dht
     gms
     idl
+    index
     lang
     locator
     mutation
@@ -145,6 +145,7 @@ target_link_libraries(scylla PRIVATE
     raft
     readers
     redis
+    repair
     replica
     schema
     scylla_version
