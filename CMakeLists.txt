@@ -36,6 +36,7 @@ find_package(ICU COMPONENTS uc i18n REQUIRED)
 find_package(absl COMPONENTS hash raw_hash_set REQUIRED)
 find_package(libdeflate REQUIRED)
 find_package(libxcrypt REQUIRED)
+find_package(Snappy REQUIRED)
 find_package(RapidJSON REQUIRED)
 find_package(Thrift REQUIRED)
 find_package(xxHash REQUIRED)
@@ -92,6 +93,7 @@ target_link_libraries(scylla-main
     absl::hash
     absl::raw_hash_set
     Seastar::seastar
+    Snappy::snappy
     systemd
     ZLIB::ZLIB)
 add_subdirectory(api)
@@ -187,7 +189,6 @@ target_link_libraries(scylla PRIVATE
     libdeflate::libdeflate
     ICU::uc
     zstd
-    snappy
     xxHash::xxhash)
 
 # Force SHA1 build-id generation
