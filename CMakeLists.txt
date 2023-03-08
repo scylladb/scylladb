@@ -186,7 +186,6 @@ target_link_libraries(scylla PRIVATE
     Boost::headers
     # System libs
     libxcrypt::libxcrypt
-    libdeflate::libdeflate
     ICU::uc
     zstd
     xxHash::xxhash)
