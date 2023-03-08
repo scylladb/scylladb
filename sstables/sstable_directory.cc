@@ -117,23 +117,19 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_f
     }
 
     auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
-    return sst->load(_io_priority).then([this, sst, flags] {
-        validate(sst, flags);
-        if (flags.need_mutate_level) {
-            dirlog.trace("Mutating {} to level 0\n", sst->get_filename());
-            return sst->mutate_sstable_level(0);
-        } else {
-            return make_ready_future<>();
-        }
-    }).then([sst, flags, this] {
-        if (flags.sort_sstables_according_to_owner) {
-            return sort_sstable(sst);
-        } else {
-            dirlog.debug("Added {} to unsorted sstables list", sst->get_filename());
-            _unsorted_sstables.push_back(sst);
-            return make_ready_future<>();
-        }
-    });
+    co_await sst->load(_io_priority);
+    validate(sst, flags);
+    if (flags.need_mutate_level) {
+        dirlog.trace("Mutating {} to level 0\n", sst->get_filename());
+        co_await sst->mutate_sstable_level(0);
+    }
+
+    if (flags.sort_sstables_according_to_owner) {
+        co_await sort_sstable(sst);
+    } else {
+        dirlog.debug("Added {} to unsorted sstables list", sst->get_filename());
+        _unsorted_sstables.push_back(sst);
+    }
 }
 
 future<>
