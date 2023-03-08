@@ -16,4 +16,5 @@ target_link_libraries(compaction
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
+    mutation_writer
     replica)

@@ -51,4 +51,5 @@ target_link_libraries(utils
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
+    Boost::regex
     cryptopp)

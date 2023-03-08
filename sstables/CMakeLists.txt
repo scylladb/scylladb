@@ -26,4 +26,8 @@ target_link_libraries(sstables
     idl
     wasmtime_bindings
     Seastar::seastar
-    xxHash::xxhash)
+    xxHash::xxhash
+  PRIVATE
+    readers
+    tracing
+    ZLIB::ZLIB)

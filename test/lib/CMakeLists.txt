@@ -16,7 +16,23 @@ target_include_directories(test-lib
     ${CMAKE_SOURCE_DIR})
 target_link_libraries(test-lib
   PUBLIC
+    scylla-main
+    replica
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    idl)
+    auth
+    cdc
+    compaction
+    dht   # used by cql3
+    gms
+    types
+    idl
+    index # used by cql3
+    locator
+    schema
+    scylla_version
+    service
+    sstables
+    utils
+    Boost::regex)

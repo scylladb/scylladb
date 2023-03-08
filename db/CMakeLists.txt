@@ -40,4 +40,5 @@ target_link_libraries(db
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
+    data_dictionary
     cql3)

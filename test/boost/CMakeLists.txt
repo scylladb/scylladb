@@ -126,7 +126,9 @@ add_scylla_test(types_test
   KIND BOOST)
 add_scylla_test(vint_serialization_test
   KIND BOOST
-  LIBRARIES utils)
+  LIBRARIES
+    scylla-main
+    utils)
 add_scylla_test(bptree_test
   KIND BOOST
   LIBRARIES utils)
@@ -134,7 +136,8 @@ add_scylla_test(utf8_test
   KIND BOOST
   LIBRARIES utils)
 add_scylla_test(user_function_test
-  KIND BOOST)
+  KIND SEASTAR
+  LIBRARIES idl)
 add_scylla_test(user_types_test
   KIND BOOST)
 add_scylla_test(expr_test
