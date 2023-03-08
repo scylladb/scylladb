@@ -33,7 +33,7 @@ find_package(Boost REQUIRED
 find_package(Lua REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(ICU COMPONENTS uc i18n REQUIRED)
-find_package(absl REQUIRED)
+find_package(absl COMPONENTS hash raw_hash_set REQUIRED)
 find_package(libdeflate REQUIRED)
 find_package(libxcrypt REQUIRED)
 find_package(RapidJSON REQUIRED)
@@ -44,7 +44,9 @@ set(scylla_gen_build_dir "${CMAKE_BINARY_DIR}/gen")
 file(MAKE_DIRECTORY "${scylla_gen_build_dir}")
 
 
-set(scylla_sources
+add_library(scylla-main STATIC)
+target_sources(scylla-main
+  PRIVATE
     absl-flat_hash_map.cc
     bytes.cc
     client_data.cc
@@ -84,7 +86,14 @@ set(scylla_sources
     validation.cc
     vint-serialization.cc
     zstd.cc)
-
+target_link_libraries(scylla-main
+  PRIVATE
+    db
+    absl::hash
+    absl::raw_hash_set
+    Seastar::seastar
+    systemd
+    ZLIB::ZLIB)
 add_subdirectory(api)
 add_subdirectory(alternator)
 add_subdirectory(db)
@@ -122,10 +131,11 @@ add_subdirectory(utils)
 include(add_version_library)
 add_version_library(scylla_version
     release.cc)
-add_executable(scylla
-    ${scylla_sources})
 
+add_executable(scylla
+  main.cc)
 target_link_libraries(scylla PRIVATE
+    scylla-main
     api
     auth
     alternator
@@ -172,33 +182,10 @@ target_link_libraries(scylla PRIVATE
     Boost::thread
     Boost::regex
     Boost::headers
-    # Abseil libs
-    absl::hashtablez_sampler
-    absl::raw_hash_set
-    absl::synchronization
-    absl::graphcycles_internal
-    absl::stacktrace
-    absl::symbolize
-    absl::debugging_internal
-    absl::demangle_internal
-    absl::time
-    absl::time_zone
-    absl::int128
-    absl::city
-    absl::hash
-    absl::malloc_internal
-    absl::spinlock_wait
-    absl::base
-    absl::dynamic_annotations
-    absl::raw_logging_internal
-    absl::exponential_biased
-    absl::throw_delegate
     # System libs
     libxcrypt::libxcrypt
     libdeflate::libdeflate
-    ZLIB::ZLIB
     ICU::uc
-    systemd
     zstd
     snappy
     xxHash::xxhash)
