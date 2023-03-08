@@ -290,7 +290,7 @@ future<shared_sstable> sstable_directory::load_foreign_sstable(foreign_sstable_o
 }
 
 future<>
-sstable_directory::load_foreign_sstables(sstable_info_vector info_vec) {
+sstable_directory::load_foreign_sstables(sstable_open_info_vector info_vec) {
     return parallel_for_each_restricted(info_vec, [this] (sstables::foreign_sstable_open_info& info) {
         return load_foreign_sstable(info).then([this] (auto sst) {
             _unshared_local_sstables.push_back(sst);
@@ -387,7 +387,7 @@ sstable_directory::store_phaser(utils::phased_barrier::operation op) {
     _operation_barrier.emplace(std::move(op));
 }
 
-sstable_directory::sstable_info_vector
+sstable_directory::sstable_open_info_vector
 sstable_directory::retrieve_shared_sstables() {
     return std::exchange(_shared_sstable_info, {});
 }

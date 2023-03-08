@@ -53,7 +53,7 @@ class sstable_directory {
 public:
     // favor chunked vectors when dealing with file lists: they can grow to hundreds of thousands
     // of elements.
-    using sstable_info_vector = utils::chunked_vector<sstables::foreign_sstable_open_info>;
+    using sstable_open_info_vector = utils::chunked_vector<sstables::foreign_sstable_open_info>;
 
     // Flags below control how to behave when scanning new SSTables.
     struct process_flags {
@@ -122,12 +122,12 @@ private:
     //
     // The indexes of the outer vector represent the shards. Having anything in the index
     // representing this shard is illegal.
-    std::vector<sstable_info_vector> _unshared_remote_sstables;
+    std::vector<sstable_open_info_vector> _unshared_remote_sstables;
 
     // SSTables that are shared. Stored as foreign_sstable_open_info objects. Reason is those are
     // the SSTables that we found, and not necessarily the ones we will reshard. We want to balance
     // the amount of data resharded per shard, so a coordinator may redistribute this.
-    sstable_info_vector _shared_sstable_info;
+    sstable_open_info_vector _shared_sstable_info;
 
     std::vector<sstables::shared_sstable> _unsorted_sstables;
 private:
@@ -139,7 +139,7 @@ private:
     template <typename Container, typename Func>
     requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>
     future<> parallel_for_each_restricted(Container&& C, Func&& func);
-    future<> load_foreign_sstables(sstable_info_vector info_vec);
+    future<> load_foreign_sstables(sstable_open_info_vector info_vec);
 
     // Sort the sstable according to owner
     future<> sort_sstable(sstables::entry_descriptor desc, process_flags flags);
@@ -196,7 +196,7 @@ public:
 
     // Retrieves the list of shared SSTables in this object. The list will be reset once this
     // is called.
-    sstable_info_vector retrieve_shared_sstables();
+    sstable_open_info_vector retrieve_shared_sstables();
     std::vector<sstables::shared_sstable>& get_unshared_local_sstables() { return _unshared_local_sstables; }
 
     future<> remove_sstables(std::vector<sstables::shared_sstable> sstlist);
