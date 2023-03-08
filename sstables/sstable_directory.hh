@@ -129,6 +129,8 @@ private:
     // the amount of data resharded per shard, so a coordinator may redistribute this.
     sstable_info_vector _shared_sstable_info;
 
+    std::vector<sstables::shared_sstable> _unsorted_sstables;
+private:
     future<> process_descriptor(sstables::entry_descriptor desc, process_flags flags);
     void validate(sstables::shared_sstable sst, process_flags flags) const;
 
@@ -136,8 +138,6 @@ private:
     requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>
     future<> parallel_for_each_restricted(Container&& C, Func&& func);
     future<> load_foreign_sstables(sstable_info_vector info_vec);
-
-    std::vector<sstables::shared_sstable> _unsorted_sstables;
 public:
     sstable_directory(sstables_manager& manager,
             schema_ptr schema,
