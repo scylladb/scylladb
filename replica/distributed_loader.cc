@@ -214,7 +214,7 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
         co_return;
     }
 
-    // We want to reshard many SSTables at a time for efficiency. However if we have to many we may
+    // We want to reshard many SSTables at a time for efficiency. However if we have too many we may
     // be risking OOM.
     auto max_sstables_per_job = table.schema()->max_compaction_threshold();
     auto num_jobs = (shared_info.size() + max_sstables_per_job - 1) / max_sstables_per_job;
