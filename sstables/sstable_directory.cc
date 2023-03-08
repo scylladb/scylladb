@@ -146,20 +146,19 @@ future<>
 sstable_directory::sort_sstable(sstables::shared_sstable sst) {
     sstables::foreign_sstable_open_info info = co_await sst->get_open_info();
 
-        // FIXME: indentation.
-        auto shards = sst->get_shards_for_this_sstable();
-        if (shards.size() == 1) {
-            if (shards[0] == this_shard_id()) {
-                dirlog.trace("{} identified as a local unshared SSTable", sst->get_filename());
-                _unshared_local_sstables.push_back(sst);
-            } else {
-                dirlog.trace("{} identified as a remote unshared SSTable", sst->get_filename());
-                _unshared_remote_sstables[shards[0]].push_back(std::move(info));
-            }
+    auto shards = sst->get_shards_for_this_sstable();
+    if (shards.size() == 1) {
+        if (shards[0] == this_shard_id()) {
+            dirlog.trace("{} identified as a local unshared SSTable", sst->get_filename());
+            _unshared_local_sstables.push_back(sst);
         } else {
-            dirlog.trace("{} identified as a shared SSTable", sst->get_filename());
-            _shared_sstable_info.push_back(std::move(info));
+            dirlog.trace("{} identified as a remote unshared SSTable", sst->get_filename());
+            _unshared_remote_sstables[shards[0]].push_back(std::move(info));
         }
+    } else {
+        dirlog.trace("{} identified as a shared SSTable", sst->get_filename());
+        _shared_sstable_info.push_back(std::move(info));
+    }
 }
 
 generation_type
