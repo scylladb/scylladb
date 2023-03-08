@@ -196,6 +196,10 @@ public:
     future<> open_data(sstable_open_config cfg = {}) noexcept;
     future<> update_info_for_opened_data(sstable_open_config cfg = {});
 
+    // Load set of shards that own the SSTable, while reading the minimum
+    // from disk to achieve that.
+    future<> load_owner_shards(const io_priority_class& pc = default_priority_class());
+
     class delayed_commit_changes {
         std::unordered_set<sstring> _dirs;
         friend class sstable;
