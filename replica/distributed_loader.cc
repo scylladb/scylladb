@@ -256,7 +256,7 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
     }
 
     auto start = std::chrono::steady_clock::now();
-    dblog.info("{}", fmt::format("Resharding {} for {}.{}", sstables::pretty_printed_data_size(total_size), ks_name, table_name));
+    dblog.info("Resharding {} for {}.{}", sstables::pretty_printed_data_size(total_size), ks_name, table_name);
 
     co_await dir.invoke_on_all(coroutine::lambda([&] (sstables::sstable_directory& d) -> future<> {
         auto& table = db.local().find_column_family(ks_name, table_name);
@@ -266,7 +266,7 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
     }));
 
     auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
-    dblog.info("{}", fmt::format("Resharded {} for {}.{} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), ks_name, table_name, duration.count(), sstables::pretty_printed_throughput(total_size, duration)));
+    dblog.info("Resharded {} for {}.{} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), ks_name, table_name, duration.count(), sstables::pretty_printed_throughput(total_size, duration));
 }
 
 // Global resharding function. Done in two parts:
@@ -361,7 +361,7 @@ distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<r
 
     if (total_size > 0) {
         auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
-        dblog.info("{}", fmt::format("Reshaped {} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), duration.count(), sstables::pretty_printed_throughput(total_size, duration)));
+        dblog.info("Reshaped {} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), duration.count(), sstables::pretty_printed_throughput(total_size, duration));
     }
 }
 
