@@ -1,6 +1,14 @@
 ### a dictionary of redirections
 #old path: new path
 
+# removing the Enterprise-only content from the Open Source documentation
+
+/stable/using-scylla/workload-prioritization: https://enterprise.docs.scylladb.com//stable/using-scylla/workload-prioritization.html
+/stable/operating-scylla/security/encryption-at-rest: https://enterprise.docs.scylladb.com/stable/operating-scylla/security/encryption-at-rest.html
+/stable/operating-scylla/security/ldap-authentication: https://enterprise.docs.scylladb.com/stable/operating-scylla/security/ldap-authentication.html
+/stable/operating-scylla/security/ldap-authorization: https://enterprise.docs.scylladb.com/stable/operating-scylla/security/ldap-authorization.html
+/stable/operating-scylla/security/auditing: https://enterprise.docs.scylladb.com/stable/operating-scylla/security/auditing.html
+
 # unifying the Ubunut upgrade guide for different Ubuntu versions: from 5.0 to 2022.1
 
 /stable/upgrade/upgrade-to-enterprise/upgrade-guide-from-5.0-to-2022.1/upgrade-guide-from-5.0-to-2022.1-ubuntu-18-04.html: /stable/upgrade/upgrade-to-enterprise/upgrade-guide-from-5.0-to-2022.1/upgrade-guide-from-5.0-to-2022.1-ubuntu.html
@@ -440,17 +448,17 @@ stable/operating-scylla/manager/2.1/index.html: https://manager.docs.scylladb.co
 /operating-scylla/procedures/tips/production-readiness/index.html: /stable/operating-scylla/procedures/tips/production-readiness
 /operating-scylla/rest/index.html: /stable/operating-scylla/rest
 /operating-scylla/scylla-operator/index.html: /stable/operating-scylla/scylla-operator
-/operating-scylla/security/auditing/index.html: /stable/operating-scylla/security/auditing
+/operating-scylla/security/auditing/index.html: https://enterprise.docs.scylladb.com/stable/operating-scylla/security/auditing.html
 /operating-scylla/security/authentication/index.html: /stable/operating-scylla/security/authentication
 /operating-scylla/security/authorization/index.html: /stable/operating-scylla/security/authorization
 /operating-scylla/security/client-node-encryption/index.html: /stable/operating-scylla/security/client-node-encryption
 /operating-scylla/security/enable-authorization/index.html: /stable/operating-scylla/security/enable-authorization
-/operating-scylla/security/encryption-at-rest/index.html: /stable/operating-scylla/security/encryption-at-rest
+/operating-scylla/security/encryption-at-rest/index.html: https://enterprise.docs.scylladb.com/stable/operating-scylla/security/encryption-at-rest.html
 /operating-scylla/security/gen-cqlsh-file/index.html: /stable/operating-scylla/security/gen-cqlsh-file
 /operating-scylla/security/generate-certificate/index.html: /stable/operating-scylla/security/generate-certificate
 /operating-scylla/security/index.html: /stable/operating-scylla/security
-/operating-scylla/security/ldap-authentication/index.html: /stable/operating-scylla/security/ldap-authentication
-/operating-scylla/security/ldap-authorization/index.html: /stable/operating-scylla/security/ldap-authorization
+/operating-scylla/security/ldap-authentication/index.html: https://enterprise.docs.scylladb.com/stable/operating-scylla/security/ldap-authentication.html
+/operating-scylla/security/ldap-authorization/index.html: https://enterprise.docs.scylladb.com/stable/operating-scylla/security/ldap-authorization.html
 /operating-scylla/security/node-node-encryption/index.html: /stable/operating-scylla/security/node-node-encryption
 /operating-scylla/security/rbac-usecase/index.html: /stable/operating-scylla/security/rbac-usecase
 /operating-scylla/security/runtime-authentication/index.html: /stable/operating-scylla/security/runtime-authentication
@@ -805,7 +813,7 @@ stable/operating-scylla/manager/2.1/index.html: https://manager.docs.scylladb.co
 /using-scylla/migrate-scylla/index.html: /stable/using-scylla/migrate-scylla
 /using-scylla/secondary-indexes/index.html: /stable/using-scylla/secondary-indexes
 /using-scylla/tracing/index.html: /stable/using-scylla/tracing
-/using-scylla/workload-prioritization/index.html: /stable/using-scylla/workload-prioritization
+/using-scylla/workload-prioritization/index.html: https://enterprise.docs.scylladb.com/stable/using-scylla/workload-prioritization.html
 
 
 ### Local redirects
@@ -814,7 +822,7 @@ stable/operating-scylla/manager/2.1/index.html: https://manager.docs.scylladb.co
 cassandra-compatibility/index.html: /stable/using-scylla/cassandra-compatibility
 getting-started/security/index.html: /stable/operating-scylla/authorization
 getting-started/rbac_usecase/index.html: /stable/operating-scylla/security/rbac-usecase
-operating-scylla/auditing/index.html: /stable/operating-scylla/security/auditing
+operating-scylla/auditing/index.html: https://enterprise.docs.scylladb.com/stable/operating-scylla/security/auditing.html
 operating-scylla/configure_ssl_on_live_scylla_cluster/index.html: /stable/operating-scylla/security
 using-scylla/migrate/index.html: /stable/procedures/cassandra_to_scylla_migration_process
 troubleshooting/performance_problem/index.html: /stable/troubleshooting/report-scylla-problem

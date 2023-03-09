@@ -6,15 +6,12 @@ Scylla Enterprise Features
    :maxdepth: 2
    :hidden:
 
-   Workload Prioritization </using-scylla/workload-prioritization/>
    In-memory tables </using-scylla/in-memory/>
    Global Secondary Indexes </using-scylla/secondary-indexes/>
    Local Secondary Indexes </using-scylla/local-secondary-indexes/>
    Materialized Views </using-scylla/materialized-views/>
    Counters </using-scylla/counters/>
    Change Data Capture </using-scylla/cdc/index>
-   LDAP Authentication </operating-scylla/security/ldap-authentication>
-   LDAP Authorization </operating-scylla/security/ldap-authorization>
 
 
 .. panel-box::
@@ -24,8 +21,8 @@ Scylla Enterprise Features
 
   The following features are scheduled for an **upcoming release** of Scylla Enterprise. To see which release, read the `Release Notes <https://www.scylladb.com/product/release-notes/>`_.
 
-  * :doc:`LDAP Role Management </operating-scylla/security/ldap-authorization>`
-  * :doc:`LDAP Authentication </operating-scylla/security/ldap-authentication>`
+  * `LDAP Role Management <https://enterprise.docs.scylladb.com/stable/operating-scylla/security/ldap-authorization.html>`_
+  * `LDAP Authentication <https://enterprise.docs.scylladb.com/stable/operating-scylla/security/ldap-authentication.html>`_
 
 .. panel-box::
   :title: Scylla Enterprise 2022.1 Features
@@ -48,7 +45,7 @@ Scylla Enterprise Features
 
   The following are **new features** for Scylla Scylla Enterprise 2021.1.x:
 
-  * :ref:`Space Amplification Goal (SAG) <SAG>` for ICS -  new CQL option to set a Space Amplification Goal (SAG) in Incremental Compaction Strategy (ICS).
+  * `Space Amplification Goal (SAG) <https://enterprise.docs.scylladb.com/stable/cql/compaction.html>`_ for ICS -  new CQL option to set a Space Amplification Goal (SAG) in Incremental Compaction Strategy (ICS).
   * Scylla Unified Installer - Scylla is now available as an all-in-one binary tar file. You can download the tar file from the `Scylla Download Center <https://www.scylladb.com/download/?platform=tar>`_.
   * :doc:`Change Data Capture (CDC) </using-scylla/cdc/index>` query the history of all changes made to the table. From *Scylla Enterprise 2021.1.1*
 
@@ -83,7 +80,7 @@ Scylla Enterprise Features
 
   * :ref:`Incremental Compaction Strategy <incremental-compaction-strategy-ics>` - (version 2019.1.4) - significantly lowers SA (size amplification) for workloads which run STCS and should be used instead of STCS.
   * :ref:`IPv6 <ipv6_addresses>` (version 2019.1.4) support for client-to-node, node-to-node, Manager to node, and Monitoring to node communication - Scylla now supports IPv6 Global Scope Addresses for all IPs: seeds, listen_address, broadcast_address etc. This functionality is available for Scylla Manager in Scylla Manager 2.0.
-  * :doc:`Workload Prioritization </using-scylla/workload-prioritization>` - Grant a level of service to roles in your organization. 
+  * `Workload Prioritization <https://enterprise.docs.scylladb.com/stable/using-scylla/workload-prioritization.html>`_ - Grant a level of service to roles in your organization. 
   * :doc:`Scylla Materialized Views </using-scylla/materialized-views>` - An alternate view table for finding a partition by the value of another column.
   * :doc:`Global Secondary Indexes </using-scylla/secondary-indexes>` - A mechanism for allowing efficient searches on non-partition keys using Materialized Views.
   * :doc:`Local Secondary Indexes </using-scylla/local-secondary-indexes>` - More efficient Secondary Index searches when the base table and index share the same partition key.
@@ -94,7 +91,7 @@ Scylla Enterprise Features
   * :doc:`Role Based Access Control (RBAC) </operating-scylla/security/rbac-usecase>` - compatible with Apache Cassandra 3.x using CQL commands to :ref:`grant roles <cql-security>` to users in an organization. 
   * :ref:`GoogleCloudSnitch <googlecloudsnitch>`- optimized for use with GCE instances
   * `Large Partitions Support <https://www.scylladb.com/2018/09/11/large-partitions-support-scylla-2-3/>`_ - Scylla supports large partitions. 
-  * :doc:`Encryption at Rest </operating-scylla/security/encryption-at-rest>` - protects your data persisted in storage or backup.
+  * `Encryption at Rest <https://enterprise.docs.scylladb.com/stable/operating-scylla/security/encryption-at-rest.html>`_ - protects your data persisted in storage or backup.
   * :ref:`BYPASS CACHE <bypass-cache>` - This CQL command informs the database that the data being read is unlikely to be read again in the near future, and also was unlikely to have been read in the near past; therefore no attempt should be made to read it from the cache or to populate the cache with the data. 
 
   Read the `Release Notes <https://www.scylladb.com/product/release-notes/>`_ for more information. 
@@ -106,7 +103,7 @@ Scylla Enterprise Features
 
   The following are **new features** for Scylla Scylla Enterprise 2018.1.x
 
-  * :doc:`Scylla Auditing Guide </operating-scylla/security/auditing>` -  allows administrators to know which users performed what action at what time.
+  * `Scylla Auditing Guide <https://enterprise.docs.scylladb.com/stable/operating-scylla/security/auditing.html>`_ -  allows administrators to know which users performed what action at what time.
   * :doc:`Scylla in-memory tables </using-scylla/in-memory/>` - an alternative table type for storing data in RAM.
   * :doc:`Scylla Counters </using-scylla/counters/>` - A data type for counting
   * :ref:`Time Window Compaction Strategy <time-window-compactionstrategy-twcs>` - a replacement compaction strategy for Date-Tiered Compaction Strategy, refined for time-series data.

@@ -687,7 +687,7 @@ Custom strategy can be provided by specifying the full class name as a :ref:`str
 <constants>`.
 
 All default strategies support a number of common options, as well as options specific to
-the strategy chosen (see the section corresponding to your strategy for details: :ref:`STCS <stcs-options>`, :ref:`LCS <lcs-options>`, :ref:`ICS <ics-options>`, and :ref:`TWCS <twcs-options>`). DTCS is not recommended, and TWCS should be used instead.
+the strategy chosen (see the section corresponding to your strategy for details: :ref:`STCS <stcs-options>`, :ref:`LCS <lcs-options>`, and :ref:`TWCS <twcs-options>`). DTCS is not recommended, and TWCS should be used instead.
 
 
 .. ``'Date Tiered Compaction Strategy is not recommended and has been replaced by Time Window Compaction Stragegy.'`` (:ref:`TWCS <TWCS>`) (the
@@ -798,13 +798,6 @@ For example,
                     v1 int,
                     v2 int,
                 ) WITH caching = {'enabled': 'true'};
-
-Encryption options
-###################
-
-Encryption options are used when enabling or disabling encryption at rest, available in Scylla Enterprise from version 2019.1.1. 
-
-.. note:: When the ``key_provider`` is ``LocalFileSystemKeyProviderFactory``, you must indicate where the key resides using the ``secret_key_file: <path>`` parameter. Refer to :doc:`Encryption at Rest </operating-scylla/security/encryption-at-rest>` for details. 
 
 .. _ddl-tombstones-gc:
 .. _gc_grace_seconds:

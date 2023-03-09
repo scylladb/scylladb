@@ -30,8 +30,6 @@ Once configured, any login to Scylla is authenticated with the SaslauthdAuthenti
 
 #. Configure saslauthd: choose the authentication mechanism (e.g., LDAP or PAM) and set the appropriate mechanism-specific parameters by following the `saslauthd documentation <https://linux.die.net/man/8/saslauthd>`_.
 
-   .. note:: If you are configuring saslauthd for LDAP, use the :doc:`configuration details </operating-scylla/security/ldap-authentication>` which are specific for Scylla.
-
 #. After every configuration change, restart the saslauthd service.
 
    .. code-block:: shell

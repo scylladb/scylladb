@@ -5,11 +5,9 @@
 * :doc:`Enable Authorization</operating-scylla/security/enable-authorization/>`
 * :doc:`Grant Authorization CQL Reference </operating-scylla/security/authorization/>`
 * :doc:`Role Based Access Control (RBAC) </operating-scylla/security/rbac-usecase/>`
-* :doc:`Scylla Auditing Guide </operating-scylla/security/auditing/>`
 * :doc:`Encryption: Data in Transit Client to Node </operating-scylla/security/client-node-encryption/>`
 * :doc:`Encryption: Data in Transit Node to Node </operating-scylla/security/node-node-encryption/>`
 * :doc:`Generating a self-signed Certificate Chain Using openssl </operating-scylla/security/generate-certificate/>`
-* :doc:`Encryption at Rest </operating-scylla/security/encryption-at-rest>`
 
 
 

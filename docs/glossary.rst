@@ -61,9 +61,6 @@ Glossary
     Keyspace
       A collection of tables with attributes which define how data is replicated on nodes. See :doc:`Ring Architecture </architecture/ringarchitecture/index>`.
     
-    Key Management Interoperability Protocol (KMIP)
-      :abbr:`KMIP (Key Management Interoperability Protocol)` is a communication protocol that defines message formats for storing keys on a key management server (KMIP server). You can use a KMIP server to protect your keys when using Encryption at Rest. See :doc:`Encryption at Rest</operating-scylla/security/encryption-at-rest/>`.
-
     Leveled compaction strategy (LCS)
       :abbr:`LCS (Leveled compaction strategy)` uses small, fixed-size (by default 160 MB) SSTables divided into different levels. See :doc:`Compaction Strategies</architecture/compaction/compaction-strategies/>`.
 
@@ -178,5 +175,6 @@ Glossary
        Cache dummy rows are entries in the row set, which have a clustering position, although they do not represent CQL rows written by users.  Scylla cache uses them to mark boundaries of population ranges, to represent the information that the whole range is complete, and there is no need to go to sstables to read the gaps between existing row entries when scanning.
       
     Workload
-      A database category that allows you to manage different sources of database activities, such as requests or administrative activities. By defining workloads, you can specify how ScyllaDB will process those activities. For example, you can prioritize one workload over another (e.g., user requests over administrative activities). See :doc:`Workload Prioritization </using-scylla/workload-prioritization>`.
+      A database category that allows you to manage different sources of database activities, such as requests or administrative activities. By defining workloads, you can specify how ScyllaDB will process those activities. For example, `ScyllaDB Enterprise <https://enterprise.docs.scylladb.com/>`_
+      ships with a feature that allows you to prioritize one workload over another (e.g., user requests over administrative activities). See `Workload Prioritization <https://enterprise.docs.scylladb.com/stable/using-scylla/workload-prioritization.html>`_.
 
