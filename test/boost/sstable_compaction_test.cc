@@ -3048,7 +3048,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         auto partial_sstable_run_sst = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), { std::move(mut) }), sst_cfg);
 
         column_family_test(cf).add_sstable(partial_sstable_run_sst).get();
-        column_family_test::update_sstables_known_generation(*cf, generation_value(partial_sstable_run_sst->generation()));
+        column_family_test::update_sstables_known_generation(*cf, partial_sstable_run_sst->generation());
 
         auto generation_exists = [&cf] (sstables::generation_type::int_t generation) {
             auto sstables = cf->get_sstables();
