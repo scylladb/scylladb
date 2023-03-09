@@ -2392,7 +2392,7 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
     return make_entry_descriptor(std::move(sstdir), std::move(fname), &ks, &cf);
 }
 
-sstable::version_types sstable::version_from_sstring(sstring &s) {
+sstable::version_types sstable::version_from_sstring(const sstring &s) {
     try {
         return reverse_map(s, _version_string);
     } catch (std::out_of_range&) {
@@ -2400,7 +2400,7 @@ sstable::version_types sstable::version_from_sstring(sstring &s) {
     }
 }
 
-sstable::format_types sstable::format_from_sstring(sstring &s) {
+sstable::format_types sstable::format_from_sstring(const sstring &s) {
     try {
         return reverse_map(s, _format_string);
     } catch (std::out_of_range&) {
@@ -2408,7 +2408,7 @@ sstable::format_types sstable::format_from_sstring(sstring &s) {
     }
 }
 
-component_type sstable::component_from_sstring(version_types v, sstring &s) {
+component_type sstable::component_from_sstring(version_types v, const sstring &s) {
     try {
         return reverse_map(s, sstable_version_constants::get_component_map(v));
     } catch (std::out_of_range&) {
