@@ -1034,6 +1034,7 @@ static void test_min_max_clustering_key(test_env& env, schema_ptr s, std::vector
     write_memtable_to_sstable_for_test(*mt, sst).get();
     sst = env.reusable_sst(sst).get0();
     check_min_max_column_names(sst, std::move(min_components), std::move(max_components));
+    sst->unlink().get();
 }
 
 SEASTAR_TEST_CASE(min_max_clustering_key_test) {
@@ -1151,7 +1152,6 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
                     .with_column("ck1", utf8_type, column_kind::clustering_key)
                     .with_column("r1", int32_type)
                     .build();
-            auto tmp = env.tempdir().make_sweeper();
             auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
             auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
             const column_definition& r1_col = *s->get_column_definition("r1");
@@ -1369,7 +1369,6 @@ SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
                     .with_column("ck2", utf8_type, column_kind::clustering_key)
                     .with_column("r1", int32_type)
                     .build();
-            auto tmp = env.tempdir().make_sweeper();
             auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
             auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("c1"), to_bytes("c2")});
             const column_definition& r1_col = *s->get_column_definition("r1");
@@ -2034,7 +2033,7 @@ SEASTAR_TEST_CASE(test_unknown_component) {
         // check that create_links() moved unknown component to new dir
         BOOST_REQUIRE(file_exists(env.tempdir().path().string() + "/la-1-big-UNKNOWN.txt").get0());
 
-        sstp = env.reusable_sst(uncompressed_schema(), env.tempdir().path().string(), 1).get0();
+        sstp = env.reusable_sst(uncompressed_schema(), 1).get0();
         sstables::sstable_directory::delete_atomically({sstp}).get();
         // assure unknown component is deleted
         BOOST_REQUIRE(!file_exists(env.tempdir().path().string() + "/la-1-big-UNKNOWN.txt").get0());
@@ -3076,7 +3075,7 @@ SEASTAR_TEST_CASE(test_index_fast_forwarding_after_eof) {
 
         const auto muts = tests::generate_random_mutations(random_schema, 2).get();
 
-        auto sst = env.make_sstable(schema, 0, writable_sstable_versions.back(), big);
+        auto sst = env.make_sstable(schema, writable_sstable_versions.back());
         {
             auto mr = make_flat_mutation_reader_from_mutations_v2(schema, permit, muts);
             auto close_mr = deferred_close(mr);
@@ -3169,7 +3168,7 @@ SEASTAR_TEST_CASE(find_first_position_in_partition_from_sstable_test) {
         class with_static_row_tag;
         using with_static_row = bool_class<with_static_row_tag>;
 
-        auto check_sstable_first_and_last_positions = [&env] (size_t partitions, with_range_tombstone with_range_tombstone, with_static_row with_static_row) {
+        auto check_sstable_first_and_last_positions = [&] (size_t partitions, with_range_tombstone with_range_tombstone, with_static_row with_static_row) {
             testlog.info("check_sstable_first_and_last_positions: partitions={}, with_range_tombstone={}, with_static_row={}",
                 partitions, bool(with_range_tombstone), bool(with_static_row));
             simple_schema ss;

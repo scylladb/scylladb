@@ -26,7 +26,6 @@
 #include "schema/schema_builder.hh"
 #include "test/boost/sstable_test.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
-#include "test/lib/tmpdir.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/index_reader_assertions.hh"
 #include "test/lib/random_utils.hh"
@@ -3028,7 +3027,6 @@ static flat_mutation_reader_v2 compacted_sstable_reader(test_env& env, schema_pt
     cf->mark_ready_for_writes();
     lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
 
-    tmpdir tmp;
     auto sstables = open_sstables(env, s, format("test/resource/sstables/3.x/uncompressed/{}", table_name), generations);
     auto new_generation = generations.back() + 1;
     sstables::shared_sstable compacted_sst;
@@ -3226,7 +3224,8 @@ static void compare_sstables(test_env& env, sstring table_name, sstable_version_
 }
 
 static sstables::shared_sstable write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica::memtable> mt1, lw_shared_ptr<replica::memtable> mt2, sstable_version_types version) {
-    auto sst = env.make_sstable(s, env.tempdir().path().string(), 1, version, sstable::format_types::big, 4096);
+    auto sst = env.make_sstable(s, version);
+    BOOST_TEST_MESSAGE(format("write_sstable from two memtable: {}", sst->get_filename()));
 
     sst->write_components(make_combined_reader(s,
         env.make_reader_permit(),
@@ -3245,7 +3244,8 @@ static sstables::shared_sstable write_and_compare_sstables(test_env& env, schema
 }
 
 static sstables::shared_sstable write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica::memtable> mt, sstable_version_types version) {
-    auto sst = env.make_sstable(s, env.tempdir().path().string(), 1, version, sstable::format_types::big, 4096);
+    auto sst = env.make_sstable(s, version);
+    BOOST_TEST_MESSAGE(format("write_sstable from memtable: {}", sst->get_filename()));
     write_memtable_to_sstable_for_test(*mt, sst).get();
     return sst;
 }
@@ -5198,8 +5198,7 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, r
 
     sstables::test_env::do_with_async([&] (auto& env) {
         env.db_config().host_id = locator::host_id::create_random_id();
-        tmpdir dir;
-        auto sst = env.make_sstable(s, dir.path().string(), 1, version, sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(s, version);
 
         // The test provides thresholds values for the large row handler. Whether the handler gets
         // trigger depends on the size of rows after they are written in the MC format and that size
@@ -5254,8 +5253,7 @@ static void test_sstable_write_large_cell_f(schema_ptr s, reader_permit permit, 
 
     sstables::test_env::do_with_async([&] (auto& env) {
         env.db_config().host_id = locator::host_id::create_random_id();
-        tmpdir dir;
-        auto sst = env.make_sstable(s, dir.path().string(), 1, version, sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(s, version);
 
         // The test provides thresholds values for the large row handler. Whether the handler gets
         // trigger depends on the size of rows after they are written in the MC format and that size
@@ -5314,8 +5312,7 @@ static void test_sstable_log_too_many_rows_f(int rows, uint64_t threshold, bool 
 
     sstables::test_env::do_with_async([&] (auto& env) {
         env.db_config().host_id = locator::host_id::create_random_id();
-        tmpdir dir;
-        auto sst = env.make_sstable(sc, dir.path().string(), 1, version, sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(sc, version);
         sst->write_components(mt->make_flat_reader(sc, semaphore.make_permit()), 1, sc, env.manager().configure_writer("test"), encoding_stats{}).get();
 
         BOOST_REQUIRE_EQUAL(logged, expected);
@@ -5367,8 +5364,7 @@ static void test_sstable_too_many_collection_elements_f(int elements, uint64_t t
 
     sstables::test_env::do_with_async([&] (auto& env) {
         env.db_config().host_id = locator::host_id::create_random_id();
-        tmpdir dir;
-        auto sst = env.make_sstable(sc, dir.path().string(), 1, version, sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(sc, version);
         sst->write_components(mt->make_flat_reader(sc, semaphore.make_permit()), 1, sc, env.manager().configure_writer("test"), encoding_stats{}).get();
 
         BOOST_REQUIRE_EQUAL(logged, expected);

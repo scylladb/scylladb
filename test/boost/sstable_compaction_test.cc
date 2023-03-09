@@ -1154,13 +1154,13 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
         };
         apply_key(key_for_this_shard[0]);
 
-        auto sst = env.make_sstable(s, 51);
+        auto sst = env.make_sstable(s);
         write_memtable_to_sstable_for_test(*mt, sst).get();
         auto sstp = env.reusable_sst(sst).get();
         auto key = key_for_this_shard[0];
         std::vector<sstables::shared_sstable> new_tables;
         auto creator = [&] {
-            auto sst = env.make_sstable(s, 52);
+            auto sst = env.make_sstable(s);
             new_tables.emplace_back(sst);
             return sst;
         };
@@ -1778,7 +1778,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         for (auto i = 0; i < remaining; i++) {
             insert_key(to_bytes("key" + to_sstring(i)), 3600, expiration_time);
         }
-        auto sst = env.make_sstable(s, 1);
+        auto sst = env.make_sstable(s);
         write_memtable_to_sstable_for_test(*mt, sst).get();
         sst = env.reusable_sst(sst).get0();
         const auto& stats = sst->get_stats_metadata();
@@ -3438,7 +3438,6 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
                 .with_column("value", int32_type)
                 .build();
 
-        auto tmp = tmpdir();
         auto cf = env.make_table_for_tests(s);
         auto& cm = cf.get_compaction_manager();
         auto close_cf = deferred_stop(cf);
@@ -3798,8 +3797,9 @@ SEASTAR_TEST_CASE(test_twcs_compaction_across_buckets) {
         auto next_timestamp = [] (std::chrono::hours step = std::chrono::hours(0)) {
             return (gc_clock::now().time_since_epoch() - std::chrono::duration_cast<std::chrono::microseconds>(step)).count();
         };
-        auto sst_gen = [&env, s, gen = make_lw_shared<unsigned>(1)] () mutable {
-            return env.make_sstable(s, (*gen)++);
+
+        auto sst_gen = [&env, s] () mutable {
+            return env.make_sstable(s);
         };
         auto pkey = tests::generate_partition_key(s);
 
@@ -4531,8 +4531,8 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
         };
         auto manager = compaction_manager(std::move(cfg), as, task_manager);
 
-        auto add_sstable = [&env, gen = make_lw_shared<unsigned>(1)] (table_for_tests& t, uint64_t data_size, int level) {
-            auto sst = env.make_sstable(t.schema(), env.tempdir().path().native(), (*gen)++);
+        auto add_sstable = [&env] (table_for_tests& t, uint64_t data_size, int level) {
+            auto sst = env.make_sstable(t.schema());
             auto key = tests::generate_partition_key(t.schema()).key();
             sstables::test(sst).set_values_for_leveled_strategy(data_size, level, 0 /*max ts*/, key, key);
             assert(sst->data_size() == data_size);

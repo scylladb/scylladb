@@ -14,7 +14,6 @@
 #include "dht/murmur3_partitioner.hh"
 #include "compaction/compaction_manager.hh"
 #include "test/boost/sstable_test.hh"
-#include "test/lib/tmpdir.hh"
 #include "cell_locking.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/key_utils.hh"
@@ -40,8 +39,8 @@ static schema_ptr get_schema(unsigned shard_count, unsigned sharding_ignore_msb_
 }
 
 // Asserts that sstable::compute_owner_shards(...) produces correct results.
-static future<> assert_sstable_computes_correct_owners(test_env& env, const sstables::shared_sstable& base_sst, sstring dir) {
-    auto sst = env.make_sstable(base_sst->get_schema(), dir, base_sst->generation().value(), base_sst->get_version());
+static future<> assert_sstable_computes_correct_owners(test_env& env, const sstables::shared_sstable& base_sst) {
+    auto sst = co_await env.reusable_sst(base_sst);
     co_await sst->load_owner_shards();
     BOOST_REQUIRE_EQUAL(sst->get_shards_for_this_sstable(), base_sst->get_shards_for_this_sstable());
 }
@@ -50,7 +49,6 @@ void run_sstable_resharding_test() {
     test_env env;
     auto close_env = defer([&] { env.stop().get(); });
   for (const auto version : writable_sstable_versions) {
-    auto tmp = tmpdir();
     auto s = get_schema();
     auto cf = env.make_table_for_tests(s);
     auto close_cf = deferred_stop(cf);
@@ -76,10 +74,10 @@ void run_sstable_resharding_test() {
                 mt->apply(std::move(m));
             }
         }
-        auto sst = env.make_sstable(s, tmp.path().string(), 0, version, sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(s, 0, version);
         write_memtable_to_sstable_for_test(*mt, sst).get();
     }
-    auto sst = env.reusable_sst(s, tmp.path().string(), 0, version, sstables::sstable::format_types::big).get0();
+    auto sst = env.reusable_sst(s, 0, version).get0();
 
     // FIXME: sstable write has a limitation in which it will generate sharding metadata only
     // for a single shard. workaround that by setting shards manually. from this test perspective,
@@ -92,15 +90,14 @@ void run_sstable_resharding_test() {
 
     auto descriptor = sstables::compaction_descriptor({sst}, default_priority_class(), 0, std::numeric_limits<uint64_t>::max());
     descriptor.options = sstables::compaction_type_options::make_reshard();
-    descriptor.creator = [&env, &cf, &tmp, version] (shard_id shard) mutable {
+    descriptor.creator = [&env, &cf, version] (shard_id shard) mutable {
         // we need generation calculated by instance of cf at requested shard,
         // or resource usage wouldn't be fairly distributed among shards.
         auto gen = smp::submit_to(shard, [&cf] () {
             return column_family_test::calculate_generation_for_new_table(*cf);
         }).get0();
 
-        return env.make_sstable(cf->schema(), tmp.path().string(), gen,
-            version, sstables::sstable::format_types::big);
+        return env.make_sstable(cf->schema(), gen, version);
     };
     auto cdata = compaction_manager::create_compaction_data();
     auto res = sstables::compact_sstables(std::move(descriptor), cdata, cf.as_table_state()).get0();
@@ -111,15 +108,14 @@ void run_sstable_resharding_test() {
     std::unordered_set<shard_id> processed_shards;
 
     for (auto& sstable : new_sstables) {
-        auto new_sst = env.reusable_sst(s, tmp.path().string(), generation_value(sstable->generation()),
-            version, sstables::sstable::format_types::big).get0();
+        auto new_sst = env.reusable_sst(s, generation_value(sstable->generation()), version).get0();
         filter_fname = sstables::test(new_sst).filename(component_type::Filter);
         bloom_filter_size_after += file_size(filter_fname).get0();
         auto shards = new_sst->get_shards_for_this_sstable();
         BOOST_REQUIRE(shards.size() == 1); // check sstable is unshared.
         auto shard = shards.front();
         BOOST_REQUIRE(processed_shards.insert(shard).second == true); // check resharding created one sstable per shard.
-        assert_sstable_computes_correct_owners(env, new_sst, tmp.path().string()).get();
+        assert_sstable_computes_correct_owners(env, new_sst).get();
 
         auto rd = assert_that(new_sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit()));
         BOOST_REQUIRE(muts[shard].size() == keys_per_shard);
@@ -141,7 +137,6 @@ SEASTAR_TEST_CASE(sstable_resharding_test) {
 SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
     return test_env::do_with_async([] (test_env& env) {
       for (const auto version : writable_sstable_versions) {
-        auto tmp = tmpdir();
         auto cfg = std::make_unique<db::config>();
 
         auto get_mutation = [] (const schema_ptr& s, const dht::decorated_key& key, auto value) {
@@ -149,13 +144,12 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(value)), api::timestamp_type(0));
             return m;
         };
-        auto gen = make_lw_shared<unsigned>(1);
 
         // created sstable owned only by this shard
         {
             auto s = get_schema();
-            auto sst_gen = [&env, s, &tmp, gen, version]() mutable {
-                return env.make_sstable(s, tmp.path().string(), (*gen)++, version);
+            auto sst_gen = [&env, s, version]() mutable {
+                return env.make_sstable(s, version);
             };
 
             const auto keys = tests::generate_partition_keys(smp::count * 10, s);
@@ -166,7 +160,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
 
             auto sst = make_sstable_containing(sst_gen, muts);
             BOOST_REQUIRE(!sst->is_shared());
-            assert_sstable_computes_correct_owners(env, sst, tmp.path().string()).get();
+            assert_sstable_computes_correct_owners(env, sst).get();
         }
 
         // create sstable owned by all shards
@@ -174,8 +168,8 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
         {
             auto key_s = get_schema();
             auto single_sharded_s = get_schema(1, cfg->murmur3_partitioner_ignore_msb_bits());
-            auto sst_gen = [&env, single_sharded_s, &tmp, gen, version]() mutable {
-                return env.make_sstable(single_sharded_s, tmp.path().string(), (*gen)++, version);
+            auto sst_gen = [&env, single_sharded_s, version]() mutable {
+                return env.make_sstable(single_sharded_s, version);
             };
 
             std::vector<mutation> muts;
@@ -190,10 +184,10 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
             BOOST_REQUIRE(!sst->is_shared());
 
             auto all_shards_s = get_schema(smp::count, cfg->murmur3_partitioner_ignore_msb_bits());
-            sst = env.reusable_sst(all_shards_s, tmp.path().string(), generation_value(sst->generation()), version).get0();
+            sst = env.reusable_sst(all_shards_s, generation_value(sst->generation()), version).get0();
             BOOST_REQUIRE(smp::count == 1 || sst->is_shared());
             BOOST_REQUIRE(sst->get_shards_for_this_sstable().size() == smp::count);
-            assert_sstable_computes_correct_owners(env, sst, tmp.path().string()).get();
+            assert_sstable_computes_correct_owners(env, sst).get();
         }
       }
     });

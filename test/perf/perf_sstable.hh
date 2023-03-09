@@ -179,7 +179,7 @@ public:
     }
 
     future<> load_sstables(unsigned iterations) {
-        _sst.push_back(_env.make_sstable(s, this->dir(), 0, sstables::get_highest_sstable_version(), sstable::format_types::big));
+        _sst.push_back(_env.make_sstable(s, this->dir(), 0));
         return _sst.back()->load();
     }
 
