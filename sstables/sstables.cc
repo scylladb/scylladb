@@ -203,10 +203,10 @@ std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_typ
 // enough.  If that changes, it would be adviseable to create a full static
 // reverse mapping, even if it is done at runtime.
 template <typename Map>
-static typename Map::key_type reverse_map(const typename Map::mapped_type& value, Map& map) {
-    for (auto& pair: map) {
-        if (pair.second == value) {
-            return pair.first;
+static typename Map::key_type reverse_map(const typename Map::mapped_type& v, const Map& map) {
+    for (auto& [key, value]: map) {
+        if (value == v) {
+            return key;
         }
     }
     throw std::out_of_range("unable to reverse map");
