@@ -180,7 +180,6 @@ public:
     };
 
     static component_type component_from_sstring(version_types version, sstring& s);
-    static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
     static sstring component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
                                       format_types format, component_type component);

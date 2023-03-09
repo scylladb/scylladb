@@ -2392,14 +2392,6 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
     return make_entry_descriptor(std::move(sstdir), std::move(fname), &ks, &cf);
 }
 
-sstable::version_types sstable::version_from_sstring(sstring &s) {
-    try {
-        return reverse_map(s, _version_string);
-    } catch (std::out_of_range&) {
-        throw std::out_of_range(seastar::format("Unknown sstable version: {}", s.c_str()));
-    }
-}
-
 sstable::format_types sstable::format_from_sstring(sstring &s) {
     try {
         return reverse_map(s, _format_string);
