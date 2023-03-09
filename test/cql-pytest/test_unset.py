@@ -157,3 +157,94 @@ def test_insert_unset_regular_col_if_not_exists(cql, table4):
     # INSERT (p, 1, 5, UNSET)
     insert(c=1, s=5, r=UNSET_VALUE)
     assert select_rows() == [(p, 1, 2, None)]
+
+# Try doing UPDATE table4 SET c=UNSET_VALUE
+# Should fail, clustering columns can't be updated
+def test_update_unset_clustering_column(cql, table4):
+    with pytest.raises(InvalidRequest):
+        cql.prepare(f"UPDATE {table4} SET r=123, c = ? WHERE p = 0 AND c = ?")
+        # Prepare fails, no point in executing it.
+
+# Test doing UPDATE table4 SET s=UNSET_VALUE
+def test_update_unset_static_column(cql, table4, scylla_only):
+    p = unique_key_int()
+    def select_rows():
+        return list(cql.execute(f"SELECT p, c, s, r FROM {table4} WHERE p = {p}"))
+
+    # UPDATE SET s=UNSET_VALUE
+    update1 = cql.prepare(f"UPDATE {table4} SET s=? WHERE p = {p} AND c = ?")
+    cql.execute(update1, [UNSET_VALUE, 1])
+    assert select_rows() == []
+
+    # Try the same with c = UNSET_VALUE
+    cql.execute(update1, [UNSET_VALUE, UNSET_VALUE])
+    assert select_rows() == []
+
+    # UPDATE SET s=UNSET_VALUE, r=123
+    update2 = cql.prepare(f"UPDATE {table4} SET r=123, s=? WHERE p = {p} AND c = ?")
+    cql.execute(update2, [UNSET_VALUE, 1])
+    assert select_rows() == [(p, 1, None, 123)]
+
+    # Try the same with c = UNSET_VALUE
+    cql.execute(update2, [UNSET_VALUE, UNSET_VALUE])
+    assert select_rows() == [(p, 1, None, 123)]
+
+    # UPDATE SET s=4321
+    update3 = cql.prepare(f"UPDATE {table4} SET s=4321 WHERE p = {p} AND c = ?")
+    cql.execute(update3, [1])
+    assert select_rows() == [(p, 1, 4321, 123)]
+
+    # Try the same with c = UNSET_VALUE
+    cql.execute(update3, [UNSET_VALUE])
+    assert select_rows() == [(p, 1, 4321, 123)]
+
+    # UPDATE SET r=567, s=UNSET_VALUE
+    update4 = cql.prepare(f"UPDATE {table4} SET r=567, s=? WHERE p = {p} AND c = ?")
+    cql.execute(update4, [UNSET_VALUE, 1])
+    assert select_rows() == [(p, 1, 4321, 567)]
+
+    # Try the same with c = UNSET_VALUE
+    cql.execute(update4, [UNSET_VALUE, UNSET_VALUE])
+    assert select_rows() == [(p, 1, 4321, 567)]
+
+# Test doing UPDATE table4 SET r=UNSET_VALUE
+def test_update_unset_regular_column(cql, table4, scylla_only):
+    p = unique_key_int()
+    def select_rows():
+        return list(cql.execute(f"SELECT p, c, s, r FROM {table4} WHERE p = {p}"))
+
+    # UPDATE SET r = UNSET_VALUE
+    update1 = cql.prepare(f"UPDATE {table4} SET r = ? WHERE p = {p} AND c = ?")
+    cql.execute(update1, [UNSET_VALUE, 1])
+    assert select_rows() == []
+
+    # Try the same with c = UNSET_VALUE
+    cql.execute(update1, [UNSET_VALUE, UNSET_VALUE])
+    assert select_rows() == []
+
+    # UPDATE SET r = UNSET_VALUE, s = 100
+    update2 = cql.prepare(f"UPDATE {table4} SET r = ?, s = 100 WHERE p = {p} AND c = ?")
+    cql.execute(update2, [UNSET_VALUE, 1])
+    assert select_rows() == [(p, 1, 100, None)]
+
+    # Try the same with c = UNSET_VALUE
+    cql.execute(update2, [UNSET_VALUE, UNSET_VALUE])
+    assert select_rows() == [(p, 1, 100, None)]
+
+    # UPDATE SET r = 200
+    update3 = cql.prepare(f"UPDATE {table4} SET r = 200 WHERE p = {p} AND c = ?")
+    cql.execute(update3, [1])
+    assert select_rows() == [(p, 1, 100, 200)]
+
+    # Try the same with c = UNSET_VALUE
+    cql.execute(update3, [UNSET_VALUE])
+    assert select_rows() == [(p, 1, 100, 200)]
+
+    # UPDATE SET r = UNSET_VALUE, s = 300
+    update4 = cql.prepare(f"UPDATE {table4} SET r = ?, s = 300 WHERE p = {p} AND c = ?")
+    cql.execute(update4, [UNSET_VALUE, 1])
+    assert select_rows() == [(p, 1, 300, 200)]
+
+    # Try the same with c = UNSET_VALUE
+    cql.execute(update4, [UNSET_VALUE, UNSET_VALUE])
+    assert select_rows() == [(p, 1, 300, 200)]
