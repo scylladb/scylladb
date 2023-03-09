@@ -536,6 +536,11 @@ sharded<locator::snitch_ptr> *the_snitch;
 sharded<service::storage_proxy> *the_storage_proxy;
 }
 
+// This is used by perf-alternator to allow running scylla together with the tool
+// in a single process. So that it's easier to measure internals. It's not added
+// to main_func_type to not complicate common flow as no other tool needs such logic.
+std::function<void(lw_shared_ptr<db::config>)> after_init_func;
+
 static locator::host_id initialize_local_info_thread(sharded<db::system_keyspace>& sys_ks,
         sharded<locator::snitch_ptr>& snitch,
         const gms::inet_address& listen_address,
@@ -2040,6 +2045,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             startlog.info("Scylla version {} initialization completed.", scylla_version());
+            if (after_init_func) {
+                after_init_func(cfg);
+            }
             stop_signal.wait().get();
             startlog.info("Signal received; shutting down");
 	    // At this point, all objects destructors and all shutdown hooks registered with defer() are executed
@@ -2109,6 +2117,7 @@ int main(int ac, char** av) {
         {"perf-tablets", perf::scylla_tablets_main, "run performance tests of tablet metadata management"},
         {"perf-simple-query", perf::scylla_simple_query_main, "run performance tests by sending simple queries to this server"},
         {"perf-sstable", perf::scylla_sstable_main, "run performance tests by exercising sstable related operations on this server"},
+        {"perf-alternator", perf::alternator(scylla_main, &after_init_func), "run performance tests on full alternator stack"}
     };
 
     main_func_type main_func;

@@ -26,6 +26,7 @@ endfunction()
 add_library(test-perf STATIC)
 target_sources(test-perf
   PRIVATE
+    perf_alternator.cc
     perf_fast_forward.cc
     perf_row_cache_update.cc
     perf_simple_query.cc
