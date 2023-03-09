@@ -194,6 +194,7 @@ def assert_rows(result, *expected):
         assert r == e
 
 assertRows = assert_rows
+assertRowsNet = assert_rows
 
 # Check if results is one of two possible result sets.
 # Can be useful in cases where Cassandra and Scylla results are
