@@ -338,3 +338,98 @@ def test_update_unset_regular_column_if_exists(cql, table4):
     # Try the same with c = UNSET_VALUE
     with pytest.raises(InvalidRequest):
         cql.execute(update4, [UNSET_VALUE, UNSET_VALUE])
+
+# Test doing UPDATE table4 SET s=UNSET_VALUE IF <lwt condition>, unset values in lwt condition are also tested
+def test_update_unset_static_column_with_lwt(cql, table4):
+    p = unique_key_int()
+    def select_rows():
+        return list(cql.execute(f"SELECT p, c, s, r FROM {table4} WHERE p = {p}"))
+
+    update1 = cql.prepare(f"UPDATE {table4} SET s = ? WHERE p = {p} AND c = ? IF s = ? AND r = ?")
+
+    # UPDATE SET s = 123 WHERE c = 123 AND s = 123 AND r = 123
+    cql.execute(update1, [123, 123, 123, 123])
+    assert select_rows() == []
+
+    # UPDATE SET s = UNSET_VALUE WHERE c = 123 AND s = 123 AND r = 123
+    cql.execute(update1, [UNSET_VALUE, 123, 123, 123])
+    assert select_rows() == []
+
+    # Insert something into the table so that the updates actually change something
+    cql.execute(f"INSERT INTO {table4} (p, c, s, r) VALUES ({p}, 123, 123, 123)")
+
+    # UPDATE SET s = UNSET_VALUE WHERE c = 123 AND s = 123 AND r = 123
+    cql.execute(update1, [UNSET_VALUE, 123, 123, 123])
+    assert select_rows() == [(p, 123, 123, 123)]
+
+    # UPDATE table4 SET s = 321 WHERE c = 123 AND s = 123 AND r = 123
+    cql.execute(update1, [321, 123, 123, 123])
+    assert select_rows() == [(p, 123, 321, 123)]
+
+    # Setting c (clustering column) to UNSET_VALUE should generate an error
+    with pytest.raises(InvalidRequest):
+        cql.execute(update1, [123, UNSET_VALUE, 123, 123])
+
+    # Doing IF s = UNSET generates an error
+    with pytest.raises(InvalidRequest):
+        cql.execute(update1, [9000000, 123, UNSET_VALUE, 123])
+
+    # Doing IF r = UNSET silently skips the update
+    cql.execute(update1, [9000000, 123, 123, UNSET_VALUE])
+    assert select_rows() == [(p, 123, 321, 123)]
+
+    # Doing IF s = UNSET AND r = UNSET generates an error
+    with pytest.raises(InvalidRequest):
+        cql.execute(update1, [9000000, 123, UNSET_VALUE, UNSET_VALUE])
+
+    # Setting everything to UNSET generates an error
+    with pytest.raises(InvalidRequest):
+        cql.execute(update1, [UNSET_VALUE, UNSET_VALUE, UNSET_VALUE, UNSET_VALUE])
+
+# Test doing UPDATE table4 SET r=UNSET_VALUE IF <lwt condition>, unset values in lwt condition are also tested
+def test_update_unset_regular_column_with_lwt(cql, table4):
+    p = unique_key_int()
+    def select_rows():
+        return list(cql.execute(f"SELECT p, c, s, r FROM {table4} WHERE p = {p}"))
+
+    update1 = cql.prepare(f"UPDATE {table4} SET r = ? WHERE p = {p} AND c = ? IF s = ? AND r = ?")
+
+    # UPDATE SET r = 123 WHERE c = 123 AND s = 123 AND r = 123
+    cql.execute(update1, [123, 123, 123, 123])
+    assert select_rows() == []
+
+    # UPDATE SET r = UNSET_VALUE WHERE c = 123 AND s = 123 AND r = 123
+    cql.execute(update1, [UNSET_VALUE, 123, 123, 123])
+    assert select_rows() == []
+
+    # Insert something into the table so that the updates actually change something
+    cql.execute(f"INSERT INTO {table4} (p, c, s, r) VALUES ({p}, 123, 123, 123)")
+
+    # UPDATE SET r = UNSET_VALUE WHERE c = 123 AND s = 123 AND r = 123
+    cql.execute(update1, [UNSET_VALUE, 123, 123, 123])
+    assert select_rows() == [(p, 123, 123, 123)]
+
+    # UPDATE table4 SET r = 321 WHERE c = 123 AND s = 123 AND r = 123
+    cql.execute(update1, [321, 123, 123, 123])
+    assert select_rows() == [(p, 123, 123, 321)]
+
+    # Setting c (clustering column) to UNSET_VALUE should generate an error
+    with pytest.raises(InvalidRequest):
+        cql.execute(update1, [123, UNSET_VALUE, 123, 123])
+
+    # Doing IF s = UNSET generates an error
+    with pytest.raises(InvalidRequest):
+        cql.execute(update1, [9000000, 123, UNSET_VALUE, 123])
+
+    # Doing IF r = UNSET generates an error
+    # This didn't cause an error when updating s instead of r
+    with pytest.raises(InvalidRequest):
+        cql.execute(update1, [9000000, 123, 123, UNSET_VALUE])
+
+    # Doing IF s = UNSET AND r = UNSET generates an error
+    with pytest.raises(InvalidRequest):
+        cql.execute(update1, [9000000, 123, UNSET_VALUE, UNSET_VALUE])
+
+    # Setting everything to UNSET generates an error
+    with pytest.raises(InvalidRequest):
+        cql.execute(update1, [UNSET_VALUE, UNSET_VALUE, UNSET_VALUE, UNSET_VALUE])
