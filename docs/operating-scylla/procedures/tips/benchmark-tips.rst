@@ -187,7 +187,7 @@ Use Workload Prioritization
 In a typical application there are operational workloads that require low latency.
 Sometimes these run in parallel with analytic workloads that process high volumes of data and do not require low latency.
 With workload prioritization, one can prevent that the analytic workloads lead to an unwanted high latency on operational workload.
-:doc:`Workload prioritization </using-scylla/workload-prioritization/>` is only available with Scylla Enterprise.
+`Workload prioritization <https://enterprise.docs.scylladb.com/stable/using-scylla/workload-prioritization.html>`_ is only available with `Scylla Enterprise <https://enterprise.docs.scylladb.com/>`_.
 
 Bypass Cache
 ============

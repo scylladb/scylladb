@@ -13,5 +13,3 @@ There are two ways to handle the migration:
 
 * Fork-lifting the historical data with the :doc:`Spark Migrator </using-scylla/mig-tool-review/>` tool.
 * Double writing the new data.
-
-If you are running Scylla Enterprise it is advantageous to control the migration resources using :doc:`Workload Prioritization </using-scylla/workload-prioritization/>`.

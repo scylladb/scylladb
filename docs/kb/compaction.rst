@@ -118,50 +118,7 @@ Likewise, when :term:`bootstrapping<Bootstrap>` a new node, SSTables are streame
 
 Incremental Compaction Strategy (ICS) :label-tip:`ScyllaDB Enterprise`
 ------------------------------------------------------------------------
-
-.. versionadded:: 2019.1.4
-
-One of the issues with Size-tiered compaction is that it needs temporary space because SSTables are not removed until they are fully compacted. ICS takes a different approach and splits each large SSTable into a run of sorted, fixed-size (by default 1 GB) SSTables (a.k.a. fragments) in the same way that LCS does, except it treats the entire run and not the individual SSTables as the sizing file for STCS. As the run-fragments are small, the SSTables compact quickly, allowing individual SSTables to be removed as soon as they are compacted.  This approach uses low amounts of memory and temporary disk space.
-
-ICS uses the same philosophy as STCS, where the SSTables are sorted in buckets according to their size. However, unlike STCS, ICS compaction uses SSTable runs as input, and produces a new run as output. It doesn't matter if a run is composed of only one fragment that could have come from STCS migration. From an incremental compaction perspective, everything is a run.
-
-The strategy works as follows:
-
-#. ICS looks for candidates for compaction that are similar in size. These candidates are called ``Input Runs``. 
-
-   * The input runs may contain one or more SSTables each.
-
-#. ICS compacts two or more similar-sized input runs into a single ``Output run`` (* See note_ ).
-#. Incremental Compaction progressively works on two or more fragments at a time, one from each input run.
-
-   * It reads mutations from all input fragments and merges them together into a single output fragment.
-   * As long as the resulting fragment is smaller than the ``sstable_size_in_mb``, no further action is needed.
-   * If the fragment is larger than the ``sstable_size_in_mb``:
-
-     1. Stop when the size threshold is reached, and seal the output fragment.
-     2. Create a new run fragment and continue compacting the remaining input fragments, until the size threshold is reached.
-     3. When an input fragment is exhausted, take it out of the list of SSTables to compact, and delete it from disk.
-     4. Repeat until there are no input fragments left.
-
-#. Take all of the output fragments and feed them back into compaction as an SSTable run.
-#. Stop when all fragments from input runs were exhausted and released.
-
-.. _note:
-.. note:: To prevent data resurrection in case scylla crashes in the middle of compaction, ICS may possibly write an auxiliary run containing purgeable tombstones in addition to the output run containing live data.
-   These tombstones are kept on disk while there are SSTables containing data that the tombstones may shadow. Once compaction is done, deleting all shadowed data from all SSTables, the purgeable tombstones are purged and the SSTables holding them are removed from storage.
-
-.. image:: ics-incremental-compaction.png
-
-Incremental compaction as a solution for temporary space overhead in STCS
-.........................................................................
-
-We fixed the temporary space overhead on STCS by applying the incremental compaction approach to it, which resulted in the creation of Incremental Compaction Strategy (ICS). The compacted SSTables, that become increasingly larger over time with STCS, are replaced with sorted runs of SSTable fragments, together called “SSTable runs” – which is a concept borrowed from Leveled Compaction Strategy (LCS).
-
-Each fragment is a roughly fixed size (aligned to partition boundaries) SSTable and it holds a unique range of keys, a portion of the whole SSTable run. Note that as the SSTable-runs in ICS hold exactly the same data as the corresponding SSTables created by STCS, they become increasingly longer over time (holding more fragments), in the same way that SSTables grow in size with STCS, yet the ICS SSTable fragments’ size remains the same.
-
-For example, when compacting two SSTables (or SSTable runs) holding 7GB each: instead of writing up to 14GB into a single SSTable file, we’ll break the output SSTable into a run of 14 x 1GB fragments (fragment size is 1GB by default).
-
-.. image:: compaction-incremental.png
+ICS is only available in ScyllaDB Enterprise. See the `ScyllaDB Enetrpise documentation <https://enterprise.docs.scylladb.com/stable/kb/compaction.html>`_ for details.
 
 .. _time-window-compactionstrategy-twcs:
 

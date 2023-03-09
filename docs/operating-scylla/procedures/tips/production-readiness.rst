@@ -21,18 +21,6 @@ Choose a Compaction Strategy
 ============================
 
 Each workload may require a specific strategy. Refer to :doc:`Choose a Compaction Strategy </architecture/compaction/compaction-strategies>` for details.
-If you are using Scylla Enterprise, in all cases ICS is preferred over STCS.
-
-Incremental Compaction Strategy (ICS)
-.....................................
-
-If you are using Scylla Enterprise, we highly recommend using ICS (the default setting) for any table that you have, or considering to have STCS as a compaction strategy.
-You will have much less Space Amplification with ICS as it only requires 25% additional storage, as opposed to STCS which requires 50% more.
-
-.. note:: ICS is the default compaction strategy setting for Scylla Enterprise versions 2020.1 and higher.
-
-* Refer to :ref:`Incremental Compaction Strategy <ICS1>` for an overview of the benefits.
-* Refer to :ref:`Incremental Compaction Strategy Overview <incremental-compaction-strategy-ics>` for a description of how it works.
 
 Resiliency
 ----------

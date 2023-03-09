@@ -37,16 +37,14 @@ See:
 
 * :doc:`Encryption Data in Transit Node to Node </operating-scylla/security/node-node-encryption>`
 
-Encryption at Rest
-~~~~~~~~~~~~~~~~~~
-Encryption at Rest is available in a Scylla Enterprise 2019.1.1.
+Encryption at Rest :label-tip:`ScyllaDB Enterprise`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Encryption at Rest is available in `ScyllaDB Enterprise <https://enterprise.docs.scylladb.com/>`_.
 
 Encryption at Rest protects the privacy of your user's data, reduces the risk of data breaches, and helps meet regulatory requirements. 
 In particular, it provides an additional level of protection for your data persisted in storage or backup.
 
-See:
-
-* :doc:`Encryption at Rest </operating-scylla/security/encryption-at-rest>`
+See `Encryption at Rest <https://enterprise.docs.scylladb.com/stable/operating-scylla/security/encryption-at-rest.html>`_ for details.
 
 Reduce the Network Exposure
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -67,7 +65,10 @@ The Scylla ports are detailed in the table below. For Scylla Manager ports, see 
 
 Audit System Activity
 ~~~~~~~~~~~~~~~~~~~~~
-Using the :doc:`auditing feature</operating-scylla/security/auditing/>` allows the administrator to know “who did / looked at / changed what and when.” It also allows logging some or all the activities a user performs on the Scylla cluster.
+
+Auditing is available in `ScyllaDB Enterprise <https://enterprise.docs.scylladb.com/>`_.
+
+Using the `auditing feature <https://enterprise.docs.scylladb.com/stable/operating-scylla/security/auditing.html>`_ allows the administrator to know “who did / looked at / changed what and when.” It also allows logging some or all the activities a user performs on the Scylla cluster.
 
 General Recommendations
 ~~~~~~~~~~~~~~~~~~~~~~~
