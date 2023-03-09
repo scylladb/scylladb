@@ -266,6 +266,16 @@ Behavior for null input values must be defined for each function:
 * ``RETURNS NULL ON NULL INPUT`` declares that the function will always return null (without being executed) if any of the input arguments is null.
 * ``CALLED ON NULL INPUT`` declares that the function will always be executed.
 
+The ``LANGUAGE`` clause specifies the language of the function, and the ``AS`` clause defines the function body:
+
+* For Lua functions, the ``LANGUAGE`` is ``lua`` and the body is a string literal containing the Lua script.
+
+* For Wasm functions, the ``LANGUAGE`` is ``wasm`` and the body is a string literal containing a WebAssembly module in WebAssembly text format, which exports a function with the same name as specified in the ``CREATE FUNCTION`` statement. More details on generating the Wasm modules can be found `here </cql/wasm>`_.
+
+If the function code contains single quotes, they must be escaped by doubling them, for example::
+
+   CREATE FUNCTION hworld () RETURNS text LANGUAGE LUA AS 'return ''hello world'';';
+
 Function Signature
 ``````````````````
 
