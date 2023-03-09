@@ -73,8 +73,9 @@ sstables::generation_type table::make_new_generation(std::optional<sstables::gen
     return sstables::generation_type(next_value);
 }
 
-void table::update_sstables_known_generation(sstables::generation_type generation) {
-    auto normalized_generation = generation.value() - generation.value() % smp::count + this_shard_id();
+void table::update_sstables_known_generation(std::optional<sstables::generation_type> generation) {
+    auto gen = generation.value_or(sstables::generation_type(0)).value();
+    auto normalized_generation = gen - gen % smp::count + this_shard_id();
     if (!_sstable_generation || normalized_generation > _sstable_generation->value()) {
         _sstable_generation.emplace(normalized_generation);
         tlogger.debug("{}.{} updated highest known generation to {}", schema()->ks_name(), schema()->cf_name(), *_sstable_generation);

@@ -282,13 +282,6 @@ distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<r
     co_await run_resharding_jobs(dir, std::move(destinations), db, ks_name, table_name, std::move(creator), iop);
 }
 
-future<sstables::generation_type>
-highest_generation_seen(sharded<sstables::sstable_directory>& directory) {
-    return directory.map_reduce0(std::mem_fn(&sstables::sstable_directory::highest_generation_seen), sstables::generation_from_value(0), [] (sstables::generation_type a, sstables::generation_type b) {
-        return std::max(a, b);
-    });
-}
-
 future<sstables::sstable::version_types>
 highest_version_seen(sharded<sstables::sstable_directory>& dir, sstables::sstable_version_types system_version) {
     using version = sstables::sstable_version_types;
@@ -442,7 +435,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         process_sstable_dir(directory, flags).get();
 
         auto generation = highest_generation_seen(directory).get0();
-        auto shard_generation_base = sstables::generation_value(generation) / smp::count + 1;
+        auto shard_generation_base = generation.value_or(replica::table::make_new_generation()).value() / smp::count + 1;
 
         // We still want to do our best to keep the generation numbers shard-friendly.
         // Each destination shard will manage its own generation counter.
@@ -557,7 +550,7 @@ class table_populator {
     fs::path _base_path;
     std::unordered_map<sstring, lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
     sstables::sstable_version_types _highest_version = sstables::oldest_writable_sstable_format;
-    sstables::generation_type _highest_generation = sstables::generation_from_value(0);
+    std::optional<sstables::generation_type> _highest_generation;
 
 public:
     table_populator(distributed<replica::database>& db, sstring ks, sstring cf)
@@ -655,7 +648,11 @@ future<> table_populator::start_subdir(sstring subdir) {
     auto generation = co_await highest_generation_seen(directory);
 
     _highest_version = std::max(sst_version, _highest_version);
-    _highest_generation = std::max(generation, _highest_generation);
+    if (generation) {
+        _highest_generation = _highest_generation ?
+            std::max(*generation, *_highest_generation) :
+            *generation;
+    }
 }
 
 sstables::shared_sstable make_sstable(replica::table& table, fs::path dir, sstables::generation_type generation, sstables::sstable_version_types v) {
