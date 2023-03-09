@@ -16,7 +16,7 @@ import stat
 import distro
 from pathlib import Path
 from scylla_util import *
-from subprocess import run
+from subprocess import run, SubprocessError
 
 if __name__ == '__main__':
     if os.getuid() > 0:
@@ -137,7 +137,9 @@ if __name__ == '__main__':
     # stalling. The minimum block size for crc enabled filesystems is 1024,
     # and it also cannot be smaller than the sector size.
     block_size = max(1024, sector_size)
+    run('udevadm settle', shell=True, check=True)
     run(f'mkfs.xfs -b size={block_size} {fsdev} -f -K', shell=True, check=True)
+    run('udevadm settle', shell=True, check=True)
 
     if is_debian_variant():
         confpath = '/etc/mdadm/mdadm.conf'
@@ -152,7 +154,12 @@ if __name__ == '__main__':
 
     os.makedirs(mount_at, exist_ok=True)
 
-    uuid = run(f'blkid -s UUID -o value {fsdev}', shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
+    uuid = out(f'blkid -s UUID -o value {fsdev}')
+    if not uuid:
+        raise Exception(f'Failed to get UUID of {fsdev}')
+
+    uuidpath = f'/dev/disk/by-uuid/{uuid}'
+
     after = 'local-fs.target'
     wants = ''
     if raid and args.raid_level != '0':
@@ -169,7 +176,7 @@ After={after}{wants}
 DefaultDependencies=no
 
 [Mount]
-What=/dev/disk/by-uuid/{uuid}
+What={uuidpath}
 Where={mount_at}
 Type=xfs
 Options=noatime{opt_discard}
@@ -191,8 +198,16 @@ WantedBy=multi-user.target
     systemd_unit.reload()
     if args.raid_level != '0':
         md_service.start()
-    mount = systemd_unit(mntunit_bn)
-    mount.start()
+    try:
+        mount = systemd_unit(mntunit_bn)
+        mount.start()
+    except SubprocessError as e:
+        if not os.path.exists(uuidpath):
+            print(f'\nERROR: {uuidpath} is not found\n')
+        elif not stat.S_ISBLK(os.stat(uuidpath).st_mode):
+            print(f'\nERROR: {uuidpath} is not block device\n')
+        raise e
+
     if args.enable_on_nextboot:
         mount.enable()
     uid = pwd.getpwnam('scylla').pw_uid
