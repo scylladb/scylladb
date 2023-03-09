@@ -248,3 +248,93 @@ def test_update_unset_regular_column(cql, table4, scylla_only):
     # Try the same with c = UNSET_VALUE
     cql.execute(update4, [UNSET_VALUE, UNSET_VALUE])
     assert select_rows() == [(p, 1, 300, 200)]
+
+# Test doing UPDATE table4 SET s=UNSET_VALUE IF EXISTS
+def test_update_unset_static_column_if_exists(cql, table4):
+    p = unique_key_int()
+    def select_rows():
+        return list(cql.execute(f"SELECT p, c, s, r FROM {table4} WHERE p = {p}"))
+
+    # UPDATE SET s=UNSET_VALUE
+    update1 = cql.prepare(f"UPDATE {table4} SET s=? WHERE p = {p} AND c = ? IF EXISTS")
+    cql.execute(update1, [UNSET_VALUE, 1])
+    assert select_rows() == []
+
+    # Try the same with c = UNSET_VALUE
+    with pytest.raises(InvalidRequest):
+        cql.execute(update1, [UNSET_VALUE, UNSET_VALUE])
+
+    # Insert something into the table so that the updates actually change something
+    cql.execute(f"INSERT INTO {table4} (p, c, s, r) VALUES ({p}, 1, 2, 3)")
+
+    # UPDATE SET s=UNSET_VALUE, r=123
+    update2 = cql.prepare(f"UPDATE {table4} SET r=123, s=? WHERE p = {p} AND c = ? IF EXISTS")
+    cql.execute(update2, [UNSET_VALUE, 1])
+    assert select_rows() == [(p, 1, 2, 123)]
+
+    # Try the same with c = UNSET_VALUE
+    with pytest.raises(InvalidRequest):
+        cql.execute(update2, [UNSET_VALUE, UNSET_VALUE])
+
+    # UPDATE SET s=4321
+    update3 = cql.prepare(f"UPDATE {table4} SET s=4321 WHERE p = {p} AND c = ? IF EXISTS")
+    cql.execute(update3, [1])
+    assert select_rows() == [(p, 1, 4321, 123)]
+
+    # Try the same with c = UNSET_VALUE
+    with pytest.raises(InvalidRequest):
+        cql.execute(update3, [UNSET_VALUE])
+
+    # UPDATE SET r=567, s=UNSET_VALUE
+    update4 = cql.prepare(f"UPDATE {table4} SET r=567, s=? WHERE p = {p} AND c = ? IF EXISTS")
+    cql.execute(update4, [UNSET_VALUE, 1])
+    assert select_rows() == [(p, 1, 4321, 567)]
+
+    # Try the same with c = UNSET_VALUE
+    with pytest.raises(InvalidRequest):
+        cql.execute(update4, [UNSET_VALUE, UNSET_VALUE])
+
+# Test doing UPDATE table4 SET r=UNSET_VALUE
+def test_update_unset_regular_column_if_exists(cql, table4):
+    p = unique_key_int()
+    def select_rows():
+        return list(cql.execute(f"SELECT p, c, s, r FROM {table4} WHERE p = {p}"))
+
+    # UPDATE SET r = UNSET_VALUE
+    update1 = cql.prepare(f"UPDATE {table4} SET r = ? WHERE p = {p} AND c = ? IF EXISTS")
+    cql.execute(update1, [UNSET_VALUE, 1])
+    assert select_rows() == []
+
+    # Try the same with c = UNSET_VALUE
+    with pytest.raises(InvalidRequest):
+        cql.execute(update1, [UNSET_VALUE, UNSET_VALUE])
+
+    # Insert something into the table so that the updates actually change something
+    cql.execute(f"INSERT INTO {table4} (p, c, s, r) VALUES ({p}, 1, 2, 3)")
+
+    # UPDATE SET r = UNSET_VALUE, s = 100
+    update2 = cql.prepare(f"UPDATE {table4} SET r = ?, s = 100 WHERE p = {p} AND c = ? IF EXISTS")
+    cql.execute(update2, [UNSET_VALUE, 1])
+    assert select_rows() == [(p, 1, 100, 3)]
+
+    # Try the same with c = UNSET_VALUE
+    with pytest.raises(InvalidRequest):
+        cql.execute(update2, [UNSET_VALUE, UNSET_VALUE])
+
+    # UPDATE SET r = 200
+    update3 = cql.prepare(f"UPDATE {table4} SET r = 200 WHERE p = {p} AND c = ? IF EXISTS")
+    cql.execute(update3, [1])
+    assert select_rows() == [(p, 1, 100, 200)]
+
+    # Try the same with c = UNSET_VALUE
+    with pytest.raises(InvalidRequest):
+        cql.execute(update3, [UNSET_VALUE])
+
+    # UPDATE SET r = UNSET_VALUE, s = 300
+    update4 = cql.prepare(f"UPDATE {table4} SET r = ?, s = 300 WHERE p = {p} AND c = ? IF EXISTS")
+    cql.execute(update4, [UNSET_VALUE, 1])
+    assert select_rows() == [(p, 1, 300, 200)]
+
+    # Try the same with c = UNSET_VALUE
+    with pytest.raises(InvalidRequest):
+        cql.execute(update4, [UNSET_VALUE, UNSET_VALUE])
