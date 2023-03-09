@@ -187,7 +187,7 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
   }
 }
 
-std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_types>> sstable::_version_string = {
+const std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_types>> sstable::_version_string = {
     { sstable::version_types::ka , "ka" },
     { sstable::version_types::la , "la" },
     { sstable::version_types::mc , "mc" },
@@ -195,7 +195,7 @@ std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_t
     { sstable::version_types::me , "me" },
 };
 
-std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_types>> sstable::_format_string = {
+const std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_types>> sstable::_format_string = {
     { sstable::format_types::big , "big" }
 };
 
