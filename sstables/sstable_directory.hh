@@ -54,6 +54,7 @@ public:
     // favor chunked vectors when dealing with file lists: they can grow to hundreds of thousands
     // of elements.
     using sstable_open_info_vector = utils::chunked_vector<sstables::foreign_sstable_open_info>;
+    using sstable_entry_descriptor_vector = utils::chunked_vector<sstables::entry_descriptor>;
 
     // Flags below control how to behave when scanning new SSTables.
     struct process_flags {
@@ -122,7 +123,7 @@ private:
     //
     // The indexes of the outer vector represent the shards. Having anything in the index
     // representing this shard is illegal.
-    std::vector<sstable_open_info_vector> _unshared_remote_sstables;
+    std::vector<sstable_entry_descriptor_vector> _unshared_remote_sstables;
 
     // SSTables that are shared. Stored as foreign_sstable_open_info objects. Reason is those are
     // the SSTables that we found, and not necessarily the ones we will reshard. We want to balance
@@ -139,13 +140,18 @@ private:
     template <typename Container, typename Func>
     requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>
     future<> parallel_for_each_restricted(Container&& C, Func&& func);
-    future<> load_foreign_sstables(sstable_open_info_vector info_vec);
+    future<> load_foreign_sstables(sstable_entry_descriptor_vector info_vec);
 
     // Sort the sstable according to owner
     future<> sort_sstable(sstables::entry_descriptor desc, process_flags flags);
 
     // Returns filename for a SSTable from its entry_descriptor.
     sstring sstable_filename(const sstables::entry_descriptor& desc) const;
+
+    // Compute owner of shards for a particular SSTable.
+    future<std::vector<shard_id>> get_shards_for_this_sstable(const sstables::entry_descriptor& desc, process_flags flags) const;
+    // Retrieves sstables::foreign_sstable_open_info for a particular SSTable.
+    future<foreign_sstable_open_info> get_open_info_for_this_sstable(const sstables::entry_descriptor& desc) const;
 public:
     sstable_directory(sstables_manager& manager,
             schema_ptr schema,
