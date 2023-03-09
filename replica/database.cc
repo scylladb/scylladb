@@ -1226,16 +1226,6 @@ future<> keyspace::update_from(const locator::shared_token_metadata& stm, ::lw_s
    return create_replication_strategy(stm, _metadata->strategy_options());
 }
 
-future<> keyspace::ensure_populated() const {
-    return _populated.get_shared_future();
-}
-
-void keyspace::mark_as_populated() {
-    if (!_populated.available()) {
-        _populated.set_value();
-    }
-}
-
 column_family::config
 keyspace::make_column_family_config(const schema& s, const database& db) const {
     column_family::config cfg;
@@ -1368,12 +1358,6 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
     co_await create_in_memory_keyspace(ksm, erm_factory, system);
     auto& ks = _keyspaces.at(ksm->name());
     auto& datadir = ks.datadir();
-
-    // keyspace created by either cql or migration 
-    // is by definition populated
-    if (!is_bootstrap) {
-        ks.mark_as_populated();
-    }
 
     if (datadir != "") {
         co_await io_check([&datadir] { return touch_directory(datadir); });

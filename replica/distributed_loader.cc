@@ -789,11 +789,6 @@ future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& 
                     auto& cf = db.find_column_family(cfm);
                     cf.mark_ready_for_writes();
                 }
-                // for system keyspaces, we only do this post all population, and
-                // only as a consistency measure.
-                // change this if it is ever needed to sync system keyspace
-                // population
-                ks.mark_as_populated();
             }
             return make_ready_future<>();
         }).get();
@@ -822,15 +817,6 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<replica::data
             });
         }).get();
 
-        db.invoke_on_all([&dirs] (replica::database& db) {
-            for (auto& [name, ks] : db.get_keyspaces()) {
-                // mark all user keyspaces that are _not_ on disk as already
-                // populated.
-                if (!dirs.contains(ks.metadata()->name())) {
-                    ks.mark_as_populated();
-                }
-            }
-        }).get();
 
         for (bool prio_only : { true, false}) {
             std::vector<future<>> futures;
@@ -857,16 +843,6 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<replica::data
                 futures.emplace_back(parallel_for_each(j, e, [&](const std::pair<sstring, sstring>& p) {
                     auto& datadir = p.second;
                     return distributed_loader::populate_keyspace(db, datadir, ks_name);
-                }).finally([&] {
-                    return db.invoke_on_all([ks_name] (replica::database& db) {
-                        // can be false if running test environment
-                        // or ks_name was just a borked directory not representing
-                        // a keyspace in schema tables.
-                        if (db.has_keyspace(ks_name)) {
-                            db.find_keyspace(ks_name).mark_as_populated();
-                        }
-                        return make_ready_future<>();
-                    });
                 }));
             }
 
