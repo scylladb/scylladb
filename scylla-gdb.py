@@ -3111,7 +3111,7 @@ def exit_thread_context():
 
 
 def seastar_threads_on_current_shard():
-    return intrusive_list(gdb.parse_and_eval('\'seastar::thread_context::_all_threads\''), link='_all_link')
+    return intrusive_list(gdb.parse_and_eval('seastar::thread_context::_all_threads'), link='_all_link')
 
 
 class scylla_thread(gdb.Command):
