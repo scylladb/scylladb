@@ -432,7 +432,12 @@ private:
     // Ensures that concurrent updates to sstable set will work correctly
     seastar::named_semaphore _sstable_set_mutation_sem = {1, named_semaphore_exception_factory{"sstable set mutation"}};
     mutable row_cache _cache; // Cache covers only sstables.
-    std::optional<sstables::generation_type::int_t> _sstable_generation = {};
+    // FIXME: until we use uuid for sstables generation (#10459)
+    // _sstable_generation keeps track of the highest
+    // generation number in the table so that newly created sstables
+    // will use numeric generation numbers larger than this one.
+    // Initialized when the table is populated via update_sstables_known_generation.
+    std::optional<sstables::generation_type> _sstable_generation = {};
 
     db::replay_position _highest_rp;
     db::replay_position _flush_rp;
@@ -532,6 +537,8 @@ public:
                        const std::vector<sstables::shared_sstable>& new_sstables,
                        const std::vector<sstables::shared_sstable>& old_sstables);
     };
+
+    static sstables::generation_type make_new_generation(std::optional<sstables::generation_type> prev = std::nullopt);
 private:
     using compaction_group_ptr = std::unique_ptr<compaction_group>;
     std::vector<std::unique_ptr<compaction_group>> make_compaction_groups();
@@ -564,7 +571,8 @@ private:
     future<> update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts);
     struct merge_comparator;
 
-    // update the sstable generation, making sure that new new sstables don't overwrite this one.
+    // update the sstable generation, making sure (in calculate_generation_for_new_table)
+    // that new new sstables don't overwrite this one.
     void update_sstables_known_generation(sstables::generation_type generation);
 
     sstables::generation_type calculate_generation_for_new_table();

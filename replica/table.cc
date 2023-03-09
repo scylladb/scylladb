@@ -66,18 +66,30 @@ static seastar::metrics::label keyspace_label("ks");
 
 using namespace std::chrono_literals;
 
+sstables::generation_type table::make_new_generation(std::optional<sstables::generation_type> prev) {
+    auto prev_value = prev.value_or(sstables::generation_type(0)).value();
+    auto next_value = prev_value - prev_value % smp::count + smp::count + this_shard_id();
+    tlogger.trace("new_generation {} -> {}", prev_value, next_value);
+    return sstables::generation_type(next_value);
+}
+
 void table::update_sstables_known_generation(sstables::generation_type generation) {
-    if (!_sstable_generation) {
-        _sstable_generation = 1;
+    auto normalized_generation = generation.value() - generation.value() % smp::count + this_shard_id();
+    if (!_sstable_generation || normalized_generation > _sstable_generation->value()) {
+        _sstable_generation.emplace(normalized_generation);
+        tlogger.debug("{}.{} updated highest known generation to {}", schema()->ks_name(), schema()->cf_name(), *_sstable_generation);
     }
-    _sstable_generation = std::max<sstables::generation_type::int_t>(*_sstable_generation, sstables::generation_value(generation) / smp::count + 1);
 }
 
 sstables::generation_type table::calculate_generation_for_new_table() {
-    assert(_sstable_generation);
     // FIXME: better way of ensuring we don't attempt to
     // overwrite an existing table.
-    return sstables::generation_from_value((*_sstable_generation)++ * smp::count + this_shard_id());
+    // See https://github.com/scylladb/scylladb/issues/10459
+    // for uuid-based sstable generation
+    auto ret = make_new_generation(_sstable_generation);
+    tlogger.debug("{}.{} new sstable generation {}", schema()->ks_name(), schema()->cf_name(), ret);
+    _sstable_generation = ret;
+    return ret;
 }
 
 flat_mutation_reader_v2
