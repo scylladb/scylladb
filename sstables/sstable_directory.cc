@@ -239,18 +239,18 @@ future<> sstable_directory::components_lister::process(sstable_directory& direct
     auto msg = format("After {} scanned, {} descriptors found, {} different files found",
             location, _state->descriptors.size(), _state->generations_found.size());
 
-  if (!_state->generations_found.empty()) {
-    // FIXME: for now set _max_generation_seen is any generation were found
-    // With https://github.com/scylladb/scylladb/issues/10459,
-    // We should do that only if any _numeric_ generations were found
-    directory._max_generation_seen =  boost::accumulate(_state->generations_found | boost::adaptors::map_keys, sstables::generation_type(0), [] (generation_type a, generation_type b) {
-        return std::max<generation_type>(a, b);
-    });
+    if (!_state->generations_found.empty()) {
+        // FIXME: for now set _max_generation_seen is any generation were found
+        // With https://github.com/scylladb/scylladb/issues/10459,
+        // We should do that only if any _numeric_ generations were found
+        directory._max_generation_seen =  boost::accumulate(_state->generations_found | boost::adaptors::map_keys, sstables::generation_type(0), [] (generation_type a, generation_type b) {
+            return std::max<generation_type>(a, b);
+        });
 
-    msg = format("{}, highest generation seen: {}", msg, *directory._max_generation_seen);
-  } else {
-    msg = format("{}, no numeric generation was seen", msg);
-  }
+        msg = format("{}, highest generation seen: {}", msg, *directory._max_generation_seen);
+    } else {
+        msg = format("{}, no numeric generation was seen", msg);
+    }
 
     dirlog.debug("{}", msg);
 
