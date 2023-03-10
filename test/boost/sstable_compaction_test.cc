@@ -148,6 +148,7 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
     auto& cm = cf.get_compaction_manager();
     auto close_cf = deferred_stop(cf);
     cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
+    auto sst_gen = cf.make_sst_factory();
 
     auto idx = std::vector<unsigned long>({1, 2, 3, 4});
     for (auto i : idx) {
@@ -165,10 +166,7 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
         mt->apply(std::move(m));
 
-        auto sst = cf.make_sstable();
-
-        write_memtable_to_sstable_for_test(*mt, sst).get();
-        sst->load().get();
+        auto sst = make_sstable_containing(sst_gen, mt);
         column_family_test(cf).add_sstable(sst).get();
     }
 
@@ -335,10 +333,7 @@ static future<std::vector<unsigned long>> compact_sstables(test_env& env, std::v
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(utf8_type, bytes(min_sstable_size, 'a')));
                 mt->apply(std::move(m));
 
-                auto sst = env.make_sstable(s, generation);
-
-                write_memtable_to_sstable_for_test(*mt, sst).get();
-                sst->load().get();
+                auto sst = make_sstable_containing(env.make_sstable(s, generation), mt);
                 sstables.push_back(sst);
             }
         }
@@ -1130,6 +1125,7 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
     return test_env::do_with_async([] (test_env& env) {
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type);
+        auto sst_gen = env.make_sst_factory(s);
 
         auto mt = make_lw_shared<replica::memtable>(s);
 
@@ -1144,13 +1140,11 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
         };
         apply_key(key_for_this_shard[0]);
 
-        auto sst = env.make_sstable(s);
-        write_memtable_to_sstable_for_test(*mt, sst).get();
-        auto sstp = env.reusable_sst(sst).get();
+        auto sstp = make_sstable_containing(sst_gen, mt);
         auto key = key_for_this_shard[0];
         std::vector<sstables::shared_sstable> new_tables;
         auto creator = [&] {
-            auto sst = env.make_sstable(s);
+            auto sst = sst_gen();
             new_tables.emplace_back(sst);
             return sst;
         };
@@ -1188,6 +1182,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                 schema_ptr s = builder.build(schema_builder::compact_storage::no);
                 auto cf = env.make_table_for_tests(s);
                 auto close_cf = deferred_stop(cf);
+                auto sst_gen = cf.make_sst_factory(version);
                 auto mt = make_lw_shared<replica::memtable>(s);
                 auto now = gc_clock::now();
                 int32_t last_expiry = 0;
@@ -1198,11 +1193,8 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                                          make_atomic_cell(utf8_type, bytes(""), ttl, last_expiry));
                     mt->apply(std::move(m));
                 };
-                auto get_usable_sst = [&env, s, version](replica::memtable &mt) -> future<sstable_ptr> {
-                    auto sst = env.make_sstable(s, version);
-                    return write_memtable_to_sstable_for_test(mt, sst).then([&env, sst] {
-                        return env.reusable_sst(sst);
-                    });
+                auto get_usable_sst = [&] (lw_shared_ptr<replica::memtable>) {
+                    return make_sstable_containing(sst_gen, mt);
                 };
 
                 mutation m(s, partition_key::from_exploded(*s, {to_bytes("deletetest")}));
@@ -1210,7 +1202,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                     add_row(m, to_bytes("deletecolumn" + to_sstring(i)), 100);
                 }
                 add_row(m, to_bytes("todelete"), 1000);
-                auto sst1 = get_usable_sst(*mt).get0();
+                auto sst1 = get_usable_sst(mt);
                 BOOST_REQUIRE(last_expiry == sst1->get_stats_metadata().max_local_deletion_time);
 
                 mt = make_lw_shared<replica::memtable>(s);
@@ -1218,10 +1210,10 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                 tombstone tomb(api::new_timestamp(), now);
                 m.partition().apply_delete(*s, clustering_key::from_exploded(*s, {to_bytes("todelete")}), tomb);
                 mt->apply(std::move(m));
-                auto sst2 = get_usable_sst(*mt).get0();
+                auto sst2 = get_usable_sst(mt);
                 BOOST_REQUIRE(now.time_since_epoch().count() == sst2->get_stats_metadata().max_local_deletion_time);
 
-                auto creator = [&env, s, version] { return env.make_sstable(s, version); };
+                auto creator = [&] { return cf.make_sstable(version); };
                 auto info = compact_sstables(sstables::compaction_descriptor({sst1, sst2}, default_priority_class()), cf, creator).get0();
                 BOOST_REQUIRE(info.new_sstables.size() == 1);
                 BOOST_REQUIRE(((now + gc_clock::duration(100)).time_since_epoch().count()) ==
@@ -1297,9 +1289,7 @@ SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
         tombstone tomb(api::new_timestamp(), gc_clock::now() - std::chrono::seconds(3600));
         m.partition().apply_delete(*s, c_key, tomb);
         mt->apply(std::move(m));
-        auto sst = sst_gen();
-        write_memtable_to_sstable_for_test(*mt, sst).get();
-        sst = env.reusable_sst(sst).get0();
+        auto sst = make_sstable_containing(sst_gen, mt);
 
         auto cf = env.make_table_for_tests(s);
         auto close_cf = deferred_stop(cf);
@@ -1677,6 +1667,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
                       .build();
             auto cf = env.make_table_for_tests(s);
             auto close_cf = deferred_stop(cf);
+            auto sst_gen = cf.make_sst_factory(version);
             auto mt = make_lw_shared<replica::memtable>(s);
             const column_definition &r1_col = *s->get_column_definition("r1");
 
@@ -1689,9 +1680,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
                 }
                 mt->apply(std::move(m));
             }
-            auto sst = env.make_sstable(s, version);
-            write_memtable_to_sstable_for_test(*mt, sst).get();
-            sst = env.reusable_sst(sst).get0();
+            auto sst = make_sstable_containing(sst_gen, mt);
             check_min_max_column_names(sst, {"0ck100"}, {"7ck149"});
 
             mt = make_lw_shared<replica::memtable>(s);
@@ -1702,12 +1691,10 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
             }
             mt->apply(std::move(m));
-            auto sst2 = env.make_sstable(s, version);
-            write_memtable_to_sstable_for_test(*mt, sst2).get();
-            sst2 = env.reusable_sst(sst2).get0();
+            auto sst2 = make_sstable_containing(sst_gen, mt);
             check_min_max_column_names(sst2, {"9ck101"}, {"9ck298"});
 
-            auto creator = [&env, s, version] { return env.make_sstable(s, version); };
+            auto creator = [&] { return cf.make_sstable(version); };
             auto info = compact_sstables(sstables::compaction_descriptor({sst, sst2}, default_priority_class()), cf, creator).get0();
             BOOST_REQUIRE(info.new_sstables.size() == 1);
             check_min_max_column_names(info.new_sstables.front(), {"0ck100"}, {"9ck298"});
@@ -1739,6 +1726,9 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
     return test_env::do_with_async([] (test_env& env) {
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type);
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        auto sst_gen = cf.make_sst_factory();
 
         auto mt = make_lw_shared<replica::memtable>(s);
 
@@ -1767,9 +1757,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         for (auto i = 0; i < remaining; i++) {
             insert_key(to_bytes("key" + to_sstring(i)), 3600, expiration_time);
         }
-        auto sst = env.make_sstable(s);
-        write_memtable_to_sstable_for_test(*mt, sst).get();
-        sst = env.reusable_sst(sst).get0();
+        auto sst = make_sstable_containing(sst_gen, mt);
         const auto& stats = sst->get_stats_metadata();
         BOOST_REQUIRE(stats.estimated_tombstone_drop_time.bin.size() == sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE);
         auto gc_before = gc_clock::now() - s->gc_grace_seconds();
@@ -1780,12 +1768,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         run.insert(sst);
         BOOST_REQUIRE(std::fabs(run.estimate_droppable_tombstone_ratio(gc_before) - expired) <= 0.1);
 
-        auto cf = env.make_table_for_tests(s);
-        auto close_cf = deferred_stop(cf);
-        auto creator = [&] {
-            auto sst = env.make_sstable(s);
-            return sst;
-        };
+        auto creator = sst_gen;
         auto info = compact_sstables(sstables::compaction_descriptor({ sst }, default_priority_class()), cf, creator).get0();
         BOOST_REQUIRE(info.new_sstables.size() == 1);
         BOOST_REQUIRE(info.new_sstables.front()->estimate_droppable_tombstone_ratio(gc_before) == 0.0f);

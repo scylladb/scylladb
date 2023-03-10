@@ -3244,9 +3244,8 @@ static sstables::shared_sstable write_and_compare_sstables(test_env& env, schema
 }
 
 static sstables::shared_sstable write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica::memtable> mt, sstable_version_types version) {
-    auto sst = env.make_sstable(s, version);
+    auto sst = make_sstable_containing(env.make_sstable(s, version), mt);
     BOOST_TEST_MESSAGE(format("write_sstable from memtable: {}", sst->get_filename()));
-    write_memtable_to_sstable_for_test(*mt, sst).get();
     return sst;
 }
 

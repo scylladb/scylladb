@@ -25,6 +25,9 @@
 using namespace sstables;
 using namespace std::chrono_literals;
 
+// Must be called in a seastar thread.
+sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, lw_shared_ptr<replica::memtable> mt);
+sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, lw_shared_ptr<replica::memtable> mt);
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts);
 sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, std::vector<mutation> muts);
 

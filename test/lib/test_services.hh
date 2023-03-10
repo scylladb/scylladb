@@ -84,4 +84,16 @@ struct table_for_tests {
         auto& sstables_manager = table.get_sstables_manager();
         return sstables_manager.make_sstable(_data->s, _data->cfg.datadir, table.calculate_generation_for_new_table(), version);
     }
+
+    std::function<sstables::shared_sstable()> make_sst_factory() {
+        return [this] {
+            return make_sstable();
+        };
+    }
+
+    std::function<sstables::shared_sstable()> make_sst_factory(sstables::sstable_version_types version) {
+        return [this, version] {
+            return make_sstable(version);
+        };
+    }
 };

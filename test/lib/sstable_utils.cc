@@ -17,12 +17,24 @@
 #include "sstables/version.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "test/boost/sstable_test.hh"
 #include <seastar/core/reactor.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/coroutine.hh>
 
 using namespace sstables;
 using namespace std::chrono_literals;
+
+sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, lw_shared_ptr<replica::memtable> mt) {
+    return make_sstable_containing(sst_factory(), std::move(mt));
+}
+
+sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, lw_shared_ptr<replica::memtable> mt) {
+    write_memtable_to_sstable_for_test(*mt, sst).get();
+    sstable_open_config cfg { .load_first_and_last_position_metadata = true };
+    sst->open_data(cfg).get();
+    return sst;
+}
 
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts) {
     return make_sstable_containing(sst_factory(), std::move(muts));
