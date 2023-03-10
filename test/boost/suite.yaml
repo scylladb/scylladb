@@ -5,11 +5,11 @@ run_first:
     - schema_changes_test
     - sstable_conforms_to_mutation_source_test
     - secondary_index_test
-    - cql_query_test
     - mutation_reader_test
-    - view_schema_test
     - multishard_combining_reader_as_mutation_source_test
     - database_test
+    - cql_function_test
+    - memtable_test
 # These test cannot work in case-by-case mode because
 # some test-cases depend on each other
 no_parallel_cases:
