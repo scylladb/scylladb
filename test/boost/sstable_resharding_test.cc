@@ -53,6 +53,7 @@ void run_sstable_resharding_test() {
     auto s = get_schema();
     auto cf = env.make_table_for_tests(s);
     auto close_cf = deferred_stop(cf);
+    auto sst_gen = cf.make_sst_factory(version);
     std::unordered_map<shard_id, std::vector<mutation>> muts;
     static constexpr auto keys_per_shard = 1000u;
 

@@ -445,3 +445,16 @@ inline dht::decorated_key make_dkey(schema_ptr s, bytes b)
     auto sst_key = sstables::key::from_bytes(b);
     return dht::decorate_key(*s, sst_key.to_partition_key(*s));
 }
+
+// Must be called from a seastar thread.
+shared_sstable verify_mutation(test_env& env, shared_sstable sst, lw_shared_ptr<replica::memtable> mt, bytes key, std::function<void(mutation_opt&)> verify);
+inline shared_sstable verify_mutation(test_env& env, std::function<shared_sstable()> sst_gen, lw_shared_ptr<replica::memtable> mt, bytes key, std::function<void(mutation_opt&)> verify) {
+    return verify_mutation(env, sst_gen(), std::move(mt), std::move(key), std::move(verify));
+}
+shared_sstable verify_mutation(test_env& env, shared_sstable sstp, bytes key, std::function<void(mutation_opt&)> verify);
+
+shared_sstable verify_mutation(test_env& env, shared_sstable sst, lw_shared_ptr<replica::memtable> mt, dht::partition_range pr, std::function<stop_iteration(mutation_opt&)> verify);
+inline shared_sstable verify_mutation(test_env& env, std::function<shared_sstable()> sst_gen, lw_shared_ptr<replica::memtable> mt, dht::partition_range pr, std::function<stop_iteration(mutation_opt&)> verify) {
+    return verify_mutation(env, sst_gen(), std::move(mt), std::move(pr), std::move(verify));
+}
+shared_sstable verify_mutation(test_env& env, shared_sstable sstp, dht::partition_range pr, std::function<stop_iteration(mutation_opt&)> verify);

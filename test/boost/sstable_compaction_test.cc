@@ -307,6 +307,9 @@ static future<std::vector<unsigned long>> compact_sstables(test_env& env, std::v
         builder.set_compressor_params(compression_parameters::no_compression());
         builder.set_min_compaction_threshold(4);
         auto s = builder.build(schema_builder::compact_storage::no);
+        auto sst_gen = [&, generation = make_lw_shared<unsigned long>(create_sstables ? generations[0] : new_generation)] () mutable {
+            return env.make_sstable(s, (*generation)++);
+        };
 
         auto cf = env.make_table_for_tests(s);
         auto stop_cf = deferred_stop(cf);
@@ -333,14 +336,15 @@ static future<std::vector<unsigned long>> compact_sstables(test_env& env, std::v
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(utf8_type, bytes(min_sstable_size, 'a')));
                 mt->apply(std::move(m));
 
-                auto sst = make_sstable_containing(env.make_sstable(s, generation), mt);
+                auto sst = make_sstable_containing(sst_gen, mt);
                 sstables.push_back(sst);
             }
         }
+
         auto new_sstable = [&] {
-            auto gen = new_generation++;
-            created.push_back(gen);
-            return env.make_sstable(s, gen);
+            auto sst = sst_gen();
+            created.push_back(sst->generation().value());
+            return sst;
         };
         // We must have opened at least all original candidates.
         BOOST_REQUIRE(generations.size() == sstables.size());
@@ -1193,7 +1197,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                                          make_atomic_cell(utf8_type, bytes(""), ttl, last_expiry));
                     mt->apply(std::move(m));
                 };
-                auto get_usable_sst = [&] (lw_shared_ptr<replica::memtable>) {
+                auto get_usable_sst = [&] (lw_shared_ptr<replica::memtable> mt) {
                     return make_sstable_containing(sst_gen, mt);
                 };
 

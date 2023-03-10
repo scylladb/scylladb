@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "sstables/sstables.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/index_reader.hh"

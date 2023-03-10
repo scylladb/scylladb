@@ -208,3 +208,35 @@ void compaction_manager_test::deregister_compaction(const sstables::compaction_d
         testlog.error("compaction_manager_test: deregister_compaction uuid={}: task not found", c.compaction_uuid);
     }
 }
+
+shared_sstable verify_mutation(test_env& env, shared_sstable sst, lw_shared_ptr<replica::memtable> mt, bytes key, std::function<void(mutation_opt&)> verify) {
+    auto sstp = make_sstable_containing(std::move(sst), mt);
+    return verify_mutation(env, std::move(sstp), std::move(key), std::move(verify));
+}
+
+shared_sstable verify_mutation(test_env& env, shared_sstable sstp, bytes key, std::function<void(mutation_opt&)> verify) {
+    auto s = sstp->get_schema();
+    auto pr = dht::partition_range::make_singular(make_dkey(s, key));
+    auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
+    auto close_rd = deferred_close(rd);
+    auto mopt = read_mutation_from_flat_mutation_reader(rd).get();
+    verify(mopt);
+    return sstp;
+}
+
+shared_sstable verify_mutation(test_env& env, shared_sstable sst, lw_shared_ptr<replica::memtable> mt, dht::partition_range pr, std::function<stop_iteration(mutation_opt&)> verify) {
+    auto sstp = make_sstable_containing(std::move(sst), mt);
+    return verify_mutation(env, std::move(sstp), std::move(pr), std::move(verify));
+}
+
+shared_sstable verify_mutation(test_env& env, shared_sstable sstp, dht::partition_range pr, std::function<stop_iteration(mutation_opt&)> verify) {
+    auto s = sstp->get_schema();
+    auto rd = sstp->make_reader(s, env.make_reader_permit(), std::move(pr), s->full_slice());
+    auto close_rd = deferred_close(rd);
+    while (auto mopt = read_mutation_from_flat_mutation_reader(rd).get()) {
+        if (verify(mopt) == stop_iteration::yes) {
+            break;
+        }
+    }
+    return sstp;
+}
