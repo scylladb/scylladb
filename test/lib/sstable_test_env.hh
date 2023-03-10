@@ -185,6 +185,10 @@ public:
             return func(env);
         });
     }
+
+    table_for_tests make_table_for_tests(schema_ptr s = nullptr, std::optional<sstring> dir = std::nullopt) {
+        return table_for_tests(manager(), s, dir.value_or(tempdir().path().native()));
+    }
 };
 
 }   // namespace sstables

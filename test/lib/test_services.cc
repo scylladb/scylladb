@@ -116,7 +116,7 @@ public:
 table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir)
     : _data(make_lw_shared<data>())
 {
-    _data->s = s;
+    _data->s = s ? s : make_default_schema();
     _data->cfg = replica::table::config{.compaction_concurrency_semaphore = &_data->semaphore};
     _data->cfg.enable_disk_writes = bool(datadir);
     _data->cfg.datadir = datadir.value_or(sstring());
