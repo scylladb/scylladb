@@ -299,17 +299,18 @@ highest_version_seen(sharded<sstables::sstable_directory>& dir, sstables::sstabl
 using sstable_filter_func_t = std::function<bool (const sstables::shared_sstable&)>;
 
 future<uint64_t> reshape(sstables::sstable_directory& dir, replica::table& table, sstables::compaction_sstable_creator_fn creator,
-                                            sstables::reshape_mode mode, sstable_filter_func_t sstable_filter, io_priority_class iop)
+                                            sstables::reshape_mode mode, sstable_filter_func_t filter, io_priority_class iop)
 {
-    return do_with(uint64_t(0), std::move(sstable_filter), [&dir, &table, creator = std::move(creator), mode, iop] (uint64_t& reshaped_size, sstable_filter_func_t& filter) mutable {
-        return repeat([&dir, &table, creator = std::move(creator), &reshaped_size, mode, &filter, iop] () mutable {
+    uint64_t reshaped_size = 0;
+
+    while (true) {
             auto reshape_candidates = boost::copy_range<std::vector<sstables::shared_sstable>>(dir.get_unshared_local_sstables()
                     | boost::adaptors::filtered([&filter] (const auto& sst) {
                 return filter(sst);
             }));
             auto desc = table.get_compaction_strategy().get_reshaping_job(std::move(reshape_candidates), table.schema(), iop, mode);
             if (desc.sstables.empty()) {
-                return make_ready_future<stop_iteration>(stop_iteration::yes);
+                break;
             }
 
             if (!reshaped_size) {
@@ -324,28 +325,33 @@ future<uint64_t> reshape(sstables::sstable_directory& dir, replica::table& table
 
             desc.creator = creator;
 
-            return table.get_compaction_manager().run_custom_job(table.as_table_state(), sstables::compaction_type::Reshape, "Reshape compaction", [&dir, &table, sstlist = std::move(sstlist), desc = std::move(desc)] (sstables::compaction_data& info) mutable {
-                return sstables::compact_sstables(std::move(desc), info, table.as_table_state()).then([&dir, sstlist = std::move(sstlist)] (sstables::compaction_result result) mutable {
-                    return dir.remove_unshared_sstables(std::move(sstlist)).then([&dir, new_sstables = std::move(result.new_sstables)] () mutable {
-                        return dir.collect_output_unshared_sstables(std::move(new_sstables), sstables::sstable_directory::can_be_remote::no);
-                    });
-                });
-            }).then_wrapped([&table] (future<> f) {
+          std::exception_ptr ex;
+          try {
+            co_await table.get_compaction_manager().run_custom_job(table.as_table_state(), sstables::compaction_type::Reshape, "Reshape compaction", [&dir, &table, sstlist = std::move(sstlist), desc = std::move(desc)] (sstables::compaction_data& info) mutable -> future<> {
+                sstables::compaction_result result = co_await sstables::compact_sstables(std::move(desc), info, table.as_table_state());
+                co_await dir.remove_unshared_sstables(std::move(sstlist));
+                co_await dir.collect_output_unshared_sstables(std::move(result.new_sstables), sstables::sstable_directory::can_be_remote::no);
+            });
+          } catch (...) {
+              ex = std::current_exception();
+          }
+
+          if (ex != nullptr) {
                 try {
-                    f.get();
+                  std::rethrow_exception(std::move(ex));
                 } catch (sstables::compaction_stopped_exception& e) {
                     dblog.info("Table {}.{} with compaction strategy {} had reshape successfully aborted.", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name());
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    break;
                 } catch (...) {
                     dblog.info("Reshape failed for Table {}.{} with compaction strategy {} due to {}", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name(), std::current_exception());
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    break;
                 }
-                return make_ready_future<stop_iteration>(stop_iteration::no);
-            });
-        }).then([&reshaped_size] {
-            return make_ready_future<uint64_t>(reshaped_size);
-        });
-    });
+          }
+
+          co_await coroutine::maybe_yield();
+    }
+
+    co_return reshaped_size;
 }
 
 future<>
