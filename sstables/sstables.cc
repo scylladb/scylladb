@@ -187,7 +187,7 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
   }
 }
 
-std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_types>> sstable::_version_string = {
+const std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_types>> sstable::_version_string = {
     { sstable::version_types::ka , "ka" },
     { sstable::version_types::la , "la" },
     { sstable::version_types::mc , "mc" },
@@ -195,7 +195,7 @@ std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_t
     { sstable::version_types::me , "me" },
 };
 
-std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_types>> sstable::_format_string = {
+const std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_types>> sstable::_format_string = {
     { sstable::format_types::big , "big" }
 };
 
@@ -203,10 +203,10 @@ std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_typ
 // enough.  If that changes, it would be adviseable to create a full static
 // reverse mapping, even if it is done at runtime.
 template <typename Map>
-static typename Map::key_type reverse_map(const typename Map::mapped_type& value, Map& map) {
-    for (auto& pair: map) {
-        if (pair.second == value) {
-            return pair.first;
+static typename Map::key_type reverse_map(const typename Map::mapped_type& v, const Map& map) {
+    for (auto& [key, value]: map) {
+        if (value == v) {
+            return key;
         }
     }
     throw std::out_of_range("unable to reverse map");
@@ -2392,7 +2392,7 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
     return make_entry_descriptor(std::move(sstdir), std::move(fname), &ks, &cf);
 }
 
-sstable::version_types sstable::version_from_sstring(sstring &s) {
+sstable::version_types sstable::version_from_sstring(const sstring &s) {
     try {
         return reverse_map(s, _version_string);
     } catch (std::out_of_range&) {
@@ -2400,7 +2400,7 @@ sstable::version_types sstable::version_from_sstring(sstring &s) {
     }
 }
 
-sstable::format_types sstable::format_from_sstring(sstring &s) {
+sstable::format_types sstable::format_from_sstring(const sstring &s) {
     try {
         return reverse_map(s, _format_string);
     } catch (std::out_of_range&) {
@@ -2408,7 +2408,7 @@ sstable::format_types sstable::format_from_sstring(sstring &s) {
     }
 }
 
-component_type sstable::component_from_sstring(version_types v, sstring &s) {
+component_type sstable::component_from_sstring(version_types v, const sstring &s) {
     try {
         return reverse_map(s, sstable_version_constants::get_component_map(v));
     } catch (std::out_of_range&) {
