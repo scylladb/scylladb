@@ -216,8 +216,12 @@ public:
         });
     }
 
-    table_for_tests make_table_for_tests(schema_ptr s = nullptr, std::optional<sstring> dir = std::nullopt) {
-        return table_for_tests(manager(), s, dir.value_or(tempdir().path().native()));
+    table_for_tests make_table_for_tests(schema_ptr s, sstring dir) {
+        return table_for_tests(manager(), s, std::move(dir));
+    }
+
+    table_for_tests make_table_for_tests(schema_ptr s = nullptr) {
+        return table_for_tests(manager(), s, tempdir().path().native());
     }
 };
 

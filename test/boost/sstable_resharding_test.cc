@@ -45,6 +45,7 @@ static future<> assert_sstable_computes_correct_owners(test_env& env, const ssta
     BOOST_REQUIRE_EQUAL(sst->get_shards_for_this_sstable(), base_sst->get_shards_for_this_sstable());
 }
 
+// Must be called in a seastar thread.
 void run_sstable_resharding_test() {
     test_env env;
     auto close_env = defer([&] { env.stop().get(); });
@@ -56,7 +57,7 @@ void run_sstable_resharding_test() {
     static constexpr auto keys_per_shard = 1000u;
 
     // create sst shared by all shards
-    {
+    auto sst = std::invoke([&] {
         auto mt = make_lw_shared<replica::memtable>(s);
         auto get_mutation = [mt, s] (const dht::decorated_key& key, auto value) {
             mutation m(s, key);
@@ -74,10 +75,10 @@ void run_sstable_resharding_test() {
                 mt->apply(std::move(m));
             }
         }
-        auto sst = env.make_sstable(s, 0, version);
+        auto sst = cf.make_sstable(version);
         write_memtable_to_sstable_for_test(*mt, sst).get();
-    }
-    auto sst = env.reusable_sst(s, 0, version).get0();
+        return env.reusable_sst(s, sst->generation().value(), version).get();
+    });
 
     // FIXME: sstable write has a limitation in which it will generate sharding metadata only
     // for a single shard. workaround that by setting shards manually. from this test perspective,

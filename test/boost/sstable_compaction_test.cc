@@ -165,7 +165,7 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
         mt->apply(std::move(m));
 
-        auto sst = env.make_sstable(s, column_family_test::calculate_generation_for_new_table(*cf));
+        auto sst = cf.make_sstable();
 
         write_memtable_to_sstable_for_test(*mt, sst).get();
         sst->load().get();
@@ -3822,8 +3822,8 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
 
             auto cf = env.make_table_for_tests(s, tmp.path().string());
             auto close_cf = deferred_stop(cf);
-            auto sst_gen = [&env, s, cf, path = tmp.path().string(), version] () mutable {
-                return env.make_sstable(s, path, column_family_test::calculate_generation_for_new_table(*cf), version);
+            auto sst_gen = [&] () mutable {
+                return cf.make_sstable(version);
             };
 
             cf->mark_ready_for_writes();
@@ -4452,8 +4452,8 @@ SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable) {
 
         auto cf = env.make_table_for_tests(s);
         auto close_cf = deferred_stop(cf);
-        auto sst_gen = [&env, &cf, s] () mutable {
-            return env.make_sstable(s, column_family_test::calculate_generation_for_new_table(*cf));
+        auto sst_gen = [&] () mutable {
+            return cf.make_sstable();
         };
 
         auto row_mut = [&] () {
@@ -4623,8 +4623,8 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
 
             auto cf = env.make_table_for_tests(s);
             auto close_cf = deferred_stop(cf);
-            auto sst_gen = [&env, &cf, s]() mutable {
-                return env.make_sstable(s, column_family_test::calculate_generation_for_new_table(*cf));
+            auto sst_gen = [&]() mutable {
+                return cf.make_sstable();
             };
 
             using namespace std::chrono;
