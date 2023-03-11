@@ -191,97 +191,97 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
 }
 
 SEASTAR_TEST_CASE(compact) {
-  return sstables::test_env::do_with_async([] (sstables::test_env& env) {
-    BOOST_REQUIRE(smp::count == 1);
-    constexpr int generation = 17;
-    // The "compaction" sstable was created with the following schema:
-    // CREATE TABLE compaction (
-    //        name text,
-    //        age int,
-    //        height int,
-    //        PRIMARY KEY (name)
-    //);
-    auto builder = schema_builder("tests", "compaction")
-        .with_column("name", utf8_type, column_kind::partition_key)
-        .with_column("age", int32_type)
-        .with_column("height", int32_type);
-    builder.set_comment("Example table for compaction");
-    builder.set_gc_grace_seconds(std::numeric_limits<int32_t>::max());
-    auto s = builder.build();
-    table_for_tests cf(env.manager(), s);
-    auto close_cf = deferred_stop(cf);
+    return sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        BOOST_REQUIRE(smp::count == 1);
+        constexpr int generation = 17;
+        // The "compaction" sstable was created with the following schema:
+        // CREATE TABLE compaction (
+        //        name text,
+        //        age int,
+        //        height int,
+        //        PRIMARY KEY (name)
+        //);
+        auto builder = schema_builder("tests", "compaction")
+            .with_column("name", utf8_type, column_kind::partition_key)
+            .with_column("age", int32_type)
+            .with_column("height", int32_type);
+        builder.set_comment("Example table for compaction");
+        builder.set_gc_grace_seconds(std::numeric_limits<int32_t>::max());
+        auto s = builder.build();
+        table_for_tests cf(env.manager(), s);
+        auto close_cf = deferred_stop(cf);
 
         auto sstables = open_sstables(env, s, "test/resource/sstables/compaction", {1,2,3}).get();
-            auto new_sstable = [&env, gen = make_lw_shared<unsigned>(generation), s] {
-                return env.make_sstable(s, (*gen)++);
-            };
-            compact_sstables(sstables::compaction_descriptor(std::move(sstables), default_priority_class()), cf, new_sstable).get();
-                // Verify that the compacted sstable has the right content. We expect to see:
-                //  name  | age | height
-                // -------+-----+--------
-                //  jerry |  40 |    170
-                //    tom |  20 |    180
-                //   john |  20 |   deleted
-                //   nadav - deleted partition
-                auto sst = env.reusable_sst(s, generation).get();
-                    auto reader = sstable_reader(sst, s, env.make_reader_permit());
-                    auto close_reader = deferred_close(reader);
-                    auto verify_mutation = [&] (std::function<void(mutation_opt)> verify) {
-                        std::invoke(verify, read_mutation_from_flat_mutation_reader(reader).get());
-                    };
-                    verify_mutation([&] (mutation_opt m) {
-                        BOOST_REQUIRE(m);
-                        BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("jerry")))));
-                        BOOST_REQUIRE(!m->partition().partition_tombstone());
-                        auto rows = m->partition().clustered_rows();
-                        BOOST_REQUIRE(rows.calculate_size() == 1);
-                        auto &row = rows.begin()->row();
-                        BOOST_REQUIRE(!row.deleted_at());
-                        auto &cells = row.cells();
-                        auto& cdef1 = *s->get_column_definition("age");
-                        auto& cdef2 = *s->get_column_definition("height");
-                        BOOST_REQUIRE(cells.cell_at(cdef1.id).as_atomic_cell(cdef1).value() == managed_bytes({0,0,0,40}));
-                        BOOST_REQUIRE(cells.cell_at(cdef2.id).as_atomic_cell(cdef2).value() == managed_bytes({0,0,0,(int8_t)170}));
-                    });
-                    verify_mutation([&] (mutation_opt m) {
-                        BOOST_REQUIRE(m);
-                        BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("tom")))));
-                        BOOST_REQUIRE(!m->partition().partition_tombstone());
-                        auto rows = m->partition().clustered_rows();
-                        BOOST_REQUIRE(rows.calculate_size() == 1);
-                        auto &row = rows.begin()->row();
-                        BOOST_REQUIRE(!row.deleted_at());
-                        auto &cells = row.cells();
-                        auto& cdef1 = *s->get_column_definition("age");
-                        auto& cdef2 = *s->get_column_definition("height");
-                        BOOST_REQUIRE(cells.cell_at(cdef1.id).as_atomic_cell(cdef1).value() == managed_bytes({0,0,0,20}));
-                        BOOST_REQUIRE(cells.cell_at(cdef2.id).as_atomic_cell(cdef2).value() == managed_bytes({0,0,0,(int8_t)180}));
-                    });
-                    verify_mutation([&] (mutation_opt m) {
-                        BOOST_REQUIRE(m);
-                        BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("john")))));
-                        BOOST_REQUIRE(!m->partition().partition_tombstone());
-                        auto rows = m->partition().clustered_rows();
-                        BOOST_REQUIRE(rows.calculate_size() == 1);
-                        auto &row = rows.begin()->row();
-                        BOOST_REQUIRE(!row.deleted_at());
-                        auto &cells = row.cells();
-                        auto& cdef1 = *s->get_column_definition("age");
-                        auto& cdef2 = *s->get_column_definition("height");
-                        BOOST_REQUIRE(cells.cell_at(cdef1.id).as_atomic_cell(cdef1).value() == managed_bytes({0,0,0,20}));
-                        BOOST_REQUIRE(cells.find_cell(cdef2.id) == nullptr);
-                    });
-                    verify_mutation([&] (mutation_opt m) {
-                        BOOST_REQUIRE(m);
-                        BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("nadav")))));
-                        BOOST_REQUIRE(m->partition().partition_tombstone());
-                        auto rows = m->partition().clustered_rows();
-                        BOOST_REQUIRE(rows.calculate_size() == 0);
-                    });
-                    verify_mutation([&] (mutation_opt m) {
-                        BOOST_REQUIRE(!m);
-                    });
-  });
+        auto new_sstable = [&env, gen = make_lw_shared<unsigned>(generation), s] {
+            return env.make_sstable(s, (*gen)++);
+        };
+        compact_sstables(sstables::compaction_descriptor(std::move(sstables), default_priority_class()), cf, new_sstable).get();
+        // Verify that the compacted sstable has the right content. We expect to see:
+        //  name  | age | height
+        // -------+-----+--------
+        //  jerry |  40 |    170
+        //    tom |  20 |    180
+        //   john |  20 |   deleted
+        //   nadav - deleted partition
+        auto sst = env.reusable_sst(s, generation).get();
+        auto reader = sstable_reader(sst, s, env.make_reader_permit());
+        auto close_reader = deferred_close(reader);
+        auto verify_mutation = [&] (std::function<void(mutation_opt)> verify) {
+            std::invoke(verify, read_mutation_from_flat_mutation_reader(reader).get());
+        };
+        verify_mutation([&] (mutation_opt m) {
+            BOOST_REQUIRE(m);
+            BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("jerry")))));
+            BOOST_REQUIRE(!m->partition().partition_tombstone());
+            auto rows = m->partition().clustered_rows();
+            BOOST_REQUIRE(rows.calculate_size() == 1);
+            auto &row = rows.begin()->row();
+            BOOST_REQUIRE(!row.deleted_at());
+            auto &cells = row.cells();
+            auto& cdef1 = *s->get_column_definition("age");
+            auto& cdef2 = *s->get_column_definition("height");
+            BOOST_REQUIRE(cells.cell_at(cdef1.id).as_atomic_cell(cdef1).value() == managed_bytes({0,0,0,40}));
+            BOOST_REQUIRE(cells.cell_at(cdef2.id).as_atomic_cell(cdef2).value() == managed_bytes({0,0,0,(int8_t)170}));
+        });
+        verify_mutation([&] (mutation_opt m) {
+            BOOST_REQUIRE(m);
+            BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("tom")))));
+            BOOST_REQUIRE(!m->partition().partition_tombstone());
+            auto rows = m->partition().clustered_rows();
+            BOOST_REQUIRE(rows.calculate_size() == 1);
+            auto &row = rows.begin()->row();
+            BOOST_REQUIRE(!row.deleted_at());
+            auto &cells = row.cells();
+            auto& cdef1 = *s->get_column_definition("age");
+            auto& cdef2 = *s->get_column_definition("height");
+            BOOST_REQUIRE(cells.cell_at(cdef1.id).as_atomic_cell(cdef1).value() == managed_bytes({0,0,0,20}));
+            BOOST_REQUIRE(cells.cell_at(cdef2.id).as_atomic_cell(cdef2).value() == managed_bytes({0,0,0,(int8_t)180}));
+        });
+        verify_mutation([&] (mutation_opt m) {
+            BOOST_REQUIRE(m);
+            BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("john")))));
+            BOOST_REQUIRE(!m->partition().partition_tombstone());
+            auto rows = m->partition().clustered_rows();
+            BOOST_REQUIRE(rows.calculate_size() == 1);
+            auto &row = rows.begin()->row();
+            BOOST_REQUIRE(!row.deleted_at());
+            auto &cells = row.cells();
+            auto& cdef1 = *s->get_column_definition("age");
+            auto& cdef2 = *s->get_column_definition("height");
+            BOOST_REQUIRE(cells.cell_at(cdef1.id).as_atomic_cell(cdef1).value() == managed_bytes({0,0,0,20}));
+            BOOST_REQUIRE(cells.find_cell(cdef2.id) == nullptr);
+        });
+        verify_mutation([&] (mutation_opt m) {
+            BOOST_REQUIRE(m);
+            BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("nadav")))));
+            BOOST_REQUIRE(m->partition().partition_tombstone());
+            auto rows = m->partition().clustered_rows();
+            BOOST_REQUIRE(rows.calculate_size() == 0);
+        });
+        verify_mutation([&] (mutation_opt m) {
+            BOOST_REQUIRE(!m);
+        });
+    });
 
     // verify that the compacted sstable look like
 }
