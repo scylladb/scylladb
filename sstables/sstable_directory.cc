@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <type_traits>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/file.hh>
@@ -361,6 +362,7 @@ sstable_directory::do_for_each_sstable(std::function<future<>(sstables::shared_s
 }
 
 template <typename Container, typename Func>
+requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>
 future<>
 sstable_directory::parallel_for_each_restricted(Container&& C, Func&& func) {
     return do_with(std::move(C), std::move(func), [this] (Container& c, Func& func) mutable {

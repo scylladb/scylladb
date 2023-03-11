@@ -133,6 +133,7 @@ private:
     void validate(sstables::shared_sstable sst, process_flags flags) const;
 
     template <typename Container, typename Func>
+    requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>
     future<> parallel_for_each_restricted(Container&& C, Func&& func);
     future<> load_foreign_sstables(sstable_info_vector info_vec);
 
