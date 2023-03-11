@@ -138,7 +138,7 @@ public:
         return sstables::binary_search(p, entries, sk);
     }
 
-    void change_generation_number(int64_t generation) {
+    void change_generation_number(sstables::generation_type::int_t generation) {
         _sst->_generation = generation_from_value(generation);
     }
 
@@ -303,6 +303,6 @@ future<compaction_result> compact_sstables(compaction_manager& cm, sstables::com
         can_purge_tombstones can_purge = can_purge_tombstones::yes);
 
 shared_sstable make_sstable_easy(test_env& env, flat_mutation_reader_v2 rd, sstable_writer_config cfg,
-        int64_t generation = 1, const sstables::sstable::version_types version = sstables::get_highest_sstable_version(), int expected_partition = 1);
+        sstables::generation_type::int_t gen_value = 1, const sstables::sstable::version_types version = sstables::get_highest_sstable_version(), int expected_partition = 1);
 shared_sstable make_sstable_easy(test_env& env, lw_shared_ptr<replica::memtable> mt, sstable_writer_config cfg,
-        unsigned long gen = 1, const sstable::version_types v = sstables::get_highest_sstable_version(), int estimated_partitions = 1, gc_clock::time_point = gc_clock::now());
+        sstables::generation_type::int_t gen_value = 1, const sstable::version_types v = sstables::get_highest_sstable_version(), int estimated_partitions = 1, gc_clock::time_point = gc_clock::now());

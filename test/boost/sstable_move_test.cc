@@ -19,7 +19,7 @@ using namespace sstables;
 namespace fs = std::filesystem;
 
 // Must be called from a seastar thread
-static auto copy_sst_to_tmpdir(fs::path tmp_path, test_env& env, sstables::schema_ptr schema_ptr, fs::path src_path, unsigned long gen) {
+static auto copy_sst_to_tmpdir(fs::path tmp_path, test_env& env, sstables::schema_ptr schema_ptr, fs::path src_path, sstables::generation_type::int_t gen) {
     auto sst = env.reusable_sst(schema_ptr, src_path.native(), gen).get0();
     auto dst_path = tmp_path / src_path.filename() / format("gen-{}", gen);
     recursive_touch_directory(dst_path.native()).get();
@@ -35,7 +35,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move) {
     auto env = test_env();
     auto stop_env = defer([&env] { env.stop().get(); });
 
-    int64_t gen = 1;
+    sstables::generation_type::int_t gen = 1;
     auto [ sst, cur_dir ] = copy_sst_to_tmpdir(tmp.path(), env, uncompressed_schema(), fs::path(uncompressed_dir()), gen);
 
     for (auto i = 0; i < 2; i++) {
@@ -76,7 +76,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move_idempotent) {
 // Returns true when done
 //
 // Must be called from a seastar thread
-static bool partial_create_links(sstable_ptr sst, fs::path dst_path, int64_t gen, int count) {
+static bool partial_create_links(sstable_ptr sst, fs::path dst_path, sstables::generation_type::int_t gen, int count) {
     auto schema = sst->get_schema();
     auto tmp_toc = sstable::filename(dst_path.native(), schema->ks_name(), schema->cf_name(), sst->get_version(), generation_from_value(gen), sstable_format_types::big, component_type::TemporaryTOC);
     link_file(test::filename(*sst, component_type::TOC).native(), tmp_toc).get();
@@ -101,7 +101,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move_replay) {
     auto env = test_env();
     auto stop_env = defer([&env] { env.stop().get(); });
 
-    int64_t gen = 1;
+    sstables::generation_type::int_t gen = 1;
     auto [ sst, cur_dir ] = copy_sst_to_tmpdir(tmp.path(), env, uncompressed_schema(), fs::path(uncompressed_dir()), gen);
 
     bool done;
@@ -122,7 +122,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move_exists_failure) {
     auto env = test_env();
     auto stop_env = defer([&env] { env.stop().get(); });
 
-    int64_t gen = 1;
+    sstables::generation_type::int_t gen = 1;
     auto [ src_sst, cur_dir ] = copy_sst_to_tmpdir(tmp.path(), env, uncompressed_schema(), fs::path(uncompressed_dir()), gen);
     auto [ dst_sst, new_dir ] = copy_sst_to_tmpdir(tmp.path(), env, uncompressed_schema(), fs::path(uncompressed_dir()), ++gen);
 

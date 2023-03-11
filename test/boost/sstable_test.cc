@@ -39,7 +39,7 @@ bytes as_bytes(const sstring& s) {
     return { reinterpret_cast<const int8_t*>(s.data()), s.size() };
 }
 
-future<> test_using_working_sst(schema_ptr s, sstring dir, int64_t gen) {
+future<> test_using_working_sst(schema_ptr s, sstring dir, sstables::generation_type::int_t gen) {
     return test_env::do_with([s = std::move(s), dir = std::move(dir), gen] (test_env& env) {
         return env.reusable_sst(std::move(s), std::move(dir), gen).discard_result();
     });
@@ -64,7 +64,7 @@ SEASTAR_TEST_CASE(composite_index) {
 
 template<typename Func>
 inline auto
-test_using_reusable_sst(schema_ptr s, sstring dir, unsigned long gen, Func&& func) {
+test_using_reusable_sst(schema_ptr s, sstring dir, sstables::generation_type::int_t gen, Func&& func) {
     return test_env::do_with([s = std::move(s), dir = std::move(dir), gen, func = std::move(func)] (test_env& env) {
         return env.reusable_sst(std::move(s), std::move(dir), gen).then([&env, func = std::move(func)] (sstable_ptr sst) mutable {
             return func(env, std::move(sst));
@@ -94,7 +94,7 @@ SEASTAR_TEST_CASE(composite_index_read) {
 }
 
 template<uint64_t Position, uint64_t EntryPosition, uint64_t EntryKeySize>
-future<> summary_query(schema_ptr schema, sstring path, int generation) {
+future<> summary_query(schema_ptr schema, sstring path, sstables::generation_type::int_t generation) {
     return test_using_reusable_sst(std::move(schema), path, generation, [] (test_env& env, sstable_ptr ptr) {
         return sstables::test(ptr).read_summary_entry(Position).then([ptr] (auto entry) {
             BOOST_REQUIRE(entry.position == EntryPosition);
@@ -105,7 +105,7 @@ future<> summary_query(schema_ptr schema, sstring path, int generation) {
 }
 
 template<uint64_t Position, uint64_t EntryPosition, uint64_t EntryKeySize>
-future<> summary_query_fail(schema_ptr schema, sstring path, int generation) {
+future<> summary_query_fail(schema_ptr schema, sstring path, sstables::generation_type::int_t generation) {
     return summary_query<Position, EntryPosition, EntryKeySize>(std::move(schema), path, generation).then_wrapped([] (auto fut) {
         try {
             fut.get();
@@ -171,7 +171,7 @@ SEASTAR_TEST_CASE(missing_summary_first_last_sane) {
     });
 }
 
-static future<sstable_ptr> do_write_sst(test_env& env, schema_ptr schema, sstring load_dir, sstring write_dir, unsigned long generation) {
+static future<sstable_ptr> do_write_sst(test_env& env, schema_ptr schema, sstring load_dir, sstring write_dir, sstables::generation_type::int_t generation) {
     return env.reusable_sst(std::move(schema), load_dir, generation).then([write_dir, generation] (sstable_ptr sst) {
         sstables::test(sst).change_generation_number(generation + 1);
         sstables::test(sst).change_dir(write_dir);
@@ -182,7 +182,7 @@ static future<sstable_ptr> do_write_sst(test_env& env, schema_ptr schema, sstrin
     });
 }
 
-static future<> write_sst_info(schema_ptr schema, sstring load_dir, sstring write_dir, unsigned long generation) {
+static future<> write_sst_info(schema_ptr schema, sstring load_dir, sstring write_dir, sstables::generation_type::int_t generation) {
     return test_env::do_with([schema = std::move(schema), load_dir = std::move(load_dir), write_dir = std::move(write_dir), generation] (test_env& env) {
         return do_write_sst(env, std::move(schema), load_dir, write_dir, generation).then([] (auto ptr) { return make_ready_future<>(); });
     });
@@ -208,7 +208,7 @@ static future<std::pair<bufptr_t, size_t>> read_file(sstring file_path)
 
 struct sstdesc {
     sstring dir;
-    int64_t gen;
+    sstables::generation_type::int_t gen;
 };
 
 static future<> compare_files(sstdesc file1, sstdesc file2, component_type component) {
@@ -469,7 +469,7 @@ SEASTAR_TEST_CASE(wrong_range) {
 }
 
 static future<>
-test_sstable_exists(sstring dir, unsigned long generation, bool exists) {
+test_sstable_exists(sstring dir, sstables::generation_type::int_t generation, bool exists) {
     auto file_path = sstable::filename(dir, "ks", "cf", la, generation_from_value(generation), big, component_type::Data);
     return open_file_dma(file_path, open_flags::ro).then_wrapped([exists] (future<file> f) {
         if (exists) {

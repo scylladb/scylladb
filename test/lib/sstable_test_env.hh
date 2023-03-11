@@ -56,7 +56,7 @@ class test_env {
         db::nop_large_data_handler nop_ld_handler;
         test_env_sstables_manager mgr;
         reader_concurrency_semaphore semaphore;
-        unsigned long generation = 1;
+        sstables::generation_type::int_t generation = 1;
 
         impl(test_env_config cfg);
         impl(impl&&) = delete;
@@ -97,7 +97,7 @@ public:
         return make_sstable(std::move(schema), std::move(dir), _impl->generation++, std::move(v));
     }
 
-    shared_sstable make_sstable(schema_ptr schema, unsigned long generation,
+    shared_sstable make_sstable(schema_ptr schema, sstables::generation_type::int_t generation,
             sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
             size_t buffer_size = default_sstable_buffer_size, gc_clock::time_point now = gc_clock::now()) {
         return make_sstable(std::move(schema), _impl->dir.path().native(), generation, std::move(v), std::move(f), buffer_size, now);
@@ -107,7 +107,7 @@ public:
         return make_sstable(std::move(schema), _impl->generation++, std::move(v));
     }
 
-    shared_sstable make_sstable(schema_ptr schema, unsigned long gen_value, sstable::version_types v, size_t buffer_size,
+    shared_sstable make_sstable(schema_ptr schema, sstables::generation_type::int_t gen_value, sstable::version_types v, size_t buffer_size,
             gc_clock::time_point now = gc_clock::now()) {
         return make_sstable(std::move(schema), gen_value, v, sstable::format_types::big, buffer_size, now);
     }
@@ -125,7 +125,7 @@ public:
     }
 
     struct sst_not_found : public std::runtime_error {
-        sst_not_found(const sstring& dir, unsigned long generation)
+        sst_not_found(const sstring& dir, sstables::generation_type::int_t generation)
             : std::runtime_error(format("no versions of sstable generation {} found in {}", generation, dir))
         {}
     };
@@ -136,7 +136,7 @@ public:
     // therefore may block. The future value is a shared sstable - a reference-
     // counting pointer to an sstable - allowing for the returned handle to
     // be passed around until no longer needed.
-    future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation,
+    future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type::int_t generation,
             sstable::version_types version, sstable::format_types f = sstable::format_types::big) {
         auto sst = make_sstable(std::move(schema), dir, generation, version, f);
         sstable_open_config cfg { .load_first_and_last_position_metadata = true };
@@ -145,15 +145,15 @@ public:
         });
     }
 
-    future<shared_sstable> reusable_sst(schema_ptr schema, unsigned long generation,
+    future<shared_sstable> reusable_sst(schema_ptr schema, sstables::generation_type::int_t generation,
             sstable::version_types version, sstable::format_types f = sstable::format_types::big) {
         return reusable_sst(std::move(schema), _impl->dir.path().native(), std::move(generation), std::move(version), std::move(f));
     }
 
     // looks up the sstable in the given dir
-    future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation);
+    future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type::int_t generation);
 
-    future<shared_sstable> reusable_sst(schema_ptr schema, unsigned long generation) {
+    future<shared_sstable> reusable_sst(schema_ptr schema, sstables::generation_type::int_t generation) {
         return reusable_sst(std::move(schema), _impl->dir.path().native(), generation);
     }
 

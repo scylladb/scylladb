@@ -408,7 +408,7 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
     co_return new_sstables.size();
 }
 
-sstables::shared_sstable make_sstable(replica::table& table, fs::path dir, int64_t generation_value) {
+sstables::shared_sstable make_sstable(replica::table& table, fs::path dir, sstables::generation_type::int_t generation_value) {
     auto& sstm = table.get_sstables_manager();
     return sstm.make_sstable(table.schema(), dir.native(), sstables::generation_from_value(generation_value), sstm.get_highest_supported_format(), sstables::sstable_format_types::big, gc_clock::now(), &error_handler_gen_for_upload_dir);
 }
@@ -446,7 +446,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
 
         // We still want to do our best to keep the generation numbers shard-friendly.
         // Each destination shard will manage its own generation counter.
-        std::vector<std::atomic<int64_t>> shard_gen(smp::count);
+        std::vector<std::atomic<sstables::generation_type::int_t>> shard_gen(smp::count);
         for (shard_id s = 0; s < smp::count; ++s) {
             shard_gen[s].store(shard_generation_base * smp::count + s, std::memory_order_relaxed);
         }

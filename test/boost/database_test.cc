@@ -391,11 +391,11 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
         require_exist(file_name, true);
     };
 
-    auto component_basename = [&ks, &cf] (int64_t gen, component_type ctype) {
+    auto component_basename = [&ks, &cf] (sstables::generation_type::int_t gen, component_type ctype) {
         return sst::component_basename(ks, cf, sstables::get_highest_sstable_version(), generation_from_value(gen), sst::format_types::big, ctype);
     };
 
-    auto gen_filename = [&sst_dir, &ks, &cf] (int64_t gen, component_type ctype) {
+    auto gen_filename = [&sst_dir, &ks, &cf] (sstables::generation_type::int_t gen, component_type ctype) {
         return sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(gen), sst::format_types::big, ctype);
     };
 

@@ -35,7 +35,7 @@ SEASTAR_TEST_CASE(test_sstables_sstable_set_read_modify_write) {
         auto pk = tests::generate_partition_key(s);
         auto mut = mutation(s, pk);
         ss.add_row(mut, ss.make_ckey(0), "val");
-        int gen = 1;
+        sstables::generation_type::int_t gen = 1;
 
         auto mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), {mut});
         sstable_writer_config cfg = env.manager().configure_writer("");
@@ -63,7 +63,7 @@ SEASTAR_TEST_CASE(test_time_series_sstable_set_read_modify_write) {
         auto pk = tests::generate_partition_key(s);
         auto mut = mutation(s, pk);
         ss.add_row(mut, ss.make_ckey(0), "val");
-        int gen = 1;
+        sstables::generation_type::int_t gen = 1;
         sstable_writer_config cfg = env.manager().configure_writer("");
 
         auto mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), {mut});
