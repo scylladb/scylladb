@@ -227,7 +227,7 @@ future<> sstable_directory::components_lister::process(sstable_directory& direct
 
     // _descriptors is everything with a TOC. So after we remove this, what's left is
     // SSTables for which a TOC was not found.
-    co_await directory.parallel_for_each_restricted(_state->descriptors, [this, flags, &directory] (std::tuple<generation_type, sstables::entry_descriptor>&& t) {
+    co_await directory.parallel_for_each_restricted(_state->descriptors, [this, flags, &directory] (std::pair<const generation_type, sstables::entry_descriptor>& t) {
         auto& desc = std::get<1>(t);
         _state->generations_found.erase(desc.generation);
         // This will try to pre-load this file and throw an exception if it is invalid
