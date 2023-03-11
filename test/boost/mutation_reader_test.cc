@@ -3825,7 +3825,7 @@ static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
     auto pr = dht::partition_range::make_singular(dht::ring_position(g._pk));
     auto make_tested = [&env, query_schema, pk = g._pk, &pr, &query_slice, reversed]
             (const time_series_sstable_set& sst_set,
-                const std::unordered_set<int64_t>& included_gens, streamed_mutation::forwarding fwd) {
+                const std::unordered_set<sstables::generation_type::int_t>& included_gens, streamed_mutation::forwarding fwd) {
         auto permit = env.make_reader_permit();
         auto q = sst_set.make_position_reader_queue(
             [query_schema, &pr, &query_slice, fwd, permit] (sstable& sst) {
@@ -3855,7 +3855,7 @@ static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
 
         time_series_sstable_set sst_set(table_schema);
         mutation merged(table_schema, g._pk);
-        std::unordered_set<int64_t> included_gens;
+        std::unordered_set<sstables::generation_type::int_t> included_gens;
         auto sst_factory = env.make_sst_factory(table_schema);
         for (auto& mb: scenario.readers_data) {
             sstables::shared_sstable sst;

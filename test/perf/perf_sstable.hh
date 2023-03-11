@@ -211,7 +211,7 @@ public:
     future<double> compaction(int idx) {
         return test_setup::create_empty_test_dir(dir()).then([this, idx] {
             return sstables::test_env::do_with_async_returning<double>([this, idx] (sstables::test_env& env) {
-                auto sst_gen = [this, gen = make_lw_shared<unsigned>(idx)] () mutable {
+                auto sst_gen = [this, gen = make_lw_shared<sstables::generation_type::int_t>(idx)] () mutable {
                     return _env.make_sstable(s, dir(), (*gen)++, sstables::get_highest_sstable_version(), sstable::format_types::big, _cfg.buffer_size);
                 };
 

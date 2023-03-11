@@ -559,7 +559,7 @@ static schema_ptr tombstone_overlap_schema() {
 }
 
 
-static future<sstable_ptr> ka_sst(sstables::test_env& env, schema_ptr schema, sstring dir, unsigned long generation) {
+static future<sstable_ptr> ka_sst(sstables::test_env& env, schema_ptr schema, sstring dir, sstables::generation_type::int_t generation) {
     auto sst = env.make_sstable(std::move(schema), dir, generation, sstables::sstable::version_types::ka, big);
     auto fut = sst->load();
     return std::move(fut).then([sst = std::move(sst)] {

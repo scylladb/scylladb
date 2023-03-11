@@ -477,7 +477,7 @@ SEASTAR_TEST_CASE(test_counter_write) {
     });
 }
 
-static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_ptr& schema, int64_t gen,
+static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_ptr& schema, sstables::generation_type::int_t gen,
         const partition_key& first_key, const partition_key& last_key, uint32_t level = 0) {
     auto sst = env.make_sstable(schema, "", gen);
     sstables::test(sst).set_values_for_leveled_strategy(0, level, 0, first_key, last_key);
@@ -1936,7 +1936,7 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
     auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
     const auto decorated_keys = tests::generate_partition_keys(8, s);
 
-    auto check = [] (sstable_set::incremental_selector& selector, const dht::decorated_key& key, std::unordered_set<int64_t> expected_gens) {
+    auto check = [] (sstable_set::incremental_selector& selector, const dht::decorated_key& key, std::unordered_set<sstables::generation_type::int_t> expected_gens) {
         auto sstables = selector.select(key).sstables;
         BOOST_REQUIRE_EQUAL(sstables.size(), expected_gens.size());
         for (auto& sst : sstables) {
@@ -2111,7 +2111,7 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 1);
             return m;
         };
-        auto gen = make_lw_shared<unsigned>(1);
+        auto gen = make_lw_shared<sstables::generation_type::int_t>(1);
         auto make_shared_sstable = [&] (std::unordered_set<unsigned> shards, unsigned ignore_msb, unsigned smp_count) {
             auto key_schema = schema_builder(s).with_sharder(smp_count, ignore_msb).build();
             auto mut = [&] (auto shard) {
@@ -2497,7 +2497,7 @@ SEASTAR_TEST_CASE(sstable_run_disjoint_invariant_test) {
         auto s = ss.schema();
 
         const auto keys = tests::generate_partition_keys(6, s);
-        auto next_gen = [gen = make_lw_shared<unsigned>(1)] { return (*gen)++; };
+        auto next_gen = [gen = make_lw_shared<sstables::generation_type::int_t>(1)] { return (*gen)++; };
 
         sstables::sstable_run run;
 
@@ -2760,7 +2760,7 @@ SEASTAR_TEST_CASE(test_sstable_origin) {
         const auto pk = tests::generate_partition_key(s);
         auto mut = mutation(s, pk);
         ss.add_row(mut, ss.make_ckey(0), "val");
-        int gen = 1;
+        sstables::generation_type::int_t gen = 1;
 
         for (const auto version : all_sstable_versions) {
             if (version < sstable_version_types::mc) {
@@ -2875,7 +2875,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
         const std::map<sstring, sstring> no_compression_params = {};
         const std::map<sstring, sstring> lz4_compression_params = {{compression_parameters::SSTABLE_COMPRESSION, "LZ4Compressor"}};
 
-        int gen = 0;
+        sstables::generation_type::int_t gen = 0;
 
         for (const auto version : writable_sstable_versions) {
             testlog.info("version={}", version);

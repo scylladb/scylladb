@@ -2414,7 +2414,7 @@ static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sst
     } else {
         throw malformed_sstable_exception(seastar::format("invalid version for file {}. Name doesn't match any known version.", fname));
     }
-    return entry_descriptor(sstdir, ks, cf, generation_from_value(boost::lexical_cast<unsigned long>(generation)), version, format_from_string(format), sstable::component_from_sstring(version, component));
+    return entry_descriptor(sstdir, ks, cf, generation_from_value(boost::lexical_cast<sstables::generation_type::int_t>(generation)), version, format_from_string(format), sstable::component_from_sstring(version, component));
 }
 
 entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname) {
