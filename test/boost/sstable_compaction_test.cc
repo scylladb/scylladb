@@ -299,6 +299,9 @@ static std::vector<sstables::shared_sstable> get_candidates_for_leveled_strategy
 static future<std::vector<unsigned long>> compact_sstables(test_env& env, std::vector<unsigned long> generations_to_compact,
         unsigned long new_generation, bool create_sstables, uint64_t min_sstable_size, compaction_strategy_type strategy) {
     BOOST_REQUIRE(smp::count == 1);
+    return seastar::async(
+            [&env, generations_to_compact = std::move(generations_to_compact), new_generation, create_sstables, min_sstable_size, strategy] () mutable {
+    // FIXME: indentation
     schema_builder builder(make_shared_schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type));
     builder.set_compressor_params(compression_parameters::no_compression());
@@ -306,23 +309,19 @@ static future<std::vector<unsigned long>> compact_sstables(test_env& env, std::v
     auto s = builder.build(schema_builder::compact_storage::no);
 
     auto cf = make_lw_shared<table_for_tests>(env.manager(), s);
+    auto stop_cf = deferred_stop(*cf);
 
     auto generations = make_lw_shared<std::vector<unsigned long>>(std::move(generations_to_compact));
     auto sstables = make_lw_shared<std::vector<sstables::shared_sstable>>();
     auto created = make_lw_shared<std::vector<unsigned long>>();
 
-    auto f = make_ready_future<>();
-
-    return f.then([&env, generations, sstables, s, create_sstables, min_sstable_size] () mutable {
         if (!create_sstables) {
-            return open_sstables(env, s, env.tempdir().path().native(), *generations).then([sstables] (auto opened_sstables) mutable {
+            auto opened_sstables = open_sstables(env, s, env.tempdir().path().native(), *generations).get();
                 for (auto& sst : opened_sstables) {
                     sstables->push_back(sst);
                 }
-                return make_ready_future<>();
-            });
-        }
-        return do_for_each(*generations, [&env, generations, sstables, s, min_sstable_size] (unsigned long generation) {
+        } else {
+        for (auto generation : *generations) {
             auto mt = make_lw_shared<replica::memtable>(s);
 
             const column_definition& r1_col = *s->get_column_definition("r1");
@@ -337,14 +336,12 @@ static future<std::vector<unsigned long>> compact_sstables(test_env& env, std::v
 
             auto sst = env.make_sstable(s, generation, sstables::get_highest_sstable_version(), big);
 
-            return write_memtable_to_sstable_for_test(*mt, sst).then([mt, sst, s, sstables] {
-                return sst->load().then([sst, sstables] {
+            write_memtable_to_sstable_for_test(*mt, sst).get();
+                sst->load().get();
                     sstables->push_back(sst);
-                    return make_ready_future<>();
-                });
-            });
-        });
-    }).then([&env, cf = *cf, sstables, new_generation, generations, strategy, created, min_sstable_size, s] () mutable {
+        }
+        }
+
         auto generation = make_lw_shared<unsigned long>(new_generation);
         auto new_sstable = [&env, generation, created, s] {
             auto gen = (*generation)++;
@@ -361,8 +358,8 @@ static future<std::vector<unsigned long>> compact_sstables(test_env& env, std::v
             auto sstables_to_compact = sstables::size_tiered_compaction_strategy::most_interesting_bucket(*sstables, min_threshold, max_threshold);
             // We do expect that all candidates were selected for compaction (in this case).
             BOOST_REQUIRE(sstables_to_compact.size() == sstables->size());
-            return compact_sstables(sstables::compaction_descriptor(std::move(sstables_to_compact),
-                default_priority_class()), cf, new_sstable).then([generation] (auto) {});
+            (void)compact_sstables(sstables::compaction_descriptor(std::move(sstables_to_compact),
+                default_priority_class()), *cf, new_sstable).get();
         } else if (strategy == compaction_strategy_type::leveled) {
             std::vector<sstables::shared_sstable> candidates;
             candidates.reserve(sstables->size());
@@ -372,7 +369,7 @@ static future<std::vector<unsigned long>> compact_sstables(test_env& env, std::v
                 candidates.push_back(sst);
             }
             sstables::size_tiered_compaction_strategy_options stcs_options;
-            leveled_manifest manifest = leveled_manifest::create(cf.as_table_state(), candidates, 1, stcs_options);
+            leveled_manifest manifest = leveled_manifest::create(cf->as_table_state(), candidates, 1, stcs_options);
             std::vector<std::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
             std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
             auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
@@ -380,16 +377,13 @@ static future<std::vector<unsigned long>> compact_sstables(test_env& env, std::v
             BOOST_REQUIRE(candidate.level == 1);
             BOOST_REQUIRE(candidate.max_sstable_bytes == 1024*1024);
 
-            return compact_sstables(sstables::compaction_descriptor(std::move(candidate.sstables),
-                default_priority_class(), candidate.level, 1024*1024), cf, new_sstable).then([generation] (auto) {});
+            (void)compact_sstables(sstables::compaction_descriptor(std::move(candidate.sstables),
+                default_priority_class(), candidate.level, 1024*1024), *cf, new_sstable).get();
         } else {
             throw std::runtime_error("unexpected strategy");
         }
-        return make_ready_future<>();
-    }).then([created] {
+
         return std::move(*created);
-    }).finally([cf] () mutable {
-        return cf->stop_and_keep_alive();
     });
 }
 
