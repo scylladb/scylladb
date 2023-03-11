@@ -300,27 +300,26 @@ static future<std::vector<unsigned long>> compact_sstables(test_env& env, std::v
         unsigned long new_generation, bool create_sstables, uint64_t min_sstable_size, compaction_strategy_type strategy) {
     BOOST_REQUIRE(smp::count == 1);
     return seastar::async(
-            [&env, generations_to_compact = std::move(generations_to_compact), new_generation, create_sstables, min_sstable_size, strategy] () mutable {
+            [&env, generations = std::move(generations_to_compact), new_generation, create_sstables, min_sstable_size, strategy] () mutable {
         schema_builder builder(make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type));
         builder.set_compressor_params(compression_parameters::no_compression());
         builder.set_min_compaction_threshold(4);
         auto s = builder.build(schema_builder::compact_storage::no);
 
-        auto cf = make_lw_shared<table_for_tests>(env.manager(), s);
-        auto stop_cf = deferred_stop(*cf);
+        auto cf = table_for_tests(env.manager(), s);
+        auto stop_cf = deferred_stop(cf);
 
-        auto generations = make_lw_shared<std::vector<unsigned long>>(std::move(generations_to_compact));
-        auto sstables = make_lw_shared<std::vector<sstables::shared_sstable>>();
-        auto created = make_lw_shared<std::vector<unsigned long>>();
+        std::vector<sstables::shared_sstable> sstables;
+        std::vector<unsigned long> created;
 
         if (!create_sstables) {
-            auto opened_sstables = open_sstables(env, s, env.tempdir().path().native(), *generations).get();
+            auto opened_sstables = open_sstables(env, s, env.tempdir().path().native(), generations).get();
             for (auto& sst : opened_sstables) {
-                sstables->push_back(sst);
+                sstables.push_back(sst);
             }
         } else {
-            for (auto generation : *generations) {
+            for (auto generation : generations) {
                 auto mt = make_lw_shared<replica::memtable>(s);
 
                 const column_definition& r1_col = *s->get_column_definition("r1");
@@ -337,52 +336,50 @@ static future<std::vector<unsigned long>> compact_sstables(test_env& env, std::v
 
                 write_memtable_to_sstable_for_test(*mt, sst).get();
                 sst->load().get();
-                sstables->push_back(sst);
+                sstables.push_back(sst);
             }
         }
-
-        auto generation = make_lw_shared<unsigned long>(new_generation);
-        auto new_sstable = [&env, generation, created, s] {
-            auto gen = (*generation)++;
-            created->push_back(gen);
+        auto new_sstable = [&] {
+            auto gen = new_generation++;
+            created.push_back(gen);
             return env.make_sstable(s, gen, sstables::get_highest_sstable_version(), sstables::sstable::format_types::big);
         };
         // We must have opened at least all original candidates.
-        BOOST_REQUIRE(generations->size() == sstables->size());
+        BOOST_REQUIRE(generations.size() == sstables.size());
 
         if (strategy == compaction_strategy_type::size_tiered) {
             // Calling function that will return a list of sstables to compact based on size-tiered strategy.
             int min_threshold = cf->schema()->min_compaction_threshold();
             int max_threshold = cf->schema()->max_compaction_threshold();
-            auto sstables_to_compact = sstables::size_tiered_compaction_strategy::most_interesting_bucket(*sstables, min_threshold, max_threshold);
+            auto sstables_to_compact = sstables::size_tiered_compaction_strategy::most_interesting_bucket(sstables, min_threshold, max_threshold);
             // We do expect that all candidates were selected for compaction (in this case).
-            BOOST_REQUIRE(sstables_to_compact.size() == sstables->size());
+            BOOST_REQUIRE(sstables_to_compact.size() == sstables.size());
             (void)compact_sstables(sstables::compaction_descriptor(std::move(sstables_to_compact),
-                default_priority_class()), *cf, new_sstable).get();
+                default_priority_class()), cf, new_sstable).get();
         } else if (strategy == compaction_strategy_type::leveled) {
             std::vector<sstables::shared_sstable> candidates;
-            candidates.reserve(sstables->size());
-            for (auto& sst : *sstables) {
+            candidates.reserve(sstables.size());
+            for (auto& sst : sstables) {
                 BOOST_REQUIRE(sst->get_sstable_level() == 0);
                 BOOST_REQUIRE(sst->data_size() >= min_sstable_size);
                 candidates.push_back(sst);
             }
             sstables::size_tiered_compaction_strategy_options stcs_options;
-            leveled_manifest manifest = leveled_manifest::create(cf->as_table_state(), candidates, 1, stcs_options);
+            leveled_manifest manifest = leveled_manifest::create(cf.as_table_state(), candidates, 1, stcs_options);
             std::vector<std::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
             std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
             auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
-            BOOST_REQUIRE(candidate.sstables.size() == sstables->size());
+            BOOST_REQUIRE(candidate.sstables.size() == sstables.size());
             BOOST_REQUIRE(candidate.level == 1);
             BOOST_REQUIRE(candidate.max_sstable_bytes == 1024*1024);
 
             (void)compact_sstables(sstables::compaction_descriptor(std::move(candidate.sstables),
-                default_priority_class(), candidate.level, 1024*1024), *cf, new_sstable).get();
+                default_priority_class(), candidate.level, 1024*1024), cf, new_sstable).get();
         } else {
             throw std::runtime_error("unexpected strategy");
         }
 
-        return std::move(*created);
+        return created;
     });
 }
 
