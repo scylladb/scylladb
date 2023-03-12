@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <type_traits>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/file.hh>
@@ -227,7 +228,7 @@ future<> sstable_directory::components_lister::process(sstable_directory& direct
 
     // _descriptors is everything with a TOC. So after we remove this, what's left is
     // SSTables for which a TOC was not found.
-    co_await directory.parallel_for_each_restricted(_state->descriptors, [this, flags, &directory] (std::tuple<generation_type, sstables::entry_descriptor>&& t) {
+    co_await directory.parallel_for_each_restricted(_state->descriptors, [this, flags, &directory] (std::pair<const generation_type, sstables::entry_descriptor>& t) {
         auto& desc = std::get<1>(t);
         _state->generations_found.erase(desc.generation);
         // This will try to pre-load this file and throw an exception if it is invalid
@@ -361,6 +362,7 @@ sstable_directory::do_for_each_sstable(std::function<future<>(sstables::shared_s
 }
 
 template <typename Container, typename Func>
+requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>
 future<>
 sstable_directory::parallel_for_each_restricted(Container&& C, Func&& func) {
     return do_with(std::move(C), std::move(func), [this] (Container& c, Func& func) mutable {
