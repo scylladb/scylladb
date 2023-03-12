@@ -25,9 +25,12 @@ using namespace sstables;
 using namespace std::chrono_literals;
 
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts) {
+    return make_sstable_containing(sst_factory(), std::move(muts));
+}
+
+sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, std::vector<mutation> muts) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
 
-    auto sst = sst_factory();
     schema_ptr s = muts[0].schema();
     auto mt = make_lw_shared<replica::memtable>(s);
 
@@ -77,22 +80,26 @@ shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, 
         mt->apply(m);
     }
 
-    return make_sstable_easy(env, dir_path, mt, cfg, 1, version, mutations.size(), query_time);
+    auto sst = env.make_sstable(s, dir_path.string(), 1, version, sstable_format_types::big, default_sstable_buffer_size, query_time);
+    auto mr = mt->make_flat_reader(s, env.make_reader_permit());
+    sst->write_components(std::move(mr), mutations.size(), s, cfg, mt->get_encoding_stats()).get();
+    sst->load().get();
+    return sst;
 }
 
-shared_sstable make_sstable_easy(test_env& env, const fs::path& path, flat_mutation_reader_v2 rd, sstable_writer_config cfg,
+shared_sstable make_sstable_easy(test_env& env, flat_mutation_reader_v2 rd, sstable_writer_config cfg,
         int64_t generation, const sstables::sstable::version_types version, int expected_partition) {
     auto s = rd.schema();
-    auto sst = env.make_sstable(s, path.string(), generation, version, sstable_format_types::big);
+    auto sst = env.make_sstable(s, generation, version, sstable_format_types::big);
     sst->write_components(std::move(rd), expected_partition, s, cfg, encoding_stats{}).get();
     sst->load().get();
     return sst;
 }
 
-shared_sstable make_sstable_easy(test_env& env, const fs::path& path, lw_shared_ptr<replica::memtable> mt, sstable_writer_config cfg,
+shared_sstable make_sstable_easy(test_env& env, lw_shared_ptr<replica::memtable> mt, sstable_writer_config cfg,
         unsigned long gen, const sstable::version_types v, int estimated_partitions, gc_clock::time_point query_time) {
     schema_ptr s = mt->schema();
-    auto sst = env.make_sstable(s, path.string(), gen, v, sstable_format_types::big, default_sstable_buffer_size, query_time);
+    auto sst = env.make_sstable(s, gen, v, sstable_format_types::big, default_sstable_buffer_size, query_time);
     auto mr = mt->make_flat_reader(s, env.make_reader_permit());
     sst->write_components(std::move(mr), estimated_partitions, s, cfg, mt->get_encoding_stats()).get();
     sst->load().get();

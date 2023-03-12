@@ -55,6 +55,7 @@ class test_env {
         db::nop_large_data_handler nop_ld_handler;
         test_env_sstables_manager mgr;
         reader_concurrency_semaphore semaphore;
+        unsigned generation = 1;
 
         impl(test_env_config cfg);
         impl(impl&&) = delete;
@@ -77,12 +78,28 @@ public:
         return _impl->mgr.make_sstable(std::move(schema), dir, generation_from_value(generation), v, f, now, default_io_error_handler_gen(), buffer_size);
     }
 
+    shared_sstable make_sstable(schema_ptr schema, unsigned long generation,
+            sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
+            size_t buffer_size = default_sstable_buffer_size, gc_clock::time_point now = gc_clock::now()) {
+        return make_sstable(std::move(schema), _impl->dir.path().native(), generation, std::move(v), std::move(f), buffer_size, now);
+    }
+
+    shared_sstable make_sstable(schema_ptr schema, sstable::version_types v = sstables::get_highest_sstable_version()) {
+        return make_sstable(std::move(schema), _impl->generation++, std::move(v));
+    }
+
     struct sst_not_found : public std::runtime_error {
         sst_not_found(const sstring& dir, unsigned long generation)
             : std::runtime_error(format("no versions of sstable generation {} found in {}", generation, dir))
         {}
     };
 
+    // reusable_sst() opens the requested sstable for reading only (sstables are
+    // immutable, so an existing sstable cannot be opened for writing).
+    // It returns a future because opening requires reading from disk, and
+    // therefore may block. The future value is a shared sstable - a reference-
+    // counting pointer to an sstable - allowing for the returned handle to
+    // be passed around until no longer needed.
     future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation,
             sstable::version_types version, sstable::format_types f = sstable::format_types::big) {
         auto sst = make_sstable(std::move(schema), dir, generation, version, f);
@@ -92,8 +109,17 @@ public:
         });
     }
 
+    future<shared_sstable> reusable_sst(schema_ptr schema, unsigned long generation,
+            sstable::version_types version, sstable::format_types f = sstable::format_types::big) {
+        return reusable_sst(std::move(schema), _impl->dir.path().native(), std::move(generation), std::move(version), std::move(f));
+    }
+
     // looks up the sstable in the given dir
     future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation);
+
+    future<shared_sstable> reusable_sst(schema_ptr schema, unsigned long generation) {
+        return reusable_sst(std::move(schema), _impl->dir.path().native(), generation);
+    }
 
     test_env_sstables_manager& manager() { return _impl->mgr; }
     reader_concurrency_semaphore& semaphore() { return _impl->semaphore; }
@@ -115,15 +141,6 @@ public:
     static inline auto do_with(Func&& func, test_env_config cfg = {}) {
         return seastar::do_with(test_env(std::move(cfg)), [func = std::move(func)] (test_env& env) mutable {
             return futurize_invoke(func, env).finally([&env] {
-                return env.stop();
-            });
-        });
-    }
-
-    template <typename T, typename Func>
-    static inline auto do_with(T&& rval, Func&& func) {
-        return seastar::do_with(test_env(), std::forward<T>(rval), [func = std::move(func)] (test_env& env, T& val) mutable {
-            return futurize_invoke(func, env, val).finally([&env] {
                 return env.stop();
             });
         });

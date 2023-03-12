@@ -24,6 +24,13 @@ class tmpdir {
 private:
     void remove() noexcept;
 
+    class sweeper {
+        const tmpdir& _tmpd;
+    public:
+        sweeper(const tmpdir& t) noexcept : _tmpd(t) {}
+        ~sweeper();
+    };
+
 public:
     tmpdir();
 
@@ -35,4 +42,5 @@ public:
     ~tmpdir();
 
     const fs::path& path() const noexcept { return _path; }
+    sweeper make_sweeper() const noexcept { return sweeper(*this); }
 };
