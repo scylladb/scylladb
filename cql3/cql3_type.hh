@@ -20,6 +20,9 @@ namespace data_dictionary {
 class database;
 class user_types_metadata;
 }
+namespace auth {
+class resource;
+}
 
 namespace cql3 {
 
@@ -63,6 +66,7 @@ public:
         static shared_ptr<raw> tuple(std::vector<shared_ptr<raw>> ts);
         static shared_ptr<raw> frozen(shared_ptr<raw> t);
         friend std::ostream& operator<<(std::ostream& os, const raw& r);
+        friend class auth::resource;
     };
 
 private:

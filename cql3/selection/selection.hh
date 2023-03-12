@@ -15,6 +15,7 @@
 #include "query-result-reader.hh"
 #include "cql3/column_specification.hh"
 #include "cql3/selection/selector.hh"
+#include "cql3/selection/selectable.hh"
 #include "exceptions/exceptions.hh"
 #include "unimplemented.hh"
 #include <seastar/core/thread.hh>
@@ -117,6 +118,8 @@ public:
     static ::shared_ptr<selection> for_columns(schema_ptr schema, std::vector<const column_definition*> columns);
 
     virtual uint32_t add_column_for_post_processing(const column_definition& c);
+
+    virtual std::vector<shared_ptr<functions::function>> used_functions() const { return {}; }
 
     query::partition_slice::option_set get_query_options();
 private:

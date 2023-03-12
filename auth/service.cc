@@ -20,10 +20,12 @@
 #include "auth/allow_all_authorizer.hh"
 #include "auth/common.hh"
 #include "auth/role_or_anonymous.hh"
+#include "cql3/functions/functions.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/config.hh"
 #include "db/consistency_level_type.hh"
+#include "db/functions/function_name.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
 #include "service/migration_manager.hh"
@@ -346,6 +348,22 @@ future<bool> service::exists(const resource& r) const {
         }
         case resource_kind::service_level:
             return make_ready_future<bool>(true);
+
+        case resource_kind::functions: {
+            const auto& db = _qp.db();
+
+            functions_resource_view v(r);
+            const auto keyspace = v.keyspace();
+            if (!keyspace) {
+                return make_ready_future<bool>(true);
+            }
+            const auto function_signature = v.function_signature();
+            if (!function_signature) {
+                return make_ready_future<bool>(db.has_keyspace(sstring(*keyspace)));
+            }
+            auto [name, function_args] = auth::decode_signature(*function_signature);
+            return make_ready_future<bool>(cql3::functions::functions::find(db::functions::function_name{sstring(*keyspace), name}, function_args));
+        }
     }
 
     return make_ready_future<bool>(false);

@@ -48,6 +48,10 @@ public:
         return _fun->return_type();
     }
 
+    shared_ptr<functions::function> function() const {
+        return _fun;
+    }
+
 #if 0
     @Override
     public String toString()

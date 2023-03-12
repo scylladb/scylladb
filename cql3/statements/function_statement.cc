@@ -9,6 +9,7 @@
 #include "cql3/statements/function_statement.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_function.hh"
+#include "cql3/util.hh"
 #include "db/config.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "gms/feature_service.hh"
@@ -19,6 +20,48 @@ namespace cql3 {
 namespace statements {
 
 future<> function_statement::check_access(query_processor& qp, const service::client_state& state) const { return make_ready_future<>(); }
+
+future<> create_function_statement_base::check_access(query_processor& qp, const service::client_state& state) const {
+    co_await state.has_functions_access(qp.db(), _name.keyspace, auth::permission::CREATE);
+    if (_or_replace) {
+        create_arg_types(qp);
+        sstring encoded_signature = auth::encode_signature(_name.name, _arg_types);
+
+        co_await state.has_function_access(qp.db(), _name.keyspace, encoded_signature, auth::permission::ALTER);
+    }
+}
+
+future<> drop_function_statement_base::check_access(query_processor& qp, const service::client_state& state) const
+{
+    create_arg_types(qp);
+    shared_ptr<functions::function> func;
+    if (_args_present) {
+        func = functions::functions::find(_name, _arg_types);
+        if (!func) {
+            return make_ready_future<>();
+        }
+    } else {
+        auto funcs = functions::functions::find(_name);
+        if (!funcs.empty()) {
+            auto b = funcs.begin();
+            auto i = b;
+            if (++i != funcs.end()) {
+                return make_ready_future<>();
+            }
+            func = b->second;
+        } else {
+            return make_ready_future<>();
+        }
+    }
+
+    sstring encoded_signature = auth::encode_signature(_name.name, func->arg_types());
+
+    try {
+        return state.has_function_access(qp.db(), _name.keyspace, encoded_signature, auth::permission::DROP);
+    } catch (exceptions::invalid_request_exception&) {
+        return make_ready_future();
+    }
+}
 
 function_statement::function_statement(
         functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> raw_arg_types)

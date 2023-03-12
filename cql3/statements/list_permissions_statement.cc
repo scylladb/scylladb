@@ -42,7 +42,7 @@ void cql3::statements::list_permissions_statement::validate(
 
 future<> cql3::statements::list_permissions_statement::check_access(query_processor& qp, const service::client_state& state) const {
     if (_resource) {
-        maybe_correct_resource(*_resource, state);
+        maybe_correct_resource(*_resource, state, qp);
         return state.ensure_exists(*_resource);
     }
 
