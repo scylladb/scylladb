@@ -28,7 +28,7 @@ drop_aggregate_statement::prepare_schema_mutations(query_processor& qp, api::tim
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
-    auto func = validate_while_executing(qp);
+    auto func = co_await validate_while_executing(qp);
     if (func) {
         auto user_aggr = dynamic_pointer_cast<functions::user_aggregate>(func);
         if (!user_aggr) {

@@ -125,16 +125,16 @@ void create_function_statement_base::validate(query_processor& qp, const service
     // validation happens during execution
 }
 
-shared_ptr<functions::function> create_function_statement_base::validate_while_executing(query_processor& qp) const {
+seastar::future<shared_ptr<functions::function>> create_function_statement_base::validate_while_executing(query_processor& qp) const {
     create_arg_types(qp);
     auto old = functions::functions::find(_name, _arg_types);
     if (!old || _or_replace) {
-        return create(qp, old.get());
+        co_return co_await create(qp, old.get());
     }
     if (!_if_not_exists) {
         throw exceptions::invalid_request_exception(format("The function '{}' already exists", old));
     }
-    return nullptr;
+    co_return nullptr;
 }
 
 drop_function_statement_base::drop_function_statement_base(functions::function_name name,
@@ -145,7 +145,7 @@ void drop_function_statement_base::validate(query_processor& qp, const service::
     // validation happens during execution
 }
 
-shared_ptr<functions::function> drop_function_statement_base::validate_while_executing(query_processor& qp) const {
+seastar::future<shared_ptr<db::functions::function>> drop_function_statement_base::validate_while_executing(query_processor& qp) const {
     create_arg_types(qp);
     shared_ptr<functions::function> func;
     if (_args_present) {
@@ -169,7 +169,7 @@ shared_ptr<functions::function> drop_function_statement_base::validate_while_exe
         }
     }
 
-    return func;
+    co_return func;
 }
 }
 }

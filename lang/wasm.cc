@@ -19,7 +19,9 @@
 #include "seastarx.hh"
 #include "rust/cxx.h"
 #include "rust/wasmtime_bindings.hh"
+#include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include "lang/wasm_alien_thread_runner.hh"
 
 static logging::logger wasm_logger("wasm");
 
@@ -216,9 +218,15 @@ struct from_val_visitor {
     }
 };
 
-void precompile(context& ctx, const std::vector<sstring>& arg_names, std::string script) {
+seastar::future<> precompile(alien_thread_runner& alien_runner, context& ctx, const std::vector<sstring>& arg_names, std::string script) {
+    seastar::promise<rust::Box<wasmtime::Module>> done;
+    alien_runner.submit(done, [&engine_ptr = ctx.engine_ptr, script = std::move(script)] {
+        return wasmtime::create_module(engine_ptr, rust::Str(script.data(), script.size()));
+    });
+
+    ctx.module = co_await done.get_future();
+    std::exception_ptr ex;
     try {
-        ctx.module = wasmtime::create_module(ctx.engine_ptr, rust::Str(script.data(), script.size()));
         // After precompiling the module, we try creating a store, an instance and a function with it to make sure it's valid.
         // If we succeed, we drop them and keep the module, knowing that we will be able to create them again for UDF execution.
         ctx.module.value()->compile(ctx.engine_ptr);
@@ -227,7 +235,10 @@ void precompile(context& ctx, const std::vector<sstring>& arg_names, std::string
         create_func(*inst, *store, ctx.function_name);
         ctx.module.value()->release();
     } catch (const rust::Error& e) {
-        throw wasm::exception(e.what());
+        ex = std::make_exception_ptr(wasm::exception(format("Compilation failed: {}", e.what())));
+    }
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
     }
 }
 seastar::future<bytes_opt> run_script(context& ctx, wasmtime::Store& store, wasmtime::Instance& instance, wasmtime::Func& func, const std::vector<data_type>& arg_types, const std::vector<bytes_opt>& params, data_type return_type, bool allow_null_input) {

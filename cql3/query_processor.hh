@@ -29,6 +29,7 @@
 #include "service/client_state.hh"
 #include "service/forward_service.hh"
 #include "utils/observable.hh"
+#include "lang/wasm_alien_thread_runner.hh"
 
 
 namespace service {
@@ -126,6 +127,7 @@ private:
     std::unordered_map<sstring, std::unique_ptr<statements::prepared_statement>> _internal_statements;
 
     wasm::instance_cache* _wasm_instance_cache;
+    std::shared_ptr<wasm::alien_thread_runner> _alien_runner;
 public:
     static const sstring CQL_VERSION;
 
@@ -171,8 +173,16 @@ public:
         return _wasm_instance_cache;
     }
 
+    wasm::alien_thread_runner& alien_runner() {
+        return *_alien_runner;
+    }
+
     void set_wasm_instance_cache(wasm::instance_cache* cache) {
         _wasm_instance_cache = cache;
+    }
+
+    void set_alien_runner(std::shared_ptr<wasm::alien_thread_runner> alien_runner) {
+        _alien_runner = std::move(alien_runner);
     }
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key) {
