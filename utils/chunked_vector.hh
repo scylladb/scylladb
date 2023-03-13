@@ -53,6 +53,8 @@
 #include <stdexcept>
 #include <malloc.h>
 
+#include "utils/to_string.hh"
+
 namespace utils {
 
 struct chunked_vector_free_deleter {
@@ -492,6 +494,11 @@ chunked_vector<T, max_contiguous_allocation>::clear() {
         pop_back();
     }
     shrink_to_fit();
+}
+
+template <typename T, size_t max_contiguous_allocation>
+std::ostream& operator<<(std::ostream& os, const chunked_vector<T, max_contiguous_allocation>& v) {
+    return utils::format_range(os, v);
 }
 
 }

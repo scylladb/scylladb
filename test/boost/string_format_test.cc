@@ -170,6 +170,9 @@ BOOST_AUTO_TEST_CASE(test_vector_format) {
     auto list = std::list<int>(ints);
     test_format_range("list", list, ordered_strings);
 
+    auto deque = std::deque<int>(ints);
+    test_format_range("deque", deque, ordered_strings);
+
     auto set = std::set<int>(ints);
     test_format_range("set", set, ordered_strings);
 
@@ -186,19 +189,17 @@ BOOST_AUTO_TEST_CASE(test_vector_format) {
     auto ordered_map_strings = std::vector<std::string>({"{1, one}", "{2, two}", "{3, three}"});
     auto ordered_map_values = std::vector<std::string>({"one", "two", "three"});
     test_format_range("map", map, ordered_map_strings);
-    // FIXME: https://github.com/scylladb/scylladb/issues/13146
-    // test_format_range("map | boost::adaptors::map_keys", map | boost::adaptors::map_keys, ordered_strings);
-    // test_format_range("map | boost::adaptors::map_values", map | boost::adaptors::map_values, ordered_map_values);
+    test_format_range("map | boost::adaptors::map_keys", map | boost::adaptors::map_keys, ordered_strings);
+    test_format_range("map | boost::adaptors::map_values", map | boost::adaptors::map_values, ordered_map_values);
 
-    auto unordered_map = std::unordered_map<int, std::string>({{1, "one"}, {2, "two"}, {3, "three"}});
+    auto unordered_map = std::unordered_map<int, std::string>(map.begin(), map.end());
     // seastar has a specialized print function for unordered_map
     // See https://github.com/scylladb/seastar/issues/1544
     auto unordered_map_strings = std::unordered_set<std::string>({"{1 -> one}", "{2 -> two}", "{3 -> three}"});
     auto unordered_map_values = std::unordered_set<std::string>(ordered_map_values.begin(), ordered_map_values.end());
     test_format_range("unordered_map", unordered_map, unordered_map_strings);
-    // FIXME: https://github.com/scylladb/scylladb/issues/13146
-    // test_format_range("unordered_map | boost::adaptors::map_keys", unordered_map | boost::adaptors::map_keys, unordered_strings);
-    // test_format_range("unordered_map | boost::adaptors::map_values", unordered_map | boost::adaptors::map_values, unordered_map_values);
+    test_format_range("unordered_map | boost::adaptors::map_keys", unordered_map | boost::adaptors::map_keys, unordered_strings);
+    test_format_range("unordered_map | boost::adaptors::map_values", unordered_map | boost::adaptors::map_values, unordered_map_values);
 }
 
 BOOST_AUTO_TEST_CASE(test_string_format) {
@@ -242,4 +243,15 @@ BOOST_AUTO_TEST_CASE(test_fs_path_format) {
     // fs::path printer quotes the path
     auto expected = fmt::format("\"{}\"", str_path);
     BOOST_REQUIRE_EQUAL(formatted, expected);
+}
+
+BOOST_AUTO_TEST_CASE(test_boost_transformed_range_format) {
+    auto v = std::vector<int>({1, 2, 3});
+
+    test_format_range("boost::adaptors::transformed", v | boost::adaptors::transformed([] (int i) { return fmt::format("{}", i * 11); }),
+        std::vector<std::string>({"11", "22", "33"}));
+
+    auto sv = utils::small_vector<int, 3>({1, 2, 3});
+    test_format_range("transformed vector", sv | boost::adaptors::transformed([] (int i) { return fmt::format("/{}", i); }),
+        std::vector<std::string>({"/1", "/2", "/3"}));
 }
