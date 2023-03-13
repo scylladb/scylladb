@@ -219,23 +219,7 @@ public:
         std::string describe() const;
     };
 
-    class sstables_task : public task {
-    protected:
-        std::vector<sstables::shared_sstable> _sstables;
-
-        void set_sstables(std::vector<sstables::shared_sstable> new_sstables);
-        sstables::shared_sstable consume_sstable();
-
-    public:
-        explicit sstables_task(compaction_manager& mgr, compaction::table_state* t, sstables::compaction_type compaction_type, sstring desc, std::vector<sstables::shared_sstable> sstables)
-            : task(mgr, t, compaction_type, std::move(desc))
-        {
-            set_sstables(std::move(sstables));
-        }
-
-        virtual ~sstables_task();
-    };
-
+    class sstables_task;
     class major_compaction_task;
     class custom_compaction_task;
     class regular_compaction_task;

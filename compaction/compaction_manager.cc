@@ -368,6 +368,23 @@ future<> compaction_manager::get_compaction_history(compaction_history_consumer&
     return _sys_ks->get_compaction_history(std::move(f)).finally([s = _sys_ks] {});
 }
 
+class compaction_manager::sstables_task : public compaction_manager::task {
+protected:
+    std::vector<sstables::shared_sstable> _sstables;
+
+    void set_sstables(std::vector<sstables::shared_sstable> new_sstables);
+    sstables::shared_sstable consume_sstable();
+
+public:
+    explicit sstables_task(compaction_manager& mgr, compaction::table_state* t, sstables::compaction_type compaction_type, sstring desc, std::vector<sstables::shared_sstable> sstables)
+        : compaction_manager::task(mgr, t, compaction_type, std::move(desc))
+    {
+        set_sstables(std::move(sstables));
+    }
+
+    virtual ~sstables_task();
+};
+
 class compaction_manager::major_compaction_task : public compaction_manager::task {
 public:
     major_compaction_task(compaction_manager& mgr, compaction::table_state* t)
