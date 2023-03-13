@@ -3508,6 +3508,16 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
             auto m2 = gen();
             m2.partition().make_fully_continuous();
 
+            bool upgrade_schema = tests::random::get_bool();
+            if (upgrade_schema) {
+                schema_ptr new_schema = schema_builder(s)
+                    .with_column(to_bytes("_phantom"), byte_type)
+                    .remove_column("_phantom")
+                    .build();
+                m2.upgrade(new_schema);
+                cache.set_schema(new_schema);
+            }
+
             auto mt = make_lw_shared<replica::memtable>(m2.schema());
             mt->apply(m2);
             cache.update(row_cache::external_updater([&] () noexcept {
