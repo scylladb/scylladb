@@ -229,6 +229,20 @@ class ScyllaServer:
                 cluster_name = self.cluster_name) \
             | config_options
 
+    def change_ip(self, ip_addr: IPAddress) -> None:
+        """Change IP address of the current server. Pre: the server is
+        stopped"""
+        if self.is_running:
+            raise RuntimeError(f"Can't change IP of a running server {self.ip_addr}.")
+        self.ip_addr = ip_addr
+        self.config["listen_address"] = ip_addr
+        self.config["rpc_address"] = ip_addr
+        self.config["api_address"] = ip_addr
+        self.config["prometheus_address"] = ip_addr
+        self.config["alternator_address"] = ip_addr
+        self._write_config_file()
+
+
     async def install_and_start(self, api: ScyllaRESTAPIClient) -> None:
         """Setup and start this server"""
         try:
@@ -585,7 +599,7 @@ class ScyllaCluster:
     async def uninstall(self) -> None:
         """Stop running servers and uninstall all servers"""
         self.is_dirty = True
-        self.logger.info("Uninstalling cluster")
+        self.logger.info("Uninstalling cluster %s", self)
         await self.stop()
         await asyncio.gather(*(srv.uninstall() for srv in self.stopped.values()))
         await asyncio.gather(*(self.host_registry.release_host(Host(ip))
@@ -595,6 +609,7 @@ class ScyllaCluster:
         """Release all IPs leased from the host registry by this cluster.
         Call this function only if the cluster is stopped and will not be started again."""
         assert not self.running
+        self.logger.info("Cluster %s releases ips %s", self, self.leased_ips)
         while self.leased_ips:
             ip = self.leased_ips.pop()
             await self.host_registry.release_host(Host(ip))
@@ -787,7 +802,6 @@ class ScyllaCluster:
 
     async def server_start(self, server_id: ServerNum) -> ActionReturn:
         """Start a stopped server"""
-        self.logger.info("Cluster %s starting server %s", self, server_id)
         if server_id in self.running:
             return ScyllaCluster.ActionReturn(success=True,
                                               msg=f"{self.running[server_id]} already running")
@@ -795,6 +809,8 @@ class ScyllaCluster:
             return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
         self.is_dirty = True
         server = self.stopped.pop(server_id)
+        self.logger.info("Cluster %s starting server %s ip %s", self,
+                         server_id, server.ip_addr)
         server.seeds = self._seeds()
         # Put the server in `running` before starting it.
         # Starting may fail and if we didn't add it now it might leak.
@@ -837,6 +853,25 @@ class ScyllaCluster:
         self.logger = logger
         for srv in self.servers.values():
             srv.setLogger(self.logger)
+
+    async def change_ip(self, server_id: ServerNum) -> ActionReturn:
+        """Lease a new IP address and update conf/scylla.yaml with it. The
+        original IP is released at the end of the test to avoid an
+        immediate recycle within the same cluster. The server must be
+        stopped before its ip is changed."""
+        if server_id not in self.servers:
+            return ScyllaCluster.ActionReturn(success=False, msg=f"Server {server_id} unknown")
+        server = self.servers[server_id]
+        if server.is_running:
+            msg = f"Server {server_id} is running: stop it first and then change its ip"
+            return ScyllaCluster.ActionReturn(success=False, msg=msg)
+        self.is_dirty = True
+        ip_addr = IPAddress(await self.host_registry.lease_host())
+        self.leased_ips.add(ip_addr)
+        logging.info("Cluster %s changed server %s IP from %s to %s", self.name,
+                     server_id, server.ip_addr, ip_addr)
+        server.change_ip(ip_addr)
+        return ScyllaCluster.ActionReturn(success=True)
 
 
 class ScyllaClusterManager:
@@ -956,6 +991,7 @@ class ScyllaClusterManager:
         add_get('/cluster/decommission-node/{server_id}', self._cluster_decommission_node)
         add_get('/cluster/server/{server_id}/get_config', self._server_get_config)
         add_put('/cluster/server/{server_id}/update_config', self._server_update_config)
+        add_put('/cluster/server/{server_id}/change_ip', self._server_change_ip)
 
     async def _manager_up(self, _request) -> aiohttp.web.Response:
         return aiohttp.web.Response(text=f"{self.is_running}")
@@ -1123,6 +1159,15 @@ class ScyllaClusterManager:
         data = await request.json()
         ret = self.cluster.update_config(ServerNum(int(request.match_info["server_id"])),
                                          data['key'], data['value'])
+        if not ret.success:
+            return aiohttp.web.Response(status=404, text=ret.msg)
+        return aiohttp.web.Response()
+
+    async def _server_change_ip(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
+        """Pass change_ip command for the given server to the cluster"""
+        assert self.cluster
+        server_id = ServerNum(int(request.match_info["server_id"]))
+        ret = await self.cluster.change_ip(server_id)
         if not ret.success:
             return aiohttp.web.Response(status=404, text=ret.msg)
         return aiohttp.web.Response()

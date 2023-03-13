@@ -196,6 +196,10 @@ class ManagerClient():
         await self.client.put_json(f"/cluster/server/{server_id}/update_config",
                                    {"key": key, "value": value})
 
+    async def server_change_ip(self, server_id: ServerNum) -> None:
+        """Change server IP address. Applicable only to a stopped server"""
+        await self.client.put_json(f"/cluster/server/{server_id}/change_ip", {})
+
     async def wait_for_host_known(self, dst_server_id: str, expect_host_id: str,
                                   deadline: Optional[float] = None) -> None:
         """Waits until dst_server_id knows about expect_host_id, with timeout"""
