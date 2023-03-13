@@ -47,6 +47,7 @@ debian_base_packages=(
     libzstd-dev
     libdeflate-dev
     libabsl-dev
+    librapidxml-dev
 )
 
 fedora_packages=(
@@ -104,6 +105,7 @@ fedora_packages=(
     curl
     rust
     cargo
+    rapidxml-devel
 )
 
 # lld is not available on s390x, see
