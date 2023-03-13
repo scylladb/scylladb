@@ -489,7 +489,7 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
     if (s.version() == p_schema.version()) {
         return apply_monotonically(s, std::move(p), no_cache_tracker, app_stats, preemptible, res);
     } else {
-        mutation_partition p2(s, p);
+        mutation_partition p2(p_schema, p);
         p2.upgrade(p_schema, s);
         return apply_monotonically(s, std::move(p2), no_cache_tracker, app_stats, is_preemptible::no, res); // FIXME: make preemptible
     }
@@ -520,7 +520,7 @@ mutation_partition::apply_weak(const schema& s, mutation_partition_view p,
 void mutation_partition::apply_weak(const schema& s, const mutation_partition& p,
         const schema& p_schema, mutation_application_stats& app_stats) {
     // FIXME: Optimize
-    apply_monotonically(s, mutation_partition(s, p), p_schema, app_stats);
+    apply_monotonically(s, mutation_partition(p_schema, p), p_schema, app_stats);
 }
 
 void mutation_partition::apply_weak(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats) {
