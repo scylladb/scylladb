@@ -24,7 +24,7 @@ import requests
 def pid_to_dir(pid):
     return os.path.join(os.getenv('TMPDIR', '/tmp'), 'scylla-test-'+str(pid))
 
-def run_with_temporary_dir(run_cmd_generator):
+def run_with_generated_dir(run_cmd_generator, run_dir_generator):
     global run_with_temporary_dir_pids
     global run_pytest_pids
     # Below, there is a small time window, after we fork and the child
@@ -42,12 +42,11 @@ def run_with_temporary_dir(run_cmd_generator):
         run_with_temporary_dir_pids = set() # no children to clean up on child
         run_pytest_pids = set()
         pid = os.getpid()
-        dir = pid_to_dir(pid)
-        os.mkdir(dir)
+        dir = run_dir_generator(pid)
         (cmd, env) = run_cmd_generator(pid, dir)
         # redirect stdout and stderr to log file, as in a shell's >log 2>&1:
         log = os.path.join(dir, 'log')
-        fd = os.open(log, os.O_WRONLY | os.O_CREAT, mode=0o666)
+        fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, mode=0o666)
         sys.stdout.flush()
         os.close(1)
         os.dup2(fd, 1)
@@ -66,6 +65,25 @@ def run_with_temporary_dir(run_cmd_generator):
     signal.pthread_sigmask(signal.SIG_SETMASK, mask)
     return pid
 
+def make_new_tempdir(pid):
+    dir = pid_to_dir(pid)
+    os.mkdir(dir)
+    return dir
+
+def run_with_temporary_dir(run_cmd_generator):
+    return run_with_generated_dir(run_cmd_generator, make_new_tempdir)
+
+def restart_with_dir(old_pid, run_cmd_generator, dir):
+    try:
+        os.killpg(old_pid, 2)
+        os.waitpid(old_pid, 0)
+    except ProcessLookupError:
+        pass
+
+    scylla_link = os.path.join(dir, 'test_scylla')
+    os.unlink(scylla_link)
+    return run_with_generated_dir(run_cmd_generator, lambda pid : dir)
+
 # run_with_temporary_dir_pids is a set of process ids previously created
 # by run_with_temporary_dir(). On exit, the processes listed here are
 # cleaned up. Note that there is a known mapping (pid_to_dir()) from each
@@ -78,8 +96,7 @@ run_with_temporary_dir_pids = set()
 # it to the standard output even after the directory is removed. In the
 # future we may want to change this - and save the log somewhere instead
 # of copying it to stdout.
-def abort_run_with_temporary_dir(pid):
-    tmpdir = pid_to_dir(pid)
+def abort_run_with_dir(pid, tmpdir):
     try:
         os.killpg(pid, 9)
         os.waitpid(pid, 0) # don't leave an annoying zombie
@@ -97,6 +114,9 @@ def abort_run_with_temporary_dir(pid):
     if tmpdir != '/':
         shutil.rmtree(tmpdir)
     return f
+
+def abort_run_with_temporary_dir(pid):
+    return abort_run_with_dir(pid, pid_to_dir(pid))
 
 summary=''
 run_pytest_pids = set()
