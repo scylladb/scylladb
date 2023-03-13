@@ -154,7 +154,7 @@ if __name__ == '__main__':
 
     os.makedirs(mount_at, exist_ok=True)
 
-    uuid = out(f'blkid -s UUID -o value {fsdev}')
+    uuid = run(f'blkid -s UUID -o value {fsdev}', shell=True, check=True, capture_output=True, encoding='utf-8').stdout.strip()
     if not uuid:
         raise Exception(f'Failed to get UUID of {fsdev}')
 
