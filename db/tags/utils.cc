@@ -40,21 +40,6 @@ std::optional<std::string> find_tag(const schema& s, const sstring& tag) {
     }
 }
 
-future<> update_tags(service::migration_manager& mm, schema_ptr schema, std::map<sstring, sstring>&& tags_map) {
-    co_await mm.container().invoke_on(0, [s = global_schema_ptr(std::move(schema)), tags_map = std::move(tags_map)] (service::migration_manager& mm) -> future<> {
-        // FIXME: the following needs to be in a loop. If mm.announce() below
-        // fails, we need to retry the whole thing.
-        auto group0_guard = co_await mm.start_group0_operation();
-
-        schema_builder builder(s);
-        builder.add_extension(tags_extension::NAME, ::make_shared<tags_extension>(tags_map));
-
-        auto m = co_await mm.prepare_column_family_update_announcement(builder.build(), false, std::vector<view_ptr>(), group0_guard.write_timestamp());
-
-        co_await mm.announce(std::move(m), std::move(group0_guard));
-    });
-}
-
 future<> modify_tags(service::migration_manager& mm, sstring ks, sstring cf,
                      std::function<void(std::map<sstring, sstring>&)> modify) {
     co_await mm.container().invoke_on(0, [ks = std::move(ks), cf = std::move(cf), modify = std::move(modify)] (service::migration_manager& mm) -> future<> {

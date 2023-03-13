@@ -33,11 +33,6 @@ const std::map<sstring, sstring>* get_tags_of_table(schema_ptr schema);
 // tags exist but not this tag.
 std::optional<std::string> find_tag(const schema& s, const sstring& tag);
 
-// FIXME: Updating tags currently relies on updating schema, which may be subject
-// to races during concurrent updates of the same table. Once Scylla schema updates
-// are fixed, this issue will automatically get fixed as well.
-future<> update_tags(service::migration_manager& mm, schema_ptr schema, std::map<sstring, sstring>&& tags_map);
-
 // modify_tags() atomically modifies the tags on a given table: It reads the
 // existing tags, passes them as a map to the given function which can modify
 // the map, and finally writes the modified tags. This read-modify-write
