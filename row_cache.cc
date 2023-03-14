@@ -1366,7 +1366,7 @@ future<> row_cache::do_update(row_cache::external_updater eu, row_cache::interna
   });
 }
 
-std::ostream& operator<<(std::ostream& out, cache_entry& e) {
+std::ostream& operator<<(std::ostream& out, const cache_entry& e) {
     return out << "{cache_entry: " << e.position()
                << ", cont=" << e.continuous()
                << ", dummy=" << e.is_dummy_entry()
