@@ -1139,45 +1139,49 @@ void reader_concurrency_semaphore::evict_readers_in_background() {
     });
 }
 
-reader_concurrency_semaphore::can_admit
+reader_concurrency_semaphore::admit_result
 reader_concurrency_semaphore::can_admit_read(const reader_permit::impl& permit) const noexcept {
     if (_resources.memory < 0) [[unlikely]] {
         const auto consumed_memory = consumed_resources().memory;
         if (consumed_memory >= get_kill_limit()) {
-            return can_admit::no;
+            return {can_admit::no, reason::memory_resources};
         }
         if (consumed_memory >= get_serialize_limit()) {
             if (_blessed_permit) {
                 // blessed permit is never in the wait list
-                return can_admit::no;
+                return {can_admit::no, reason::memory_resources};
             } else {
-                auto res = permit.get_state() == reader_permit::state::waiting_for_memory ? can_admit::yes : can_admit::no;
-                return res;
+                if (permit.get_state() == reader_permit::state::waiting_for_memory) {
+                    return {can_admit::yes, reason::all_ok};
+                } else {
+                    return {can_admit::no, reason::memory_resources};
+                }
             }
         }
     }
 
     if (permit.get_state() == reader_permit::state::waiting_for_memory) {
-        return can_admit::yes;
+        return {can_admit::yes, reason::all_ok};
     }
 
     if (!_ready_list.empty()) {
-        return can_admit::no;
+        return {can_admit::no, reason::ready_list};
     }
 
     if (!all_used_permits_are_stalled()) {
-        return can_admit::no;
+        return {can_admit::no, reason::used_permits};
     }
 
     if (!has_available_units(permit.base_resources())) {
+        auto reason = _resources.memory >= permit.base_resources().memory ? reason::memory_resources : reason::count_resources;
         if (_inactive_reads.empty()) {
-            return can_admit::no;
+            return {can_admit::no, reason};
         } else {
-            return can_admit::maybe;
+            return {can_admit::maybe, reason};
         }
     }
 
-    return can_admit::yes;
+    return {can_admit::yes, reason::all_ok};
 }
 
 future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& permit) {
@@ -1185,7 +1189,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
         _execution_loop_future.emplace(execution_loop());
     }
 
-    const auto admit = can_admit_read(permit);
+    const auto admit = can_admit_read(permit).decision;
     if (admit != can_admit::yes || !_wait_list.empty()) {
         auto fut = enqueue_waiter(permit, wait_on::admission);
         if (admit == can_admit::yes && !_wait_list.empty()) {
@@ -1211,7 +1215,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
 
 void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
     auto admit = can_admit::no;
-    while (!_wait_list.empty() && (admit = can_admit_read(_wait_list.front())) == can_admit::yes) {
+    while (!_wait_list.empty() && (admit = can_admit_read(_wait_list.front()).decision) == can_admit::yes) {
         auto& permit = _wait_list.front();
         dequeue_permit(permit);
         try {
