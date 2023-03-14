@@ -16,4 +16,6 @@ target_link_libraries(replica
     db
     wasmtime_bindings
     Seastar::seastar
-    xxHash::xxhash)
+    xxHash::xxhash
+  PRIVATE
+    absl::raw_hash_set)

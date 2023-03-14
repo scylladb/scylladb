@@ -119,4 +119,7 @@ target_link_libraries(cql3
     wasmtime_bindings
     Seastar::seastar
     xxHash::xxhash
-    ANTLR3::antlr3)
+    ANTLR3::antlr3
+  PRIVATE
+    lang
+    transport)

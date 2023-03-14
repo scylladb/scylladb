@@ -1,4 +1,20 @@
-function(add_scylla_test name)
+#
+ # Add a scylla unit test
+ #
+ # add_scylla_test(<test_name>
+ #   [KIND <kind>]
+ #   [SOUCES <src>...])
+ #
+ # kind can be:
+ # * SEASTAR - a unit test that depends on the scylla sources and the
+ #   seastar test framework.
+ # * BOOST - a unit test that only depends on the listed sources and the
+ #   Boost test framework
+ # test_name should map to a source file, such that ${test_name}.cc
+ # is a valid source file. If this isn't the case, please use the SOURCE
+ # param.
+ #
+ function(add_scylla_test name)
   cmake_parse_arguments(parsed_args
     ""
     "KIND"
@@ -106,17 +122,13 @@ add_scylla_test(top_k_test
   KIND BOOST)
 add_scylla_test(transport_test
   KIND BOOST)
-add_scylla_test(type_json_test
-  KIND BOOST
-  LIBRARIES
-    cql3
-    types
-    utils)
 add_scylla_test(types_test
   KIND BOOST)
 add_scylla_test(vint_serialization_test
   KIND BOOST
-  LIBRARIES utils)
+  LIBRARIES
+    scylla-main
+    utils)
 add_scylla_test(bptree_test
   KIND BOOST
   LIBRARIES utils)
@@ -124,7 +136,8 @@ add_scylla_test(utf8_test
   KIND BOOST
   LIBRARIES utils)
 add_scylla_test(user_function_test
-  KIND BOOST)
+  KIND SEASTAR
+  LIBRARIES idl)
 add_scylla_test(user_types_test
   KIND BOOST)
 add_scylla_test(expr_test

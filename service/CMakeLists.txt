@@ -34,4 +34,8 @@ target_link_libraries(service
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    mutation)
+    mutation
+    raft
+    repair
+    streaming
+    systemd)

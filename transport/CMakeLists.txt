@@ -15,4 +15,5 @@ target_link_libraries(transport
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    cql3)
+    cql3
+    Snappy::snappy)
