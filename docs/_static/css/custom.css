@@ -1,7 +1,15 @@
+/* Override theme styles */
+
 .cloud-card img {
     right: -30px !important;
 }
 
 .enterprise-card img {
-    right: -15px !important;
+    right: -25px !important;
+}
+
+.cloud-card,
+.enterprise-card,
+.opensource-card {
+    padding: 20px 30px !important;
 }
