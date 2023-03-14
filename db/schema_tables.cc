@@ -92,6 +92,13 @@ static bool is_extra_durable(const sstring& ks_name, const sstring& cf_name) {
 
 /** system.schema_* tables used to store keyspace/table/type attributes prior to C* 3.0 */
 namespace db {
+namespace {
+    const auto set_null_sharder = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
+        if (ks_name == schema_tables::NAME) {
+            props.use_null_sharder = true;
+        }
+    });
+}
 
 schema_ctxt::schema_ctxt(const db::config& cfg, std::shared_ptr<data_dictionary::user_types_storage> uts)
     : _extensions(cfg.extensions())
@@ -247,7 +254,6 @@ schema_ptr keyspaces() {
         );
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        builder.with_null_sharder();
         return builder.build();
     }();
     return schema;
@@ -274,7 +280,6 @@ schema_ptr scylla_keyspaces() {
         );
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        builder.with_null_sharder();
         return builder.build();
     }();
     return schema;
@@ -316,7 +321,6 @@ schema_ptr tables() {
         );
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        builder.with_null_sharder();
         return builder.build();
     }();
     return schema;
@@ -345,7 +349,6 @@ schema_ptr scylla_tables(schema_features features) {
             offset += 2;
         }
         sb.with_version(system_keyspace::generate_schema_version(id, offset));
-        sb.with_null_sharder();
         return sb.build();
     };
     static thread_local schema_ptr schemas[2][2] = { {make(false, false), make(false, true)}, {make(true, false), make(true, true)} };
@@ -387,7 +390,6 @@ static schema_ptr columns_schema(const char* columns_table_name) {
         );
     builder.set_gc_grace_seconds(schema_gc_grace);
     builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-    builder.with_null_sharder();
     return builder.build();
 }
 schema_ptr columns() {
@@ -454,7 +456,6 @@ static schema_ptr computed_columns_schema(const char* columns_table_name) {
         );
     builder.set_gc_grace_seconds(schema_gc_grace);
     builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-    builder.with_null_sharder();
     return builder.build();
 }
 
@@ -484,7 +485,6 @@ schema_ptr dropped_columns() {
         );
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        builder.with_null_sharder();
         return builder.build();
     }();
     return schema;
@@ -510,7 +510,6 @@ schema_ptr triggers() {
         );
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        builder.with_null_sharder();
         return builder.build();
     }();
     return schema;
@@ -555,7 +554,6 @@ schema_ptr views() {
         );
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        builder.with_null_sharder();
         return builder.build();
     }();
     return schema;
@@ -582,7 +580,6 @@ schema_ptr indexes() {
         );
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        builder.with_null_sharder();
         return builder.build();
     }();
     return schema;
@@ -609,7 +606,6 @@ schema_ptr types() {
         );
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        builder.with_null_sharder();
         return builder.build();
     }();
     return schema;
@@ -639,7 +635,6 @@ schema_ptr functions() {
         );
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        builder.with_null_sharder();
         return builder.build();
     }();
     return schema;
@@ -669,7 +664,6 @@ schema_ptr aggregates() {
         );
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        builder.with_null_sharder();
         return builder.build();
     }();
     return schema;
@@ -700,7 +694,6 @@ schema_ptr scylla_aggregates() {
         
         builder.set_gc_grace_seconds(schema_gc_grace);
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        builder.with_null_sharder();
         return builder.build();
     }();
     return schema;
@@ -720,7 +713,6 @@ schema_ptr scylla_table_schema_history() {
         builder.set_comment("Scylla specific table to store a history of column mappings "
             "for each table schema version upon an CREATE TABLE/ALTER TABLE operations");
         builder.with_version(system_keyspace::generate_schema_version(builder.uuid()));
-        builder.with_null_sharder();
         return builder.build(schema_builder::compact_storage::no);
     }();
     return s;
@@ -3017,19 +3009,6 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
     }
 }
 
-// tables in the "system" keyspace which need to use null sharder
-static const std::unordered_set<sstring>& system_ks_null_shard_tables() {
-    static const std::unordered_set<sstring> tables = {
-        SCYLLA_TABLE_SCHEMA_HISTORY,
-        db::system_keyspace::RAFT,
-        db::system_keyspace::RAFT_SNAPSHOTS,
-        db::system_keyspace::RAFT_SNAPSHOT_CONFIG,
-        db::system_keyspace::GROUP0_HISTORY,
-        db::system_keyspace::DISCOVERY,
-        db::system_keyspace::BROADCAST_KV_STORE,
-    };
-    return tables;
-}
 
 schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, std::optional<table_schema_version> version)
 {
@@ -3112,13 +3091,6 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
     if (auto partitioner = sm.partitioner()) {
         builder.with_partitioner(*partitioner);
         builder.with_sharder(smp::count, ctxt.murmur3_partitioner_ignore_msb_bits());
-    }
-
-    if (ks_name == NAME
-            || (ks_name == db::system_keyspace::NAME
-                && system_ks_null_shard_tables().contains(cf_name))) {
-        // Put every schema table on shard 0.
-        builder.with_null_sharder();
     }
 
     if (is_extra_durable(ks_name, cf_name)) {

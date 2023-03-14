@@ -21,12 +21,14 @@ class per_partition_rate_limit_options;
 struct schema_builder {
 public:
     enum class compact_storage { no, yes };
+    using static_configurator = noncopyable_function<void(const sstring& ks_name, const sstring& cf_name, schema_static_props&)>;
 private:
     schema::raw_schema _raw;
     std::optional<compact_storage> _compact_storage;
     std::optional<table_schema_version> _version;
     std::optional<raw_view_info> _view_info;
     schema_builder(const schema::raw_schema&);
+    static std::vector<static_configurator>& static_configurators();
 public:
     schema_builder(std::string_view ks_name, std::string_view cf_name,
             std::optional<table_id> = { },
@@ -42,6 +44,8 @@ public:
             data_type regular_column_name_type,
             sstring comment = "");
     schema_builder(const schema_ptr);
+
+    static int register_static_configurator(static_configurator&& configurator);
 
     schema_builder& set_uuid(const table_id& id) {
         _raw._id = id;
@@ -238,7 +242,6 @@ public:
     }
     schema_builder& with_partitioner(sstring name);
     schema_builder& with_sharder(unsigned shard_count, unsigned sharding_ignore_msb_bits);
-    schema_builder& with_null_sharder(); // a sharder that puts everything on shard 0
     class default_names {
     public:
         default_names(const schema_builder&);

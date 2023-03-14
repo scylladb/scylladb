@@ -319,8 +319,9 @@ schema::raw_schema::raw_schema(table_id id)
     , _sharder(::get_sharder(smp::count, default_partitioner_ignore_msb))
 { }
 
-schema::schema(private_tag, const raw_schema& raw, std::optional<raw_view_info> raw_view_info)
+schema::schema(private_tag, const raw_schema& raw, std::optional<raw_view_info> raw_view_info, const schema_static_props& props)
     : _raw(raw)
+    , _static_props(props)
     , _offsets([this] {
         if (_raw._columns.size() > std::numeric_limits<column_count_type>::max()) {
             throw std::runtime_error(format("Column count limit ({:d}) overflowed: {:d}",
@@ -410,6 +411,7 @@ schema::schema(private_tag, const raw_schema& raw, std::optional<raw_view_info> 
 
 schema::schema(const schema& o, const std::function<void(schema&)>& transform)
     : _raw(o._raw)
+    , _static_props(o._static_props)
     , _offsets(o._offsets)
 {
     // Do the transformation after all the raw fields are initialized, but
@@ -984,10 +986,6 @@ schema_builder& schema_builder::with_sharder(unsigned shard_count, unsigned shar
     return *this;
 }
 
-schema_builder& schema_builder::with_null_sharder() {
-    _raw._sharder = get_sharder(1, 0);
-    return *this;
-}
 
 schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_name,
         std::optional<table_id> id, data_type rct)
@@ -1275,6 +1273,11 @@ schema_builder& schema_builder::without_indexes() {
 schema_ptr schema_builder::build() {
     schema::raw_schema new_raw = _raw; // Copy so that build() remains idempotent.
 
+    schema_static_props static_props{};
+    for (const auto& c: static_configurators()) {
+        c(new_raw._ks_name, new_raw._cf_name, static_props);
+    }
+
     if (_version) {
         new_raw._version = *_version;
     } else {
@@ -1322,7 +1325,21 @@ schema_ptr schema_builder::build() {
             dynamic_pointer_cast<db::per_partition_rate_limit_extension>(it->second)->get_options();
     }
 
-    return make_lw_shared<schema>(schema::private_tag{}, new_raw, _view_info);
+    if (static_props.use_null_sharder) {
+        new_raw._sharder = get_sharder(1, 0);
+    }
+
+    return make_lw_shared<schema>(schema::private_tag{}, new_raw, _view_info, static_props);
+}
+
+auto schema_builder::static_configurators() -> std::vector<static_configurator>& {
+    static std::vector<static_configurator> result{};
+    return result;
+}
+
+int schema_builder::register_static_configurator(static_configurator&& configurator) {
+    static_configurators().push_back(std::move(configurator));
+    return 0;
 }
 
 const cdc::options& schema::cdc_options() const {

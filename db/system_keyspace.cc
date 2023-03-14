@@ -67,6 +67,23 @@
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
 namespace db {
+namespace {
+    const auto set_null_sharder = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
+        // tables in the "system" keyspace which need to use null sharder
+        static const std::unordered_set<sstring> system_ks_null_shard_tables = {
+            schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY,
+            system_keyspace::RAFT,
+            system_keyspace::RAFT_SNAPSHOTS,
+            system_keyspace::RAFT_SNAPSHOT_CONFIG,
+            system_keyspace::GROUP0_HISTORY,
+            system_keyspace::DISCOVERY,
+            system_keyspace::BROADCAST_KV_STORE,
+        };
+        if (ks_name == system_keyspace::NAME && system_ks_null_shard_tables.contains(cf_name)) {
+            props.use_null_sharder = true;
+        }
+    });
+}
 
 std::unique_ptr<query_context> qctx = {};
 
@@ -206,7 +223,6 @@ schema_ptr system_keyspace::raft() {
             .set_comment("Persisted RAFT log, votes and snapshot info")
             .with_version(generate_schema_version(id))
             .set_wait_for_sync_to_commitlog(true)
-            .with_null_sharder()
             .build();
     }();
     return schema;
@@ -228,7 +244,6 @@ schema_ptr system_keyspace::raft_snapshots() {
             .set_comment("Persisted RAFT snapshot descriptors info")
             .with_version(generate_schema_version(id))
             .set_wait_for_sync_to_commitlog(true)
-            .with_null_sharder()
             .build();
     }();
     return schema;
@@ -246,7 +261,6 @@ schema_ptr system_keyspace::raft_snapshot_config() {
             .set_comment("RAFT configuration for the latest snapshot descriptor")
             .with_version(generate_schema_version(id))
             .set_wait_for_sync_to_commitlog(true)
-            .with_null_sharder()
             .build();
     }();
     return schema;
@@ -924,7 +938,6 @@ schema_ptr system_keyspace::group0_history() {
 
             .set_comment("History of Raft group 0 state changes")
             .with_version(generate_schema_version(id))
-            .with_null_sharder()
             .build();
     }();
     return schema;
@@ -944,7 +957,6 @@ schema_ptr system_keyspace::discovery() {
             .set_comment("State of cluster discovery algorithm: the set of discovered peers")
             .with_version(generate_schema_version(id))
             .set_wait_for_sync_to_commitlog(true)
-            .with_null_sharder()
             .build();
     }();
     return schema;
@@ -958,7 +970,6 @@ schema_ptr system_keyspace::broadcast_kv_store() {
             .with_column("value", utf8_type)
             .with_version(generate_schema_version(id))
             .set_wait_for_sync_to_commitlog(true)
-            .with_null_sharder()
             .build();
     }();
     return schema;

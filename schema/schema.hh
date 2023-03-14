@@ -562,6 +562,10 @@ public:
     }
 };
 
+struct schema_static_props {
+    bool use_null_sharder = false; // use a sharder that puts everything on shard 0
+};
+
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
@@ -630,6 +634,7 @@ private:
         std::reference_wrapper<const dht::sharder> _sharder;
     };
     raw_schema _raw;
+    schema_static_props _static_props;
     thrift_schema _thrift;
     v3_columns _v3_columns;
     mutable schema_registry_entry* _registry_entry = nullptr;
@@ -680,11 +685,14 @@ private:
     schema(const schema&, const std::function<void(schema&)>&);
     class private_tag{};
 public:
-    schema(private_tag, const raw_schema&, std::optional<raw_view_info>);
+    schema(private_tag, const raw_schema&, std::optional<raw_view_info>, const schema_static_props& props);
     schema(const schema&);
     // See \ref make_reversed().
     schema(reversed_tag, const schema&);
     ~schema();
+    const schema_static_props& static_props() const {
+        return _static_props;
+    }
     table_schema_version version() const {
         return _raw._version;
     }
