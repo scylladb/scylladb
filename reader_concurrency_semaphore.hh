@@ -74,6 +74,18 @@ public:
         uint64_t reads_admitted = 0;
         // Total number of reads enqueued to wait for admission.
         uint64_t reads_enqueued = 0;
+        // Total number of reads admitted immediately, without queueing
+        uint64_t reads_admitted_immediately = 0;
+        // Total number of reads enqueued because ready_list wasn't empty
+        uint64_t reads_queued_because_ready_list = 0;
+        // Total number of reads enqueued because there are used but unblocked permits
+        uint64_t reads_queued_because_used_permits = 0;
+        // Total number of reads enqueued because there weren't enough memory resources
+        uint64_t reads_queued_because_memory_resources = 0;
+        // Total number of reads enqueued because there weren't enough count resources
+        uint64_t reads_queued_because_count_resources = 0;
+        // Total number of reads enqueued to be maybe admitted after evicting some inactive reads
+        uint64_t reads_queued_with_eviction = 0;
         // Total number of permits created so far.
         uint64_t total_permits = 0;
         // Current number of permits.
