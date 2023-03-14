@@ -84,17 +84,6 @@ void feature_service::unregister_feature(feature& f) {
 }
 
 
-void feature_service::enable(const sstring& name) {
-    if (auto it = _registered_features.find(name); it != _registered_features.end()) {
-        auto&& f = it->second;
-        auto& f_ref = f.get();
-        if (db::qctx && !f_ref) {
-            persist_enabled_feature_info(f_ref);
-        }
-        f_ref.enable();
-    }
-}
-
 std::set<std::string_view> feature_service::supported_feature_set() {
     // Add features known by this local node. When a new feature is
     // introduced in scylla, update it here, e.g.,
