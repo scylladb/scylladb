@@ -3265,6 +3265,7 @@ future<> system_keyspace::delete_paxos_decision(const schema& s, const partition
 }
 
 future<> system_keyspace::enable_features_on_startup(sharded<gms::feature_service>& feat) {
+    std::set<sstring> features_to_enable;
     auto pre_enabled_features = co_await get_scylla_local_param(gms::feature_service::ENABLED_FEATURES_KEY);
     if (!pre_enabled_features) {
         co_return;
@@ -3288,17 +3289,20 @@ future<> system_keyspace::enable_features_on_startup(sharded<gms::feature_servic
             }
         }
         if (is_registered_feat) {
-            co_await feat.invoke_on_all([f] (auto& srv) -> future<> {
-                // `gms::feature::enable` should be run within a seastar thread context
-                co_await seastar::async([&srv, f] {
-                    srv.enable(sstring(f));
-                });
-            });
+            features_to_enable.insert(std::move(f));
         }
         // If a feature is not in `registered_features` but still in `known_features` list
         // that means the feature name is used for backward compatibility and should be implicitly
         // enabled in the code by default, so just skip it.
     }
+
+    co_await feat.invoke_on_all([&features_to_enable] (auto& srv) -> future<> {
+        // `gms::feature::enable` should be run within a seastar thread context
+        co_await seastar::async([&srv, &features_to_enable] {
+            std::set<std::string_view> feat = boost::copy_range<std::set<std::string_view>>(features_to_enable);
+            srv.enable(feat);
+        });
+    });
 }
 
 future<utils::UUID> system_keyspace::get_raft_group0_id() {
