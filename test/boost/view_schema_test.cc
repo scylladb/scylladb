@@ -9,7 +9,8 @@
 
 #include <boost/test/unit_test.hpp>
 #include <boost/range/adaptor/map.hpp>
-
+#include <fmt/ostream.h>
+#include <fmt/ranges.h>
 #include "replica/database.hh"
 #include "types/user.hh"
 #include "db/view/node_view_update_backlog.hh"
@@ -1501,7 +1502,7 @@ SEASTAR_TEST_CASE(test_filter_with_type_cast) {
 SEASTAR_TEST_CASE(test_restrictions_on_all_types) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create type myType (a int, b uuid, c set<text>)").get();
-        auto column_names = ::join(", ", std::vector<sstring>({
+        const std::string_view column_names[] = {
             "asciival",
             "bigintval",
             "blobval",
@@ -1523,7 +1524,7 @@ SEASTAR_TEST_CASE(test_restrictions_on_all_types) {
             "frozensetval",
             "frozenmapval",
             "tupleval",
-            "udtval"}));
+            "udtval"};
         e.execute_cql(fmt::format("create table cf ("
                     "asciival ascii, "
                     "bigintval bigint, "
@@ -1546,7 +1547,7 @@ SEASTAR_TEST_CASE(test_restrictions_on_all_types) {
                     "frozensetval frozen<set<uuid>>, "
                     "frozenmapval frozen<map<ascii, int>>,"
                     "tupleval frozen<tuple<int, ascii, uuid>>,"
-                    "udtval frozen<myType>, primary key ({}))", column_names)).get();
+                    "udtval frozen<myType>, primary key ({}))", fmt::join(column_names, ", "))).get();
 
         e.execute_cql(fmt::format("create materialized view vcf as select * from cf where "
                 "asciival = 'abc' AND "
@@ -1571,7 +1572,7 @@ SEASTAR_TEST_CASE(test_restrictions_on_all_types) {
                 "frozenmapval = {{'a': 1, 'b': 2}} AND "
                 "tupleval = (1, 'foobar', 6BDDC89A-5644-11E4-97FC-56847AFE9799) AND "
                 "udtval = {{a: 1, b: 6BDDC89A-5644-11E4-97FC-56847AFE9799, c: {{'foo', 'bar'}}}} "
-                "PRIMARY KEY ({})", column_names)).get();
+                "PRIMARY KEY ({})", fmt::join(column_names, ", "))).get();
 
         e.execute_cql(fmt::format("insert into cf ({}) values ( "
                 "'abc',"
@@ -1595,7 +1596,7 @@ SEASTAR_TEST_CASE(test_restrictions_on_all_types) {
                 "{{6BDDC89A-5644-11E4-97FC-56847AFE9799}},"
                 "{{'a': 1, 'b': 2}},"
                 "(1, 'foobar', 6BDDC89A-5644-11E4-97FC-56847AFE9799),"
-                "{{a: 1, b: 6BDDC89A-5644-11E4-97FC-56847AFE9799, c: {{'foo', 'bar'}}}})", column_names)).get();
+                "{{a: 1, b: 6BDDC89A-5644-11E4-97FC-56847AFE9799, c: {{'foo', 'bar'}}}})", fmt::join(column_names, ", "))).get();
 
         eventually([&] {
         auto msg = e.execute_cql("select * from vcf").get0();

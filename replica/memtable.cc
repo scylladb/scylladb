@@ -865,7 +865,8 @@ size_t memtable_entry::object_memory_size(allocation_strategy& allocator) {
 
 std::ostream& operator<<(std::ostream& out, memtable& mt) {
     logalloc::reclaim_lock rl(mt);
-    return out << "{memtable: [" << ::join(",\n", mt.partitions) << "]}";
+    fmt::print(out, "{{memtable: [{}]}}", fmt::join(mt.partitions, ",\n"));
+    return out;
 }
 
 std::ostream& operator<<(std::ostream& out, const memtable_entry& mt) {

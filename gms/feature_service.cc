@@ -200,7 +200,7 @@ void feature_service::persist_enabled_feature_info(const gms::feature& f) const 
     }
     auto feats_set = to_feature_set(*raw_old_value);
     feats_set.emplace(f.name());
-    db::system_keyspace::set_scylla_local_param(ENABLED_FEATURES_KEY, ::join(",", feats_set)).get0();
+    db::system_keyspace::set_scylla_local_param(ENABLED_FEATURES_KEY, fmt::to_string(fmt::join(feats_set, ","))).get0();
 }
 
 void feature_service::enable(const std::set<std::string_view>& list) {

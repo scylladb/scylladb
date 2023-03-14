@@ -210,7 +210,7 @@ void batch_statement::verify_batch_size(query_processor& qp, const std::vector<m
                 ks_cf_pairs.insert(m.schema()->ks_name() + "." + m.schema()->cf_name());
             }
             return format("Batch modifying {:d} partitions in {} is of size {:d} bytes, exceeding specified {} threshold of {:d} by {:d}.",
-                    mutations.size(), join(", ", ks_cf_pairs), size, type, threshold, size - threshold);
+                    mutations.size(), fmt::join(ks_cf_pairs, ", "), size, type, threshold, size - threshold);
         };
         if (size > fail_threshold) {
             _logger.error(error("FAIL", fail_threshold).c_str());

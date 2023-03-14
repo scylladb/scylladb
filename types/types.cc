@@ -1007,8 +1007,8 @@ static sstring cql3_type_name_impl(const abstract_type& t) {
         sstring operator()(const time_type_impl&) { return "time"; }
         sstring operator()(const timeuuid_type_impl&) { return "timeuuid"; }
         sstring operator()(const tuple_type_impl& t) {
-            return format("tuple<{}>", ::join(", ", t.all_types() | boost::adaptors::transformed(std::mem_fn(
-                                                                            &abstract_type::as_cql3_type))));
+            return format("tuple<{}>", fmt::join(t.all_types() | boost::adaptors::transformed(std::mem_fn(
+                                                                            &abstract_type::as_cql3_type)), ", "));
         }
         sstring operator()(const user_type_impl& u) { return u.get_name_as_cql_string(); }
         sstring operator()(const utf8_type_impl&) { return "text"; }
@@ -1176,14 +1176,14 @@ static sstring map_to_string(const std::vector<std::pair<data_value, data_value>
         out << "(";
     }
 
-    out << ::join(", ", v | boost::adaptors::transformed([] (const std::pair<data_value, data_value>& p) {
+    fmt::print(out, "{}", fmt::join(v | boost::adaptors::transformed([] (const std::pair<data_value, data_value>& p) {
         std::ostringstream out;
         const auto& k = p.first;
         const auto& v = p.second;
         out << "{" << k.type()->to_string_impl(k) << " : ";
         out << v.type()->to_string_impl(v) << "}";
         return out.str();
-    }));
+    }), ", "));
 
     if (include_frozen_type) {
         out << ")";
@@ -1489,8 +1489,9 @@ list_type_impl::deserialize(View in) const {
 template data_value list_type_impl::deserialize<>(ser::buffer_view<bytes_ostream::fragment_iterator>) const;
 
 static sstring vector_to_string(const std::vector<data_value>& v, std::string_view sep) {
-    return join(sstring(sep),
-            v | boost::adaptors::transformed([] (const data_value& e) { return e.type()->to_string_impl(e); }));
+    return fmt::to_string(fmt::join(
+            v | boost::adaptors::transformed([] (const data_value& e) { return e.type()->to_string_impl(e); }),
+            sep));
 }
 
 template <typename F>
@@ -2963,7 +2964,7 @@ tuple_type_impl::make_name(const std::vector<data_type>& types) {
     // "org.apache.cassandra.db.marshal.FrozenType(...)".
     // Even when the tuple is frozen.
     // For more details see #4087
-    return format("org.apache.cassandra.db.marshal.TupleType({})", ::join(", ", types | boost::adaptors::transformed(std::mem_fn(&abstract_type::name))));
+    return format("org.apache.cassandra.db.marshal.TupleType({})", fmt::join(types | boost::adaptors::transformed(std::mem_fn(&abstract_type::name)), ", "));
 }
 
 static std::optional<std::vector<data_type>>

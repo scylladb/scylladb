@@ -363,7 +363,7 @@ public:
     }
 
     flat_reader_assertions_v2& produces(mutation_fragment_v2::kind k, std::vector<int> ck_elements, bool make_full_key = false) {
-        testlog.trace("Expect {} {{{}}}", k, ::join(", ", ck_elements));
+        testlog.trace("Expect {} {{{}}}", k, fmt::join(ck_elements, ", "));
         std::vector<bytes> ck_bytes;
         for (auto&& e : ck_elements) {
             ck_bytes.emplace_back(int32_type->decompose(e));

@@ -95,7 +95,7 @@ public:
     }
 
     static sstring version_string(const std::initializer_list<sstring>& args) {
-        return ::join(sstring(versioned_value::DELIMITER_STR), args);
+        return fmt::to_string(fmt::join(args, std::string_view(versioned_value::DELIMITER_STR)));
     }
 
     static sstring make_full_token_string(const std::unordered_set<dht::token>& tokens);
@@ -217,7 +217,7 @@ public:
     }
 
     static versioned_value supported_features(const std::set<std::string_view>& features) {
-        return versioned_value(::join(",", features));
+        return versioned_value(fmt::to_string(fmt::join(features, ",")));
     }
 
     static versioned_value cache_hitrates(const sstring& hitrates) {

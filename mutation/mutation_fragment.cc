@@ -476,7 +476,8 @@ std::ostream& operator<<(std::ostream& out, const range_tombstone_stream& rtl) {
 }
 
 std::ostream& operator<<(std::ostream& out, const clustering_interval_set& set) {
-    return out << "{" << ::join(",\n  ", set) << "}";
+    fmt::print(out, "{{{}}}", fmt::join(set, ",\n  "));
+    return out;
 }
 
 template<typename Hasher>

@@ -49,7 +49,7 @@ row_assertion::matches(const query::result_set_row& row) const {
 
 sstring
 row_assertion::describe(schema_ptr schema) const {
-    return "{" + ::join(", ", _expected_values | boost::adaptors::transformed([&schema] (auto&& e) {
+    return format("{{{}}}", fmt::join(_expected_values | boost::adaptors::transformed([&schema] (auto&& e) {
         auto&& name = e.first;
         auto&& value = e.second;
         const column_definition* def = schema->get_column_definition(name);
@@ -61,7 +61,7 @@ row_assertion::describe(schema_ptr schema) const {
         } else {
             return format("{}=\"{}\"", to_sstring(name), def->type->to_string(def->type->decompose(value)));
         }
-    })) + "}";
+    }), ", "));
 }
 
 const result_set_assertions&

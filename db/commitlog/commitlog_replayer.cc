@@ -324,7 +324,7 @@ future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(seastar::
 future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fname_prefix) {
     typedef std::unordered_multimap<unsigned, sstring> shard_file_map;
 
-    rlogger.info("Replaying {}", join(", ", files));
+    rlogger.info("Replaying {}", fmt::join(files, ", "));
 
     // pre-compute work per shard already.
     auto map = ::make_lw_shared<shard_file_map>();

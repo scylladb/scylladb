@@ -75,8 +75,10 @@ std::unique_ptr<dht::i_partitioner> make_partitioner(sstring partitioner_name) {
     try {
         return create_object<i_partitioner>(partitioner_name);
     } catch (std::exception& e) {
-        auto supported_partitioners = ::join(", ", class_registry<i_partitioner>::classes() |
-                boost::adaptors::map_keys);
+        auto supported_partitioners = fmt::join(
+            class_registry<i_partitioner>::classes() |
+            boost::adaptors::map_keys,
+            ", ");
         throw std::runtime_error(format("Partitioner {} is not supported, supported partitioners = {{ {} }} : {}",
                 partitioner_name, supported_partitioners, e.what()));
     }

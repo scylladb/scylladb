@@ -110,12 +110,12 @@ std::ostream& operator<<(std::ostream& out, const column_mapping& cm) {
         // s->regular_column_name_type()->to_string(e.name()).
         return format("{{id={}, name=0x{}, type={}}}", i, e.name(), e.type()->name());
     };
-
-    return out << "{static=[" << ::join(", ", boost::irange<column_id>(0, n_static) |
-            boost::adaptors::transformed([&] (column_id i) { return pr_entry(i, cm.static_column_at(i)); }))
-        << "], regular=[" << ::join(", ", boost::irange<column_id>(0, n_regular) |
-            boost::adaptors::transformed([&] (column_id i) { return pr_entry(i, cm.regular_column_at(i)); }))
-        << "]}";
+    fmt::print(out, "{{static=[{}], regular=[{}]}}",
+               fmt::join(boost::irange<column_id>(0, n_static) |
+                         boost::adaptors::transformed([&] (column_id i) { return pr_entry(i, cm.static_column_at(i)); }), ", "),
+               fmt::join(boost::irange<column_id>(0, n_regular) |
+                         boost::adaptors::transformed([&] (column_id i) { return pr_entry(i, cm.regular_column_at(i)); }), ", "));
+    return out;
 }
 
 std::ostream& operator<<(std::ostream& os, ordinal_column_id id)
@@ -482,10 +482,11 @@ sstring schema::thrift_key_validator() const {
     if (partition_key_size() == 1) {
         return partition_key_columns().begin()->type->name();
     } else {
-        sstring type_params = ::join(", ", partition_key_columns()
+        auto type_params = fmt::join(partition_key_columns()
                             | boost::adaptors::transformed(std::mem_fn(&column_definition::type))
-                            | boost::adaptors::transformed(std::mem_fn(&abstract_type::name)));
-        return "org.apache.cassandra.db.marshal.CompositeType(" + type_params + ")";
+                            | boost::adaptors::transformed(std::mem_fn(&abstract_type::name)),
+                                        ", ");
+        return format("org.apache.cassandra.db.marshal.CompositeType({})", type_params);
     }
 }
 

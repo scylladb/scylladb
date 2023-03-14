@@ -210,9 +210,9 @@ std::ostream &operator<<(std::ostream &os, const service_level_resource_view &v)
 
 sstring encode_signature(std::string_view name, std::vector<data_type> args) {
     return format("{}[{}]", name,
-            ::join("^", args | boost::adaptors::transformed([] (const data_type t) {
+            fmt::join(args | boost::adaptors::transformed([] (const data_type t) {
                 return t->name();
-            })));
+            }), "^"));
 }
 
 std::pair<sstring, std::vector<data_type>> decode_signature(std::string_view encoded_signature) {

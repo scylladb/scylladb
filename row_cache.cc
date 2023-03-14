@@ -1333,7 +1333,7 @@ void row_cache::upgrade_entry(cache_entry& e) {
 
 std::ostream& operator<<(std::ostream& out, row_cache& rc) {
     rc._read_section(rc._tracker.region(), [&] {
-        out << "{row_cache: " << ::join(", ", rc._partitions.begin(), rc._partitions.end()) << "}";
+        fmt::print(out, "{{row_cache: {}}}", fmt::join(rc._partitions.begin(), rc._partitions.end(), ", "));
     });
     return out;
 }
