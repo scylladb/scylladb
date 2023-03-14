@@ -214,7 +214,9 @@ private:
     // A return value of can_admit::maybe means admission might be possible if
     // some of the inactive readers are evicted.
     enum class can_admit { no, maybe, yes };
-    can_admit can_admit_read(const reader_permit& permit) const noexcept;
+    enum class reason { all_ok = 0, ready_list, used_permits, memory_resources, count_resources };
+    struct admit_result { can_admit decision; reason why; };
+    admit_result can_admit_read(const reader_permit& permit) const noexcept;
 
     void maybe_admit_waiters() noexcept;
 

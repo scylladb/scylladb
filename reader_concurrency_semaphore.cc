@@ -913,25 +913,26 @@ void reader_concurrency_semaphore::evict_readers_in_background() {
     });
 }
 
-reader_concurrency_semaphore::can_admit
+reader_concurrency_semaphore::admit_result
 reader_concurrency_semaphore::can_admit_read(const reader_permit& permit) const noexcept {
     if (!_ready_list.empty()) {
-        return can_admit::no;
+        return {can_admit::no, reason::ready_list};
     }
 
     if (!all_used_permits_are_stalled()) {
-        return can_admit::no;
+        return {can_admit::no, reason::used_permits};
     }
 
     if (!has_available_units(permit.base_resources())) {
+        auto reason = _resources.memory >= permit.base_resources().memory ? reason::memory_resources : reason::count_resources;
         if (_inactive_reads.empty()) {
-            return can_admit::no;
+            return {can_admit::no, reason};
         } else {
-            return can_admit::maybe;
+            return {can_admit::maybe, reason};
         }
     }
 
-    return can_admit::yes;
+    return {can_admit::yes, reason::all_ok};
 }
 
 future<> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, read_func func) {
@@ -939,7 +940,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, r
         _execution_loop_future.emplace(execution_loop());
     }
 
-    const auto admit = can_admit_read(permit);
+    const auto admit = can_admit_read(permit).decision;
     if (admit != can_admit::yes || !_wait_list.empty()) {
         auto fut = enqueue_waiter(std::move(permit), std::move(func));
         if (admit == can_admit::yes && !_wait_list.empty()) {
@@ -965,7 +966,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, r
 
 void reader_concurrency_semaphore::maybe_admit_waiters() noexcept {
     auto admit = can_admit::no;
-    while (!_wait_list.empty() && (admit = can_admit_read(_wait_list.front().permit)) == can_admit::yes) {
+    while (!_wait_list.empty() && (admit = can_admit_read(_wait_list.front().permit).decision) == can_admit::yes) {
         auto& x = _wait_list.front();
         try {
             x.permit.on_admission();
