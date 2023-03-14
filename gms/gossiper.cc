@@ -2549,9 +2549,8 @@ future<> gossiper::maybe_enable_features() {
     co_await container().invoke_on_all([&features] (gossiper& g) {
         // gms::feature::enable should be run within seastar::async context
         return seastar::async([&features, &g] {
-            for (auto&& name : features) {
-                g._feature_service.enable(name);
-            }
+            std::set<std::string_view> features_v = boost::copy_range<std::set<std::string_view>>(features);
+            g._feature_service.enable(features_v);
         });
     });
 }
