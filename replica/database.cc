@@ -2241,16 +2241,24 @@ future<> database::stop() {
     if (_schema_commitlog) {
         co_await _schema_commitlog->release();
     }
+    dblog.info("Shutting down system dirty memory manager");
     co_await _system_dirty_memory_manager.shutdown();
+    dblog.info("Shutting down dirty memory manager");
     co_await _dirty_memory_manager.shutdown();
+    dblog.info("Shutting down memtable controller");
     co_await _memtable_controller.shutdown();
+    dblog.info("Closing user sstables manager");
     co_await _user_sstables_manager->close();
+    dblog.info("Closing system sstables manager");
     co_await _system_sstables_manager->close();
+    dblog.info("Stopping querier cache");
     co_await _querier_cache.stop();
+    dblog.info("Stopping concurrency semaphores");
     co_await _read_concurrency_sem.stop();
     co_await _streaming_concurrency_sem.stop();
     co_await _compaction_concurrency_sem.stop();
     co_await _system_read_concurrency_sem.stop();
+    dblog.info("Joining memtable update action");
     co_await _update_memtable_flush_static_shares_action.join();
 }
 
