@@ -104,6 +104,8 @@ fedora_packages=(
     curl
     rust
     cargo
+    rustfmt
+    clippy
 )
 
 # lld is not available on s390x, see

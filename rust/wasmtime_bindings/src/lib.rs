@@ -142,7 +142,7 @@ pub struct Module {
 fn create_module(engine: &mut Engine, script: &str) -> Result<Box<Module>> {
     let module_bytes = engine
         .wasmtime_engine
-        .precompile_module((&script).as_bytes())
+        .precompile_module(script.as_bytes())
         .map_err(|e| anyhow!("Compilation failed: {:?}", e))?;
     let module = Box::new(Module {
         serialized_module: module_bytes,
@@ -192,10 +192,7 @@ pub struct Store {
 fn create_store(engine: &mut Engine, total_fuel: u64, yield_fuel: u64) -> Result<Box<Store>> {
     let wasi = wasmtime_wasi::WasiCtxBuilder::new().build();
     let mut store = wasmtime::Store::new(&engine.wasmtime_engine, wasi);
-    store.out_of_fuel_async_yield(
-        ((total_fuel + yield_fuel - 1) / yield_fuel) as u64,
-        yield_fuel,
-    );
+    store.out_of_fuel_async_yield((total_fuel + yield_fuel - 1) / yield_fuel, yield_fuel);
     Ok(Box::new(Store {
         wasmtime_store: store,
     }))
