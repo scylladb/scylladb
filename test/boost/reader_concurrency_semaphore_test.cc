@@ -1226,42 +1226,6 @@ public:
     }
 };
 
-
-void dump_stats(const reader_concurrency_semaphore& semaphore, log_level lvl, bool with_diag = false) {
-    const auto& stats = semaphore.get_stats();
-    testlog.log(lvl, "stats = {{\n"
-        "\t.permit_based_evictions = {}\n"
-        "\t.time_based_evictions = {}\n"
-        "\t.inactive_reads = {}\n"
-        "\t.total_successful_reads = {}\n"
-        "\t.total_failed_reads = {}\n"
-        "\t.total_reads_shed_due_to_overload = {}\n"
-        "\t.total_reads_killed_due_to_kill_limit = {}\n"
-        "\t.reads_admitted = {}\n"
-        "\t.reads_enqueued_for_admission = {}\n"
-        "\t.reads_enqueued_for_memory = {}\n"
-        "\t.total_permits = {}\n"
-        "\t.current_permits = {}\n"
-        "\t.used_permits = {}\n"
-        "\t.blocked_permits = {}\n"
-        "}}{}",
-        stats.permit_based_evictions,
-        stats.time_based_evictions,
-        stats.inactive_reads,
-        stats.total_successful_reads,
-        stats.total_failed_reads,
-        stats.total_reads_shed_due_to_overload,
-        stats.total_reads_killed_due_to_kill_limit,
-        stats.reads_admitted,
-        stats.reads_enqueued_for_admission,
-        stats.reads_enqueued_for_memory,
-        stats.total_permits,
-        stats.current_permits,
-        stats.used_permits,
-        stats.blocked_permits,
-        with_diag ? format("\n{}", semaphore.dump_diagnostics()) : "");
-};
-
 } //anonymous namespace
 
 // Check that the memory consumption limiting mechanism doesn't leak any
@@ -1299,7 +1263,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_no_leaks
         }
         done = std::all_of(readers.begin(), readers.end(), std::mem_fn(&allocating_reader::done));
 
-        dump_stats(semaphore, log_level::debug, true);
+        testlog.debug("{}", semaphore.dump_diagnostics());
 
         reader_resources all_permit_res;
         semaphore.foreach_permit([&all_permit_res] (const reader_permit& p) { all_permit_res += p.consumed_resources(); });
@@ -1321,7 +1285,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_no_leaks
 
         seastar::thread::yield();
     }
-    dump_stats(semaphore, log_level::info, false);
+    testlog.info("{}", semaphore.dump_diagnostics());
     parallel_for_each(readers.begin(), readers.end(), [] (allocating_reader& rd) {
         return rd.close();
     }).get();
@@ -1499,7 +1463,7 @@ SEASTAR_TEST_CASE(test_reader_concurrency_semaphore_memory_limit_engages) {
         }).get();
 
         testlog.info("total reads: {} ({} successful, {} failed)", num_reads, successful_reads, failed_reads);
-        dump_stats(semaphore, log_level::info, false);
+        testlog.info("{}", semaphore.dump_diagnostics());
 
         // There should be both successful and failed reads.
         // If there is only one or the other, the test is not testing anything.
