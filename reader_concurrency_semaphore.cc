@@ -1189,7 +1189,16 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
         _execution_loop_future.emplace(execution_loop());
     }
 
-    const auto admit = can_admit_read(permit).decision;
+    static uint64_t stats::*stats_table[] = {
+        &stats::reads_admitted_immediately,
+        &stats::reads_queued_because_ready_list,
+        &stats::reads_queued_because_used_permits,
+        &stats::reads_queued_because_memory_resources,
+        &stats::reads_queued_because_count_resources
+    };
+
+    const auto [admit, why] = can_admit_read(permit);
+    ++(_stats.*stats_table[static_cast<int>(why)]);
     if (admit != can_admit::yes || !_wait_list.empty()) {
         auto fut = enqueue_waiter(permit, wait_on::admission);
         if (admit == can_admit::yes && !_wait_list.empty()) {
@@ -1200,6 +1209,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
             maybe_dump_reader_permit_diagnostics(*this, "semaphore could admit new reads yet there are waiters");
             maybe_admit_waiters();
         } else if (admit == can_admit::maybe) {
+            ++_stats.reads_queued_with_eviction;
             evict_readers_in_background();
         }
         return fut;
