@@ -28,7 +28,8 @@
 .. topic-box::
   :title: ScyllaDB Cloud
   :link: https://cloud.docs.scylladb.com
-  :class: large-4
+  :image: /_static/img/mascots/scylla-cloud.svg
+  :class: large-4 cloud-card
   :anchor: ScyllaDB Cloud Documentation
 
   Simplify application development with ScyllaDB Cloud - a fully managed database-as-a-service.
@@ -36,15 +37,17 @@
 .. topic-box::
   :title: ScyllaDB Enterprise
   :link: https://enterprise.docs.scylladb.com
-  :class: large-4
+  :image: /_static/img/mascots/scylla-enterprise.svg
+  :class: large-4 enterprise-card
   :anchor: ScyllaDB Enterprise Documentation
 
   Deploy and manage ScyllaDB's most stable enterprise-grade database with premium features and 24/7 support.
 
 .. topic-box::
   :title: ScyllaDB Open Source
-  :link: getting-started
-  :class: large-4
+  :link: https://docs.scylladb.com/stable/getting-started/
+  :image: /_static/img/mascots/scylla-opensource.svg
+  :class: large-4 opensource-card
   :anchor: ScyllaDB Open Source Documentation
 
   Deploy and manage your database in your environment.
@@ -59,6 +62,7 @@
   <div class="topics-grid topics-grid--products">
 
       <h2 class="topics-grid__title">Other Products</h2>
+      <p class="topics-grid__text"></p>
 
       <div class="grid-container full">
           <div class="grid-x grid-margin-x">
