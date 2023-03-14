@@ -725,7 +725,52 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
             problem);
     total += do_dump_reader_permit_diagnostics(os, permits, max_lines);
     fmt::print(os, "\n");
-    fmt::print(os, "Total: {} permits with {} count and {} memory resources\n", total.permits, total.resources.count, utils::to_hr_size(total.resources.memory));
+    const auto& stats = semaphore.get_stats();
+    fmt::print(os, "Stats:\n"
+            "permit_based_evictions: {}\n"
+            "time_based_evictions: {}\n"
+            "inactive_reads: {}\n"
+            "total_successful_reads: {}\n"
+            "total_failed_reads: {}\n"
+            "total_reads_shed_due_to_overload: {}\n"
+            "total_reads_killed_due_to_kill_limit: {}\n"
+            "reads_admitted: {}\n"
+            "reads_enqueued_for_admission: {}\n"
+            "reads_enqueued_for_memory: {}\n"
+            "reads_admitted_immediately: {}\n"
+            "reads_queued_because_ready_list: {}\n"
+            "reads_queued_because_used_permits: {}\n"
+            "reads_queued_because_memory_resources: {}\n"
+            "reads_queued_because_count_resources: {}\n"
+            "reads_queued_with_eviction: {}\n"
+            "total_permits: {}\n"
+            "current_permits: {}\n"
+            "used_permits: {}\n"
+            "blocked_permits: {}\n"
+            "disk_reads: {}\n"
+            "sstables_read: {}",
+            stats.permit_based_evictions,
+            stats.time_based_evictions,
+            stats.inactive_reads,
+            stats.total_successful_reads,
+            stats.total_failed_reads,
+            stats.total_reads_shed_due_to_overload,
+            stats.total_reads_killed_due_to_kill_limit,
+            stats.reads_admitted,
+            stats.reads_enqueued_for_admission,
+            stats.reads_enqueued_for_memory,
+            stats.reads_admitted_immediately,
+            stats.reads_queued_because_ready_list,
+            stats.reads_queued_because_used_permits,
+            stats.reads_queued_because_memory_resources,
+            stats.reads_queued_because_count_resources,
+            stats.reads_queued_with_eviction,
+            stats.total_permits,
+            stats.current_permits,
+            stats.used_permits,
+            stats.blocked_permits,
+            stats.disk_reads,
+            stats.sstables_read);
 }
 
 void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaphore& semaphore, std::string_view problem) noexcept {
