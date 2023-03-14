@@ -92,6 +92,11 @@ namespace {
             props.use_null_sharder = true;
         }
     });
+    const auto set_use_schema_commitlog = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
+        if (ks_name == schema_tables::NAME) {
+            props.use_schema_commitlog = true;
+        }
+    });
 }
 
 schema_ctxt::schema_ctxt(const db::config& cfg, std::shared_ptr<data_dictionary::user_types_storage> uts)

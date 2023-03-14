@@ -565,6 +565,7 @@ public:
 struct schema_static_props {
     bool use_null_sharder = false; // use a sharder that puts everything on shard 0
     bool wait_for_sync_to_commitlog = false; // true if all writes using this schema have to be synced immediately by commitlog
+    bool use_schema_commitlog = false;
 };
 
 /*

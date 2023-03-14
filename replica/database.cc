@@ -946,7 +946,7 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     auto& sst_manager = is_system_table(*schema) ? get_system_sstables_manager() : get_user_sstables_manager();
     lw_shared_ptr<column_family> cf;
     if (cfg.enable_commitlog && _commitlog) {
-        db::commitlog& cl = schema->ks_name() == db::schema_tables::NAME && _uses_schema_commitlog
+        db::commitlog& cl = schema->static_props().use_schema_commitlog && _uses_schema_commitlog
                 ? *_schema_commitlog
                 : *_commitlog;
         cf = make_lw_shared<column_family>(schema, std::move(cfg), cl, _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
