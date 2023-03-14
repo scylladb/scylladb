@@ -40,6 +40,15 @@ static logging::logger dlogger("system_distributed_keyspace");
 extern logging::logger cdc_log;
 
 namespace db {
+namespace {
+    const auto set_wait_for_sync_to_commitlog = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
+        if ((ks_name == system_distributed_keyspace::NAME_EVERYWHERE && cf_name == system_distributed_keyspace::CDC_GENERATIONS_V2) ||
+            (ks_name == system_distributed_keyspace::NAME && cf_name == system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION))
+        {
+            props.wait_for_sync_to_commitlog = true;
+        }
+    });
+}
 
 thread_local data_type cdc_streams_set_type = set_type_impl::get_instance(bytes_type, false);
 
@@ -183,10 +192,6 @@ static void check_exists(std::string_view ks_name, std::string_view cf_name, con
         dlogger.error(err.c_str());
         throw std::runtime_error{std::move(err)};
     }
-}
-
-bool system_distributed_keyspace::is_extra_durable(const sstring& cf_name) {
-    return cf_name == CDC_TOPOLOGY_DESCRIPTION || cf_name == CDC_GENERATIONS_V2;
 }
 
 std::vector<schema_ptr> system_distributed_keyspace::all_distributed_tables() {

@@ -564,6 +564,7 @@ public:
 
 struct schema_static_props {
     bool use_null_sharder = false; // use a sharder that puts everything on shard 0
+    bool wait_for_sync_to_commitlog = false; // true if all writes using this schema have to be synced immediately by commitlog
 };
 
 /*
@@ -625,9 +626,6 @@ private:
         std::unordered_map<sstring, dropped_column> _dropped_columns;
         std::map<bytes, data_type> _collections;
         std::unordered_map<sstring, index_metadata> _indices_by_name;
-        // The flag is not stored in the schema mutation and does not affects schema digest.
-        // It is set locally on a system tables that should be extra durable
-        bool _wait_for_sync = false; // true if all writes using this schema have to be synced immediately by commitlog
         std::reference_wrapper<const dht::i_partitioner> _partitioner;
         // Sharding info is not stored in the schema mutation and does not affect
         // schema digest. It is also not set locally on a schema tables.
@@ -962,7 +960,7 @@ public:
     bool is_synced() const;
     bool equal_columns(const schema&) const;
     bool wait_for_sync_to_commitlog() const {
-        return _raw._wait_for_sync;
+        return _static_props.wait_for_sync_to_commitlog;
     }
 public:
     const v3_columns& v3() const {
