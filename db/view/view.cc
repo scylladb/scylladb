@@ -1722,8 +1722,12 @@ future<> mutate_MV(
                     auto ep = f.get_exception();
                     tracing::trace(tr_state, "Failed to apply view update for {} and {} remote endpoints",
                             *target_endpoint, updates_pushed_remote);
-                    vlogger.error("Error applying view update to {} (view: {}.{}, base token: {}, view token: {}): {}",
-                            *target_endpoint, s->ks_name(), s->cf_name(), base_token, view_token, ep);
+
+                    // Printing an error on every failed view mutation would cause log spam, so a rate limit is needed.
+                    static thread_local logger::rate_limit view_update_error_rate_limit(std::chrono::seconds(4));
+                    vlogger.log(log_level::error, view_update_error_rate_limit,
+                                "Error applying view update to {} (view: {}.{}, base token: {}, view token: {}): {}",
+                                *target_endpoint, s->ks_name(), s->cf_name(), base_token, view_token, ep);
                     return apply_update_synchronously ? make_exception_future<>(std::move(ep)) : make_ready_future<>();
                 }
                 tracing::trace(tr_state, "Successfully applied view update for {} and {} remote endpoints",
