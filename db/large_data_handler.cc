@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/print.hh>
+#include <seastar/core/coroutine.hh>
 #include "db/system_keyspace.hh"
 #include "db/large_data_handler.hh"
 #include "sstables/sstables.hh"
@@ -55,11 +56,11 @@ void large_data_handler::start() {
 }
 
 future<> large_data_handler::stop() {
-    if (!running()) {
-        return make_ready_future<>();
+    if (running()) {
+        _running = false;
+        large_data_logger.info("Waiting for {} background handlers", max_concurrency - _sem.available_units());
+        co_await _sem.wait(max_concurrency);
     }
-    _running = false;
-    return _sem.wait(max_concurrency);
 }
 
 void large_data_handler::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
