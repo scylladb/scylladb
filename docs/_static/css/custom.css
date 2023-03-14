@@ -8,8 +8,10 @@
     right: -25px !important;
 }
 
-.cloud-card,
-.enterprise-card,
-.opensource-card {
-    padding: 20px 30px !important;
+@media  screen and (min-width: 1024px) {
+    .cloud-card .card,
+    .enterprise-card .card,
+    .opensource-card .card {
+        padding: 20px 30px !important;
+    }
 }
