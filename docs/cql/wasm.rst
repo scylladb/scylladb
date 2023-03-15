@@ -33,7 +33,7 @@ As a short example, here's a sample Rust code which can be compiled to WebAssemb
         list.into_iter().flatten().collect()
     }
 
-The compilation instructions are described at <https://github.com/scylladb/scylla-rust-udf> but the commands will generally be:
+The compilation instructions are described at https://github.com/scylladb/scylla-rust-udf but the commands will generally be:
 
 .. code-block:: bash
 
