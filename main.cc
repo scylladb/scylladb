@@ -1492,10 +1492,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return ss.local().join_cluster(cdc_generation_service.local(), sys_dist_ks, proxy, group0_service);
             }).get();
 
-            sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {
-                controller.set_distributed_data_accessor(::static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
-                        ::make_shared<qos::standard_service_level_distributed_data_accessor>(sys_dist_ks.local())));
-                lifecycle_notifier.local().register_subscriber(&controller);
+            sl_controller.invoke_on_all([&lifecycle_notifier, &feature_service] (qos::service_level_controller& controller) {
+                return controller.set_distributed_data_accessor(::static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
+                        ::make_shared<qos::standard_service_level_distributed_data_accessor>(sys_dist_ks.local(), feature_service.local()))).then([&controller, &lifecycle_notifier] {
+                    lifecycle_notifier.local().register_subscriber(&controller);
+                });
             }).get();
 
             supervisor::notify("starting tracing");

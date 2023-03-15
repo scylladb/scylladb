@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
+#include "seastar/core/future.hh"
 #include "service_level_controller.hh"
 #include "service/priority_manager.hh"
 #include "message/messaging_service.hh"
@@ -65,7 +66,7 @@ future<> service_level_controller::start() {
 }
 
 
-void service_level_controller::set_distributed_data_accessor(service_level_distributed_data_accessor_ptr sl_data_accessor) {
+future<> service_level_controller::set_distributed_data_accessor(service_level_distributed_data_accessor_ptr sl_data_accessor) {
     // unregistering the accessor is always legal
     if (!sl_data_accessor) {
         _sl_data_accessor = nullptr;
@@ -76,6 +77,7 @@ void service_level_controller::set_distributed_data_accessor(service_level_distr
     // overriden by storage_proxy
     if (!_sl_data_accessor) {
         _sl_data_accessor = sl_data_accessor;
+        co_await _sl_data_accessor->init();
     }
 }
 
@@ -88,15 +90,23 @@ future<> service_level_controller::drain() {
         _global_controller_db->dist_data_update_aborter.request_abort();
     }
     _global_controller_db->notifications_serializer.broken();
-    return std::exchange(_global_controller_db->distributed_data_update, make_ready_future<>()).then_wrapped([] (future<> f) {
-        try {
-            f.get();
-        } catch (const broken_semaphore& ignored) {
-        } catch (const sleep_aborted& ignored) {
-        } catch (const exceptions::unavailable_exception& ignored) {
-        } catch (const exceptions::read_timeout_exception& ignored) {
-        }
+
+    future<> data_accessor_stop_fut = make_ready_future<>();
+    if (_sl_data_accessor) {
+        data_accessor_stop_fut = _sl_data_accessor->stop();
+    }
+    return data_accessor_stop_fut.then([this] {
+        return std::exchange(_global_controller_db->distributed_data_update, make_ready_future<>()).then_wrapped([] (future<> f) {
+            try {
+                f.get();
+            } catch (const broken_semaphore& ignored) {
+            } catch (const sleep_aborted& ignored) {
+            } catch (const exceptions::unavailable_exception& ignored) {
+            } catch (const exceptions::read_timeout_exception& ignored) {
+            }
+        });
     });
+
 }
 
 future<> service_level_controller::stop() {

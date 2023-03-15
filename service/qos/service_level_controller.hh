@@ -49,10 +49,18 @@ class service_level_controller : public peering_sharded_service<service_level_co
 public:
     class service_level_distributed_data_accessor {
     public:
+        virtual future<> init() = 0;
+        virtual future<> stop() = 0;
+
+        // virtual bool is_data_source_ready() const = 0;
         virtual future<qos::service_levels_info> get_service_levels() const = 0;
         virtual future<qos::service_levels_info> get_service_level(sstring service_level_name) const = 0;
         virtual future<> set_service_level(sstring service_level_name, qos::service_level_options slo) const = 0;
         virtual future<> drop_service_level(sstring service_level_name) const = 0;
+
+        // virtual bool is_v2_upgraded() const = 0;
+        // virtual future<> start_upgrade_to_v2() const = 0;
+        // virtual future<> end_upgrade_to_v2() = 0;
     };
     using service_level_distributed_data_accessor_ptr = ::shared_ptr<service_level_distributed_data_accessor>;
 
@@ -93,7 +101,7 @@ public:
      */
     future<> start();
 
-    void set_distributed_data_accessor(service_level_distributed_data_accessor_ptr sl_data_accessor);
+    future<> set_distributed_data_accessor(service_level_distributed_data_accessor_ptr sl_data_accessor);
 
     /**
      *  Adds a service level configuration if it doesn't exists, and updates

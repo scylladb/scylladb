@@ -850,7 +850,7 @@ public:
             sl_controller.invoke_on_all([&sys_dist_ks, &sl_controller] (qos::service_level_controller& service) {
                 qos::service_level_controller::service_level_distributed_data_accessor_ptr service_level_data_accessor =
                         ::static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
-                                make_shared<qos::unit_test_service_levels_accessor>(sl_controller,sys_dist_ks));
+                                make_shared<qos::unit_test_service_levels_accessor>(sl_controller,sys_dist_ks,true));
                 return service.set_distributed_data_accessor(std::move(service_level_data_accessor));
             }).get();
 

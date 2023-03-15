@@ -233,14 +233,14 @@ SEASTAR_TEST_CASE(test_alter_with_timeouts) {
         // Avoid reading from memtables, which does not check timeouts due to being too fast
         e.db().invoke_on_all([] (replica::database& db) { return db.flush_all_memtables(); }).get();
 
-	    auto msg = cquery_nofail(e, "SELECT timeout FROM system_distributed.service_levels");
+	    auto msg = cquery_nofail(e, "SELECT timeout FROM system_distributed_everywhere.service_levels_v2");
         assert_that(msg).is_rows().with_rows({{
             duration_type->from_string("5ms")
         }});
 
         cquery_nofail(e, "ALTER SERVICE LEVEL sl WITH timeout = 35s");
 
-	    msg = cquery_nofail(e, "SELECT timeout FROM system_distributed.service_levels WHERE service_level = 'sl'");
+	    msg = cquery_nofail(e, "SELECT timeout FROM system_distributed_everywhere.service_levels_v2 WHERE service_level = 'sl'");
         assert_that(msg).is_rows().with_rows({{
             duration_type->from_string("35s")
         }});
@@ -328,7 +328,7 @@ SEASTAR_TEST_CASE(test_alter_with_workload_type) {
         cquery_nofail(e, "CREATE SERVICE LEVEL sl");
         cquery_nofail(e, "ATTACH SERVICE LEVEL sl TO user1");
 
-	    auto msg = cquery_nofail(e, "SELECT workload_type FROM system_distributed.service_levels");
+	    auto msg = cquery_nofail(e, "SELECT workload_type FROM system_distributed_everywhere.service_levels_v2");
         assert_that(msg).is_rows().with_rows({{
             {}
         }});
