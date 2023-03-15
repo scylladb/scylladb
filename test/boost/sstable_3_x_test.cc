@@ -3224,31 +3224,35 @@ static void compare_sstables(test_env& env, sstring table_name, sstable_version_
     compare_sstables(env.tempdir().path().native(), std::move(table_name), version);
 }
 
-static void write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica::memtable> mt1, lw_shared_ptr<replica::memtable> mt2, sstable_version_types version) {
+static sstables::shared_sstable write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica::memtable> mt1, lw_shared_ptr<replica::memtable> mt2, sstable_version_types version) {
     auto sst = env.make_sstable(s, env.tempdir().path().string(), 1, version, sstable::format_types::big, 4096);
 
     sst->write_components(make_combined_reader(s,
         env.make_reader_permit(),
         mt1->make_flat_reader(s, env.make_reader_permit()),
         mt2->make_flat_reader(s, env.make_reader_permit())), 1, s, env.manager().configure_writer(), mt1->get_encoding_stats()).get();
+    return sst;
 }
 
 // Can be useful if we want, e.g., to avoid range tombstones de-overlapping
 // that otherwise takes place for RTs put into one and the same memtable
-static void write_and_compare_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica::memtable> mt1, lw_shared_ptr<replica::memtable> mt2,
+static sstables::shared_sstable write_and_compare_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica::memtable> mt1, lw_shared_ptr<replica::memtable> mt2,
                                          sstring table_name, sstable_version_types version) {
-    write_sstables(env, std::move(s), std::move(mt1), std::move(mt2), version);
+    auto sst = write_sstables(env, std::move(s), std::move(mt1), std::move(mt2), version);
     compare_sstables(env, table_name, version);
+    return sst;
 }
 
-static void write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica::memtable> mt, sstable_version_types version) {
+static sstables::shared_sstable write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica::memtable> mt, sstable_version_types version) {
     auto sst = env.make_sstable(s, env.tempdir().path().string(), 1, version, sstable::format_types::big, 4096);
     write_memtable_to_sstable_for_test(*mt, sst).get();
+    return sst;
 }
 
-static void write_and_compare_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica::memtable> mt, sstring table_name, sstable_version_types version) {
-    write_sstables(env, std::move(s), std::move(mt), version);
+static sstables::shared_sstable write_and_compare_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica::memtable> mt, sstring table_name, sstable_version_types version) {
+    auto sst = write_sstables(env, std::move(s), std::move(mt), version);
     compare_sstables(env, table_name, version);
+    return sst;
 }
 
 static sstable_assertions validate_read(test_env& env, schema_ptr s, std::vector<mutation> mutations, sstable_version_types version) {
@@ -3353,7 +3357,7 @@ static void write_mut_and_validate_version(test_env& env, schema_ptr s, const ss
     lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
     mt->apply(mut);
 
-    write_and_compare_sstables(env, s, mt, table_name, version);
+    auto sst = write_and_compare_sstables(env, s, mt, table_name, version);
     auto written_sst = validate_read(env, s, {mut}, version);
     if (validate_flag) {
         do_validate_stats_metadata(s, written_sst, table_name);
@@ -3377,7 +3381,7 @@ static void write_mut_and_validate_version(test_env& env, schema_ptr s, const ss
     // but cannot now because flat reader version tranforms rearrange
     // range tombstones.  Revisit once the reader v2 migration is
     // complete and those version transforms are gone
-    write_sstables(env, s, mt, version);
+    auto sst = write_sstables(env, s, mt, version);
     auto written_sst = validate_read(env, s, {mut}, version);
     check_min_max_column_names(written_sst, std::move(min_components), std::move(max_components));
 }
@@ -3396,7 +3400,7 @@ static void write_mut_and_validate_version(test_env& env, schema_ptr s, const ss
         mt->apply(mut);
     }
 
-    write_and_compare_sstables(env, s, mt, table_name, version);
+    auto sst = write_and_compare_sstables(env, s, mt, table_name, version);
     auto written_sst = validate_read(env, s, muts, version);
     if (validate_flag) {
         do_validate_stats_metadata(s, written_sst, table_name);
@@ -3739,11 +3743,7 @@ static future<> test_write_many_partitions(sstring table_name, tombstone partiti
             mt->apply(mut);
         }
 
-        if (compressed) {
-            write_sstables(env, s, mt, version);
-        } else {
-            write_and_compare_sstables(env, s, mt, table_name, version);
-        }
+        auto sst = compressed ? write_sstables(env, s, mt, version) : write_and_compare_sstables(env, s, mt, table_name, version);
         boost::sort(muts, mutation_decorated_key_less_comparator());
         validate_read(env, s, muts, version);
     }
@@ -5060,7 +5060,7 @@ SEASTAR_TEST_CASE(test_write_empty_static_row) {
         mt->apply(mut1);
         mt->apply(mut2);
 
-        write_and_compare_sstables(env, s, mt, table_name, version);
+        auto sst = write_and_compare_sstables(env, s, mt, table_name, version);
         validate_read(env, s, {mut2, mut1}, version); // Mutations are re-ordered according to decorated_key order
     }
   });
