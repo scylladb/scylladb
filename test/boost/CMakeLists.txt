@@ -43,6 +43,9 @@
     target_link_libraries(${name}
       PRIVATE
         Seastar::seastar_testing)
+    target_compile_definitions(${name}
+      PRIVATE
+        SEASTAR_TESTING_MAIN)
   elseif(kind STREQUAL "BOOST")
     target_link_libraries(${name}
       PRIVATE
