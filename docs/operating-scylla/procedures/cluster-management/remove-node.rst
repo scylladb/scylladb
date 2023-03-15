@@ -49,6 +49,11 @@ Removing a Running Node
 
    .. include:: /rst_include/clean-data-code.rst
 
+Handling Failures
+-----------------
+
+If ``nodetool decommission`` starts executing but then fails in the middle e.g. due to a power loss, consult the :doc:`Handling Membership Change Failures document</operating-scylla/procedures/cluster-management/handling-membership-change-failures>`.
+
 ----------------------------
 Removing an Unavailable Node
 ----------------------------
@@ -80,7 +85,6 @@ the ``nodetool removenode`` operation will fail. To ensure successful operation 
 * In the case of node failures during the ``removenode`` operation, re-run repair before running
   ``nodetool removenode`` (not required when :doc:`Repair Based Node Operations (RBNO) <repair-based-node-operation>` for ``removenode`` 
   is enabled).
-
 
 Additional Information
 ----------------------
