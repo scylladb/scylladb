@@ -64,7 +64,6 @@ target_sources(scylla-main
     debug.cc
     init.cc
     keys.cc
-    main.cc
     message/messaging_service.cc
     multishard_mutation_query.cc
     mutation_query.cc

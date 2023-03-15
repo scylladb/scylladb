@@ -76,3 +76,21 @@ target_include_directories(wasmtime_bindings
     ${scylla_gen_build_dir})
 target_link_libraries(wasmtime_bindings
   INTERFACE Rust::rust_combined)
+
+# only for testing
+generate_cxxbridge(inc
+  INPUT inc/src/lib.rs
+  INCLUDE ${cxx_header}
+  OUTPUT_DIR "${binding_gen_build_dir}"
+  SOURCES inc_sources)
+
+add_library(inc)
+target_sources(inc
+  PRIVATE
+    ${cxx_header}
+    ${inc_sources})
+target_include_directories(inc
+  INTERFACE
+    ${scylla_gen_build_dir})
+target_link_libraries(inc
+  INTERFACE Rust::rust_combined)
