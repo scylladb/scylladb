@@ -1146,7 +1146,6 @@ private:
     locator::abstract_replication_strategy::ptr_type _replication_strategy;
     locator::effective_replication_map_ptr _effective_replication_map;
     lw_shared_ptr<keyspace_metadata> _metadata;
-    shared_promise<> _populated;
     config _config;
     locator::effective_replication_map_factory& _erm_factory;
 
@@ -1209,9 +1208,6 @@ public:
     }
 
     sstring column_family_directory(const sstring& base_path, const sstring& name, table_id uuid) const;
-
-    future<> ensure_populated() const;
-    void mark_as_populated();
 };
 
 using no_such_keyspace = data_dictionary::no_such_keyspace;

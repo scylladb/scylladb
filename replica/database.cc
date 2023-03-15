@@ -946,7 +946,7 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     auto& sst_manager = is_system_table(*schema) ? get_system_sstables_manager() : get_user_sstables_manager();
     lw_shared_ptr<column_family> cf;
     if (cfg.enable_commitlog && _commitlog) {
-        db::commitlog& cl = schema->ks_name() == db::schema_tables::NAME && _uses_schema_commitlog
+        db::commitlog& cl = schema->static_props().use_schema_commitlog && _uses_schema_commitlog
                 ? *_schema_commitlog
                 : *_commitlog;
         cf = make_lw_shared<column_family>(schema, std::move(cfg), cl, _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
@@ -1226,16 +1226,6 @@ future<> keyspace::update_from(const locator::shared_token_metadata& stm, ::lw_s
    return create_replication_strategy(stm, _metadata->strategy_options());
 }
 
-future<> keyspace::ensure_populated() const {
-    return _populated.get_shared_future();
-}
-
-void keyspace::mark_as_populated() {
-    if (!_populated.available()) {
-        _populated.set_value();
-    }
-}
-
 column_family::config
 keyspace::make_column_family_config(const schema& s, const database& db) const {
     column_family::config cfg;
@@ -1368,12 +1358,6 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
     co_await create_in_memory_keyspace(ksm, erm_factory, system);
     auto& ks = _keyspaces.at(ksm->name());
     auto& datadir = ks.datadir();
-
-    // keyspace created by either cql or migration 
-    // is by definition populated
-    if (!is_bootstrap) {
-        ks.mark_as_populated();
-    }
 
     if (datadir != "") {
         co_await io_check([&datadir] { return touch_directory(datadir); });

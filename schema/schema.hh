@@ -562,6 +562,12 @@ public:
     }
 };
 
+struct schema_static_props {
+    bool use_null_sharder = false; // use a sharder that puts everything on shard 0
+    bool wait_for_sync_to_commitlog = false; // true if all writes using this schema have to be synced immediately by commitlog
+    bool use_schema_commitlog = false;
+};
+
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
@@ -621,15 +627,13 @@ private:
         std::unordered_map<sstring, dropped_column> _dropped_columns;
         std::map<bytes, data_type> _collections;
         std::unordered_map<sstring, index_metadata> _indices_by_name;
-        // The flag is not stored in the schema mutation and does not affects schema digest.
-        // It is set locally on a system tables that should be extra durable
-        bool _wait_for_sync = false; // true if all writes using this schema have to be synced immediately by commitlog
         std::reference_wrapper<const dht::i_partitioner> _partitioner;
         // Sharding info is not stored in the schema mutation and does not affect
         // schema digest. It is also not set locally on a schema tables.
         std::reference_wrapper<const dht::sharder> _sharder;
     };
     raw_schema _raw;
+    schema_static_props _static_props;
     thrift_schema _thrift;
     v3_columns _v3_columns;
     mutable schema_registry_entry* _registry_entry = nullptr;
@@ -680,11 +684,14 @@ private:
     schema(const schema&, const std::function<void(schema&)>&);
     class private_tag{};
 public:
-    schema(private_tag, const raw_schema&, std::optional<raw_view_info>);
+    schema(private_tag, const raw_schema&, std::optional<raw_view_info>, const schema_static_props& props);
     schema(const schema&);
     // See \ref make_reversed().
     schema(reversed_tag, const schema&);
     ~schema();
+    const schema_static_props& static_props() const {
+        return _static_props;
+    }
     table_schema_version version() const {
         return _raw._version;
     }
@@ -954,7 +961,7 @@ public:
     bool is_synced() const;
     bool equal_columns(const schema&) const;
     bool wait_for_sync_to_commitlog() const {
-        return _raw._wait_for_sync;
+        return _static_props.wait_for_sync_to_commitlog;
     }
 public:
     const v3_columns& v3() const {

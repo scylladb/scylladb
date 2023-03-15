@@ -77,10 +77,6 @@ private:
     bool _forced_cdc_timestamps_schema_sync = false;
 
 public:
-    /* Should writes to the given table always be synchronized by commitlog (flushed to disk)
-     * before being acknowledged? */
-    static bool is_extra_durable(const sstring& cf_name);
-
     static std::vector<schema_ptr> all_distributed_tables();
     static std::vector<schema_ptr> all_everywhere_tables();
 

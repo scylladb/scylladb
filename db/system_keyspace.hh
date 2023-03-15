@@ -211,10 +211,6 @@ public:
         static schema_ptr batchlog();
     };
 
-    static constexpr const char* extra_durable_tables[] = { PAXOS, SCYLLA_LOCAL, RAFT, RAFT_SNAPSHOTS, RAFT_SNAPSHOT_CONFIG, DISCOVERY, BROADCAST_KV_STORE };
-
-    static bool is_extra_durable(const sstring& name);
-
     // Partition estimates for a given range of tokens.
     struct range_estimates {
         schema_ptr schema;

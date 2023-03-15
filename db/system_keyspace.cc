@@ -67,15 +67,42 @@
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
 namespace db {
+namespace {
+    const auto set_null_sharder = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
+        // tables in the "system" keyspace which need to use null sharder
+        static const std::unordered_set<sstring> system_ks_null_shard_tables = {
+            schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY,
+            system_keyspace::RAFT,
+            system_keyspace::RAFT_SNAPSHOTS,
+            system_keyspace::RAFT_SNAPSHOT_CONFIG,
+            system_keyspace::GROUP0_HISTORY,
+            system_keyspace::DISCOVERY,
+            system_keyspace::BROADCAST_KV_STORE,
+        };
+        if (ks_name == system_keyspace::NAME && system_ks_null_shard_tables.contains(cf_name)) {
+            props.use_null_sharder = true;
+        }
+    });
+    const auto set_wait_for_sync_to_commitlog = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
+        static const std::unordered_set<sstring> extra_durable_tables = {
+            system_keyspace::PAXOS,
+            system_keyspace::SCYLLA_LOCAL,
+            system_keyspace::RAFT,
+            system_keyspace::RAFT_SNAPSHOTS,
+            system_keyspace::RAFT_SNAPSHOT_CONFIG,
+            system_keyspace::DISCOVERY,
+            system_keyspace::BROADCAST_KV_STORE
+        };
+        if (ks_name == system_keyspace::NAME && extra_durable_tables.contains(cf_name)) {
+            props.wait_for_sync_to_commitlog = true;
+        }
+    });
+}
 
 std::unique_ptr<query_context> qctx = {};
 
 static logging::logger slogger("system_keyspace");
 static const api::timestamp_type creation_timestamp = api::new_timestamp();
-
-bool system_keyspace::is_extra_durable(const sstring& name) {
-    return boost::algorithm::any_of(extra_durable_tables, [name] (const char* table) { return name == table; });
-}
 
 api::timestamp_type system_keyspace::schema_creation_timestamp() {
     return creation_timestamp;
@@ -181,7 +208,6 @@ schema_ptr system_keyspace::batchlog() {
        );
        builder.set_gc_grace_seconds(0);
        builder.with_version(generate_schema_version(builder.uuid()));
-       builder.set_wait_for_sync_to_commitlog(true);
        return builder.build(schema_builder::compact_storage::no);
     }();
     return paxos;
@@ -205,8 +231,6 @@ schema_ptr system_keyspace::raft() {
 
             .set_comment("Persisted RAFT log, votes and snapshot info")
             .with_version(generate_schema_version(id))
-            .set_wait_for_sync_to_commitlog(true)
-            .with_null_sharder()
             .build();
     }();
     return schema;
@@ -227,8 +251,6 @@ schema_ptr system_keyspace::raft_snapshots() {
 
             .set_comment("Persisted RAFT snapshot descriptors info")
             .with_version(generate_schema_version(id))
-            .set_wait_for_sync_to_commitlog(true)
-            .with_null_sharder()
             .build();
     }();
     return schema;
@@ -245,8 +267,6 @@ schema_ptr system_keyspace::raft_snapshot_config() {
 
             .set_comment("RAFT configuration for the latest snapshot descriptor")
             .with_version(generate_schema_version(id))
-            .set_wait_for_sync_to_commitlog(true)
-            .with_null_sharder()
             .build();
     }();
     return schema;
@@ -640,8 +660,6 @@ schema_ptr system_keyspace::large_cells() {
         "Scylla specific information about the local node"
        );
        builder.set_gc_grace_seconds(0);
-       // Raft Group id and server id updates must be sync
-       builder.set_wait_for_sync_to_commitlog(true);
        builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
     }();
@@ -924,7 +942,6 @@ schema_ptr system_keyspace::group0_history() {
 
             .set_comment("History of Raft group 0 state changes")
             .with_version(generate_schema_version(id))
-            .with_null_sharder()
             .build();
     }();
     return schema;
@@ -943,8 +960,6 @@ schema_ptr system_keyspace::discovery() {
             .with_column("raft_server_id", uuid_type)
             .set_comment("State of cluster discovery algorithm: the set of discovered peers")
             .with_version(generate_schema_version(id))
-            .set_wait_for_sync_to_commitlog(true)
-            .with_null_sharder()
             .build();
     }();
     return schema;
@@ -957,8 +972,6 @@ schema_ptr system_keyspace::broadcast_kv_store() {
             .with_column("key", utf8_type, column_kind::partition_key)
             .with_column("value", utf8_type)
             .with_version(generate_schema_version(id))
-            .set_wait_for_sync_to_commitlog(true)
-            .with_null_sharder()
             .build();
     }();
     return schema;
