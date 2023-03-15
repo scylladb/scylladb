@@ -270,7 +270,7 @@ The ``LANGUAGE`` clause specifies the language of the function, and the ``AS`` c
 
 * For Lua functions, the ``LANGUAGE`` is ``lua`` and the body is a string literal containing the Lua script.
 
-* For Wasm functions, the ``LANGUAGE`` is ``wasm`` and the body is a string literal containing a WebAssembly module in WebAssembly text format, which exports a function with the same name as specified in the ``CREATE FUNCTION`` statement. More details on generating the Wasm modules can be found `here </cql/wasm>`_.
+* For Wasm functions, the ``LANGUAGE`` is ``wasm`` and the body is a string literal containing a WebAssembly module in WebAssembly text format, which exports a function with the same name as specified in the ``CREATE FUNCTION`` statement. More details on generating the Wasm modules can be found :doc:`here </cql/wasm>`.
 
 If the function code contains single quotes, they must be escaped by doubling them, for example::
 
