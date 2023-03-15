@@ -53,7 +53,8 @@ class sstable_directory {
 public:
     // favor chunked vectors when dealing with file lists: they can grow to hundreds of thousands
     // of elements.
-    using sstable_info_vector = utils::chunked_vector<sstables::foreign_sstable_open_info>;
+    using sstable_open_info_vector = utils::chunked_vector<sstables::foreign_sstable_open_info>;
+    using sstable_entry_descriptor_vector = utils::chunked_vector<sstables::entry_descriptor>;
 
     // Flags below control how to behave when scanning new SSTables.
     struct process_flags {
@@ -122,22 +123,35 @@ private:
     //
     // The indexes of the outer vector represent the shards. Having anything in the index
     // representing this shard is illegal.
-    std::vector<sstable_info_vector> _unshared_remote_sstables;
+    std::vector<sstable_entry_descriptor_vector> _unshared_remote_sstables;
 
     // SSTables that are shared. Stored as foreign_sstable_open_info objects. Reason is those are
     // the SSTables that we found, and not necessarily the ones we will reshard. We want to balance
     // the amount of data resharded per shard, so a coordinator may redistribute this.
-    sstable_info_vector _shared_sstable_info;
+    sstable_open_info_vector _shared_sstable_info;
 
+    std::vector<sstables::shared_sstable> _unsorted_sstables;
+private:
     future<> process_descriptor(sstables::entry_descriptor desc, process_flags flags);
     void validate(sstables::shared_sstable sst, process_flags flags) const;
+    future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc) const;
+    future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc, process_flags flags) const;
 
     template <typename Container, typename Func>
     requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>
     future<> parallel_for_each_restricted(Container&& C, Func&& func);
-    future<> load_foreign_sstables(sstable_info_vector info_vec);
+    future<> load_foreign_sstables(sstable_entry_descriptor_vector info_vec);
 
-    std::vector<sstables::shared_sstable> _unsorted_sstables;
+    // Sort the sstable according to owner
+    future<> sort_sstable(sstables::entry_descriptor desc, process_flags flags);
+
+    // Returns filename for a SSTable from its entry_descriptor.
+    sstring sstable_filename(const sstables::entry_descriptor& desc) const;
+
+    // Compute owner of shards for a particular SSTable.
+    future<std::vector<shard_id>> get_shards_for_this_sstable(const sstables::entry_descriptor& desc, process_flags flags) const;
+    // Retrieves sstables::foreign_sstable_open_info for a particular SSTable.
+    future<foreign_sstable_open_info> get_open_info_for_this_sstable(const sstables::entry_descriptor& desc) const;
 public:
     sstable_directory(sstables_manager& manager,
             schema_ptr schema,
@@ -174,9 +188,6 @@ public:
     // class in a sharded service have the opportunity to validate its files.
     future<> process_sstable_dir(process_flags flags);
 
-    // Sort the sstable according to owner
-    future<> sort_sstable(sstables::shared_sstable sst);
-
     // If files were scheduled to be removed, they will be removed after this call.
     future<> commit_directory_changes();
 
@@ -191,7 +202,7 @@ public:
 
     // Retrieves the list of shared SSTables in this object. The list will be reset once this
     // is called.
-    sstable_info_vector retrieve_shared_sstables();
+    sstable_open_info_vector retrieve_shared_sstables();
     std::vector<sstables::shared_sstable>& get_unshared_local_sstables() { return _unshared_local_sstables; }
 
     future<> remove_sstables(std::vector<sstables::shared_sstable> sstlist);

@@ -132,7 +132,7 @@ distributed_loader::lock_table(sharded<sstables::sstable_directory>& dir, sharde
 // SSTables assigned to it, and their total size. The total size is used to make sure we are
 // fairly balancing SSTables among shards.
 struct reshard_shard_descriptor {
-    sstables::sstable_directory::sstable_info_vector info_vec;
+    sstables::sstable_directory::sstable_open_info_vector info_vec;
     uint64_t uncompressed_data_size = 0;
 
     bool total_size_smaller(const reshard_shard_descriptor& rhs) const {
@@ -147,9 +147,9 @@ struct reshard_shard_descriptor {
 // Collects shared SSTables from all shards and returns a vector containing them all.
 // This function assumes that the list of SSTables can be fairly big so it is careful to
 // manipulate it in a do_for_each loop (which yields) instead of using standard accumulators.
-future<sstables::sstable_directory::sstable_info_vector>
+future<sstables::sstable_directory::sstable_open_info_vector>
 collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir) {
-    auto info_vec = sstables::sstable_directory::sstable_info_vector();
+    auto info_vec = sstables::sstable_directory::sstable_open_info_vector();
 
     // We want to make sure that each distributed object reshards about the same amount of data.
     // Each sharded object has its own shared SSTables. We can use a clever algorithm in which they
@@ -177,7 +177,7 @@ collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir) {
 //
 // Returns a reshard_shard_descriptor per shard indicating the work that each shard has to do.
 future<std::vector<reshard_shard_descriptor>>
-distribute_reshard_jobs(sstables::sstable_directory::sstable_info_vector source) {
+distribute_reshard_jobs(sstables::sstable_directory::sstable_open_info_vector source) {
     auto destinations = std::vector<reshard_shard_descriptor>(smp::count);
 
     std::sort(source.begin(), source.end(), [] (const sstables::foreign_sstable_open_info& a, const sstables::foreign_sstable_open_info& b) {
@@ -205,7 +205,7 @@ distribute_reshard_jobs(sstables::sstable_directory::sstable_info_vector source)
 //
 // A creator function must be passed that will create an SSTable object in the correct shard,
 // and an I/O priority must be specified.
-future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::sstable_info_vector shared_info, replica::table& table,
+future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::sstable_open_info_vector shared_info, replica::table& table,
                            sstables::compaction_sstable_creator_fn creator, io_priority_class iop)
 {
     // Resharding doesn't like empty sstable sets, so bail early. There is nothing

@@ -39,6 +39,13 @@ static schema_ptr get_schema(unsigned shard_count, unsigned sharding_ignore_msb_
     return get_schema_builder().with_sharder(shard_count, sharding_ignore_msb_bits).build();
 }
 
+// Asserts that sstable::compute_owner_shards(...) produces correct results.
+static future<> assert_sstable_computes_correct_owners(test_env& env, const sstables::shared_sstable& base_sst, sstring dir) {
+    auto sst = env.make_sstable(base_sst->get_schema(), dir, base_sst->generation().value(), base_sst->get_version());
+    co_await sst->load_owner_shards();
+    BOOST_REQUIRE_EQUAL(sst->get_shards_for_this_sstable(), base_sst->get_shards_for_this_sstable());
+}
+
 void run_sstable_resharding_test() {
     test_env env;
     auto close_env = defer([&] { env.stop().get(); });
@@ -112,6 +119,7 @@ void run_sstable_resharding_test() {
         BOOST_REQUIRE(shards.size() == 1); // check sstable is unshared.
         auto shard = shards.front();
         BOOST_REQUIRE(processed_shards.insert(shard).second == true); // check resharding created one sstable per shard.
+        assert_sstable_computes_correct_owners(env, new_sst, tmp.path().string()).get();
 
         auto rd = assert_that(new_sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit()));
         BOOST_REQUIRE(muts[shard].size() == keys_per_shard);
@@ -158,6 +166,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
 
             auto sst = make_sstable_containing(sst_gen, muts);
             BOOST_REQUIRE(!sst->is_shared());
+            assert_sstable_computes_correct_owners(env, sst, tmp.path().string()).get();
         }
 
         // create sstable owned by all shards
@@ -184,6 +193,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
             sst = env.reusable_sst(all_shards_s, tmp.path().string(), generation_value(sst->generation()), version).get0();
             BOOST_REQUIRE(smp::count == 1 || sst->is_shared());
             BOOST_REQUIRE(sst->get_shards_for_this_sstable().size() == smp::count);
+            assert_sstable_computes_correct_owners(env, sst, tmp.path().string()).get();
         }
       }
     });

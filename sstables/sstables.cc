@@ -1535,6 +1535,38 @@ future<foreign_sstable_open_info> sstable::get_open_info() & {
     });
 }
 
+future<>
+sstable::load_owner_shards(const io_priority_class& pc) {
+    if (!_shards.empty()) {
+        co_return;
+    }
+    co_await read_scylla_metadata(pc);
+
+    auto has_valid_sharding_metadata = std::invoke([this] {
+        if (!has_component(component_type::Scylla)) {
+            return false;
+        }
+
+        auto& scylla_metadata = _components->scylla_metadata;
+        const auto* sm = scylla_metadata
+                ? scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>()
+                : nullptr;
+        return sm && sm->token_ranges.elements.size();
+    });
+    // Statistics is needed for SSTable loading validation and possible Summary regeneration.
+    co_await read_statistics(pc);
+
+    // If sharding metadata is not available, we must load first and last keys from summary
+    // for sstable::compute_shards_for_this_sstable() to operate on them.
+    if (!has_valid_sharding_metadata) {
+        sstlog.warn("Sharding metadata not available for {}, so Summary will be read to allow Scylla to compute shards owning the SSTable.", get_filename());
+        co_await read_summary(pc);
+        set_first_and_last_keys();
+    }
+
+    _shards = compute_shards_for_this_sstable();
+}
+
 void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval) {
     assert(expected_partition_count >= 1);
 

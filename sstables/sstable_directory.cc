@@ -110,50 +110,67 @@ void sstable_directory::validate(sstables::shared_sstable sst, process_flags fla
     }
 }
 
+future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc) const {
+    auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
+    co_await sst->load(_io_priority);
+    co_return sst;
+}
+
+future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc, process_flags flags) const {
+    auto sst = co_await load_sstable(std::move(desc));
+    validate(sst, flags);
+    if (flags.need_mutate_level) {
+        dirlog.trace("Mutating {} to level 0\n", sst->get_filename());
+        co_await sst->mutate_sstable_level(0);
+    }
+    co_return sst;
+}
+
 future<>
 sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_flags flags) {
     if (desc.version > _max_version_seen) {
         _max_version_seen = desc.version;
     }
 
+    if (flags.sort_sstables_according_to_owner) {
+        co_await sort_sstable(std::move(desc), flags);
+    } else {
+        dirlog.debug("Added {} to unsorted sstables list", sstable_filename(desc));
+        _unsorted_sstables.push_back(co_await load_sstable(std::move(desc), flags));
+    }
+}
+
+future<std::vector<shard_id>> sstable_directory::get_shards_for_this_sstable(const sstables::entry_descriptor& desc, process_flags flags) const {
     auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
-    return sst->load(_io_priority).then([this, sst, flags] {
-        validate(sst, flags);
-        if (flags.need_mutate_level) {
-            dirlog.trace("Mutating {} to level 0\n", sst->get_filename());
-            return sst->mutate_sstable_level(0);
-        } else {
-            return make_ready_future<>();
-        }
-    }).then([sst, flags, this] {
-        if (flags.sort_sstables_according_to_owner) {
-            return sort_sstable(sst);
-        } else {
-            dirlog.debug("Added {} to unsorted sstables list", sst->get_filename());
-            _unsorted_sstables.push_back(sst);
-            return make_ready_future<>();
-        }
-    });
+    co_await sst->load_owner_shards(_io_priority);
+    validate(sst, flags);
+    co_return sst->get_shards_for_this_sstable();
+}
+
+future<foreign_sstable_open_info> sstable_directory::get_open_info_for_this_sstable(const sstables::entry_descriptor& desc) const {
+    auto sst = co_await load_sstable(std::move(desc));
+    co_return co_await sst->get_open_info();
 }
 
 future<>
-sstable_directory::sort_sstable(sstables::shared_sstable sst) {
-    return sst->get_open_info().then([sst, this] (sstables::foreign_sstable_open_info info) {
-        auto shards = sst->get_shards_for_this_sstable();
-        if (shards.size() == 1) {
-            if (shards[0] == this_shard_id()) {
-                dirlog.trace("{} identified as a local unshared SSTable", sst->get_filename());
-                _unshared_local_sstables.push_back(sst);
-            } else {
-                dirlog.trace("{} identified as a remote unshared SSTable", sst->get_filename());
-                _unshared_remote_sstables[shards[0]].push_back(std::move(info));
-            }
+sstable_directory::sort_sstable(sstables::entry_descriptor desc, process_flags flags) {
+    auto shards = co_await get_shards_for_this_sstable(desc, flags);
+    if (shards.size() == 1) {
+        if (shards[0] == this_shard_id()) {
+            dirlog.trace("{} identified as a local unshared SSTable", sstable_filename(desc));
+            _unshared_local_sstables.push_back(co_await load_sstable(std::move(desc), flags));
         } else {
-            dirlog.trace("{} identified as a shared SSTable", sst->get_filename());
-            _shared_sstable_info.push_back(std::move(info));
+            dirlog.trace("{} identified as a remote unshared SSTable", sstable_filename(desc));
+            _unshared_remote_sstables[shards[0]].push_back(std::move(desc));
         }
-        return make_ready_future<>();
-    });
+    } else {
+        dirlog.trace("{} identified as a shared SSTable", sstable_filename(desc));
+        _shared_sstable_info.push_back(co_await get_open_info_for_this_sstable(desc));
+    }
+}
+
+sstring sstable_directory::sstable_filename(const sstables::entry_descriptor& desc) const {
+    return sstable::filename(_sstable_dir.native(), _schema->ks_name(), _schema->cf_name(), desc.version, desc.generation, desc.format, component_type::Data);
 }
 
 generation_type
@@ -282,9 +299,9 @@ future<shared_sstable> sstable_directory::load_foreign_sstable(foreign_sstable_o
 }
 
 future<>
-sstable_directory::load_foreign_sstables(sstable_info_vector info_vec) {
-    return parallel_for_each_restricted(info_vec, [this] (sstables::foreign_sstable_open_info& info) {
-        return load_foreign_sstable(info).then([this] (auto sst) {
+sstable_directory::load_foreign_sstables(sstable_entry_descriptor_vector info_vec) {
+    return parallel_for_each_restricted(info_vec, [this] (const sstables::entry_descriptor& info) {
+        return load_sstable(info).then([this] (auto sst) {
             _unshared_local_sstables.push_back(sst);
             return make_ready_future<>();
         });
@@ -319,10 +336,8 @@ sstable_directory::collect_output_unshared_sstables(std::vector<sstables::shared
         }
 
         dirlog.trace("Collected output SSTable {} is remote. Storing it", sst->get_filename());
-        return sst->get_open_info().then([this, shard, sst] (sstables::foreign_sstable_open_info info) {
-            _unshared_remote_sstables[shard].push_back(std::move(info));
-            return make_ready_future<>();
-        });
+        _unshared_remote_sstables[shard].push_back(sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), sst->component_basename(component_type::Data)));
+        return make_ready_future<>();
     });
 }
 
@@ -379,7 +394,7 @@ sstable_directory::store_phaser(utils::phased_barrier::operation op) {
     _operation_barrier.emplace(std::move(op));
 }
 
-sstable_directory::sstable_info_vector
+sstable_directory::sstable_open_info_vector
 sstable_directory::retrieve_shared_sstables() {
     return std::exchange(_shared_sstable_info, {});
 }
