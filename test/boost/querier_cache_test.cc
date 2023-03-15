@@ -731,7 +731,7 @@ SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
 
     auto fut = sem.obtain_permit(t.get_schema().get(), get_name(), 1, db::no_timeout);
 
-    BOOST_CHECK_EQUAL(sem.waiters(), 1);
+    BOOST_CHECK_EQUAL(sem.get_stats().waiters, 1);
 
     const auto entry = t.produce_first_page_and_save_mutation_querier();
     t.assert_cache_lookup_mutation_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)

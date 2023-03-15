@@ -231,7 +231,7 @@ void database::setup_scylla_memory_diagnostics_producer() {
                         name,
                         initial_res.count - available_res.count,
                         utils::to_hr_size(initial_res.memory - available_res.memory),
-                        sem.waiters());
+                        sem.get_stats().waiters);
             } else {
                 writeln("    {}: {}/{}, {}/{}, queued: {}\n",
                         name,
@@ -239,7 +239,7 @@ void database::setup_scylla_memory_diagnostics_producer() {
                         initial_res.count,
                         utils::to_hr_size(initial_res.memory - available_res.memory),
                         utils::to_hr_size(initial_res.memory),
-                        sem.waiters());
+                        sem.get_stats().waiters);
             }
         }
 
@@ -595,7 +595,7 @@ database::setup_metrics() {
                        sm::description("Holds the amount of memory consumed by current read operations. "),
                        {user_label_instance}),
 
-        sm::make_gauge("queued_reads", [this] { return _read_concurrency_sem.waiters(); },
+        sm::make_gauge("queued_reads", [this] { return _read_concurrency_sem.get_stats().waiters; },
                        sm::description("Holds the number of currently queued read operations."),
                        {user_label_instance}),
 
@@ -630,7 +630,7 @@ database::setup_metrics() {
                        sm::description("Holds the amount of memory consumed by current read operations issued on behalf of streaming "),
                        {streaming_label_instance}),
 
-        sm::make_gauge("queued_reads", [this] { return _streaming_concurrency_sem.waiters(); },
+        sm::make_gauge("queued_reads", [this] { return _streaming_concurrency_sem.get_stats().waiters; },
                        sm::description("Holds the number of currently queued read operations on behalf of streaming."),
                        {streaming_label_instance}),
 
@@ -665,7 +665,7 @@ database::setup_metrics() {
                        sm::description("Holds the amount of memory consumed by all read operations from \"system\" keyspace tables. "),
                        {system_label_instance}),
 
-        sm::make_gauge("queued_reads", [this] { return _system_read_concurrency_sem.waiters(); },
+        sm::make_gauge("queued_reads", [this] { return _system_read_concurrency_sem.get_stats().waiters; },
                        sm::description("Holds the number of currently queued read operations from \"system\" keyspace tables."),
                        {system_label_instance}),
 

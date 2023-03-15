@@ -81,6 +81,7 @@ public:
     enum class state {
         waiting_for_admission,
         waiting_for_memory,
+        waiting_for_execution,
         active_unused,
         active_used,
         active_blocked,
@@ -101,12 +102,8 @@ private:
     explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name,
             reader_resources base_resources, db::timeout_clock::time_point timeout);
 
-    void on_waiting_for_admission();
-    void on_waiting_for_memory(future<> f);
-    void on_admission();
-    void on_granted_memory();
-
-    future<> get_memory_future();
+    reader_permit::impl& operator*() { return *_impl; }
+    reader_permit::impl* operator->() { return _impl.get(); }
 
     void mark_used() noexcept;
 
@@ -135,6 +132,8 @@ public:
 
     reader_concurrency_semaphore& semaphore();
 
+    const ::schema* get_schema() const;
+    std::string_view get_op_name() const;
     state get_state() const;
 
     bool needs_readmission() const;
@@ -163,6 +162,10 @@ public:
     db::timeout_clock::time_point timeout() const noexcept;
 
     void set_timeout(db::timeout_clock::time_point timeout) noexcept;
+
+    // If the read was aborted, throw the exception the read was aborted with.
+    // Otherwise no-op.
+    void check_abort();
 
     query::max_result_size max_result_size() const;
     void set_max_result_size(query::max_result_size);

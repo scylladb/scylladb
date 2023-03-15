@@ -11,15 +11,16 @@
 #include <boost/intrusive/list.hpp>
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
-#include <seastar/core/queue.hh>
-#include <seastar/core/expiring_fifo.hh>
+#include <seastar/core/condition-variable.hh>
 #include "reader_permit.hh"
-#include "readers/flat_mutation_reader_v2.hh"
 #include "utils/updateable_value.hh"
 
 namespace bi = boost::intrusive;
 
 using namespace seastar;
+
+class flat_mutation_reader_v2;
+using flat_mutation_reader_v2_opt = optimized_optional<flat_mutation_reader_v2>;
 
 /// Specific semaphore for controlling reader concurrency
 ///
@@ -107,6 +108,8 @@ public:
         uint64_t disk_reads = 0;
         // The number of sstables read currently.
         uint64_t sstables_read = 0;
+        // Permits waiting on something: admission, memory or execution
+        uint64_t waiters = 0;
     };
 
     using permit_list_type = bi::list<
@@ -114,82 +117,30 @@ public:
             bi::base_hook<bi::list_base_hook<bi::link_mode<bi::auto_unlink>>>,
             bi::constant_time_size<false>>;
 
-    class inactive_read_handle;
-
     using read_func = noncopyable_function<future<>(reader_permit)>;
 
 private:
-    struct entry {
-        promise<> pr;
-        reader_permit permit;
-        read_func func;
-        entry(promise<>&& pr, reader_permit permit, read_func func)
-            : pr(std::move(pr)), permit(std::move(permit)), func(std::move(func)) {}
-    };
-
-    class expiry_handler {
-        reader_concurrency_semaphore& _semaphore;
-    public:
-        explicit expiry_handler(reader_concurrency_semaphore& semaphore)
-            : _semaphore(semaphore) {}
-        void operator()(entry& e) noexcept;
-    };
-
-    struct inactive_read : public bi::list_base_hook<bi::link_mode<bi::auto_unlink>> {
-        flat_mutation_reader_v2 reader;
-        eviction_notify_handler notify_handler;
-        timer<lowres_clock> ttl_timer;
-        inactive_read_handle* handle = nullptr;
-
-        explicit inactive_read(flat_mutation_reader_v2 reader_) noexcept
-            : reader(std::move(reader_))
-        { }
-        ~inactive_read();
-        void detach() noexcept;
-    };
-
-    using inactive_reads_type = bi::list<inactive_read, bi::constant_time_size<false>>;
+    struct inactive_read;
 
 public:
     class inactive_read_handle {
-        reader_concurrency_semaphore* _sem = nullptr;
-        inactive_read* _irp = nullptr;
+        reader_permit_opt _permit;
 
         friend class reader_concurrency_semaphore;
 
     private:
         void abandon() noexcept;
 
-        explicit inactive_read_handle(reader_concurrency_semaphore& sem, inactive_read& ir) noexcept
-            : _sem(&sem), _irp(&ir) {
-            _irp->handle = this;
-        }
+        explicit inactive_read_handle(reader_permit permit) noexcept;
     public:
         inactive_read_handle() = default;
-        inactive_read_handle(inactive_read_handle&& o) noexcept
-            : _sem(std::exchange(o._sem, nullptr))
-            , _irp(std::exchange(o._irp, nullptr)) {
-            if (_irp) {
-                _irp->handle = this;
-            }
-        }
-        inactive_read_handle& operator=(inactive_read_handle&& o) noexcept {
-            if (this == &o) {
-                return *this;
-            }
-            abandon();
-            _sem = std::exchange(o._sem, nullptr);
-            _irp = std::exchange(o._irp, nullptr);
-            if (_irp) {
-                _irp->handle = this;
-            }
-            return *this;
-        }
+        inactive_read_handle(inactive_read_handle&& o) noexcept;
+        inactive_read_handle& operator=(inactive_read_handle&& o) noexcept;
         ~inactive_read_handle() {
             abandon();
         }
         explicit operator bool() const noexcept {
-            return bool(_irp);
+            return bool(_permit);
         }
     };
 
@@ -197,51 +148,32 @@ private:
     resources _initial_resources;
     resources _resources;
 
-    class wait_queue {
+    struct wait_queue {
         // Stores entries for permits waiting to be admitted.
-        expiring_fifo<entry, expiry_handler, db::timeout_clock> _admission_queue;
+        permit_list_type _admission_queue;
         // Stores entries for serialized permits waiting to obtain memory.
-        expiring_fifo<entry, expiry_handler, db::timeout_clock> _memory_queue;
+        permit_list_type _memory_queue;
     public:
-        wait_queue(expiry_handler eh) : _admission_queue(eh), _memory_queue(eh) { }
-        size_t size() const {
-            return _admission_queue.size() + _memory_queue.size();
-        }
         bool empty() const {
             return _admission_queue.empty() && _memory_queue.empty();
         }
-        void push_to_admission_queue(entry&& e, db::timeout_clock::time_point timeout) {
-            _admission_queue.push_back(std::move(e), timeout);
-        }
-        void push_to_memory_queue(entry&& e, db::timeout_clock::time_point timeout) {
-            _memory_queue.push_back(std::move(e), timeout);
-        }
-        entry& front() {
-            if (_memory_queue.empty()) {
-                return _admission_queue.front();
-            } else {
-                return _memory_queue.front();
-            }
-        }
-        void pop_front() {
-            if (_memory_queue.empty()) {
-                _admission_queue.pop_front();
-            } else {
-                _memory_queue.pop_front();
-            }
-        }
+        void push_to_admission_queue(reader_permit::impl& p);
+        void push_to_memory_queue(reader_permit::impl& p);
+        reader_permit::impl& front();
     };
 
     wait_queue _wait_list;
-    queue<entry> _ready_list;
+    permit_list_type _ready_list;
+    condition_variable _ready_list_cv;
+    permit_list_type _inactive_reads;
+    // Stores permits that are not in any of the above list.
+    permit_list_type _permit_list;
 
     sstring _name;
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
     utils::updateable_value<uint32_t> _serialize_limit_multiplier;
     utils::updateable_value<uint32_t> _kill_limit_multiplier;
-    inactive_reads_type _inactive_reads;
     stats _stats;
-    permit_list_type _permit_list;
     bool _stopped = false;
     bool _evicting = false;
     gate _close_readers_gate;
@@ -250,9 +182,9 @@ private:
     reader_permit::impl* _blessed_permit = nullptr;
 
 private:
-    void do_detach_inactive_reader(inactive_read&, evict_reason reason) noexcept;
-    [[nodiscard]] flat_mutation_reader_v2 detach_inactive_reader(inactive_read&, evict_reason reason) noexcept;
-    void evict(inactive_read&, evict_reason reason) noexcept;
+    void do_detach_inactive_reader(reader_permit::impl&, evict_reason reason) noexcept;
+    [[nodiscard]] flat_mutation_reader_v2 detach_inactive_reader(reader_permit::impl&, evict_reason reason) noexcept;
+    void evict(reader_permit::impl&, evict_reason reason) noexcept;
 
     bool has_available_units(const resources& r) const;
 
@@ -263,9 +195,9 @@ private:
     // Add the permit to the wait queue and return the future which resolves when
     // the permit is admitted (popped from the queue).
     enum class wait_on { admission, memory };
-    future<> enqueue_waiter(reader_permit permit, read_func func, wait_on wait);
+    future<> enqueue_waiter(reader_permit::impl& permit, wait_on wait);
     void evict_readers_in_background();
-    future<> do_wait_admission(reader_permit permit, read_func func = {});
+    future<> do_wait_admission(reader_permit::impl& permit);
 
     // Check whether permit can be admitted or not.
     // The wait list is not taken into consideration, this is the caller's
@@ -273,7 +205,7 @@ private:
     // A return value of can_admit::maybe means admission might be possible if
     // some of the inactive readers are evicted.
     enum class can_admit { no, maybe, yes };
-    can_admit can_admit_read(const reader_permit& permit) const noexcept;
+    can_admit can_admit_read(const reader_permit::impl& permit) const noexcept;
 
     void maybe_admit_waiters() noexcept;
 
@@ -286,6 +218,8 @@ private:
     // * The blessed read finishes and a new blessed permit is choosen.
     // * Memory consumption falls below the limit.
     future<> request_memory(reader_permit::impl& permit, size_t memory);
+
+    void dequeue_permit(reader_permit::impl&);
 
     void on_permit_created(reader_permit::impl&);
     void on_permit_destroyed(reader_permit::impl&) noexcept;
@@ -309,6 +243,8 @@ private:
     // Throws std::bad_alloc if memory consumed is oom_kill_limit_multiply_threshold more than the memory limit.
     void consume(reader_permit::impl& permit, resources r);
     void signal(const resources& r) noexcept;
+
+    future<> with_ready_permit(reader_permit::impl& permit);
 
 public:
     struct no_limits { };
@@ -507,10 +443,6 @@ public:
         return _initial_resources - _resources;
     }
 
-    size_t waiters() const {
-        return _wait_list.size();
-    }
-
     void broken(std::exception_ptr ex = {});
 
     /// Dump diagnostics printout
@@ -524,10 +456,11 @@ public:
     }
 
     uint64_t active_reads() const noexcept {
-        return _stats.current_permits - _stats.inactive_reads - waiters();
+        return _stats.current_permits - _stats.inactive_reads - _stats.waiters;
     }
 
-    void foreach_permit(noncopyable_function<void(const reader_permit&)> func);
+    void foreach_permit(noncopyable_function<void(const reader_permit::impl&)> func) const;
+    void foreach_permit(noncopyable_function<void(const reader_permit&)> func) const;
 
     uintptr_t get_blessed_permit() const noexcept { return reinterpret_cast<uintptr_t>(_blessed_permit); }
 };

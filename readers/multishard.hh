@@ -10,6 +10,7 @@
 
 #include "reader_concurrency_semaphore.hh"
 #include "readers/flat_mutation_reader_fwd.hh"
+#include "readers/flat_mutation_reader_v2.hh"
 #include "tracing/trace_state.hh"
 #include "seastarx.hh"
 
