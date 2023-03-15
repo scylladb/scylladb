@@ -159,7 +159,8 @@ ar.reloc_add('api')
 def exclude_submodules(tarinfo):
     if tarinfo.name in ('scylla/tools/jmx',
                         'scylla/tools/java',
-                        'scylla/tools/python3'):
+                        'scylla/tools/python3',
+                        'scylla/tools/cqlsh'):
         return None
     return tarinfo
 ar.reloc_add('tools', filter=exclude_submodules)
