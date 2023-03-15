@@ -1863,7 +1863,7 @@ future<> gossiper::start_gossiping(int generation_nbr, std::map<application_stat
 }
 
 future<std::unordered_map<gms::inet_address, int32_t>>
-gossiper::get_generation_for_nodes(std::list<gms::inet_address> nodes) {
+gossiper::get_generation_for_nodes(std::unordered_set<gms::inet_address> nodes) {
     std::unordered_map<gms::inet_address, int32_t> ret;
     for (const auto& node : nodes) {
         auto es = get_endpoint_state_for_endpoint_ptr(node);
