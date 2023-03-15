@@ -201,6 +201,11 @@ Add New DC
 
 #. If you are using Scylla Monitoring, update the `monitoring stack <https://monitoring.docs.scylladb.com/stable/install/monitoring_stack.html#configure-scylla-nodes-from-files>`_ to monitor it. If you are using Scylla Manager, make sure you install the `Manager Agent <https://manager.docs.scylladb.com/stable/install-scylla-manager-agent.html>`_ and Manager can access the new DC.
 
+Handling Failures
+=================
+
+If one of the new nodes starts bootstrapping but then fails in the middle e.g. due to a power loss, you can retry bootstrap (by restarting the node). If you don't want to retry, or the node refuses to boot on subsequent attempts, consult the :doc:`Handling Membership Change Failures document</operating-scylla/procedures/cluster-management/handling-membership-change-failures>`.
+
 Configure the Client not to Connect to the New DC
 -------------------------------------------------
 

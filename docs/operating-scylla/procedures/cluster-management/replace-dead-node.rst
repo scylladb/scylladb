@@ -152,6 +152,12 @@ Procedure
     .. note:: 
        When :doc:`Repair Based Node Operations (RBNO) <repair-based-node-operation>` for **replace** is enabled, there is no need to rerun repair.
 
+
+Handling Failures
+-----------------
+
+If the new node starts and begins the replace operation but then fails in the middle e.g. due to a power loss, you can retry the replace (by restarting the node). If you don't want to retry, or the node refuses to boot on subsequent attempts, consult the :doc:`Handling Membership Change Failures document</operating-scylla/procedures/cluster-management/handling-membership-change-failures>`.
+
 ------------------------------
 Setup RAID Following a Restart
 ------------------------------
