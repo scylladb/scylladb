@@ -3014,6 +3014,7 @@ static std::vector<sstables::shared_sstable> open_sstables(test_env& env, schema
     return result;
 }
 
+// Must be called in a seastar thread.
 static flat_mutation_reader_v2 compacted_sstable_reader(test_env& env, schema_ptr s,
                      sstring table_name, std::vector<unsigned long> generations) {
     auto cm = make_lw_shared<compaction_manager_for_testing>(false);
@@ -3026,17 +3027,18 @@ static flat_mutation_reader_v2 compacted_sstable_reader(test_env& env, schema_pt
     tmpdir tmp;
     auto sstables = open_sstables(env, s, format("test/resource/sstables/3.x/uncompressed/{}", table_name), generations);
     auto new_generation = generations.back() + 1;
+    sstables::shared_sstable compacted_sst;
 
     auto desc = sstables::compaction_descriptor(std::move(sstables), default_priority_class());
-    desc.creator = [s, &tmp, &env, new_generation] (shard_id dummy) {
-        return env.make_sstable(s, tmp.path().string(), new_generation,
+    desc.creator = [&] (shard_id dummy) {
+        compacted_sst = env.make_sstable(s, tmp.path().string(), new_generation,
                          sstables::sstable_version_types::mc, sstable::format_types::big, 4096);
+        return compacted_sst;
     };
     desc.replacer = replacer_fn_no_op();
     auto cdata = compaction_manager::create_compaction_data();
     sstables::compact_sstables(std::move(desc), cdata, cf->as_table_state()).get();
 
-    auto compacted_sst = open_sstable(env, s, tmp.path().string(), new_generation);
     return compacted_sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
 }
 
