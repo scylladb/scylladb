@@ -119,3 +119,8 @@ Procedure
        You don't need to restart the Scylla service after modifying the seeds list in ``scylla.yaml``.
 
 #. If you are using Scylla Monitoring, update the `monitoring stack <https://monitoring.docs.scylladb.com/stable/install/monitoring_stack.html#configure-scylla-nodes-from-files>`_ to monitor it. If you are using Scylla Manager, make sure you install the `Manager Agent <https://manager.docs.scylladb.com/stable/install-scylla-manager-agent.html>`_, and Manager can access it.
+
+Handling Failures
+=================
+
+If the node starts bootstrapping but then fails in the middle e.g. due to a power loss, you can retry bootstrap (by restarting the node). If you don't want to retry, or the node refuses to boot on subsequent attempts, consult the :doc:`Handling Membership Change Failures document</operating-scylla/procedures/cluster-management/handling-membership-change-failures>`.
