@@ -63,9 +63,9 @@ public:
                             1))
     { }
 
-    sstable_assertions(test_env& env, schema_ptr schema, sstable_version_types version, int generation)
-        : sstable_assertions(env, schema, env.tempdir().path().native(), version, generation)
-    { }
+    sstable_assertions(test_env& env, shared_sstable sst)
+        : sstable_assertions(env, sst->get_schema(), env.tempdir().path().native(), sst->get_version(), sst->generation().value())
+    {}
 
     test_env& get_env() {
         return _env;
@@ -3257,8 +3257,8 @@ static sstables::shared_sstable write_and_compare_sstables(test_env& env, schema
     return sst;
 }
 
-static sstable_assertions validate_read(test_env& env, schema_ptr s, std::vector<mutation> mutations, sstable_version_types version) {
-    sstable_assertions sst(env, s, version, 1);
+static sstable_assertions validate_read(test_env& env, shared_sstable input_sst, std::vector<mutation> mutations) {
+    sstable_assertions sst(env, input_sst);
     sst.load();
 
     auto assertions = assert_that(sst.make_reader());
@@ -3360,7 +3360,7 @@ static void write_mut_and_validate_version(test_env& env, schema_ptr s, const ss
     mt->apply(mut);
 
     auto sst = write_and_compare_sstables(env, s, mt, table_name, version);
-    auto written_sst = validate_read(env, s, {mut}, version);
+    auto written_sst = validate_read(env, sst, {mut});
     if (validate_flag) {
         do_validate_stats_metadata(s, written_sst, table_name);
     }
@@ -3384,7 +3384,7 @@ static void write_mut_and_validate_version(test_env& env, schema_ptr s, const ss
     // range tombstones.  Revisit once the reader v2 migration is
     // complete and those version transforms are gone
     auto sst = write_sstables(env, s, mt, version);
-    auto written_sst = validate_read(env, s, {mut}, version);
+    auto written_sst = validate_read(env, sst, {mut});
     check_min_max_column_names(written_sst, std::move(min_components), std::move(max_components));
 }
 
@@ -3403,7 +3403,7 @@ static void write_mut_and_validate_version(test_env& env, schema_ptr s, const ss
     }
 
     auto sst = write_and_compare_sstables(env, s, mt, table_name, version);
-    auto written_sst = validate_read(env, s, muts, version);
+    auto written_sst = validate_read(env, sst, muts);
     if (validate_flag) {
         do_validate_stats_metadata(s, written_sst, table_name);
     }
@@ -3747,7 +3747,7 @@ static future<> test_write_many_partitions(sstring table_name, tombstone partiti
 
         auto sst = compressed ? write_sstables(env, s, mt, version) : write_and_compare_sstables(env, s, mt, table_name, version);
         boost::sort(muts, mutation_decorated_key_less_comparator());
-        validate_read(env, s, muts, version);
+        validate_read(env, sst, muts);
     }
   });
 }
@@ -5063,7 +5063,7 @@ SEASTAR_TEST_CASE(test_write_empty_static_row) {
         mt->apply(mut2);
 
         auto sst = write_and_compare_sstables(env, s, mt, table_name, version);
-        validate_read(env, s, {mut2, mut1}, version); // Mutations are re-ordered according to decorated_key order
+        validate_read(env, sst, {mut2, mut1}); // Mutations are re-ordered according to decorated_key order
     }
   });
 }
