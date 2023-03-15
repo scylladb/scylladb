@@ -9,6 +9,7 @@
 #include "db/system_distributed_keyspace.hh"
 
 #include "cql3/untyped_result_set.hh"
+#include "query-request.hh"
 #include "replica/database.hh"
 #include "db/consistency_level_type.hh"
 #include "db/system_keyspace.hh"
@@ -23,7 +24,9 @@
 #include "service/migration_manager.hh"
 #include "db/config.hh"
 #include "locator/host_id.hh"
+#include "partition_slice_builder.hh"
 
+#include <chrono>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/coroutine.hh>
@@ -161,6 +164,20 @@ schema_ptr service_levels() {
     return schema;
 }
 
+schema_ptr service_levels_v2() {
+    static thread_local auto schema = [] {
+        auto old_schema = service_levels();
+
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::SERVICE_LEVELS_V2);
+        auto builder = schema_builder(system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::SERVICE_LEVELS_V2, std::make_optional(id));
+        for (auto& col: old_schema->all_columns()) {
+            builder.with_column(col.name(), col.type, col.kind);
+        }
+        return builder.build();
+    }();
+    return schema;
+}
+
 // This is the set of tables which this node ensures to exist in the cluster.
 // It does that by announcing the creation of these schemas on initialization
 // of the `system_distributed_keyspace` service (see `start()`), unless it first
@@ -178,6 +195,7 @@ static std::vector<schema_ptr> ensured_tables() {
         cdc_desc(),
         cdc_timestamps(),
         service_levels(),
+        service_levels_v2()
     };
 }
 
@@ -199,7 +217,7 @@ std::vector<schema_ptr> system_distributed_keyspace::all_distributed_tables() {
 }
 
 std::vector<schema_ptr> system_distributed_keyspace::all_everywhere_tables() {
-    return {cdc_generations_v2()};
+    return {cdc_generations_v2(), service_levels_v2()};
 }
 
 system_distributed_keyspace::system_distributed_keyspace(cql3::query_processor& qp, service::migration_manager& mm, service::storage_proxy& sp)
@@ -213,10 +231,10 @@ static thread_local std::pair<std::string_view, data_type> new_columns[] {
     {"workload_type", utf8_type}
 };
 
-static bool has_missing_columns(data_dictionary::database db) noexcept {
+static bool has_missing_columns(data_dictionary::database db, const sstring& ks, const sstring& table) noexcept {
     assert(this_shard_id() == 0);
     try {
-        auto schema = db.find_schema(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS);
+        auto schema = db.find_schema(ks, table);
         for (const auto& col : new_columns) {
             auto& [col_name, col_type] = col;
             bytes options_name = to_bytes(col_name.data());
@@ -233,10 +251,10 @@ static bool has_missing_columns(data_dictionary::database db) noexcept {
     return false;
 }
 
-static future<> add_new_columns_if_missing(replica::database& db, ::service::migration_manager& mm, ::service::group0_guard group0_guard) noexcept {
+static future<> add_new_columns_if_missing(replica::database& db, ::service::migration_manager& mm, ::service::group0_guard group0_guard, const sstring& ks, const sstring& table) noexcept {
     assert(this_shard_id() == 0);
     try {
-        auto schema = db.find_schema(system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS);
+        auto schema = db.find_schema(ks, table);
         schema_builder b(schema);
         bool updated = false;
         for (const auto& col : new_columns) {
@@ -336,10 +354,19 @@ future<> system_distributed_keyspace::start() {
     }
 
     _started = true;
-    if (has_missing_columns(_qp.db())) {
+    bool has_missing = false;
+    if (has_missing_columns(_qp.db(), system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS)) {
+        has_missing = true;
         auto group0_guard = co_await _mm.start_group0_operation();
-        co_await add_new_columns_if_missing(_qp.db().real_database(), _mm, std::move(group0_guard));
-    } else {
+        co_await add_new_columns_if_missing(_qp.db().real_database(), _mm, std::move(group0_guard), system_distributed_keyspace::NAME, system_distributed_keyspace::SERVICE_LEVELS);
+    }
+    if (has_missing_columns(_qp.db(), system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::SERVICE_LEVELS_V2)) {
+        has_missing = true;
+        auto group0_guard = co_await _mm.start_group0_operation();
+        co_await add_new_columns_if_missing(_qp.db().real_database(), _mm, std::move(group0_guard), system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::SERVICE_LEVELS_V2);
+    }
+    
+    if (!has_missing) {
         dlogger.info("All schemas are uptodate on start");
     }
 }
@@ -818,9 +845,58 @@ static qos::service_level_options::timeout_type get_duration(const cql3::untyped
 };
 
 future<qos::service_levels_info> system_distributed_keyspace::get_service_levels() const {
-    static sstring prepared_query = format("SELECT * FROM {}.{};", NAME, SERVICE_LEVELS);
+    return internal_get_service_levels(NAME, SERVICE_LEVELS, db::consistency_level::ONE);
+}
 
-    return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), cql3::query_processor::cache_internal::yes).then([] (shared_ptr<cql3::untyped_result_set> result_set) {
+future<qos::service_levels_info> system_distributed_keyspace::get_service_level(sstring service_level_name) const {
+    return internal_get_service_level(NAME, SERVICE_LEVELS, std::move(service_level_name), db::consistency_level::ONE);
+}
+
+future<> system_distributed_keyspace::set_service_level(sstring service_level_name, qos::service_level_options slo) const {
+    return internal_set_service_level(NAME, SERVICE_LEVELS, std::move(service_level_name), std::move(slo), db::consistency_level::ONE);
+}
+
+future<> system_distributed_keyspace::drop_service_level(sstring service_level_name) const {
+    return internal_drop_service_level(NAME, SERVICE_LEVELS, std::move(service_level_name), db::consistency_level::ONE);
+}
+
+future<qos::service_levels_info> system_distributed_keyspace::get_service_levels_v2() const {
+    return internal_get_service_levels(NAME_EVERYWHERE, SERVICE_LEVELS_V2, db::consistency_level::LOCAL_ONE);
+}
+
+future<qos::service_levels_info> system_distributed_keyspace::get_service_level_v2(sstring service_level_name) const {
+    return internal_get_service_level(NAME_EVERYWHERE, SERVICE_LEVELS_V2, std::move(service_level_name), db::consistency_level::LOCAL_ONE);
+}
+
+future<> system_distributed_keyspace::set_service_level_v2(sstring service_level_name, qos::service_level_options slo) const {
+    return internal_set_service_level(NAME_EVERYWHERE, SERVICE_LEVELS_V2, std::move(service_level_name), std::move(slo), db::consistency_level::LOCAL_ONE);
+}
+
+future<> system_distributed_keyspace::drop_service_level_v2(sstring service_level_name) const {
+    return internal_drop_service_level(NAME_EVERYWHERE, SERVICE_LEVELS_V2, std::move(service_level_name), db::consistency_level::LOCAL_ONE);
+}
+
+future<> system_distributed_keyspace::migrate_service_levels_to_v2() const {    
+    auto schema = _qp.db().find_table(NAME, SERVICE_LEVELS).schema();
+    auto schema_v2 = _qp.db().find_table(NAME_EVERYWHERE, SERVICE_LEVELS_V2).schema();
+    
+    auto slice = partition_slice_builder(*schema).build();
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), _sp.get_max_result_size(slice), query::tombstone_limit::max);
+
+    auto [res, _] = co_await _sp.query_mutations_locally(schema, std::move(cmd), query::full_partition_range, db::no_timeout);
+
+    std::vector<mutation> muts;
+    auto& cm = schema->get_column_mapping();
+    for(auto& p: res->partitions()) {
+        muts.push_back(p.mut().unfreeze_upgrading(schema_v2, cm));
+    }
+    co_await _sp.mutate_locally(std::move(muts), tracing::trace_state_ptr());
+}
+
+future<qos::service_levels_info> system_distributed_keyspace::internal_get_service_levels(sstring ks, sstring table, db::consistency_level cl) const {
+    sstring prepared_query = format("SELECT * FROM {}.{};", ks, table);
+
+    return _qp.execute_internal(prepared_query, cl, internal_distributed_query_state(), cql3::query_processor::cache_internal::yes).then([] (shared_ptr<cql3::untyped_result_set> result_set) {
         qos::service_levels_info service_levels;
         for (auto &&row : *result_set) {
             try {
@@ -839,9 +915,9 @@ future<qos::service_levels_info> system_distributed_keyspace::get_service_levels
     });
 }
 
-future<qos::service_levels_info> system_distributed_keyspace::get_service_level(sstring service_level_name) const {
-    static sstring prepared_query = format("SELECT * FROM {}.{} WHERE service_level = ?;", NAME, SERVICE_LEVELS);
-    return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}, cql3::query_processor::cache_internal::yes).then(
+future<qos::service_levels_info> system_distributed_keyspace::internal_get_service_level(sstring ks, sstring table, sstring service_level_name, db::consistency_level cl) const {
+    sstring prepared_query = format("SELECT * FROM {}.{} WHERE service_level = ?;", ks, table);
+    return _qp.execute_internal(prepared_query, cl, internal_distributed_query_state(), {service_level_name}, cql3::query_processor::cache_internal::yes).then(
                 [service_level_name = std::move(service_level_name)] (shared_ptr<cql3::untyped_result_set> result_set) {
         qos::service_levels_info service_levels;
         if (!result_set->empty()) {
@@ -861,9 +937,9 @@ future<qos::service_levels_info> system_distributed_keyspace::get_service_level(
     });
 }
 
-future<> system_distributed_keyspace::set_service_level(sstring service_level_name, qos::service_level_options slo) const {
-    static sstring prepared_query = format("INSERT INTO {}.{} (service_level) VALUES (?);", NAME, SERVICE_LEVELS);
-    co_await _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}, cql3::query_processor::cache_internal::no);
+future<> system_distributed_keyspace::internal_set_service_level(sstring ks, sstring table, sstring service_level_name, qos::service_level_options slo, db::consistency_level cl) const {
+    sstring prepared_query = format("INSERT INTO {}.{} (service_level) VALUES (?);", ks, table);
+    co_await _qp.execute_internal(prepared_query, cl, internal_distributed_query_state(), {service_level_name}, cql3::query_processor::cache_internal::no);
     auto to_data_value = [&] (const qos::service_level_options::timeout_type& tv) {
         return std::visit(overloaded_functor {
             [&] (const qos::service_level_options::unset_marker&) {
@@ -882,8 +958,8 @@ future<> system_distributed_keyspace::set_service_level(sstring service_level_na
     data_value workload = slo.workload == qos::service_level_options::workload_type::unspecified
             ? data_value::make_null(utf8_type)
             : data_value(qos::service_level_options::to_string(slo.workload));
-    co_await _qp.execute_internal(format("UPDATE {}.{} SET timeout = ?, workload_type = ? WHERE service_level = ?;", NAME, SERVICE_LEVELS),
-                db::consistency_level::ONE,
+    co_await _qp.execute_internal(format("UPDATE {}.{} SET timeout = ?, workload_type = ? WHERE service_level = ?;", ks, table),
+                cl,
                 internal_distributed_query_state(),
                 {to_data_value(slo.timeout),
                     workload,
@@ -891,9 +967,10 @@ future<> system_distributed_keyspace::set_service_level(sstring service_level_na
                 cql3::query_processor::cache_internal::no);
 }
 
-future<> system_distributed_keyspace::drop_service_level(sstring service_level_name) const {
-    static sstring prepared_query = format("DELETE FROM {}.{} WHERE service_level= ?;", NAME, SERVICE_LEVELS);
-    return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}, cql3::query_processor::cache_internal::no).discard_result();
+future<> system_distributed_keyspace::internal_drop_service_level(sstring ks, sstring table, sstring service_level_name, db::consistency_level cl) const {
+    sstring prepared_query = format("DELETE FROM {}.{} WHERE service_level= ?;", ks, table);
+    return _qp.execute_internal(prepared_query, cl, internal_distributed_query_state(), {service_level_name}, cql3::query_processor::cache_internal::no).discard_result();
 }
+
 
 }

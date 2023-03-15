@@ -9,6 +9,7 @@
 #pragma once
 
 #include "bytes.hh"
+#include "db/consistency_level_type.hh"
 #include "schema/schema_fwd.hh"
 #include "service/qos/qos_common.hh"
 #include "utils/UUID.hh"
@@ -44,6 +45,7 @@ public:
 
     static constexpr auto VIEW_BUILD_STATUS = "view_build_status";
     static constexpr auto SERVICE_LEVELS = "service_levels";
+    static constexpr auto SERVICE_LEVELS_V2 = "service_levels_v2";
 
     /* Nodes use this table to communicate new CDC stream generations to other nodes. */
     static constexpr auto CDC_TOPOLOGY_DESCRIPTION = "cdc_generation_descriptions";
@@ -117,6 +119,19 @@ public:
     future<qos::service_levels_info> get_service_level(sstring service_level_name) const;
     future<> set_service_level(sstring service_level_name, qos::service_level_options slo) const;
     future<> drop_service_level(sstring service_level_name) const;
+
+    future<> migrate_service_levels_to_v2() const;
+
+    future<qos::service_levels_info> get_service_levels_v2() const;
+    future<qos::service_levels_info> get_service_level_v2(sstring service_level_name) const;
+    future<> set_service_level_v2(sstring service_level_name, qos::service_level_options slo) const;
+    future<> drop_service_level_v2(sstring service_level_name) const;
+
+private:
+    future<qos::service_levels_info> internal_get_service_levels(sstring ks, sstring table, db::consistency_level cl) const;
+    future<qos::service_levels_info> internal_get_service_level(sstring ks, sstring table, sstring service_level_name, db::consistency_level cl) const;
+    future<> internal_set_service_level(sstring ks, sstring table, sstring service_level_name, qos::service_level_options slo, db::consistency_level cl) const;
+    future<> internal_drop_service_level(sstring ks, sstring table, sstring service_level_name, db::consistency_level cl) const;
 };
 
 }
