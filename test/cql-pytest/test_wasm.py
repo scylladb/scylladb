@@ -78,15 +78,14 @@ def test_fib(cql, test_keyspace, table1, scylla_with_wasm_only):
         with pytest.raises(InvalidRequest, match="wasm"):
             cql.execute(f"SELECT {test_keyspace}.{fib_name}(p) AS result FROM {table} WHERE p = 997")
 
-# Reads WASM UDF from a file. For a function "foo", the file should be named "foo.wat" and
-# be located in the "test/resource/wasm" directory. Supports renaming the exported function.
-def read_function_from_file(func_name, rename=None):
-    wat_path = os.path.realpath(os.path.join(__file__, f"../../resource/wasm/{func_name}.wat"))
+# Reads WASM UDF from a file, which should be located in the "test/resource/wasm" directory.
+# Supports renaming the exported function.
+def read_function_from_file(file_name, orig_name=None, rename=None):
+    wat_path = os.path.realpath(os.path.join(__file__, f"../../resource/wasm/{file_name}.wat"))
+    orig_name = orig_name or file_name
+    rename = rename or orig_name
     with open(wat_path, "r") as f:
-        if rename:
-            return f.read().replace(f'export "{func_name}"', f'export "{rename}"')
-        else:
-            return f.read()
+        return f.read().replace("'", "''").replace(f'export "{orig_name}"', f'export "{rename}"')
 
 # Test that calling a fibonacci function that claims to accept null input works.
 # Note that since the int field is nullable, it's no longer
@@ -132,7 +131,7 @@ def read_function_from_file(func_name, rename=None):
 def test_fib_called_on_null(cql, test_keyspace, table1, scylla_with_wasm_only):
     table = table1
     fib_name = unique_name()
-    fib_source = read_function_from_file('fib', fib_name)
+    fib_source = read_function_from_file('fib', 'fib', fib_name)
     src = f"(input bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE wasm AS '{fib_source}'"
     with new_function(cql, test_keyspace, src, fib_name):
         cql.execute(f"INSERT INTO {table1} (p) VALUES (3)")
@@ -306,7 +305,7 @@ def test_short_ints(cql, test_keyspace, table1, scylla_with_wasm_only):
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{plus_name}(s, s2) AS result FROM {table} WHERE p = 43")]
         assert len(res) == 1 and res[0].result == -9535
     # Check whether we can use a different function under the same name
-    plus42_source = read_function_from_file('plus42', plus_name)
+    plus42_source = read_function_from_file('plus42', 'plus42', plus_name)
     plus42_src = f"(input smallint, input2 smallint) RETURNS NULL ON NULL INPUT RETURNS smallint LANGUAGE wasm AS '{plus42_source}'"
     # Repeat a number of times so the wasm instances get cached on all shards
     with new_function(cql, test_keyspace, src, plus_name):
@@ -575,7 +574,7 @@ def test_validate_params(cql, test_keyspace, table1, scylla_with_wasm_only):
 def test_word_double(cql, test_keyspace, table1, scylla_with_wasm_only):
     table = table1
     dbl_name = unique_name()
-    dbl_source = read_function_from_file('dbl', dbl_name)
+    dbl_source = read_function_from_file('dbl', 'dbl', dbl_name)
     src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS text LANGUAGE wasm AS '{dbl_source}'"
     with new_function(cql, test_keyspace, src, dbl_name):
         cql.execute(f"INSERT INTO {table1} (p, txt) VALUES (1000, 'doggo')")
@@ -621,7 +620,7 @@ def test_word_double(cql, test_keyspace, table1, scylla_with_wasm_only):
 def test_abi_v2(cql, test_keyspace, table1, scylla_with_wasm_only):
     table = table1
     ri_name = unique_name()
-    ri_source = read_function_from_file('return_input', ri_name)
+    ri_source = read_function_from_file('return_input', 'return_input', ri_name)
     text_src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS text LANGUAGE wasm AS '{ri_source}'"
     with new_function(cql, test_keyspace, text_src, ri_name):
         cql.execute(f"INSERT INTO {table1} (p, txt) VALUES (2000, 'doggo')")
@@ -1098,7 +1097,7 @@ def test_drop(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
 def test_counter(cql, test_keyspace, scylla_only):
     schema = "p int, c counter, PRIMARY KEY (p)"
     ri_counter_name = unique_name()
-    ri_counter_source = read_function_from_file('return_input', ri_counter_name)
+    ri_counter_source = read_function_from_file('return_input', 'return_input', ri_counter_name)
     src = f"(input counter) RETURNS NULL ON NULL INPUT RETURNS counter LANGUAGE wasm AS '{ri_counter_source}'"
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"UPDATE {table} SET c = c + 2  WHERE p = 42;")
