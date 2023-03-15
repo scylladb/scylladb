@@ -148,9 +148,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
         // created sstable owned only by this shard
         {
             auto s = get_schema();
-            auto sst_gen = [&env, s, version]() mutable {
-                return env.make_sstable(s, version);
-            };
+            auto sst_gen = env.make_sst_factory(s, version);
 
             const auto keys = tests::generate_partition_keys(smp::count * 10, s);
             std::vector<mutation> muts;
@@ -168,9 +166,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
         {
             auto key_s = get_schema();
             auto single_sharded_s = get_schema(1, cfg->murmur3_partitioner_ignore_msb_bits());
-            auto sst_gen = [&env, single_sharded_s, version]() mutable {
-                return env.make_sstable(single_sharded_s, version);
-            };
+            auto sst_gen = env.make_sst_factory(single_sharded_s, version);
 
             std::vector<mutation> muts;
             for (shard_id shard : boost::irange(0u, smp::count)) {

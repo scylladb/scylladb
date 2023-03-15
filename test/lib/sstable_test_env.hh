@@ -18,6 +18,7 @@
 #include "gms/feature_service.hh"
 #include "sstables/version.hh"
 #include "sstables/sstable_directory.hh"
+
 #include "test/lib/tmpdir.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/log.hh"
@@ -55,11 +56,15 @@ class test_env {
         db::nop_large_data_handler nop_ld_handler;
         test_env_sstables_manager mgr;
         reader_concurrency_semaphore semaphore;
-        unsigned generation = 1;
+        unsigned long generation = 1;
 
         impl(test_env_config cfg);
         impl(impl&&) = delete;
         impl(const impl&) = delete;
+
+        unsigned long new_generation() noexcept {
+            return generation++;
+        }
     };
     std::unique_ptr<impl> _impl;
 public:
@@ -70,6 +75,10 @@ public:
         return _impl->mgr.close().finally([this] {
             return _impl->semaphore.stop();
         });
+    }
+
+    unsigned long new_generation() noexcept {
+        return _impl->new_generation();
     }
 
     shared_sstable make_sstable(schema_ptr schema, sstring dir, sstables::generation_type generation,
@@ -101,6 +110,18 @@ public:
     shared_sstable make_sstable(schema_ptr schema, unsigned long gen_value, sstable::version_types v, size_t buffer_size,
             gc_clock::time_point now = gc_clock::now()) {
         return make_sstable(std::move(schema), gen_value, v, sstable::format_types::big, buffer_size, now);
+    }
+
+    std::function<shared_sstable()> make_sst_factory(schema_ptr s) {
+        return [this, s = std::move(s)] {
+            return make_sstable(s, new_generation());
+        };
+    }
+
+    std::function<shared_sstable()> make_sst_factory(schema_ptr s, sstable::version_types version) {
+        return [this, s = std::move(s), version] {
+            return make_sstable(s, new_generation(), version);
+        };
     }
 
     struct sst_not_found : public std::runtime_error {

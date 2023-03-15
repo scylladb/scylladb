@@ -940,9 +940,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
         builder.set_gc_grace_seconds(0);
         auto s = builder.build();
 
-        auto sst_gen = [&env, s] () mutable {
-            return env.make_sstable(s);
-        };
+        auto sst_gen = env.make_sst_factory(s);
 
         auto compact = [&, s] (std::vector<shared_sstable> all, std::vector<shared_sstable> to_compact) -> std::vector<shared_sstable> {
             auto cf = env.make_table_for_tests(s);
@@ -1292,9 +1290,7 @@ SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
 
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
-        auto sst_gen = [&env, s] () mutable {
-            return env.make_sstable(s);
-        };
+        auto sst_gen = env.make_sst_factory(s);
 
         auto mt = make_lw_shared<replica::memtable>(s);
         mutation m(s, key);
@@ -1586,9 +1582,7 @@ SEASTAR_TEST_CASE(time_window_strategy_size_tiered_behavior_correctness) {
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", int32_type).build();
 
-        auto sst_gen = [&env, s] () mutable {
-            return env.make_sstable(s);
-        };
+        auto sst_gen = env.make_sst_factory(s);
 
         auto make_insert = [&] (partition_key key, api::timestamp_type t) {
             mutation m(s, key);
@@ -1854,10 +1848,7 @@ SEASTAR_TEST_CASE(compaction_correctness_with_partitioned_sstable_set) {
         builder.set_compaction_strategy(sstables::compaction_strategy_type::leveled);
         auto s = builder.build();
 
-        auto sst_gen = [&env, s] () mutable {
-            auto sst = env.make_sstable(s);
-            return sst;
-        };
+        auto sst_gen = env.make_sst_factory(s);
 
         auto compact = [&, s] (std::vector<shared_sstable> all) -> std::vector<shared_sstable> {
             // NEEDED for partitioned_sstable_set to actually have an effect
@@ -1961,9 +1952,7 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
                     .with_column("id", utf8_type, column_kind::partition_key)
                     .with_column("value", int32_type).build();
 
-            auto sst_gen = [&env, s] () mutable {
-                return env.make_sstable(s);
-            };
+            auto sst_gen = env.make_sst_factory(s);
 
             auto make_insert = [&] (dht::decorated_key key) {
                 mutation m(s, std::move(key));
@@ -2839,10 +2828,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
                 .with_column("value", int32_type);
         auto s = builder.build();
 
-        auto sst_gen = [&env, s] () mutable {
-            auto sst = env.make_sstable(s);
-            return sst;
-        };
+        auto sst_gen = env.make_sst_factory(s);
 
         auto tracker = make_lw_shared<cache_tracker>();
         auto cf = env.make_table_for_tests(s);
@@ -3009,10 +2995,7 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
                 .with_column("value", int32_type);
         auto s = builder.build();
 
-        auto sst_gen = [&env, s] () mutable {
-            auto sst = env.make_sstable(s);
-            return sst;
-        };
+        auto sst_gen = env.make_sst_factory(s);
 
         auto cf = env.make_table_for_tests(s);
         auto close_cf = deferred_stop(cf);
@@ -3262,9 +3245,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         builder.set_gc_grace_seconds(0);
         auto s = builder.build();
 
-        auto sst_gen = [&env, s] () mutable {
-            return env.make_sstable(s);
-        };
+        auto sst_gen = env.make_sst_factory(s);
 
         auto next_timestamp = [] {
             static thread_local api::timestamp_type next = 1;
@@ -3380,9 +3361,7 @@ SEASTAR_TEST_CASE(twcs_major_compaction_test) {
                 .with_column("value", int32_type);
         auto s = builder.build();
 
-        auto sst_gen = [&env, s] () mutable {
-            return env.make_sstable(s);
-        };
+        auto sst_gen = env.make_sst_factory(s);
 
         auto next_timestamp = [] (auto step) {
             using namespace std::chrono;
@@ -3501,9 +3480,7 @@ SEASTAR_TEST_CASE(test_bug_6472) {
         builder.set_gc_grace_seconds(0);
         auto s = builder.build();
 
-        auto sst_gen = [&env, s] () mutable {
-            return env.make_sstable(s);
-        };
+        auto sst_gen = env.make_sst_factory(s);
 
         auto next_timestamp = [] (auto step) {
             using namespace std::chrono;
@@ -3609,9 +3586,7 @@ SEASTAR_TEST_CASE(test_twcs_partition_estimate) {
 
         const auto rows_per_partition = 200;
 
-        auto sst_gen = [&env, s] () mutable {
-            return env.make_sstable(s);
-        };
+        auto sst_gen = env.make_sst_factory(s);
 
         auto next_timestamp = [] (int sstable_idx, int ck_idx) {
             using namespace std::chrono;
@@ -3793,9 +3768,7 @@ SEASTAR_TEST_CASE(test_twcs_compaction_across_buckets) {
             return (gc_clock::now().time_since_epoch() - std::chrono::duration_cast<std::chrono::microseconds>(step)).count();
         };
 
-        auto sst_gen = [&env, s] () mutable {
-            return env.make_sstable(s);
-        };
+        auto sst_gen = env.make_sst_factory(s);
         auto pkey = tests::generate_partition_key(s);
 
         auto make_row = [&] (std::chrono::hours step) {
@@ -3922,9 +3895,7 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
             return m;
         };
 
-        auto sst_gen = [&env, s]() {
-            return env.make_sstable(s);
-        };
+        auto sst_gen = env.make_sst_factory(s);
 
         {
             // create set of 256 disjoint ssts that belong to the same time window and expect that twcs reshape allows them all to be compacted at once
@@ -4057,9 +4028,7 @@ SEASTAR_TEST_CASE(stcs_reshape_overlapping_test) {
             return m;
         };
 
-        auto sst_gen = [&env, s]() {
-            return env.make_sstable(s);
-        };
+        auto sst_gen = env.make_sst_factory(s);
 
         {
             // create set of 256 disjoint ssts and expect that stcs reshape allows them all to be compacted at once
@@ -4099,9 +4068,7 @@ SEASTAR_TEST_CASE(test_twcs_single_key_reader_filtering) {
         builder.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
         auto s = builder.build();
 
-        auto sst_gen = [&env, s]() {
-            return env.make_sstable(s);
-        };
+        auto sst_gen = env.make_sst_factory(s);
 
         auto make_row = [&] (int32_t pk, int32_t ck) {
             mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(pk)));
@@ -4445,9 +4412,7 @@ SEASTAR_TEST_CASE(twcs_single_key_reader_through_compound_set_test) {
         auto set1 = make_lw_shared<sstable_set>(cs.make_sstable_set(s));
         auto set2 = make_lw_shared<sstable_set>(cs.make_sstable_set(s));
 
-        auto sst_gen = [&env, s]() {
-            return env.make_sstable(s);
-        };
+        auto sst_gen = env.make_sst_factory(s);
 
         // sstables with same key but belonging to different windows
         auto sst1 = make_sstable_containing(sst_gen, {make_row(std::chrono::hours(1))});
@@ -4742,9 +4707,7 @@ SEASTAR_TEST_CASE(test_large_partition_splitting_on_compaction) {
         auto next_timestamp = [] (std::chrono::seconds step = 0s) {
             return (gc_clock::now().time_since_epoch() + duration_cast<microseconds>(step)).count();
         };
-        auto sst_gen = [&env, s] () mutable {
-            return env.make_sstable(s);
-        };
+        auto sst_gen = env.make_sst_factory(s);
         auto pkey = tests::generate_partition_key(s);
         auto cf = env.make_table_for_tests(s);
         auto close_cf = deferred_stop(cf);
