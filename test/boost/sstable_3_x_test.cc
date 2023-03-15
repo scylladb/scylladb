@@ -3188,10 +3188,12 @@ SEASTAR_TEST_CASE(compact_deleted_cell) {
 
 static void compare_files(sstring filename1, sstring filename2) {
     BOOST_TEST_MESSAGE(format("comparing {} to {}", filename1, filename2));
+    BOOST_REQUIRE(file_exists(filename1).get());
     std::ifstream ifs1;
     ifs1.exceptions(std::ifstream::failbit | std::ifstream::badbit);
     ifs1.open(filename1, std::ios_base::in | std::ios_base::binary);
 
+    BOOST_REQUIRE(file_exists(filename2).get());
     std::ifstream ifs2;
     ifs2.exceptions(std::ifstream::failbit | std::ifstream::badbit);
     ifs2.open(filename2);
@@ -3206,7 +3208,7 @@ static sstring get_write_test_path(sstring table_name) {
 }
 
 // This method should not be called for compressed sstables because compression is not deterministic
-static void compare_sstables(const std::filesystem::path& result_path, sstring table_name, sstable_version_types version) {
+static void compare_sstables(const std::filesystem::path& result_path, sstring table_name, sstable_version_types version, sstables::shared_sstable sst) {
     for (auto file_type : {component_type::Data,
                            component_type::Index,
                            component_type::Digest,
@@ -3215,13 +3217,13 @@ static void compare_sstables(const std::filesystem::path& result_path, sstring t
                 sstable::filename(get_write_test_path(table_name),
                                   "ks", table_name, sstables::sstable_version_types::mc, generation_from_value(1), big, file_type);
         auto result_filename =
-                sstable::filename(result_path.string(), "ks", table_name, version, generation_from_value(1), big, file_type);
+                sstable::filename(result_path.string(), "ks", table_name, sst->get_version(), sst->generation(), big, file_type);
         compare_files(orig_filename, result_filename);
     }
 }
 
-static void compare_sstables(test_env& env, sstring table_name, sstable_version_types version) {
-    compare_sstables(env.tempdir().path().native(), std::move(table_name), version);
+static void compare_sstables(test_env& env, sstring table_name, sstable_version_types version, sstables::shared_sstable sst) {
+    compare_sstables(env.tempdir().path().native(), std::move(table_name), version, std::move(sst));
 }
 
 static sstables::shared_sstable write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica::memtable> mt1, lw_shared_ptr<replica::memtable> mt2, sstable_version_types version) {
@@ -3239,7 +3241,7 @@ static sstables::shared_sstable write_sstables(test_env& env, schema_ptr s, lw_s
 static sstables::shared_sstable write_and_compare_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica::memtable> mt1, lw_shared_ptr<replica::memtable> mt2,
                                          sstring table_name, sstable_version_types version) {
     auto sst = write_sstables(env, std::move(s), std::move(mt1), std::move(mt2), version);
-    compare_sstables(env, table_name, version);
+    compare_sstables(env, table_name, version, sst);
     return sst;
 }
 
@@ -3251,7 +3253,7 @@ static sstables::shared_sstable write_sstables(test_env& env, schema_ptr s, lw_s
 
 static sstables::shared_sstable write_and_compare_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica::memtable> mt, sstring table_name, sstable_version_types version) {
     auto sst = write_sstables(env, std::move(s), std::move(mt), version);
-    compare_sstables(env, table_name, version);
+    compare_sstables(env, table_name, version, sst);
     return sst;
 }
 
