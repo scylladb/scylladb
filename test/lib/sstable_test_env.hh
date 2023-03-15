@@ -18,6 +18,7 @@
 #include "gms/feature_service.hh"
 #include "sstables/version.hh"
 #include "sstables/sstable_directory.hh"
+#include "replica/database.hh"
 
 #include "test/lib/tmpdir.hh"
 #include "test/lib/test_services.hh"
@@ -56,14 +57,16 @@ class test_env {
         db::nop_large_data_handler nop_ld_handler;
         test_env_sstables_manager mgr;
         reader_concurrency_semaphore semaphore;
-        sstables::generation_type::int_t generation = 1;
+        std::optional<sstables::generation_type> generation;
 
         impl(test_env_config cfg);
         impl(impl&&) = delete;
         impl(const impl&) = delete;
 
-        unsigned long new_generation() noexcept {
-            return generation++;
+        sstables::generation_type new_generation() noexcept {
+            auto ret = replica::table::make_new_generation(generation);
+            generation = ret;
+            return ret;
         }
     };
     std::unique_ptr<impl> _impl;
@@ -77,7 +80,7 @@ public:
         });
     }
 
-    unsigned long new_generation() noexcept {
+    sstables::generation_type new_generation() noexcept {
         return _impl->new_generation();
     }
 
@@ -86,30 +89,38 @@ public:
             size_t buffer_size = default_sstable_buffer_size, gc_clock::time_point now = gc_clock::now()) {
         return _impl->mgr.make_sstable(std::move(schema), dir, generation, v, f, now, default_io_error_handler_gen(), buffer_size);
     }
-
-    shared_sstable make_sstable(schema_ptr schema, sstring dir, unsigned long gen_value,
+    // FIXME: convert users
+    [[deprecated("use sstables::generation_type param")]]
+    shared_sstable make_sstable(schema_ptr schema, sstring dir, sstables::generation_type::int_t gen_value,
             sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
             size_t buffer_size = default_sstable_buffer_size, gc_clock::time_point now = gc_clock::now()) {
         return make_sstable(std::move(schema), std::move(dir), generation_from_value(gen_value), v, f, buffer_size, now);
     }
 
     shared_sstable make_sstable(schema_ptr schema, sstring dir, sstable::version_types v = sstables::get_highest_sstable_version()) {
-        return make_sstable(std::move(schema), std::move(dir), _impl->generation++, std::move(v));
+        return make_sstable(std::move(schema), std::move(dir), new_generation(), std::move(v));
     }
 
-    shared_sstable make_sstable(schema_ptr schema, sstables::generation_type::int_t generation,
+    shared_sstable make_sstable(schema_ptr schema, sstables::generation_type generation,
             sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
             size_t buffer_size = default_sstable_buffer_size, gc_clock::time_point now = gc_clock::now()) {
         return make_sstable(std::move(schema), _impl->dir.path().native(), generation, std::move(v), std::move(f), buffer_size, now);
     }
-
-    shared_sstable make_sstable(schema_ptr schema, sstable::version_types v = sstables::get_highest_sstable_version()) {
-        return make_sstable(std::move(schema), _impl->generation++, std::move(v));
+    [[deprecated("use sstables::generation_type param")]]
+    shared_sstable make_sstable(schema_ptr schema, sstables::generation_type::int_t gen_value,
+            sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
+            size_t buffer_size = default_sstable_buffer_size, gc_clock::time_point now = gc_clock::now()) {
+        return make_sstable(std::move(schema), generation_from_value(gen_value), std::move(v), std::move(f), buffer_size, now);
     }
 
+    shared_sstable make_sstable(schema_ptr schema, sstable::version_types v = sstables::get_highest_sstable_version()) {
+        return make_sstable(std::move(schema), new_generation(), std::move(v));
+    }
+
+    [[deprecated("use sstables::generation_type param")]]
     shared_sstable make_sstable(schema_ptr schema, sstables::generation_type::int_t gen_value, sstable::version_types v, size_t buffer_size,
             gc_clock::time_point now = gc_clock::now()) {
-        return make_sstable(std::move(schema), gen_value, v, sstable::format_types::big, buffer_size, now);
+        return make_sstable(std::move(schema), generation_from_value(gen_value), v, sstable::format_types::big, buffer_size, now);
     }
 
     std::function<shared_sstable()> make_sst_factory(schema_ptr s) {
