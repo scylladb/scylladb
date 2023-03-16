@@ -2842,7 +2842,8 @@ SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
             // this is only here as a sanity check.
             BOOST_REQUIRE(sst_mr.is_buffer_empty());
             BOOST_REQUIRE(sst_mr.is_end_of_stream());
-            BOOST_REQUIRE_EQUAL(mut, sst_mut);
+            BOOST_REQUIRE(sst_mut);
+            BOOST_REQUIRE_EQUAL(mut, *sst_mut);
         }
     });
 }
