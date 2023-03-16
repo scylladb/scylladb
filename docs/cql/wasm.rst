@@ -5,12 +5,12 @@ Wasm support for user-defined functions
 This document describes the details of Wasm language support in user-defined functions (UDF). The language ``wasm`` is one of the possible languages to use, besides Lua, to implement these functions. To learn more about User-defined functions in ScyllaDB, click :ref:`here <udfs>`.
 
 
-.. note:: Until ScyllaDB 5.2, the Wasm language is called ``xwasm``. This name is replaced with ``wasm`` in ScyllaDB 5.3.
+.. note:: Until ScyllaDB 5.2, the Wasm language was called ``xwasm``. This name is replaced with ``wasm`` in ScyllaDB 5.3.
 
 How to generate a correct Wasm UDF source code
 ----------------------------------------------
 
-Scylla accepts UDF's source code in WebAssembly Text ("WAT") format. The source can use and define whatever's needed for execution, including multiple helper functions and symbols. The requirements for it to be accepted as correct UDF source is that the WebAssembly module export a symbol with the same name as the function, this symbol's type should be indeed a function with correct signature, the module export a ``_scylla_abi`` global and all symbols related to the selected :ref:`ABI version <abi-versions>`.
+Scylla accepts UDF's source code in WebAssembly Text ("WAT") format. The source can use and define whatever's needed for execution, including multiple helper functions and symbols. The requirements for it to be accepted as correct UDF source are that the WebAssembly module export a symbol with the same name as the function, this symbol's type should be indeed a function with correct signature, and the module export a ``_scylla_abi`` global and all symbols related to the selected :ref:`ABI version <abi-versions>`.
 
 UDF's source code can be, naturally, simply coded by hand in WAT. It is not often very convenient to program directly in assembly, so here are a few tips.
 
@@ -20,7 +20,7 @@ Compiling to Wasm
 Rust
 ....
 
-The main supported language for Wasm UDFs is Rust. To generate WebAssembly from rust, it's best to use the `scylla-udf <https://github.com/scylladb/scylla-rust-udf>`_ Rust helper library, and follow the instructions present there.
+The main supported language for Wasm UDFs is Rust. To generate WebAssembly from Rust, it's best to use the `scylla-udf <https://github.com/scylladb/scylla-rust-udf>`_ Rust helper library, and follow the instructions presented there.
 
 As a short example, here's a sample Rust code which can be compiled to WebAssembly:
 
@@ -38,7 +38,7 @@ The compilation instructions are described at <https://github.com/scylladb/scyll
 .. code-block:: bash
 
     cargo build --target=wasm32-wasi
-    wasm2wat target/wasm32-wasi/debug/fib.wasm > fib.wat
+    wasm2wat target/wasm32-wasi/debug/flatten.wasm > flatten.wat
 
 
 C
@@ -130,7 +130,7 @@ if we specify that the UDF ``RETURNS NULL ON NULL INPUT``, all serialization can
 
     int main(){}
 
-Becausee don't need to serialize anything, the ``_scylla_malloc`` and ``_scylla_free`` methods don't need to be exported, and ``_scylla_abi`` can be set to 1, resulting in an even shorter code:
+Because we don't need to serialize anything, the ``_scylla_malloc`` and ``_scylla_free`` methods don't need to be exported, and ``_scylla_abi`` can be set to 1, resulting in an even shorter code:
 
 .. code-block:: c
 
@@ -150,10 +150,11 @@ Compilation instructions:
 
 .. code-block:: bash
 
-    /path/to/wasm/supporting/c/compiler --sysroot=/path/to/wasi/sysroot -O2  --target=wasm32-wasi -Wl,--export=fib -Wl,--export=_scylla_abi -Wl,--no-entry fib.c -o fib.wasm
+    clang -O2 --target=wasm32 --no-standard-libraries -Wl,--export=fib -Wl,--export=_scylla_abi -Wl,--no-entry fib.c -o fib.wasm
     wasm2wat fib.wasm > fib.wat
 
-The compiled example can be viewed at test/cql-pytest/test_wasm.py::test_docs_c
+..
+    The compiled example can be viewed at test/cql-pytest/test_wasm.py::test_docs_c
 
 AssemblyScript
 ..............
@@ -186,7 +187,8 @@ Compile directly to WebAssembly Text format with:
 
     asc fib.ts --textFile fib.wat --optimize
 
-The compiled example can be viewed at test/cql-pytest/test_wasm.py::test_docs_assemblyscript
+..
+    The compiled example can be viewed at test/cql-pytest/test_wasm.py::test_docs_assemblyscript
 
 Similarly to C, the AssemblyScript can only be conveniently used with ``RETURNS NULL ON NULL INPUT`` UDFs that only have Wasm-compatible arguments/returns.
 
@@ -244,7 +246,7 @@ and it can be invoked just like a regular UDF:
      4 |         3
      5 |         5
 
-    (11 rows)
+    (6 rows)
 
 Experimental status
 -------------------
@@ -317,12 +319,12 @@ If the function is specified not to accept ``NULL``, all parameters and return v
 as in the description above.
 
 If the function is specified to accept ``NULL``, parameters and return values of both natively and non-natively supported types are represented
-using their serialized representation, also decribed above. 
+using their serialized representation, also described above.
 
 The important distinction is that size equal to ``-1`` (minus one or ``0xffffffff``) indicates that the value is ``NULL`` and should not be parsed.
 
-.. note:: CQL syntax extensions and new helper libraries may be deployed together with new ABI versions,
-    the description below only refers to ABI versions 1 and 2.
+.. note:: CQL syntax extensions and new helper libraries may be deployed together with new ABI versions.
+    The description below only refers to ABI versions 1 and 2.
 
 Currently, returning ``NULL`` values is possible only for functions declared to be ``CALLED ON NULL INPUT``.
 This decision allows returning some values as native WebAssembly types without having to allocate memory for them and serialize them first.
