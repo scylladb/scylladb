@@ -1507,10 +1507,10 @@ default_modes = args.selected_modes or [mode for mode, mode_cfg in modes.items()
 build_modes =  {m: modes[m] for m in selected_modes}
 
 if args.artifacts:
-    build_artifacts = []
+    build_artifacts = set()
     for artifact in args.artifacts:
         if artifact in all_artifacts:
-            build_artifacts.append(artifact)
+            build_artifacts.add(artifact)
         else:
             print("Ignoring unknown build artifact: {}".format(artifact))
     if not build_artifacts:
