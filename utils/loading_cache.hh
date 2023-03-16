@@ -524,7 +524,7 @@ private:
             return make_ready_future<>();
         }
 
-        return _load(key).then_wrapped([this, ts_value_ptr = std::move(ts_value_ptr), &key] (auto&& f) mutable {
+        return _load(key).then_wrapped([ts_value_ptr = std::move(ts_value_ptr)] (auto&& f) mutable {
             // if the entry has been evicted by now - simply end here
             if (!ts_value_ptr->lru_entry_ptr()) {
                 _logger.trace("{}: entry was dropped during the reload", key);
