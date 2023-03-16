@@ -25,7 +25,7 @@ static auth::permission_set filter_applicable_permissions(const auth::permission
     auto const filtered_permissions = auth::permission_set::from_mask(ps.mask() & r.applicable_permissions().mask());
 
     if (!filtered_permissions) {
-        throw exceptions::invalid_request_exception(
+        throw exceptions::syntax_exception(
                 format("Resource {} does not support any of the requested permissions.", r));
     }
 
