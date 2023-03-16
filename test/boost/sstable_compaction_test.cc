@@ -3572,7 +3572,7 @@ SEASTAR_TEST_CASE(test_bug_6472) {
 }
 
 SEASTAR_TEST_CASE(sstable_needs_cleanup_test) {
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     auto s = make_shared_schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type);
 
@@ -3606,8 +3606,6 @@ SEASTAR_TEST_CASE(sstable_needs_cleanup_test) {
         auto sst5 = sst_gen(keys[7], keys[7]);
         BOOST_REQUIRE(needs_cleanup(sst5, local_ranges, s));
     }
-
-    return make_ready_future<>();
   });
 }
 
