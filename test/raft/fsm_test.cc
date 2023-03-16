@@ -2318,3 +2318,41 @@ BOOST_AUTO_TEST_CASE(test_ping_leader) {
     communicate(A, B, C);
     BOOST_CHECK(C.current_leader());
 }
+
+BOOST_AUTO_TEST_CASE(test_state_change_notifications) {
+    discrete_failure_detector fd;
+
+    server_id id1 = id(), id2 = id();
+
+    raft::configuration cfg(raft::config_member_set{raft::config_member{server_addr_from_id(id1), true},
+                                                    raft::config_member{server_addr_from_id(id2), true}});
+    raft::log log{raft::snapshot_descriptor{.config = cfg}};
+
+    auto fsm = create_follower(id1, std::move(log), fd);
+
+    // Initial state is follower
+    BOOST_CHECK(fsm.is_follower());
+
+    // After election timeout, a follower becomes a candidate
+    election_timeout(fsm);
+    BOOST_CHECK(fsm.is_candidate());
+
+    // Check that state transition was notified
+    auto output = fsm.get_output();
+    BOOST_CHECK(output.state_changed);
+
+    // If nothing happens, the candidate stays this way
+    election_timeout(fsm);
+    BOOST_CHECK(fsm.is_candidate());
+
+    // Check that no state transition is notified
+    output = fsm.get_output();
+    BOOST_CHECK(!output.state_changed);
+
+    // After a favourable reply, we become a leader (quorum is 2)
+    fsm.step(id2, raft::vote_reply{output.term_and_vote->first, true});
+    // Check that state transition is notified again
+    output = fsm.get_output();
+    BOOST_CHECK(output.state_changed);
+    BOOST_CHECK(fsm.is_leader());
+}

@@ -231,6 +231,12 @@ public:
     // The function should be called periodically to advance logical clock.
     virtual void tick() = 0;
 
+    // Returned future is resolved when state changes
+    // State changes can be coalesced, so it is not guarantied that the caller will
+    // get notification about each one of them. The state can even be the same after
+    // the call as before, but term should be different.
+    virtual future<> wait_for_state_change(seastar::abort_source* as = nullptr) = 0;
+
     // Ad hoc functions for testing
     virtual void wait_until_candidate() = 0;
     virtual future<> wait_election_done() = 0;

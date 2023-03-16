@@ -160,6 +160,7 @@ void fsm::reset_election_timeout() {
 
 void fsm::become_leader() {
     assert(!std::holds_alternative<leader>(_state));
+    _output.state_changed = true;
     _state.emplace<leader>(_config.max_log_size, *this);
 
     // The semaphore is not used on the follower, so the limit could
@@ -193,6 +194,9 @@ void fsm::become_follower(server_id leader) {
     if (leader == _my_id) {
         on_internal_error(logger, "fsm cannot become a follower of itself");
     }
+    if (!std::holds_alternative<follower>(_state)) {
+        _output.state_changed = true;
+    }
     // Note that current state should be destroyed only after the new one is
     // assigned. The exchange here guarantis that.
     std::exchange(_state, follower{.current_leader = leader});
@@ -203,6 +207,9 @@ void fsm::become_follower(server_id leader) {
 }
 
 void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
+    if (!std::holds_alternative<candidate>(_state)) {
+        _output.state_changed = true;
+    }
     // When starting a campain we need to reset current leader otherwise
     // disruptive server prevention will stall an election if quorum of nodes
     // start election together since each one will ignore vote requests from others
@@ -304,7 +311,7 @@ future<fsm_output> fsm::poll_output() {
         auto diff = _log.last_idx() - _log.stable_idx();
 
         if (diff > 0 || !_messages.empty() || !_observed.is_equal(*this) || _output.max_read_id_with_quorum ||
-                (is_leader() && leader_state().last_read_id_changed) || _output.snp || !_output.snps_to_drop.empty()) {
+                (is_leader() && leader_state().last_read_id_changed) || _output.snp || !_output.snps_to_drop.empty() || _output.state_changed) {
             break;
         }
         co_await _sm_events.wait();

@@ -34,6 +34,11 @@ struct fsm_output {
     // since last fsm output poll.
     std::optional<config_member_set> configuration;
     std::optional<read_id> max_read_id_with_quorum;
+    // True if there was a state change.
+    // Events can be coalesced, so this cannot be used to get
+    // all state changes, only to know that the state changed
+    // at least once
+    bool state_changed = false;
     // Set to true if a leadership transfer was aborted since the last output
     bool abort_leadership_transfer;
 
