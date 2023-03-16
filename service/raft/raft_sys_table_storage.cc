@@ -303,6 +303,7 @@ future<> raft_sys_table_storage::execute_with_linearization_point(std::function<
 
 future<> raft_sys_table_storage::bootstrap(raft::configuration initial_configuation) {
     raft::snapshot_descriptor snapshot;
+    snapshot.id = raft::snapshot_id::create_random_id();
     snapshot.config = std::move(initial_configuation);
     co_await store_snapshot_descriptor(snapshot, 0);
 }
