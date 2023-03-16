@@ -14,12 +14,12 @@ set(CMAKE_BUILD_TYPE "${CMAKE_BUILD_TYPE}" CACHE
 set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
   "Debug" "Release" "Dev" "Sanitize")
 string(TOUPPER "${CMAKE_BUILD_TYPE}" build_mode)
-include("mode.common")
-include("mode.${build_mode}")
+include(mode.common)
+include(mode.${build_mode})
 add_compile_definitions(
     ${Seastar_DEFINITIONS_${build_mode}}
     FMT_DEPRECATED_OSTREAM)
-include("limit_jobs")
+include(limit_jobs)
 # Configure Seastar compile options to align with Scylla
 set(CMAKE_CXX_STANDARD "20" CACHE INTERNAL "")
 set(CMAKE_CXX_EXTENSIONS ON CACHE INTERNAL "")
@@ -177,18 +177,7 @@ target_link_libraries(Boost::regex
 
 target_link_libraries(scylla PRIVATE
     seastar
-    # Boost dependencies
-    Boost::filesystem
-    Boost::program_options
-    Boost::system
-    Boost::thread
-    Boost::regex
-    Boost::headers
-    # System libs
-    libxcrypt::libxcrypt
-    ICU::uc
-    zstd
-    xxHash::xxhash)
+    Boost::program_options)
 
 # Force SHA1 build-id generation
 set(default_linker_flags "-Wl,--build-id=sha1")

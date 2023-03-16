@@ -1,4 +1,4 @@
-set(LINK_MEM_PER_JOB 1024 CACHE INTERNAL "Maximum memory used by each link job in (in MiB)")
+set(LINK_MEM_PER_JOB 4096 CACHE INTERNAL "Maximum memory used by each link job in (in MiB)")
 
 cmake_host_system_information(
   RESULT _total_mem

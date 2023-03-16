@@ -2,6 +2,7 @@ add_library(test-lib)
 target_sources(test-lib
   PRIVATE
     cql_assertions.cc
+    dummy_sharder.cc
     exception_utils.cc
     log.cc
     test_utils.cc
@@ -14,6 +15,7 @@ target_sources(test-lib
     mutation_source_test.cc
     random_schema.cc
     result_set_assertions.cc
+    sstable_run_based_compaction_strategy_for_tests.cc
     sstable_utils.cc
     data_model.cc)
 target_include_directories(test-lib
