@@ -217,6 +217,17 @@ public:
     // completes and current state of group0 is not RECOVERY.
     future<> remove_from_raft_config(raft::server_id id);
 
+    raft_group0_client& client() {
+        return _client;
+    }
+
+    // Return an instance of group 0. Valid only on shard 0,
+    // after boot/upgrade is complete
+    raft::server& group0_server() {
+        return _raft_gr.group0();
+    }
+
+    const raft_address_map& address_map() const;
 private:
     static void init_rpc_verbs(raft_group0& shard0_this);
     static future<> uninit_rpc_verbs(netw::messaging_service& ms);

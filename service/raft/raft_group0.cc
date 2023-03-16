@@ -1571,6 +1571,10 @@ void raft_group0::register_metrics() {
     });
 }
 
+const raft_address_map& raft_group0::address_map() const {
+    return _raft_gr.address_map();
+}
+
 std::ostream& operator<<(std::ostream& os, group0_upgrade_state state) {
     switch (state) {
         case group0_upgrade_state::recovery:
