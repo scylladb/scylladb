@@ -28,6 +28,7 @@ namespace db {
 
 class data_listener {
 public:
+    virtual ~data_listener() = default;
     // Invoked for each write, with partition granularity.
     // The schema_ptr passed is the one which corresponds to the incoming mutation, not the current schema of the table.
     virtual void on_write(const schema_ptr&, const frozen_mutation&) { }
