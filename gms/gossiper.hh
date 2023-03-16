@@ -209,6 +209,8 @@ private:
     /* unreachable member set */
     std::unordered_map<inet_address, clk::time_point> _unreachable_endpoints;
 
+    semaphore _endpoint_update_semaphore = semaphore(1);
+
     /* initial seeds for joining the cluster */
     std::set<inet_address> _seeds;
 
@@ -224,6 +226,9 @@ private:
 
     std::unordered_map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
     utils::chunked_vector<inet_address> _shadow_live_endpoints;
+
+    // replicate live endpoints across all other shards.
+    future<> replicate_live_endpoints_on_change();
 
     void run();
     // Replicates given endpoint_state to all other shards.
@@ -434,6 +439,9 @@ public:
     bool is_dead_state(const endpoint_state& eps) const;
     // Wait for nodes to be alive on all shards
     future<> wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout);
+
+    // Get live members synchronized to all shards
+    future<std::set<inet_address>> get_live_members_synchronized();
 
     future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
 
