@@ -22,6 +22,7 @@ namespace service {
 
 class migration_manager;
 class raft_group0_client;
+class storage_service;
 
 // Wrapper for `discovery` which persists the learned peers on disk.
 class persistent_discovery {
@@ -74,6 +75,7 @@ class raft_group0 {
     gms::feature_service& _feat;
     db::system_keyspace& _sys_ks;
     raft_group0_client& _client;
+    service::storage_service& _ss;
 
     // Status of leader discovery. Initially there is no group 0,
     // and the variant contains no state. During initial cluster
@@ -111,7 +113,8 @@ public:
         migration_manager& mm,
         gms::feature_service& feat,
         db::system_keyspace& sys_ks,
-        raft_group0_client& client);
+        raft_group0_client& client,
+        storage_service& ss);
 
     // Initialises RPC verbs on all shards.
     // Call after construction but before using the object.

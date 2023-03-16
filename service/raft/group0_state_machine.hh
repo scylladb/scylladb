@@ -17,6 +17,7 @@ namespace service {
 class raft_group0_client;
 class migration_manager;
 class storage_proxy;
+class storage_service;
 
 struct schema_change {
     // Mutations of schema tables (such as `system_schema.keyspaces`, `system_schema.tables` etc.)
@@ -67,8 +68,9 @@ class group0_state_machine : public raft_state_machine {
     raft_group0_client& _client;
     migration_manager& _mm;
     storage_proxy& _sp;
+    storage_service& _ss;
 public:
-    group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp) : _client(client), _mm(mm), _sp(sp) {}
+    group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss) : _client(client), _mm(mm), _sp(sp), _ss(ss) {}
     future<> apply(std::vector<raft::command_cref> command) override;
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;
