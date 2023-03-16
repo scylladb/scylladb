@@ -1379,9 +1379,9 @@ future<> storage_service::drain_on_shutdown() {
         _drain_finished.get_future() : do_drain();
 }
 
-future<> storage_service::init_messaging_service_part() {
-    return container().invoke_on_all([] (storage_service& local) {
-        return local.init_messaging_service();
+future<> storage_service::init_messaging_service_part(sharded<service::storage_proxy>& proxy, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
+    return container().invoke_on_all([&proxy, &sys_dist_ks] (storage_service& local) {
+        return local.init_messaging_service(proxy, sys_dist_ks);
     });
 }
 
@@ -3369,7 +3369,7 @@ future<> storage_service::snitch_reconfigured() {
     }
 }
 
-void storage_service::init_messaging_service() {
+void storage_service::init_messaging_service(sharded<service::storage_proxy>& proxy, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
     _messaging.local().register_replication_finished([] (gms::inet_address from) {
         slogger.info("Got confirm_replication from {}", from);
         return make_ready_future<>();
