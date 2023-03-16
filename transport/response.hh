@@ -9,7 +9,6 @@
 #pragma once
 
 #include "server.hh"
-#include "utils/reusable_buffer.hh"
 
 namespace cql_transport {
 
