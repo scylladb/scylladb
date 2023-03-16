@@ -1210,7 +1210,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                     mt->apply(std::move(m));
                 };
                 auto get_usable_sst = [&env, s, version](replica::memtable &mt, int64_t gen) -> future<sstable_ptr> {
-                    auto sst = env.make_sstable(s, gen, version, big);
+                    auto sst = env.make_sstable(s, gen, version);
                     return write_memtable_to_sstable_for_test(mt, sst).then([&env, sst, gen, s, version] {
                         return env.reusable_sst(s, gen, version);
                     });
@@ -1232,7 +1232,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                 auto sst2 = get_usable_sst(*mt, 55).get0();
                 BOOST_REQUIRE(now.time_since_epoch().count() == sst2->get_stats_metadata().max_local_deletion_time);
 
-                auto creator = [&env, s, version, gen = make_lw_shared<unsigned>(56)] { return env.make_sstable(s, (*gen)++, version, big); };
+                auto creator = [&env, s, version, gen = make_lw_shared<unsigned>(56)] { return env.make_sstable(s, (*gen)++, version); };
                 auto info = compact_sstables(sstables::compaction_descriptor({sst1, sst2}, default_priority_class()), cf, creator).get0();
                 BOOST_REQUIRE(info.new_sstables.size() == 1);
                 BOOST_REQUIRE(((now + gc_clock::duration(100)).time_since_epoch().count()) ==
@@ -1700,7 +1700,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
                 }
                 mt->apply(std::move(m));
             }
-            auto sst = env.make_sstable(s, 1, version, big);
+            auto sst = env.make_sstable(s, 1, version);
             write_memtable_to_sstable_for_test(*mt, sst).get();
             sst = env.reusable_sst(s, 1, version).get0();
             check_min_max_column_names(sst, {"0ck100"}, {"7ck149"});
@@ -1713,12 +1713,12 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
             }
             mt->apply(std::move(m));
-            auto sst2 = env.make_sstable(s, 2, version, big);
+            auto sst2 = env.make_sstable(s, 2, version);
             write_memtable_to_sstable_for_test(*mt, sst2).get();
             sst2 = env.reusable_sst(s, 2, version).get0();
             check_min_max_column_names(sst2, {"9ck101"}, {"9ck298"});
 
-            auto creator = [&env, s, version] { return env.make_sstable(s, 3, version, big); };
+            auto creator = [&env, s, version] { return env.make_sstable(s, 3, version); };
             auto info = compact_sstables(sstables::compaction_descriptor({sst, sst2}, default_priority_class()), cf, creator).get0();
             BOOST_REQUIRE(info.new_sstables.size() == 1);
             check_min_max_column_names(info.new_sstables.front(), {"0ck100"}, {"9ck298"});
@@ -3854,7 +3854,7 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
             table_for_tests cf(env.manager(), s, tmp.path().string());
             auto close_cf = deferred_stop(cf);
             auto sst_gen = [&env, s, cf, path = tmp.path().string(), version] () mutable {
-                return env.make_sstable(s, path, column_family_test::calculate_generation_for_new_table(*cf), version, big);
+                return env.make_sstable(s, path, column_family_test::calculate_generation_for_new_table(*cf), version);
             };
 
             cf->mark_ready_for_writes();
