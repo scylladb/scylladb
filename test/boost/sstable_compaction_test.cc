@@ -438,32 +438,22 @@ SEASTAR_TEST_CASE(compact_02) {
     // By the way, automatic compaction isn't tested here, instead the
     // strategy algorithm that selects candidates for compaction.
 
-    return test_env::do_with([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         // Compact 4 sstables into 1 using size-tiered strategy to select sstables.
         // E.g.: generations 18, 19, 20 and 21 will be compacted into generation 22.
-        return compact_sstables(env, { 18, 19, 20, 21 }, 22).then([&env] {
-            // Check that generation 22 contains all keys of generations 18, 19, 20 and 21.
-            return check_compacted_sstables(env, 22, { 18, 19, 20, 21 });
-        }).then([&env] {
-            return compact_sstables(env, { 23, 24, 25, 26 }, 27).then([&env] {
-                return check_compacted_sstables(env, 27, { 23, 24, 25, 26 });
-            });
-        }).then([&env] {
-            return compact_sstables(env, { 28, 29, 30, 31 }, 32).then([&env] {
-                return check_compacted_sstables(env, 32, { 28, 29, 30, 31 });
-            });
-        }).then([&env] {
-            return compact_sstables(env, { 33, 34, 35, 36 }, 37).then([&env] {
-                return check_compacted_sstables(env, 37, { 33, 34, 35, 36 });
-            });
-        }).then([&env] {
-            // In this step, we compact 4 compacted sstables.
-            return compact_sstables(env, { 22, 27, 32, 37 }, 38, false).then([&env] {
-                // Check that the compacted sstable contains all keys.
-                return check_compacted_sstables(env, 38,
-                    { 18, 19, 20, 21, 23, 24, 25, 26, 28, 29, 30, 31, 33, 34, 35, 36 });
-            });
-        });
+        compact_sstables(env, { 18, 19, 20, 21 }, 22).get();
+        // Check that generation 22 contains all keys of generations 18, 19, 20 and 21.
+        check_compacted_sstables(env, 22, { 18, 19, 20, 21 }).get();
+        compact_sstables(env, { 23, 24, 25, 26 }, 27).get();
+        check_compacted_sstables(env, 27, { 23, 24, 25, 26 }).get();
+        compact_sstables(env, { 28, 29, 30, 31 }, 32).get();
+        check_compacted_sstables(env, 32, { 28, 29, 30, 31 }).get();
+        compact_sstables(env, { 33, 34, 35, 36 }, 37).get();
+        check_compacted_sstables(env, 37, { 33, 34, 35, 36 }).get();
+        // In this step, we compact 4 compacted sstables.
+        compact_sstables(env, { 22, 27, 32, 37 }, 38, false).get();
+        // Check that the compacted sstable contains all keys.
+        check_compacted_sstables(env, 38, { 18, 19, 20, 21, 23, 24, 25, 26, 28, 29, 30, 31, 33, 34, 35, 36 }).get();
     });
 }
 
