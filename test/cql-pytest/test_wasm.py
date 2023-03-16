@@ -78,14 +78,19 @@ def test_fib(cql, test_keyspace, table1, scylla_with_wasm_only):
         with pytest.raises(InvalidRequest, match="wasm"):
             cql.execute(f"SELECT {test_keyspace}.{fib_name}(p) AS result FROM {table} WHERE p = 997")
 
-# Reads WASM UDF from a file, which should be located in the "test/resource/wasm" directory.
+# Reads WASM UDF from a file, which should be located in the "build/wasm" directory.
 # Supports renaming the exported function.
 def read_function_from_file(file_name, orig_name=None, rename=None):
-    wat_path = os.path.realpath(os.path.join(__file__, f"../../resource/wasm/{file_name}.wat"))
+    wat_path = os.path.realpath(os.path.join(__file__, f'../../../build/wasm/{file_name}.wat'))
     orig_name = orig_name or file_name
     rename = rename or orig_name
-    with open(wat_path, "r") as f:
-        return f.read().replace("'", "''").replace(f'export "{orig_name}"', f'export "{rename}"')
+    try:
+      with open(wat_path, "r") as f:
+          return f.read().replace("'", "''").replace(f'export "{orig_name}"', f'export "{rename}"')
+    except:
+        print(f"Can't open {wat_path}.\nPlease build Wasm examples.")
+        exit(1)
+
 
 # Test that calling a fibonacci function that claims to accept null input works.
 # Note that since the int field is nullable, it's no longer
@@ -94,44 +99,10 @@ def read_function_from_file(file_name, orig_name=None, rename=None):
 # Also, note that CQL serializes integers as big endian, which means that
 # WebAssembly should convert to host endianness (assumed little endian here)
 # before operating on its native types.
-# Compiled from:
-# const int WASM_PAGE_SIZE = 64 * 1024;
-# const int _scylla_abi = 1;
-#
-# static long long swap_int64(long long val) {
-#     val = ((val << 8) & 0xFF00FF00FF00FF00ULL ) | ((val >> 8) & 0x00FF00FF00FF00FFULL );
-#     val = ((val << 16) & 0xFFFF0000FFFF0000ULL ) | ((val >> 16) & 0x0000FFFF0000FFFFULL );
-#     return (val << 32) | ((val >> 32) & 0xFFFFFFFFULL);
-# }
-#
-# long long fib_aux(long long n) {
-#     if (n < 2) {
-#         return n;
-#     }
-#     return fib_aux(n-1) + fib_aux(n-2);
-# }
-# long long fib(long long p) {
-#     int size = p >> 32;
-#     long long* p_val = (long long*)(p & 0xffffffff);
-#     // Initialize memory for the return value
-#     long long* ret_val = (long long*)(__builtin_wasm_memory_size(0) * WASM_PAGE_SIZE);
-#     __builtin_wasm_memory_grow(0, 1); // long long fits in one wasm page
-#     if (size == -1) {
-#         *ret_val = swap_int64(42);
-#     } else {
-#         *ret_val = swap_int64(fib_aux(swap_int64(*p_val)));
-#     }
-#     // 8 is the size of a bigint
-#     return (long long)(8ll << 32) | (long long)ret_val;
-# }
-#
-# with:
-# $ clang -O2  --target=wasm32 --no-standard-libraries -Wl,--export=fib -Wl,--export=_scylla_abi -Wl,--no-entry fib.c -o fib.wasm
-# $ wasm2wat fib.wasm > fib.wat
 def test_fib_called_on_null(cql, test_keyspace, table1, scylla_with_wasm_only):
     table = table1
     fib_name = unique_name()
-    fib_source = read_function_from_file('fib', 'fib', fib_name)
+    fib_source = read_function_from_file('test_fib_called_on_null', 'fib', fib_name)
     src = f"(input bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE wasm AS '{fib_source}'"
     with new_function(cql, test_keyspace, src, fib_name):
         cql.execute(f"INSERT INTO {table1} (p) VALUES (3)")
@@ -305,7 +276,7 @@ def test_short_ints(cql, test_keyspace, table1, scylla_with_wasm_only):
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{plus_name}(s, s2) AS result FROM {table} WHERE p = 43")]
         assert len(res) == 1 and res[0].result == -9535
     # Check whether we can use a different function under the same name
-    plus42_source = read_function_from_file('plus42', 'plus42', plus_name)
+    plus42_source = read_function_from_file('test_short_ints', 'plus42', plus_name)
     plus42_src = f"(input smallint, input2 smallint) RETURNS NULL ON NULL INPUT RETURNS smallint LANGUAGE wasm AS '{plus42_source}'"
     # Repeat a number of times so the wasm instances get cached on all shards
     with new_function(cql, test_keyspace, src, plus_name):
@@ -392,65 +363,7 @@ def test_9_params(cql, test_keyspace, table1, scylla_with_wasm_only):
 def test_pow(cql, test_keyspace, table1, scylla_with_wasm_only):
     table = table1
     pow_name = "pow_" + unique_name()
-    pow_source = f"""
-(module
-  (type (;0;) (func (param i32 i32) (result i32)))
-  (func ${pow_name} (type 0) (param i32 i32) (result i32)
-    (local i32 i32)
-    i32.const 1
-    local.set 2
-    block  ;; label = @1
-      block  ;; label = @2
-        block  ;; label = @3
-          local.get 1
-          br_table 2 (;@1;) 1 (;@2;) 0 (;@3;)
-        end
-        local.get 1
-        local.set 2
-        i32.const 1
-        local.set 1
-        loop  ;; label = @3
-          local.get 0
-          i32.const 1
-          local.get 2
-          i32.const 1
-          i32.and
-          select
-          local.get 1
-          i32.mul
-          local.set 1
-          local.get 2
-          i32.const 3
-          i32.gt_u
-          local.set 3
-          local.get 0
-          local.get 0
-          i32.mul
-          local.set 0
-          local.get 2
-          i32.const 1
-          i32.shr_u
-          local.set 2
-          local.get 3
-          br_if 0 (;@3;)
-        end
-      end
-      local.get 0
-      local.get 1
-      i32.mul
-      local.set 2
-    end
-    local.get 2)
-  (table (;0;) 1 1 funcref)
-  (table (;1;) 32 externref)
-  (memory (;0;) 17)
-  (export "memory" (memory 0))
-  (global (;0;) i32 (i32.const 1024))
-  (export "{pow_name}" (func ${pow_name}))
-  (elem (;0;) (i32.const 0) func)
-  (export "_scylla_abi" (global 0))
-  (data $.rodata (i32.const 1024) "\\01"))
-"""
+    pow_source = read_function_from_file('test_pow', 'power', pow_name)
     src = f"(base int, pow int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{pow_source}'"
     with new_function(cql, test_keyspace, src, pow_name):
         cql.execute(f"INSERT INTO {table} (p, i, i2) VALUES (311, 3, 11)")
@@ -550,31 +463,10 @@ def test_validate_params(cql, test_keyspace, table1, scylla_with_wasm_only):
 
 # Test that calling a wasm-based function on a string works.
 # The function doubles the string: dog -> dogdog.
-# Created with:
-# const int WASM_PAGE_SIZE = 64 * 1024;
-# const int _scylla_abi = 1;
-
-# long long dbl(long long par) {
-#    int size = par >> 32;
-#    int position = par & 0xffffffff;
-#    int orig_size = __builtin_wasm_memory_size(0) * WASM_PAGE_SIZE;
-#    __builtin_wasm_memory_grow(0, 1 + (2 * size - 1) / WASM_PAGE_SIZE);
-#    char* p = (char*)0;
-#    for (int i = 0; i < size; ++i) {
-#        p[orig_size + i] = p[position + i];
-#        p[orig_size + size + i] = p[position + i];
-#    }
-#    long long ret = ((long long)2 * size << 32) | (long long)orig_size;
-#    return ret;
-# }
-# ... and compiled with
-# clang --target=wasm32 --no-standard-libraries -Wl,--export=dbl -Wl,--export=_scylla_abi -Wl,--no-entry demo.c -o demo.wasm
-# wasm2wat demo.wasm > demo.wat
-
 def test_word_double(cql, test_keyspace, table1, scylla_with_wasm_only):
     table = table1
     dbl_name = unique_name()
-    dbl_source = read_function_from_file('dbl', 'dbl', dbl_name)
+    dbl_source = read_function_from_file('test_word_double', 'dbl', dbl_name)
     src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS text LANGUAGE wasm AS '{dbl_source}'"
     with new_function(cql, test_keyspace, src, dbl_name):
         cql.execute(f"INSERT INTO {table1} (p, txt) VALUES (1000, 'doggo')")
@@ -589,34 +481,6 @@ def test_word_double(cql, test_keyspace, table1, scylla_with_wasm_only):
 
 # Test that calling a wasm-based function works with ABI version 2.
 # The function returns the input. It's compatible with all data types represented by size + pointer.
-# Created with:
-# # extern "C" {
-#     fn malloc(size: usize) -> usize;
-#     fn free(ptr: *mut usize);
-# }
-
-# #[no_mangle]
-# pub unsafe extern "C" fn _scylla_malloc(size: usize) -> u32 {
-#     malloc(size) as u32
-# }
-
-# #[no_mangle]
-# pub unsafe extern "C" fn _scylla_free(ptr: *mut usize) {
-#     free(ptr)
-# }
-
-# #[no_mangle]
-# pub static _scylla_abi: u32 = 2;
-
-# #[no_mangle]
-# pub extern "C" fn return_input(sizeptr: u64) -> u64 {
-#     sizeptr
-# }
-
-# ... and compiled with
-# cargo build --target=wasm32-wasi --release
-# wasm2wat return_input.wasm > return_input.wat
-
 def test_abi_v2(cql, test_keyspace, table1, scylla_with_wasm_only):
     table = table1
     ri_name = unique_name()
@@ -668,314 +532,14 @@ def get_metric(metrics, name, requested_labels=None, the_metrics=None):
 
 # Test that calling a wasm-based aggregate works.
 # The aggregate calculates the average of integers.
-# Created with scalar function:
-# const int _scylla_abi = 1;
-
-# static int swap_int32(int val) {
-#     val = ((val << 8) & 0xFF00FF00 ) | ((val >> 8) & 0x00FF00FF );
-#     return (val << 16) | ((val >> 16) & 0xFFFF);
-# }
-
-# long long sum(long long acc, long long p) {
-#     int size = p >> 32;
-#     int accsize = acc >> 32;
-#     if (size != 4 || accsize != 16) {
-#         return acc;
-#     }
-#     int p_val = swap_int32(*(int*)(p & 0xffffffff));
-#     int* acc_val_cnt = (int*)((acc + 4) & 0xffffffff);
-#     int* acc_val_sum = (int*)((acc + 12) & 0xffffffff);
-#     *acc_val_cnt = swap_int32(1 + swap_int32(*acc_val_cnt));
-#     *acc_val_sum = swap_int32(p_val + swap_int32(*acc_val_sum));
-#     return acc;
-# }
-
-# ... and compiled with
-# clang --target=wasm32 --no-standard-libraries -Wl,--export=sum -Wl,--export=_scylla_abi -Wl,--no-entry scalar.c -o scalar.wasm
-# wasm2wat scalar.wasm > scalar.wat
-
-# And final function:
-# const int _scylla_abi = 1;
-
-# static int swap_int32(int val) {
-#     val = ((val << 8) & 0xFF00FF00 ) | ((val >> 8) & 0x00FF00FF );
-#     return (val << 16) | ((val >> 16) & 0xFFFF);
-# }
-
-# long long div(long long acc) {
-#     int accsize = acc >> 32;
-#     if (accsize != 16) {
-#         long long ret = -1;
-#         return ret << 32;
-#     }
-#     int* acc_val_cnt = (int*)((acc + 4) & 0xffffffff);
-#     int* acc_val_sum = (int*)((acc + 12) & 0xffffffff);
-#     int cnt = swap_int32(*acc_val_cnt);
-#     int sum = swap_int32(*acc_val_sum);
-#     float ret_val = (float)sum / cnt;
-#     *acc_val_cnt = swap_int32(*((unsigned int*)&ret_val));
-#     acc = 4ll << 32 | (int)acc_val_cnt;
-#     return acc;
-# }
-
-
-# ... and compiled with
-# clang --target=wasm32 --no-standard-libraries -Wl,--export=div -Wl,--export=_scylla_abi -Wl,--no-entry final.c -o final.wasm
-# wasm2wat final.wasm > final.wat
-
-
 def test_UDA(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
     table = table1
     sum_name = unique_name()
-    sum_source = f"""
-(module
-  (type (;0;) (func (param i64 i64) (result i64)))
-  (func (;0;) (type 0) (param i64 i64) (result i64)
-    (local i32 i32 i32)
-    block  ;; label = @1
-      local.get 1
-      i64.const -4294967296
-      i64.and
-      i64.const 17179869184
-      i64.ne
-      br_if 0 (;@1;)
-      local.get 0
-      i64.const -4294967296
-      i64.and
-      i64.const 68719476736
-      i64.ne
-      br_if 0 (;@1;)
-      local.get 1
-      i32.wrap_i64
-      i32.load
-      local.set 3
-      local.get 0
-      i32.wrap_i64
-      local.tee 4
-      i32.const 4
-      i32.add
-      local.tee 2
-      local.get 2
-      i32.load
-      local.tee 2
-      i32.const 24
-      i32.shl
-      local.get 2
-      i32.const 8
-      i32.shl
-      i32.const 16711680
-      i32.and
-      i32.or
-      local.get 2
-      i32.const 8
-      i32.shr_u
-      i32.const 65280
-      i32.and
-      local.get 2
-      i32.const 24
-      i32.shr_u
-      i32.or
-      i32.or
-      i32.const 1
-      i32.add
-      local.tee 2
-      i32.const 24
-      i32.shl
-      local.get 2
-      i32.const 8
-      i32.shl
-      i32.const 16711680
-      i32.and
-      i32.or
-      local.get 2
-      i32.const 8
-      i32.shr_u
-      i32.const 65280
-      i32.and
-      local.get 2
-      i32.const 24
-      i32.shr_u
-      i32.or
-      i32.or
-      i32.store
-      local.get 4
-      i32.const 12
-      i32.add
-      local.tee 2
-      local.get 2
-      i32.load
-      local.tee 2
-      i32.const 24
-      i32.shl
-      local.get 2
-      i32.const 8
-      i32.shl
-      i32.const 16711680
-      i32.and
-      i32.or
-      local.get 2
-      i32.const 8
-      i32.shr_u
-      i32.const 65280
-      i32.and
-      local.get 2
-      i32.const 24
-      i32.shr_u
-      i32.or
-      i32.or
-      local.get 3
-      i32.const 8
-      i32.shl
-      i32.const 16711680
-      i32.and
-      local.get 3
-      i32.const 24
-      i32.shl
-      i32.or
-      local.get 3
-      i32.const 8
-      i32.shr_u
-      i32.const 65280
-      i32.and
-      local.get 3
-      i32.const 24
-      i32.shr_u
-      i32.or
-      i32.or
-      i32.add
-      local.tee 3
-      i32.const 24
-      i32.shl
-      local.get 3
-      i32.const 8
-      i32.shl
-      i32.const 16711680
-      i32.and
-      i32.or
-      local.get 3
-      i32.const 8
-      i32.shr_u
-      i32.const 65280
-      i32.and
-      local.get 3
-      i32.const 24
-      i32.shr_u
-      i32.or
-      i32.or
-      i32.store
-    end
-    local.get 0)
-  (memory (;0;) 2)
-  (global (;0;) i32 (i32.const 1024))
-  (export "memory" (memory 0))
-  (export "{sum_name}" (func 0))
-  (export "_scylla_abi" (global 0))
-  (data (;0;) (i32.const 1024) "\\01"))
-"""
+    sum_source = read_function_from_file('test_UDA_scalar', 'sum', sum_name)
     sum_src = f"(acc tuple<int, int>, input int) CALLED ON NULL INPUT RETURNS tuple<int,int> LANGUAGE wasm AS '{sum_source}'"
 
     div_name = unique_name()
-    div_source = f"""
-(module
-  (type (;0;) (func (param i64) (result i64)))
-  (func (;0;) (type 0) (param i64) (result i64)
-    (local i32 i32 i64)
-    i64.const -4294967296
-    local.set 3
-    local.get 0
-    i64.const -4294967296
-    i64.and
-    i64.const 68719476736
-    i64.eq
-    if (result i64)  ;; label = @1
-      local.get 0
-      i32.wrap_i64
-      local.tee 1
-      i32.const 4
-      i32.add
-      local.tee 2
-      local.get 1
-      i32.const 12
-      i32.add
-      i32.load
-      local.tee 1
-      i32.const 24
-      i32.shl
-      local.get 1
-      i32.const 8
-      i32.shl
-      i32.const 16711680
-      i32.and
-      i32.or
-      local.get 1
-      i32.const 8
-      i32.shr_u
-      i32.const 65280
-      i32.and
-      local.get 1
-      i32.const 24
-      i32.shr_u
-      i32.or
-      i32.or
-      f32.convert_i32_s
-      local.get 2
-      i32.load
-      local.tee 1
-      i32.const 24
-      i32.shl
-      local.get 1
-      i32.const 8
-      i32.shl
-      i32.const 16711680
-      i32.and
-      i32.or
-      local.get 1
-      i32.const 8
-      i32.shr_u
-      i32.const 65280
-      i32.and
-      local.get 1
-      i32.const 24
-      i32.shr_u
-      i32.or
-      i32.or
-      f32.convert_i32_s
-      f32.div
-      i32.reinterpret_f32
-      local.tee 1
-      i32.const 24
-      i32.shl
-      local.get 1
-      i32.const 8
-      i32.shl
-      i32.const 16711680
-      i32.and
-      i32.or
-      local.get 1
-      i32.const 8
-      i32.shr_u
-      i32.const 65280
-      i32.and
-      local.get 1
-      i32.const 24
-      i32.shr_u
-      i32.or
-      i32.or
-      i32.store
-      local.get 2
-      i64.extend_i32_s
-      i64.const 17179869184
-      i64.or
-    else
-      local.get 3
-    end)
-  (memory (;0;) 2)
-  (global (;0;) i32 (i32.const 1024))
-  (export "memory" (memory 0))
-  (export "{div_name}" (func 0))
-  (export "_scylla_abi" (global 0))
-  (data (;0;) (i32.const 1024) "\\01"))
-"""
+    div_source = read_function_from_file('test_UDA_final', 'div', div_name)
     div_src = f"(acc tuple<int, int>) CALLED ON NULL INPUT RETURNS float LANGUAGE wasm AS '{div_source}'"
     for i in range(20):
       cql.execute(f"INSERT INTO {table} (p, i, i2) VALUES ({i}, {i}, {i})")
@@ -1014,34 +578,11 @@ def test_UDA(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
 # FIXME: shorten the wait time when such configuration becomes possible
 
 # The function grows the memory by n pages and returns n.
-# Compiled from:
-# const int _scylla_abi = 1;
-
-# int grow_mem(int val) {
-#     __builtin_wasm_memory_grow(0, val);
-#     return val;
-# }
-#
-# with:
-# $ clang -O2  --target=wasm32 --no-standard-libraries -Wl,--export=grow_mem -Wl,--export=_scylla_abi -Wl,--no-entry grow_mem.c -o grow_mem.wasm
-# $ wasm2wat grow_mem.wasm > grow_mem.wat
 @pytest.mark.skip(reason="slow test, remove skip to try it anyway")
 def test_mem_grow(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
     table = table1
     mem_grow_name = "mem_grow_" + unique_name()
-    mem_grow_source = f"""
-(module
-  (type (;0;) (func (param i32) (result i32)))
-  (func ${mem_grow_name} (type 0) (param i32) (result i32)
-    local.get 0
-    memory.grow)
-  (memory (;0;) 2)
-  (global (;0;) i32 (i32.const 1024))
-  (export "memory" (memory 0))
-  (export "{mem_grow_name}" (func ${mem_grow_name}))
-  (export "_scylla_abi" (global 0))
-  (data (;0;) (i32.const 1024) "\\01"))
-"""
+    mem_grow_source = read_function_from_file('test_mem_grow', 'grow_mem', mem_grow_name)
     src = f"(pages int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{mem_grow_source}'"
     with new_function(cql, test_keyspace, src, mem_grow_name):
         cql.execute(f"INSERT INTO {table} (p, i) VALUES (8, 8)")
@@ -1107,7 +648,7 @@ def test_counter(cql, test_keyspace, scylla_only):
             cql.execute(f"UPDATE {table} SET c = c - 4  WHERE p = 42;")
             assert cql.execute(f"SELECT {ri_counter_name}(c) AS result FROM {table} WHERE p = 42").one().result == -1
 
-# See docs/dev/wasm.md for the source and build instructions of the compiled UDF.
+# See docs/cql/wasm.rst for the source and build instructions of the compiled UDF.
 def test_docs_assemblyscript(cql, test_keyspace, table1, scylla_only):
     table = table1
     fib_name = unique_name()
@@ -1147,7 +688,7 @@ def test_docs_assemblyscript(cql, test_keyspace, table1, scylla_only):
         cql.execute(f"INSERT INTO {table} (p, i) VALUES (42, 10)")
         assert cql.execute(f"SELECT {test_keyspace}.{fib_name}(i) AS result FROM {table} WHERE p = 42").one().result == 55
 
-# See docs/dev/wasm.md for the source and build instructions of the compiled UDF.
+# See docs/cql/wasm.rst for the source and build instructions of the compiled UDF.
 def test_docs_c(cql, test_keyspace, table1, scylla_only):
     table = table1
     fib_name = unique_name()
