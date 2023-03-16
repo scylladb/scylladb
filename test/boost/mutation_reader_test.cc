@@ -979,9 +979,8 @@ SEASTAR_TEST_CASE(reader_selector_fast_forwarding_test) {
 
 static
 sstables::shared_sstable create_sstable(sstables::test_env& env, schema_ptr s, std::vector<mutation> mutations) {
-    static int gen = 0;
     return make_sstable_containing([&] {
-        return env.make_sstable(s, gen++);
+        return env.make_sstable(s);
     }, mutations);
 }
 
