@@ -131,9 +131,9 @@ static void validate_column_rename(data_dictionary::database db, const schema& s
     if (!schema.indices().empty()) {
         auto dependent_indices = db.find_column_family(schema.id()).get_index_manager().get_dependent_indices(*def);
         if (!dependent_indices.empty()) {
-            auto index_names = ::join(", ", dependent_indices | boost::adaptors::transformed([](const index_metadata& im) {
+            auto index_names = fmt::join(dependent_indices | boost::adaptors::transformed([](const index_metadata& im) {
                 return im.name();
-            }));
+            }), ", ");
             throw exceptions::invalid_request_exception(
                     format("Cannot rename column {} because it has dependent secondary indexes ({})", from, index_names));
         }

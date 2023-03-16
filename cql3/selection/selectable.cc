@@ -94,7 +94,7 @@ selectable::with_function::new_selector_factory(data_dictionary::database db, sc
 
 sstring
 selectable::with_function::to_string() const {
-    return format("{}({})", _function_name.name, join(", ", _args));
+    return format("{}({})", _function_name.name, fmt::join(_args, ", "));
 }
 
 expr::expression
@@ -112,7 +112,7 @@ selectable::with_anonymous_function::new_selector_factory(data_dictionary::datab
 
 sstring
 selectable::with_anonymous_function::to_string() const {
-    return format("{}({})", _function->name().name, join(", ", _args));
+    return format("{}({})", _function->name().name, fmt::join(_args, ", "));
 }
 
 shared_ptr<selector::factory>

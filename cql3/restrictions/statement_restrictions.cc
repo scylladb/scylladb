@@ -31,6 +31,24 @@
 #include "types/map.hh"
 #include "types/set.hh"
 
+namespace {
+struct maybe_column_definition {
+    const column_definition* value;
+};
+}
+
+template<>
+struct fmt::formatter<maybe_column_definition> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const maybe_column_definition& cd, FormatContext& ctx) const {
+        if (cd.value != nullptr) {
+            return fmt::format_to(ctx.out(), "{}", *cd.value);
+        } else {
+            return fmt::format_to(ctx.out(), "(null)");
+        }
+    }
+};
+
 namespace cql3 {
 namespace restrictions {
 
@@ -595,7 +613,11 @@ void statement_restrictions::add_single_column_parition_key_restriction(const ex
     if (has_token(_partition_key_restrictions)) {
         throw exceptions::invalid_request_exception(
                 format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
-                        join(", ", expr::get_sorted_column_defs(_partition_key_restrictions))));
+                       fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
+                                 boost::adaptors::transformed([](auto* p) {
+                                   return maybe_column_definition{p};
+                                 }),
+                                 ", ")));
     }
 
     _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, restr);
@@ -606,7 +628,11 @@ void statement_restrictions::add_token_partition_key_restriction(const expr::bin
     if (!partition_key_restrictions_is_empty() && !has_token(_partition_key_restrictions)) {
         throw exceptions::invalid_request_exception(
                 format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
-                        join(", ", expr::get_sorted_column_defs(_partition_key_restrictions))));
+                        fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
+                                  boost::adaptors::transformed([](auto* p) {
+                                    return maybe_column_definition{p};
+                                  }),
+                                  ", ")));
     }
 
     _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, restr);

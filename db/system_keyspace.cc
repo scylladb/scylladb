@@ -1287,7 +1287,7 @@ future<> system_keyspace::save_local_supported_features(const std::set<std::stri
     static const auto req = format("INSERT INTO system.{} (key, supported_features) VALUES (?, ?)", LOCAL);
     return qctx->execute_cql(req,
         sstring(db::system_keyspace::LOCAL),
-        ::join(",", feats)).discard_result();
+        fmt::to_string(fmt::join(feats, ","))).discard_result();
 }
 
 // The cache must be distributed, because the values themselves may not update atomically, so a shard reading that

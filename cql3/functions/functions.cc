@@ -417,13 +417,13 @@ functions::get(data_dictionary::database db,
     if (compatibles.empty()) {
         throw exceptions::invalid_request_exception(
                 format("Invalid call to function {}, none of its type signatures match (known type signatures: {})",
-                                                        name, join(", ", candidates)));
+                                                        name, fmt::join(candidates, ", ")));
     }
 
     if (compatibles.size() > 1) {
         throw exceptions::invalid_request_exception(
                 format("Ambiguous call to function {} (can be matched by following signatures: {}): use type casts to disambiguate",
-                    name, join(", ", compatibles)));
+                    name, fmt::join(compatibles, ", ")));
     }
 
     return std::move(compatibles[0]);

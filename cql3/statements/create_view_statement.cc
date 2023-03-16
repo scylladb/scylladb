@@ -251,7 +251,7 @@ view_ptr create_view_statement::prepare_view(data_dictionary::database db) const
     }
 
     if (!missing_pk_columns.empty()) {
-        auto column_names = ::join(", ", missing_pk_columns | boost::adaptors::transformed(std::mem_fn(&column_definition::name_as_text)));
+        auto column_names = fmt::join(missing_pk_columns | boost::adaptors::transformed(std::mem_fn(&column_definition::name_as_text)), ", ");
         throw exceptions::invalid_request_exception(format("Cannot create Materialized View {} without primary key columns from base {} ({})",
                         column_family(), _base_name.get_column_family(), column_names));
     }
@@ -294,7 +294,7 @@ view_ptr create_view_statement::prepare_view(data_dictionary::database db) const
             target_primary_keys.contains(non_pk_restrictions.cbegin()->first)) {
         // This case (filter by new PK column of the view) works, as explained above
     } else if (!non_pk_restrictions.empty()) {
-        auto column_names = ::join(", ", non_pk_restrictions | boost::adaptors::map_keys | boost::adaptors::transformed(std::mem_fn(&column_definition::name_as_text)));
+        auto column_names = fmt::join(non_pk_restrictions | boost::adaptors::map_keys | boost::adaptors::transformed(std::mem_fn(&column_definition::name_as_text)), ", ");
         throw exceptions::invalid_request_exception(format("Non-primary key columns cannot be restricted in the SELECT statement used for materialized view {} creation (got restrictions on: {})",
                 column_family(), column_names));
     }

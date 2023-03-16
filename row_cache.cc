@@ -1333,7 +1333,7 @@ void row_cache::upgrade_entry(cache_entry& e) {
 
 std::ostream& operator<<(std::ostream& out, row_cache& rc) {
     rc._read_section(rc._tracker.region(), [&] {
-        out << "{row_cache: " << ::join(", ", rc._partitions.begin(), rc._partitions.end()) << "}";
+        fmt::print(out, "{{row_cache: {}}}", fmt::join(rc._partitions.begin(), rc._partitions.end(), ", "));
     });
     return out;
 }
@@ -1366,7 +1366,7 @@ future<> row_cache::do_update(row_cache::external_updater eu, row_cache::interna
   });
 }
 
-std::ostream& operator<<(std::ostream& out, cache_entry& e) {
+std::ostream& operator<<(std::ostream& out, const cache_entry& e) {
     return out << "{cache_entry: " << e.position()
                << ", cont=" << e.continuous()
                << ", dummy=" << e.is_dummy_entry()

@@ -40,17 +40,18 @@ const clustering_range full_clustering_range = clustering_range::make_open_ended
 std::ostream& operator<<(std::ostream& out, const specific_ranges& s);
 
 std::ostream& operator<<(std::ostream& out, const partition_slice& ps) {
-    out << "{"
-        << "regular_cols=[" << join(", ", ps.regular_columns) << "]"
-        << ", static_cols=[" << join(", ", ps.static_columns) << "]"
-        << ", rows=[" << join(", ", ps._row_ranges) << "]"
-        ;
+    fmt::print(out,
+               "{{regular_cols=[{}], static_cols=[{}], rows=[{}]",
+               fmt::join(ps.regular_columns, ", "),
+               fmt::join(ps.static_columns, ", "),
+               ps._row_ranges);
     if (ps._specific_ranges) {
-        out << ", specific=[" << *ps._specific_ranges << "]";
+        fmt::print(out, ", specific=[{}]", *ps._specific_ranges);
     }
-    out << ", options=" << format("{:x}", ps.options.mask()); // FIXME: pretty print options
-    out << ", partition_row_limit=" << ps.partition_row_limit();
-    return out << "}";
+    // FIXME: pretty print options
+    fmt::print(out, ", options={:x}, , partition_row_limit={}}}",
+               ps.options.mask(), ps.partition_row_limit());
+    return out;
 }
 
 std::ostream& operator<<(std::ostream& out, const read_command& r) {
@@ -81,29 +82,28 @@ std::ostream& operator<<(std::ostream& out, const forward_request::reduction_typ
 }
 
 std::ostream& operator<<(std::ostream& out, const forward_request::aggregation_info& a) {
-    return out << "aggregation_info{"
-        << ", name=" << a.name
-        << ", column_names=[" << join(",", a.column_names) << "]"
-        << "}";
+    fmt::print(out, "aggregation_info{{, name={}, column_names=[{}]}}",
+               a.name, fmt::join(a.column_names, ","));;
+    return out;
 }
 
 std::ostream& operator<<(std::ostream& out, const forward_request& r) {
     auto ms = std::chrono::time_point_cast<std::chrono::milliseconds>(r.timeout).time_since_epoch().count();
-
-    out << "forward_request{"
-        << "reductions=[" << join(",", r.reduction_types) << "]";
-    if(r.aggregation_infos) {
-        out << ", aggregation_infos=[" << join(",", r.aggregation_infos.value()) << "]";
+    fmt::print(out, "forward_request{{reductions=[{}]",
+               fmt::join(r.reduction_types, ","));
+    if (r.aggregation_infos) {
+        fmt::print(out, ", aggregation_infos=[{}]",
+                   fmt::join(r.aggregation_infos.value(), ","));
     }
-    return out << ", cmd=" << r.cmd
-        << ", pr=" << r.pr
-        << ", cl=" << r.cl
-        << ", timeout(ms)=" << ms << "}";
+    fmt::print(out, "cmd={}, pr={}, cl={}, timeout(ms)={}}}",
+               r.cmd, r.pr, r.cl, ms);
+    return out;
 }
 
 
 std::ostream& operator<<(std::ostream& out, const specific_ranges& s) {
-    return out << "{" << s._pk << " : " << join(", ", s._ranges) << "}";
+    fmt::print(out, "{{{} : {}}}", s._pk, fmt::join(s._ranges, ", "));
+    return out;
 }
 
 void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, position_in_partition pos, bool reversed) {

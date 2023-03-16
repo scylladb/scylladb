@@ -1835,7 +1835,7 @@ future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::descr
         // we're done: the results map is ready to return to the client.  the rest is just debug logging:
         auto it_unreachable = results.find(UNREACHABLE);
         if (it_unreachable != results.end()) {
-            slogger.debug("Hosts not in agreement. Didn't get a response from everybody: {}", ::join( ",", it_unreachable->second));
+            slogger.debug("Hosts not in agreement. Didn't get a response from everybody: {}", fmt::join(it_unreachable->second, ","));
         }
         auto my_version = get_schema_version();
         for (auto&& entry : results) {
@@ -2060,7 +2060,7 @@ public:
             errors.emplace_back(format("The {} command failed for nodes={}: the needed nodes are down. It is highly recommended to fix the down nodes and try again", op_desc, nodes_failed));
         }
         if (!errors.empty()) {
-            co_await coroutine::return_exception(std::runtime_error(join("; ", errors)));
+            co_await coroutine::return_exception(std::runtime_error(fmt::to_string(fmt::join(errors, "; "))));
         }
         slogger.info("{}[{}]: Finished {}", desc, uuid(), req);
     }

@@ -151,7 +151,7 @@ rows_assertions::with_rows_ignore_order(std::vector<std::vector<bytes_opt>> rows
         });
         if (found == std::end(actual)) {
             fail(format("row {} not found in result set ({})", to_string(expected),
-               ::join(", ", actual | boost::adaptors::transformed([] (auto& r) { return to_string(r); }))));
+               fmt::join(actual | boost::adaptors::transformed([] (auto& r) { return to_string(r); }), ", ")));
         }
     }
     if (rs.size() != rows.size()) {

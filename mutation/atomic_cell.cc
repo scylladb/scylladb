@@ -194,14 +194,13 @@ operator<<(std::ostream& os, const atomic_cell_view::printer& acvp) {
         std::ostringstream cell_value_string_builder;
         if (type.is_counter()) {
             if (acv.is_counter_update()) {
-                cell_value_string_builder << "counter_update_value=" << acv.counter_update_value();
+                fmt::print(cell_value_string_builder, "counter_update_value={}", acv.counter_update_value());
             } else {
-                cell_value_string_builder << "shards: ";
                 auto ccv = counter_cell_view(acv);
-                cell_value_string_builder << ::join(", ", ccv.shards());
+                fmt::print(cell_value_string_builder, "shards: {}", fmt::join(ccv.shards(), ", "));
             }
         } else {
-            cell_value_string_builder << type.to_string(to_bytes(acv.value()));
+            fmt::print(cell_value_string_builder, "{}", type.to_string(to_bytes(acv.value())));
         }
         fmt::print(os, "atomic_cell{{{},ts={:d},expiry={:d},ttl={:d}}}",
             cell_value_string_builder.str(),

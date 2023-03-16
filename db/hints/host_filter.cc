@@ -78,7 +78,7 @@ sstring host_filter::to_configuration_string() const {
     case enabled_kind::enabled_for_all:
         return "true";
     case enabled_kind::enabled_selectively:
-        return ::join(",", _dcs);
+        return fmt::to_string(fmt::join(_dcs, ","));
     case enabled_kind::disabled_for_all:
         return "false";
     }
@@ -99,12 +99,12 @@ std::string_view host_filter::enabled_kind_to_string(host_filter::enabled_kind e
 }
 
 std::ostream& operator<<(std::ostream& os, const host_filter& f) {
-    os << "host_filter{enabled_kind="
-        << host_filter::enabled_kind_to_string(f._enabled_kind);
+    fmt::print(os, "host_filter{{enabled_kind={}",
+               host_filter::enabled_kind_to_string(f._enabled_kind));
     if (f._enabled_kind == host_filter::enabled_kind::enabled_selectively) {
-        os << ", dcs={" << ::join(",", f._dcs);
+        fmt::print(os, ", dcs={{{}}}", fmt::join(f._dcs, ","));
     }
-    os << "}";
+    fmt::print(os, "}}");
     return os;
 }
 

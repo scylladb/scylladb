@@ -836,7 +836,7 @@ query_processor::execute_internal(
         cache_internal cache) {
 
     if (log.is_enabled(logging::log_level::trace)) {
-        log.trace("execute_internal: {}\"{}\" ({})", cache ? "(cached) " : "", query_string, ::join(", ", values));
+        log.trace("execute_internal: {}\"{}\" ({})", cache ? "(cached) " : "", query_string, fmt::join(values, ", "));
     }
     if (cache) {
         return execute_with_params(prepare_internal(query_string), cl, query_state, values);

@@ -3435,7 +3435,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                         return m2 == actual;
                     })) {
                         BOOST_FAIL(format("Mutation read doesn't match any expected version, slice: {}, read: {}\nexpected: [{}]",
-                            slice, actual, ::join(",\n", possible_versions)));
+                            slice, actual, fmt::join(possible_versions, ",\n")));
                     }
                 }
             }).finally([&] {

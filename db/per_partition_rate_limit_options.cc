@@ -45,7 +45,7 @@ per_partition_rate_limit_options::per_partition_rate_limit_options(std::map<sstr
     if (!map.empty()) {
         throw exceptions::configuration_exception(format(
                 "Unknown keys in map for per_partition_rate_limit extension: {}",
-                ::join(", ", map | boost::adaptors::map_keys)));
+                fmt::join(map | boost::adaptors::map_keys, ", ")));
     }
 }
 

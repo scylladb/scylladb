@@ -141,7 +141,7 @@ public:
 
     bool is_dummy_entry() const noexcept { return _flags._dummy_entry; }
 
-    friend std::ostream& operator<<(std::ostream&, cache_entry&);
+    friend std::ostream& operator<<(std::ostream&, const cache_entry&);
 };
 
 //
