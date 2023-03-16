@@ -177,18 +177,7 @@ target_link_libraries(Boost::regex
 
 target_link_libraries(scylla PRIVATE
     seastar
-    # Boost dependencies
-    Boost::filesystem
-    Boost::program_options
-    Boost::system
-    Boost::thread
-    Boost::regex
-    Boost::headers
-    # System libs
-    libxcrypt::libxcrypt
-    ICU::uc
-    zstd
-    xxHash::xxhash)
+    Boost::program_options)
 
 # Force SHA1 build-id generation
 set(default_linker_flags "-Wl,--build-id=sha1")
