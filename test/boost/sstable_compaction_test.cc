@@ -731,20 +731,18 @@ SEASTAR_TEST_CASE(leveled_04) {
 
 SEASTAR_TEST_CASE(leveled_05) {
     // NOTE: Generations from 48 to 51 are used here.
-    return test_env::do_with([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         // Check compaction code with leveled strategy. In this test, two sstables of level 0 will be created.
-        return compact_sstables(env, { 48, 49 }, 50, true, 1024*1024, compaction_strategy_type::leveled).then([&env] (auto generations) {
+        auto generations = compact_sstables(env, { 48, 49 }, 50, true, 1024*1024, compaction_strategy_type::leveled).get();
+            // FIXME: indentation
             BOOST_REQUIRE(generations.size() == 2);
             BOOST_REQUIRE(generations[0] == 50);
             BOOST_REQUIRE(generations[1] == 51);
 
-            return seastar::async([&, generations = std::move(generations)] {
                 for (auto gen : generations) {
                     auto fname = sstable::filename(env.tempdir().path().native(), "ks", "cf", sstables::get_highest_sstable_version(), generation_from_value(gen), big, component_type::Data);
                     BOOST_REQUIRE(file_size(fname).get0() >= 1024*1024);
                 }
-            });
-        });
     });
 }
 
