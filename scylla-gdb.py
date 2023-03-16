@@ -4784,7 +4784,7 @@ class scylla_small_objects(gdb.Command):
 
 
 class scylla_compaction_tasks(gdb.Command):
-    """Summarize the compaction::task instances.
+    """Summarize the compaction::compaction_task_executor instances.
 
     The summary is created based on compaction_manager::_tasks and it takes the
     form of a histogram with the compaction type and compaction running and
@@ -4806,7 +4806,7 @@ class scylla_compaction_tasks(gdb.Command):
 		1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage_postimage"
 		1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_scylla_cdc_log"
 		1 type=sstables::compaction_type::Compaction, running=true , "cdc_test"."test_table_preimage_scylla_cdc_log"
-	Total: 5246 instances of compaction::task
+	Total: 5246 instances of compaction::compaction_task_executor
     """
 
     def __init__(self):
@@ -4844,7 +4844,7 @@ class scylla_compaction_tasks(gdb.Command):
             task_hist.add(key)
 
         task_hist.print_to_console()
-        gdb.write('Total: {} instances of compaction::task\n'.format(len(task_list)))
+        gdb.write('Total: {} instances of compaction::compaction_task_executor\n'.format(len(task_list)))
 
 
 class Schema(object):

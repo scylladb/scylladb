@@ -164,13 +164,13 @@ compaction_manager_for_testing::wrapped_compaction_manager::~wrapped_compaction_
     cm.stop().get();
 }
 
-class compaction_manager_test_task : public compaction::task {
+class compaction_manager_test_task : public compaction::compaction_task_executor {
     sstables::run_id _run_id;
     noncopyable_function<future<> (sstables::compaction_data&)> _job;
 
 public:
     compaction_manager_test_task(compaction_manager& cm, table_state& table_s, sstables::run_id run_id, noncopyable_function<future<> (sstables::compaction_data&)> job)
-        : compaction::task(cm, &table_s, sstables::compaction_type::Compaction, "Test compaction")
+        : compaction::compaction_task_executor(cm, &table_s, sstables::compaction_type::Compaction, "Test compaction")
         , _run_id(run_id)
         , _job(std::move(job))
     { }
@@ -192,7 +192,7 @@ future<> compaction_manager_test::run(sstables::run_id output_run_id, table_stat
     });
 }
 
-sstables::compaction_data& compaction_manager_test::register_compaction(shared_ptr<compaction::task> task) {
+sstables::compaction_data& compaction_manager_test::register_compaction(shared_ptr<compaction::compaction_task_executor> task) {
     testlog.debug("compaction_manager_test: register_compaction uuid={}: {}", task->compaction_data().compaction_uuid, *task);
     _cm._tasks.push_back(task);
     return task->compaction_data();

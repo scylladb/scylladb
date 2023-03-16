@@ -52,17 +52,17 @@ public:
 };
 
 namespace compaction {
-class task;
-class sstables_task;
-class major_compaction_task;
-class custom_compaction_task;
-class regular_compaction_task;
-class offstrategy_compaction_task;
-class rewrite_sstables_compaction_task;
-class cleanup_sstables_compaction_task;
-class validate_sstables_compaction_task;
+class compaction_task_executor;
+class sstables_task_executor;
+class major_compaction_task_executor;
+class custom_compaction_task_executor;
+class regular_compaction_task_executor;
+class offstrategy_compaction_task_executor;
+class rewrite_sstables_compaction_task_executor;
+class cleanup_sstables_compaction_task_executor;
+class validate_sstables_compaction_task_executor;
 }
-class compaction_manager_test_task;
+class compaction_manager_test_task_executor;
 
 // Compaction manager provides facilities to submit and track compaction jobs on
 // behalf of existing tables.
@@ -116,7 +116,7 @@ public:
 private:
     shared_ptr<compaction::task_manager_module> _task_manager_module;
     // compaction manager may have N fibers to allow parallel compaction per shard.
-    std::list<shared_ptr<compaction::task>> _tasks;
+    std::list<shared_ptr<compaction::compaction_task_executor>> _tasks;
 
     // Possible states in which the compaction manager can be found.
     //
@@ -186,9 +186,9 @@ private:
     per_table_history_maps _repair_history_maps;
     tombstone_gc_state _tombstone_gc_state;
 private:
-    future<compaction_stats_opt> perform_task(shared_ptr<compaction::task>);
+    future<compaction_stats_opt> perform_task(shared_ptr<compaction::compaction_task_executor>);
 
-    future<> stop_tasks(std::vector<shared_ptr<compaction::task>> tasks, sstring reason);
+    future<> stop_tasks(std::vector<shared_ptr<compaction::compaction_task_executor>> tasks, sstring reason);
     future<> update_throughput(uint32_t value_mbs);
 
     // Return the largest fan-in of currently running compactions
@@ -235,7 +235,7 @@ private:
     // Guarantees that a maintenance task, e.g. cleanup, will be performed on all files available at the time
     // by retrieving set of candidates only after all compactions for table T were stopped, if any.
     template<typename TaskType, typename... Args>
-    requires std::derived_from<TaskType, compaction::task>
+    requires std::derived_from<TaskType, compaction::compaction_task_executor>
     future<compaction_stats_opt> perform_task_on_all_files(compaction::table_state& t, sstables::compaction_type_options options, get_candidates_func, Args... args);
 
     future<compaction_stats_opt> rewrite_sstables(compaction::table_state& t, sstables::compaction_type_options options, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
@@ -424,21 +424,21 @@ public:
     friend class compaction_weight_registration;
     friend class compaction_manager_test;
 
-    friend class compaction::task;
-    friend class compaction::sstables_task;
-    friend class compaction::major_compaction_task;
-    friend class compaction::custom_compaction_task;
-    friend class compaction::regular_compaction_task;
-    friend class compaction::offstrategy_compaction_task;
-    friend class compaction::rewrite_sstables_compaction_task;
-    friend class compaction::cleanup_sstables_compaction_task;
-    friend class compaction::validate_sstables_compaction_task;
-    friend class compaction_manager_test_task;
+    friend class compaction::compaction_task_executor;
+    friend class compaction::sstables_task_executor;
+    friend class compaction::major_compaction_task_executor;
+    friend class compaction::custom_compaction_task_executor;
+    friend class compaction::regular_compaction_task_executor;
+    friend class compaction::offstrategy_compaction_task_executor;
+    friend class compaction::rewrite_sstables_compaction_task_executor;
+    friend class compaction::cleanup_sstables_compaction_task_executor;
+    friend class compaction::validate_sstables_compaction_task_executor;
+    friend class compaction_manager_test_task_executor;
 };
 
 namespace compaction {
 
-class task {
+class compaction_task_executor {
 public:
     enum class state {
         none,       // initial and final state
@@ -470,12 +470,12 @@ private:
     sstring _description;
 
 public:
-    explicit task(compaction_manager& mgr, ::compaction::table_state* t, sstables::compaction_type type, sstring desc);
+    explicit compaction_task_executor(compaction_manager& mgr, ::compaction::table_state* t, sstables::compaction_type type, sstring desc);
 
-    task(task&&) = delete;
-    task(const task&) = delete;
+    compaction_task_executor(compaction_task_executor&&) = delete;
+    compaction_task_executor(const compaction_task_executor&) = delete;
 
-    virtual ~task();
+    virtual ~compaction_task_executor();
 
 protected:
     virtual future<compaction_manager::compaction_stats_opt> do_run() = 0;
@@ -557,8 +557,8 @@ public:
     std::string describe() const;
 };
 
-std::ostream& operator<<(std::ostream& os, compaction::task::state s);
-std::ostream& operator<<(std::ostream& os, const compaction::task& task);
+std::ostream& operator<<(std::ostream& os, compaction::compaction_task_executor::state s);
+std::ostream& operator<<(std::ostream& os, const compaction::compaction_task_executor& task);
 
 }
 
