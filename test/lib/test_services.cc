@@ -144,6 +144,7 @@ namespace sstables {
 std::unique_ptr<db::config> make_db_config(sstring temp_dir) {
     auto cfg = std::make_unique<db::config>();
     cfg->data_file_directories.set({ temp_dir });
+    cfg->host_id = locator::host_id::create_random_id();
     return cfg;
 }
 

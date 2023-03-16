@@ -97,7 +97,7 @@ make_sstable_for_all_shards(replica::database& db, replica::table& table, fs::pa
 
 sstables::shared_sstable new_sstable(sstables::test_env& env, fs::path dir, int64_t gen) {
     return env.manager().make_sstable(test_table_schema(), dir.native(), generation_from_value(gen),
-                sstables::sstable_version_types::mc, sstables::sstable_format_types::big,
+                sstables::get_highest_sstable_version(), sstables::sstable_format_types::big,
                 gc_clock::now(), default_io_error_handler_gen(), default_sstable_buffer_size);
 }
 
