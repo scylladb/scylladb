@@ -127,6 +127,14 @@ public:
         return reusable_sst(std::move(schema), _impl->dir.path().native(), generation);
     }
 
+    future<shared_sstable> reusable_sst(schema_ptr schema, shared_sstable sst) {
+        return reusable_sst(std::move(schema), sst->get_storage().prefix(), sst->generation().value(), sst->get_version());
+    }
+
+    future<shared_sstable> reusable_sst(shared_sstable sst) {
+        return reusable_sst(sst->get_schema(), std::move(sst));
+    }
+
     test_env_sstables_manager& manager() { return _impl->mgr; }
     reader_concurrency_semaphore& semaphore() { return _impl->semaphore; }
     db::config& db_config() { return *_impl->db_config; }
