@@ -507,6 +507,10 @@ public:
         sstring prefix() const { return dir; }
     };
 
+    const filesystem_storage& get_storage() const {
+        return _storage;
+    }
+
 private:
     sstring filename(component_type f) const {
         return filename(_storage.prefix(), f);
