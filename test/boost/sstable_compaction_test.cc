@@ -4312,7 +4312,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
 }
 
 SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
-    return test_env::do_with([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
                                     {{"p1", utf8_type}}, {}, {}, {}, utf8_type);
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
@@ -4403,8 +4403,6 @@ SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
             incremental_selection_test(strategy_param::ICS);
             incremental_selection_test(strategy_param::LCS);
         }
-
-        return make_ready_future<>();
     });
 }
 
