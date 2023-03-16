@@ -212,6 +212,11 @@ public:
     // The returned ID is not empty.
     const raft::server_id& load_my_id();
 
+    // Remove the node from raft config, retries raft::commit_status_unknown.
+    // The function can only be called after wait_for_raft() successfully
+    // completes and current state of group0 is not RECOVERY.
+    future<> remove_from_raft_config(raft::server_id id);
+
 private:
     static void init_rpc_verbs(raft_group0& shard0_this);
     static future<> uninit_rpc_verbs(netw::messaging_service& ms);
@@ -288,9 +293,6 @@ private:
     // Make the given server a non-voter in Raft group 0 configuration.
     // Retries on raft::commit_status_unknown.
     future<> make_raft_config_nonvoter(raft::server_id);
-
-    // Remove the node from raft config, retries raft::commit_status_unknown.
-    future<> remove_from_raft_config(raft::server_id id);
 
     // Load the initial Raft <-> IP address map as seen by
     // the gossiper.
