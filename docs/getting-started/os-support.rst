@@ -25,11 +25,7 @@ ScyllaDB Open Source
 
 .. note:: 
 
-    Recommended OS and ScyllaDB AMI/Image OS for ScyllaDB Open Source:
-
-       - Ubuntu 20.04 for versions 4.6 and later.
-       - CentOS 7 for versions earlier than 4.6.
-
+    The recommended OS for ScyllaDB Open Source is Ubuntu 22.04.
 
 +----------------------------+----------------------------------+-----------------------------+---------+-------+
 | Linux Distributions        |       Ubuntu                     |    Debian                   | CentOS /| Rocky/|
@@ -37,6 +33,8 @@ ScyllaDB Open Source
 +----------------------------+------+------+------+------+------+------+------+-------+-------+---------+-------+
 | ScyllaDB Version / Version | 14.04| 16.04| 18.04|20.04 |22.04 | 8    | 9    |  10   |  11   | 7       |   8   |
 +============================+======+======+======+======+======+======+======+=======+=======+=========+=======+
+|   5.2                      | |x|  | |x|  | |v|  | |v|  | |v|  | |x|  | |x|  | |v|   | |v|   | |v|     | |v|   |
++----------------------------+------+------+------+------+------+------+------+-------+-------+---------+-------+
 |   5.1                      | |x|  | |x|  | |v|  | |v|  | |v|  | |x|  | |x|  | |v|   | |v|   | |v|     | |v|   |
 +----------------------------+------+------+------+------+------+------+------+-------+-------+---------+-------+
 |   5.0                      | |x|  | |x|  | |v|  | |v|  | |v|  | |x|  | |x|  | |v|   | |v|   | |v|     | |v|   |
@@ -63,17 +61,18 @@ ScyllaDB Open Source
 +----------------------------+------+------+------+------+------+------+------+-------+-------+---------+-------+
 
 
-All releases are available as a Docker container, EC2 AMI, and a GCP image (GCP image from version 4.3).
+All releases are available as a Docker container, EC2 AMI, and a GCP image (GCP image from version 4.3). Since 
+version 5.2, the ScyllaDB AMI/Image OS for ScyllaDB Open Source is based on Ubuntu 22.04.
+
 
 
 ScyllaDB Enterprise
 --------------------
 
 .. note:: 
-   Recommended OS and ScyllaDB AMI/Image OS for ScyllaDB Enterprise:
 
-    - Ubuntu 20.04 for versions 2021.1 and later.
-    - CentOS 7 for versions earlier than 2021.1.
+    The recommended OS for ScyllaDB Enterprise is Ubuntu 22.04.
+
 
 +----------------------------+-----------------------------------+---------------------------+--------+-------+
 | Linux Distributions        |  Ubuntu                           | Debian                    | CentOS/| Rocky/|
@@ -95,4 +94,5 @@ ScyllaDB Enterprise
 +----------------------------+------+------+------+------+-------+------+------+------+------+--------+-------+
 
 
-All releases are available as a Docker container, EC2 AMI, and a GCP image (GCP image from version 2021.1).
+All releases are available as a Docker container, EC2 AMI, and a GCP image (GCP image from version 2021.1). Since 
+version 2023.1, the ScyllaDB AMI/Image OS for ScyllaDB Enterprise is based on Ubuntu 22.04.
