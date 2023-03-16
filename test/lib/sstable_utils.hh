@@ -292,7 +292,7 @@ public:
         _cm.propagate_replacement(table_s, removed, added);
     }
 private:
-    sstables::compaction_data& register_compaction(shared_ptr<compaction_manager::task> task);
+    sstables::compaction_data& register_compaction(shared_ptr<compaction::task> task);
 
     void deregister_compaction(const sstables::compaction_data& c);
 };

@@ -164,13 +164,13 @@ compaction_manager_for_testing::wrapped_compaction_manager::~wrapped_compaction_
     cm.stop().get();
 }
 
-class compaction_manager::compaction_manager_test_task : public compaction_manager::task {
+class compaction_manager_test_task : public compaction::task {
     sstables::run_id _run_id;
     noncopyable_function<future<> (sstables::compaction_data&)> _job;
 
 public:
     compaction_manager_test_task(compaction_manager& cm, table_state& table_s, sstables::run_id run_id, noncopyable_function<future<> (sstables::compaction_data&)> job)
-        : compaction_manager::task(cm, &table_s, sstables::compaction_type::Compaction, "Test compaction")
+        : compaction::task(cm, &table_s, sstables::compaction_type::Compaction, "Test compaction")
         , _run_id(run_id)
         , _job(std::move(job))
     { }
@@ -179,20 +179,20 @@ protected:
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
         setup_new_compaction(_run_id);
         return _job(_compaction_data).then([] {
-            return make_ready_future<compaction_stats_opt>(std::nullopt);
+            return make_ready_future<compaction_manager::compaction_stats_opt>(std::nullopt);
         });
     }
 };
 
 future<> compaction_manager_test::run(sstables::run_id output_run_id, table_state& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job) {
-    auto task = make_shared<compaction_manager::compaction_manager_test_task>(_cm, table_s, output_run_id, std::move(job));
+    auto task = make_shared<compaction_manager_test_task>(_cm, table_s, output_run_id, std::move(job));
     auto& cdata = register_compaction(task);
     return task->run().discard_result().finally([this, &cdata] {
         deregister_compaction(cdata);
     });
 }
 
-sstables::compaction_data& compaction_manager_test::register_compaction(shared_ptr<compaction_manager::task> task) {
+sstables::compaction_data& compaction_manager_test::register_compaction(shared_ptr<compaction::task> task) {
     testlog.debug("compaction_manager_test: register_compaction uuid={}: {}", task->compaction_data().compaction_uuid, *task);
     _cm._tasks.push_back(task);
     return task->compaction_data();
