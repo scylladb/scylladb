@@ -3883,8 +3883,7 @@ static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
         int64_t gen = 0;
         for (auto& mb: scenario.readers_data) {
             auto sst_factory = [table_schema, &env, &tmp, gen = ++gen] () {
-                return env.make_sstable(std::move(table_schema), tmp.path().string(), gen,
-                    sstables::sstable::version_types::md, sstables::sstable::format_types::big);
+                return env.make_sstable(std::move(table_schema), tmp.path().string(), gen);
             };
 
             if (mb.m) {

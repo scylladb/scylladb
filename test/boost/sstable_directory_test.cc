@@ -84,8 +84,7 @@ make_sstable_for_all_shards(replica::database& db, replica::table& table, fs::pa
         m.set_clustered_cell(clustering_key::make_empty(), bytes("c"), data_value(int32_t(0)), api::timestamp_type(0));
         mt->apply(std::move(m));
     }
-    auto sst = table.get_sstables_manager().make_sstable(s, sstdir.native(), generation_from_value(generation++),
-            sstables::get_highest_sstable_version(), sstables::sstable::format_types::big);
+    auto sst = table.get_sstables_manager().make_sstable(s, sstdir.native(), generation_from_value(generation++));
     write_memtable_to_sstable(*mt, sst, table.get_sstables_manager().configure_writer("test")).get();
     mt->clear_gently().get();
     // We can't write an SSTable with bad sharding, so pretend
@@ -96,9 +95,7 @@ make_sstable_for_all_shards(replica::database& db, replica::table& table, fs::pa
 }
 
 sstables::shared_sstable new_sstable(sstables::test_env& env, fs::path dir, int64_t gen) {
-    return env.manager().make_sstable(test_table_schema(), dir.native(), generation_from_value(gen),
-                sstables::get_highest_sstable_version(), sstables::sstable_format_types::big,
-                gc_clock::now(), default_io_error_handler_gen(), default_sstable_buffer_size);
+    return env.make_sstable(test_table_schema(), dir.native(), generation_from_value(gen));
 }
 
 // there is code for this in distributed_loader.cc but this is so simple it is not worth polluting
@@ -472,7 +469,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
         distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", [&e, upload_path, &generation_for_test] (shard_id id) {
             auto generation = generation_for_test.fetch_add(1, std::memory_order_relaxed);
             auto& cf = e.local_db().find_column_family("ks", "cf");
-            return cf.get_sstables_manager().make_sstable(cf.schema(), upload_path.native(), generation_from_value(generation), sstables::sstable::version_types::mc, sstables::sstable::format_types::big);
+            return cf.get_sstables_manager().make_sstable(cf.schema(), upload_path.native(), generation_from_value(generation));
         }).get();
         verify_that_all_sstables_are_local(sstdir, smp::count * smp::count).get();
       });
@@ -512,7 +509,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
         distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", [&e, upload_path, &generation_for_test] (shard_id id) {
             auto generation = generation_for_test.fetch_add(1, std::memory_order_relaxed);
             auto& cf = e.local_db().find_column_family("ks", "cf");
-            return cf.get_sstables_manager().make_sstable(cf.schema(), upload_path.native(), generation_from_value(generation), sstables::sstable::version_types::mc, sstables::sstable::format_types::big);
+            return cf.get_sstables_manager().make_sstable(cf.schema(), upload_path.native(), generation_from_value(generation));
         }).get();
         verify_that_all_sstables_are_local(sstdir, smp::count * smp::count).get();
       });
@@ -552,7 +549,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
         distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", [&e, upload_path, &generation_for_test] (shard_id id) {
             auto generation = generation_for_test.fetch_add(1, std::memory_order_relaxed);
             auto& cf = e.local_db().find_column_family("ks", "cf");
-            return cf.get_sstables_manager().make_sstable(cf.schema(), upload_path.native(), generation_from_value(generation), sstables::sstable::version_types::mc, sstables::sstable::format_types::big);
+            return cf.get_sstables_manager().make_sstable(cf.schema(), upload_path.native(), generation_from_value(generation));
         }).get();
         verify_that_all_sstables_are_local(sstdir, 2 * smp::count * smp::count).get();
       });

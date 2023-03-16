@@ -1459,11 +1459,11 @@ SEASTAR_TEST_CASE(test_reading_serialization_header) {
         // SSTable class has way too many responsibilities. In particular, it mixes the reading and
         // writting parts. Let's use a separate objects for writing and reading to ensure that nothing
         // carries over that wouldn't normally be read from disk.
-        auto sst = env.make_sstable(s, 1, sstable::version_types::mc, sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(s, 1);
         sst->write_components(mt->make_flat_reader(s, env.make_reader_permit()), 2, s, env.manager().configure_writer(), mt->get_encoding_stats()).get();
     }
 
-    auto sst = env.make_sstable(s, 1, sstable::version_types::mc, sstables::sstable::format_types::big);
+    auto sst = env.make_sstable(s, 1);
     sst->load().get();
 
     auto hdr = sst->get_serialization_header();

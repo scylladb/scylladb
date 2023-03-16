@@ -106,10 +106,10 @@ SEASTAR_TEST_CASE(datafile_generation_09) {
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
         mt->apply(std::move(m));
 
-        auto sst = env.make_sstable(s, 9, sstables::get_highest_sstable_version(), big);
+        auto sst = env.make_sstable(s, 9);
 
         write_memtable_to_sstable_for_test(*mt, sst).get();
-        auto sst2 = env.make_sstable(s, 9, sstables::get_highest_sstable_version(), big);
+        auto sst2 = env.make_sstable(s, 9);
 
         sstables::test(sst2).read_summary().get();
         summary& sst1_s = sstables::test(sst).get_summary();
@@ -177,7 +177,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
             });
         };
 
-        auto sst = env.make_sstable(s, 11, sstables::get_highest_sstable_version(), big);
+        auto sst = env.make_sstable(s, 11);
         write_memtable_to_sstable_for_test(*mt, sst).get();
         auto sstp = env.reusable_sst(s, 11).get();
         std::invoke([&] {
@@ -238,7 +238,7 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
         m.partition().apply_delete(*s, cp, tomb);
         mt->apply(std::move(m));
 
-        auto sst = env.make_sstable(s, 12, sstables::get_highest_sstable_version(), big);
+        auto sst = env.make_sstable(s, 12);
         write_memtable_to_sstable_for_test(*mt, sst).get();
         auto sstp = env.reusable_sst(s, 12).get();
         auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
@@ -271,7 +271,7 @@ static future<> sstable_compression_test(compressor_ptr c, unsigned generation) 
         m.partition().apply_delete(*s, cp, tomb);
         mtp->apply(std::move(m));
 
-        auto sst = env.make_sstable(s, generation, sstables::get_highest_sstable_version(), big);
+        auto sst = env.make_sstable(s, generation);
         write_memtable_to_sstable_for_test(*mtp, sst).get();
         auto sstp = env.reusable_sst(s, generation).get();
         auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
@@ -314,7 +314,7 @@ SEASTAR_TEST_CASE(datafile_generation_16) {
             mtp->apply(std::move(m));
         }
 
-        auto sst = env.make_sstable(s, 16, sstables::get_highest_sstable_version(), big);
+        auto sst = env.make_sstable(s, 16);
         write_memtable_to_sstable_for_test(*mtp, sst).get();
         env.reusable_sst(s, 16).get();
         // Not crashing is enough
@@ -346,7 +346,7 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
         m.set_clustered_cell(c_key, cl2, make_atomic_cell(bytes_type, bytes_type->decompose(data_value(to_bytes("cl2")))));
         mtp->apply(std::move(m));
 
-        auto sst = env.make_sstable(s, 37, sstables::get_highest_sstable_version(), big);
+        auto sst = env.make_sstable(s, 37);
         write_memtable_to_sstable_for_test(*mtp, sst).get();
         auto sstp = env.reusable_sst(s, 37).get();
         auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
@@ -377,7 +377,7 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
         m.set_clustered_cell(c_key, cl3, make_atomic_cell(bytes_type, bytes_type->decompose(data_value(to_bytes("cl3")))));
         mtp->apply(std::move(m));
 
-        auto sst = env.make_sstable(s, 38, sstables::get_highest_sstable_version(), big);
+        auto sst = env.make_sstable(s, 38);
         write_memtable_to_sstable_for_test(*mtp, sst).get();
         auto sstp = env.reusable_sst(s, 38).get();
         auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
@@ -409,7 +409,7 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
         m.set_clustered_cell(c_key, cl2, make_atomic_cell(bytes_type, bytes_type->decompose(data_value(to_bytes("cl2")))));
         mtp->apply(std::move(m));
 
-        auto sst = env.make_sstable(s, 39, sstables::get_highest_sstable_version(), big);
+        auto sst = env.make_sstable(s, 39);
         write_memtable_to_sstable_for_test(*mtp, sst).get();
         auto sstp = env.reusable_sst(s, 39).get();
         auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
@@ -438,7 +438,7 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
         m.partition().apply_delete(*s, std::move(c_key), tomb);
         mt->apply(std::move(m));
 
-        auto sst = env.make_sstable(s, 41, sstables::get_highest_sstable_version(), big);
+        auto sst = env.make_sstable(s, 41);
         write_memtable_to_sstable_for_test(*mt, sst).get();
         auto sstp = env.reusable_sst(s, 41).get();
         auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
@@ -468,7 +468,7 @@ SEASTAR_TEST_CASE(datafile_generation_47) {
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(utf8_type, bytes(512*1024, 'a')));
         mt->apply(std::move(m));
 
-        auto sst = env.make_sstable(s, 47, sstables::get_highest_sstable_version(), big);
+        auto sst = env.make_sstable(s, 47);
         write_memtable_to_sstable_for_test(*mt, sst).get();
         auto sstp = env.reusable_sst(s, 47).get();
         auto reader = sstable_reader_v2(sstp, s, env.make_reader_permit());
@@ -517,7 +517,7 @@ SEASTAR_TEST_CASE(test_counter_write) {
 
         mt->apply(m);
 
-        auto sst = env.make_sstable(s, 900, sstables::get_highest_sstable_version(), big);
+        auto sst = env.make_sstable(s, 900);
         write_memtable_to_sstable_for_test(*mt, sst).get();
 
         auto sstp = env.reusable_sst(s, 900).get0();
@@ -529,7 +529,7 @@ SEASTAR_TEST_CASE(test_counter_write) {
 
 static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_ptr& schema, int64_t gen,
         const partition_key& first_key, const partition_key& last_key, uint32_t level = 0) {
-    auto sst = env.make_sstable(schema, "", gen, la, big);
+    auto sst = env.make_sstable(schema, "", gen);
     sstables::test(sst).set_values_for_leveled_strategy(0, level, 0, first_key, last_key);
     return sst;
 }
@@ -2233,7 +2233,7 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
                 | boost::adaptors::transformed([&] (auto shard) { return mut(shard); }));
             auto sst_gen = [&env, s, gen, ignore_msb] () mutable {
                 auto schema = schema_builder(s).with_sharder(1, ignore_msb).build();
-                auto sst = env.make_sstable(std::move(schema), (*gen)++, sstables::get_highest_sstable_version(), big);
+                auto sst = env.make_sstable(std::move(schema), (*gen)++);
                 return sst;
             };
             auto sst = make_sstable_containing(sst_gen, std::move(muts));
@@ -2957,7 +2957,7 @@ SEASTAR_TEST_CASE(sstable_reader_with_timeout) {
             m.partition().apply_delete(*s, cp, tomb);
             mt->apply(std::move(m));
 
-            auto sst = env.make_sstable(s, 12, sstables::get_highest_sstable_version(), big);
+            auto sst = env.make_sstable(s, 12);
             write_memtable_to_sstable_for_test(*mt, sst).get();
             auto sstp = env.reusable_sst(s, 12).get0();
             auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));

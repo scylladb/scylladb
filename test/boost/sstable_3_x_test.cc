@@ -3035,8 +3035,7 @@ static flat_mutation_reader_v2 compacted_sstable_reader(test_env& env, schema_pt
 
     auto desc = sstables::compaction_descriptor(std::move(sstables), default_priority_class());
     desc.creator = [&] (shard_id dummy) {
-        compacted_sst = env.make_sstable(s, tmp.path().string(), new_generation,
-                         sstables::sstable_version_types::mc, sstable::format_types::big, 4096);
+        compacted_sst = env.make_sstable(s, new_generation);
         return compacted_sst;
     };
     desc.replacer = replacer_fn_no_op();
@@ -4588,7 +4587,7 @@ static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst, reader
 }
 
 shared_sstable make_test_sstable(test_env& env, schema_ptr schema, const sstring& table_name, int64_t gen = 1) {
-    return env.reusable_sst(schema, get_read_index_test_path(table_name), gen, sstable_version_types::mc).get0();
+    return env.reusable_sst(schema, get_read_index_test_path(table_name), gen).get0();
 }
 
 /*
