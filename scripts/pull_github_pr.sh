@@ -9,6 +9,13 @@
 
 set -e
 
+gh_hosts=~/.config/gh/hosts.yml
+
+if [[ ( -z "$GITHUB_LOGIN" || -z "$GITHUB_TOKEN" ) && -f "$gh_hosts" ]]; then
+	GITHUB_LOGIN=$(awk '/user:/ { print $2 }' "$gh_hosts")
+	GITHUB_TOKEN=$(awk '/oauth_token:/ { print $2 }' "$gh_hosts")
+fi
+
 if [[ $# != 1 ]]; then
 	echo Please provide a github pull request number
 	exit 1
@@ -20,6 +27,14 @@ for required in jq curl; do
 		exit 1
 	fi
 done
+
+curl() {
+    local opts=()
+    if [[ -n "$GITHUB_LOGIN" && -n "$GITHUB_TOKEN" ]]; then
+        opts+=(--user "${GITHUB_LOGIN}:${GITHUB_TOKEN}")
+    fi
+    command curl "${opts[@]}" "$@"
+}
 
 NL=$'\n'
 
