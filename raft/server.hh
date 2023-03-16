@@ -224,14 +224,19 @@ public:
     // of two servers iff their IDs are different.
     virtual void register_metrics() = 0;
 
+    // Returns true if this servers thinks that it is the leader.
+    // The information is only relevant for the current_term() only
+    virtual bool is_leader() = 0;
+
+    // The function should be called periodically to advance logical clock.
+    virtual void tick() = 0;
+
     // Ad hoc functions for testing
     virtual void wait_until_candidate() = 0;
     virtual future<> wait_election_done() = 0;
     virtual future<> wait_log_idx_term(std::pair<index_t, term_t> idx_log) = 0;
     virtual std::pair<index_t, term_t> log_last_idx_term() = 0;
     virtual void elapse_election() = 0;
-    virtual bool is_leader() = 0;
-    virtual void tick() = 0;
     // Server id of this server
     virtual raft::server_id id() const = 0;
     virtual void set_applier_queue_max_size(size_t queue_max_size) = 0;
