@@ -106,10 +106,10 @@ SEASTAR_TEST_CASE(datafile_generation_09) {
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
         mt->apply(std::move(m));
 
-        auto sst = env.make_sstable(s, 9);
+        auto sst = env.make_sstable(s);
 
         write_memtable_to_sstable_for_test(*mt, sst).get();
-        auto sst2 = env.make_sstable(s, 9);
+        auto sst2 = env.make_sstable(s, sst->generation().value());
 
         sstables::test(sst2).read_summary().get();
         summary& sst1_s = sstables::test(sst).get_summary();
@@ -177,7 +177,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
             });
         };
 
-        auto sst = env.make_sstable(s, 11);
+        auto sst = env.make_sstable(s);
         write_memtable_to_sstable_for_test(*mt, sst).get();
         auto sstp = env.reusable_sst(s, sst).get();
         std::invoke([&] {
@@ -238,7 +238,7 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
         m.partition().apply_delete(*s, cp, tomb);
         mt->apply(std::move(m));
 
-        auto sst = env.make_sstable(s, 12);
+        auto sst = env.make_sstable(s);
         write_memtable_to_sstable_for_test(*mt, sst).get();
         auto sstp = env.reusable_sst(s, sst).get();
         auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
@@ -314,7 +314,7 @@ SEASTAR_TEST_CASE(datafile_generation_16) {
             mtp->apply(std::move(m));
         }
 
-        auto sst = env.make_sstable(s, 16);
+        auto sst = env.make_sstable(s);
         write_memtable_to_sstable_for_test(*mtp, sst).get();
         env.reusable_sst(s, sst).get();
         // Not crashing is enough
@@ -346,7 +346,7 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
         m.set_clustered_cell(c_key, cl2, make_atomic_cell(bytes_type, bytes_type->decompose(data_value(to_bytes("cl2")))));
         mtp->apply(std::move(m));
 
-        auto sst = env.make_sstable(s, 37);
+        auto sst = env.make_sstable(s);
         write_memtable_to_sstable_for_test(*mtp, sst).get();
         auto sstp = env.reusable_sst(s, sst).get();
         auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
@@ -377,7 +377,7 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
         m.set_clustered_cell(c_key, cl3, make_atomic_cell(bytes_type, bytes_type->decompose(data_value(to_bytes("cl3")))));
         mtp->apply(std::move(m));
 
-        auto sst = env.make_sstable(s, 38);
+        auto sst = env.make_sstable(s);
         write_memtable_to_sstable_for_test(*mtp, sst).get();
         auto sstp = env.reusable_sst(s, sst).get();
         auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
@@ -409,7 +409,7 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
         m.set_clustered_cell(c_key, cl2, make_atomic_cell(bytes_type, bytes_type->decompose(data_value(to_bytes("cl2")))));
         mtp->apply(std::move(m));
 
-        auto sst = env.make_sstable(s, 39);
+        auto sst = env.make_sstable(s);
         write_memtable_to_sstable_for_test(*mtp, sst).get();
         auto sstp = env.reusable_sst(s, sst).get();
         auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
@@ -438,7 +438,7 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
         m.partition().apply_delete(*s, std::move(c_key), tomb);
         mt->apply(std::move(m));
 
-        auto sst = env.make_sstable(s, 41);
+        auto sst = env.make_sstable(s);
         write_memtable_to_sstable_for_test(*mt, sst).get();
         auto sstp = env.reusable_sst(s, sst).get();
         auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
@@ -468,7 +468,7 @@ SEASTAR_TEST_CASE(datafile_generation_47) {
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(utf8_type, bytes(512*1024, 'a')));
         mt->apply(std::move(m));
 
-        auto sst = env.make_sstable(s, 47);
+        auto sst = env.make_sstable(s);
         write_memtable_to_sstable_for_test(*mt, sst).get();
         auto sstp = env.reusable_sst(s, sst).get();
         auto reader = sstable_reader_v2(sstp, s, env.make_reader_permit());
@@ -517,7 +517,7 @@ SEASTAR_TEST_CASE(test_counter_write) {
 
         mt->apply(m);
 
-        auto sst = env.make_sstable(s, 900);
+        auto sst = env.make_sstable(s);
         write_memtable_to_sstable_for_test(*mt, sst).get();
 
         auto sstp = env.reusable_sst(s, sst).get0();
