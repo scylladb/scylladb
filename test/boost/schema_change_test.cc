@@ -1001,7 +1001,7 @@ SEASTAR_TEST_CASE(test_schema_make_reversed) {
 }
 
 SEASTAR_TEST_CASE(test_schema_get_reversed) {
-    return do_with_cql_env([this] (cql_test_env& e) {
+    return do_with_cql_env([] (cql_test_env& e) {
         auto schema = schema_builder("ks", get_name())
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck", bytes_type, column_kind::clustering_key)

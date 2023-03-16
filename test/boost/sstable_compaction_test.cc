@@ -2075,8 +2075,8 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
     db_cfg.enable_cache(false);
     db_cfg.enable_commitlog(false);
 
-    return do_with_cql_env([this] (cql_test_env& cql_env) -> future<> {
-        return test_env::do_with_async([this] (test_env& env) {
+    return do_with_cql_env([] (cql_test_env& cql_env) -> future<> {
+        return test_env::do_with_async([] (test_env& env) {
             auto schema = schema_builder("ks", get_name())
                     .with_column("pk", utf8_type, column_kind::partition_key)
                     .with_column("ck", int32_type, column_kind::clustering_key)
@@ -2268,8 +2268,8 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
     db_cfg.enable_cache(false);
     db_cfg.enable_commitlog(false);
 
-    return do_with_cql_env([this] (cql_test_env& cql_env) -> future<> {
-        return test_env::do_with_async([this] (test_env& env) {
+    return do_with_cql_env([] (cql_test_env& cql_env) -> future<> {
+        return test_env::do_with_async([] (test_env& env) {
             auto schema = schema_builder("ks", get_name())
                     .with_column("pk", utf8_type, column_kind::partition_key)
                     .with_column("ck", int32_type, column_kind::clustering_key)
@@ -2357,8 +2357,8 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
     db_cfg.enable_cache(false);
     db_cfg.enable_commitlog(false);
 
-    return do_with_cql_env([this] (cql_test_env& cql_env) -> future<> {
-        return test_env::do_with_async([this] (test_env& env) {
+    return do_with_cql_env([] (cql_test_env& cql_env) -> future<> {
+        return test_env::do_with_async([] (test_env& env) {
             auto schema = schema_builder("ks", get_name())
                     .with_column("pk", utf8_type, column_kind::partition_key)
                     .with_column("ck", int32_type, column_kind::clustering_key)
@@ -2463,8 +2463,8 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
         sstables::compaction_type_options::scrub::quarantine_mode::only,
     };
     for (auto qmode : quarantine_modes) {
-        co_await do_with_cql_env([this, qmode] (cql_test_env& cql_env) {
-            return test_env::do_with_async([this, qmode] (test_env& env) {
+        co_await do_with_cql_env([qmode] (cql_test_env& cql_env) {
+            return test_env::do_with_async([qmode] (test_env& env) {
                 auto schema = schema_builder("ks", get_name())
                         .with_column("pk", utf8_type, column_kind::partition_key)
                         .with_column("ck", int32_type, column_kind::clustering_key)
