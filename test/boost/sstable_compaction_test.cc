@@ -1191,31 +1191,30 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
         write_memtable_to_sstable_for_test(*mt, sst).get();
         auto sstp = env.reusable_sst(s, 51).get();
         auto key = key_for_this_shard[0];
-        // FIXME: indentation
-            auto new_tables = make_lw_shared<std::vector<sstables::shared_sstable>>();
-            auto creator = [&env, new_tables, s] {
-                auto sst = env.make_sstable(s, 52, sstables::get_highest_sstable_version(), big);
-                new_tables->emplace_back(sst);
-                return sst;
-            };
-            auto cf = make_lw_shared<table_for_tests>(env.manager(), s);
-            auto stop_cf = deferred_stop(*cf);
-            std::vector<shared_sstable> sstables;
-            sstables.push_back(std::move(sstp));
+        auto new_tables = make_lw_shared<std::vector<sstables::shared_sstable>>();
+        auto creator = [&env, new_tables, s] {
+            auto sst = env.make_sstable(s, 52, sstables::get_highest_sstable_version(), big);
+            new_tables->emplace_back(sst);
+            return sst;
+        };
+        auto cf = make_lw_shared<table_for_tests>(env.manager(), s);
+        auto stop_cf = deferred_stop(*cf);
+        std::vector<shared_sstable> sstables;
+        sstables.push_back(std::move(sstp));
 
-            compact_sstables(sstables::compaction_descriptor(std::move(sstables), default_priority_class()), *cf, creator).get();
-                BOOST_REQUIRE(new_tables->size() == 1);
-                auto newsst = (*new_tables)[0];
-                BOOST_REQUIRE(generation_value(newsst->generation()) == 52);
-                auto reader = make_lw_shared<flat_mutation_reader_v2>(sstable_reader(newsst, s, env.make_reader_permit()));
-                auto close_reader = deferred_close(*reader);
-                auto m = (*reader)().get();
-                    BOOST_REQUIRE(m);
-                    BOOST_REQUIRE(m->is_partition_start());
-                    BOOST_REQUIRE(m->as_partition_start().key().equal(*s, key));
-                    reader->next_partition().get();
-                m = (*reader)().get();
-                    BOOST_REQUIRE(!m);
+        compact_sstables(sstables::compaction_descriptor(std::move(sstables), default_priority_class()), *cf, creator).get();
+        BOOST_REQUIRE(new_tables->size() == 1);
+        auto newsst = (*new_tables)[0];
+        BOOST_REQUIRE(generation_value(newsst->generation()) == 52);
+        auto reader = make_lw_shared<flat_mutation_reader_v2>(sstable_reader(newsst, s, env.make_reader_permit()));
+        auto close_reader = deferred_close(*reader);
+        auto m = (*reader)().get();
+        BOOST_REQUIRE(m);
+        BOOST_REQUIRE(m->is_partition_start());
+        BOOST_REQUIRE(m->as_partition_start().key().equal(*s, key));
+        reader->next_partition().get();
+        m = (*reader)().get();
+        BOOST_REQUIRE(!m);
     });
 }
 
