@@ -3843,7 +3843,6 @@ static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
     auto engine = std::mt19937(seed);
     std::bernoulli_distribution dist(0.9);
 
-    int64_t gen = 0;
     for (int run = 0; run < 100; ++run) {
         auto scenario = g.generate_scenario(engine);
 
@@ -3858,13 +3857,14 @@ static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
         time_series_sstable_set sst_set(table_schema);
         mutation merged(table_schema, g._pk);
         std::unordered_set<int64_t> included_gens;
+        auto sst_factory = [&env, table_schema] () {
+            return env.make_sstable(std::move(table_schema));
+        };
         for (auto& mb: scenario.readers_data) {
-            auto sst_factory = [table_schema, &env, gen = ++gen] () {
-                return env.make_sstable(std::move(table_schema), gen);
-            };
-
+            sstables::shared_sstable sst;
             if (mb.m) {
-                sst_set.insert(make_sstable_containing(std::move(sst_factory), {*mb.m}));
+                sst = make_sstable_containing(sst_factory, {*mb.m});
+                sst_set.insert(sst);
             } else {
                 // We want to have an sstable that won't return any fragments when we query it
                 // for our partition (not even `partition_start`). For that we create an sstable
@@ -3872,11 +3872,12 @@ static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
                 auto pk = pkeys[1];
                 assert(!pk.equal(*g._s, g._pk));
 
-                sst_set.insert(make_sstable_containing(std::move(sst_factory), {mutation(table_schema, pk)}));
+                sst = make_sstable_containing(sst_factory, {mutation(table_schema, pk)});
+                sst_set.insert(sst);
             }
 
             if (dist(engine)) {
-                included_gens.insert(gen);
+                included_gens.insert(sst->generation().value());
                 if (mb.m) {
                     merged += *mb.m;
                 }
