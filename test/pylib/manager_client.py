@@ -150,7 +150,7 @@ class ManagerClient():
         await self.client.get_text(f"/cluster/server/{server_id}/restart")
         self._driver_update()
 
-    async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None) -> ServerInfo:
+    async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None, config: Optional[dict[str, str]] = None) -> ServerInfo:
         """Add a new server"""
         try:
             data: dict[str, Any] = {}
@@ -158,6 +158,8 @@ class ManagerClient():
                 data['replace_cfg'] = replace_cfg._asdict()
             if cmdline:
                 data['cmdline'] = cmdline
+            if config:
+                data['config'] = config
             server_info = await self.client.put_json("/cluster/addserver", data, response_type="json",
                                                      timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         except Exception as exc:
