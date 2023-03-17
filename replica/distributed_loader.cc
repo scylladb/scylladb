@@ -726,6 +726,16 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
     co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data() | boost::adaptors::map_values, [&] (schema_ptr s) -> future<> {
         auto uuid = s->id();
         lw_shared_ptr<replica::column_family> cf = column_families[uuid];
+
+        // System tables (from system and system_schema keyspaces) are loaded in two phases.
+        // The populate_keyspace function can be called in the second phase for tables that
+        // were already populated in the first phase.
+        // This check protects from double-populating them, since every populated cf
+        // is marked as ready_for_writes.
+        if (cf->is_ready_for_writes()) {
+            co_return;
+        }
+
         sstring cfname = cf->schema()->cf_name();
         auto sstdir = ks.column_family_directory(ksdir, cfname, uuid);
         dblog.info("Keyspace {}: Reading CF {} id={} version={}", ks_name, cfname, uuid, s->version());
@@ -760,34 +770,37 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
     });
 }
 
-future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& sys_ks, distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<service::raft_group_registry>& raft_gr, db::config& cfg, db::table_selector& tables) {
+future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& sys_ks, distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<service::raft_group_registry>& raft_gr, db::config& cfg, system_table_load_phase phase) {
     population_started = true;
 
-    return seastar::async([&sys_ks, &db, &ss, &cfg, &g, &raft_gr, &tables] {
-        sys_ks.invoke_on_all([&db, &ss, &cfg, &g, &raft_gr, &tables] (auto& sys_ks) {
-            return sys_ks.make(db, ss, g, raft_gr, cfg, tables);
+    return seastar::async([&sys_ks, &db, &ss, &cfg, &g, &raft_gr, phase] {
+        sys_ks.invoke_on_all([&db, &ss, &cfg, &g, &raft_gr, phase] (auto& sys_ks) {
+            return sys_ks.make(db, ss, g, raft_gr, cfg, phase);
         }).get();
 
         const auto& cfg = db.local().get_config();
         for (auto& data_dir : cfg.data_file_directories()) {
             for (auto ksname : system_keyspaces) {
-                if (!tables.contains_keyspace(ksname)) {
-                    continue;
+                if (db.local().has_keyspace(ksname)) {
+                    distributed_loader::populate_keyspace(db, data_dir, sstring(ksname)).get();
                 }
-                distributed_loader::populate_keyspace(db, data_dir, sstring(ksname)).get();
             }
         }
 
-        db.invoke_on_all([&tables] (replica::database& db) {
+        db.invoke_on_all([] (replica::database& db) {
             for (auto ksname : system_keyspaces) {
-                if (!tables.contains_keyspace(ksname)) {
+                if (!db.has_keyspace(ksname)) {
                     continue;
                 }
                 auto& ks = db.find_keyspace(ksname);
                 for (auto& pair : ks.metadata()->cf_meta_data()) {
                     auto cfm = pair.second;
                     auto& cf = db.find_column_family(cfm);
-                    cf.mark_ready_for_writes();
+                    // During phase2 some tables may have already been
+                    // marked as 'ready for writes' at phase1.
+                    if (!cf.is_ready_for_writes()) {
+                        cf.mark_ready_for_writes();
+                    }
                 }
             }
             return make_ready_future<>();

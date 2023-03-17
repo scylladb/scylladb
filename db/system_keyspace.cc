@@ -1365,44 +1365,9 @@ struct truncation_record {
     db_clock::time_point time_stamp;
 };
 
-table_selector& table_selector::all() {
-    class all_selector : public table_selector {
-    public:
-        bool contains(const schema_ptr&) override {
-            return true;
-        }
-
-        bool contains_keyspace(std::string_view) override {
-            return true;
-        }
-    };
-    static all_selector instance;
-    return instance;
-}
-
-std::unique_ptr<table_selector> table_selector::all_in_keyspace(sstring name) {
-    class keyspace_selector : public table_selector {
-        sstring _name;
-    public:
-        keyspace_selector(sstring name) : _name(std::move(name)) {}
-
-        bool contains(const schema_ptr& s) override {
-            return s->ks_name() == _name;
-        }
-
-        bool contains_keyspace(std::string_view name) override {
-            return name == _name;
-        }
-    };
-    return std::make_unique<keyspace_selector>(name);
-}
-
 }
 
 namespace db {
-
-typedef utils::UUID truncation_key;
-typedef std::unordered_map<truncation_key, truncation_record> truncation_map;
 
 future<truncation_record> system_keyspace::get_truncation_record(table_id cf_id) {
     if (_db.local().get_config().ignore_truncation_record.is_set()) {
@@ -2848,8 +2813,8 @@ static bool maybe_write_in_user_memory(schema_ptr s) {
             || s == system_keyspace::raft();
 }
 
-future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, distributed<service::raft_group_registry>& dist_raft_gr, db::config& cfg, table_selector& tables) {
-    if (tables.contains_keyspace(system_keyspace::NAME)) {
+future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, distributed<service::raft_group_registry>& dist_raft_gr, db::config& cfg, system_table_load_phase phase) {
+    if (phase == system_table_load_phase::phase1) {
         register_virtual_tables(dist_db, dist_ss, dist_gossiper, dist_raft_gr, cfg);
     }
 
@@ -2857,7 +2822,7 @@ future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::
     auto& db_config = db.get_config();
     bool durable = db_config.data_file_directories().size() > 0;
     for (auto&& table : system_keyspace::all_tables(db_config)) {
-        if (!tables.contains(table)) {
+        if (table->static_props().load_phase != phase) {
             continue;
         }
         auto ks_name = table->ks_name();
@@ -2880,13 +2845,13 @@ future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::
         db.add_column_family(ks, table, std::move(cfg));
     }
 
-    if (tables.contains_keyspace(system_keyspace::NAME)) {
+    if (phase == system_table_load_phase::phase1) {
         install_virtual_readers(sys_ks, db);
     }
 }
 
-future<> system_keyspace::make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, distributed<service::raft_group_registry>& raft_gr, db::config& cfg, table_selector& tables) {
-    return system_keyspace_make(*this, db, ss, g, raft_gr, cfg, tables);
+future<> system_keyspace::make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, distributed<service::raft_group_registry>& raft_gr, db::config& cfg, system_table_load_phase phase) {
+    return system_keyspace_make(*this, db, ss, g, raft_gr, cfg, phase);
 }
 
 future<locator::host_id> system_keyspace::load_local_host_id() {
