@@ -2398,7 +2398,7 @@ static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sst
                 throw malformed_sstable_exception(seastar::format("invalid path for file {}: {}. Path doesn't match known pattern.", fname, sstdir));
             }
         }
-        version = from_string(match[1].str());
+        version = version_from_string(match[1].str());
         generation = match[2].str();
         format = sstring(match[3].str());
         component = sstring(match[4].str());

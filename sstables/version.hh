@@ -57,25 +57,6 @@ inline auto get_highest_sstable_version() {
     return all_sstable_versions[all_sstable_versions.size() - 1];
 }
 
-inline sstable_version_types from_string(const seastar::sstring& format) {
-    if (format == "ka") {
-        return sstable_version_types::ka;
-    }
-    if (format == "la") {
-        return sstable_version_types::la;
-    }
-    if (format == "mc") {
-        return sstable_version_types::mc;
-    }
-    if (format == "md") {
-        return sstable_version_types::md;
-    }
-    if (format == "me") {
-        return sstable_version_types::me;
-    }
-    throw std::invalid_argument("Wrong sstable format name: " + format);
-}
-
 sstable_version_types version_from_string(std::string_view s);
 sstable_format_types format_from_string(std::string_view s);
 

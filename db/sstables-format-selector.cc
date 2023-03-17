@@ -63,7 +63,7 @@ future<> sstables_format_selector::stop() {
 future<> sstables_format_selector::read_sstables_format() {
     std::optional<sstring> format_opt = co_await db::system_keyspace::get_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME);
     if (format_opt) {
-        sstables::sstable_version_types format = sstables::from_string(*format_opt);
+        sstables::sstable_version_types format = sstables::version_from_string(*format_opt);
         co_await select_format(format);
     }
 }
