@@ -76,6 +76,9 @@ inline sstable_version_types from_string(const seastar::sstring& format) {
     throw std::invalid_argument("Wrong sstable format name: " + format);
 }
 
+sstable_version_types version_from_string(std::string_view s);
+sstable_format_types format_from_string(std::string_view s);
+
 extern const std::unordered_map<sstable_version_types, seastar::sstring, seastar::enum_hash<sstable_version_types>> version_string;
 extern const std::unordered_map<sstable_format_types, seastar::sstring, seastar::enum_hash<sstable_format_types>> format_string;
 

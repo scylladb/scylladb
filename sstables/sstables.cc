@@ -202,8 +202,9 @@ const std::unordered_map<sstable_format_types, sstring, enum_hash<sstable_format
 // This assumes that the mappings are small enough, and called unfrequent
 // enough.  If that changes, it would be adviseable to create a full static
 // reverse mapping, even if it is done at runtime.
-template <typename Map>
-static typename Map::key_type reverse_map(const typename Map::mapped_type& v, const Map& map) {
+template <typename Map, typename Value>
+requires std::equality_comparable_with<typename Map::mapped_type, Value>
+static typename Map::key_type reverse_map(const Value& v, const Map& map) {
     for (auto& [key, value]: map) {
         if (value == v) {
             return key;
@@ -2413,7 +2414,7 @@ static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sst
     } else {
         throw malformed_sstable_exception(seastar::format("invalid version for file {}. Name doesn't match any known version.", fname));
     }
-    return entry_descriptor(sstdir, ks, cf, generation_from_value(boost::lexical_cast<unsigned long>(generation)), version, sstable::format_from_sstring(format), sstable::component_from_sstring(version, component));
+    return entry_descriptor(sstdir, ks, cf, generation_from_value(boost::lexical_cast<unsigned long>(generation)), version, format_from_string(format), sstable::component_from_sstring(version, component));
 }
 
 entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname) {
@@ -2424,19 +2425,19 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
     return make_entry_descriptor(std::move(sstdir), std::move(fname), &ks, &cf);
 }
 
-sstable::version_types sstable::version_from_sstring(const sstring &s) {
+sstable_version_types version_from_string(std::string_view s) {
     try {
         return reverse_map(s, version_string);
     } catch (std::out_of_range&) {
-        throw std::out_of_range(seastar::format("Unknown sstable version: {}", s.c_str()));
+        throw std::out_of_range(seastar::format("Unknown sstable version: {}", s));
     }
 }
 
-sstable::format_types sstable::format_from_sstring(const sstring &s) {
+sstable_format_types format_from_string(std::string_view s) {
     try {
         return reverse_map(s, format_string);
     } catch (std::out_of_range&) {
-        throw std::out_of_range(seastar::format("Unknown sstable format: {}", s.c_str()));
+        throw std::out_of_range(seastar::format("Unknown sstable format: {}", s));
     }
 }
 
