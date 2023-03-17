@@ -34,6 +34,9 @@ add_scylla_test(compress_test
 add_scylla_test(cql_auth_syntax_test
   KIND BOOST
   LIBRARIES cql3)
+add_scylla_test(cql_query_test
+  KIND SEASTAR
+  LIBRARIES cql3)
 add_scylla_test(crc_test
   KIND BOOST)
 add_scylla_test(data_listeners_test

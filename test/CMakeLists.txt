@@ -41,6 +41,8 @@ add_subdirectory(perf)
 #   seastar test framework.
 # * BOOST - a unit test that only depends on the listed sources and the
 #   Boost test framework
+# * UNIT - a test driven its own main(). and it depends on the
+#   seastar test framework.
 # test_name should map to a source file, such that ${test_name}.cc
 # is a valid source file. If this isn't the case, please use the SOURCE
 # param.
@@ -82,6 +84,12 @@ function(add_scylla_test name)
       PRIVATE
         Boost::unit_test_framework
         Boost::dynamic_linking)
+  elseif(kind STREQUAL "UNIT")
+    target_link_libraries(${name}
+      PRIVATE
+        Seastar::seastar_testing)
+  else()
+    message(FATAL_ERROR "unknown test KIND: ${kind}")
   endif()
   if(parsed_args_LIBRARIES)
     target_link_libraries(${name}
@@ -92,4 +100,6 @@ endfunction()
 
 if(BUILD_TESTING)
     add_subdirectory(boost)
+    add_subdirectory(manual)
+    add_subdirectory(unit)
 endif()
