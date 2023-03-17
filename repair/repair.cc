@@ -63,7 +63,7 @@ void node_ops_info::check_abort() {
     }
 }
 
-node_ops_metrics::node_ops_metrics(shared_ptr<repair::repair_module> module)
+node_ops_metrics::node_ops_metrics(shared_ptr<repair::task_manager_module> module)
     : _module(module)
 {
     namespace sm = seastar::metrics;
@@ -349,7 +349,7 @@ float node_ops_metrics::repair_finished_percentage() {
     return _module->report_progress(streaming::stream_reason::repair);
 }
 
-repair::repair_module::repair_module(tasks::task_manager& tm, repair_service& rs, size_t max_repair_memory) noexcept
+repair::task_manager_module::task_manager_module(tasks::task_manager& tm, repair_service& rs, size_t max_repair_memory) noexcept
     : tasks::task_manager::module(tm, "repair")
     , _rs(rs)
     , _range_parallelism_semaphore(std::max(size_t(1), size_t(max_repair_memory / max_repair_memory_per_range / 4)),
@@ -360,12 +360,12 @@ repair::repair_module::repair_module(tasks::task_manager& tm, repair_service& rs
         max_repair_memory, max_repair_memory_per_range, nr);
 }
 
-void repair::repair_module::start(repair_uniq_id id) {
+void repair::task_manager_module::start(repair_uniq_id id) {
     _pending_repairs.insert(id.uuid());
     _status[id.id] = repair_status::RUNNING;
 }
 
-void repair::repair_module::done(repair_uniq_id id, bool succeeded) {
+void repair::task_manager_module::done(repair_uniq_id id, bool succeeded) {
     _pending_repairs.erase(id.uuid());
     _aborted_pending_repairs.erase(id.uuid());
     if (succeeded) {
@@ -376,7 +376,7 @@ void repair::repair_module::done(repair_uniq_id id, bool succeeded) {
     _done_cond.broadcast();
 }
 
-repair_status repair::repair_module::get(int id) const {
+repair_status repair::task_manager_module::get(int id) const {
     if (std::cmp_greater(id, _sequence_number)) {
         throw std::runtime_error(format("unknown repair id {}", id));
     }
@@ -388,7 +388,7 @@ repair_status repair::repair_module::get(int id) const {
     }
 }
 
-future<repair_status> repair::repair_module::repair_await_completion(int id, std::chrono::steady_clock::time_point timeout) {
+future<repair_status> repair::task_manager_module::repair_await_completion(int id, std::chrono::steady_clock::time_point timeout) {
     return seastar::with_gate(async_gate(), [this, id, timeout] {
         if (std::cmp_greater(id, _sequence_number)) {
             return make_exception_future<repair_status>(std::runtime_error(format("unknown repair id {}", id)));
@@ -412,19 +412,19 @@ future<repair_status> repair::repair_module::repair_await_completion(int id, std
     });
 }
 
-void repair::repair_module::check_in_shutdown() {
+void repair::task_manager_module::check_in_shutdown() {
     abort_source().check();
 }
 
-void repair::repair_module::add_shard_task_id(int id, tasks::task_id uuid) {
+void repair::task_manager_module::add_shard_task_id(int id, tasks::task_id uuid) {
     _repairs.emplace(id, uuid);
 }
 
-void repair::repair_module::remove_shard_task_id(int id) {
+void repair::task_manager_module::remove_shard_task_id(int id) {
     _repairs.erase(id);
 }
 
-tasks::task_manager::task_ptr repair::repair_module::get_shard_task_ptr(int id) {
+tasks::task_manager::task_ptr repair::task_manager_module::get_shard_task_ptr(int id) {
     auto it = _repairs.find(id);
     if (it != _repairs.end()) {
         auto task_it = _tasks.find(it->second);
@@ -435,7 +435,7 @@ tasks::task_manager::task_ptr repair::repair_module::get_shard_task_ptr(int id) 
     return {};
 }
 
-std::vector<int> repair::repair_module::get_active() const {
+std::vector<int> repair::task_manager_module::get_active() const {
     std::vector<int> res;
     boost::push_back(res, _status | boost::adaptors::filtered([] (auto& x) {
         return x.second == repair_status::RUNNING;
@@ -443,7 +443,7 @@ std::vector<int> repair::repair_module::get_active() const {
     return res;
 }
 
-size_t repair::repair_module::nr_running_repair_jobs() {
+size_t repair::task_manager_module::nr_running_repair_jobs() {
     size_t count = 0;
     if (this_shard_id() != 0) {
         return count;
@@ -457,11 +457,11 @@ size_t repair::repair_module::nr_running_repair_jobs() {
     return count;
 }
 
-bool repair::repair_module::is_aborted(const tasks::task_id& uuid) {
+bool repair::task_manager_module::is_aborted(const tasks::task_id& uuid) {
     return _aborted_pending_repairs.contains(uuid);
 }
 
-void repair::repair_module::abort_all_repairs() {
+void repair::task_manager_module::abort_all_repairs() {
     _aborted_pending_repairs = _pending_repairs;
     for (auto& x : _repairs) {
         auto it = _tasks.find(x.second);
@@ -474,7 +474,7 @@ void repair::repair_module::abort_all_repairs() {
     rlogger.info0("Aborted {} repair job(s), aborted={}", _aborted_pending_repairs.size(), _aborted_pending_repairs);
 }
 
-float repair::repair_module::report_progress(streaming::stream_reason reason) {
+float repair::task_manager_module::report_progress(streaming::stream_reason reason) {
     uint64_t nr_ranges_finished = 0;
     uint64_t nr_ranges_total = 0;
     for (auto& x : _repairs) {
@@ -490,11 +490,11 @@ float repair::repair_module::report_progress(streaming::stream_reason reason) {
     return nr_ranges_total == 0 ? 1 : float(nr_ranges_finished) / float(nr_ranges_total);
 }
 
-named_semaphore& repair::repair_module::range_parallelism_semaphore() {
+named_semaphore& repair::task_manager_module::range_parallelism_semaphore() {
     return _range_parallelism_semaphore;
 }
 
-future<> repair::repair_module::run(repair_uniq_id id, std::function<void ()> func) {
+future<> repair::task_manager_module::run(repair_uniq_id id, std::function<void ()> func) {
     return seastar::with_gate(async_gate(), [this, id, func = std::move(func)] () mutable {
         start(id);
         return seastar::async([func = std::move(func)] { func(); }).then([this, id] {
@@ -1109,7 +1109,7 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
 }
 
 future<> repair::user_requested_repair_task_impl::run() {
-    auto module = dynamic_pointer_cast<repair::repair_module>(_module);
+    auto module = dynamic_pointer_cast<repair::task_manager_module>(_module);
     auto& rs = module->get_repair_service();
     auto& sharded_db = rs.get_db();
     auto& db = sharded_db.local();
@@ -1294,7 +1294,7 @@ future<> repair_service::sync_data_using_repair(
 }
 
 future<> repair::data_sync_repair_task_impl::run() {
-    auto module = dynamic_pointer_cast<repair::repair_module>(_module);
+    auto module = dynamic_pointer_cast<repair::task_manager_module>(_module);
     auto& rs = module->get_repair_service();
     auto& keyspace = _status.keyspace;
     auto& sharded_db = rs.get_db();

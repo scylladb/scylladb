@@ -165,12 +165,12 @@ protected:
     future<> run() override;
 };
 
-// The repair_module tracks ongoing repair operations and their progress.
+// The repair::task_manager_module tracks ongoing repair operations and their progress.
 // A repair which has already finished successfully is dropped from this
 // table, but a failed repair will remain in the table forever so it can
 // be queried about more than once (FIXME: reconsider this. But note that
 // failed repairs should be rare anwyay).
-class repair_module : public tasks::task_manager::module {
+class task_manager_module : public tasks::task_manager::module {
 private:
     repair_service& _rs;
     // Note that there are no "SUCCESSFUL" entries in the "status" map:
@@ -190,7 +190,7 @@ private:
 public:
     static constexpr size_t max_repair_memory_per_range = 32 * 1024 * 1024;
 
-    repair_module(tasks::task_manager& tm, repair_service& rs, size_t max_repair_memory) noexcept;
+    task_manager_module(tasks::task_manager& tm, repair_service& rs, size_t max_repair_memory) noexcept;
 
     repair_service& get_repair_service() noexcept {
         return _rs;

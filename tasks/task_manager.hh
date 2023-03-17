@@ -22,7 +22,7 @@
 #include "utils/updateable_value.hh"
 
 namespace repair {
-class repair_module;
+class task_manager_module;
 }
 
 namespace tasks {
@@ -148,7 +148,7 @@ public:
         const foreign_task_vector& get_children() const noexcept;
 
         friend class test_task;
-        friend class ::repair::repair_module;
+        friend class ::repair::task_manager_module;
     };
 
     class module : public enable_shared_from_this<module> {

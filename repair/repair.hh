@@ -34,7 +34,7 @@
 
 namespace tasks {
 namespace repair {
-class repair_module;
+class task_manager_module;
 }
 }
 
