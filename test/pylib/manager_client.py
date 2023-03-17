@@ -151,10 +151,10 @@ class ManagerClient():
         await self.client.get_text(f"/cluster/server/{server_id}/restart")
         self._driver_update()
 
-    async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None, config: Optional[dict[str, str]] = None) -> ServerInfo:
+    async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None, config: Optional[dict[str, str]] = None, start: bool = True) -> ServerInfo:
         """Add a new server"""
         try:
-            data: dict[str, Any] = {}
+            data: dict[str, Any] = {'start': start}
             if replace_cfg:
                 data['replace_cfg'] = replace_cfg._asdict()
             if cmdline:
