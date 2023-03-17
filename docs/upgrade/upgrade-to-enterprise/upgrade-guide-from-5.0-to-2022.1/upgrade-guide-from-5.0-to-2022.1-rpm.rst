@@ -109,7 +109,7 @@ A new io.conf format was introduced in ScyllaDB 2.3 and 2019.1. If your io.conf 
 
 .. code:: sh
 
-   sudo systemctl start scylla-enterprise-server
+   sudo systemctl start scylla-server
 
 Validate
 --------
