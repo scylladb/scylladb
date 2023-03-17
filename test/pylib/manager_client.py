@@ -138,10 +138,11 @@ class ManagerClient():
         logger.debug("ManagerClient stopping gracefully %s", server_id)
         await self.client.get_text(f"/cluster/server/{server_id}/stop_gracefully")
 
-    async def server_start(self, server_id: ServerNum) -> None:
+    async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None) -> None:
         """Start specified server"""
         logger.debug("ManagerClient starting %s", server_id)
-        await self.client.get_text(f"/cluster/server/{server_id}/start")
+        params = {'expected_error': expected_error} if expected_error is not None else None
+        await self.client.get_text(f"/cluster/server/{server_id}/start", params=params)
         self._driver_update()
 
     async def server_restart(self, server_id: ServerNum) -> None:
