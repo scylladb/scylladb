@@ -379,7 +379,7 @@ class ScyllaServer:
             return False
         # Any other exception may indicate a problem, and is passed to the caller.
 
-    async def start(self, api: ScyllaRESTAPIClient) -> None:
+    async def start(self, api: ScyllaRESTAPIClient, expected_error: Optional[str] = None) -> None:
         """Start an installed server. May be used for restarts."""
 
         env = os.environ.copy()
@@ -402,6 +402,8 @@ class ScyllaServer:
             message += f", server_id {self.server_id}, IP {self.ip_addr}, workdir {self.workdir.name}"
             message += f", host_id {self.host_id if hasattr(self, 'host_id') else '<missing>'}"
             message += f", cql [{'connected' if cql_up_state == CqlUpState.CONNECTED else 'not connected'}]"
+            if expected_error is not None:
+                message += f", the node log was expected to contain the string [{expected_error}]"
             self.logger.error(message)
             self.logger.error("last line of %s:", self.log_filename)
             with self.log_filename.open('r') as log_file:
@@ -419,11 +421,19 @@ class ScyllaServer:
         while time.time() < self.start_time + self.TOPOLOGY_TIMEOUT:
             if self.cmd.returncode:
                 self.cmd = None
+                if expected_error is not None:
+                    with self.log_filename.open('r') as log_file:
+                        for line in log_file.readlines():
+                            if expected_error in line:
+                                return
+                        report_error("the node startup failed, but the log file doesn't contain the expected error")
                 report_error("failed to start the node")
 
             if hasattr(self, "host_id") or await self.get_host_id(api):
                 cql_up_state = await self.cql_is_up()
                 if cql_up_state == CqlUpState.QUERIED:
+                    if expected_error is not None:
+                        report_error("the node started, but was expected to fail with the expected error")
                     return
 
             # Sleep and retry
@@ -795,7 +805,7 @@ class ScyllaCluster:
         self.logger.debug("Cluster %s marking server %s as removed", self, server_id)
         self.removed.add(server_id)
 
-    async def server_start(self, server_id: ServerNum) -> ActionReturn:
+    async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None) -> ActionReturn:
         """Start a stopped server"""
         if server_id in self.running:
             return ScyllaCluster.ActionReturn(success=True,
@@ -810,7 +820,10 @@ class ScyllaCluster:
         # Put the server in `running` before starting it.
         # Starting may fail and if we didn't add it now it might leak.
         self.running[server_id] = server
-        await server.start(self.api)
+        await server.start(self.api, expected_error)
+        if expected_error is not None:
+            self.running.pop(server_id)
+            self.stopped[server_id] = server
         return ScyllaCluster.ActionReturn(success=True, msg=f"{server} started")
 
     async def server_restart(self, server_id: ServerNum) -> ActionReturn:
@@ -1067,7 +1080,8 @@ class ScyllaClusterManager:
         """Start a specified server (must be stopped)"""
         assert self.cluster
         server_id = ServerNum(int(request.match_info["server_id"]))
-        ret = await self.cluster.server_start(server_id)
+        expected_error = request.query.get("expected_error")
+        ret = await self.cluster.server_start(server_id, expected_error)
         return aiohttp.web.Response(status=200 if ret[0] else 500, text=ret[1])
 
     async def _cluster_server_restart(self, request) -> aiohttp.web.Response:
