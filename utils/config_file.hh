@@ -156,7 +156,7 @@ public:
         std::vector<T> _allowed_values;
     protected:
         updateable_value_source<T>& the_value() {
-            any_value* av =_cf->_per_shard_values[_cf->s_shard_id][_per_shard_values_offset].get();
+            any_value* av = _cf->_per_shard_values[_cf->s_shard_id][_per_shard_values_offset].get();
             return static_cast<the_value_type*>(av)->value;
         }
         const updateable_value_source<T>& the_value() const {
