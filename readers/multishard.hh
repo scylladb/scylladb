@@ -97,7 +97,8 @@ public:
     /// `semaphore()`.
     ///
     /// This method will be called on the shard where the relevant reader lives.
-    virtual future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout) = 0;
+    virtual future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout,
+            tracing::trace_state_ptr trace_ptr) = 0;
 };
 
 /// Make a multishard_combining_reader.

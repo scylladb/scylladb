@@ -1521,7 +1521,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
         if (querier_opt) {
             f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), read_func));
         } else {
-            f = co_await coroutine::as_future(semaphore.with_permit(s.get(), "data-query", cf.estimate_read_memory_cost(), timeout, read_func));
+            f = co_await coroutine::as_future(semaphore.with_permit(s.get(), "data-query", cf.estimate_read_memory_cost(), timeout, trace_state, read_func));
         }
 
         if (!f.failed()) {
@@ -1587,7 +1587,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
         if (querier_opt) {
             f = co_await coroutine::as_future(semaphore.with_ready_permit(querier_opt->permit(), read_func));
         } else {
-            f = co_await coroutine::as_future(semaphore.with_permit(s.get(), "mutation-query", cf.estimate_read_memory_cost(), timeout, read_func));
+            f = co_await coroutine::as_future(semaphore.with_permit(s.get(), "mutation-query", cf.estimate_read_memory_cost(), timeout, trace_state, read_func));
         }
 
         if (!f.failed()) {
@@ -1636,12 +1636,12 @@ reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
     std::abort();
 }
 
-future<reader_permit> database::obtain_reader_permit(table& tbl, const char* const op_name, db::timeout_clock::time_point timeout) {
-    return get_reader_concurrency_semaphore().obtain_permit(tbl.schema().get(), op_name, tbl.estimate_read_memory_cost(), timeout);
+future<reader_permit> database::obtain_reader_permit(table& tbl, const char* const op_name, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
+    return get_reader_concurrency_semaphore().obtain_permit(tbl.schema().get(), op_name, tbl.estimate_read_memory_cost(), timeout, std::move(trace_ptr));
 }
 
-future<reader_permit> database::obtain_reader_permit(schema_ptr schema, const char* const op_name, db::timeout_clock::time_point timeout) {
-    return obtain_reader_permit(find_column_family(std::move(schema)), op_name, timeout);
+future<reader_permit> database::obtain_reader_permit(schema_ptr schema, const char* const op_name, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
+    return obtain_reader_permit(find_column_family(std::move(schema)), op_name, timeout, std::move(trace_ptr));
 }
 
 std::ostream& operator<<(std::ostream& out, const column_family& cf) {
@@ -1701,7 +1701,7 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
             // counter state for each modified cell...
 
             tracing::trace(trace_state, "Reading counter values from the CF");
-            auto permit = get_reader_concurrency_semaphore().make_tracking_only_permit(m_schema.get(), "counter-read-before-write", timeout);
+            auto permit = get_reader_concurrency_semaphore().make_tracking_only_permit(m_schema.get(), "counter-read-before-write", timeout, trace_state);
             return counter_write_query(m_schema, cf.as_mutation_source(), std::move(permit), m.decorated_key(), slice, trace_state)
                     .then([this, &cf, &m, m_schema, timeout, trace_state] (auto mopt) {
                 // ...now, that we got existing state of all affected counter
@@ -2771,9 +2771,9 @@ flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::da
             }
             return *_contexts[shard].semaphore;
         }
-        virtual future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout) override {
+        virtual future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) override {
             auto& cf = _db.local().find_column_family(_table_id);
-            return semaphore().obtain_permit(schema.get(), description, cf.estimate_read_memory_cost(), timeout);
+            return semaphore().obtain_permit(schema.get(), description, cf.estimate_read_memory_cost(), timeout, std::move(trace_ptr));
         }
     };
     auto ms = mutation_source([&db] (schema_ptr s,

@@ -41,7 +41,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_clear_inactive_reads)
         auto clear_permits = defer([&permits] { permits.clear(); });
 
         for (int i = 0; i < 10; ++i) {
-            permits.emplace_back(semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout));
+            permits.emplace_back(semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout, {}));
             handles.emplace_back(semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), permits.back())));
         }
 
@@ -59,7 +59,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_clear_inactive_reads)
         handles.clear();
 
         for (int i = 0; i < 10; ++i) {
-            handles.emplace_back(semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout))));
+            handles.emplace_back(semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout, {}))));
         }
 
         BOOST_REQUIRE(std::all_of(handles.begin(), handles.end(), [] (const reader_concurrency_semaphore::inactive_read_handle& handle) { return bool(handle); }));
@@ -77,14 +77,14 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_destroyed_permit_rele
 
     // Not admitted, active
     {
-        auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout);
+        auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout, {});
         auto units2 = permit.consume_memory(1024);
     }
     BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
 
     // Not admitted, inactive
     {
-        auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout);
+        auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout, {});
         auto units2 = permit.consume_memory(1024);
 
         auto handle = semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), permit));
@@ -94,14 +94,14 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_destroyed_permit_rele
 
     // Admitted, active
     {
-        auto permit = semaphore.obtain_permit(s.schema().get(), get_name(), 1024, db::no_timeout).get0();
+        auto permit = semaphore.obtain_permit(s.schema().get(), get_name(), 1024, db::no_timeout, {}).get0();
         auto units1 = permit.consume_memory(1024);
     }
     BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
 
     // Admitted, inactive
     {
-        auto permit = semaphore.obtain_permit(s.schema().get(), get_name(), 1024, db::no_timeout).get0();
+        auto permit = semaphore.obtain_permit(s.schema().get(), get_name(), 1024, db::no_timeout, {}).get0();
         auto units1 = permit.consume_memory(1024);
 
         auto handle = semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), permit));
@@ -115,7 +115,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_abandoned_handle_clos
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name());
     auto stop_sem = deferred_stop(semaphore);
 
-    auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout);
+    auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout, {});
     {
         auto handle = semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), permit));
         // The handle is destroyed here, triggering the destrution of the inactive read.
@@ -136,7 +136,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_readmission_preserves
 
     auto stop_sem = deferred_stop(semaphore);
 
-    reader_permit_opt permit = semaphore.obtain_permit(s.schema().get(), get_name(), 1024, db::no_timeout).get();
+    reader_permit_opt permit = semaphore.obtain_permit(s.schema().get(), get_name(), 1024, db::no_timeout, {}).get();
     BOOST_REQUIRE_EQUAL(permit->consumed_resources(), base_resources);
 
     std::optional<reader_permit::resource_units> residue_units;
@@ -152,7 +152,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_readmission_preserves
         BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources - permit->consumed_resources());
 
         if (i % 2) {
-            auto sponge_permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout);
+            auto sponge_permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout, {});
             auto consumed_resources = sponge_permit.consume_resources(semaphore.available_resources());
 
             auto fut = make_ready_future<>();
@@ -267,9 +267,9 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_forward_progress) {
         }
         future<> obtain_permit() {
             if (_memory_only) {
-                _permit = _semaphore.make_tracking_only_permit(_schema.get(), "reader_m", db::no_timeout);
+                _permit = _semaphore.make_tracking_only_permit(_schema.get(), "reader_m", db::no_timeout, {});
             } else {
-                _permit = co_await _semaphore.obtain_permit(_schema.get(), fmt::format("reader_{}", _evictable ? 'e' : 'a'), 1024, db::no_timeout);
+                _permit = co_await _semaphore.obtain_permit(_schema.get(), fmt::format("reader_{}", _evictable ? 'e' : 'a'), 1024, db::no_timeout, {});
             }
             _units = _permit->consume_memory(tests::random::get_int(128, 1024));
         }
@@ -414,7 +414,7 @@ SEASTAR_TEST_CASE(reader_restriction_file_tracking) {
     return async([&] {
         reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 100, 4 * 1024);
         auto stop_sem = deferred_stop(semaphore);
-        auto permit = semaphore.obtain_permit(nullptr, get_name(), 0, db::no_timeout).get();
+        auto permit = semaphore.obtain_permit(nullptr, get_name(), 0, db::no_timeout, {}).get();
 
         {
             auto tracked_file = make_tracked_file(file(shared_ptr<file_impl>(make_shared<dummy_file_impl>())), permit);
@@ -474,11 +474,11 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_timeout) {
         {
             auto timeout = db::timeout_clock::now() + std::chrono::duration_cast<db::timeout_clock::time_point::duration>(std::chrono::milliseconds{1});
 
-            reader_permit_opt permit1 = semaphore.obtain_permit(nullptr, "permit1", replica::new_reader_base_cost, timeout).get();
+            reader_permit_opt permit1 = semaphore.obtain_permit(nullptr, "permit1", replica::new_reader_base_cost, timeout, {}).get();
 
-            auto permit2_fut = semaphore.obtain_permit(nullptr, "permit2", replica::new_reader_base_cost, timeout);
+            auto permit2_fut = semaphore.obtain_permit(nullptr, "permit2", replica::new_reader_base_cost, timeout, {});
 
-            auto permit3_fut = semaphore.obtain_permit(nullptr, "permit3", replica::new_reader_base_cost, timeout);
+            auto permit3_fut = semaphore.obtain_permit(nullptr, "permit3", replica::new_reader_base_cost, timeout, {});
 
             BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 2);
 
@@ -516,15 +516,15 @@ SEASTAR_TEST_CASE(reader_concurrency_semaphore_max_queue_length) {
         auto stop_sem = deferred_stop(semaphore);
 
         {
-            reader_permit_opt permit1 = semaphore.obtain_permit(nullptr, "permit1", replica::new_reader_base_cost, db::no_timeout).get();
+            reader_permit_opt permit1 = semaphore.obtain_permit(nullptr, "permit1", replica::new_reader_base_cost, db::no_timeout, {}).get();
 
-            auto permit2_fut = semaphore.obtain_permit(nullptr, "permit2", replica::new_reader_base_cost, db::no_timeout);
+            auto permit2_fut = semaphore.obtain_permit(nullptr, "permit2", replica::new_reader_base_cost, db::no_timeout, {});
 
-            auto permit3_fut = semaphore.obtain_permit(nullptr, "permit3", replica::new_reader_base_cost, db::no_timeout);
+            auto permit3_fut = semaphore.obtain_permit(nullptr, "permit3", replica::new_reader_base_cost, db::no_timeout, {});
 
             BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 2);
 
-            auto permit4_fut = semaphore.obtain_permit(nullptr, "permit4", replica::new_reader_base_cost, db::no_timeout);
+            auto permit4_fut = semaphore.obtain_permit(nullptr, "permit4", replica::new_reader_base_cost, db::no_timeout, {});
 
             // The queue should now be full.
             BOOST_REQUIRE_THROW(permit4_fut.get(), std::runtime_error);
@@ -564,7 +564,7 @@ SEASTAR_THREAD_TEST_CASE(reader_concurrency_semaphore_dump_reader_diganostics) {
     for (auto& schema : schemas) {
         const auto nr_permits = tests::random::get_int<unsigned>(2, 32);
         for (unsigned i = 0; i < nr_permits; ++i) {
-            auto permit = semaphore.make_tracking_only_permit(schema.get(), op_names.at(tests::random::get_int<unsigned>(0, nr_ops - 1)), db::no_timeout);
+            auto permit = semaphore.make_tracking_only_permit(schema.get(), op_names.at(tests::random::get_int<unsigned>(0, nr_ops - 1)), db::no_timeout, {});
             if (tests::random::get_int<unsigned>(0, 4)) {
                 auto units = permit.consume_resources(reader_resources(tests::random::get_int<unsigned>(0, 1), tests::random::get_int<unsigned>(1024, 16 * 1024 * 1024)));
                 permits.push_back(std::pair(std::move(permit), std::move(units)));
@@ -597,7 +597,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_stop_waits_on_permits
     BOOST_TEST_MESSAGE("1 permit");
     {
         auto semaphore = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, get_name());
-        auto permit = std::make_unique<reader_permit>(semaphore->make_tracking_only_permit(nullptr, "permit1", db::no_timeout));
+        auto permit = std::make_unique<reader_permit>(semaphore->make_tracking_only_permit(nullptr, "permit1", db::no_timeout, {}));
 
         // Test will fail via use-after-free
         auto f = semaphore->stop().then([semaphore = std::move(semaphore)] { });
@@ -623,7 +623,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
         testlog.trace("Running admission scenario {}, with exepcted_can_admit={}", description, expected_can_admit);
         const auto stats_before = semaphore.get_stats();
 
-        auto admit_fut = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now());
+        auto admit_fut = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now(), {});
         admit_fut.wait();
         const bool can_admit = !admit_fut.failed();
         if (can_admit) {
@@ -650,13 +650,13 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
     // resources and waitlist
     {
-        reader_permit_opt permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now()).get();
+        reader_permit_opt permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now(), {}).get();
 
         require_can_admit(true, "enough resources");
 
         const auto stats_before = semaphore.get_stats();
 
-        auto enqueued_permit_fut = semaphore.obtain_permit(schema_ptr, get_name(), 2 * 1024, db::no_timeout);
+        auto enqueued_permit_fut = semaphore.obtain_permit(schema_ptr, get_name(), 2 * 1024, db::no_timeout, {});
         {
             const auto stats_after = semaphore.get_stats();
             BOOST_REQUIRE(!enqueued_permit_fut.available());
@@ -678,7 +678,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
     // used and blocked
     {
-        auto permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now()).get();
+        auto permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now(), {}).get();
 
         require_can_admit(true, "!used");
         {
@@ -698,7 +698,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
     // forward progress -- resources
     {
-        auto sponge_permit = semaphore.make_tracking_only_permit(nullptr, "sponge", db::no_timeout);
+        auto sponge_permit = semaphore.make_tracking_only_permit(nullptr, "sponge", db::no_timeout, {});
         sponge_permit.consume_resources(reader_resources::with_memory(semaphore.available_resources().memory));
         require_can_admit(true, "semaphore with no memory but all count available");
     }
@@ -707,7 +707,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
     // forward progress -- readmission
     {
-        auto permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now()).get();
+        auto permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now(), {}).get();
 
         auto irh = semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), permit));
         BOOST_REQUIRE(semaphore.try_evict_one_inactive_read());
@@ -733,7 +733,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
     // inactive readers
     {
-        auto permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now()).get();
+        auto permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now(), {}).get();
 
         require_can_admit(true, "!used");
         {
@@ -761,10 +761,10 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
     // evicting inactive readers for admission
     {
-        auto permit1 = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now()).get();
+        auto permit1 = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now(), {}).get();
         auto irh1 = semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), permit1));
 
-        auto permit2 = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now()).get();
+        auto permit2 = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now(), {}).get();
         auto irh2 = semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), permit2));
 
         require_can_admit(true, "evictable reads");
@@ -779,7 +779,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
         const auto stats_before = semaphore.get_stats();
 
-        auto permit2_fut = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::no_timeout);
+        auto permit2_fut = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::no_timeout, {});
 
         const auto stats_after = semaphore.get_stats();
         BOOST_REQUIRE_EQUAL(stats_after.reads_admitted, stats_before.reads_admitted);
@@ -800,7 +800,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
     {
         check_admitting_enqueued_read(
             [&] {
-                return reader_permit_opt(semaphore.obtain_permit(schema_ptr, get_name(), 2 * 1024, db::timeout_clock::now()).get());
+                return reader_permit_opt(semaphore.obtain_permit(schema_ptr, get_name(), 2 * 1024, db::timeout_clock::now(), {}).get());
             },
             [] (reader_permit_opt& permit1) {
                 permit1 = {};
@@ -815,7 +815,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
     {
         check_admitting_enqueued_read(
             [&] {
-                return reader_permit_opt(semaphore.obtain_permit(schema_ptr, get_name(), 2 * 1024, db::timeout_clock::now()).get());
+                return reader_permit_opt(semaphore.obtain_permit(schema_ptr, get_name(), 2 * 1024, db::timeout_clock::now(), {}).get());
             },
             [&] (reader_permit_opt& permit1) {
                 return semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), *permit1));
@@ -829,7 +829,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
     {
         check_admitting_enqueued_read(
             [&] {
-                auto permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now()).get();
+                auto permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now(), {}).get();
                 require_can_admit(true, "enough resources");
                 return std::pair(permit, std::optional<reader_permit::used_guard>{permit});
             }, [&] (std::pair<reader_permit, std::optional<reader_permit::used_guard>>& permit_and_used_guard) {
@@ -845,7 +845,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
     {
         check_admitting_enqueued_read(
             [&] {
-                auto permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now()).get();
+                auto permit = semaphore.obtain_permit(schema_ptr, get_name(), 1024, db::timeout_clock::now(), {}).get();
                 require_can_admit(true, "enough resources");
                 return std::pair(permit, reader_permit::used_guard{permit});
             }, [&] (std::pair<reader_permit, reader_permit::used_guard>& permit_and_used_guard) {
@@ -866,7 +866,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_used_blocked) {
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 0);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 0);
 
-    auto permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+    auto permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get0();
 
     for (auto scenario = 0; scenario < 5; ++scenario) {
         testlog.info("Running scenario {}", scenario);
@@ -953,7 +953,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_
     for (auto& s : schemas) {
         auto& handles = schema_handles[&s];
         for (int i = 0; i < 10; ++i) {
-            handles.emplace_back(semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout))));
+            handles.emplace_back(semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout, {}))));
         }
     }
 
@@ -1008,10 +1008,10 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_
         }
     };
 
-    auto p1 = semaphore.obtain_permit(&s, get_name(), 1024, db::no_timeout).get();
+    auto p1 = semaphore.obtain_permit(&s, get_name(), 1024, db::no_timeout, {}).get();
     auto irh1 = semaphore.register_inactive_read(make_empty_flat_reader_v2(ss.schema(), p1));
 
-    auto p2 = semaphore.obtain_permit(&s, get_name(), 1024, db::no_timeout).get();
+    auto p2 = semaphore.obtain_permit(&s, get_name(), 1024, db::no_timeout, {}).get();
     read rd2(p2);
     auto fut2 = semaphore.with_ready_permit(p2, rd2.get_read_func());
 
@@ -1020,7 +1020,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_
     // * 1 used (but not blocked) read on the ready list
     // * 1 waiter
     // * no more count resources left
-    auto p3_fut = semaphore.obtain_permit(&s, get_name(), 1024, db::no_timeout);
+    auto p3_fut = semaphore.obtain_permit(&s, get_name(), 1024, db::no_timeout, {});
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 2); // (waiters includes _ready_list entries)
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_admission, 1);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 0); // permit looses used status while waiting for execution
@@ -1061,8 +1061,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_set_resources) {
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), initial_resources.count, initial_resources.memory);
     auto stop_sem = deferred_stop(semaphore);
 
-    auto permit1 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
-    auto permit2 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+    auto permit1 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get0();
+    auto permit2 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get0();
     BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(2, 2 * 1024));
     BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(4, 4 * 1024));
 
@@ -1082,7 +1082,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_set_resources) {
     BOOST_REQUIRE_EQUAL(semaphore.available_resources(), reader_resources(-1, 1024));
     BOOST_REQUIRE_EQUAL(semaphore.initial_resources(), reader_resources(1, 3 * 1024));
 
-    auto permit3_fut = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout);
+    auto permit3_fut = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {});
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_admission, 1);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
 
@@ -1128,7 +1128,7 @@ private:
 public:
     explicit allocating_reader(reader_concurrency_semaphore& sem) : _sem(sem) {
         testlog.debug("[{}] allocating_reader created", fmt::ptr(this));
-        _admission_fut = sem.obtain_permit(nullptr, "reader", admission_cost, db::no_timeout).then_wrapped([this] (future<reader_permit>&& permit_fut) {
+        _admission_fut = sem.obtain_permit(nullptr, "reader", admission_cost, db::no_timeout, {}).then_wrapped([this] (future<reader_permit>&& permit_fut) {
             try {
                 _permit = std::move(permit_fut.get());
                 _state = state::request_memory;
@@ -1335,7 +1335,7 @@ memory_limit_table create_memory_limit_table(cql_test_env& env, uint64_t target_
                 auto sst = sst_man.make_sstable(s, sstables_dir.path().string(), sstables::generation_type{num_sstables});
                 auto writer_cfg = sst_man.configure_writer("test");
                 sst->write_components(
-                    make_flat_mutation_reader_from_mutations_v2(s, semaphore.make_tracking_only_permit(s.get(), "test", db::no_timeout), mut, s->full_slice()),
+                    make_flat_mutation_reader_from_mutations_v2(s, semaphore.make_tracking_only_permit(s.get(), "test", db::no_timeout, {}), mut, s->full_slice()),
                     1,
                     s,
                     writer_cfg,
@@ -1493,7 +1493,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_request_memory_preser
             utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier));
     auto stop_sem = deferred_stop(semaphore);
 
-    auto sponge_permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+    auto sponge_permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get0();
 
     uint64_t reads_enqueued_for_memory = 0;
 
@@ -1528,20 +1528,20 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_request_memory_preser
 
     // unused
     {
-        auto permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+        auto permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get0();
         do_check(permit, 0, 0, std::source_location::current());
     }
 
     // used
     {
-        auto permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+        auto permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get0();
         reader_permit::used_guard ug{permit};
         do_check(permit, 1, 0, std::source_location::current());
     }
 
     // blocked
     {
-        auto permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+        auto permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get0();
         reader_permit::used_guard ug{permit};
         reader_permit::blocked_guard bg{permit};
         do_check(permit, 1, 1, std::source_location::current());
@@ -1559,7 +1559,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_blessed_read_goes_ina
     simple_schema ss;
     auto s = ss.schema();
 
-    auto permit = semaphore.obtain_permit(s.get(), get_name(), 1024, db::no_timeout).get();
+    auto permit = semaphore.obtain_permit(s.get(), get_name(), 1024, db::no_timeout, {}).get();
 
     std::vector<reader_permit::resource_units> permit_res;
 
@@ -1588,7 +1588,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_stop_with_inactive_re
     simple_schema ss;
     auto s = ss.schema();
 
-    auto permit = reader_permit_opt(semaphore.obtain_permit(s.get(), get_name(), 1024, db::no_timeout).get());
+    auto permit = reader_permit_opt(semaphore.obtain_permit(s.get(), get_name(), 1024, db::no_timeout, {}).get());
 
     auto handle = semaphore.register_inactive_read(make_empty_flat_reader_v2(s, *permit));
 
@@ -1618,8 +1618,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_permit_waiting_for_me
             utils::updateable_value<uint32_t>(serialize_multiplier), utils::updateable_value<uint32_t>(kill_multiplier));
     auto stop_sem = deferred_stop(semaphore);
 
-    auto permit1 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
-    auto permit2 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get0();
+    auto permit1 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get0();
+    auto permit2 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get0();
 
     std::vector<reader_permit::resource_units> res;
 

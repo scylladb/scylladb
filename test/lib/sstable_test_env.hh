@@ -171,10 +171,10 @@ public:
     tmpdir& tempdir() noexcept { return _impl->dir; }
 
     reader_permit make_reader_permit(const schema* const s, const char* n, db::timeout_clock::time_point timeout) {
-        return _impl->semaphore.make_tracking_only_permit(s, n, timeout);
+        return _impl->semaphore.make_tracking_only_permit(s, n, timeout, {});
     }
     reader_permit make_reader_permit(db::timeout_clock::time_point timeout = db::no_timeout) {
-        return _impl->semaphore.make_tracking_only_permit(nullptr, "test", timeout);
+        return _impl->semaphore.make_tracking_only_permit(nullptr, "test", timeout, {});
     }
 
     replica::table::config make_table_config() {

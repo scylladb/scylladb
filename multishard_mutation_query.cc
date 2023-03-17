@@ -213,7 +213,7 @@ public:
             tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout)
             : _db(db)
             , _schema(std::move(s))
-            , _permit(_db.local().get_reader_concurrency_semaphore().make_tracking_only_permit(_schema.get(), "multishard-mutation-query", timeout))
+            , _permit(_db.local().get_reader_concurrency_semaphore().make_tracking_only_permit(_schema.get(), "multishard-mutation-query", timeout, trace_state))
             , _cmd(cmd)
             , _ranges(ranges)
             , _trace_state(std::move(trace_state))
@@ -261,14 +261,14 @@ public:
         return *_semaphores[shard];
     }
 
-    virtual future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout) override {
+    virtual future<reader_permit> obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) override {
         const auto shard = this_shard_id();
         auto& rm = _readers[shard];
         if (rm.state == reader_state::successful_lookup) {
             rm.rparts->permit.set_max_result_size(get_max_result_size());
             co_return rm.rparts->permit;
         }
-        auto permit = co_await _db.local().obtain_reader_permit(std::move(schema), description, timeout);
+        auto permit = co_await _db.local().obtain_reader_permit(std::move(schema), description, timeout, std::move(trace_ptr));
         permit.set_max_result_size(get_max_result_size());
         co_return permit;
     }

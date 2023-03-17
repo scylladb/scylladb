@@ -386,8 +386,8 @@ public:
     ///
     /// Some permits cannot be associated with any table, so passing nullptr as
     /// the schema parameter is allowed.
-    future<reader_permit> obtain_permit(const schema* const schema, const char* const op_name, size_t memory, db::timeout_clock::time_point timeout);
-    future<reader_permit> obtain_permit(const schema* const schema, sstring&& op_name, size_t memory, db::timeout_clock::time_point timeout);
+    future<reader_permit> obtain_permit(const schema* const schema, const char* const op_name, size_t memory, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
+    future<reader_permit> obtain_permit(const schema* const schema, sstring&& op_name, size_t memory, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
 
     /// Make a tracking only permit
     ///
@@ -402,8 +402,8 @@ public:
     ///
     /// Some permits cannot be associated with any table, so passing nullptr as
     /// the schema parameter is allowed.
-    reader_permit make_tracking_only_permit(const schema* const schema, const char* const op_name, db::timeout_clock::time_point timeout);
-    reader_permit make_tracking_only_permit(const schema* const schema, sstring&& op_name, db::timeout_clock::time_point timeout);
+    reader_permit make_tracking_only_permit(const schema* const schema, const char* const op_name, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
+    reader_permit make_tracking_only_permit(const schema* const schema, sstring&& op_name, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
 
     /// Run the function through the semaphore's execution stage with an admitted permit
     ///
@@ -424,7 +424,7 @@ public:
     ///
     /// Some permits cannot be associated with any table, so passing nullptr as
     /// the schema parameter is allowed.
-    future<> with_permit(const schema* const schema, const char* const op_name, size_t memory, db::timeout_clock::time_point timeout, read_func func);
+    future<> with_permit(const schema* const schema, const char* const op_name, size_t memory, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr, read_func func);
 
     /// Run the function through the semaphore's execution stage with a pre-admitted permit
     ///

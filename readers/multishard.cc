@@ -819,7 +819,7 @@ future<> shard_reader_v2::do_fill_buffer() {
                     return lifecycle_policy->create_reader(std::move(s), std::move(permit), pr, ps, pc, std::move(ts), fwd_mr);
                 });
                 auto s = gs.get();
-                auto permit = co_await _lifecycle_policy->obtain_reader_permit(s, "shard-reader", timeout());
+                auto permit = co_await _lifecycle_policy->obtain_reader_permit(s, "shard-reader", timeout(), _trace_state);
                 auto rreader = make_foreign(std::make_unique<evictable_reader_v2>(evictable_reader_v2::auto_pause::yes, std::move(ms),
                             s, std::move(permit), *_pr, _ps, _pc, _trace_state, _fwd_mr));
 
