@@ -11,6 +11,8 @@
 #include "repair/repair.hh"
 #include "tasks/task_manager.hh"
 
+namespace repair {
+
 class repair_task_impl : public tasks::task_manager::task::impl {
 protected:
     streaming::stream_reason _reason;
@@ -215,3 +217,5 @@ public:
     float report_progress(streaming::stream_reason reason);
     bool is_aborted(const tasks::task_id& uuid);
 };
+
+}
