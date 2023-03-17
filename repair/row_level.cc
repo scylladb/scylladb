@@ -9,7 +9,7 @@
 #include <seastar/util/defer.hh>
 #include "repair/repair.hh"
 #include "message/messaging_service.hh"
-#include "repair/repair_task.hh"
+#include "repair/task_manager_module.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "mutation/mutation_fragment.hh"

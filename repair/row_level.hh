@@ -11,7 +11,7 @@
 #include <vector>
 #include "gms/inet_address.hh"
 #include "repair/repair.hh"
-#include "repair/repair_task.hh"
+#include "repair/task_manager_module.hh"
 #include "tasks/task_manager.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include <seastar/core/distributed.hh>
