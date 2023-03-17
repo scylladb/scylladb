@@ -84,7 +84,7 @@ void feature_service::unregister_feature(feature& f) {
 }
 
 
-std::set<std::string_view> feature_service::supported_feature_set() {
+std::set<std::string_view> feature_service::supported_feature_set() const {
     // Add features known by this local node. When a new feature is
     // introduced in scylla, update it here, e.g.,
     // return sstring("FEATURE1,FEATURE2")
