@@ -15,6 +15,7 @@ import subprocess
 import tarfile
 import pathlib
 import shutil
+import sys
 
 
 RELOC_PREFIX='scylla'
@@ -71,6 +72,8 @@ ap.add_argument('--mode', dest='mode', default='release',
                 help='Build mode (debug/release) to use')
 ap.add_argument('--stripped', action='store_true',
                 help='use stripped binaries')
+ap.add_argument('--print-libexec', action='store_true',
+                help='print libexec executables and exit script')
 
 args = ap.parse_args()
 
@@ -90,6 +93,11 @@ executables_distrocmd = [
                 '/usr/bin/lsblk']
 
 executables = executables_scylla + executables_distrocmd
+
+if args.print_libexec:
+    for exec in executables:
+        print(f'libexec/{os.path.basename(exec)}')
+    sys.exit(0)
 
 output = args.dest
 
