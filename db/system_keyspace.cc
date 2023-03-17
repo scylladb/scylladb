@@ -97,6 +97,19 @@ namespace {
             props.wait_for_sync_to_commitlog = true;
         }
     });
+    const auto set_use_schema_commitlog = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
+        static const std::unordered_set<sstring> raft_tables = {
+            system_keyspace::RAFT,
+            system_keyspace::RAFT_SNAPSHOTS,
+            system_keyspace::RAFT_SNAPSHOT_CONFIG,
+            system_keyspace::GROUP0_HISTORY,
+            system_keyspace::DISCOVERY
+        };
+        if (ks_name == system_keyspace::NAME && raft_tables.contains(cf_name)) {
+            props.use_schema_commitlog = true;
+            props.load_phase = system_table_load_phase::phase2;
+        }
+    });
 }
 
 std::unique_ptr<query_context> qctx = {};
