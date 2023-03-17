@@ -528,9 +528,6 @@ private:
 
     size_t sstable_buffer_size;
 
-    static const std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
-    static const std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
-
     std::unordered_set<component_type, enum_hash<component_type>> _recognized_components;
     std::vector<sstring> _unrecognized_components;
 

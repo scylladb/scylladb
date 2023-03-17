@@ -187,16 +187,16 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
   }
 }
 
-const std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_types>> sstable::_version_string = {
-    { sstable::version_types::ka , "ka" },
-    { sstable::version_types::la , "la" },
-    { sstable::version_types::mc , "mc" },
-    { sstable::version_types::md , "md" },
-    { sstable::version_types::me , "me" },
+const std::unordered_map<sstable_version_types, sstring, enum_hash<sstable_version_types>> version_string = {
+    { sstable_version_types::ka , "ka" },
+    { sstable_version_types::la , "la" },
+    { sstable_version_types::mc , "mc" },
+    { sstable_version_types::md , "md" },
+    { sstable_version_types::me , "me" },
 };
 
-const std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_types>> sstable::_format_string = {
-    { sstable::format_types::big , "big" }
+const std::unordered_map<sstable_format_types, sstring, enum_hash<sstable_format_types>> format_string = {
+    { sstable_format_types::big , "big" }
 };
 
 // This assumes that the mappings are small enough, and called unfrequent
@@ -2038,9 +2038,9 @@ bool sstable::is_uploaded() const noexcept {
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
                                     format_types format, sstring component) {
-    sstring v = _version_string.at(version);
+    sstring v = version_string.at(version);
     sstring g = to_sstring(generation);
-    sstring f = _format_string.at(format);
+    sstring f = format_string.at(format);
     switch (version) {
     case sstable::version_types::ka:
         return ks + "-" + cf + "-" + v + "-" + g + "-" + component;
@@ -2426,7 +2426,7 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
 
 sstable::version_types sstable::version_from_sstring(const sstring &s) {
     try {
-        return reverse_map(s, _version_string);
+        return reverse_map(s, version_string);
     } catch (std::out_of_range&) {
         throw std::out_of_range(seastar::format("Unknown sstable version: {}", s.c_str()));
     }
@@ -2434,7 +2434,7 @@ sstable::version_types sstable::version_from_sstring(const sstring &s) {
 
 sstable::format_types sstable::format_from_sstring(const sstring &s) {
     try {
-        return reverse_map(s, _format_string);
+        return reverse_map(s, format_string);
     } catch (std::out_of_range&) {
         throw std::out_of_range(seastar::format("Unknown sstable format: {}", s.c_str()));
     }

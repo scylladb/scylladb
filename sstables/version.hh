@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/enum.hh>
 
 namespace sstables {
 
@@ -74,6 +75,10 @@ inline sstable_version_types from_string(const seastar::sstring& format) {
     }
     throw std::invalid_argument("Wrong sstable format name: " + format);
 }
+
+extern const std::unordered_map<sstable_version_types, seastar::sstring, seastar::enum_hash<sstable_version_types>> version_string;
+extern const std::unordered_map<sstable_format_types, seastar::sstring, seastar::enum_hash<sstable_format_types>> format_string;
+
 
 inline seastar::sstring to_string(sstable_version_types format) {
     switch (format) {
