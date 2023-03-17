@@ -1173,22 +1173,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             bm.start(std::ref(qp), std::ref(sys_ks), bm_cfg).get();
 
-            if (raft_gr.local().is_enabled()) {
-                auto my_raft_id = raft::server_id{cfg->host_id.uuid()};
-                supervisor::notify("starting Raft Group Registry service");
-                raft_gr.invoke_on_all([my_raft_id] (service::raft_group_registry& raft_gr) {
-                    return raft_gr.start(my_raft_id);
-                }).get();
-            } else {
-                if (cfg->check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
-                    startlog.error("Bad configuration: RAFT feature has to be enabled if BROADCAST_TABLES is enabled");
-                    throw bad_configuration_error();
-                }
-            }
-
-
-            group0_client.init().get();
-
             db::sstables_format_selector sst_format_selector(gossiper.local(), feature_service, db);
 
             sst_format_selector.start().get();
@@ -1208,6 +1192,20 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Needs to be before system_keyspace::setup(), which writes to schema tables.
             supervisor::notify("loading system_schema sstables");
             replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, raft_gr, *cfg, system_table_load_phase::phase2).get();
+
+            if (raft_gr.local().is_enabled()) {
+                auto my_raft_id = raft::server_id{cfg->host_id.uuid()};
+                supervisor::notify("starting Raft Group Registry service");
+                raft_gr.invoke_on_all([my_raft_id] (service::raft_group_registry& raft_gr) {
+                    return raft_gr.start(my_raft_id);
+                }).get();
+            } else {
+                if (cfg->check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
+                    startlog.error("Bad configuration: RAFT feature has to be enabled if BROADCAST_TABLES is enabled");
+                    throw bad_configuration_error();
+                }
+            }
+            group0_client.init().get();
 
             // schema migration, if needed, is also done on shard 0
             db::legacy_schema_migrator::migrate(proxy, db, qp.local()).get();
