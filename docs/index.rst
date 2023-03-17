@@ -154,6 +154,7 @@
   architecture/index
   troubleshooting/index
   kb/index
+  reference/index
   ScyllaDB University <https://university.scylladb.com/>
   faq
   Contribute to ScyllaDB <contribute>
