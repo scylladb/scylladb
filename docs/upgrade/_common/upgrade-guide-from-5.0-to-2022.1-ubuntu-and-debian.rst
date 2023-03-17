@@ -114,7 +114,7 @@ New io.conf format was introduced in ScyllaDB 2.3 and 2019.1. If your io.conf do
 
 .. code:: sh
 
-   sudo service scylla-enterprise-server start
+   sudo service scylla-server start
 
 Validate
 --------
@@ -154,7 +154,7 @@ Gracefully shutdown ScyllaDB
 .. code:: sh
 
    nodetool drain
-   sudo service scylla-enterprise-server stop
+   sudo service scylla-server stop
 
 Download and install the old release
 ------------------------------------
