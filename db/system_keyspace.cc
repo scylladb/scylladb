@@ -3264,16 +3264,30 @@ future<> system_keyspace::delete_paxos_decision(const schema& s, const partition
         ).discard_result();
 }
 
+future<std::set<sstring>> system_keyspace::load_local_enabled_features() {
+    std::set<sstring> features;
+    auto features_str = co_await get_scylla_local_param(gms::feature_service::ENABLED_FEATURES_KEY);
+    if (features_str) {
+        features = gms::feature_service::to_feature_set(*features_str);
+    }
+    co_return features;
+}
+
+future<> system_keyspace::save_local_enabled_features(std::set<sstring> features) {
+    auto features_str = fmt::to_string(fmt::join(features, ","));
+    co_await set_scylla_local_param(gms::feature_service::ENABLED_FEATURES_KEY, features_str);
+}
+
 future<> system_keyspace::enable_features_on_startup(sharded<gms::feature_service>& feat) {
     std::set<sstring> features_to_enable;
-    auto pre_enabled_features = co_await get_scylla_local_param(gms::feature_service::ENABLED_FEATURES_KEY);
-    if (!pre_enabled_features) {
+    const auto persisted_features = co_await load_local_enabled_features();
+    if (persisted_features.empty()) {
         co_return;
     }
+
     gms::feature_service& local_feat_srv = feat.local();
     const auto known_features = local_feat_srv.supported_feature_set();
     const auto& registered_features = local_feat_srv.registered_features();
-    const auto persisted_features = gms::feature_service::to_feature_set(*pre_enabled_features);
     for (auto&& f : persisted_features) {
         slogger.debug("Enabling persisted feature '{}'", f);
         const bool is_registered_feat = registered_features.contains(sstring(f));

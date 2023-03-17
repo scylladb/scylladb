@@ -182,14 +182,9 @@ void feature_service::persist_enabled_feature_info(const gms::feature& f) const 
     // Executed in seastar::async context, because `gms::feature::enable`
     // is only allowed to run within a thread context
 
-    std::optional<sstring> raw_old_value = db::system_keyspace::get_scylla_local_param(ENABLED_FEATURES_KEY).get0();
-    if (!raw_old_value) {
-        db::system_keyspace::set_scylla_local_param(ENABLED_FEATURES_KEY, f.name()).get0();
-        return;
-    }
-    auto feats_set = to_feature_set(*raw_old_value);
+    std::set<sstring> feats_set = db::system_keyspace::load_local_enabled_features().get0();
     feats_set.emplace(f.name());
-    db::system_keyspace::set_scylla_local_param(ENABLED_FEATURES_KEY, fmt::to_string(fmt::join(feats_set, ","))).get0();
+    db::system_keyspace::save_local_enabled_features(std::move(feats_set)).get0();
 }
 
 void feature_service::enable(const std::set<std::string_view>& list) {
