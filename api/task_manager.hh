@@ -13,6 +13,6 @@
 
 namespace api {
 
-void set_task_manager(http_context& ctx, routes& r, db::config& cfg);
+void set_task_manager(http_context& ctx, httpd::routes& r, db::config& cfg);
 
 }

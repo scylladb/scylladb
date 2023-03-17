@@ -15,6 +15,6 @@ namespace service { class storage_service; }
 
 namespace api {
 
-void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_service>& ss);
+void set_storage_proxy(http_context& ctx, httpd::routes& r, sharded<service::storage_service>& ss);
 
 }

@@ -42,7 +42,7 @@ sstring validate_keyspace(http_context& ctx, sstring ks_name);
 
 // verify that the keyspace parameter is found, otherwise a bad_param_exception exception is thrown
 // containing the description of the respective keyspace error.
-sstring validate_keyspace(http_context& ctx, const parameters& param);
+sstring validate_keyspace(http_context& ctx, const httpd::parameters& param);
 
 // splits a request parameter assumed to hold a comma-separated list of table names
 // verify that the tables are found, otherwise a bad_param_exception exception is thrown
@@ -63,19 +63,19 @@ struct table_info {
 // if the parameter is not found or is empty, returns a list of all table infos in the keyspace.
 std::vector<table_info> parse_table_infos(const sstring& ks_name, http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name);
 
-void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<cdc::generation_service>& cdc_gs, sharded<db::system_keyspace>& sys_ls);
-void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>& sst_loader);
-void unset_sstables_loader(http_context& ctx, routes& r);
-void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_builder>& vb);
-void unset_view_builder(http_context& ctx, routes& r);
-void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair);
-void unset_repair(http_context& ctx, routes& r);
-void set_transport_controller(http_context& ctx, routes& r, cql_transport::controller& ctl);
-void unset_transport_controller(http_context& ctx, routes& r);
-void set_rpc_controller(http_context& ctx, routes& r, thrift_controller& ctl);
-void unset_rpc_controller(http_context& ctx, routes& r);
-void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_ctl);
-void unset_snapshot(http_context& ctx, routes& r);
+void set_storage_service(http_context& ctx, httpd::routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<cdc::generation_service>& cdc_gs, sharded<db::system_keyspace>& sys_ls);
+void set_sstables_loader(http_context& ctx, httpd::routes& r, sharded<sstables_loader>& sst_loader);
+void unset_sstables_loader(http_context& ctx, httpd::routes& r);
+void set_view_builder(http_context& ctx, httpd::routes& r, sharded<db::view::view_builder>& vb);
+void unset_view_builder(http_context& ctx, httpd::routes& r);
+void set_repair(http_context& ctx, httpd::routes& r, sharded<repair_service>& repair);
+void unset_repair(http_context& ctx, httpd::routes& r);
+void set_transport_controller(http_context& ctx, httpd::routes& r, cql_transport::controller& ctl);
+void unset_transport_controller(http_context& ctx, httpd::routes& r);
+void set_rpc_controller(http_context& ctx, httpd::routes& r, thrift_controller& ctl);
+void unset_rpc_controller(http_context& ctx, httpd::routes& r);
+void set_snapshot(http_context& ctx, httpd::routes& r, sharded<db::snapshot_ctl>& snap_ctl);
+void unset_snapshot(http_context& ctx, httpd::routes& r);
 seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, http_context &ctx, bool legacy_request = false);
 
 } // namespace api

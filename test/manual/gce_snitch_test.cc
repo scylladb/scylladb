@@ -74,7 +74,7 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
         try {
             if (use_dummy_server) {
                 http_server.start("dummy_GCE_meta_server").get();
-                http_server.set_routes([] (routes& r) {
+                http_server.set_routes([] (httpd::routes& r) {
                     r.put(seastar::httpd::operation_type::GET, locator::gce_snitch::ZONE_NAME_QUERY_REQ, new gce_meta_get_handler());
                 }).get();
                 http_server.listen(ipv4_addr(meta_url.c_str(), 80)).get();

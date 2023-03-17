@@ -14,7 +14,7 @@ namespace netw { class messaging_service; }
 
 namespace api {
 
-void set_messaging_service(http_context& ctx, routes& r, sharded<netw::messaging_service>& ms);
-void unset_messaging_service(http_context& ctx, routes& r);
+void set_messaging_service(http_context& ctx, httpd::routes& r, sharded<netw::messaging_service>& ms);
+void unset_messaging_service(http_context& ctx, httpd::routes& r);
 
 }

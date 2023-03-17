@@ -20,8 +20,8 @@ class system_keyspace;
 
 namespace api {
 
-void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace>& sys_ks);
-void unset_column_family(http_context& ctx, routes& r);
+void set_column_family(http_context& ctx, httpd::routes& r, sharded<db::system_keyspace>& sys_ks);
+void unset_column_family(http_context& ctx, httpd::routes& r);
 
 const table_id& get_uuid(const sstring& name, const replica::database& db);
 future<> foreach_column_family(http_context& ctx, const sstring& name, std::function<void(replica::column_family&)> f);

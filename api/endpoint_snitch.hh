@@ -16,7 +16,7 @@ class snitch_ptr;
 
 namespace api {
 
-void set_endpoint_snitch(http_context& ctx, routes& r, sharded<locator::snitch_ptr>&);
-void unset_endpoint_snitch(http_context& ctx, routes& r);
+void set_endpoint_snitch(http_context& ctx, httpd::routes& r, sharded<locator::snitch_ptr>&);
+void unset_endpoint_snitch(http_context& ctx, httpd::routes& r);
 
 }

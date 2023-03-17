@@ -14,7 +14,7 @@
 
 namespace api {
 
-void set_task_manager_test(http_context& ctx, routes& r);
+void set_task_manager_test(http_context& ctx, httpd::routes& r);
 
 }
 

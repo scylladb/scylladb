@@ -30,8 +30,8 @@ class server {
             tracing::trace_state_ptr, service_permit, rjson::value, std::unique_ptr<http::request>)>;
     using alternator_callbacks_map = std::unordered_map<std::string_view, alternator_callback>;
 
-    http_server _http_server;
-    http_server _https_server;
+    httpd::http_server _http_server;
+    httpd::http_server _https_server;
     executor& _executor;
     service::storage_proxy& _proxy;
     gms::gossiper& _gossiper;

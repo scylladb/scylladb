@@ -22,6 +22,7 @@ namespace api {
 
 namespace cm = httpd::compaction_manager_json;
 using namespace json;
+using namespace seastar::httpd;
 
 static future<json::json_return_type> get_cm_stats(http_context& ctx,
         int64_t compaction_manager::stats::*f) {

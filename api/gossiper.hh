@@ -18,6 +18,6 @@ class gossiper;
 
 namespace api {
 
-void set_gossiper(http_context& ctx, routes& r, gms::gossiper& g);
+void set_gossiper(http_context& ctx, httpd::routes& r, gms::gossiper& g);
 
 }

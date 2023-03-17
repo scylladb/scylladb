@@ -189,7 +189,7 @@ struct basic_ratio_holder : public json::jsonable {
 typedef basic_ratio_holder<double>  ratio_holder;
 typedef basic_ratio_holder<int64_t> integral_ratio_holder;
 
-class unimplemented_exception : public base_exception {
+class unimplemented_exception : public httpd::base_exception {
 public:
     unimplemented_exception()
             : base_exception("API call is not supported yet", reply::status_type::internal_server_error) {
@@ -238,7 +238,7 @@ public:
                 value = T{boost::lexical_cast<Base>(param)};
             }
         } catch (boost::bad_lexical_cast&) {
-            throw bad_param_exception(format("{} ({}): type error - should be {}", name, param, boost::units::detail::demangle(typeid(Base).name())));
+            throw httpd::bad_param_exception(format("{} ({}): type error - should be {}", name, param, boost::units::detail::demangle(typeid(Base).name())));
         }
     }
 
@@ -306,6 +306,6 @@ public:
     }
 };
 
-utils_json::estimated_histogram time_to_json_histogram(const utils::time_estimated_histogram& val);
+httpd::utils_json::estimated_histogram time_to_json_histogram(const utils::time_estimated_histogram& val);
 
 }

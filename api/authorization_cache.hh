@@ -12,7 +12,7 @@
 
 namespace api {
 
-void set_authorization_cache(http_context& ctx, routes& r, sharded<auth::service> &auth_service);
-void unset_authorization_cache(http_context& ctx, routes& r);
+void set_authorization_cache(http_context& ctx, httpd::routes& r, sharded<auth::service> &auth_service);
+void unset_authorization_cache(http_context& ctx, httpd::routes& r);
 
 }

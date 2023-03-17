@@ -12,6 +12,6 @@
 
 namespace api {
 
-void set_collectd(http_context& ctx, routes& r);
+void set_collectd(http_context& ctx, httpd::routes& r);
 
 }
