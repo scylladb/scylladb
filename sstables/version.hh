@@ -96,3 +96,11 @@ struct fmt::formatter<sstables::sstable_version_types> : fmt::formatter<std::str
         return fmt::format_to(ctx.out(), "{}", sstables::version_string.at(version));
     }
 };
+
+template <>
+struct fmt::formatter<sstables::sstable_format_types> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const sstables::sstable_format_types& format, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", sstables::format_string.at(format));
+    }
+};

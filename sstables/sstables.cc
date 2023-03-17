@@ -2040,7 +2040,7 @@ sstring sstable::component_basename(const sstring& ks, const sstring& cf, versio
                                     format_types format, sstring component) {
     sstring v = fmt::to_string(version);
     sstring g = to_sstring(generation);
-    sstring f = format_string.at(format);
+    sstring f = fmt::to_string(format);
     switch (version) {
     case sstable::version_types::ka:
         return ks + "-" + cf + "-" + v + "-" + g + "-" + component;
