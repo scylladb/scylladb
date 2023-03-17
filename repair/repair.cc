@@ -139,6 +139,29 @@ static std::vector<sstring> list_column_families(const replica::database& db, co
     return ret;
 }
 
+static const replica::column_family* find_column_family_if_exists(const replica::database& db, std::string_view ks_name, std::string_view cf_name, bool warn = true) {
+    try {
+        auto uuid = db.find_uuid(std::move(ks_name), std::move(cf_name));
+        return &db.find_column_family(uuid);
+    } catch (replica::no_such_column_family&) {
+        if (warn) {
+            rlogger.warn("{}", std::current_exception());
+        }
+        return nullptr;
+    }
+}
+
+static const replica::column_family* find_column_family_if_exists(const replica::database& db, const utils::UUID& uuid, bool warn = true) {
+    try {
+        return &db.find_column_family(uuid);
+    } catch (...) {
+        if (warn) {
+            rlogger.warn("{}", std::current_exception());
+        }
+        return nullptr;
+    }
+}
+
 std::ostream& operator<<(std::ostream& os, const repair_uniq_id& x) {
     return os << format("[id={}, uuid={}]", x.id, x.uuid);
 }
@@ -149,7 +172,11 @@ static std::vector<utils::UUID> get_table_ids(const replica::database& db, const
     table_ids.reserve(tables.size());
     for (auto& table : tables) {
         thread::maybe_yield();
-        table_ids.push_back(db.find_uuid(keyspace, table));
+        try {
+            table_ids.push_back(db.find_uuid(keyspace, table));
+        } catch (replica::no_such_column_family&) {
+            rlogger.warn("Column family {} does not exist in keyspace {}", table, keyspace);
+        }
     }
     return table_ids;
 }
@@ -158,7 +185,8 @@ static std::vector<sstring> get_table_names(const replica::database& db, const s
     std::vector<sstring> table_names;
     table_names.reserve(table_ids.size());
     for (auto& table_id : table_ids) {
-        table_names.push_back(db.find_column_family(table_id).schema()->cf_name());
+        auto* cf = find_column_family_if_exists(db, table_id);
+        table_names.push_back(cf ? cf->schema()->cf_name() : "");
     }
     return table_names;
 }
@@ -513,10 +541,10 @@ get_sharder_for_tables(seastar::sharded<replica::database>& db, const sstring& k
     schema_ptr last_s;
     for (size_t idx = 0 ; idx < table_ids.size(); idx++) {
         schema_ptr s;
-        try {
-            s = db.local().find_column_family(table_ids[idx]).schema();
-        } catch(...) {
-            throw replica::no_such_column_family(keyspace, table_ids[idx]);
+        if (const auto* cf = find_column_family_if_exists(db.local(), table_ids[idx])) {
+            s = cf->schema();
+        } else {
+            continue;
         }
         if (last_s && last_s->get_sharder() != s->get_sharder()) {
             throw std::runtime_error(
@@ -1107,10 +1135,12 @@ int repair_service::do_repair_start(sstring keyspace, std::unordered_map<sstring
         bool needs_flush_before_repair = false;
         if (db.local().features().tombstone_gc_options) {
             for (auto& table: cfs) {
-                auto s = db.local().find_column_family(keyspace, table).schema();
-                const auto& options = s->tombstone_gc_options();
-                if (options.mode() == tombstone_gc_mode::repair) {
-                    needs_flush_before_repair = true;
+                if (const auto* cf = find_column_family_if_exists(db.local(), keyspace, table)) {
+                    auto s = cf->schema();
+                    const auto& options = s->tombstone_gc_options();
+                    if (options.mode() == tombstone_gc_mode::repair) {
+                        needs_flush_before_repair = true;
+                    }
                 }
             }
         }
