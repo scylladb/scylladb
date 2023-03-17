@@ -1194,6 +1194,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, raft_gr, *cfg, system_table_load_phase::phase2).get();
 
             if (raft_gr.local().is_enabled()) {
+                if (!db.local().uses_schema_commitlog()) {
+                    startlog.error("Bad configuration: consistent_cluster_management requires schema commit log to be enabled");
+                    throw bad_configuration_error();
+                }
                 auto my_raft_id = raft::server_id{cfg->host_id.uuid()};
                 supervisor::notify("starting Raft Group Registry service");
                 raft_gr.invoke_on_all([my_raft_id] (service::raft_group_registry& raft_gr) {
