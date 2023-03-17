@@ -628,11 +628,11 @@ class ScyllaCluster:
     def _seeds(self) -> List[str]:
         return [server.ip_addr for server in self.running.values()]
 
-    async def add_server(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None) -> ServerInfo:
+    async def add_server(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None, config: Optional[dict[str, str]] = None) -> ServerInfo:
         """Add a new server to the cluster"""
         self.is_dirty = True
 
-        extra_config: dict[str, str] = {}
+        extra_config: dict[str, str] = config.copy() if config else {}
         if replace_cfg:
             replaced_id = replace_cfg.replaced_id
             assert replaced_id in self.servers, \
@@ -1060,7 +1060,7 @@ class ScyllaClusterManager:
         assert self.cluster
         data = await request.json()
         replace_cfg = ReplaceConfig(**data["replace_cfg"]) if "replace_cfg" in data else None
-        s_info = await self.cluster.add_server(replace_cfg, data.get('cmdline'))
+        s_info = await self.cluster.add_server(replace_cfg, data.get('cmdline'), data.get('config'))
         return aiohttp.web.json_response({"server_id" : s_info.server_id,
                                           "ip_addr": s_info.ip_addr,
                                           "host_id": s_info.host_id})
