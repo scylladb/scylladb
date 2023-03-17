@@ -12,6 +12,7 @@ import string
 import os
 import shutil
 import re
+import subprocess
 from pathlib import Path
 
 class DebianFilesTemplate(string.Template):
@@ -69,3 +70,6 @@ with open('build/debian/debian/changelog', 'w') as f:
 with open('build/debian/debian/control', 'w') as f:
     f.write(control_applied)
 
+include_binaries = subprocess.run("./scripts/create-relocatable-package.py --print-libexec -", shell=True, check=True, capture_output=True, encoding='utf-8').stdout
+with open('build/debian/debian/source/include-binaries', 'w') as f:
+    f.write(include_binaries)
