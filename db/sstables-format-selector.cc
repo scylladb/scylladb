@@ -41,7 +41,7 @@ future<> sstables_format_selector::maybe_select_format(sstables::sstable_version
     auto units = co_await get_units(_sem, 1);
 
     if (new_format > _selected_format) {
-        co_await db::system_keyspace::set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, to_string(new_format));
+        co_await db::system_keyspace::set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, fmt::to_string(new_format));
         co_await select_format(new_format);
         // FIXME discarded future
         (void)_gossiper.add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
@@ -69,7 +69,7 @@ future<> sstables_format_selector::read_sstables_format() {
 }
 
 future<> sstables_format_selector::select_format(sstables::sstable_version_types format) {
-    logger.info("Selected {} sstables format", to_string(format));
+    logger.info("Selected {} sstables format", format);
     _selected_format = format;
     co_await _db.invoke_on_all([this] (replica::database& db) {
         db.set_format(_selected_format);

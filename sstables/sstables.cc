@@ -2038,7 +2038,7 @@ bool sstable::is_uploaded() const noexcept {
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
                                     format_types format, sstring component) {
-    sstring v = version_string.at(version);
+    sstring v = fmt::to_string(version);
     sstring g = to_sstring(generation);
     sstring f = format_string.at(format);
     switch (version) {

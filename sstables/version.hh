@@ -80,17 +80,6 @@ extern const std::unordered_map<sstable_version_types, seastar::sstring, seastar
 extern const std::unordered_map<sstable_format_types, seastar::sstring, seastar::enum_hash<sstable_format_types>> format_string;
 
 
-inline seastar::sstring to_string(sstable_version_types format) {
-    switch (format) {
-        case sstable_version_types::ka: return "ka";
-        case sstable_version_types::la: return "la";
-        case sstable_version_types::mc: return "mc";
-        case sstable_version_types::md: return "md";
-        case sstable_version_types::me: return "me";
-    }
-    throw std::runtime_error("Wrong sstable format");
-}
-
 inline int operator<=>(sstable_version_types a, sstable_version_types b) {
     auto to_int = [] (sstable_version_types x) {
         return static_cast<std::underlying_type_t<sstable_version_types>>(x);
@@ -99,3 +88,11 @@ inline int operator<=>(sstable_version_types a, sstable_version_types b) {
 }
 
 }
+
+template <>
+struct fmt::formatter<sstables::sstable_version_types> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const sstables::sstable_version_types& version, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", sstables::version_string.at(version));
+    }
+};

@@ -1015,7 +1015,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
                         .with_column("ck2", utf8_type, column_kind::clustering_key)
                         .with_column("r1", int32_type)
                         .build();
-                BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: min={{\"a\", \"c\"}} max={{\"b\", \"a\"}} version={}", to_string(version)));
+                BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: min={{\"a\", \"c\"}} max={{\"b\", \"a\"}} version={}", version));
                 auto sst_gen = env.make_sst_factory(s, version);
                 test_min_max_clustering_key(env, s, sst_gen, {"key1"}, {{"b", "a"}, {"a", "c"}}, {"a", "c"}, {"b", "a"}, version);
             }
@@ -1027,7 +1027,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
                         .with_column("ck2", utf8_type, column_kind::clustering_key)
                         .with_column("r1", int32_type)
                         .build();
-                BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: min={{\"a\", \"c\"}} max={{\"b\", \"a\"}} with compact storage version={}", to_string(version)));
+                BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: min={{\"a\", \"c\"}} max={{\"b\", \"a\"}} with compact storage version={}", version));
                 auto sst_gen = env.make_sst_factory(s, version);
                 test_min_max_clustering_key(env, s, sst_gen, {"key1"}, {{"b", "a"}, {"a", "c"}}, {"a", "c"}, {"b", "a"}, version);
             }
@@ -1038,7 +1038,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
                         .with_column("ck2", reversed_type_impl::get_instance(utf8_type), column_kind::clustering_key)
                         .with_column("r1", int32_type)
                         .build();
-                BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: reversed order: min={{\"a\", \"z\"}} max={{\"a\", \"a\"}} version={}", to_string(version)));
+                BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: reversed order: min={{\"a\", \"z\"}} max={{\"a\", \"a\"}} version={}", version));
                 auto sst_gen = env.make_sst_factory(s, version);
                 test_min_max_clustering_key(env, s, sst_gen, {"key1"}, {{"a", "a"}, {"a", "z"}}, {"a", "z"}, {"a", "a"}, version);
             }
@@ -1049,7 +1049,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
                         .with_column("ck2", reversed_type_impl::get_instance(utf8_type), column_kind::clustering_key)
                         .with_column("r1", int32_type)
                         .build();
-                BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: reversed order: min={{\"a\", \"a\"}} max={{\"b\", \"z\"}} version={}", to_string(version)));
+                BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: reversed order: min={{\"a\", \"a\"}} max={{\"b\", \"z\"}} version={}", version));
                 auto sst_gen = env.make_sst_factory(s, version);
                 test_min_max_clustering_key(env, s, sst_gen, {"key1"}, {{"b", "z"}, {"a", "a"}}, {"a", "a"}, {"b", "z"}, version);
             }
@@ -1090,7 +1090,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
                             .with_column("ck2", reversed_type_impl::get_instance(utf8_type), column_kind::clustering_key)
                             .with_column("r1", int32_type)
                             .build();
-                    BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: reversed order: min={{\"a\"}} max={{\"a\"}} with compact storage version={}", to_string(version)));
+                    BOOST_TEST_MESSAGE(fmt::format("min_max_clustering_key_test: reversed order: min={{\"a\"}} max={{\"a\"}} with compact storage version={}", version));
                 auto sst_gen = env.make_sst_factory(s, version);
                     test_min_max_clustering_key(env, s, sst_gen, {"key1"}, {{"a", "z"}, {"a"}}, {"a"}, {"a"}, version);
                 }
@@ -1112,7 +1112,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
             const column_definition& r1_col = *s->get_column_definition("r1");
 
-            BOOST_TEST_MESSAGE(fmt::format("version {}", to_string(version)));
+            BOOST_TEST_MESSAGE(fmt::format("version {}", version));
 
             {
                 auto mt = make_lw_shared<replica::memtable>(s);
@@ -1306,7 +1306,7 @@ SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
             auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("c1"), to_bytes("c2")});
             const column_definition& r1_col = *s->get_column_definition("r1");
 
-            BOOST_TEST_MESSAGE(fmt::format("version {}", to_string(version)));
+            BOOST_TEST_MESSAGE(fmt::format("version {}", version));
 
             {
                 auto mt = make_lw_shared<replica::memtable>(s);
@@ -1490,7 +1490,7 @@ SEASTAR_TEST_CASE(sstable_composite_reverse_tombstone_metadata_check) {
             auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("c1"), to_bytes("c2")});
             const column_definition& r1_col = *s->get_column_definition("r1");
 
-            BOOST_TEST_MESSAGE(fmt::format("version {}", to_string(version)));
+            BOOST_TEST_MESSAGE(fmt::format("version {}", version));
 
             {
                 auto mt = make_lw_shared<replica::memtable>(s);
@@ -2662,7 +2662,7 @@ SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
         ss.add_row(mut, ss.make_ckey(0), "val");
 
         for (const auto version : writable_sstable_versions) {
-            testlog.info("version={}", sstables::to_string(version));
+            testlog.info("version={}", version);
 
             auto mr = make_flat_mutation_reader_from_mutations_v2(ss.schema(), env.make_reader_permit(), {mut});
             sstable_writer_config cfg = env.manager().configure_writer();
@@ -2725,7 +2725,7 @@ SEASTAR_TEST_CASE(test_missing_partition_end_fragment) {
         auto enable_aborts = defer([] { set_abort_on_internal_error(true); }); // FIXME: restore to previous value
 
         for (const auto version : writable_sstable_versions) {
-            testlog.info("version={}", sstables::to_string(version));
+            testlog.info("version={}", version);
 
             std::deque<mutation_fragment_v2> frags;
             frags.push_back(mutation_fragment_v2(*s, env.make_reader_permit(), partition_start(pkeys[0], tombstone())));
@@ -2878,7 +2878,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
         int gen = 0;
 
         for (const auto version : writable_sstable_versions) {
-            testlog.info("version={}", sstables::to_string(version));
+            testlog.info("version={}", version);
             for (const auto& compression_params : {no_compression_params, lz4_compression_params}) {
                 testlog.info("compression={}", compression_params);
                 auto sst_schema = schema_builder(schema).set_compressor_params(compression_params).build();
