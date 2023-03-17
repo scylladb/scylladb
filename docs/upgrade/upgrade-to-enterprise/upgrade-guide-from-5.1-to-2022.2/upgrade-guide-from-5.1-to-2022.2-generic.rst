@@ -144,7 +144,7 @@ Download and install the new release
                sudo apt-get clean all
                sudo apt-get update
                sudo apt-get remove scylla\*
-               sudo apt-get install scylla-enterprise-server
+               sudo apt-get install scylla-enterprise
                sudo systemctl daemon-reload
 
         Answer ‘y’ to the first two questions.
@@ -163,7 +163,7 @@ Download and install the new release
                sudo yum clean all
                sudo rm -rf /var/cache/yum
                sudo yum remove scylla\*
-               sudo yum install scylla-enterprise-server
+               sudo yum install scylla-enterprise
 
    .. group-tab:: EC2/GCP/Azure Ubuntu Image
 
@@ -221,13 +221,13 @@ Start the node
 
 .. code:: sh
 
-   sudo service scylla-enterprise-server start
+   sudo service scylla-server start
 
 Validate
 --------
 #. Check cluster status with ``nodetool status`` and make sure **all** nodes, including the one you just upgraded, are in ``UN`` status.
 #. Use ``curl -X GET "http://localhost:10000/storage_service/scylla_release_version"`` to check the ScyllaDB version. Validate that the version matches the one you upgraded to.
-#. Check scylla-enterprise-server log (using ``journalctl _COMM=scylla``) and ``/var/log/syslog`` to validate there are no new errors in the log.
+#. Check scylla-server log (using ``journalctl _COMM=scylla``) and ``/var/log/syslog`` to validate there are no new errors in the log.
 #. Check again after two minutes, to validate no new issues are introduced.
 
 Once you are sure the node upgrade was successful, move to the next node in the cluster.
@@ -269,7 +269,7 @@ Drain and gracefully stop the node
 .. code:: sh
 
    nodetool drain
-   sudo service scylla-enterprise-server stop
+   sudo service scylla-server stop
 
 Download and install the old release
 ------------------------------------
