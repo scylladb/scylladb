@@ -900,7 +900,7 @@ static bool is_system_table(const schema& s) {
         || s.ks_name() == db::system_distributed_keyspace::NAME_EVERYWHERE;
 }
 
-void database::before_schema_keyspace_init() {
+void database::maybe_init_schema_commitlog() {
     assert(this_shard_id() == 0);
 
     if (!_feat.schema_commitlog && !_cfg.force_schema_commit_log()) {

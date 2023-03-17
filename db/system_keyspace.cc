@@ -1589,7 +1589,7 @@ future<> set_scylla_local_param_as(const sstring& key, const T& value) {
     auto type = data_type_for<T>();
     co_await qctx->execute_cql(req, type->to_string_impl(data_value(value)), key).discard_result();
     // Flush the table so that the value is available on boot before commitlog replay.
-    // database::before_schema_keyspace_init() depends on it.
+    // database::maybe_init_schema_commitlog() depends on it.
     co_await smp::invoke_on_all([] () -> future<> {
         co_await qctx->qp().db().real_database().flush(db::system_keyspace::NAME, system_keyspace::SCYLLA_LOCAL);
     });

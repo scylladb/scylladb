@@ -1201,7 +1201,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // since some features affect storage.
             db::system_keyspace::enable_features_on_startup(feature_service).get();
 
-            db.local().before_schema_keyspace_init();
+            db.local().maybe_init_schema_commitlog();
 
             // Init schema tables only after enable_features_on_startup()
             // because table construction consults enabled features.

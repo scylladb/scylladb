@@ -1491,7 +1491,7 @@ public:
     const service::migration_notifier& get_notifier() const { return _mnotifier; }
 
     void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
-    void before_schema_keyspace_init();
+    void maybe_init_schema_commitlog();
     future<> add_column_family_and_make_directory(schema_ptr schema);
 
     /* throws no_such_column_family if missing */
