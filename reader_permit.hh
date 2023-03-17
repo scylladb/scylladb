@@ -134,6 +134,8 @@ public:
 
     reader_concurrency_semaphore& semaphore();
 
+    state get_state() const;
+
     bool needs_readmission() const;
 
     // Call only when needs_readmission() = true.
@@ -184,6 +186,8 @@ public:
     reader_permit permit() const { return _permit; }
     reader_resources resources() const { return _resources; }
 };
+
+std::ostream& operator<<(std::ostream& os, reader_permit::state s);
 
 /// Mark a permit as used.
 ///
