@@ -91,7 +91,7 @@ static void assert_sstable_set_size(const sstable_set& s, size_t expected_size) 
 
 SEASTAR_TEST_CASE(datafile_generation_09) {
     // Test that generated sstable components can be successfully loaded.
-    return test_env::do_with([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type);
 
@@ -108,10 +108,11 @@ SEASTAR_TEST_CASE(datafile_generation_09) {
 
         auto sst = env.make_sstable(s, 9, sstables::get_highest_sstable_version(), big);
 
-        return write_memtable_to_sstable_for_test(*mt, sst).then([&env, mt, sst, s] {
+        write_memtable_to_sstable_for_test(*mt, sst).get();
+            // FIXME: indentation
             auto sst2 = env.make_sstable(s, 9, sstables::get_highest_sstable_version(), big);
 
-            return sstables::test(sst2).read_summary().then([sst, sst2] {
+            sstables::test(sst2).read_summary().get();
                 summary& sst1_s = sstables::test(sst).get_summary();
                 summary& sst2_s = sstables::test(sst2).get_summary();
 
@@ -120,20 +121,17 @@ SEASTAR_TEST_CASE(datafile_generation_09) {
                 BOOST_REQUIRE(sst1_s.entries == sst2_s.entries);
                 BOOST_REQUIRE(sst1_s.first_key.value == sst2_s.first_key.value);
                 BOOST_REQUIRE(sst1_s.last_key.value == sst2_s.last_key.value);
-            }).then([sst, sst2] {
-                return sstables::test(sst2).read_toc().then([sst, sst2] {
+
+                sstables::test(sst2).read_toc().get();
                     auto& sst1_c = sstables::test(sst).get_components();
                     auto& sst2_c = sstables::test(sst2).get_components();
 
                     BOOST_REQUIRE(sst1_c == sst2_c);
-                });
-            });
-        });
     });
 }
 
 SEASTAR_TEST_CASE(datafile_generation_11) {
-    return test_env::do_with([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         auto s = complex_schema();
 
         auto mt = make_lw_shared<replica::memtable>(s);
@@ -182,11 +180,13 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
         };
 
         auto sst = env.make_sstable(s, 11, sstables::get_highest_sstable_version(), big);
-        return write_memtable_to_sstable_for_test(*mt, sst).then([&env, s, sst, mt, verifier, tomb, &static_set_col] {
-            return env.reusable_sst(s, 11).then([&env, s, verifier, tomb, &static_set_col] (auto sstp) mutable {
-                return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s, verifier, tomb, &static_set_col] (auto& pr) {
-                    auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
-                    return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, verifier, tomb, &static_set_col, rd] (auto mutation) {
+        write_memtable_to_sstable_for_test(*mt, sst).get();
+            auto sstp = env.reusable_sst(s, 11).get();
+            std::invoke([&] {
+                auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
+                    auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
+                    auto close_rd = deferred_close(rd);
+                    auto mutation = read_mutation_from_flat_mutation_reader(rd).get();
                         auto verify_set = [&tomb] (const collection_mutation_description& m) {
                             BOOST_REQUIRE(bool(m.tomb) == true);
                             BOOST_REQUIRE(m.tomb == tomb);
@@ -210,29 +210,23 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
                         // The clustered set
                         auto m = verifier(mutation);
                         verify_set(m);
-                    }).finally([rd] {
-                        return rd->close().finally([rd] {});
-                    });
-                }).then([&env, sstp, s, verifier] {
-                    return do_with(dht::partition_range::make_singular(make_dkey(s, "key2")), [&env, sstp, s, verifier] (auto& pr) {
-                        auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
-                        return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, verifier, rd] (auto mutation) {
+            });
+
+            std::invoke([&] {
+                    auto pr = dht::partition_range::make_singular(make_dkey(s, "key2"));
+                        auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
+                        auto close_rd = deferred_close(rd);
+                        auto mutation = read_mutation_from_flat_mutation_reader(rd).get();
                             auto m = verifier(mutation);
                             BOOST_REQUIRE(!m.tomb);
                             BOOST_REQUIRE(m.cells.size() == 1);
                             BOOST_REQUIRE(m.cells[0].first == to_bytes("4"));
-                        }).finally([rd] {
-                            return rd->close().finally([rd] {});
-                        });
-                    });
-                });
             });
-        }).then([sst, mt] {});
     });
 }
 
 SEASTAR_TEST_CASE(datafile_generation_12) {
-    return test_env::do_with([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         auto s = complex_schema();
 
         auto mt = make_lw_shared<replica::memtable>(s);
@@ -247,27 +241,22 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
         mt->apply(std::move(m));
 
         auto sst = env.make_sstable(s, 12, sstables::get_highest_sstable_version(), big);
-        return write_memtable_to_sstable_for_test(*mt, sst).then([&env, s, tomb] {
-            return env.reusable_sst(s, 12).then([&env, s, tomb] (auto sstp) mutable {
-                return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s, tomb] (auto& pr) {
-                    auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
-                    return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, tomb, rd] (auto mutation) {
+        write_memtable_to_sstable_for_test(*mt, sst).get();
+            auto sstp = env.reusable_sst(s, 12).get();
+                auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
+                    auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
+                    auto close_rd = deferred_close(rd);
+                    auto mutation = read_mutation_from_flat_mutation_reader(rd).get();
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.row_tombstones().size() == 1);
                         for (auto& rt: mp.row_tombstones()) {
                             BOOST_REQUIRE(rt.tombstone().tomb == tomb);
                         }
-                    }).finally([rd] {
-                        return rd->close().finally([rd] {});
-                    });
-                });
-            });
-        }).then([sst, mt] {});
     });
 }
 
 static future<> sstable_compression_test(compressor_ptr c, unsigned generation) {
-    return test_env::do_with([c, generation] (test_env& env) {
+    return test_env::do_with_async([c, generation] (test_env& env) {
         // NOTE: set a given compressor algorithm to schema.
         schema_builder builder(complex_schema());
         builder.set_compressor_params(c);
@@ -285,22 +274,17 @@ static future<> sstable_compression_test(compressor_ptr c, unsigned generation) 
         mtp->apply(std::move(m));
 
         auto sst = env.make_sstable(s, generation, sstables::get_highest_sstable_version(), big);
-        return write_memtable_to_sstable_for_test(*mtp, sst).then([&env, s, tomb, generation] {
-            return env.reusable_sst(s, generation).then([&env, s, tomb] (auto sstp) mutable {
-                return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s, tomb] (auto& pr) {
-                    auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
-                    return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, tomb, rd] (auto mutation) {
+        write_memtable_to_sstable_for_test(*mtp, sst).get();
+            auto sstp = env.reusable_sst(s, generation).get();
+                auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
+                    auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
+                    auto close_rd = deferred_close(rd);
+                    auto mutation = read_mutation_from_flat_mutation_reader(rd).get();
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.row_tombstones().size() == 1);
                         for (auto& rt: mp.row_tombstones()) {
                             BOOST_REQUIRE(rt.tombstone().tomb == tomb);
                         }
-                    }).finally([rd] {
-                        return rd->close().finally([rd] {});
-                    });
-                });
-            });
-        }).then([sst, mtp] {});
     });
 }
 
@@ -317,7 +301,7 @@ SEASTAR_TEST_CASE(datafile_generation_15) {
 }
 
 SEASTAR_TEST_CASE(datafile_generation_16) {
-    return test_env::do_with([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         auto s = uncompressed_schema();
 
         auto mtp = make_lw_shared<replica::memtable>(s);
@@ -333,12 +317,9 @@ SEASTAR_TEST_CASE(datafile_generation_16) {
         }
 
         auto sst = env.make_sstable(s, 16, sstables::get_highest_sstable_version(), big);
-        return write_memtable_to_sstable_for_test(*mtp, sst).then([&env, s] {
-            return env.reusable_sst(s, 16).then([] (auto s) {
-                // Not crashing is enough
-                return make_ready_future<>();
-            });
-        }).then([sst, mtp] {});
+        write_memtable_to_sstable_for_test(*mtp, sst).get();
+        env.reusable_sst(s, 16).get();
+        // Not crashing is enough
     });
 }
 
@@ -353,7 +334,7 @@ static flat_mutation_reader_v2 sstable_reader_v2(shared_sstable sst, schema_ptr 
 }
 
 SEASTAR_TEST_CASE(datafile_generation_37) {
-    return test_env::do_with([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         auto s = compact_simple_dense_schema();
 
         auto mtp = make_lw_shared<replica::memtable>(s);
@@ -368,29 +349,23 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
         mtp->apply(std::move(m));
 
         auto sst = env.make_sstable(s, 37, sstables::get_highest_sstable_version(), big);
-        return write_memtable_to_sstable_for_test(*mtp, sst).then([&env, s] {
-            return env.reusable_sst(s, 37).then([&env, s] (auto sstp) {
-                return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s] (auto& pr) {
-                    auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
-                    return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, rd] (auto mutation) {
+        write_memtable_to_sstable_for_test(*mtp, sst).get();
+            auto sstp = env.reusable_sst(s, 37).get();
+                auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
+                    auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
+                    auto close_rd = deferred_close(rd);
+                    auto mutation = read_mutation_from_flat_mutation_reader(rd).get();
                         auto& mp = mutation->partition();
 
                         auto clustering = clustering_key_prefix::from_exploded(*s, {to_bytes("cl1")});
 
                         auto& row = mp.clustered_row(*s, clustering);
                         match_live_cell(row.cells(), *s, "cl2", data_value(to_bytes("cl2")));
-                        return make_ready_future<>();
-                    }).finally([rd] {
-                        return rd->close().finally([rd] {});
-                    });
-                });
-            });
-        }).then([sst, mtp, s] {});
     });
 }
 
 SEASTAR_TEST_CASE(datafile_generation_38) {
-    return test_env::do_with([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         auto s = compact_dense_schema();
 
         auto mtp = make_lw_shared<replica::memtable>(s);
@@ -405,28 +380,22 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
         mtp->apply(std::move(m));
 
         auto sst = env.make_sstable(s, 38, sstables::get_highest_sstable_version(), big);
-        return write_memtable_to_sstable_for_test(*mtp, sst).then([&env, s] {
-            return env.reusable_sst(s, 38).then([&env, s] (auto sstp) {
-                return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s] (auto& pr) {
-                    auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
-                    return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, rd] (auto mutation) {
+        write_memtable_to_sstable_for_test(*mtp, sst).get();
+            auto sstp = env.reusable_sst(s, 38).get();
+                auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
+                    auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
+                    auto close_rd = deferred_close(rd);
+                    auto mutation = read_mutation_from_flat_mutation_reader(rd).get();
                         auto& mp = mutation->partition();
                         auto clustering = clustering_key_prefix::from_exploded(*s, {to_bytes("cl1"), to_bytes("cl2")});
 
                         auto& row = mp.clustered_row(*s, clustering);
                         match_live_cell(row.cells(), *s, "cl3", data_value(to_bytes("cl3")));
-                        return make_ready_future<>();
-                    }).finally([rd] {
-                        return rd->close().finally([rd] {});
-                    });
-                });
-            });
-        }).then([sst, mtp, s] {});
     });
 }
 
 SEASTAR_TEST_CASE(datafile_generation_39) {
-    return test_env::do_with([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         auto s = compact_sparse_schema();
 
         auto mtp = make_lw_shared<replica::memtable>(s);
@@ -443,27 +412,21 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
         mtp->apply(std::move(m));
 
         auto sst = env.make_sstable(s, 39, sstables::get_highest_sstable_version(), big);
-        return write_memtable_to_sstable_for_test(*mtp, sst).then([&env, s] {
-            return env.reusable_sst(s, 39).then([&env, s] (auto sstp) {
-                return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s] (auto& pr) {
-                    auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
-                    return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, rd] (auto mutation) {
+        write_memtable_to_sstable_for_test(*mtp, sst).get();
+            auto sstp = env.reusable_sst(s, 39).get();
+                auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
+                    auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
+                    auto close_rd = deferred_close(rd);
+                    auto mutation = read_mutation_from_flat_mutation_reader(rd).get();
                         auto& mp = mutation->partition();
                         auto& row = mp.clustered_row(*s, clustering_key::make_empty());
                         match_live_cell(row.cells(), *s, "cl1", data_value(data_value(to_bytes("cl1"))));
                         match_live_cell(row.cells(), *s, "cl2", data_value(data_value(to_bytes("cl2"))));
-                        return make_ready_future<>();
-                    }).finally([rd] {
-                        return rd->close().finally([rd] {});
-                    });
-                });
-            });
-        }).then([sst, mtp, s] {});
     });
 }
 
 SEASTAR_TEST_CASE(datafile_generation_41) {
-    return test_env::do_with([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}, {"r2", int32_type}}, {}, utf8_type);
 
@@ -478,27 +441,22 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
         mt->apply(std::move(m));
 
         auto sst = env.make_sstable(s, 41, sstables::get_highest_sstable_version(), big);
-        return write_memtable_to_sstable_for_test(*mt, sst).then([&env, s, tomb] {
-            return env.reusable_sst(s, 41).then([&env, s, tomb] (auto sstp) mutable {
-                return do_with(dht::partition_range::make_singular(make_dkey(s, "key1")), [&env, sstp, s, tomb] (auto& pr) {
-                    auto rd = make_lw_shared<flat_mutation_reader_v2>(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()));
-                    return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, tomb, rd] (auto mutation) {
+        write_memtable_to_sstable_for_test(*mt, sst).get();
+            auto sstp = env.reusable_sst(s, 41).get();
+                auto pr = dht::partition_range::make_singular(make_dkey(s, "key1"));
+                    auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
+                    auto close_rd = deferred_close(rd);
+                    auto mutation = read_mutation_from_flat_mutation_reader(rd).get();
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.clustered_rows().calculate_size() == 1);
                         auto& c_row = *(mp.clustered_rows().begin());
                         BOOST_REQUIRE(c_row.row().deleted_at().tomb() == tomb);
-                    }).finally([rd] {
-                        return rd->close().finally([rd] {});
-                    });
-                });
-            });
-        }).then([sst, mt] {});
     });
 }
 
 SEASTAR_TEST_CASE(datafile_generation_47) {
     // Tests the problem in which the sstable row parser would hang.
-    return test_env::do_with([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type);
 
@@ -513,21 +471,12 @@ SEASTAR_TEST_CASE(datafile_generation_47) {
         mt->apply(std::move(m));
 
         auto sst = env.make_sstable(s, 47, sstables::get_highest_sstable_version(), big);
-        return write_memtable_to_sstable_for_test(*mt, sst).then([&env, s] {
-            return env.reusable_sst(s, 47).then([&env, s] (auto sstp) mutable {
-                auto reader = make_lw_shared<flat_mutation_reader_v2>(sstable_reader_v2(sstp, s, env.make_reader_permit()));
-                return repeat([reader] {
-                    return (*reader)().then([] (mutation_fragment_v2_opt m) {
-                        if (!m) {
-                            return make_ready_future<stop_iteration>(stop_iteration::yes);
-                        }
-                        return make_ready_future<stop_iteration>(stop_iteration::no);
-                    });
-                }).finally([sstp, reader, s] {
-                    return reader->close();
-                });
-            });
-        }).then([sst, mt] {});
+        write_memtable_to_sstable_for_test(*mt, sst).get();
+            auto sstp = env.reusable_sst(s, 47).get();
+                auto reader = sstable_reader_v2(sstp, s, env.make_reader_permit());
+                auto close_reader = deferred_close(reader);
+                while (reader().get()) {
+                }
     });
 }
 
@@ -588,20 +537,19 @@ static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_p
 }
 
 SEASTAR_TEST_CASE(check_read_indexes) {
-  return test_env::do_with_async([] (test_env& env) {
-      for_each_sstable_version([&env] (const sstables::sstable::version_types version) {
+  return test_env::do_with([] (test_env& env) {
+    return for_each_sstable_version([&env] (const sstables::sstable::version_types version) {
+      return seastar::async([&env, version] {
         auto builder = schema_builder("test", "summary_test")
             .with_column("a", int32_type, column_kind::partition_key);
         builder.set_min_index_interval(256);
         auto s = builder.build();
 
-        return env.reusable_sst(s, get_test_dir("summary_test", s), 1, version).then([&env] (auto sst) {
-            return sstables::test(sst).read_indexes(env.make_reader_permit()).then([sst] (auto list) {
+        auto sst = env.reusable_sst(s, get_test_dir("summary_test", s), 1, version).get();
+            auto list = sstables::test(sst).read_indexes(env.make_reader_permit()).get();
                 BOOST_REQUIRE(list.size() == 130);
-                return make_ready_future<>();
-            });
-        });
-      }).get();
+      });
+    });
   });
 }
 
@@ -622,8 +570,9 @@ SEASTAR_TEST_CASE(check_multi_schema) {
     //        d int,
     //        e blob
     //);
-    return test_env::do_with_async([] (test_env& env) {
-        for_each_sstable_version([&env] (const sstables::sstable::version_types version) {
+    return test_env::do_with([] (test_env& env) {
+        return for_each_sstable_version([&env] (const sstables::sstable::version_types version) {
+          return seastar::async([&env, version] {
             auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
             auto builder = schema_builder("test", "test_multi_schema")
                 .with_column("a", int32_type, column_kind::partition_key)
@@ -632,9 +581,11 @@ SEASTAR_TEST_CASE(check_multi_schema) {
                 .with_column("e", bytes_type);
             auto s = builder.build();
 
-            return env.reusable_sst(s, get_test_dir("multi_schema_test", s), 1, version).then([&env, s] (auto sst) {
-                auto reader = make_lw_shared<flat_mutation_reader_v2>(sstable_reader_v2(sst, s, env.make_reader_permit()));
-                return read_mutation_from_flat_mutation_reader(*reader).then([reader, s] (mutation_opt m) {
+            auto sst = env.reusable_sst(s, get_test_dir("multi_schema_test", s), 1, version).get();
+                auto reader = sstable_reader_v2(sst, s, env.make_reader_permit());
+                auto close_reader = deferred_close(reader);
+            std::invoke([&] {
+                mutation_opt m = read_mutation_from_flat_mutation_reader(reader).get();
                     BOOST_REQUIRE(m);
                     BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, 0)));
                     auto rows = m->partition().clustered_rows();
@@ -645,15 +596,14 @@ SEASTAR_TEST_CASE(check_multi_schema) {
                     BOOST_REQUIRE_EQUAL(cells.size(), 1);
                     auto& cdef = *s->get_column_definition("e");
                     BOOST_REQUIRE_EQUAL(cells.cell_at(cdef.id).as_atomic_cell(cdef).value(), managed_bytes(int32_type->decompose(5)));
-                    return (*reader)();
-                }).then([reader, s] (mutation_fragment_v2_opt m) {
-                    BOOST_REQUIRE(!m);
-                }).finally([reader] {
-                    return reader->close();
-                });
             });
-            return make_ready_future<>();
-        }).get();
+
+            std::invoke([&] {
+                auto m = reader().get();
+                    BOOST_REQUIRE(!m);
+            });
+          });
+        });
     });
 }
 
