@@ -66,6 +66,20 @@ static seastar::metrics::label keyspace_label("ks");
 
 using namespace std::chrono_literals;
 
+void table::update_sstables_known_generation(sstables::generation_type generation) {
+    if (!_sstable_generation) {
+        _sstable_generation = 1;
+    }
+    _sstable_generation = std::max<sstables::generation_type::int_t>(*_sstable_generation, sstables::generation_value(generation) / smp::count + 1);
+}
+
+sstables::generation_type table::calculate_generation_for_new_table() {
+    assert(_sstable_generation);
+    // FIXME: better way of ensuring we don't attempt to
+    // overwrite an existing table.
+    return sstables::generation_from_value((*_sstable_generation)++ * smp::count + this_shard_id());
+}
+
 flat_mutation_reader_v2
 table::make_sstable_reader(schema_ptr s,
                                    reader_permit permit,
