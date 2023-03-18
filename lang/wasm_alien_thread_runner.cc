@@ -8,10 +8,12 @@
 
 #include <exception>
 #include <seastar/core/alien.hh>
+#include <seastar/core/posix.hh>
 #include <seastar/core/reactor.hh>
 
 #include "lang/wasm.hh"
 #include "lang/wasm_alien_thread_runner.hh"
+#include "seastar/core/posix.hh"
 
 namespace wasm {
 
@@ -32,6 +34,10 @@ void task_queue::push_back(std::optional<wasm_compile_task> work_item) {
 
 alien_thread_runner::alien_thread_runner()
     : _thread([this] {
+        sigset_t mask;
+        sigfillset(&mask);
+        auto r = ::pthread_sigmask(SIG_BLOCK, &mask, nullptr);
+        throw_pthread_error(r);
         for (;;) {
             auto work_item = _pending_queue.pop_front();
             if (work_item) {
