@@ -1970,7 +1970,8 @@ static managed_bytes serialize_listlike(const Range& elements, const char* colle
             collection_name, elements.size(), std::numeric_limits<int32_t>::max()));
     }
 
-    for (const managed_bytes_opt& element_opt : elements) {
+    for (const auto& element : elements) {
+      const managed_bytes_opt& element_opt = element;
       if (element_opt) {
         auto& element = *element_opt;
         if (element.size() > std::numeric_limits<int32_t>::max()) {
