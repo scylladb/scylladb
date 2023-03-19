@@ -3901,10 +3901,10 @@ public:
     void error(gms::inet_address ep, std::exception_ptr eptr) {
         sstring why;
         error_kind kind = error_kind::FAILURE;
-        if (auto ex = try_catch<replica::rate_limit_exception>(eptr)) {
+        if (try_catch<replica::rate_limit_exception>(eptr)) {
             // There might be a lot of those, so ignore
             kind = error_kind::RATE_LIMIT;
-        } else if (auto ex = try_catch<rpc::closed_error>(eptr)) {
+        } else if (try_catch<rpc::closed_error>(eptr)) {
             // do not report connection closed exception, gossiper does that
             kind = error_kind::DISCONNECT;
         } else if (try_catch<rpc::timeout_error>(eptr)) {
