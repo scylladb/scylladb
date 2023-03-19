@@ -922,7 +922,7 @@ private:
 future<> shard_repair_task_impl::do_repair_ranges() {
     // Repair tables in the keyspace one after another
     assert(table_names().size() == table_ids.size());
-    for (int idx = 0; idx < table_ids.size(); idx++) {
+    for (size_t idx = 0; idx < table_ids.size(); idx++) {
         auto table_id = table_ids[idx];
         auto table_name = table_names()[idx];
         // repair all the ranges in limited parallelism
