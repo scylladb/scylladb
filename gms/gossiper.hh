@@ -231,7 +231,8 @@ private:
 
     std::default_random_engine _e1{std::random_device{}()};
 
-    // replicate live endpoints across all other shards.
+    // replicate shard 0 live endpoints across all other shards.
+    // _endpoint_update_semaphore must be held for the whole duration
     future<> replicate_live_endpoints_on_change();
 
     void run();
