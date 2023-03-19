@@ -46,14 +46,17 @@ future<> controller::listen(seastar::sharded<auth::service>& auth_service, db::c
     auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
     auto ceo = cfg.client_encryption_options();
     auto keepalive = cfg.rpc_keepalive();
-    redis_transport::redis_server_config redis_cfg;
-    redis_cfg._timeout_config = make_timeout_config(cfg);
-    redis_cfg._read_consistency_level = make_consistency_level(cfg.redis_read_consistency_level());
-    redis_cfg._write_consistency_level = make_consistency_level(cfg.redis_write_consistency_level());
-    redis_cfg._max_request_size = memory::stats().total_memory() / 10;
-    redis_cfg._total_redis_db_count = cfg.redis_database_count();
-    return utils::resolve(cfg.rpc_address, family, preferred).then([this, server, &cfg, keepalive, ceo = std::move(ceo), redis_cfg, &auth_service] (seastar::net::inet_address ip) {
-        return server->start(std::ref(_query_processor), std::ref(auth_service), redis_cfg).then([this, server, &cfg, ip, ceo, keepalive]() {
+    return utils::resolve(cfg.rpc_address, family, preferred).then([this, server, &cfg, keepalive, ceo = std::move(ceo), &auth_service] (seastar::net::inet_address ip) {
+        auto get_config = sharded_parameter([&] {
+            return redis_transport::redis_server_config {
+                ._timeout_config = make_timeout_config(cfg),
+                ._max_request_size = memory::stats().total_memory() / 10,
+                ._read_consistency_level = make_consistency_level(cfg.redis_read_consistency_level()),
+                ._write_consistency_level = make_consistency_level(cfg.redis_write_consistency_level()),
+                ._total_redis_db_count = cfg.redis_database_count(),
+            };
+        });
+        return server->start(std::ref(_query_processor), std::ref(auth_service), std::move(get_config)).then([this, server, &cfg, ip, ceo, keepalive]() {
             auto f = make_ready_future();
             struct listen_cfg {
                 socket_address addr;

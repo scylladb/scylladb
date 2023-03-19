@@ -7,6 +7,7 @@
  */
 
 #include "transport/controller.hh"
+#include "seastar/core/sharded.hh"
 #include "transport/server.hh"
 #include "service/memory_limiter.hh"
 #include "db/config.hh"
@@ -74,23 +75,31 @@ future<> controller::do_start_server() {
         auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
         auto ceo = cfg.client_encryption_options();
         auto keepalive = cfg.rpc_keepalive();
-        cql_server_config cql_server_config;
-        cql_server_config.timeout_config = make_timeout_config(cfg);
-        cql_server_config.max_request_size = _mem_limiter.local().total_memory();
-        cql_server_config.allow_shard_aware_drivers = cfg.enable_shard_aware_drivers();
-        cql_server_config.sharding_ignore_msb = cfg.murmur3_partitioner_ignore_msb_bits();
-        if (cfg.native_shard_aware_transport_port.is_set()) {
-            // Needed for "SUPPORTED" message
-            cql_server_config.shard_aware_transport_port = cfg.native_shard_aware_transport_port();
-        }
-        if (cfg.native_shard_aware_transport_port_ssl.is_set()) {
-            // Needed for "SUPPORTED" message
-            cql_server_config.shard_aware_transport_port_ssl = cfg.native_shard_aware_transport_port_ssl();
-        }
-        cql_server_config.partitioner_name = cfg.partitioner();
         smp_service_group_config cql_server_smp_service_group_config;
         cql_server_smp_service_group_config.max_nonlocal_requests = 5000;
-        cql_server_config.bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get0();
+        auto bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get0();
+        auto get_cql_server_config = sharded_parameter([&] {
+            std::optional<uint16_t> shard_aware_transport_port;
+            if (cfg.native_shard_aware_transport_port.is_set()) {
+                // Needed for "SUPPORTED" message
+                shard_aware_transport_port = cfg.native_shard_aware_transport_port();
+            }
+            std::optional<uint16_t> shard_aware_transport_port_ssl;
+            if (cfg.native_shard_aware_transport_port_ssl.is_set()) {
+                // Needed for "SUPPORTED" message
+                shard_aware_transport_port_ssl = cfg.native_shard_aware_transport_port_ssl();
+            }
+            return cql_server_config {
+              .timeout_config = make_timeout_config(cfg),
+              .max_request_size = _mem_limiter.local().total_memory(),
+              .partitioner_name = cfg.partitioner(),
+              .sharding_ignore_msb = cfg.murmur3_partitioner_ignore_msb_bits(),
+              .shard_aware_transport_port = shard_aware_transport_port,
+              .shard_aware_transport_port_ssl = shard_aware_transport_port_ssl,
+              .allow_shard_aware_drivers = cfg.enable_shard_aware_drivers(),
+              .bounce_request_smp_service_group = bounce_request_smp_service_group,
+            };
+        });
         const seastar::net::inet_address ip = utils::resolve(cfg.rpc_address, family, preferred).get0();
 
         struct listen_cfg {
@@ -143,7 +152,7 @@ future<> controller::do_start_server() {
             }
         }
 
-        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), cql_server_config, std::ref(cfg), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key).get();
+        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), std::move(get_cql_server_config), std::ref(cfg), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key).get();
         auto on_error = defer([&cserver] { cserver->stop().get(); });
 
         subscribe_server(*cserver).get();
