@@ -677,7 +677,7 @@ future<> cql_server::connection::process_request() {
                 ? get_units(_server._memory_available, mem_estimate, shedding_timeout).then_wrapped([this, length = f.length] (auto f) {
                     try {
                         return make_ready_future<semaphore_units<>>(f.get0());
-                    } catch (semaphore_timed_out sto) {
+                    } catch (semaphore_timed_out& sto) {
                         // Cancel shedding in case no more requests are going to do that on completion
                         if (_pending_requests_gate.get_count() == 0) {
                             _shed_incoming_requests = false;
