@@ -2055,7 +2055,7 @@ class handler_factory : public CassandraCobSvIfFactory {
     sharded<service::storage_service>& _ss;
     sharded<service::storage_proxy>& _proxy;
     auth::service& _auth_service;
-    timeout_config _timeout_config;
+    const timeout_config& _timeout_config;
     service_permit& _current_permit;
 public:
     explicit handler_factory(data_dictionary::database db,
@@ -2063,7 +2063,7 @@ public:
                              sharded<service::storage_service>& ss,
                              sharded<service::storage_proxy>& proxy,
                              auth::service& auth_service,
-                             ::timeout_config timeout_config,
+                             const ::timeout_config& timeout_config,
                              service_permit& current_permit)
         : _db(db), _query_processor(qp), _ss(ss), _proxy(proxy), _auth_service(auth_service), _timeout_config(timeout_config), _current_permit(current_permit) {}
     typedef CassandraCobSvIf Handler;
@@ -2078,6 +2078,6 @@ public:
 std::unique_ptr<CassandraCobSvIfFactory>
 create_handler_factory(data_dictionary::database db, distributed<cql3::query_processor>& qp,
         sharded<service::storage_service>& ss, sharded<service::storage_proxy>& proxy,
-        auth::service& auth_service, ::timeout_config timeout_config, service_permit& current_permit) {
+        auth::service& auth_service, const ::timeout_config& timeout_config, service_permit& current_permit) {
     return std::make_unique<handler_factory>(db, qp, ss, proxy, auth_service, timeout_config, current_permit);
 }
