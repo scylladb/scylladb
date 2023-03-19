@@ -65,7 +65,7 @@ thrift_server::thrift_server(data_dictionary::database db,
         , _processor_factory(new CassandraAsyncProcessorFactory(_handler_factory))
         , _memory_available(ml.get_semaphore())
         , _max_concurrent_requests(db.get_config().max_concurrent_requests_per_shard)
-        , _config(config) {
+        , _config(std::move(config)) {
 }
 
 thrift_server::~thrift_server() {

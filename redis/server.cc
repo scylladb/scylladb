@@ -35,11 +35,11 @@ static logging::logger logging("redis_server");
 redis_server::redis_server(seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config)
     : server("Redis", logging)
     , _query_processor(qp)
-    , _config(config)
-    , _max_request_size(config._max_request_size)
+    , _config(std::move(config))
+    , _max_request_size(_config._max_request_size)
     , _memory_available(_max_request_size)
     , _auth_service(auth_service)
-    , _total_redis_db_count(config._total_redis_db_count)
+    , _total_redis_db_count(_config._total_redis_db_count)
 {
 }
 
