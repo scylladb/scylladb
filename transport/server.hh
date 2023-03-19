@@ -280,7 +280,7 @@ private:
     future<> advertise_new_connection(shared_ptr<generic_server::connection> conn) override;
     future<> unadvertise_connection(shared_ptr<generic_server::connection> conn) override;
 
-    const ::timeout_config& timeout_config() { return _config.timeout_config; }
+    const ::timeout_config& timeout_config() const { return _config.timeout_config; }
 };
 
 class cql_server::event_notifier : public service::migration_listener,
