@@ -1573,6 +1573,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
             case sstables::compaction_type_options::scrub::quarantine_mode::only:
                 return sst->is_quarantined();
             }
+            on_internal_error(cmlog, "bad scrub quarantine mode");
         }));
         return make_ready_future<std::vector<sstables::shared_sstable>>(std::move(sstables));
     }, can_purge_tombstones::no);
