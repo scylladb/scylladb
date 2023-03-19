@@ -167,7 +167,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     // generate duplicates in a paged listing here. Can obviously miss things if they 
     // are added between paged calls and end up with a "smaller" UUID/ARN, but that 
     // is to be expected.
-    if (limit < cfs.size() || streams_start) {
+    if (std::cmp_less(limit, cfs.size()) || streams_start) {
         std::sort(cfs.begin(), cfs.end(), [](const data_dictionary::table& t1, const data_dictionary::table& t2) {
             return t1.schema()->id().uuid() < t2.schema()->id().uuid();
         });
