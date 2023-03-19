@@ -30,8 +30,6 @@ namespace replica {
 class database;
 }
 
-class timeout_config;
-
 namespace service {
 class migration_manager;
 }
