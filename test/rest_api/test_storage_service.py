@@ -218,30 +218,50 @@ def test_toppartitions_pk_needs_escaping(cql, this_dc, rest_api):
             # Unfortunately, the toppartitions API doesn't let us mark the
             # beginning and end of the sampling period. Instead we need to
             # start the toppartitions for a predefined period, and in
-            # parallel, make the request. Sad.
-            def toppartitions():
-                ks, cf = table.split('.')
-                resp = rest_api.send('GET', 'storage_service/toppartitions', {'table_filters': f'{ks}:{cf}', 'duration': '1000'})
-                assert resp.ok
-                # resp.json() will raise an error if not valid JSON
-                resp.json()
-                assert pk_json in resp.text
-            def insert():
-                # We need to wait enough time for the toppartitions request
-                # to have been sent, but unfortunately we don't know when
-                # this happens because the request doesn't return until the
-                # "duration" ends. So we hope 0.5 seconds is enough.
-                # TODO: we can use the log to check when the toppartitions
-                # request was received.
-                time.sleep(0.5)
-                stmt = cql.prepare(f"INSERT INTO {table} (p) VALUES (?)")
-                cql.execute(stmt, [pk])
-            t1 = ThreadWrapper(target=toppartitions)
-            t2 = ThreadWrapper(target=insert)
-            t1.start()
-            t2.start()
-            t1.join()
-            t2.join()
+            # parallel, make the request. Usually, a very short sampling
+            # period suffices, but very rarely on slow builds and overloaded
+            # machines, even one second is not enough (see #13223), so we'll
+            # try the same test several times with an increasing period.
+            # This means that this test will usually pass quickly - but in some
+            # cases it can take some time (currently, 10.24 seconds) to fail.
+            period_sec = 0.01
+            while period_sec < 6:  # last period will be 5.12 seconds
+                def toppartitions():
+                    ks, cf = table.split('.')
+                    resp = rest_api.send('GET', 'storage_service/toppartitions', {'table_filters': f'{ks}:{cf}', 'duration': str(int(period_sec*1000))})
+                    assert resp.ok
+                    # resp.json() will raise an error if not valid JSON
+                    resp.json()
+                    assert pk_json in resp.text
+                def insert():
+                    # We need to wait enough time for the toppartitions request
+                    # to have been sent, but unfortunately we don't know when
+                    # this happens because the request doesn't return until the
+                    # "duration" ends. So we hope period_sec/2 was enough.
+                    # If it wasn't, we'll try again with increased period_sec.
+                    time.sleep(period_sec/2)
+                    stmt = cql.prepare(f"INSERT INTO {table} (p) VALUES (?)")
+                    cql.execute(stmt, [pk])
+                t1 = ThreadWrapper(target=toppartitions)
+                t2 = ThreadWrapper(target=insert)
+                t1.start()
+                t2.start()
+                try:
+                    t1.join()
+                    t2.join()
+                    # The test passed
+                    return
+                # Failing the "assert pk_json in resp.text" above is when
+                # we want to retry (with a higher period_sec). Any other
+                # error, like unparsable JSON, tells us immediately that
+                # we failed the test so we re-raise the exception.
+                except AssertionError:
+                    period_sec *= 2
+                except:
+                    raise
+        # If we're here, we didn't "return" above so the test failed
+        pytest.fail(f'Test failed, even {period_sec/2}s was not enough.')
+
 
 # TODO: check that keyspace_flush actually does anything, like create new sstables.
 def test_storage_service_flush(cql, this_dc, rest_api):
