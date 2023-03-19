@@ -515,6 +515,7 @@ SEASTAR_TEST_CASE(leveled_01) {
   BOOST_REQUIRE_EQUAL(smp::count, 1);
   return test_env::do_with_async([] (test_env& env) {
     table_for_tests cf(env.manager());
+    auto stop_cf = deferred_stop(cf);
 
     const auto keys = tests::generate_partition_keys(50, cf.schema());
     const auto& min_key = keys.front();
@@ -549,8 +550,6 @@ SEASTAR_TEST_CASE(leveled_01) {
         BOOST_REQUIRE(sst->get_sstable_level() == 0);
     }
     BOOST_REQUIRE(gens.empty());
-
-    cf.stop_and_keep_alive().get();
   });
 }
 
@@ -558,6 +557,7 @@ SEASTAR_TEST_CASE(leveled_02) {
   BOOST_REQUIRE_EQUAL(smp::count, 1);
   return test_env::do_with_async([] (test_env& env) {
     table_for_tests cf(env.manager());
+    auto stop_cf = deferred_stop(cf);
 
     const auto keys = tests::generate_partition_keys(50, cf.schema());
     const auto& min_key = keys.front();
@@ -602,8 +602,6 @@ SEASTAR_TEST_CASE(leveled_02) {
         BOOST_REQUIRE(sst->get_sstable_level() == 0);
     }
     BOOST_REQUIRE(gens.empty());
-
-    cf.stop_and_keep_alive().get();
   });
 }
 
@@ -611,6 +609,7 @@ SEASTAR_TEST_CASE(leveled_03) {
   BOOST_REQUIRE_EQUAL(smp::count, 1);
   return test_env::do_with_async([] (test_env& env) {
     table_for_tests cf(env.manager());
+    auto stop_cf = deferred_stop(cf);
 
     const auto keys = tests::generate_partition_keys(50, cf.schema());
     const auto& min_key = keys.front();
@@ -659,8 +658,6 @@ SEASTAR_TEST_CASE(leveled_03) {
         gen_and_level.erase(pair);
     }
     BOOST_REQUIRE(gen_and_level.empty());
-
-    cf.stop_and_keep_alive().get();
   });
 }
 
@@ -668,6 +665,7 @@ SEASTAR_TEST_CASE(leveled_04) {
   BOOST_REQUIRE_EQUAL(smp::count, 1);
   return test_env::do_with_async([] (test_env& env) {
     table_for_tests cf(env.manager());
+    auto stop_cf = deferred_stop(cf);
 
     const auto keys = tests::generate_partition_keys(50, cf.schema());
     const auto& min_key = keys.front();
@@ -724,8 +722,6 @@ SEASTAR_TEST_CASE(leveled_04) {
         levels.erase(sst->get_sstable_level());
     }
     BOOST_REQUIRE(levels.empty());
-
-    cf.stop_and_keep_alive().get();
   });
 }
 
@@ -749,6 +745,7 @@ SEASTAR_TEST_CASE(leveled_06) {
     // Test that we can compact a single L1 compaction into an empty L2.
   return test_env::do_with_async([] (test_env& env) {
     table_for_tests cf(env.manager());
+    auto stop_cf = deferred_stop(cf);
 
     auto max_sstable_size_in_mb = 1;
     auto max_sstable_size_in_bytes = max_sstable_size_in_mb*1024*1024;
@@ -774,14 +771,13 @@ SEASTAR_TEST_CASE(leveled_06) {
     auto& sst = (candidate.sstables)[0];
     BOOST_REQUIRE(sst->get_sstable_level() == 1);
     BOOST_REQUIRE(generation_value(sst->generation()) == 1);
-
-    cf.stop_and_keep_alive().get();
   });
 }
 
 SEASTAR_TEST_CASE(leveled_07) {
   return test_env::do_with_async([] (test_env& env) {
     table_for_tests cf(env.manager());
+    auto stop_cf = deferred_stop(cf);
 
     const auto key = tests::generate_partition_key(cf.schema());
     for (auto i = 0; i < leveled_manifest::MAX_COMPACTING_L0*2; i++) {
@@ -799,14 +795,13 @@ SEASTAR_TEST_CASE(leveled_07) {
     for (auto& sst : desc.sstables) {
         BOOST_REQUIRE(sst->get_stats_metadata().max_timestamp < leveled_manifest::MAX_COMPACTING_L0);
     }
-
-    cf.stop_and_keep_alive().get();
   });
 }
 
 SEASTAR_TEST_CASE(leveled_invariant_fix) {
   return test_env::do_with_async([] (test_env& env) {
     table_for_tests cf(env.manager());
+    auto stop_cf = deferred_stop(cf);
 
     auto sstables_no = cf.schema()->max_compaction_threshold();
     auto keys = tests::generate_partition_keys(sstables_no, cf.schema());
@@ -835,8 +830,6 @@ SEASTAR_TEST_CASE(leveled_invariant_fix) {
     BOOST_REQUIRE(boost::algorithm::all_of(candidate.sstables, [] (auto& sst) {
         return generation_value(sst->generation()) != 0;
     }));
-
-    cf.stop_and_keep_alive().get();
   });
 }
 
@@ -848,6 +841,7 @@ SEASTAR_TEST_CASE(leveled_stcs_on_L0) {
     auto s = builder.build(schema_builder::compact_storage::no);
 
     table_for_tests cf(env.manager(), s);
+    auto stop_cf = deferred_stop(cf);
 
     const auto keys = tests::generate_partition_keys(1, cf.schema());
     auto sstable_max_size_in_mb = 1;
@@ -884,14 +878,13 @@ SEASTAR_TEST_CASE(leveled_stcs_on_L0) {
         BOOST_REQUIRE(candidate.level == 0);
         BOOST_REQUIRE(candidate.sstables.empty());
     }
-
-    cf.stop_and_keep_alive().get();
   });
 }
 
 SEASTAR_TEST_CASE(overlapping_starved_sstables_test) {
   return test_env::do_with_async([] (test_env& env) {
     table_for_tests cf(env.manager());
+    auto stop_cf = deferred_stop(cf);
 
     const auto keys = tests::generate_partition_keys(5, cf.schema());
     auto min_key = keys.front();
@@ -917,14 +910,13 @@ SEASTAR_TEST_CASE(overlapping_starved_sstables_test) {
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.level == 2);
     BOOST_REQUIRE(candidate.sstables.size() == 3);
-
-    cf.stop_and_keep_alive().get();
   });
 }
 
 SEASTAR_TEST_CASE(check_overlapping) {
   return test_env::do_with_async([] (test_env& env) {
     table_for_tests cf(env.manager());
+    auto stop_cf = deferred_stop(cf);
 
     const auto keys = tests::generate_partition_keys(4, cf.schema());
     const auto& min_key = keys.front();
@@ -942,8 +934,6 @@ SEASTAR_TEST_CASE(check_overlapping) {
     auto overlapping_sstables = leveled_manifest::overlapping(*cf.schema(), compacting, uncompacting);
     BOOST_REQUIRE(overlapping_sstables.size() == 1);
     BOOST_REQUIRE(generation_value(overlapping_sstables.front()->generation()) == 4);
-
-    cf.stop_and_keep_alive().get();
   });
 }
 
@@ -1347,6 +1337,7 @@ SEASTAR_TEST_CASE(basic_date_tiered_strategy_test) {
     builder.set_min_compaction_threshold(4);
     auto s = builder.build(schema_builder::compact_storage::no);
     table_for_tests cf(env.manager(), s);
+    auto stop_cf = deferred_stop(cf);
 
     std::vector<sstables::shared_sstable> candidates;
     int min_threshold = cf->schema()->min_compaction_threshold();
@@ -1374,8 +1365,6 @@ SEASTAR_TEST_CASE(basic_date_tiered_strategy_test) {
     for (auto& sst : sstables) {
         BOOST_REQUIRE(generation_value(sst->generation()) != (min_threshold + 1));
     }
-
-    cf.stop_and_keep_alive().get();
   });
 }
 
@@ -1386,6 +1375,7 @@ SEASTAR_TEST_CASE(date_tiered_strategy_test_2) {
     builder.set_min_compaction_threshold(4);
     auto s = builder.build(schema_builder::compact_storage::no);
     table_for_tests cf(env.manager(), s);
+    auto stop_cf = deferred_stop(cf);
 
     // deterministic timestamp for Fri, 01 Jan 2016 00:00:00 GMT.
     auto tp = db_clock::from_time_t(1451606400);
@@ -1429,8 +1419,6 @@ SEASTAR_TEST_CASE(date_tiered_strategy_test_2) {
     BOOST_REQUIRE(sstables.size() == size_t(min_threshold + 1));
     BOOST_REQUIRE(gens.contains(min_threshold + 1));
     BOOST_REQUIRE(!gens.contains(min_threshold + 2));
-
-    cf.stop_and_keep_alive().get();
   });
 }
 
@@ -1739,8 +1727,9 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
 }
 
 SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     table_for_tests cf(env.manager());
+    auto stop_cf = deferred_stop(cf);
     auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, cf.schema()->compaction_strategy_options());
 
     std::vector<sstables::shared_sstable> candidates;
@@ -1754,7 +1743,6 @@ SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
     auto strategy_c = make_strategy_control_for_test(false);
     auto desc = cs.get_sstables_for_compaction(cf.as_table_state(), *strategy_c, std::move(candidates));
     BOOST_REQUIRE(desc.sstables.size() == size_t(max_threshold));
-    return cf.stop_and_keep_alive();
   });
 }
 
