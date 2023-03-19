@@ -1136,7 +1136,7 @@ SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
                     ::usleep(sleep_ms * 1000);
                     co_await db.apply(t.schema(), freeze(gen()), tracing::trace_state_ptr(), db::commitlog::force_sync::yes, db::no_timeout);
                     co_await t.flush();
-                    BOOST_ASSERT(t.sstables_count() < t.schema()->max_compaction_threshold() * 2);
+                    BOOST_ASSERT(t.sstables_count() < size_t(t.schema()->max_compaction_threshold() * 2));
                 }
                 co_await drop_table();
             }

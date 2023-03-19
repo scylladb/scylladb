@@ -561,7 +561,7 @@ SEASTAR_THREAD_TEST_CASE(test_dht_subtract_ranges) {
         dht::partition_range_vector ranges;
         ranges.reserve(count);
 
-        for (auto i = 0; i < count; i++) {
+        for (size_t i = 0; i < count; i++) {
             dht::token t0 = get_random_token();
             dht::token t1 = get_random_token();
             if (t1 < t0) {
