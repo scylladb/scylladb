@@ -125,6 +125,7 @@ sstring to_string(cql_binary_opcode op) {
     case cql_binary_opcode::AUTH_SUCCESS:   return "AUTH_SUCCESS";
     case cql_binary_opcode::OPCODES_COUNT:  return "OPCODES_COUNT";
     }
+    return format("Unknown CQL binary opcode {}", static_cast<unsigned>(op));
 }
 
 sstring to_string(const event::status_change::status_type t) {
