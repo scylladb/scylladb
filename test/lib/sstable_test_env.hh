@@ -84,6 +84,10 @@ public:
         return make_sstable(std::move(schema), std::move(dir), generation_from_value(gen_value), v, f, buffer_size, now);
     }
 
+    shared_sstable make_sstable(schema_ptr schema, sstring dir, sstable::version_types v = sstables::get_highest_sstable_version()) {
+        return make_sstable(std::move(schema), std::move(dir), _impl->generation++, std::move(v));
+    }
+
     shared_sstable make_sstable(schema_ptr schema, unsigned long generation,
             sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
             size_t buffer_size = default_sstable_buffer_size, gc_clock::time_point now = gc_clock::now()) {
