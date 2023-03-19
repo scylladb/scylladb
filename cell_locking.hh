@@ -175,7 +175,7 @@ private:
         }
 
         class hasher {
-            const schema* _schema; // pointer instead of reference for default assignment
+            const ::schema* _schema; // pointer instead of reference for default assignment
         public:
             explicit hasher(const schema& s) : _schema(&s) { }
 

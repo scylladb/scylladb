@@ -48,7 +48,7 @@ private:
     modules _modules;
     config _cfg;
     seastar::abort_source _as;
-    optimized_optional<abort_source::subscription> _abort_subscription;
+    optimized_optional<seastar::abort_source::subscription> _abort_subscription;
     serialized_action _update_task_ttl_action;
     utils::observer<uint32_t> _task_ttl_observer;
     uint32_t _task_ttl;
@@ -99,8 +99,8 @@ public:
             foreign_task_vector _children;
             shared_promise<> _done;
             module_ptr _module;
-            abort_source _as;
-            optimized_optional<abort_source::subscription> _shutdown_subscription;
+            seastar::abort_source _as;
+            optimized_optional<seastar::abort_source::subscription> _shutdown_subscription;
         public:
             impl(module_ptr module, task_id id, uint64_t sequence_number, std::string keyspace, std::string table, std::string entity, task_id parent_id) noexcept;
             virtual ~impl() = default;
@@ -203,7 +203,7 @@ public:
         }
     };
 public:
-    task_manager(config cfg, abort_source& as) noexcept;
+    task_manager(config cfg, seastar::abort_source& as) noexcept;
     task_manager() noexcept;
 
     modules& get_modules() noexcept;

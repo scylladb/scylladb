@@ -51,10 +51,10 @@ private:
         bool only_keyspace;
     };
     struct describe_listing {
-        element_type element_type;
+        describe_statement::element_type element_type;
     };
     struct describe_element {
-        element_type element_type;
+        describe_statement::element_type element_type;
         std::optional<sstring> keyspace;
         sstring name;
     };

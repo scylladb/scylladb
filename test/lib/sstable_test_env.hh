@@ -51,7 +51,7 @@ class test_env {
         tmpdir dir;
         std::unique_ptr<db::config> db_config;
         directory_semaphore dir_sem;
-        cache_tracker cache_tracker;
+        ::cache_tracker cache_tracker;
         gms::feature_service feature_service;
         db::nop_large_data_handler nop_ld_handler;
         test_env_sstables_manager mgr;
