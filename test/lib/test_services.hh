@@ -72,8 +72,4 @@ struct table_for_tests {
     compaction::table_state& as_table_state() noexcept;
 
     future<> stop();
-
-    future<> stop_and_keep_alive() {
-        return stop().finally([cf = *this] {});
-    }
 };
