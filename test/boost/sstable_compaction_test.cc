@@ -149,15 +149,15 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
     auto close_cf = deferred_stop(cf);
     cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
 
-    auto generations = std::vector<unsigned long>({1, 2, 3, 4});
-    for (auto generation : generations) {
+    auto idx = std::vector<unsigned long>({1, 2, 3, 4});
+    for (auto i : idx) {
         // create 4 sstables of similar size to be compacted later on.
 
         auto mt = make_lw_shared<replica::memtable>(s);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
-        sstring k = "key" + to_sstring(generation);
+        sstring k = "key" + to_sstring(i);
         auto key = partition_key::from_exploded(*s, {to_bytes(k)});
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
 
@@ -172,7 +172,7 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
         column_family_test(cf).add_sstable(sst).get();
     }
 
-    BOOST_REQUIRE(cf->sstables_count() == generations.size());
+    BOOST_REQUIRE(cf->sstables_count() == idx.size());
     cf->trigger_compaction();
     BOOST_REQUIRE(cm.get_stats().pending_tasks == 1 || cm.get_stats().active_tasks == 1);
 
