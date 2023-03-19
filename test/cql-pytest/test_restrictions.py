@@ -12,6 +12,7 @@
 
 import pytest
 from util import new_test_table, unique_key_int
+from cassandra.protocol import InvalidRequest
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -21,6 +22,11 @@ def table1(cql, test_keyspace):
 @pytest.fixture(scope="module")
 def table2(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "a int, b int, PRIMARY KEY (a, b)") as table:
+        yield table
+
+@pytest.fixture(scope="module")
+def table3(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "a int, b int, c int, d int, PRIMARY KEY (a, b, c, d)") as table:
         yield table
 
 # Cassandra does not allow a WHERE clause restricting the same column with
@@ -73,3 +79,36 @@ def test_multiple_restrictions_on_ck(cql, table2, scylla_only):
     assert [(p, 0)] == list(cql.execute(f'SELECT * FROM {table2} WHERE a = {p} AND b < 4 AND b < 1'))
     assert [(p, 0)] == list(cql.execute(f'SELECT * FROM {table2} WHERE a = {p} AND b < 1 AND b < 4'))
     assert [(p, 0)] == list(cql.execute(f'SELECT * FROM {table2} WHERE a = {p} AND b < 1 AND b < 2'))
+
+# Try a multi-column restriction on several clustering columns, with the wrong
+# number of values on the right-hand-side of the restriction. Scylla should
+# cleanly report the error - and not silently ignore it or even crash as in
+# issue #13241.
+@pytest.mark.skip("Crashes due to issue #13241")
+def test_multi_column_restriction_in(cql, table3):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table3} (a, b, c, d) VALUES ({p}, 1, 2, 3)')
+    # The tuple (1,2,3) is the same length as (b,c,d) so the query works:
+    assert [(p,1,2,3)] == list(cql.execute(f'SELECT * FROM {table3} WHERE a={p} AND (b,c,d) IN ((1,2,3))'))
+    # IN can also list several tuples of the same length:
+    assert [(p,1,2,3)] == list(cql.execute(f'SELECT * FROM {table3} WHERE a={p} AND (b,c,d) IN ((4,5,6), (1,2,3))'))
+    # The tuple (1,2,3,4) is too long, so fails - with different error-
+    # messages in Scylla and Cassandra:
+    with pytest.raises(InvalidRequest):
+        cql.execute(f'SELECT * FROM {table3} WHERE a={p} AND (b,c,d) IN ((1, 2, 3, 4))')
+    # The tuple (1,2) is too short, so should also fail. Reproduces #13241:
+    with pytest.raises(InvalidRequest):
+        cql.execute(f'SELECT * FROM {table3} WHERE a={p} AND (b,c,d) IN ((1, 2))')
+
+def test_multi_column_restriction_eq(cql, table3):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table3} (a, b, c, d) VALUES ({p}, 1, 2, 3)')
+    # The tuple (1,2,3) is the same length as (b,c,d) so the query works:
+    assert [(p,1,2,3)] == list(cql.execute(f'SELECT * FROM {table3} WHERE a={p} AND (b,c,d) = (1,2,3)'))
+    # The tuple (1,2,3,4) is too long, so fails - with different error-
+    # messages in Scylla and Cassandra:
+    with pytest.raises(InvalidRequest):
+        cql.execute(f'SELECT * FROM {table3} WHERE a={p} AND (b,c,d) = (1, 2, 3, 4)')
+    # The tuple (1,2) is too short, so should also fail.
+    with pytest.raises(InvalidRequest):
+        cql.execute(f'SELECT * FROM {table3} WHERE a={p} AND (b,c,d) = (1, 2)')
