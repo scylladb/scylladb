@@ -49,7 +49,7 @@ future<> controller::listen(seastar::sharded<auth::service>& auth_service, db::c
     return utils::resolve(cfg.rpc_address, family, preferred).then([this, server, &cfg, keepalive, ceo = std::move(ceo), &auth_service] (seastar::net::inet_address ip) {
         auto get_config = sharded_parameter([&] {
             return redis_transport::redis_server_config {
-                ._timeout_config = make_timeout_config(cfg),
+                ._timeout_config = updateable_timeout_config(cfg),
                 ._max_request_size = memory::stats().total_memory() / 10,
                 ._read_consistency_level = make_consistency_level(cfg.redis_read_consistency_level()),
                 ._write_consistency_level = make_consistency_level(cfg.redis_write_consistency_level()),

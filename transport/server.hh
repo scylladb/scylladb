@@ -101,7 +101,7 @@ struct cql_query_state {
 };
 
 struct cql_server_config {
-    ::timeout_config timeout_config;
+    updateable_timeout_config timeout_config;
     size_t max_request_size;
     sstring partitioner_name;
     unsigned sharding_ignore_msb;
@@ -280,7 +280,7 @@ private:
     future<> advertise_new_connection(shared_ptr<generic_server::connection> conn) override;
     future<> unadvertise_connection(shared_ptr<generic_server::connection> conn) override;
 
-    const ::timeout_config& timeout_config() const { return _config.timeout_config; }
+    ::timeout_config timeout_config() const { return _config.timeout_config.current_values(); }
 };
 
 class cql_server::event_notifier : public service::migration_listener,

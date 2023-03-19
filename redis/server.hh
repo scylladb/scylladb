@@ -46,7 +46,7 @@ class storage_proxy;
 namespace redis_transport {
 
 struct redis_server_config {
-    ::timeout_config _timeout_config;
+    ::updateable_timeout_config _timeout_config;
     size_t _max_request_size;
     db::consistency_level _read_consistency_level;
     db::consistency_level _write_consistency_level;

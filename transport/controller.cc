@@ -90,7 +90,7 @@ future<> controller::do_start_server() {
                 shard_aware_transport_port_ssl = cfg.native_shard_aware_transport_port_ssl();
             }
             return cql_server_config {
-              .timeout_config = make_timeout_config(cfg),
+              .timeout_config = updateable_timeout_config(cfg),
               .max_request_size = _mem_limiter.local().total_memory(),
               .partitioner_name = cfg.partitioner(),
               .sharding_ignore_msb = cfg.murmur3_partitioner_ignore_msb_bits(),

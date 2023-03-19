@@ -27,13 +27,13 @@ class redis_options {
     sstring _ks_name;
     const db::consistency_level _read_consistency;
     const db::consistency_level _write_consistency;
-    const timeout_config& _timeout_config;
+    const updateable_timeout_config& _timeout_config;
     service::client_state _client_state;
     size_t _total_redis_db_count;
 public:
     explicit redis_options(const db::consistency_level rcl,
         const db::consistency_level wcl,
-        const timeout_config& tc,
+        const updateable_timeout_config& tc,
         auth::service& auth,
         const socket_address addr,
         size_t total_redis_db_count)
@@ -41,14 +41,14 @@ public:
         ,_read_consistency(rcl)
         ,_write_consistency(wcl)
         ,_timeout_config(tc)
-        ,_client_state(service::client_state::external_tag{}, auth, nullptr, tc, addr)
+        ,_client_state(service::client_state::external_tag{}, auth, nullptr, tc.current_values(), addr)
         ,_total_redis_db_count(total_redis_db_count)
     {
     }
     explicit redis_options(const sstring& ks_name,
         const db::consistency_level rcl,
         const db::consistency_level wcl,
-        const timeout_config& tc,
+        const updateable_timeout_config& tc,
         auth::service& auth,
         const socket_address addr,
         size_t total_redis_db_count)
@@ -56,7 +56,7 @@ public:
         ,_read_consistency(rcl)
         ,_write_consistency(wcl)
         ,_timeout_config(tc)
-        ,_client_state(service::client_state::external_tag{}, auth, nullptr, tc, addr)
+        ,_client_state(service::client_state::external_tag{}, auth, nullptr, tc.current_values(), addr)
         ,_total_redis_db_count(total_redis_db_count)
     {
     }
@@ -64,9 +64,8 @@ public:
     const db::consistency_level get_read_consistency_level() const { return _read_consistency; }
     const db::consistency_level get_write_consistency_level() const { return _write_consistency; }
 
-    const timeout_config& get_timeout_config() const { return _timeout_config; }
-    const db::timeout_clock::duration get_read_timeout() const { return _timeout_config.read_timeout; }
-    const db::timeout_clock::duration get_write_timeout() const { return _timeout_config.write_timeout; }
+    const db::timeout_clock::duration get_read_timeout() const { return std::chrono::milliseconds(_timeout_config.read_timeout_in_ms); }
+    const db::timeout_clock::duration get_write_timeout() const { return std::chrono::milliseconds(_timeout_config.write_timeout_in_ms); }
     const sstring& get_keyspace_name() const { return _ks_name; }
     service::client_state& get_client_state() { return _client_state; }
 

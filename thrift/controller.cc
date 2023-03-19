@@ -67,14 +67,13 @@ future<> thrift_controller::do_start_server() {
         auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
         auto keepalive = cfg.rpc_keepalive();
 
-<<<<<<< HEAD
         auto ip = utils::resolve(cfg.rpc_address, family, preferred).get();
         auto port = cfg.rpc_port();
         _addr.emplace(ip, port);
 
         auto tsc = sharded_parameter([&cfg] {
             return thrift_server_config {
-                .timeout_config = make_timeout_config(cfg),
+                .timeout_config = updateable_timeout_config(cfg),
                 .max_request_size = cfg.thrift_max_message_length_in_mb() * (uint64_t(1) << 20),
             };
         });
