@@ -1115,6 +1115,7 @@ public:
             case state::release_memory: return "state::release_memory";
             case state::done: return "state::done";
         }
+        std::abort();
     };
 private:
     reader_concurrency_semaphore& _sem;
