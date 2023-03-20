@@ -1576,7 +1576,15 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
                 for (auto& x : _gossiper.get_endpoint_states()) {
                     auto state = _gossiper.get_gossip_status(x.second);
                     if (state == sstring(versioned_value::STATUS_UNKNOWN)) {
-                        throw std::runtime_error(format("Node {} has gossip status=UNKNOWN. Try fixing it before adding new node to the cluster.", x.first));
+                        if (gms::gossiper::clk::now() > t + std::chrono::seconds(60)) {
+                            throw std::runtime_error(format("Node {} has gossip status=UNKNOWN. Try fixing it before adding new node to the cluster.", x.first));
+                        } else {
+                            found_bootstrapping_node = true;
+                            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
+                            slogger.info("Node {} has gossip status=UNKNOWN. Sleep 1 second and check again ({} seconds elapsed) (check_for_endpoint_collision)", x.first, elapsed);
+                            sleep_abortable(std::chrono::seconds(1), _abort_source).get();
+                            break;
+                        }
                     }
                     auto addr = x.first;
                     slogger.debug("Checking bootstrapping/leaving/moving nodes: node={}, status={} (check_for_endpoint_collision)", addr, state);
