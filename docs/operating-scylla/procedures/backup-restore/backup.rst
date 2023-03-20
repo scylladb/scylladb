@@ -96,6 +96,8 @@ Incremental Backup
 | For example:
 | ``/mykeyspace/team_roster-91cd2060f99d11e6a47a000000000000/backups``
 
+| In addition, incremental backup can be enabled or disabled dynamically on each node, without restarting it, using :doc:`nodetool enablebackup </operating-scylla/nodetool-commands/enablebackup>` or :doc:`nodetool disablebackup </operating-scylla/nodetool-commands/disablebackup>`, respectively.
+
 
 Additional Resources
 ====================
