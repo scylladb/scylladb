@@ -259,7 +259,7 @@ Handling Failures
 Raft requires a quorum of nodes in a cluster to proceed. As long as the majority of nodes are alive and connected, schema and topology updates proceed unaffected.
 When the node that was down is up again, it first contacts the cluster to fetch the latest schema and then starts serving queries.
 
-ScyllaDB data path, read and write requests, works with :term:`Consistency Level (CL)` , and are not dependent on Raft quorum.
+ScyllaDB data path read and write requests work with :term:Consistency Level (CL) and is not dependent on Raft quorum.
 
 The following examples show the recovery actions depending on your cluster's number of nodes and DCs.
 
