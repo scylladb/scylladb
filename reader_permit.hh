@@ -164,6 +164,10 @@ public:
 
     void set_timeout(db::timeout_clock::time_point timeout) noexcept;
 
+    const tracing::trace_state_ptr& trace_state() const noexcept;
+
+    void set_trace_state(tracing::trace_state_ptr trace_ptr) noexcept;
+
     // If the read was aborted, throw the exception the read was aborted with.
     // Otherwise no-op.
     void check_abort();

@@ -325,6 +325,7 @@ flat_mutation_reader_v2 read_context::create_reader(
             if (reader_opt->permit() != permit) {
                 on_internal_error(mmq_log, "read_context::create_reader(): passed-in permit is different than saved reader's permit");
             }
+            permit.set_trace_state(trace_state);
             return std::move(*reader_opt);
         }
     }

@@ -438,6 +438,14 @@ public:
         }
     }
 
+    const tracing::trace_state_ptr& trace_state() const noexcept {
+        return _trace_ptr;
+    }
+
+    void set_trace_state(tracing::trace_state_ptr trace_ptr) noexcept {
+        _trace_ptr = std::move(trace_ptr);
+    }
+
     void check_abort() {
         if (_ex) {
             std::rethrow_exception(_ex);
@@ -577,6 +585,14 @@ db::timeout_clock::time_point reader_permit::timeout() const noexcept {
 
 void reader_permit::set_timeout(db::timeout_clock::time_point timeout) noexcept {
     _impl->set_timeout(timeout);
+}
+
+const tracing::trace_state_ptr& reader_permit::trace_state() const noexcept {
+    return _impl->trace_state();
+}
+
+void reader_permit::set_trace_state(tracing::trace_state_ptr trace_ptr) noexcept {
+    _impl->set_trace_state(std::move(trace_ptr));
 }
 
 void reader_permit::check_abort() {
