@@ -55,7 +55,7 @@ For example:
 | For example:
 | ``/mykeyspace/team_roster-91cd2060f99d11e6a47a000000000000/snapshots/1487847672222``
 
-From one of the nodes, recreate the schema. Repeat these steps for each node in the cluster.
+Repeat these steps for each node in the cluster.
 
 .. _backup-incremental-backup:
 
