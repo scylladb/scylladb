@@ -47,8 +47,8 @@ template<class T, class MAP>
 std::vector<T>& map_to_key_value(const MAP& map, std::vector<T>& res) {
     for (auto i : map) {
         T val;
-        val.key = boost::lexical_cast<std::string>(i.first);
-        val.value = boost::lexical_cast<std::string>(i.second);
+        val.key = fmt::to_string(i.first);
+        val.value = fmt::to_string(i.second);
         res.push_back(val);
     }
     return res;

@@ -55,17 +55,9 @@ std::ostream& operator<<(std::ostream& out, const partition_slice& ps) {
 }
 
 std::ostream& operator<<(std::ostream& out, const read_command& r) {
-    return out << "read_command{"
-        << "cf_id=" << r.cf_id
-        << ", version=" << r.schema_version
-        << ", slice=" << r.slice << ""
-        << ", limit=" << r.get_row_limit()
-        << ", timestamp=" << r.timestamp.time_since_epoch().count()
-        << ", partition_limit=" << r.partition_limit
-        << ", query_uuid=" << r.query_uuid
-        << ", is_first_page=" << r.is_first_page
-        << ", read_timestamp=" << r.read_timestamp
-        << "}";
+    fmt::print(out, "read_command{{cf_id={}, version={}, slice={}, limit={}, timestamp={}, partition_limit={}, query_uuid={}, is_first_page={}, read_timestamp={}}}",
+               r.cf_id, r.schema_version, r.slice, r.get_row_limit(), r.timestamp.time_since_epoch().count(), r.partition_limit, r.query_uuid, r.is_first_page, r.read_timestamp);
+    return out;
 }
 
 std::ostream& operator<<(std::ostream& out, const forward_request::reduction_type& r) {
