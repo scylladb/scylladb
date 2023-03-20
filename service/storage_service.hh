@@ -785,7 +785,7 @@ private:
 
     friend class group0_state_machine;
     bool _raft_topology_change_enabled = false;
-
+    future<> _raft_state_monitor = make_ready_future<>();
     // This fibers monitors raft state and start/stops the topology change
     // coordinator fiber
     future<> raft_state_monitor_fiber(raft::server&, sharded<db::system_distributed_keyspace>& sys_dist_ks);
@@ -794,9 +794,21 @@ private:
     topology_state_machine _topology_state_machine;
 
     future<> _topology_change_coordinator = make_ready_future<>();
-    future<> topology_change_coordinator_fiber(raft::server&, sharded<db::system_distributed_keyspace>&, abort_source&);
+    future<> topology_change_coordinator_fiber(raft::server&, raft::term_t, sharded<db::system_distributed_keyspace>&, abort_source&);
+
+    // Those futures hold results of streaming for various operations
+    std::optional<shared_future<>> _bootstrap_result;
+    std::optional<shared_future<>> _decomission_result;
+    std::optional<shared_future<>> _rebuild_result;
+    std::unordered_map<raft::server_id, std::optional<shared_future<>>> _remove_result;
 
     future<raft_topology_cmd_result> raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, const raft_topology_cmd& cmd);
+
+    future<> raft_bootstrap(raft::server&);
+    future<> raft_decomission();
+    future<> raft_removenode(locator::host_id host_id);
+    future<> raft_replace(raft::server&, raft::server_id, gms::inet_address);
+    future<> raft_rebuild(sstring source_dc);
 
     // This is called on all nodes for each new command received through raft
     future<> topology_transition(storage_proxy& proxy, gms::inet_address, std::vector<canonical_mutation>);
