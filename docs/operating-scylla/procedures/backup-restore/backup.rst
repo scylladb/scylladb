@@ -77,9 +77,12 @@ Incremental Backup
 | Enabling the incremental backup (disabled by default) will create a hard-link from each SSTable, right after it is **flushed**, to a ``backups/`` directory.
 | For a complete point in time backup, the following is required:
 
-  * A snapshot
-  * All incremental backups and commit logs from the time of the snapshot.
-  * Make sure to delete unnecessary incremental backups. Scylla does not do this automatically.
+|  * A snapshot
+|  * All incremental backups and commit logs from the time of the snapshot.
+
+.. note::
+
+   Make sure to delete unnecessary incremental backups. Scylla does not do this automatically.
 
 **Procedure**
 
