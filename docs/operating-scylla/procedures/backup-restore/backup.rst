@@ -87,12 +87,14 @@ Incremental Backup
 
 **Procedure**
 
-| 1. In the ``/etc/scylla/scylla.yaml`` file set the ``incremental backups`` parameters to ``true`` and restart the Scylla service. Snapshot are created under Scylla data directory ``/var/lib/scylla/data``
-| with the following structure:
-| ``keyspace_name/table_name-UUID/backups/backups_name``
+| In the ``/etc/scylla/scylla.yaml`` file set the ``incremental backups`` parameter to ``true`` and restart the Scylla service.
+
+| Incremental backups are created under the Scylla data directory ``/var/lib/scylla/data``
+| with the following structure for each table:
+| ``keyspace_name/table_name-UUID/backups``
 
 | For example:
-| ``/mykeyspace/team_roster-91cd2060f99d11e6a47a000000000000/backups/1437827672721``
+| ``/mykeyspace/team_roster-91cd2060f99d11e6a47a000000000000/backups``
 
 
 Additional Resources
