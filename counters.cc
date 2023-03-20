@@ -13,8 +13,9 @@
 #include <boost/range/algorithm/sort.hpp>
 
 std::ostream& operator<<(std::ostream& os, counter_shard_view csv) {
-    return os << "{global_shard id: " << csv.id() << " value: " << csv.value()
-              << " clock: " << csv.logical_clock() << "}";
+    fmt::print(os, "{{global_shard id: {} value: {}, clock: {}}}",
+               csv.id(), csv.value(), csv.logical_clock());
+    return os;
 }
 
 std::ostream& operator<<(std::ostream& os, counter_cell_view ccv) {

@@ -1143,45 +1143,35 @@ void fsm::stop() {
 }
 
 std::ostream& operator<<(std::ostream& os, const fsm& f) {
-    os << "current term: " << f._current_term << ", ";
-    os << "current leader: " << f.current_leader() << ", ";
-    os << "len messages: " << f._messages.size() << ", ";
-    os << "voted for: " << f._voted_for << ", ";
-    os << "commit idx:" << f._commit_idx << ", ";
-    // os << "last applied: " << f._last_applied << ", ";
-    os << "log (" << f._log << "), ";
-    os << "observed (current term: " << f._observed._current_term << ", ";
-    os << "voted for: " << f._observed._voted_for << ", ";
-    os << "commit index: " << f._observed._commit_idx << "), ";
-    os << "current time: " << f._clock.now() << ", ";
-    os << "last election time: " << f._last_election_time << ", ";
+    fmt::print(os, "current term: {}, current leader: {}, len messages: {}, voted_for: {}, commit idx: {}, log ({}), ",
+               f._current_term, f.current_leader(), f._messages.size(), f._voted_for, f._commit_idx, f._log);
+    fmt::print(os, "observed (current term: {}, voted for {}, commit index: {}), ",
+               f._observed._current_term, f._observed._voted_for, f._observed._commit_idx);
+    fmt::print(os, "current time: {}, last election time: {}, ",
+               f._clock.now(), f._last_election_time);
     if (f.is_candidate()) {
-        os << "votes (" << f.candidate_state().votes << "), ";
+        fmt::print(os, "votes ({}), ", f.candidate_state().votes);
     }
-    os << "messages: " << f._messages.size() << ", ";
-
+    fmt::print(os, "messages: {}, ", f._messages.size());
     if (std::holds_alternative<leader>(f._state)) {
-        os << "leader, ";
+        fmt::print(os, "leader, ");
     } else if (std::holds_alternative<candidate>(f._state)) {
-        os << "candidate";
+        fmt::print(os, "candidate");
     } else if (std::holds_alternative<follower>(f._state)) {
-        os << "follower";
+        fmt::print(os, "follower");
     }
     if (f.is_leader()) {
-        os << "followers (";
+        fmt::print(os, "followers (");
         for (const auto& [server_id, follower_progress]: f.leader_state().tracker) {
-            os << server_id << ", ";
-            os << follower_progress.next_idx << ", ";
-            os << follower_progress.match_idx << ", ";
+            fmt::print(os, "{}, {}, {}, ", server_id, follower_progress.next_idx, follower_progress.match_idx);
             if (follower_progress.state == follower_progress::state::PROBE) {
-                os << "PROBE, ";
+                fmt::print(os, "PROBE, ");
             } else if (follower_progress.state == follower_progress::state::PIPELINE) {
-                os << "PIPELINE, ";
+                fmt::print(os, "PIPELINE, ");
             }
-            os << follower_progress.in_flight;
-            os << "; ";
+            fmt::print(os, "{}; ", follower_progress.in_flight);
         }
-        os << ")";
+        fmt::print(os, ")");
 
     }
     return os;

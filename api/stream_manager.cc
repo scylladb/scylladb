@@ -22,7 +22,7 @@ static void set_summaries(const std::vector<streaming::stream_summary>& from,
         json::json_list<hs::stream_summary>& to) {
     if (!from.empty()) {
         hs::stream_summary res;
-        res.cf_id = boost::lexical_cast<std::string>(from.front().cf_id);
+        res.cf_id = fmt::to_string(from.front().cf_id);
         // For each stream_session, we pretend we are sending/receiving one
         // file, to make it compatible with nodetool.
         res.files = 1;

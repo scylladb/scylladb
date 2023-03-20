@@ -487,7 +487,8 @@ struct transient_error: public error {
     }
 
     friend std::ostream& operator<<(std::ostream& os, const transient_error& e) {
-        return os << "transient_error, message: " << e.what() << ", leader: " << e.leader;
+        fmt::print(os, "transient_error, message: {}, leader: {}", e.what(), e.leader);
+        return os;
     }
 };
 

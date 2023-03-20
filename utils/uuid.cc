@@ -34,7 +34,8 @@ make_random_uuid() noexcept {
 }
 
 std::ostream& operator<<(std::ostream& out, const UUID& uuid) {
-    return out << uuid.to_sstring();
+    fmt::print(out, "{}", uuid);
+    return out;
 }
 
 UUID::UUID(sstring_view uuid) {

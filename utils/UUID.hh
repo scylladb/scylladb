@@ -65,15 +65,10 @@ public:
 
     }
 
-    // This matches Java's UUID.toString() actual implementation. Note that
-    // that method's documentation suggest something completely different!
+    friend ::fmt::formatter<UUID>;
+
     sstring to_sstring() const {
-        return format("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-                ((uint64_t)most_sig_bits >> 32),
-                ((uint64_t)most_sig_bits >> 16 & 0xffff),
-                ((uint64_t)most_sig_bits & 0xffff),
-                ((uint64_t)least_sig_bits >> 48 & 0xffff),
-                ((uint64_t)least_sig_bits & 0xffffffffffffLL));
+        return fmt::to_string(*this);
     }
 
     friend std::ostream& operator<<(std::ostream& out, const UUID& uuid);
@@ -251,3 +246,27 @@ std::ostream& operator<<(std::ostream& os, const utils::tagged_uuid<Tag>& id) {
     return os << id.id;
 }
 } // namespace std
+
+template <>
+struct fmt::formatter<utils::UUID> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const utils::UUID& id, FormatContext& ctx) const {
+        // This matches Java's UUID.toString() actual implementation. Note that
+        // that method's documentation suggest something completely different!
+        return fmt::format_to(ctx.out(),
+                "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+                ((uint64_t)id.most_sig_bits >> 32),
+                ((uint64_t)id.most_sig_bits >> 16 & 0xffff),
+                ((uint64_t)id.most_sig_bits & 0xffff),
+                ((uint64_t)id.least_sig_bits >> 48 & 0xffff),
+                ((uint64_t)id.least_sig_bits & 0xffffffffffffLL));
+    }
+};
+
+template <typename Tag>
+struct fmt::formatter<utils::tagged_uuid<Tag>> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const utils::tagged_uuid<Tag>& id, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", id.id);
+    }
+};

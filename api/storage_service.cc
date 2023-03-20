@@ -55,7 +55,8 @@ extern logging::logger apilog;
 namespace std {
 
 std::ostream& operator<<(std::ostream& os, const api::table_info& ti) {
-    return os << "table{name=" << ti.name << ", id=" << ti.id << "}";
+    fmt::print(os, "table{{name={}, id={}}}", ti.name, ti.id);
+    return os;
 }
 
 } // namespace std

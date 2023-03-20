@@ -1660,7 +1660,7 @@ std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
 }
 
 std::ostream& operator<<(std::ostream& os, const server_impl& s) {
-    os << "[id: " << s._id << ", fsm (" << s._fsm << ")]\n";
+    fmt::print(os, "[id: {}, fsm ()]\n", s._id, s._fsm);
     return os;
 }
 

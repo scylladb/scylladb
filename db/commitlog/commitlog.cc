@@ -1905,7 +1905,8 @@ std::ostream& operator<<(std::ostream& out, const db::commitlog::segment& s) {
 }
 
 std::ostream& operator<<(std::ostream& out, const db::commitlog::segment::cf_mark& m) {
-    return out << (m.s._cf_dirty | boost::adaptors::map_keys);
+    fmt::print(out, "{}", m.s._cf_dirty | boost::adaptors::map_keys);
+    return out;
 }
 
 std::ostream& operator<<(std::ostream& out, const db::replay_position& p) {
