@@ -12,6 +12,9 @@
 
 #include "auth/service.hh"
 #include "permission_altering_statement.hh"
+#include "cql3/functions/functions.hh"
+#include "cql3/functions/user_aggregate.hh"
+#include "cql3/functions/user_function.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
 #include "cql3/role_name.hh"
@@ -22,7 +25,7 @@ static auth::permission_set filter_applicable_permissions(const auth::permission
     auto const filtered_permissions = auth::permission_set::from_mask(ps.mask() & r.applicable_permissions().mask());
 
     if (!filtered_permissions) {
-        throw exceptions::invalid_request_exception(
+        throw exceptions::syntax_exception(
                 format("Resource {} does not support any of the requested permissions.", r));
     }
 
@@ -45,6 +48,18 @@ future<> cql3::statements::permission_altering_statement::check_access(query_pro
     maybe_correct_resource(_resource, state, qp);
 
     return state.ensure_exists(_resource).then([this, &state] {
+        if (_resource.kind() == auth::resource_kind::functions) {
+            // Even if the function exists, it may be a builtin function, in which case we disallow altering permissions on it.
+            auth::functions_resource_view v(_resource);
+            if (v.function_signature()) {
+                // If the resource has a signature, it is a specific funciton and not "all functions"
+                auto [name, function_args] = auth::decode_signature(*v.function_signature());
+                auto fun = cql3::functions::functions::find(db::functions::function_name{sstring(*v.keyspace()), name}, function_args);
+                if (fun->is_native()) {
+                    return make_exception_future<>(exceptions::invalid_request_exception("Altering permissions on builtin functions is not supported"));
+                }
+            }
+        }
         // check that the user has AUTHORIZE permission on the resource or its parents, otherwise reject
         // GRANT/REVOKE.
         return state.ensure_has_permission({auth::permission::AUTHORIZE, _resource}).then([this, &state] {
