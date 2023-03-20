@@ -1365,14 +1365,11 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
 
 // The DynamoDB API doesn't let the client control the server's timeout, so
 // we have a global default_timeout() for Alternator requests. The value of
-// s_default_timeout is overwritten in alternator::controller::start_server()
+// s_default_timeout_ms is overwritten in alternator::controller::start_server()
 // based on the "alternator_timeout_in_ms" configuration parameter.
-db::timeout_clock::duration executor::s_default_timeout = 10s;
-void executor::set_default_timeout(db::timeout_clock::duration timeout) {
-    s_default_timeout = timeout;
-}
+thread_local utils::updateable_value<uint32_t> executor::s_default_timeout_in_ms{10'000};
 db::timeout_clock::time_point executor::default_timeout() {
-    return db::timeout_clock::now() + s_default_timeout;
+    return db::timeout_clock::now() + std::chrono::milliseconds(s_default_timeout_in_ms);
 }
         
 static future<std::unique_ptr<rjson::value>> get_previous_item(

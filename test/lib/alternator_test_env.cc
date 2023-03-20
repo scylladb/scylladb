@@ -13,13 +13,20 @@
 
 #include "service/storage_proxy.hh"
 
+using namespace std::chrono_literals;
+
 future<> alternator_test_env::start(std::string_view isolation_level) {
     smp_service_group_config c;
     c.max_nonlocal_requests = 5000;
     smp_service_group ssg = co_await create_smp_service_group(c);
+    utils::updateable_value<uint32_t> timeout_in_ms;
 
     co_await _sdks.start(std::ref(_qp), std::ref(_mm), std::ref(_proxy));
     co_await _cdc_metadata.start();
+    auto get_timeout_in_ms = sharded_parameter([] {
+        std::chrono::milliseconds ms = 10s;
+        return utils::updateable_value<uint32_t>(ms.count());
+    });
     co_await _executor.start(
             std::ref(_gossiper),
             std::ref(_proxy),
@@ -29,7 +36,8 @@ future<> alternator_test_env::start(std::string_view isolation_level) {
             std::ref(_sdks),
             std::ref(_cdc_metadata),
             // end-of-streams-parameters
-            ssg);
+            ssg,
+            get_timeout_in_ms);
     try {
         alternator::rmw_operation::set_default_write_isolation(isolation_level);
     } catch (const std::runtime_error& e) {

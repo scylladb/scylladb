@@ -22,6 +22,7 @@
 #include "alternator/error.hh"
 #include "stats.hh"
 #include "utils/rjson.hh"
+#include "utils/updateable_value.hh"
 
 namespace db {
     class system_distributed_keyspace;
@@ -170,8 +171,10 @@ public:
     static constexpr auto KEYSPACE_NAME_PREFIX = "alternator_";
     static constexpr std::string_view INTERNAL_TABLE_PREFIX = ".scylla.alternator.";
 
-    executor(gms::gossiper& gossiper, service::storage_proxy& proxy, service::migration_manager& mm, db::system_distributed_keyspace& sdks, cdc::metadata& cdc_metadata, smp_service_group ssg)
-        : _gossiper(gossiper), _proxy(proxy), _mm(mm), _sdks(sdks), _cdc_metadata(cdc_metadata), _ssg(ssg) {}
+    executor(gms::gossiper& gossiper, service::storage_proxy& proxy, service::migration_manager& mm, db::system_distributed_keyspace& sdks, cdc::metadata& cdc_metadata, smp_service_group ssg, utils::updateable_value<uint32_t> default_timeout_in_ms)
+        : _gossiper(gossiper), _proxy(proxy), _mm(mm), _sdks(sdks), _cdc_metadata(cdc_metadata), _ssg(ssg) {
+        s_default_timeout_in_ms = std::move(default_timeout_in_ms);
+    }
 
     future<request_return_type> create_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
     future<request_return_type> describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
@@ -199,13 +202,16 @@ public:
     future<request_return_type> describe_continuous_backups(client_state& client_state, service_permit permit, rjson::value request);
 
     future<> start();
-    future<> stop() { return make_ready_future<>(); }
+    future<> stop() {
+        // disconnect from the value source, but keep the value unchanged.
+        s_default_timeout_in_ms = utils::updateable_value<uint32_t>{s_default_timeout_in_ms()};
+        return make_ready_future<>();
+    }
 
     static sstring table_name(const schema&);
     static db::timeout_clock::time_point default_timeout();
-    static void set_default_timeout(db::timeout_clock::duration timeout);
 private:
-    static db::timeout_clock::duration s_default_timeout;
+    static thread_local utils::updateable_value<uint32_t> s_default_timeout_in_ms;
 public:
     static schema_ptr find_table(service::storage_proxy&, const rjson::value& request);
 
