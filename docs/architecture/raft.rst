@@ -341,7 +341,7 @@ During the recovery procedure, you'll enter a special ``RECOVERY`` mode, remove 
 
 .. note::
 
-   Entering ``RECOVERY`` mode requires a node restart. Restarting an additional node while some nodes are already dead may lead to unavailability data queries. For example, if you're using the standard RF=3, CL=QUORUM setup, and you're recovering from a stuck of upgrade procedure because one of your nodes is dead, restarting another node will cause temporary data query unavailability (until the node finishes restarting). Prepare your service for downtime before proceeding.
+   Entering ``RECOVERY`` mode requires a node restart. Restarting an additional node while some nodes are already dead may lead to the unavailability of data queries. For example, if you're using the standard RF=3, CL=QUORUM setup, and you're recovering from a stuck of upgrade procedure because one of your nodes is dead, restarting another node will lead to unavailability of data queries (until the node finishes restarting). Prepare your service for downtime before proceeding.
 
 #. Perform the following query on **every alive node** in the cluster, using e.g. ``cqlsh``:
 
