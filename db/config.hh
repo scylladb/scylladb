@@ -83,7 +83,7 @@ namespace db {
 struct experimental_features_t {
     // NOTE: RAFT and BROADCAST_TABLES features are not enabled via `experimental` umbrella flag.
     // These options should be enabled explicitly.
-    // RAFT feature has to be enabled if BROADCAST_TABLES is enabled.
+    // RAFT feature has to be enabled if BROADCAST_TABLES or TABLETS is enabled.
     enum class feature {
         UNUSED,
         UDF,
@@ -91,6 +91,7 @@ struct experimental_features_t {
         RAFT,
         BROADCAST_TABLES,
         KEYSPACE_STORAGE_OPTIONS,
+        TABLETS,
     };
     static std::map<sstring, feature> map(); // See enum_option.
     static std::vector<enum_option<experimental_features_t>> all();
