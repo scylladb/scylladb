@@ -22,7 +22,8 @@ You can choose one of the following:
 Full Backup - Snapshots
 =======================
 
-Snapshots are taken using :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>`. First, the command flushes the MemTables from memory to SSTables on disk, and afterward, it creates a hard link for each SSTable in each keyspace.
+Snapshots are taken using :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>`.
+First, the command flushes the MemTables from memory to SSTables on disk, and afterward, it creates a hard link for each SSTable in each keyspace and table.
 With time, SSTables are compacted, but the hard link keeps a copy of each file. This takes up an increasing amount of disk space. It is important to clear space by :doc:`clean unnecessary snapshots </operating-scylla/procedures/backup-restore/delete-snapshot>`.
 
 **Procedure**
