@@ -31,31 +31,43 @@ hence it is important to clear space using the :doc:`clean unnecessary snapshots
 
 **Procedure**
 
-| 1. Data can only be restored from a snapshot of the table schema, where data exists in a backup. Backup your schema with the following command:
+On each node, run:
 
-| ``$: cqlsh -e "DESC SCHEMA" > <schema_name.cql>``
-
-For example:
-
-| ``$: cqlsh -e "DESC SCHEMA" > db_schema.cql``
-
+| ``$ nodetool snapshot``
 |
-| 2. Take a snapshot, including every keyspace you want to backup.
-
-| ``$ nodetool snapshot <KEYSPACE_NAME>``
-
-| For example:
-
-| ``$ nodetool snapshot mykeyspace``
-
-| The snapshot is created under Scylla data directory ``/var/lib/scylla/data``
-| It will have the following structure:
+| The snapshot is created under the Scylla data directory ``/var/lib/scylla/data``
+| It will have the following structure for each table:
+|
 | ``keyspace_name/table_name-UUID/snapshots/snapshot_name``
-
+|
 | For example:
-| ``/mykeyspace/team_roster-91cd2060f99d11e6a47a000000000000/snapshots/1487847672222``
+|
+| ``mykeyspace/team_roster-91cd2060f99d11e6a47a000000000000/snapshots/1487847672222``
 
-Repeat these steps for each node in the cluster.
+.. note::
+
+   By default, nodetool automatically names the snapshot using the current time since the system EPOCH, in milliseconds.
+   For advanced options, like setting the snapshot name (a.k.a. tag) or taking a snapshot of a list of keyspaces,
+   see :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>`.
+
+.. note::
+
+   To restore data from a given snapshot, the corresponding schema must be used.
+
+   In the common case, when no columns were deleted or altered,
+   Scylla automatically describes the schema for each table in the snapshot,
+   storing the result in a file named ``schema.cql`` in each snapshot subdirectory.
+
+   The full schema can also be backed up using the ``DESCRIBE SCHEMA`` cql query.
+   For example:
+
+     ``$ cqlsh -e "DESCRIBE SCHEMA" > db_schema.cql``
+
+   If the backed up data in a snapshot contain deleted or altered columns,
+   the schema should be restored from the ``system_schema`` keyspace,
+   in the same full-backup snapshot.
+
+   See the :doc:`Restore from Backup </operating-scylla/procedures/backup-restore/restore>` page for more information.
 
 .. _backup-incremental-backup:
 
