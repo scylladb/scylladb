@@ -74,7 +74,7 @@ On each node, run:
 Incremental Backup
 ==================
 
-| Enabling the incremental backup (disabled by default) will create a hard-link from each SSTable, right after it is **flushed**, to a backups directory.
+| Enabling the incremental backup (disabled by default) will create a hard-link from each SSTable, right after it is **flushed**, to a ``backups/`` directory.
 | For a complete point in time backup, the following is required: 
 
   * A snapshot 
