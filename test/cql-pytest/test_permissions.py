@@ -164,27 +164,33 @@ def test_udf_permissions_serialization(cql):
 # are properly handled, with right permissions granted.
 # Cassandra doesn't quote names properly, so the test fails
 def test_udf_permissions_quoted_names(cassandra_bug, cql):
-    schema = "a int primary key"
+    udt_name = f'"{unique_name()}weird_udt[t^t]a^b^[]"'
+    schema = f"a frozen<{udt_name}> primary key"
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
-        with new_test_table(cql, keyspace, schema) as table:
-            fun_body_lua = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
-            fun_body_java = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42;'"
+        with new_type(cql, keyspace, "(a text, b int)", udt_name) as udt, new_test_table(cql, keyspace, schema) as table:
+            fun_body_lua = f"(i {udt}) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
+            fun_body_java = f"(i {udt}) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42;'"
             fun_body = fun_body_lua
             try:
                 with new_function(cql, keyspace, fun_body):
                     pass
             except:
                 fun_body = fun_body_java
-            with new_function(cql, keyspace, fun_body, '"weird[name]"') as weird_fun:
+            with new_function(cql, keyspace, fun_body, f'"{unique_name()}weird[name1^name2]x^y"') as weird_fun:
                 with new_user(cql) as username:
                     with new_session(cql, username) as user_session:
-                        grant(cql, 'EXECUTE', f'FUNCTION {keyspace}.{weird_fun}(int)', username)
+                        grant(cql, 'EXECUTE', f'FUNCTION {keyspace}.{weird_fun}({udt})', username)
                         grant(cql, 'SELECT', table, username)
-                        cql.execute(f"INSERT INTO {table}(a) VALUES (7)")
+                        cql.execute(f"INSERT INTO {table}(a) VALUES ({{a:'hello', b:42}})")
+
                         assert list([r[0] for r in user_session.execute(f"SELECT {keyspace}.{weird_fun}(a) FROM {table}")]) == [42]
 
                         resources_with_execute = [row.resource for row in cql.execute(f"LIST EXECUTE OF {username}")]
-                        assert f'<function {keyspace}.{weird_fun}(int)>' in resources_with_execute
+                        assert f'<function {keyspace}.{weird_fun}(frozen<{udt_name}>)>' in resources_with_execute
+
+                        revoke(cql, 'EXECUTE', f'FUNCTION {keyspace}.{weird_fun}({udt})', username)
+                        check_enforced(cql, username, 'EXECUTE', f'FUNCTION {keyspace}.{weird_fun}({udt})',
+                                lambda: user_session.execute(f"SELECT {keyspace}.{weird_fun}(a) FROM {table}"))
 
 # Test that dropping a function without specifying its signature works with the DROP permission if there's only
 # one function with the given name, and that it fails if there are multiple functions with the same name,
