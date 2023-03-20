@@ -82,7 +82,8 @@ Incremental Backup
 
 .. note::
 
-   Make sure to delete unnecessary incremental backups. Scylla does not do this automatically.
+   | Make sure to delete unnecessary incremental backups files after copying them to external storage.
+   | Scylla does not do this automatically!
 
 **Procedure**
 
