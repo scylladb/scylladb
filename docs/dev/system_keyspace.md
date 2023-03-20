@@ -377,4 +377,43 @@ When a user keyspace is created with S3 storage options, sstables are put on the
 remote object storage and the information about them is kept in this table. The
 "uuid" field is used to point to the "folder" in which all sstables files are.
 
+## system.tablets
+
+Holds information about all tablets in the cluster.
+
+Schema:
+~~~
+CREATE TABLE system.tablets (
+    keyspace_name text,
+    table_id uuid,
+    last_token bigint,
+    new_replicas frozen<set<frozen<tuple<uuid, int>>>>,
+    replicas frozen<set<frozen<tuple<uuid, int>>>>,
+    stage text,
+    table_name text static,
+    tablet_count int static,
+    PRIMARY KEY ((keyspace_name, table_id), last_token)
+)
+~~~
+
+Each partition (keyspace_name, table_id) represents a tablet map of a given table.
+
+Only tables which use tablet-based replication strategy have an entry here.
+
+`tablet_count` is the number of tablets in the map.
+`table_name` is the name of the table, provided for convenience.
+
+`last_token` is the last token owned by the tablet. The i-th tablet, where i = 0, 1, ..., `tablet_count`-1),
+ owns the token range:
+```
+   (-inf, last_token(0)]            for i = 0
+   (last_token(i-1), last_token(i)] for i > 0
+```
+
+Each tablet is represented by a single row. `replicas` holds the set of shard-replicas of the tablet.
+It's a set of tuples where the first element is `host_id` of the replica and the second element is the `shard_id` of the replica.
+
+During tablet migration, the columns `new_replicas` and `stage` are set to represent the transition. The
+`new_replicas` column holds what will be put in `replicas` after transition is done.
+
 ## TODO: the rest

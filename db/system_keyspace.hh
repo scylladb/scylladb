@@ -156,6 +156,7 @@ public:
     static constexpr auto TOPOLOGY = "topology";
     static constexpr auto SSTABLES_REGISTRY = "sstables";
     static constexpr auto CDC_GENERATIONS_V3 = "cdc_generations_v3";
+    static constexpr auto TABLETS = "tablets";
 
     struct v3 {
         static constexpr auto BATCHES = "batches";
@@ -239,6 +240,7 @@ public:
     static schema_ptr topology();
     static schema_ptr sstables_registry();
     static schema_ptr cdc_generations_v3();
+    static schema_ptr tablets();
 
     static table_schema_version generate_schema_version(table_id table_id, uint16_t offset = 0);
 

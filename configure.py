@@ -663,6 +663,7 @@ scylla_raft_core = [
 scylla_core = (['message/messaging_service.cc',
                 'replica/database.cc',
                 'replica/table.cc',
+                'replica/tablets.cc',
                 'replica/distributed_loader.cc',
                 'replica/memtable.cc',
                 'replica/exceptions.cc',
