@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "sstables/sstables.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/index_reader.hh"
@@ -25,6 +27,9 @@
 using namespace sstables;
 using namespace std::chrono_literals;
 
+// Must be called in a seastar thread.
+sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, lw_shared_ptr<replica::memtable> mt);
+sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, lw_shared_ptr<replica::memtable> mt);
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts);
 sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, std::vector<mutation> muts);
 
@@ -34,6 +39,11 @@ inline future<> write_memtable_to_sstable_for_test(replica::memtable& mt, sstabl
 
 shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
         sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now());
+
+inline shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, std::vector<mutation> mutations,
+        sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
+    return make_sstable(env, std::move(s), env.tempdir().path().native(), std::move(mutations), std::move(cfg), version, query_time);
+}
 
 namespace sstables {
 

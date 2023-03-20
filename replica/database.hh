@@ -128,6 +128,7 @@ future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::
 class mutation_reordered_with_truncate_exception : public std::exception {};
 
 class column_family_test;
+class table_for_tests;
 class database_test;
 
 namespace replica {
@@ -1097,7 +1098,9 @@ public:
 
     friend std::ostream& operator<<(std::ostream& out, const column_family& cf);
     // Testing purposes.
+    // to let test classes access calculate_generation_for_new_table
     friend class ::column_family_test;
+    friend class ::table_for_tests;
 
     friend class distributed_loader;
     friend class table_populator;

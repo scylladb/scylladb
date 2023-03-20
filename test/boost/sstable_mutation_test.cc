@@ -23,7 +23,6 @@
 #include "schema/schema_builder.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "partition_slice_builder.hh"
-#include "test/lib/tmpdir.hh"
 #include "readers/combined.hh"
 #include "replica/memtable-sstable.hh"
 #include "test/lib/index_reader_assertions.hh"
@@ -398,10 +397,17 @@ mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr
     return as_mutation_source(make_sstable(env, s, dir, std::move(mutations), cfg, version, query_time));
 }
 
+static
+mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr s, std::vector<mutation> mutations,
+        sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
+    return make_sstable_mutation_source(env, std::move(s), env.tempdir().path().native(), std::move(mutations), std::move(cfg), version, query_time);
+}
+
 SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
     return test_env::do_with_async([] (test_env& env) {
         auto s = make_shared_schema({}, "ks", "cf",
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
+        auto sst_gen = env.make_sst_factory(s);
 
         auto key = tests::generate_partition_key(s);
         auto c_key_start = clustering_key::from_exploded(*s, {int32_type->decompose(1)});
@@ -414,22 +420,19 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
         auto mt = make_lw_shared<replica::memtable>(s);
         mt->apply(std::move(m));
 
-        auto sst = env.make_sstable(s);
-        write_memtable_to_sstable_for_test(*mt, sst).get();
-        sst->load().get();
-        auto mut = with_closeable(sst->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice()), [] (auto& mr) {
-            return read_mutation_from_flat_mutation_reader(mr);
-        }).get0();
-        BOOST_REQUIRE(bool(mut));
-        auto rts = mut->partition().row_tombstones();
-        BOOST_REQUIRE(rts.size() == 1);
-        auto it = rts.begin();
-        BOOST_REQUIRE(it->tombstone().equal(*s, range_tombstone(
-                        c_key_start,
-                        bound_kind::excl_start,
-                        c_key_end,
-                        bound_kind::excl_end,
-                        tombstone(9, ttl))));
+        verify_mutation(env, env.make_sstable(s), mt, query::full_partition_range, [&] (mutation_opt& mut) {
+            BOOST_REQUIRE(bool(mut));
+            auto rts = mut->partition().row_tombstones();
+            BOOST_REQUIRE(rts.size() == 1);
+            auto it = rts.begin();
+            BOOST_REQUIRE(it->tombstone().equal(*s, range_tombstone(
+                          c_key_start,
+                          bound_kind::excl_start,
+                          c_key_end,
+                          bound_kind::excl_end,
+                          tombstone(9, ttl))));
+            return stop_iteration::yes;
+        }).get();
     });
 }
 
@@ -853,9 +856,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
         auto mt = make_lw_shared<replica::memtable>(s);
         mt->apply(std::move(m));
 
-        auto sst = env.make_sstable(s, version);
-        write_memtable_to_sstable_for_test(*mt, sst).get();
-        sst->load().get();
+        auto sst = make_sstable_containing(env.make_sstable(s, version), mt);
         auto mut = with_closeable(sst->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice()), [] (auto& mr) {
             return read_mutation_from_flat_mutation_reader(mr);
         }).get0();
@@ -883,10 +884,8 @@ SEASTAR_TEST_CASE(test_has_partition_key) {
             auto mt = make_lw_shared<replica::memtable>(s);
             mt->apply(std::move(m));
 
-            auto sst = env.make_sstable(s, version);
-            write_memtable_to_sstable_for_test(*mt, sst).get();
+            auto sst = make_sstable_containing(env.make_sstable(s, version), mt);
             auto hk = sstables::sstable::make_hashed_key(*s, dk.key());
-            sst->load().get();
             auto mr = sst->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
             auto close_mr = deferred_close(mr);
             auto res =  sst->has_partition_key(hk, dk).get0();
@@ -1253,8 +1252,7 @@ SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
             ss.add_row(m2, ss.make_ckey(5), "v");
             ss.add_row(m2, ss.make_ckey(6), "v");
 
-            tmpdir dir;
-            auto ms = make_sstable_mutation_source(env, s, dir.path().string(), {m1, m2}, env.manager().configure_writer(), version);
+            auto ms = make_sstable_mutation_source(env, s, {m1, m2}, env.manager().configure_writer(), version);
 
             auto index_accesses = [] {
                 auto&& stats = sstables::partition_index_cache::shard_stats();
@@ -1459,11 +1457,11 @@ SEASTAR_TEST_CASE(test_reading_serialization_header) {
         // SSTable class has way too many responsibilities. In particular, it mixes the reading and
         // writting parts. Let's use a separate objects for writing and reading to ensure that nothing
         // carries over that wouldn't normally be read from disk.
-        auto sst = env.make_sstable(s, 1, sstable::version_types::mc, sstables::sstable::format_types::big);
+        auto sst = env.make_sstable(s, 1);
         sst->write_components(mt->make_flat_reader(s, env.make_reader_permit()), 2, s, env.manager().configure_writer(), mt->get_encoding_stats()).get();
     }
 
-    auto sst = env.make_sstable(s, 1, sstable::version_types::mc, sstables::sstable::format_types::big);
+    auto sst = env.make_sstable(s, 1);
     sst->load().get();
 
     auto hdr = sst->get_serialization_header();
@@ -1585,9 +1583,8 @@ SEASTAR_TEST_CASE(test_static_compact_tables_are_read) {
             std::vector<mutation> muts = {m1, m2};
             boost::sort(muts, mutation_decorated_key_less_comparator{});
 
-            tmpdir dir;
             sstable_writer_config cfg = env.manager().configure_writer();
-            auto ms = make_sstable_mutation_source(env, s, dir.path().string(), muts, cfg, version);
+            auto ms = make_sstable_mutation_source(env, s, muts, cfg, version);
 
             assert_that(ms.make_reader_v2(s, env.make_reader_permit()))
                 .produces(muts[0])
@@ -1644,7 +1641,7 @@ SEASTAR_TEST_CASE(writer_handles_subsequent_range_tombstone_changes_without_tomb
             deferred_close dc1{input_reader};
             sstable_writer_config cfg = env.manager().configure_writer();
             auto _ = env.tempdir().make_sweeper();
-            shared_sstable sstable = env.make_sstable(s, 0);
+            shared_sstable sstable = env.make_sstable(s);
             encoding_stats es;
             sstable->write_components(std::move(input_reader), 1, s, cfg, es).get();
             sstable->load().get();

@@ -17,12 +17,24 @@
 #include "sstables/version.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include "test/boost/sstable_test.hh"
 #include <seastar/core/reactor.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/coroutine.hh>
 
 using namespace sstables;
 using namespace std::chrono_literals;
+
+sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, lw_shared_ptr<replica::memtable> mt) {
+    return make_sstable_containing(sst_factory(), std::move(mt));
+}
+
+sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, lw_shared_ptr<replica::memtable> mt) {
+    write_memtable_to_sstable_for_test(*mt, sst).get();
+    sstable_open_config cfg { .load_first_and_last_position_metadata = true };
+    sst->open_data(cfg).get();
+    return sst;
+}
 
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts) {
     return make_sstable_containing(sst_factory(), std::move(muts));
@@ -195,4 +207,36 @@ void compaction_manager_test::deregister_compaction(const sstables::compaction_d
     } else {
         testlog.error("compaction_manager_test: deregister_compaction uuid={}: task not found", c.compaction_uuid);
     }
+}
+
+shared_sstable verify_mutation(test_env& env, shared_sstable sst, lw_shared_ptr<replica::memtable> mt, bytes key, std::function<void(mutation_opt&)> verify) {
+    auto sstp = make_sstable_containing(std::move(sst), mt);
+    return verify_mutation(env, std::move(sstp), std::move(key), std::move(verify));
+}
+
+shared_sstable verify_mutation(test_env& env, shared_sstable sstp, bytes key, std::function<void(mutation_opt&)> verify) {
+    auto s = sstp->get_schema();
+    auto pr = dht::partition_range::make_singular(make_dkey(s, key));
+    auto rd = sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice());
+    auto close_rd = deferred_close(rd);
+    auto mopt = read_mutation_from_flat_mutation_reader(rd).get();
+    verify(mopt);
+    return sstp;
+}
+
+shared_sstable verify_mutation(test_env& env, shared_sstable sst, lw_shared_ptr<replica::memtable> mt, dht::partition_range pr, std::function<stop_iteration(mutation_opt&)> verify) {
+    auto sstp = make_sstable_containing(std::move(sst), mt);
+    return verify_mutation(env, std::move(sstp), std::move(pr), std::move(verify));
+}
+
+shared_sstable verify_mutation(test_env& env, shared_sstable sstp, dht::partition_range pr, std::function<stop_iteration(mutation_opt&)> verify) {
+    auto s = sstp->get_schema();
+    auto rd = sstp->make_reader(s, env.make_reader_permit(), std::move(pr), s->full_slice());
+    auto close_rd = deferred_close(rd);
+    while (auto mopt = read_mutation_from_flat_mutation_reader(rd).get()) {
+        if (verify(mopt) == stop_iteration::yes) {
+            break;
+        }
+    }
+    return sstp;
 }
