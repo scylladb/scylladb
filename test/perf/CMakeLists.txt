@@ -33,6 +33,23 @@ target_link_libraries(perf-lib
   PRIVATE
     xxHash::xxhash)
 
+add_perf_test(logalloc)
+add_perf_test(memory_footprint_test)
+add_perf_test(perf_big_decimal
+  LIBRARIES
+    mutation
+    schema)
+add_perf_test(perf_cache_eviction)
+add_perf_test(perf_checksum)
+add_perf_test(perf_collection)
+add_perf_test(perf_cql_parser
+  LIBRARIES
+    cql3)
+add_perf_test(perf_hash)
+add_perf_test(perf_idl
+  LIBRARIES
+    idl)
+add_perf_test(perf_mutation)
 add_perf_test(perf_mutation_readers
   LIBRARIES
     auth
@@ -45,13 +62,6 @@ add_perf_test(perf_mutation_readers
     service
     types
     utils)
-add_perf_test(perf_checksum)
 add_perf_test(perf_mutation_fragment)
-add_perf_test(perf_idl
-  LIBRARIES
-    idl)
 add_perf_test(perf_vint)
-add_perf_test(perf_big_decimal
-  LIBRARIES
-    mutation
-    schema)
+add_perf_test(perf_row_cache_reads)

@@ -1,64 +1,3 @@
-#
- # Add a scylla unit test
- #
- # add_scylla_test(<test_name>
- #   [KIND <kind>]
- #   [SOUCES <src>...])
- #
- # kind can be:
- # * SEASTAR - a unit test that depends on the scylla sources and the
- #   seastar test framework.
- # * BOOST - a unit test that only depends on the listed sources and the
- #   Boost test framework
- # test_name should map to a source file, such that ${test_name}.cc
- # is a valid source file. If this isn't the case, please use the SOURCE
- # param.
- #
- function(add_scylla_test name)
-  cmake_parse_arguments(parsed_args
-    ""
-    "KIND"
-    "LIBRARIES;SOURCES"
-    ${ARGN})
-  if(parsed_args_KIND)
-    set(kind ${parsed_args_KIND})
-  else()
-    set(kind "SEASTAR")
-  endif()
-  if(parsed_args_SOURCES)
-    set(src "${parsed_args_SOURCES}")
-  else()
-    set(src "${name}.cc")
-  endif()
-  add_executable(${name} ${src})
-  target_include_directories(${name}
-    PRIVATE
-      ${CMAKE_SOURCE_DIR})
-  target_link_libraries(${name}
-    PRIVATE
-      test-lib
-      Seastar::seastar
-      xxHash::xxhash)
-  if(kind STREQUAL "SEASTAR")
-    target_link_libraries(${name}
-      PRIVATE
-        Seastar::seastar_testing)
-    target_compile_definitions(${name}
-      PRIVATE
-        SEASTAR_TESTING_MAIN)
-  elseif(kind STREQUAL "BOOST")
-    target_link_libraries(${name}
-      PRIVATE
-        Boost::unit_test_framework
-        Boost::dynamic_linking)
-  endif()
-  if(parsed_args_LIBRARIES)
-    target_link_libraries(${name}
-      PRIVATE
-        ${parsed_args_LIBRARIES})
-  endif()
-endfunction()
-
 add_scylla_test(anchorless_list_test
   KIND BOOST)
 add_scylla_test(alternator_unit_test
@@ -94,6 +33,9 @@ add_scylla_test(compress_test
   KIND BOOST)
 add_scylla_test(cql_auth_syntax_test
   KIND BOOST
+  LIBRARIES cql3)
+add_scylla_test(cql_query_test
+  KIND SEASTAR
   LIBRARIES cql3)
 add_scylla_test(crc_test
   KIND BOOST)
