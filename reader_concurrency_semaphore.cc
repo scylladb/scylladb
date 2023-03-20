@@ -50,6 +50,15 @@ struct reader_concurrency_semaphore::inactive_read {
     }
 };
 
+template <>
+struct fmt::formatter<reader_concurrency_semaphore::evict_reason> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const reader_concurrency_semaphore::evict_reason& reason, FormatContext& ctx) const {
+        static const char* value_table[] = {"permit", "time", "manual"};
+        return fmt::format_to(ctx.out(), "{}", value_table[static_cast<int>(reason)]);
+    }
+};
+
 namespace {
 
 void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaphore& semaphore, std::string_view problem) noexcept;
@@ -878,6 +887,8 @@ future<> reader_concurrency_semaphore::execution_loop() noexcept {
             permit.on_executing();
             auto e = std::move(permit.aux_data());
 
+            tracing::trace(permit.trace_state(), "[reader concurrency semaphore] executing read");
+
             try {
                 e.func(reader_permit(permit.shared_from_this())).forward_to(std::move(e.pr));
             } catch (...) {
@@ -1105,6 +1116,7 @@ void reader_concurrency_semaphore::do_detach_inactive_reader(reader_permit::impl
     ir.ttl_timer.cancel();
     ir.detach();
     ir.reader.permit()->on_evicted();
+    tracing::trace(permit.trace_state(), "[reader_concurrency_semaphore] evicted, reason: {}", reason);
     try {
         if (ir.notify_handler) {
             ir.notify_handler(reason);
@@ -1261,8 +1273,17 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
         &stats::reads_queued_because_count_resources
     };
 
+    static const char* result_as_string[] = {
+        "admitted immediately",
+        "queued because of non-empty ready list",
+        "queued because of used permits",
+        "queued because of memory resources",
+        "queued because of count resources"
+    };
+
     const auto [admit, why] = can_admit_read(permit);
     ++(_stats.*stats_table[static_cast<int>(why)]);
+    tracing::trace(permit.trace_state(), "[reader concurrency semaphore] {}", result_as_string[static_cast<int>(why)]);
     if (admit != can_admit::yes || !_wait_list.empty()) {
         auto fut = enqueue_waiter(permit, wait_on::admission);
         if (admit == can_admit::yes && !_wait_list.empty()) {
@@ -1273,6 +1294,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
             maybe_dump_reader_permit_diagnostics(*this, "semaphore could admit new reads yet there are waiters");
             maybe_admit_waiters();
         } else if (admit == can_admit::maybe) {
+            tracing::trace(permit.trace_state(), "[reader concurrency semaphore] evicting inactive reads in the background to free up resources");
             ++_stats.reads_queued_with_eviction;
             evict_readers_in_background();
         }
