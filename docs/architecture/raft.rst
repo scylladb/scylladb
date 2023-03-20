@@ -337,7 +337,7 @@ It's good practice to ensure that using firewall rules or otherwise isolates you
 Procedure
 ~~~~~~~~~
 
-During the recovery procedure, you'll enter a special ``RECOVERY`` mode, remove all faulty nodes (using the standard :doc:`node removal procedure </operating-scylla/procedures/cluster-management/remove-node/>`), delete the internal Raft data, and execute a rolling restart. This will cause the cluster to perform the internal Raft upgrade procedure again, initializing the Raft algorithm from scratch. The recovery procedure applies to clusters not running Raft in the past and then had Raft enabled and to clusters bootstrapped with Raft.
+During the recovery procedure, you'll enter a special ``RECOVERY`` mode, remove all faulty nodes (using the standard :doc:`node removal procedure </operating-scylla/procedures/cluster-management/remove-node/>`), delete the internal Raft data, and execute a rolling restart. This will cause the cluster to perform the internal Raft upgrade procedure again, initializing the Raft algorithm from scratch. The recovery procedure applies to clusters that were not running Raft in the past and then had Raft enabled.
 
 .. note::
 
