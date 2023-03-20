@@ -205,10 +205,10 @@ class cql3_type::raw_ut : public raw {
 
     virtual sstring to_string() const override {
         if (is_frozen()) {
-            return format("frozen<{}>", _name.to_string());
+            return format("frozen<{}>", _name.to_cql_string());
         }
 
-        return _name.to_string();
+        return _name.to_cql_string();
     }
 public:
     raw_ut(ut_name name)

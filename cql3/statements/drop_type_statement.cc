@@ -56,7 +56,7 @@ void drop_type_statement::validate_while_executing(query_processor& qp) const {
             if (_if_exists) {
                 return;
             } else {
-                throw exceptions::invalid_request_exception(format("No user type named {} exists.", _name.to_string()));
+                throw exceptions::invalid_request_exception(format("No user type named {} exists.", _name.to_cql_string()));
             }
         }
 

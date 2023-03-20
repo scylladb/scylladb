@@ -37,10 +37,10 @@ public:
 
     sstring get_string_type_name() const;
 
-    sstring to_string() const;
+    sstring to_cql_string() const;
 
     friend std::ostream& operator<<(std::ostream& os, const ut_name& n) {
-        return os << n.to_string();
+        return os << n.to_cql_string();
     }
 };
 
