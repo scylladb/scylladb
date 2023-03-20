@@ -7,7 +7,15 @@ Group:          Applications/Databases
 License:        AGPLv3
 URL:            http://www.scylladb.com/
 Source0:        %{reloc_pkg}
-Requires:       %{product}-server = %{version}-%{release} %{product}-conf = %{version}-%{release} %{product}-python3 = %{version}-%{release} %{product}-kernel-conf = %{version}-%{release} %{product}-jmx = %{version}-%{release} %{product}-tools = %{version}-%{release} %{product}-tools-core = %{version}-%{release} %{product}-node-exporter = %{version}-%{release} %{product}-cqlsh = %{version}-%{release}
+Requires:       %{product}-server = %{version}-%{release}
+Requires:       %{product}-conf = %{version}-%{release}
+Requires:       %{product}-python3 = %{version}-%{release}
+Requires:       %{product}-kernel-conf = %{version}-%{release}
+Requires:       %{product}-jmx = %{version}-%{release}
+Requires:       %{product}-tools = %{version}-%{release}
+Requires:       %{product}-tools-core = %{version}-%{release}
+Requires:       %{product}-node-exporter = %{version}-%{release}
+Requires:       %{product}-cqlsh = %{version}-%{release}
 Obsoletes:	scylla-server < 1.1
 
 %global _debugsource_template %{nil}
@@ -54,7 +62,8 @@ Group:          Applications/Databases
 Summary:        The Scylla database server
 License:        AGPLv3
 URL:            http://www.scylladb.com/
-Requires:       %{product}-conf  = %{version}-%{release} %{product}-python3 = %{version}-%{release}
+Requires:       %{product}-conf = %{version}-%{release}
+Requires:       %{product}-python3 = %{version}-%{release}
 Conflicts:      abrt
 AutoReqProv:    no
 
