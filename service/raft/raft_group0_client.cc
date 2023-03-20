@@ -123,6 +123,8 @@ group0_guard::~group0_guard() = default;
 
 group0_guard::group0_guard(group0_guard&&) noexcept = default;
 
+group0_guard& group0_guard::operator=(group0_guard&&) noexcept = default;
+
 utils::UUID group0_guard::observed_group0_state_id() const {
     return _impl->_observed_group0_state_id;
 }

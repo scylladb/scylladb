@@ -41,6 +41,7 @@ class group0_guard {
 public:
     ~group0_guard();
     group0_guard(group0_guard&&) noexcept;
+    group0_guard& operator=(group0_guard&&) noexcept;
 
     utils::UUID observed_group0_state_id() const;
     utils::UUID new_group0_state_id() const;
