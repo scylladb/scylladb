@@ -418,3 +418,23 @@ def test_allow_filtering_multi_column_and_index(cql, test_keyspace):
         check_af_optional(cql, (table, everything),
             "p=1 AND (c1,c2)<(2,0) AND r = 0",
             lambda r : r.p == 1 and r.r == 0 and (r.c1 < 2 or (r.c1 == 2 and r.c2 < 0)))
+
+# In test_allow_filtering_clustering_key above we checked that a scan of the
+# whole table looking for one particular *clustering* column value requires
+# filtering: Such a query may return just a few or even no matches, but still
+# needs to go over all the partitions. Here we do exactly the same but
+# instead of the restriction c=2 we use multi-column syntax (c)=(2) - which
+# should be the same (see discussion in issue #13250).
+def test_allow_filtering_clustering_key_multicolumn_syntax(cql, table1):
+    check_af_mandatory(cql, table1, '(c)=(2)', lambda row: row.c==2)
+
+# Moreover, if we have multiple clustering key columns, c1 and c2,
+# (c2)=(10) should be allowed just like c2=10 (and require filtering
+# just like it) - we shouldn't complain that c1 is missing. Reproduces #13250.
+@pytest.mark.xfail(reason="issue #13250")
+def test_allow_filtering_compound_clustering_key_multicolumn_syntax(cql, table3):
+    check_af_mandatory(cql, table3, 'c1=10', lambda row: row.c1==10)
+    check_af_mandatory(cql, table3, '(c1)=(10)', lambda row: row.c1==10)
+    check_af_mandatory(cql, table3, 'c2=10', lambda row: row.c2==10)
+    # Reproduces #13250:
+    check_af_mandatory(cql, table3, '(c2)=(10)', lambda row: row.c2==10)

@@ -345,6 +345,31 @@ def test_filter_cluster_key(cql, test_keyspace):
         rows = cql.execute(stmt)
         assert_rows(rows, [1, 1])
 
+# Selecting *only* an indexed clustering key does not require filtering, it's
+# a full-index scan (the amount of output is proportional to the read).
+# Additionally, with unnecessary parentheses the query also works, and isn't
+# handled like a multi-column restriction (reproduces #13250).
+@pytest.mark.xfail(reason="issue #13250")
+def test_index_scan_multicolumn_syntax(cql, test_keyspace):
+    schema = 'p int, c1 int, c2 int, primary key (p, c1, c2)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(c1)")
+        cql.execute(f"CREATE INDEX ON {table}(c2)")
+        cql.execute(f"INSERT INTO {table} (p, c1, c2) VALUES (0, 1, 1)")
+        cql.execute(f"INSERT INTO {table} (p, c1, c2) VALUES (0, 0, 1)")
+        cql.execute(f"INSERT INTO {table} (p, c1, c2) VALUES (0, 1, 0)")
+        assert [(0,), (1,)] == list(cql.execute(f'SELECT c2 FROM {table} WHERE c1 = 1'))
+        assert [(0,), (1,)] == list(cql.execute(f'SELECT c1 FROM {table} WHERE c2 = 1'))
+        # The query (c1) = (1) isn't a real multi-column restriction (it
+        # should mean the same as c1=1) so it can use the index - and work
+        # without ALLOW FILTERING. Reproduces #13250:
+        assert [(0,), (1,)] == list(cql.execute(f'SELECT c2 FROM {table} WHERE (c1) = (1)'))
+        # The query (c2) = (1) isn't a real multi-column restriction (it
+        # should mean the same as c2=1) so it should be allowed despite
+        # missing a restriction on c1. In our case c2=1 is allowed because
+        # c2 is indexed. Reproduces #13250:
+        assert [(0,), (1,)] == list(cql.execute(f'SELECT c1 FROM {table} WHERE (c2) = (1)'))
+
 def test_multi_column_with_regular_index(cql, test_keyspace):
     """Reproduces #9085."""
     with new_test_table(cql, test_keyspace, 'p int, c1 int, c2 int, r int, primary key(p,c1,c2)') as tbl:
