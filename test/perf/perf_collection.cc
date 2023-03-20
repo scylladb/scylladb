@@ -16,14 +16,14 @@
 
 using per_key_t = int64_t;
 
-struct key_compare {
+struct perf_key_compare {
     bool operator()(const per_key_t& a, const per_key_t& b) const noexcept { return a < b; }
     int64_t simplify_key(per_key_t k) noexcept {
         return k;
     }
 };
 
-struct key_tri_compare {
+struct perf_key_tri_compare {
     std::strong_ordering operator()(const per_key_t& a, const per_key_t& b) const noexcept {
         return a <=> b;
     }
@@ -34,9 +34,9 @@ struct key_tri_compare {
 using namespace seastar;
 
 /* On node size 32 and less linear search works better */
-using test_bplus_tree = bplus::tree<per_key_t, unsigned long, key_compare, 4, bplus::key_search::linear>;
+using test_bplus_tree = bplus::tree<per_key_t, unsigned long, perf_key_compare, 4, bplus::key_search::linear>;
 
-static_assert(bplus::SimpleLessCompare<int64_t, key_compare>);
+static_assert(bplus::SimpleLessCompare<int64_t, perf_key_compare>);
 
 #include "utils/intrusive_btree.hh"
 
@@ -50,7 +50,7 @@ public:
     perf_intrusive_key(const perf_intrusive_key&) = delete;
 
     struct tri_compare {
-        key_tri_compare _cmp;
+        perf_key_tri_compare _cmp;
         std::strong_ordering operator()(const per_key_t a, const per_key_t b) const noexcept { return _cmp(a, b); }
         std::strong_ordering operator()(const perf_intrusive_key& a, const perf_intrusive_key& b) const noexcept { return _cmp(a._k, b._k); }
         std::strong_ordering operator()(const per_key_t a, const perf_intrusive_key& b) const noexcept { return _cmp(a, b._k); }
@@ -90,11 +90,11 @@ void scan_collection(Col& c, int batch) {
 
 class bptree_tester : public collection_tester {
     /* On node size 32 (this test) linear search works better */
-    using test_tree = bplus::tree<per_key_t, unsigned long, key_compare, 4, bplus::key_search::linear>;
+    using test_tree = bplus::tree<per_key_t, unsigned long, perf_key_compare, 4, bplus::key_search::linear>;
 
     test_tree _t;
 public:
-    bptree_tester() : _t(key_compare{}) {}
+    bptree_tester() : _t(perf_key_compare{}) {}
     virtual void insert(per_key_t k) override { _t.emplace(k, 0); }
     virtual void lower_bound(per_key_t k) override {
         auto i = _t.lower_bound(k);
@@ -108,7 +108,7 @@ public:
         int x = 0;
         auto i = _t.begin();
         while (i != _t.end()) {
-            i = i.erase(key_compare{});
+            i = i.erase(perf_key_compare{});
             if (++x % batch == 0) {
                 seastar::thread::yield();
             }
@@ -119,7 +119,7 @@ public:
     virtual void insert_and_erase(per_key_t k) override {
         auto i = _t.emplace(k, 0);
         assert(i.second);
-        i.first.erase(key_compare{});
+        i.first.erase(perf_key_compare{});
     }
     virtual void show_stats() override {
         struct bplus::stats st = _t.get_stats();
