@@ -91,8 +91,8 @@ def new_test_table(cql, keyspace, schema, extra=""):
 
 # A utility function for creating a new temporary user-defined type.
 @contextmanager
-def new_type(cql, keyspace, cmd):
-    type_name = keyspace + "." + unique_name()
+def new_type(cql, keyspace, cmd, name=None):
+    type_name = keyspace + "." + (name or unique_name())
     cql.execute("CREATE TYPE " + type_name + " " + cmd)
     try:
         yield type_name
