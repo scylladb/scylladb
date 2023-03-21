@@ -111,17 +111,27 @@ struct cql_server_config {
     smp_service_group bounce_request_smp_service_group = default_smp_service_group();
 };
 
-class cql_server : public seastar::peering_sharded_service<cql_server>, public generic_server::server {
-private:
+/**
+ * CQL op-code stats collected for each scheduling group
+ */
+struct cql_sg_stats {
     struct request_kind_stats {
         uint64_t count = 0;
         uint64_t request_size = 0;
         uint64_t response_size = 0;
     };
 
-    struct transport_stats {
-        transport_stats(int num_op) : _cql_requests_stats(num_op) {}
+    cql_sg_stats();
+    request_kind_stats& get_cql_opcode_stats(cql_binary_opcode op) { return _cql_requests_stats[static_cast<uint8_t>(op)]; }
+    void register_metrics();
+private:
+    seastar::metrics::metric_groups _metrics;
+    std::vector<request_kind_stats> _cql_requests_stats;
+};
 
+class cql_server : public seastar::peering_sharded_service<cql_server>, public generic_server::server {
+private:
+    struct transport_stats {
         // server stats
         uint64_t connects = 0;
         uint64_t connections = 0;
@@ -131,10 +141,6 @@ private:
         uint64_t requests_shed = 0;
 
         std::unordered_map<exceptions::exception_code, uint64_t> errors;
-
-        request_kind_stats& get_cql_opcode_stats(cql_binary_opcode op) { return _cql_requests_stats[static_cast<uint8_t>(op)]; }
-    private:
-        std::vector<request_kind_stats> _cql_requests_stats;
     };
 private:
     class event_notifier;
@@ -153,18 +159,23 @@ private:
     auth::service& _auth_service;
     qos::service_level_controller& _sl_controller;
     gms::gossiper& _gossiper;
+    scheduling_group_key _stats_key;
 public:
     cql_server(distributed<cql3::query_processor>& qp, auth::service&,
             service::memory_limiter& ml,
             cql_server_config config,
             const db::config& db_cfg,
             qos::service_level_controller& sl_controller,
-            gms::gossiper& g);
+            gms::gossiper& g,
+            scheduling_group_key stats_key);
 public:
     using response = cql_transport::response;
     using result_with_foreign_response_ptr = exceptions::coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>;
     service::endpoint_lifecycle_subscriber* get_lifecycle_listener() const noexcept;
     service::migration_listener* get_migration_listener() const noexcept;
+    cql_sg_stats::request_kind_stats& get_cql_opcode_stats(cql_binary_opcode op) {
+        return scheduling_group_get_specific<cql_sg_stats>(_stats_key).get_cql_opcode_stats(op);
+    }
 
     future<utils::chunked_vector<client_data>> get_client_data();
 private:

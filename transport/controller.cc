@@ -23,7 +23,7 @@ static logging::logger logger("cql_server_controller");
 controller::controller(sharded<auth::service>& auth, sharded<service::migration_notifier>& mn,
         sharded<gms::gossiper>& gossiper, sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
         sharded<qos::service_level_controller>& sl_controller, sharded<service::endpoint_lifecycle_notifier>& elc_notif,
-        const db::config& cfg)
+        const db::config& cfg, scheduling_group_key cql_opcode_stats_key)
     : _ops_sem(1)
     , _auth_service(auth)
     , _mnotifier(mn)
@@ -33,6 +33,7 @@ controller::controller(sharded<auth::service>& auth, sharded<service::migration_
     , _mem_limiter(ml)
     , _sl_controller(sl_controller)
     , _config(cfg)
+    , _cql_opcode_stats_key(cql_opcode_stats_key)
 {
 }
 
@@ -142,7 +143,7 @@ future<> controller::do_start_server() {
             }
         }
 
-        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), cql_server_config, std::ref(cfg), std::ref(_sl_controller), std::ref(_gossiper)).get();
+        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), cql_server_config, std::ref(cfg), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key).get();
         auto on_error = defer([&cserver] { cserver->stop().get(); });
 
         subscribe_server(*cserver).get();
