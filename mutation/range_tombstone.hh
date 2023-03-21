@@ -286,3 +286,16 @@ public:
 
     void clear();
 };
+
+template<>
+struct fmt::formatter<range_tombstone> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const range_tombstone& rt, FormatContext& ctx) const {
+        if (rt) {
+            return fmt::format_to(ctx.out(), "{{range_tombstone: start={}, end={}, {}}}",
+                                  rt.position(), rt.end_position(), rt.tomb);
+        } else {
+            return fmt::format_to(ctx.out(), "{{range_tombstone: none}}");
+        }
+    }
+};
