@@ -251,7 +251,7 @@ network_topology_strategy::calculate_natural_endpoints(
     co_return std::move(tracker.replicas());
 }
 
-void network_topology_strategy::validate_options() const {
+void network_topology_strategy::validate_options(const gms::feature_service&) const {
     for (auto& c : _config_options) {
         if (c.first == sstring("replication_factor")) {
             throw exceptions::configuration_exception(

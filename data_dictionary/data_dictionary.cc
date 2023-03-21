@@ -238,9 +238,9 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
     }
 }
 
-void keyspace_metadata::validate(const locator::topology& topology) const {
+void keyspace_metadata::validate(const gms::feature_service& fs, const locator::topology& topology) const {
     using namespace locator;
-    abstract_replication_strategy::validate_replication_strategy(name(), strategy_name(), strategy_options(), topology);
+    abstract_replication_strategy::validate_replication_strategy(name(), strategy_name(), strategy_options(), fs, topology);
 }
 
 lw_shared_ptr<keyspace_metadata>

@@ -21,7 +21,7 @@ future<endpoint_set> local_strategy::calculate_natural_endpoints(const token& t,
     return make_ready_future<endpoint_set>(endpoint_set({utils::fb_utilities::get_broadcast_address()}));
 }
 
-void local_strategy::validate_options() const {
+void local_strategy::validate_options(const gms::feature_service&) const {
 }
 
 std::optional<std::unordered_set<sstring>> local_strategy::recognized_options(const topology&) const {

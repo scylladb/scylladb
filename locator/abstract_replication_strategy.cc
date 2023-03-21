@@ -39,10 +39,11 @@ abstract_replication_strategy::ptr_type abstract_replication_strategy::create_re
 void abstract_replication_strategy::validate_replication_strategy(const sstring& ks_name,
                                                                   const sstring& strategy_name,
                                                                   const replication_strategy_config_options& config_options,
+                                                                  const gms::feature_service& fs,
                                                                   const topology& topology)
 {
     auto strategy = create_replication_strategy(strategy_name, config_options);
-    strategy->validate_options();
+    strategy->validate_options(fs);
     auto expected = strategy->recognized_options(topology);
     if (expected) {
         for (auto&& item : config_options) {

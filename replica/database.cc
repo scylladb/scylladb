@@ -1290,14 +1290,14 @@ const column_family& database::find_column_family(const schema_ptr& schema) cons
 }
 
 void database::validate_keyspace_update(keyspace_metadata& ksm) {
-    ksm.validate(get_token_metadata().get_topology());
+    ksm.validate(_feat, get_token_metadata().get_topology());
     if (!has_keyspace(ksm.name())) {
         throw exceptions::configuration_exception(format("Cannot update non existing keyspace '{}'.", ksm.name()));
     }
 }
 
 void database::validate_new_keyspace(keyspace_metadata& ksm) {
-    ksm.validate(get_token_metadata().get_topology());
+    ksm.validate(_feat, get_token_metadata().get_topology());
     if (has_keyspace(ksm.name())) {
         throw exceptions::already_exists_exception{ksm.name()};
     }

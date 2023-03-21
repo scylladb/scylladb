@@ -12,6 +12,7 @@
 #include <functional>
 #include <unordered_map>
 #include "gms/inet_address.hh"
+#include "gms/feature_service.hh"
 #include "locator/snitch_base.hh"
 #include "dht/i_partitioner.hh"
 #include "token_metadata.hh"
@@ -95,6 +96,7 @@ public:
     static void validate_replication_strategy(const sstring& ks_name,
                                               const sstring& strategy_name,
                                               const replication_strategy_config_options& config_options,
+                                              const gms::feature_service& fs,
                                               const topology& topology);
     static void validate_replication_factor(sstring rf);
 
@@ -103,7 +105,7 @@ public:
     virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token, const effective_replication_map& erm) const;
     // Returns the last stop_iteration result of the called func
     virtual stop_iteration for_each_natural_endpoint_until(const token& search_token, const effective_replication_map& erm, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
-    virtual void validate_options() const = 0;
+    virtual void validate_options(const gms::feature_service&) const = 0;
     virtual std::optional<std::unordered_set<sstring>> recognized_options(const topology&) const = 0;
     virtual size_t get_replication_factor(const token_metadata& tm) const = 0;
     // Decide if the replication strategy allow removing the node being

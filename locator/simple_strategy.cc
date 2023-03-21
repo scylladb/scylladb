@@ -67,7 +67,7 @@ size_t simple_strategy::get_replication_factor(const token_metadata&) const {
     return _replication_factor;
 }
 
-void simple_strategy::validate_options() const {
+void simple_strategy::validate_options(const gms::feature_service&) const {
     auto it = _config_options.find("replication_factor");
     if (it == _config_options.end()) {
         throw exceptions::configuration_exception("SimpleStrategy requires a replication_factor strategy option.");
