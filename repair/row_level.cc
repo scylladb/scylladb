@@ -679,36 +679,6 @@ void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_
     }
 }
 
-// For local reader: a permit is taken on the local shard.
-// For multi-shard reader: a permit is taken on each shard, smp::count permits
-// are taken in total.
-struct repair_reader_permit_meta {
-    std::vector<foreign_ptr<lw_shared_ptr<semaphore_units<>>>> permits{smp::count};
-};
-
-// If all_shards is set to true, permits on each shard are taken.
-// If all_shards is set to false, a single permit is taken from the specified shard.
-future<repair_reader_permit_meta> get_global_reader_permit(repair_service& rs, unsigned shard, bool all_shards) {
-    repair_reader_permit_meta meta;
-    // We need to serialize the process of taking permits. So the code to take
-    // the permits are performed on a single shard. The last shard is chosen as
-    // the coordinator shard.
-    co_await rs.container().invoke_on(smp::count -1, [&meta, shard, all_shards] (repair_service& rs) -> future<> {
-        co_await with_semaphore(rs.lock_sem(), 1, [&rs, &meta, shard, all_shards] () -> future<> {
-            co_await rs.container().invoke_on_all([&meta, shard, all_shards] (repair_service& rs) -> future<> {
-                if (all_shards || shard == this_shard_id()) {
-                    auto& reader_sem = rs.reader_sem();
-                    auto permit = co_await seastar::get_units(reader_sem, 1);
-                    auto ptr = make_lw_shared<semaphore_units<>>(std::move(permit));
-                    meta.permits[this_shard_id()] = make_foreign(std::move(ptr));
-                }
-                co_return;
-            });
-        });
-    });
-    co_return meta;
-};
-
 class repair_meta {
     friend repair_meta_tracker;
 public:
@@ -747,7 +717,6 @@ private:
     // follower nr peers is always one because repair master is the only peer.
     size_t _nr_peer_nodes= 1;
     repair_stats _stats;
-    bool _is_local_reader;
     repair_reader _repair_reader;
     lw_shared_ptr<repair_writer> _repair_writer;
     // Contains rows read from disk
@@ -773,7 +742,6 @@ private:
     is_dirty_on_master _dirty_on_master = is_dirty_on_master::no;
     std::optional<shared_future<>> _stopped;
     repair_hasher _repair_hasher;
-    std::optional<repair_reader_permit_meta> _reader_permit;
 public:
     std::vector<repair_node_state>& all_nodes() {
         return _all_node_states;
@@ -849,7 +817,6 @@ public:
             , _remote_sharder(make_remote_sharder())
             , _same_sharding_config(is_same_sharding_config())
             , _nr_peer_nodes(nr_peer_nodes)
-            , _is_local_reader(_repair_master || _same_sharding_config)
             , _repair_reader(
                     _db,
                     _cf,
@@ -1086,12 +1053,7 @@ private:
     future<std::tuple<std::list<repair_row>, size_t>>
     read_rows_from_disk(size_t cur_size) {
         using value_type = std::tuple<std::list<repair_row>, size_t>;
-        if (!_reader_permit) {
-            bool all_shards = !_is_local_reader;
-            auto permit = co_await get_global_reader_permit(_rs, this_shard_id(), all_shards);
-            _reader_permit = std::optional<repair_reader_permit_meta>(std::move(permit));
-        }
-        auto ret = co_await do_with(cur_size, size_t(0), std::list<repair_row>(), [this] (size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
+        return do_with(cur_size, size_t(0), std::list<repair_row>(), [this] (size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
             return repeat([this, &cur_size, &cur_rows, &new_rows_size] () mutable {
                 if (cur_size >= _max_row_buf_size) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
@@ -1115,7 +1077,6 @@ private:
                 return make_ready_future<value_type>(value_type(std::move(cur_rows), new_rows_size));
             });
         });
-        co_return ret;
     }
 
     future<> clear_row_buf() {
@@ -2972,9 +2933,6 @@ repair_service::repair_service(distributed<gms::gossiper>& gossiper,
     , _node_ops_metrics(_repair_module)
     , _max_repair_memory(max_repair_memory)
     , _memory_sem(max_repair_memory)
-    // The "10" below should be the same mas max_count_streaming_concurrent_reads.
-    // FIXME: use that named constant instead of the number here.
-    , _reader_sem(10)
 {
     tm.register_module("repair", _repair_module);
     if (this_shard_id() == 0) {
