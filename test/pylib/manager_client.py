@@ -81,7 +81,8 @@ class ManagerClient():
             logger.info(f"Using cluster: {cluster_str} for test {test_case_name}")
         except aiohttp.ClientError as exc:
             raise RuntimeError(f"Failed before test check {exc}") from exc
-        if self.cql is None:
+        servers = await self.running_servers()
+        if self.cql is None and servers:
             # TODO: if cluster is not up yet due to taking long and HTTP timeout, wait for it
             # await self._wait_for_cluster()
             await self.driver_connect()  # Connect driver to new cluster
@@ -170,7 +171,10 @@ class ManagerClient():
         except Exception as exc:
             raise RuntimeError(f"server_add got invalid server data {server_info}") from exc
         logger.debug("ManagerClient added %s", s_info)
-        self._driver_update()
+        if self.cql:
+            self._driver_update()
+        else:
+            await self.driver_connect()
         return s_info
 
     async def remove_node(self, initiator_id: ServerNum, server_id: ServerNum,

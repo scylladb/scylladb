@@ -596,7 +596,8 @@ class ScyllaCluster:
         try:
             for _ in range(self.replicas):
                 await self.add_server()
-            self.keyspace_count = self._get_keyspace_count()
+            if self.replicas > 0:
+                self.keyspace_count = self._get_keyspace_count()
         except Exception as exc:
             # If start fails, swallow the error to throw later,
             # at test time.
@@ -784,7 +785,7 @@ class ScyllaCluster:
             self.logger.info(f"The cluster {self.name} is dirty, not checking"
                              f" keyspace count post-condition")
         else:
-            if self._get_keyspace_count() != self.keyspace_count:
+            if self.running and self._get_keyspace_count() != self.keyspace_count:
                 raise RuntimeError(f"Test post-condition on cluster {self.name} failed, "
                                    f"the test must drop all keyspaces it creates.")
         for server in itertools.chain(self.running.values(), self.stopped.values()):
