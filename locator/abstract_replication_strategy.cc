@@ -103,6 +103,10 @@ inet_address_vector_replica_set effective_replication_map::get_natural_endpoints
     return natural_endpoints;
 }
 
+inet_address_vector_topology_change effective_replication_map::get_pending_endpoints(const token& search_token, const sstring& ks_name) const {
+    return _tmptr->pending_endpoints_for(search_token, ks_name);
+}
+
 void abstract_replication_strategy::validate_replication_factor(sstring rf)
 {
     if (rf.empty() || std::any_of(rf.begin(), rf.end(), [] (char c) {return !isdigit(c);})) {

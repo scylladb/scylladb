@@ -2846,7 +2846,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     replica::keyspace& ks = _db.local().find_keyspace(keyspace_name);
     auto erm = ks.get_effective_replication_map();
     inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints_without_node_being_replaced(token);
-    inet_address_vector_topology_change pending_endpoints = erm->get_token_metadata_ptr()->pending_endpoints_for(token, keyspace_name);
+    inet_address_vector_topology_change pending_endpoints = erm->get_pending_endpoints(token, keyspace_name);
 
     slogger.trace("creating write handler for token: {} natural: {} pending: {}", token, natural_endpoints, pending_endpoints);
     tracing::trace(tr_state, "Creating write handler for token: {} natural: {} pending: {}", token, natural_endpoints ,pending_endpoints);
@@ -3209,7 +3209,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 storage_proxy::paxos_participants
 storage_proxy::get_paxos_participants(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token &token, db::consistency_level cl_for_paxos) {
     inet_address_vector_replica_set natural_endpoints = erm.get_natural_endpoints_without_node_being_replaced(token);
-    inet_address_vector_topology_change pending_endpoints = erm.get_token_metadata_ptr()->pending_endpoints_for(token, ks_name);
+    inet_address_vector_topology_change pending_endpoints = erm.get_pending_endpoints(token, ks_name);
 
     if (cl_for_paxos == db::consistency_level::LOCAL_SERIAL) {
         auto local_dc_filter = erm.get_topology().get_local_dc_filter();
