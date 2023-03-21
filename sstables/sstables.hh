@@ -176,8 +176,6 @@ public:
     };
 
     static component_type component_from_sstring(version_types version, const sstring& s);
-    static version_types version_from_sstring(const sstring& s);
-    static format_types format_from_sstring(const sstring& s);
     static sstring component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
                                       format_types format, component_type component);
     static sstring component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
@@ -527,9 +525,6 @@ private:
     friend class sstable_directory;
 
     size_t sstable_buffer_size;
-
-    static const std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
-    static const std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
 
     std::unordered_set<component_type, enum_hash<component_type>> _recognized_components;
     std::vector<sstring> _unrecognized_components;

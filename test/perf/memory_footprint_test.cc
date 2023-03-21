@@ -261,7 +261,7 @@ int main(int argc, char** argv) {
             std::cout << " - in memtable:  " << sizes.memtable << "\n";
             std::cout << " - in sstable:\n";
             for (auto v : sizes.sstable) {
-                std::cout << "   " << sstables::to_string(v.first) << ":   " << v.second << "\n";
+                std::cout << "   " << fmt::to_string(v.first) << ":   " << v.second << "\n";
             }
             std::cout << " - frozen:       " << sizes.frozen << "\n";
             std::cout << " - canonical:    " << sizes.canonical << "\n";

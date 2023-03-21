@@ -34,7 +34,7 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
 
     fcfg._disabled_features = std::move(disabled);
 
-    switch (sstables::from_string(cfg.sstable_format())) {
+    switch (sstables::version_from_string(cfg.sstable_format())) {
     case sstables::sstable_version_types::ka:
     case sstables::sstable_version_types::la:
     case sstables::sstable_version_types::mc:

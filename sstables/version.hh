@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/enum.hh>
 
 namespace sstables {
 
@@ -56,35 +57,12 @@ inline auto get_highest_sstable_version() {
     return all_sstable_versions[all_sstable_versions.size() - 1];
 }
 
-inline sstable_version_types from_string(const seastar::sstring& format) {
-    if (format == "ka") {
-        return sstable_version_types::ka;
-    }
-    if (format == "la") {
-        return sstable_version_types::la;
-    }
-    if (format == "mc") {
-        return sstable_version_types::mc;
-    }
-    if (format == "md") {
-        return sstable_version_types::md;
-    }
-    if (format == "me") {
-        return sstable_version_types::me;
-    }
-    throw std::invalid_argument("Wrong sstable format name: " + format);
-}
+sstable_version_types version_from_string(std::string_view s);
+sstable_format_types format_from_string(std::string_view s);
 
-inline seastar::sstring to_string(sstable_version_types format) {
-    switch (format) {
-        case sstable_version_types::ka: return "ka";
-        case sstable_version_types::la: return "la";
-        case sstable_version_types::mc: return "mc";
-        case sstable_version_types::md: return "md";
-        case sstable_version_types::me: return "me";
-    }
-    throw std::runtime_error("Wrong sstable format");
-}
+extern const std::unordered_map<sstable_version_types, seastar::sstring, seastar::enum_hash<sstable_version_types>> version_string;
+extern const std::unordered_map<sstable_format_types, seastar::sstring, seastar::enum_hash<sstable_format_types>> format_string;
+
 
 inline int operator<=>(sstable_version_types a, sstable_version_types b) {
     auto to_int = [] (sstable_version_types x) {
@@ -94,3 +72,19 @@ inline int operator<=>(sstable_version_types a, sstable_version_types b) {
 }
 
 }
+
+template <>
+struct fmt::formatter<sstables::sstable_version_types> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const sstables::sstable_version_types& version, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", sstables::version_string.at(version));
+    }
+};
+
+template <>
+struct fmt::formatter<sstables::sstable_format_types> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const sstables::sstable_format_types& format, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", sstables::format_string.at(format));
+    }
+};
