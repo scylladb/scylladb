@@ -96,6 +96,18 @@ public:
         uint64_t reads_enqueued_for_admission = 0;
         // Total number of reads enqueued to wait for memory.
         uint64_t reads_enqueued_for_memory = 0;
+        // Total number of reads admitted immediately, without queueing
+        uint64_t reads_admitted_immediately = 0;
+        // Total number of reads enqueued because ready_list wasn't empty
+        uint64_t reads_queued_because_ready_list = 0;
+        // Total number of reads enqueued because there are used but unblocked permits
+        uint64_t reads_queued_because_used_permits = 0;
+        // Total number of reads enqueued because there weren't enough memory resources
+        uint64_t reads_queued_because_memory_resources = 0;
+        // Total number of reads enqueued because there weren't enough count resources
+        uint64_t reads_queued_because_count_resources = 0;
+        // Total number of reads enqueued to be maybe admitted after evicting some inactive reads
+        uint64_t reads_queued_with_eviction = 0;
         // Total number of permits created so far.
         uint64_t total_permits = 0;
         // Current number of permits.
@@ -205,7 +217,9 @@ private:
     // A return value of can_admit::maybe means admission might be possible if
     // some of the inactive readers are evicted.
     enum class can_admit { no, maybe, yes };
-    can_admit can_admit_read(const reader_permit::impl& permit) const noexcept;
+    enum class reason { all_ok = 0, ready_list, used_permits, memory_resources, count_resources };
+    struct admit_result { can_admit decision; reason why; };
+    admit_result can_admit_read(const reader_permit::impl& permit) const noexcept;
 
     void maybe_admit_waiters() noexcept;
 
