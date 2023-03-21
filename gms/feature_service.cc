@@ -188,17 +188,17 @@ void feature_service::persist_enabled_feature_info(const gms::feature& f) const 
 }
 
 future<> feature_service::enable(std::set<std::string_view> list) {
-  // `gms::feature::enable` should be run within a seastar thread context
-  return seastar::async([this, list = std::move(list)] {
-    for (gms::feature& f : _registered_features | boost::adaptors::map_values) {
-        if (list.contains(f.name())) {
-            if (db::qctx && !f) {
-                persist_enabled_feature_info(f);
+    // `gms::feature::enable` should be run within a seastar thread context
+    return seastar::async([this, list = std::move(list)] {
+        for (gms::feature& f : _registered_features | boost::adaptors::map_values) {
+            if (list.contains(f.name())) {
+                if (db::qctx && !f) {
+                    persist_enabled_feature_info(f);
+                }
+                f.enable();
             }
-            f.enable();
         }
-    }
-  });
+    });
 }
 
 } // namespace gms
