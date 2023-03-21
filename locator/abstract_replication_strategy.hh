@@ -128,11 +128,58 @@ public:
     future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address, locator::endpoint_dc_rack dr) const;
 };
 
+/// \brief Represents effective replication (assignment of replicas to keys).
+///
+/// It's a result of application of a given replication strategy instance
+/// over a particular token metadata version, for a given table.
+/// Can be shared by multiple tables if they have the same replication.
+///
+/// Immutable, users can assume that it doesn't change.
+///
+/// Holding to this object keeps the associated token_metadata_ptr alive,
+/// keeping the token metadata version alive and seen as in use.
+class effective_replication_map {
+protected:
+    abstract_replication_strategy::ptr_type _rs;
+    token_metadata_ptr _tmptr;
+    size_t _replication_factor;
+public:
+    effective_replication_map(abstract_replication_strategy::ptr_type, token_metadata_ptr, size_t replication_factor) noexcept;
+    virtual ~effective_replication_map() = default;
+
+    const abstract_replication_strategy& get_replication_strategy() const noexcept { return *_rs; }
+    const token_metadata& get_token_metadata() const noexcept { return *_tmptr; }
+    const token_metadata_ptr& get_token_metadata_ptr() const noexcept { return _tmptr; }
+    const topology& get_topology() const noexcept { return _tmptr->get_topology(); }
+    size_t get_replication_factor() const noexcept { return _replication_factor; }
+
+    /// Returns addresses of replicas for a given token.
+    /// Does not include pending replicas except for a pending replica which
+    /// has the same address as one of the old replicas. This can be the case during "nodetool replace"
+    /// operation which adds a replica which has the same address as the replaced replica.
+    /// Use get_natural_endpoints_without_node_being_replaced() to get replicas without any pending replicas.
+    /// This won't be necessary after we implement https://github.com/scylladb/scylladb/issues/6403.
+    virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const = 0;
+
+    /// Returns addresses of replicas for a given token.
+    /// Does not include pending replicas.
+    virtual inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const = 0;
+
+    /// Returns the set of pending replicas for a given token.
+    /// Pending replica is a replica which gains ownership of data.
+    /// Non-empty only during topology change.
+    virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token, const sstring& ks_name) const = 0;
+};
+
+using effective_replication_map_ptr = seastar::shared_ptr<const effective_replication_map>;
+using mutable_effective_replication_map_ptr = seastar::shared_ptr<effective_replication_map>;
+
 // Holds the full replication_map resulting from applying the
 // effective replication strategy over the given token_metadata
 // and replication_strategy_config_options.
 // Used for token-based replication strategies.
-class vnode_effective_replication_map : public enable_shared_from_this<vnode_effective_replication_map> {
+class vnode_effective_replication_map : public enable_shared_from_this<vnode_effective_replication_map>
+                                      , public effective_replication_map {
 public:
     struct factory_key {
         replication_strategy_type rs_type;
@@ -155,58 +202,34 @@ public:
     };
 
 private:
-    abstract_replication_strategy::ptr_type _rs;
-    token_metadata_ptr _tmptr;
     replication_map _replication_map;
-    size_t _replication_factor;
     std::optional<factory_key> _factory_key = std::nullopt;
     effective_replication_map_factory* _factory = nullptr;
 
     friend class abstract_replication_strategy;
     friend class effective_replication_map_factory;
+public: // effective_replication_map
+    inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override;
+    inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override;
+    inet_address_vector_topology_change get_pending_endpoints(const token& search_token, const sstring& ks_name) const override;
 public:
     explicit vnode_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr, replication_map replication_map, size_t replication_factor) noexcept
-        : _rs(std::move(rs))
-        , _tmptr(std::move(tmptr))
+        : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
         , _replication_map(std::move(replication_map))
-        , _replication_factor(replication_factor)
     { }
     vnode_effective_replication_map() = delete;
     vnode_effective_replication_map(vnode_effective_replication_map&&) = default;
     ~vnode_effective_replication_map();
 
-    const token_metadata& get_token_metadata() const noexcept {
-        return *_tmptr;
-    }
-
-    const token_metadata_ptr& get_token_metadata_ptr() const noexcept {
-        return _tmptr;
-    }
-
-    const locator::abstract_replication_strategy& get_replication_strategy() const noexcept {
-        return *_rs;
-    }
-
     const replication_map& get_replication_map() const noexcept {
         return _replication_map;
-    }
-
-    const topology& get_topology() const noexcept {
-        return _tmptr->get_topology();
-    }
-
-    const size_t get_replication_factor() const noexcept {
-        return _replication_factor;
     }
 
     future<> clear_gently() noexcept;
 
     future<replication_map> clone_endpoints_gently() const;
 
-    inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const;
     stop_iteration for_each_natural_endpoint_until(const token& search_token, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
-    inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const;
-    inet_address_vector_topology_change get_pending_endpoints(const token& search_token, const sstring& ks_name) const;
 
     // get_ranges() returns the list of ranges held by the given endpoint.
     // The list is sorted, and its elements are non overlapping and non wrap-around.
@@ -264,8 +287,6 @@ using vnode_effective_replication_map_ptr = shared_ptr<const vnode_effective_rep
 using mutable_vnode_effective_replication_map_ptr = shared_ptr<vnode_effective_replication_map>;
 using vnode_erm_ptr = vnode_effective_replication_map_ptr;
 using mutable_vnode_erm_ptr = mutable_vnode_effective_replication_map_ptr;
-using effective_replication_map = vnode_effective_replication_map_ptr;
-using mutatble_effective_replication_map = mutable_vnode_effective_replication_map_ptr;
 
 inline mutable_vnode_erm_ptr make_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr, replication_map replication_map, size_t replication_factor) {
     return seastar::make_shared<vnode_effective_replication_map>(

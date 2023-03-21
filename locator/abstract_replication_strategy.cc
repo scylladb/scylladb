@@ -368,6 +368,14 @@ vnode_effective_replication_map::~vnode_effective_replication_map() {
     }
 }
 
+effective_replication_map::effective_replication_map(abstract_replication_strategy::ptr_type rs,
+                                                     token_metadata_ptr tmptr,
+                                                     size_t replication_factor) noexcept
+        : _rs(std::move(rs))
+        , _tmptr(std::move(tmptr))
+        , _replication_factor(replication_factor)
+{ }
+
 vnode_effective_replication_map::factory_key vnode_effective_replication_map::make_factory_key(const abstract_replication_strategy::ptr_type& rs, const token_metadata_ptr& tmptr) {
     return factory_key(rs->get_type(), rs->get_config_options(), tmptr->get_ring_version());
 }
