@@ -257,3 +257,7 @@ add_scylla_test(virtual_table_mutation_source_test
   KIND SEASTAR)
 add_scylla_test(virtual_table_test
   KIND SEASTAR)
+add_scylla_test(wasm_alloc_test
+  KIND SEASTAR)
+add_scylla_test(wasm_test
+  KIND SEASTAR)

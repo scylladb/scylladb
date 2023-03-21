@@ -41,6 +41,9 @@ add_perf_test(perf_big_decimal
     schema)
 add_perf_test(perf_cache_eviction)
 add_perf_test(perf_checksum)
+add_perf_test(perf_commitlog
+  LIBRARIES
+    JsonCpp::JsonCpp)
 add_perf_test(perf_collection)
 add_perf_test(perf_cql_parser
   LIBRARIES
