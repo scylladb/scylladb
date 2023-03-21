@@ -21,7 +21,8 @@ std::ostream& operator<<(std::ostream& out, const range_tombstone& rt) {
 }
 
 std::ostream& operator<<(std::ostream& out, const range_tombstone_change& rt) {
-    return out << "{range_tombstone_change: pos=" << rt.position() << ", " << rt.tombstone() << "}";
+    fmt::print(out, "{{range_tombstone_change: pos={}, {}}}", rt.position(), rt.tombstone());
+    return out;
 }
 
 std::optional<range_tombstone> range_tombstone::apply(const schema& s, range_tombstone&& src)

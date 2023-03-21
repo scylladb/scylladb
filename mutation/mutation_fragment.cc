@@ -310,7 +310,7 @@ std::ostream& operator<<(std::ostream& os, const mutation_fragment::printer& p) 
     mf.visit(make_visitor(
         [&] (const clustering_row& cr) { os << clustering_row::printer(p._schema, cr); },
         [&] (const static_row& sr) { os << static_row::printer(p._schema, sr); },
-        [&] (const auto& what) -> void { os << what; }
+        [&] (const auto& what) -> void { fmt::print(os, "{}", what); }
     ));
     os << "}";
     return os;
@@ -371,7 +371,7 @@ std::ostream& operator<<(std::ostream& os, const mutation_fragment_v2::printer& 
     mf.visit(make_visitor(
         [&] (const clustering_row& cr) { os << clustering_row::printer(p._schema, cr); },
         [&] (const static_row& sr) { os << static_row::printer(p._schema, sr); },
-        [&] (const auto& what) -> void { os << what; }
+        [&] (const auto& what) -> void { fmt::print(os, "{}", what); }
     ));
     os << "}";
     return os;
