@@ -848,9 +848,9 @@ void manager::end_point_hints_manager::sender::start() {
 }
 
 future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_mutation_and_schema m) {
-    replica::keyspace& ks = _db.find_keyspace(m.s->ks_name());
+    auto erm = _db.find_column_family(m.s).get_effective_replication_map();
     auto token = dht::get_token(*m.s, m.fm.key());
-    inet_address_vector_replica_set natural_endpoints = ks.get_effective_replication_map()->get_natural_endpoints(std::move(token));
+    inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints(std::move(token));
 
     return do_send_one_mutation(std::move(m), natural_endpoints);
 }

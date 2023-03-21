@@ -2533,6 +2533,8 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
     pending_token_metadata_ptr.resize(smp::count);
     std::vector<std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr>> pending_effective_replication_maps;
     pending_effective_replication_maps.resize(smp::count);
+    std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_table_erms;
+    pending_table_erms.resize(smp::count);
 
     try {
         auto base_shard = this_shard_id();
@@ -2552,6 +2554,9 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
         auto keyspaces = db.get_all_keyspaces();
         for (auto& ks_name : keyspaces) {
             auto rs = db.find_keyspace(ks_name).get_replication_strategy_ptr();
+            if (rs->is_per_table()) {
+                continue;
+            }
             auto erm = co_await get_erm_factory().create_effective_replication_map(rs, tmptr);
             pending_effective_replication_maps[base_shard].emplace(ks_name, std::move(erm));
         }
@@ -2559,10 +2564,27 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             auto& db = ss._db.local();
             for (auto& ks_name : keyspaces) {
                 auto rs = db.find_keyspace(ks_name).get_replication_strategy_ptr();
+                if (rs->is_per_table()) {
+                    continue;
+                }
                 auto tmptr = pending_token_metadata_ptr[this_shard_id()];
                 auto erm = co_await ss.get_erm_factory().create_effective_replication_map(rs, std::move(tmptr));
                 pending_effective_replication_maps[this_shard_id()].emplace(ks_name, std::move(erm));
-
+            }
+        });
+        // Prepare per-table erms.
+        co_await container().invoke_on_all([&] (storage_service& ss) {
+            auto& db = ss._db.local();
+            auto tmptr = pending_token_metadata_ptr[this_shard_id()];
+            for (auto&& [id, cf] : db.get_column_families()) { // Safe because we iterate without preemption
+                auto rs = db.find_keyspace(cf->schema()->keypace_name()).get_replication_strategy_ptr();
+                locator::effective_replication_map_ptr erm;
+                if (auto pt_rs = rs->maybe_as_per_table()) {
+                    erm = pt_rs->make_replication_map(id, tmptr);
+                } else {
+                    erm = pending_effective_replication_maps[this_shard_id()][cf->schema()->keypace_name()];
+                }
+                pending_table_erms[this_shard_id()].emplace(id, std::move(erm));
             }
         });
     } catch (...) {
@@ -2575,6 +2597,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             co_await smp::invoke_on_all([&] () -> future<> {
                 auto tmptr = std::move(pending_token_metadata_ptr[this_shard_id()]);
                 auto erms = std::move(pending_effective_replication_maps[this_shard_id()]);
+                auto table_erms = std::move(pending_table_erms[this_shard_id()]);
 
                 co_await utils::clear_gently(erms);
                 co_await utils::clear_gently(tmptr);
@@ -2590,13 +2613,20 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
     try {
         co_await container().invoke_on_all([&] (storage_service& ss) {
             ss._shared_token_metadata.set(std::move(pending_token_metadata_ptr[this_shard_id()]));
+            auto& db = ss._db.local();
 
             auto& erms = pending_effective_replication_maps[this_shard_id()];
             for (auto it = erms.begin(); it != erms.end(); ) {
-                auto& db = ss._db.local();
                 auto& ks = db.find_keyspace(it->first);
                 ks.update_effective_replication_map(std::move(it->second));
                 it = erms.erase(it);
+            }
+
+            auto& table_erms = pending_table_erms[this_shard_id()];
+            for (auto it = table_erms.begin(); it != table_erms.end(); ) {
+                auto& cf = db.find_column_family(it->first);
+                cf.update_effective_replication_map(std::move(it->second));
+                it = table_erms.erase(it);
             }
         });
     } catch (...) {

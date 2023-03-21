@@ -131,6 +131,8 @@ class column_family_test;
 class table_for_tests;
 class database_test;
 
+extern logging::logger dblog;
+
 namespace replica {
 
 using shared_memtable = lw_shared_ptr<memtable>;
@@ -395,6 +397,7 @@ public:
 private:
     schema_ptr _schema;
     config _config;
+    locator::effective_replication_map_ptr _erm;
     lw_shared_ptr<const storage_options> _storage_opts;
     mutable table_stats _stats;
     mutable db::view::stats _view_stats;
@@ -757,17 +760,19 @@ public:
 
     logalloc::occupancy_stats occupancy() const;
 private:
-    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options>, db::commitlog* cl, compaction_manager&, sstables::sstables_manager&, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker);
+    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options>, db::commitlog* cl, compaction_manager&, sstables::sstables_manager&, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker, locator::effective_replication_map_ptr erm);
 public:
-    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, db::commitlog& cl, compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
-        : table(schema, std::move(cfg), std::move(sopts), &cl, cm, sm, cl_stats, row_cache_tracker) {}
-    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, no_commitlog, compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
-        : table(schema, std::move(cfg), std::move(sopts), nullptr, cm, sm, cl_stats, row_cache_tracker) {}
+    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, db::commitlog& cl, compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker, locator::effective_replication_map_ptr erm)
+        : table(schema, std::move(cfg), std::move(sopts), &cl, cm, sm, cl_stats, row_cache_tracker, std::move(erm)) {}
+    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, no_commitlog, compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker, locator::effective_replication_map_ptr erm)
+        : table(schema, std::move(cfg), std::move(sopts), nullptr, cm, sm, cl_stats, row_cache_tracker, std::move(erm)) {}
     table(column_family&&) = delete; // 'this' is being captured during construction
     ~table();
     const schema_ptr& schema() const { return _schema; }
     void set_schema(schema_ptr);
     db::commitlog* commitlog() { return _commitlog; }
+    const locator::effective_replication_map_ptr& get_effective_replication_map() const { return _erm; }
+    void update_effective_replication_map(locator::effective_replication_map_ptr);
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
     future<const_mutation_partition_ptr> find_partition_slow(schema_ptr, reader_permit permit, const partition_key& key) const;
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
@@ -1204,9 +1209,7 @@ public:
         return _replication_strategy;
     }
 
-    locator::vnode_effective_replication_map_ptr get_effective_replication_map() const {
-        return _effective_replication_map;
-    }
+    locator::vnode_effective_replication_map_ptr get_effective_replication_map() const;
 
     column_family::config make_column_family_config(const schema& s, const database& db) const;
     future<> make_directory_for_column_family(const sstring& name, table_id uuid);

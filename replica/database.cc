@@ -401,6 +401,14 @@ const data_dictionary::user_types_storage& database::user_types() const noexcept
     return *_user_types;
 }
 
+locator::vnode_effective_replication_map_ptr keyspace::get_effective_replication_map() const {
+    // FIXME: Examine all users.
+    if (get_replication_strategy().is_per_table()) {
+        on_internal_error(dblog, format("Tried to obtain per-keyspace effective replication map of {} but it's per-table", _metadata->name()));
+    }
+    return _effective_replication_map;
+}
+
 } // namespace replica
 
 void backlog_controller::adjust() {
@@ -943,6 +951,13 @@ void database::maybe_init_schema_commitlog() {
 void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg) {
     schema = local_schema_registry().learn(schema);
     schema->registry_entry()->mark_synced();
+    auto&& rs = ks.get_replication_strategy();
+    locator::effective_replication_map_ptr erm;
+    if (auto pt_rs = rs.maybe_as_per_table()) {
+        erm = pt_rs->make_replication_map(schema->id(), _shared_token_metadata.get());
+    } else {
+        erm = ks.get_effective_replication_map();
+    }
     // avoid self-reporting
     auto& sst_manager = is_system_table(*schema) ? get_system_sstables_manager() : get_user_sstables_manager();
     lw_shared_ptr<column_family> cf;
@@ -950,9 +965,9 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
         db::commitlog& cl = schema->static_props().use_schema_commitlog && _uses_schema_commitlog
                 ? *_schema_commitlog
                 : *_commitlog;
-        cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), cl, _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
+        cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), cl, _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
     } else {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), column_family::no_commitlog(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), column_family::no_commitlog(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
     }
     cf->set_durable_writes(ks.metadata()->durable_writes());
 

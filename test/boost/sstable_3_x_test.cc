@@ -3025,7 +3025,7 @@ static flat_mutation_reader_v2 compacted_sstable_reader(test_env& env, schema_pt
     auto cm = make_lw_shared<compaction_manager_for_testing>(false);
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     auto tracker = make_lw_shared<cache_tracker>();
-    auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), make_lw_shared<replica::storage_options>(), replica::column_family::no_commitlog(), **cm, env.manager(), *cl_stats, *tracker);
+    auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), make_lw_shared<replica::storage_options>(), replica::column_family::no_commitlog(), **cm, env.manager(), *cl_stats, *tracker, nullptr);
     cf->mark_ready_for_writes();
     lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
 

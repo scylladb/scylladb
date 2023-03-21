@@ -1639,8 +1639,8 @@ paxos_response_handler::paxos_response_handler(shared_ptr<storage_proxy> proxy_a
         , _permit(std::move(permit_arg))
         , tr_state(tr_state_arg) {
     auto ks_name = _schema->ks_name();
-    replica::keyspace& ks = _proxy->_db.local().find_keyspace(ks_name);
-    _effective_replication_map_ptr = ks.get_effective_replication_map();
+    replica::table& table = _proxy->_db.local().find_column_family(_schema->id());
+    _effective_replication_map_ptr = table.get_effective_replication_map();
     storage_proxy::paxos_participants pp = _proxy->get_paxos_participants(ks_name, *_effective_replication_map_ptr, _key.token(), _cl_for_paxos);
     _live_endpoints = std::move(pp.endpoints);
     _required_participants = pp.required_participants;
@@ -2843,8 +2843,8 @@ result<storage_proxy::response_id_type>
 storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::token& token, std::unique_ptr<mutation_holder> mh,
         db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
     auto keyspace_name = s->ks_name();
-    replica::keyspace& ks = _db.local().find_keyspace(keyspace_name);
-    auto erm = ks.get_effective_replication_map();
+    replica::table& table = _db.local().find_column_family(s->id());
+    auto erm = table.get_effective_replication_map();
     inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints_without_node_being_replaced(token);
     inet_address_vector_topology_change pending_endpoints = erm->get_pending_endpoints(token, keyspace_name);
 
@@ -2961,8 +2961,8 @@ storage_proxy::create_write_response_handler(const std::tuple<lw_shared_ptr<paxo
     tracing::trace(tr_state, "Creating write handler for paxos repair token: {} endpoint: {}", token, endpoints);
 
     auto keyspace_name = s->ks_name();
-    replica::keyspace& ks = _db.local().find_keyspace(keyspace_name);
-    auto ermp = ks.get_effective_replication_map();
+    replica::table& table = _db.local().find_column_family(s->id());
+    auto ermp = table.get_effective_replication_map();
 
     // No rate limiting for paxos (yet)
     return create_write_response_handler(std::move(ermp), cl, db::write_type::CAS, std::make_unique<cas_mutation>(std::move(commit), s, nullptr), std::move(endpoints),
@@ -3145,8 +3145,8 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
     std::set<locator::effective_replication_map_ptr> erms;
 
     for (auto& m : mutations) {
-        auto& ks = _db.local().find_keyspace(m.schema()->ks_name());
-        auto erm = ks.get_effective_replication_map();
+        auto& table = _db.local().find_column_family(m.schema()->id());
+        auto erm = table.get_effective_replication_map();
         erms.insert(erm);
         auto leader = find_leader_for_counter_update(m, *erm, cl);
         leaders[leader].emplace_back(frozen_mutation_and_schema { freeze(m), m.schema() });
@@ -3190,8 +3190,8 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
             // - we only use this to calculate some infomation for the error message
             // - the topology coordinator should prevent incompatible changes while requests
             //   (like this one) are in flight
-            auto& ks = _db.local().find_keyspace(s->ks_name());
-            auto erm = ks.get_effective_replication_map();
+            auto& table = _db.local().find_column_family(s->id());
+            auto erm = table.get_effective_replication_map();
             try {
                 std::rethrow_exception(std::move(exp));
             } catch (rpc::timeout_error&) {
@@ -3492,8 +3492,8 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
 
         future<result<>> send_batchlog_mutation(mutation m, db::consistency_level cl = db::consistency_level::ONE) {
             return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, cl, db::write_type::BATCH_LOG, _permit, [this] (const mutation& m, db::consistency_level cl, db::write_type type, service_permit permit) {
-                auto& ks = _p._db.local().find_keyspace(m.schema()->ks_name());
-                auto ermp = ks.get_effective_replication_map();
+                auto& table = _p._db.local().find_column_family(m.schema()->id());
+                auto ermp = table.get_effective_replication_map();
                 return _p.create_write_response_handler(std::move(ermp), cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats, std::move(permit), std::monostate());
             }).then(utils::result_wrap([this, cl] (unique_response_handler_vector ids) {
                 _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
@@ -3623,8 +3623,8 @@ future<> storage_proxy::send_to_endpoint(
                 std::inserter(targets, targets.begin()),
                 std::back_inserter(dead_endpoints),
                 std::bind_front(&storage_proxy::is_alive, this));
-        auto& ks = _db.local().find_keyspace(m->schema()->ks_name());
-        auto erm = ks.get_effective_replication_map();
+        auto& table = _db.local().find_column_family(m->schema()->id());
+        auto erm = table.get_effective_replication_map();
         slogger.trace("Creating write handler with live: {}; dead: {}", targets, dead_endpoints);
         db::assure_sufficient_live_nodes(cl, *erm, targets, pending_endpoints);
         return create_write_response_handler(
@@ -5246,8 +5246,8 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
 
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
 
-    replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
-    auto erm = ks.get_effective_replication_map();
+    replica::table& table = _db.local().find_column_family(schema->id());
+    auto erm = table.get_effective_replication_map();
 
     db::read_repair_decision repair_decision = query_options.read_repair_decision
         ? *query_options.read_repair_decision : new_read_repair_decision(*schema);
@@ -5574,12 +5574,12 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
         db::consistency_level cl,
         storage_proxy::coordinator_query_options query_options) {
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
-    replica::keyspace& ks = _db.local().find_keyspace(schema->ks_name());
-    auto erm = ks.get_effective_replication_map();
+    replica::table& table = _db.local().find_column_family(schema->id());
+    auto erm = table.get_effective_replication_map();
 
     // when dealing with LocalStrategy and EverywhereStrategy keyspaces, we can skip the range splitting and merging
     // (which can be expensive in clusters with vnodes)
-    auto merge_tokens = !ks.get_replication_strategy().natural_endpoints_depend_on_token();
+    auto merge_tokens = !erm->get_replication_strategy().natural_endpoints_depend_on_token();
 
     query_ranges_to_vnodes_generator ranges_to_vnodes(erm->get_token_metadata_ptr(), schema, std::move(partition_ranges), merge_tokens);
 

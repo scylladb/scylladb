@@ -167,9 +167,8 @@ static bool needs_repair_before_gc(const replica::database& db, sstring ks_name)
     // need to run repair even if tombstone_gc mode = repair.
     auto& ks = db.find_keyspace(ks_name);
     auto& rs = ks.get_replication_strategy();
-    auto erm = ks.get_effective_replication_map();
     bool needs_repair = rs.get_type() != locator::replication_strategy_type::local
-            && erm->get_replication_factor() != 1;
+            && rs.get_replication_factor(db.get_token_metadata()) != 1;
     return needs_repair;
 }
 

@@ -107,6 +107,13 @@ inet_address_vector_topology_change vnode_effective_replication_map::get_pending
     return _tmptr->pending_endpoints_for(search_token, ks_name);
 }
 
+const per_table_replication_strategy* abstract_replication_strategy::maybe_as_per_table() const {
+    if (!_per_table) {
+        return nullptr;
+    }
+    return dynamic_cast<const per_table_replication_strategy*>(this);
+}
+
 void abstract_replication_strategy::validate_replication_factor(sstring rf)
 {
     if (rf.empty() || std::any_of(rf.begin(), rf.end(), [] (char c) {return !isdigit(c);})) {
