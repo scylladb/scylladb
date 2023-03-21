@@ -102,7 +102,6 @@ public:
         rt2 = std::move(rt1);
         rt1 = std::move(tmp);
     }
-    friend std::ostream& operator<<(std::ostream& out, const range_tombstone& rt);
 
     static bool is_single_clustering_row_tombstone(const schema& s, const clustering_key_prefix& start,
         bound_kind start_kind, const clustering_key_prefix& end, bound_kind end_kind)
