@@ -2546,12 +2546,9 @@ future<> gossiper::maybe_enable_features() {
     }
     auto loaded_peer_features = co_await db::system_keyspace::load_peer_features();
     auto&& features = get_supported_features(loaded_peer_features, ignore_features_of_local_node::no);
-    co_await container().invoke_on_all([&features] (gossiper& g) {
-        // gms::feature::enable should be run within seastar::async context
-        return seastar::async([&features, &g] {
-            std::set<std::string_view> features_v = boost::copy_range<std::set<std::string_view>>(features);
-            g._feature_service.enable(features_v);
-        });
+    co_await container().invoke_on_all([&features] (gossiper& g) -> future<> {
+        std::set<std::string_view> features_v = boost::copy_range<std::set<std::string_view>>(features);
+        co_await g._feature_service.enable(std::move(features_v));
     });
 }
 

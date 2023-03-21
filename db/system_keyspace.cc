@@ -3311,11 +3311,8 @@ future<> system_keyspace::enable_features_on_startup(sharded<gms::feature_servic
     }
 
     co_await feat.invoke_on_all([&features_to_enable] (auto& srv) -> future<> {
-        // `gms::feature::enable` should be run within a seastar thread context
-        co_await seastar::async([&srv, &features_to_enable] {
-            std::set<std::string_view> feat = boost::copy_range<std::set<std::string_view>>(features_to_enable);
-            srv.enable(feat);
-        });
+        std::set<std::string_view> feat = boost::copy_range<std::set<std::string_view>>(features_to_enable);
+        co_await srv.enable(std::move(feat));
     });
 }
 

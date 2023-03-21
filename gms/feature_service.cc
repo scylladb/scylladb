@@ -187,7 +187,9 @@ void feature_service::persist_enabled_feature_info(const gms::feature& f) const 
     db::system_keyspace::save_local_enabled_features(std::move(feats_set)).get0();
 }
 
-void feature_service::enable(const std::set<std::string_view>& list) {
+future<> feature_service::enable(std::set<std::string_view> list) {
+  // `gms::feature::enable` should be run within a seastar thread context
+  return seastar::async([this, list = std::move(list)] {
     for (gms::feature& f : _registered_features | boost::adaptors::map_values) {
         if (list.contains(f.name())) {
             if (db::qctx && !f) {
@@ -196,6 +198,7 @@ void feature_service::enable(const std::set<std::string_view>& list) {
             f.enable();
         }
     }
+  });
 }
 
 } // namespace gms
