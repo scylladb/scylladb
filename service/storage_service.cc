@@ -976,16 +976,16 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
             .raft_id = raft::server_id{ri->host_id.uuid()},
         };
         if (!_raft_topology_change_enabled) {
-        bootstrap_tokens = std::move(ri->tokens);
-        replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
-        replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
+            bootstrap_tokens = std::move(ri->tokens);
+            replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
+            replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
 
-        slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
-            get_broadcast_address() == *replace_address ? "the same" : "a different",
-            get_broadcast_address(), *replace_address);
-        tmptr->update_topology(*replace_address, std::move(ri->dc_rack));
-        co_await tmptr->update_normal_tokens(bootstrap_tokens, *replace_address);
-        replaced_host_id = ri->host_id;
+            slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
+                get_broadcast_address() == *replace_address ? "the same" : "a different",
+                get_broadcast_address(), *replace_address);
+            tmptr->update_topology(*replace_address, std::move(ri->dc_rack));
+            co_await tmptr->update_normal_tokens(bootstrap_tokens, *replace_address);
+            replaced_host_id = ri->host_id;
         }
     } else if (should_bootstrap()) {
         co_await check_for_endpoint_collision(initial_contact_nodes, loaded_peer_features);
@@ -2866,100 +2866,100 @@ future<> storage_service::decommission() {
                 ss.raft_decomission().get();
                 raft_available = true;
             } else {
-            auto& db = ss._db.local();
-            node_ops_ctl ctl(ss, node_ops_cmd::decommission_prepare, db.get_config().host_id, ss.get_broadcast_address());
-            auto stop_ctl = deferred_stop(ctl);
-            auto tmptr = ss.get_token_metadata_ptr();
-            uuid = ctl.uuid();
-            auto endpoint = ctl.endpoint;
-            if (!tmptr->is_normal_token_owner(endpoint)) {
-                throw std::runtime_error("local node is not a member of the token ring yet");
-            }
-            // We assume that we're a member of group 0 if we're in decommission()` and Raft is enabled.
-            // We have no way to check that we're not a member: attempting to perform group 0 operations
-            // would simply hang in that case, the leader would refuse to talk to us.
-            // If we aren't a member then we shouldn't be here anyway, since it means that either
-            // an earlier decommission finished (leave_group0 is the last operation in decommission)
-            // or that we were removed using `removenode`.
-            //
-            // For handling failure scenarios such as a group 0 member that is not a token ring member,
-            // there's `removenode`.
-
-            auto temp = tmptr->clone_after_all_left().get0();
-            auto num_tokens_after_all_left = temp.sorted_tokens().size();
-            temp.clear_gently().get();
-            if (num_tokens_after_all_left < 2) {
-                throw std::runtime_error("no other normal nodes in the ring; decommission would be pointless");
-            }
-
-            if (ss._operation_mode != mode::NORMAL) {
-                throw std::runtime_error(format("Node in {} state; wait for status to become normal or restart", ss._operation_mode));
-            }
-
-            ss.update_pending_ranges(format("decommission {}", endpoint)).get();
-
-            auto non_system_keyspaces = db.get_non_local_strategy_keyspaces();
-            for (const auto& keyspace_name : non_system_keyspaces) {
-                if (ss.get_token_metadata().has_pending_ranges(keyspace_name, ss.get_broadcast_address())) {
-                    throw std::runtime_error("data is currently moving to this node; unable to leave the ring");
+                auto& db = ss._db.local();
+                node_ops_ctl ctl(ss, node_ops_cmd::decommission_prepare, db.get_config().host_id, ss.get_broadcast_address());
+                auto stop_ctl = deferred_stop(ctl);
+                auto tmptr = ss.get_token_metadata_ptr();
+                uuid = ctl.uuid();
+                auto endpoint = ctl.endpoint;
+                if (!tmptr->is_normal_token_owner(endpoint)) {
+                    throw std::runtime_error("local node is not a member of the token ring yet");
                 }
-            }
-
-            slogger.info("DECOMMISSIONING: starts");
-            ctl.req.leaving_nodes = std::list<gms::inet_address>{endpoint};
-            // TODO: wire ignore_nodes provided by user
-
-            // Step 1: Decide who needs to sync data
-            for (const auto& [node, host_id] : tmptr->get_endpoint_to_host_id_map_for_reading()) {
-                seastar::thread::maybe_yield();
-                if (!ctl.ignore_nodes.contains(node)) {
-                    ctl.sync_nodes.insert(node);
-                }
-            }
-
-            ctl.start("decommission");
-
-            assert(ss._group0);
-            raft_available = ss._group0->wait_for_raft().get();
-
-            try {
-                // Step 2: Start heartbeat updater
-                ctl.start_heartbeat_updater(node_ops_cmd::decommission_heartbeat);
-
-                // Step 3: Prepare to sync data
-                ctl.prepare(node_ops_cmd::decommission_prepare).get();
-
-                // Step 4: Start to sync data
-                slogger.info("DECOMMISSIONING: unbootstrap starts");
-                ss.unbootstrap().get();
-                on_streaming_finished();
-                slogger.info("DECOMMISSIONING: unbootstrap done");
-
-                // Step 5: Become a group 0 non-voter before leaving the token ring.
+                // We assume that we're a member of group 0 if we're in decommission()` and Raft is enabled.
+                // We have no way to check that we're not a member: attempting to perform group 0 operations
+                // would simply hang in that case, the leader would refuse to talk to us.
+                // If we aren't a member then we shouldn't be here anyway, since it means that either
+                // an earlier decommission finished (leave_group0 is the last operation in decommission)
+                // or that we were removed using `removenode`.
                 //
-                // Thanks to this, even if we fail after leaving the token ring but before leaving group 0,
-                // group 0's availability won't be reduced.
-                if (raft_available) {
-                    slogger.info("decommission[{}]: becoming a group 0 non-voter", uuid);
-                    ss._group0->become_nonvoter().get();
-                    slogger.info("decommission[{}]: became a group 0 non-voter", uuid);
+                // For handling failure scenarios such as a group 0 member that is not a token ring member,
+                // there's `removenode`.
+
+                auto temp = tmptr->clone_after_all_left().get0();
+                auto num_tokens_after_all_left = temp.sorted_tokens().size();
+                temp.clear_gently().get();
+                if (num_tokens_after_all_left < 2) {
+                    throw std::runtime_error("no other normal nodes in the ring; decommission would be pointless");
                 }
 
-                // Step 6: Verify that other nodes didn't abort in the meantime.
-                // See https://github.com/scylladb/scylladb/issues/12989.
-                ctl.query_pending_op().get();
+                if (ss._operation_mode != mode::NORMAL) {
+                    throw std::runtime_error(format("Node in {} state; wait for status to become normal or restart", ss._operation_mode));
+                }
 
-                // Step 7: Leave the token ring
-                slogger.info("decommission[{}]: leaving token ring", uuid);
-                ss.leave_ring().get();
-                left_token_ring = true;
-                slogger.info("decommission[{}]: left token ring", uuid);
+                ss.update_pending_ranges(format("decommission {}", endpoint)).get();
 
-                // Step 8: Finish token movement
-                ctl.done(node_ops_cmd::decommission_done).get();
-            } catch (...) {
-                ctl.abort_on_error(node_ops_cmd::decommission_abort, std::current_exception()).get();
-            }
+                auto non_system_keyspaces = db.get_non_local_strategy_keyspaces();
+                for (const auto& keyspace_name : non_system_keyspaces) {
+                    if (ss.get_token_metadata().has_pending_ranges(keyspace_name, ss.get_broadcast_address())) {
+                        throw std::runtime_error("data is currently moving to this node; unable to leave the ring");
+                    }
+                }
+
+                slogger.info("DECOMMISSIONING: starts");
+                ctl.req.leaving_nodes = std::list<gms::inet_address>{endpoint};
+                // TODO: wire ignore_nodes provided by user
+
+                // Step 1: Decide who needs to sync data
+                for (const auto& [node, host_id] : tmptr->get_endpoint_to_host_id_map_for_reading()) {
+                    seastar::thread::maybe_yield();
+                    if (!ctl.ignore_nodes.contains(node)) {
+                        ctl.sync_nodes.insert(node);
+                    }
+                }
+
+                ctl.start("decommission");
+
+                assert(ss._group0);
+                raft_available = ss._group0->wait_for_raft().get();
+
+                try {
+                    // Step 2: Start heartbeat updater
+                    ctl.start_heartbeat_updater(node_ops_cmd::decommission_heartbeat);
+
+                    // Step 3: Prepare to sync data
+                    ctl.prepare(node_ops_cmd::decommission_prepare).get();
+
+                    // Step 4: Start to sync data
+                    slogger.info("DECOMMISSIONING: unbootstrap starts");
+                    ss.unbootstrap().get();
+                    on_streaming_finished();
+                    slogger.info("DECOMMISSIONING: unbootstrap done");
+
+                    // Step 5: Become a group 0 non-voter before leaving the token ring.
+                    //
+                    // Thanks to this, even if we fail after leaving the token ring but before leaving group 0,
+                    // group 0's availability won't be reduced.
+                    if (raft_available) {
+                        slogger.info("decommission[{}]: becoming a group 0 non-voter", uuid);
+                        ss._group0->become_nonvoter().get();
+                        slogger.info("decommission[{}]: became a group 0 non-voter", uuid);
+                    }
+
+                    // Step 6: Verify that other nodes didn't abort in the meantime.
+                    // See https://github.com/scylladb/scylladb/issues/12989.
+                    ctl.query_pending_op().get();
+
+                    // Step 7: Leave the token ring
+                    slogger.info("decommission[{}]: leaving token ring", uuid);
+                    ss.leave_ring().get();
+                    left_token_ring = true;
+                    slogger.info("decommission[{}]: left token ring", uuid);
+
+                    // Step 8: Finish token movement
+                    ctl.done(node_ops_cmd::decommission_done).get();
+                } catch (...) {
+                    ctl.abort_on_error(node_ops_cmd::decommission_abort, std::current_exception()).get();
+                }
             }
 
             // Step 8: Leave group 0
@@ -3721,31 +3721,31 @@ future<> storage_service::rebuild(sstring source_dc) {
         if (ss._raft_topology_change_enabled) {
             co_await ss.raft_rebuild(source_dc);
         } else {
-        slogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
-        auto tmptr = ss.get_token_metadata_ptr();
-        if (ss.is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
-            co_await ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
-        } else {
-            auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._stream_manager, tmptr, ss._abort_source,
-                    ss.get_broadcast_address(), ss._sys_ks.local().local_dc_rack(), "Rebuild", streaming::stream_reason::rebuild);
-            streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
-            if (source_dc != "") {
-                streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
+            slogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
+            auto tmptr = ss.get_token_metadata_ptr();
+            if (ss.is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
+                co_await ss._repair.local().rebuild_with_repair(tmptr, std::move(source_dc));
+            } else {
+                auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._stream_manager, tmptr, ss._abort_source,
+                        ss.get_broadcast_address(), ss._sys_ks.local().local_dc_rack(), "Rebuild", streaming::stream_reason::rebuild);
+                streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(ss._gossiper.get_unreachable_members()));
+                if (source_dc != "") {
+                    streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
+                }
+                auto ks_erms = ss._db.local().get_non_local_strategy_keyspaces_erms();
+                for (const auto& [keyspace_name, erm] : ks_erms) {
+                    co_await streamer->add_ranges(keyspace_name, erm, ss.get_ranges_for_endpoint(erm, utils::fb_utilities::get_broadcast_address()), ss._gossiper, false);
+                }
+                try {
+                    co_await streamer->stream_async();
+                    slogger.info("Streaming for rebuild successful");
+                } catch (...) {
+                    auto ep = std::current_exception();
+                    // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
+                    slogger.warn("Error while rebuilding node: {}", ep);
+                    std::rethrow_exception(std::move(ep));
+                }
             }
-            auto ks_erms = ss._db.local().get_non_local_strategy_keyspaces_erms();
-            for (const auto& [keyspace_name, erm] : ks_erms) {
-                co_await streamer->add_ranges(keyspace_name, erm, ss.get_ranges_for_endpoint(erm, utils::fb_utilities::get_broadcast_address()), ss._gossiper, false);
-            }
-            try {
-                co_await streamer->stream_async();
-                slogger.info("Streaming for rebuild successful");
-            } catch (...) {
-                auto ep = std::current_exception();
-                // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
-                slogger.warn("Error while rebuilding node: {}", ep);
-                std::rethrow_exception(std::move(ep));
-            }
-        }
         }
     });
 }
