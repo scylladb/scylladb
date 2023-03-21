@@ -181,7 +181,7 @@ std::unique_ptr<locator::topology> generate_topology(const std::vector<ring_poin
     for (const auto& p : pts) {
         auto rack = std::to_string(uint8_t(p.host.bytes()[2]));
         auto dc = std::to_string(uint8_t(p.host.bytes()[1]));
-        topo->update_endpoint(p.host, { dc, rack });
+        topo->add_or_update_endpoint(p.host, { dc, rack });
     }
 
     return topo;
@@ -565,7 +565,7 @@ std::unique_ptr<locator::topology> generate_topology(const std::unordered_map<ss
         const sstring& dc = dcs[udist(0, dcs.size() - 1)(e1)];
         auto rc = racks_per_dc.at(dc);
         auto r = udist(0, rc)(e1);
-        topo->update_endpoint(node, { dc, to_sstring(r) });
+        topo->add_or_update_endpoint(node, { dc, to_sstring(r) });
     }
 
     return topo;

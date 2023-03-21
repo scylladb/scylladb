@@ -43,7 +43,7 @@ public:
     /**
      * Stores current DC/rack assignment for ep
      */
-    void update_endpoint(const inet_address& ep, endpoint_dc_rack dr);
+    void add_or_update_endpoint(const inet_address& ep, endpoint_dc_rack dr);
 
     /**
      * Removes current DC/rack assignment for ep

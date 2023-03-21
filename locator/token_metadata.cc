@@ -103,7 +103,7 @@ public:
     }
 
     void update_topology(inet_address ep, endpoint_dc_rack dr) {
-        _topology.update_endpoint(ep, std::move(dr));
+        _topology.add_or_update_endpoint(ep, std::move(dr));
     }
 
     /**

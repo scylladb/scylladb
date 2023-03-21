@@ -36,7 +36,7 @@ future<> topology::clear_gently() noexcept {
 topology::topology(config cfg)
         : _sort_by_proximity(!cfg.disable_proximity_sorting)
 {
-    update_endpoint(utils::fb_utilities::get_broadcast_address(), cfg.local_dc_rack);
+    add_or_update_endpoint(utils::fb_utilities::get_broadcast_address(), cfg.local_dc_rack);
 }
 
 future<topology> topology::clone_gently() const {
@@ -64,7 +64,7 @@ future<topology> topology::clone_gently() const {
     co_return ret;
 }
 
-void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr)
+void topology::add_or_update_endpoint(const inet_address& ep, endpoint_dc_rack dr)
 {
     auto current = _current_locations.find(ep);
 
@@ -75,7 +75,7 @@ void topology::update_endpoint(const inet_address& ep, endpoint_dc_rack dr)
         remove_endpoint(ep);
     }
 
-    tlogger.debug("update_endpoint: {} {}/{}", ep, dr.dc, dr.rack);
+    tlogger.debug("add_or_update_endpoint: {} {}/{}", ep, dr.dc, dr.rack);
     _dc_endpoints[dr.dc].insert(ep);
     _dc_racks[dr.dc][dr.rack].insert(ep);
     _datacenters.insert(dr.dc);
