@@ -77,3 +77,28 @@ def test_lwt_empty_partition_range(cql, table1):
 def test_lwt_empty_clustering_range(cql, table1):
     with pytest.raises(InvalidRequest):
         cql.execute(f"UPDATE {table1} SET r = 9000 WHERE p = 1  AND c = 2 AND c = 2000 IF r = 3")
+
+# In an LWT batch, if one of the condition fails the entire batch is not
+# applied. All conditions in a batch use the same values before the batch,
+# so if a batch has both a IF EXISTS and IF NOT EXISTS on the same row, they
+# can't possibly both be true, so this batch is guaranteed to fail
+# regardless of the data. Cassandra detects this specific conflict, and
+# prints an error instead of silently failing the batch.
+# Reproduces #13011.
+@pytest.mark.xfail(reason="issue #13011")
+def test_lwt_with_batch_conflict_1(cql, table1):
+    p = unique_key_int()
+    with pytest.raises(InvalidRequest, match='Cannot mix'):
+        cql.execute(f'BEGIN BATCH DELETE FROM {table1} WHERE p={p} AND c=1 IF EXISTS; INSERT INTO {table1}(p,c,r) VALUES ({p},1,2) IF NOT EXISTS; APPLY BATCH;')
+
+# However, Cassandra does not detect every case of a conflict between
+# different conditions in a batch. For example, trying both "IF r=1"
+# and "IF r=2" returns a not-applied - not an error message.
+def test_lwt_with_batch_conflict_2(cql, table1):
+    p = unique_key_int()
+    rs = list(cql.execute(f'BEGIN BATCH UPDATE {table1} SET r=10 WHERE p={p} AND c=1 IF r=1; UPDATE {table1} SET r=20 WHERE p={p} AND c=1 IF r=2;  APPLY BATCH;'))
+    # Note that as a documented difference between Scylla and Cassandra,
+    # Cassandra returns just one applied=False in the result r, while
+    # Scylla returns a separate row for each of the two conditions.
+    for r in rs:
+        assert r.applied == False
