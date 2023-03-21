@@ -104,8 +104,6 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
 
     size_t _max_repair_memory;
     seastar::semaphore _memory_sem;
-    seastar::semaphore _reader_sem;
-    seastar::semaphore _lock_sem{1};
 
     future<> init_ms_handlers();
     future<> uninit_ms_handlers();
@@ -174,8 +172,6 @@ public:
     gms::gossiper& get_gossiper() noexcept { return _gossiper.local(); }
     size_t max_repair_memory() const { return _max_repair_memory; }
     seastar::semaphore& memory_sem() { return _memory_sem; }
-    seastar::semaphore& reader_sem() { return _reader_sem; }
-    seastar::semaphore& lock_sem() { return _lock_sem; }
     repair_module& get_repair_module() noexcept {
         return *_repair_module;
     }
