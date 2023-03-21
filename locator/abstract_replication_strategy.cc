@@ -63,13 +63,13 @@ sstring abstract_replication_strategy::to_qualified_class_name(std::string_view 
     return strategy_class_registry::to_qualified_class_name(strategy_class_name);
 }
 
-inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpoints(const token& search_token, const effective_replication_map& erm) const {
+inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpoints(const token& search_token, const vnode_effective_replication_map& erm) const {
     const token& key_token = erm.get_token_metadata_ptr()->first_token(search_token);
     auto res = erm.get_replication_map().find(key_token);
     return res->second;
 }
 
-stop_iteration abstract_replication_strategy::for_each_natural_endpoint_until(const token& search_token, const effective_replication_map& erm, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {
+stop_iteration abstract_replication_strategy::for_each_natural_endpoint_until(const token& search_token, const vnode_effective_replication_map& erm, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {
     const token& key_token = erm.get_token_metadata_ptr()->first_token(search_token);
     auto res = erm.get_replication_map().find(key_token);
     for (const auto& ep : res->second) {
@@ -80,7 +80,7 @@ stop_iteration abstract_replication_strategy::for_each_natural_endpoint_until(co
     return stop_iteration::no;
 }
 
-inet_address_vector_replica_set effective_replication_map::get_natural_endpoints_without_node_being_replaced(const token& search_token) const {
+inet_address_vector_replica_set vnode_effective_replication_map::get_natural_endpoints_without_node_being_replaced(const token& search_token) const {
     inet_address_vector_replica_set natural_endpoints = get_natural_endpoints(search_token);
     if (_tmptr->is_any_node_being_replaced() &&
         _rs->allow_remove_node_being_replaced_from_natural_endpoints()) {
@@ -103,7 +103,7 @@ inet_address_vector_replica_set effective_replication_map::get_natural_endpoints
     return natural_endpoints;
 }
 
-inet_address_vector_topology_change effective_replication_map::get_pending_endpoints(const token& search_token, const sstring& ks_name) const {
+inet_address_vector_topology_change vnode_effective_replication_map::get_pending_endpoints(const token& search_token, const sstring& ks_name) const {
     return _tmptr->pending_endpoints_for(search_token, ks_name);
 }
 
@@ -152,7 +152,7 @@ insert_token_range_to_sorted_container_while_unwrapping(
 }
 
 dht::token_range_vector
-effective_replication_map::do_get_ranges(noncopyable_function<stop_iteration(bool&, const inet_address&)> consider_range_for_endpoint) const {
+vnode_effective_replication_map::do_get_ranges(noncopyable_function<stop_iteration(bool&, const inet_address&)> consider_range_for_endpoint) const {
     dht::token_range_vector ret;
     const auto& tm = *_tmptr;
     const auto& sorted_tokens = tm.sorted_tokens();
@@ -174,7 +174,7 @@ effective_replication_map::do_get_ranges(noncopyable_function<stop_iteration(boo
 }
 
 dht::token_range_vector
-effective_replication_map::get_ranges(inet_address ep) const {
+vnode_effective_replication_map::get_ranges(inet_address ep) const {
     // The callback function below is called for each endpoint
     // in each token natural endpoints.
     // Add the range if `ep` is found in the token's natural endpoints
@@ -224,7 +224,7 @@ abstract_replication_strategy::get_ranges(inet_address ep, const token_metadata&
 }
 
 dht::token_range_vector
-effective_replication_map::get_primary_ranges(inet_address ep) const {
+vnode_effective_replication_map::get_primary_ranges(inet_address ep) const {
     // The callback function below is called for each endpoint
     // in each token natural endpoints.
     // Add the range if `ep` is the primary replica in the token's natural endpoints.
@@ -237,7 +237,7 @@ effective_replication_map::get_primary_ranges(inet_address ep) const {
 }
 
 dht::token_range_vector
-effective_replication_map::get_primary_ranges_within_dc(inet_address ep) const {
+vnode_effective_replication_map::get_primary_ranges_within_dc(inet_address ep) const {
     const topology& topo = _tmptr->get_topology();
     sstring local_dc = topo.get_datacenter(ep);
     std::unordered_set<inet_address> local_dc_nodes = topo.get_datacenter_endpoints().at(local_dc);
@@ -259,7 +259,7 @@ effective_replication_map::get_primary_ranges_within_dc(inet_address ep) const {
 }
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
-effective_replication_map::get_range_addresses() const {
+vnode_effective_replication_map::get_range_addresses() const {
     const token_metadata& tm = *_tmptr;
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;
     for (const auto& [t, eps] : _replication_map) {
@@ -303,7 +303,7 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
     co_return ret;
 }
 
-future<mutable_effective_replication_map_ptr> calculate_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr) {
+future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr) {
     replication_map replication_map;
     const auto& sorted_tokens = tmptr->sorted_tokens();
 
@@ -327,7 +327,7 @@ future<mutable_effective_replication_map_ptr> calculate_effective_replication_ma
     co_return make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(replication_map), rf);
 }
 
-future<replication_map> effective_replication_map::clone_endpoints_gently() const {
+future<replication_map> vnode_effective_replication_map::clone_endpoints_gently() const {
     replication_map cloned_endpoints;
 
     for (auto& i : _replication_map) {
@@ -338,20 +338,20 @@ future<replication_map> effective_replication_map::clone_endpoints_gently() cons
     co_return cloned_endpoints;
 }
 
-inet_address_vector_replica_set effective_replication_map::get_natural_endpoints(const token& search_token) const {
+inet_address_vector_replica_set vnode_effective_replication_map::get_natural_endpoints(const token& search_token) const {
     return _rs->get_natural_endpoints(search_token, *this);
 }
 
-stop_iteration effective_replication_map::for_each_natural_endpoint_until(const token& search_token, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {
+stop_iteration vnode_effective_replication_map::for_each_natural_endpoint_until(const token& search_token, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {
     return _rs->for_each_natural_endpoint_until(search_token, *this, func);
 }
 
-future<> effective_replication_map::clear_gently() noexcept {
+future<> vnode_effective_replication_map::clear_gently() noexcept {
     co_await utils::clear_gently(_replication_map);
     co_await utils::clear_gently(_tmptr);
 }
 
-effective_replication_map::~effective_replication_map() {
+vnode_effective_replication_map::~vnode_effective_replication_map() {
     if (is_registered()) {
         _factory->erase_effective_replication_map(this);
         try {
@@ -368,13 +368,13 @@ effective_replication_map::~effective_replication_map() {
     }
 }
 
-effective_replication_map::factory_key effective_replication_map::make_factory_key(const abstract_replication_strategy::ptr_type& rs, const token_metadata_ptr& tmptr) {
+vnode_effective_replication_map::factory_key vnode_effective_replication_map::make_factory_key(const abstract_replication_strategy::ptr_type& rs, const token_metadata_ptr& tmptr) {
     return factory_key(rs->get_type(), rs->get_config_options(), tmptr->get_ring_version());
 }
 
-future<effective_replication_map_ptr> effective_replication_map_factory::create_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr) {
+future<vnode_effective_replication_map_ptr> effective_replication_map_factory::create_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr) {
     // lookup key on local shard
-    auto key = effective_replication_map::make_factory_key(rs, tmptr);
+    auto key = vnode_effective_replication_map::make_factory_key(rs, tmptr);
     auto erm = find_effective_replication_map(key);
     if (erm) {
         rslogger.debug("create_effective_replication_map: found {} [{}]", key, fmt::ptr(erm.get()));
@@ -385,11 +385,11 @@ future<effective_replication_map_ptr> effective_replication_map_factory::create_
     // TODO:
     // - use hash of key to distribute the load
     // - instaintiate only on NUMA nodes
-    auto ref_erm = co_await container().invoke_on(0, [key] (effective_replication_map_factory& ermf) -> future<foreign_ptr<effective_replication_map_ptr>> {
+    auto ref_erm = co_await container().invoke_on(0, [key] (effective_replication_map_factory& ermf) -> future<foreign_ptr<vnode_effective_replication_map_ptr>> {
         auto erm = ermf.find_effective_replication_map(key);
-        co_return make_foreign<effective_replication_map_ptr>(std::move(erm));
+        co_return make_foreign<vnode_effective_replication_map_ptr>(std::move(erm));
     });
-    mutable_effective_replication_map_ptr new_erm;
+    mutable_vnode_effective_replication_map_ptr new_erm;
     if (ref_erm) {
         auto rf = ref_erm->get_replication_factor();
         auto local_replication_map = co_await ref_erm->clone_endpoints_gently();
@@ -400,7 +400,7 @@ future<effective_replication_map_ptr> effective_replication_map_factory::create_
     co_return insert_effective_replication_map(std::move(new_erm), std::move(key));
 }
 
-effective_replication_map_ptr effective_replication_map_factory::find_effective_replication_map(const effective_replication_map::factory_key& key) const {
+vnode_effective_replication_map_ptr effective_replication_map_factory::find_effective_replication_map(const vnode_effective_replication_map::factory_key& key) const {
     auto it = _effective_replication_maps.find(key);
     if (it != _effective_replication_maps.end()) {
         return it->second->shared_from_this();
@@ -408,7 +408,7 @@ effective_replication_map_ptr effective_replication_map_factory::find_effective_
     return {};
 }
 
-effective_replication_map_ptr effective_replication_map_factory::insert_effective_replication_map(mutable_effective_replication_map_ptr erm, effective_replication_map::factory_key key) {
+vnode_effective_replication_map_ptr effective_replication_map_factory::insert_effective_replication_map(mutable_vnode_effective_replication_map_ptr erm, vnode_effective_replication_map::factory_key key) {
     auto [it, inserted] = _effective_replication_maps.insert({key, erm.get()});
     if (inserted) {
         rslogger.debug("insert_effective_replication_map: inserted {} [{}]", key, fmt::ptr(erm.get()));
@@ -420,7 +420,7 @@ effective_replication_map_ptr effective_replication_map_factory::insert_effectiv
     return res;
 }
 
-bool effective_replication_map_factory::erase_effective_replication_map(effective_replication_map* erm) {
+bool effective_replication_map_factory::erase_effective_replication_map(vnode_effective_replication_map* erm) {
     const auto& key = erm->get_factory_key();
     auto it = _effective_replication_maps.find(key);
     if (it == _effective_replication_maps.end()) {
@@ -474,7 +474,7 @@ void effective_replication_map_factory::submit_background_work(future<> fut) {
     });
 }
 
-future<> global_effective_replication_map::get_keyspace_erms(sharded<replica::database>& sharded_db, std::string_view keyspace_name) {
+future<> global_vnode_effective_replication_map::get_keyspace_erms(sharded<replica::database>& sharded_db, std::string_view keyspace_name) {
     return sharded_db.invoke_on(0, [this, &sharded_db, keyspace_name] (replica::database& db) -> future<> {
         // To ensure we get the same effective_replication_map
         // on all shards, acquire the shared_token_metadata lock.
@@ -506,8 +506,8 @@ future<> global_effective_replication_map::get_keyspace_erms(sharded<replica::da
     });
 }
 
-future<global_effective_replication_map> make_global_effective_replication_map(sharded<replica::database>& sharded_db, std::string_view keyspace_name) {
-    global_effective_replication_map ret;
+future<global_vnode_effective_replication_map> make_global_effective_replication_map(sharded<replica::database>& sharded_db, std::string_view keyspace_name) {
+    global_vnode_effective_replication_map ret;
     co_await ret.get_keyspace_erms(sharded_db, keyspace_name);
     co_return ret;
 }
@@ -528,7 +528,7 @@ std::ostream& operator<<(std::ostream& os, locator::replication_strategy_type t)
     std::abort();
 }
 
-std::ostream& operator<<(std::ostream& os, const locator::effective_replication_map::factory_key& key) {
+std::ostream& operator<<(std::ostream& os, const locator::vnode_effective_replication_map::factory_key& key) {
     os << key.rs_type;
     os << '.' << key.ring_version;
     char sep = ':';

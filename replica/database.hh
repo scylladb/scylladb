@@ -1164,7 +1164,7 @@ public:
     };
 private:
     locator::abstract_replication_strategy::ptr_type _replication_strategy;
-    locator::effective_replication_map_ptr _effective_replication_map;
+    locator::vnode_effective_replication_map_ptr _effective_replication_map;
     lw_shared_ptr<keyspace_metadata> _metadata;
     config _config;
     locator::effective_replication_map_factory& _erm_factory;
@@ -1190,7 +1190,7 @@ public:
      */
     lw_shared_ptr<keyspace_metadata> metadata() const;
     future<> create_replication_strategy(const locator::shared_token_metadata& stm, const locator::replication_strategy_config_options& options);
-    void update_effective_replication_map(locator::effective_replication_map_ptr erm);
+    void update_effective_replication_map(locator::vnode_effective_replication_map_ptr erm);
 
     /**
      * This should not really be return by reference, since replication
@@ -1204,7 +1204,7 @@ public:
         return _replication_strategy;
     }
 
-    locator::effective_replication_map_ptr get_effective_replication_map() const {
+    locator::vnode_effective_replication_map_ptr get_effective_replication_map() const {
         return _effective_replication_map;
     }
 
@@ -1521,7 +1521,7 @@ public:
     std::vector<sstring> get_user_keyspaces() const;
     std::vector<sstring> get_all_keyspaces() const;
     std::vector<sstring> get_non_local_strategy_keyspaces() const;
-    std::unordered_map<sstring, locator::effective_replication_map_ptr> get_non_local_strategy_keyspaces_erms() const;
+    std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> get_non_local_strategy_keyspaces_erms() const;
     column_family& find_column_family(std::string_view ks, std::string_view name);
     const column_family& find_column_family(std::string_view ks, std::string_view name) const;
     column_family& find_column_family(const table_id&);

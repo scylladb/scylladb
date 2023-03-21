@@ -1828,13 +1828,13 @@ storage_service::get_range_to_address_map(const sstring& keyspace) const {
 }
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
-storage_service::get_range_to_address_map(locator::effective_replication_map_ptr erm) const {
+storage_service::get_range_to_address_map(locator::vnode_effective_replication_map_ptr erm) const {
     return get_range_to_address_map(erm, erm->get_token_metadata_ptr()->sorted_tokens());
 }
 
 // Caller is responsible to hold token_metadata valid until the returned future is resolved
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
-storage_service::get_range_to_address_map(locator::effective_replication_map_ptr erm,
+storage_service::get_range_to_address_map(locator::vnode_effective_replication_map_ptr erm,
         const std::vector<token>& sorted_tokens) const {
     co_return co_await construct_range_to_endpoint_map(erm, co_await get_all_ranges(sorted_tokens));
 }
@@ -2531,7 +2531,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
 
     std::vector<mutable_token_metadata_ptr> pending_token_metadata_ptr;
     pending_token_metadata_ptr.resize(smp::count);
-    std::vector<std::unordered_map<sstring, locator::effective_replication_map_ptr>> pending_effective_replication_maps;
+    std::vector<std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr>> pending_effective_replication_maps;
     pending_effective_replication_maps.resize(smp::count);
 
     try {
@@ -2772,7 +2772,7 @@ future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
 
 future<std::map<gms::inet_address, float>> storage_service::effective_ownership(sstring keyspace_name) {
     return run_with_no_api_lock([keyspace_name] (storage_service& ss) mutable -> future<std::map<gms::inet_address, float>> {
-        locator::effective_replication_map_ptr erm;
+        locator::vnode_effective_replication_map_ptr erm;
         if (keyspace_name != "") {
             //find throws no such keyspace if it is missing
             const replica::keyspace& ks = ss._db.local().find_keyspace(keyspace_name);
@@ -4122,7 +4122,8 @@ int32_t storage_service::get_exception_count() {
     return 0;
 }
 
-future<std::unordered_multimap<dht::token_range, inet_address>> storage_service::get_changed_ranges_for_leaving(locator::effective_replication_map_ptr erm, inet_address endpoint) {
+future<std::unordered_multimap<dht::token_range, inet_address>>
+storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replication_map_ptr erm, inet_address endpoint) {
     // First get all ranges the leaving endpoint is responsible for
     auto ranges = get_ranges_for_endpoint(erm, endpoint);
 
@@ -4472,7 +4473,7 @@ future<> storage_service::shutdown_protocol_servers() {
 }
 
 future<std::unordered_multimap<inet_address, dht::token_range>>
-storage_service::get_new_source_ranges(locator::effective_replication_map_ptr erm, const dht::token_range_vector& ranges) const {
+storage_service::get_new_source_ranges(locator::vnode_effective_replication_map_ptr erm, const dht::token_range_vector& ranges) const {
     auto my_address = get_broadcast_address();
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_addresses = co_await erm->get_range_addresses();
     std::unordered_multimap<inet_address, dht::token_range> source_ranges;
@@ -4520,7 +4521,7 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 storage_service::construct_range_to_endpoint_map(
-        locator::effective_replication_map_ptr erm,
+        locator::vnode_effective_replication_map_ptr erm,
         const dht::token_range_vector& ranges) const {
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> res;
     res.reserve(ranges.size());
@@ -5026,7 +5027,7 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, rang
 };
 
 dht::token_range_vector
-storage_service::get_ranges_for_endpoint(const locator::effective_replication_map_ptr& erm, const gms::inet_address& ep) const {
+storage_service::get_ranges_for_endpoint(const locator::vnode_effective_replication_map_ptr& erm, const gms::inet_address& ep) const {
     return erm->get_ranges(ep);
 }
 

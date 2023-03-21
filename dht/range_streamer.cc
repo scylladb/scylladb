@@ -80,7 +80,7 @@ range_streamer::get_range_fetch_map(const std::unordered_map<dht::token_range, s
 
 // Must be called from a seastar thread
 std::unordered_map<dht::token_range, std::vector<inet_address>>
-range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, locator::effective_replication_map_ptr erm, dht::token_range_vector desired_ranges) {
+range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, locator::vnode_effective_replication_map_ptr erm, dht::token_range_vector desired_ranges) {
     logger.debug("{} ks={}", __func__, keyspace_name);
 
     auto range_addresses = erm->get_range_addresses().get0();
@@ -115,7 +115,7 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, lo
 
 // Must be called from a seastar thread
 std::unordered_map<dht::token_range, std::vector<inet_address>>
-range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, locator::effective_replication_map_ptr erm, dht::token_range_vector desired_ranges, gms::gossiper& gossiper) {
+range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, locator::vnode_effective_replication_map_ptr erm, dht::token_range_vector desired_ranges, gms::gossiper& gossiper) {
     logger.debug("{} ks={}", __func__, keyspace_name);
     assert (_tokens.empty() == false);
 
@@ -183,7 +183,7 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
     return range_sources;
 }
 
-bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name, const locator::effective_replication_map_ptr& erm) {
+bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name, const locator::vnode_effective_replication_map_ptr& erm) {
     auto rf = erm->get_replication_factor();
     auto nr_nodes_in_ring = get_token_metadata().get_all_endpoints().size();
     bool everywhere_topology = erm->get_replication_strategy().get_type() == locator::replication_strategy_type::everywhere_topology;
@@ -214,7 +214,7 @@ void range_streamer::add_rx_ranges(const sstring& keyspace_name, std::unordered_
 }
 
 // TODO: This is the legacy range_streamer interface, it is add_rx_ranges which adds rx ranges.
-future<> range_streamer::add_ranges(const sstring& keyspace_name, locator::effective_replication_map_ptr erm, dht::token_range_vector ranges, gms::gossiper& gossiper, bool is_replacing) {
+future<> range_streamer::add_ranges(const sstring& keyspace_name, locator::vnode_effective_replication_map_ptr erm, dht::token_range_vector ranges, gms::gossiper& gossiper, bool is_replacing) {
   return seastar::async([this, keyspace_name, erm = std::move(erm), ranges= std::move(ranges), &gossiper, is_replacing] () mutable {
     if (_nr_tx_added) {
         throw std::runtime_error("Mixed sending and receiving is not supported");

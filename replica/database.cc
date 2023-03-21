@@ -1136,8 +1136,8 @@ std::vector<sstring> database::get_non_local_strategy_keyspaces() const {
     return res;
 }
 
-std::unordered_map<sstring, locator::effective_replication_map_ptr> database::get_non_local_strategy_keyspaces_erms() const {
-    std::unordered_map<sstring, locator::effective_replication_map_ptr> res;
+std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> database::get_non_local_strategy_keyspaces_erms() const {
+    std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> res;
     res.reserve(_keyspaces.size());
     for (auto const& i : _keyspaces) {
         if (i.second.get_replication_strategy().get_type() != locator::replication_strategy_type::local) {
@@ -1207,7 +1207,7 @@ keyspace::create_replication_strategy(const locator::shared_token_metadata& stm,
 }
 
 void
-keyspace::update_effective_replication_map(locator::effective_replication_map_ptr erm) {
+keyspace::update_effective_replication_map(locator::vnode_effective_replication_map_ptr erm) {
     _effective_replication_map = std::move(erm);
 }
 

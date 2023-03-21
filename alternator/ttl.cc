@@ -387,7 +387,7 @@ class token_ranges_owned_by_this_shard {
     class ranges_holder_primary {
         const dht::token_range_vector _token_ranges;
      public:
-        ranges_holder_primary(const locator::effective_replication_map_ptr& erm, gms::gossiper& g, gms::inet_address ep)
+        ranges_holder_primary(const locator::vnode_effective_replication_map_ptr& erm, gms::gossiper& g, gms::inet_address ep)
             : _token_ranges(erm->get_primary_ranges(ep)) {}
         std::size_t size() const { return _token_ranges.size(); }
         const dht::token_range& operator[](std::size_t i) const {

@@ -39,14 +39,14 @@ protected:
 
 class user_requested_repair_task_impl : public repair_task_impl {
 private:
-    lw_shared_ptr<locator::global_effective_replication_map> _germs;
+    lw_shared_ptr<locator::global_vnode_effective_replication_map> _germs;
     std::vector<sstring> _cfs;
     dht::token_range_vector _ranges;
     std::vector<sstring> _hosts;
     std::vector<sstring> _data_centers;
     std::unordered_set<gms::inet_address> _ignore_nodes;
 public:
-    user_requested_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string entity, lw_shared_ptr<locator::global_effective_replication_map> germs, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<gms::inet_address> ignore_nodes) noexcept
+    user_requested_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string entity, lw_shared_ptr<locator::global_vnode_effective_replication_map> germs, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<gms::inet_address> ignore_nodes) noexcept
         : repair_task_impl(module, id.uuid(), id.id, std::move(keyspace), "", std::move(entity), tasks::task_id::create_null_id(), streaming::stream_reason::repair)
         , _germs(germs)
         , _cfs(std::move(cfs))

@@ -64,7 +64,7 @@ static void verify_sorted(const dht::token_range_vector& trv) {
     BOOST_CHECK(boost::adjacent_find(trv, not_strictly_before) == trv.end());
 }
 
-static void check_ranges_are_sorted(effective_replication_map_ptr erm, gms::inet_address ep) {
+static void check_ranges_are_sorted(vnode_effective_replication_map_ptr erm, gms::inet_address ep) {
     verify_sorted(erm->get_ranges(ep));
     verify_sorted(erm->get_primary_ranges(ep));
     verify_sorted(erm->get_primary_ranges_within_dc(ep));

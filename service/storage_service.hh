@@ -369,9 +369,9 @@ public:
     sstring get_rpc_address(const inet_address& endpoint) const;
 
     future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_to_address_map(const sstring& keyspace) const;
-    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_to_address_map(locator::effective_replication_map_ptr erm) const;
+    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_to_address_map(locator::vnode_effective_replication_map_ptr erm) const;
 
-    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_to_address_map(locator::effective_replication_map_ptr erm,
+    future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> get_range_to_address_map(locator::vnode_effective_replication_map_ptr erm,
             const std::vector<token>& sorted_tokens) const;
 
     /**
@@ -405,7 +405,7 @@ public:
      * @return mapping of ranges to the replicas responsible for them.
     */
     future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>> construct_range_to_endpoint_map(
-            locator::effective_replication_map_ptr erm,
+            locator::vnode_effective_replication_map_ptr erm,
             const dht::token_range_vector& ranges) const;
 public:
     virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
@@ -554,7 +554,7 @@ private:
      * @param ranges the ranges to find sources for
      * @return multimap of addresses to ranges the address is responsible for
      */
-    future<std::unordered_multimap<inet_address, dht::token_range>> get_new_source_ranges(locator::effective_replication_map_ptr erm, const dht::token_range_vector& ranges) const;
+    future<std::unordered_multimap<inet_address, dht::token_range>> get_new_source_ranges(locator::vnode_effective_replication_map_ptr erm, const dht::token_range_vector& ranges) const;
 
     /**
      * Sends a notification to a node indicating we have finished replicating data.
@@ -578,7 +578,7 @@ private:
     future<> removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node);
 
     // needs to be modified to accept either a keyspace or ARS.
-    future<std::unordered_multimap<dht::token_range, inet_address>> get_changed_ranges_for_leaving(locator::effective_replication_map_ptr erm, inet_address endpoint);
+    future<std::unordered_multimap<dht::token_range, inet_address>> get_changed_ranges_for_leaving(locator::vnode_effective_replication_map_ptr erm, inet_address endpoint);
 
     future<> maybe_reconnect_to_preferred_ip(inet_address ep, inet_address local_ip);
 public:
@@ -596,7 +596,7 @@ public:
      * @param ep endpoint we are interested in.
      * @return ranges for the specified endpoint.
      */
-    dht::token_range_vector get_ranges_for_endpoint(const locator::effective_replication_map_ptr& erm, const gms::inet_address& ep) const;
+    dht::token_range_vector get_ranges_for_endpoint(const locator::vnode_effective_replication_map_ptr& erm, const gms::inet_address& ep) const;
 
     /**
      * Get all ranges that span the ring given a set
