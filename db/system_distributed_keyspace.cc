@@ -574,7 +574,7 @@ system_distributed_keyspace::insert_cdc_generation(
         co_await _sp.mutate(
             { std::move(m) },
             db::consistency_level::ALL,
-            db::timeout_clock::now() + 60s,
+            db::timeout_clock::now() + 6000s,
             nullptr, // trace_state
             empty_service_permit(),
             db::allow_per_partition_rate_limit::no,
