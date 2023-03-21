@@ -3742,17 +3742,22 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     auto& stats = handler_ptr->stats();
     auto& handler = *handler_ptr;
     auto& global_stats = handler._proxy->_global_stats;
-    auto& topology = handler_ptr->_effective_replication_map_ptr->get_topology();
-    auto local_dc = topology.get_datacenter();
+    if (handler.get_targets().size() != 1 || !fbu::is_me(handler.get_targets()[0])) {
+        auto& topology = handler_ptr->_effective_replication_map_ptr->get_topology();
+        auto local_dc = topology.get_datacenter();
 
-    for(auto dest: handler.get_targets()) {
-        sstring dc = topology.get_datacenter(dest);
-        // read repair writes do not go through coordinator since mutations are per destination
-        if (handler.read_repair_write() || dc == local_dc) {
-            local.emplace_back("", inet_address_vector_replica_set({dest}));
-        } else {
-            dc_groups[dc].push_back(dest);
+        for(auto dest: handler.get_targets()) {
+            sstring dc = topology.get_datacenter(dest);
+            // read repair writes do not go through coordinator since mutations are per destination
+            if (handler.read_repair_write() || dc == local_dc) {
+                local.emplace_back("", inet_address_vector_replica_set({dest}));
+            } else {
+                dc_groups[dc].push_back(dest);
+            }
         }
+    } else {
+        // There is only one target replica and it is me
+        local.emplace_back("", handler.get_targets());
     }
 
     auto all = boost::range::join(local, dc_groups);
