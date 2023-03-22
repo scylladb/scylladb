@@ -670,11 +670,7 @@ reader_concurrency_semaphore::~reader_concurrency_semaphore() {
 reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(flat_mutation_reader_v2 reader) noexcept {
     auto& permit_impl = *reader.permit()._impl;
     permit_impl.on_register_as_inactive();
-    // Implies _inactive_reads.empty(), we don't queue new readers before
-    // evicting all inactive reads.
-    // Checking the _wait_list covers the count resources only, so check memory
-    // separately.
-    if (_wait_list.empty() && _resources.memory > 0) {
+    if (!should_evict_inactive_read()) {
       try {
         auto irp = std::make_unique<inactive_read>(std::move(reader));
         auto& ir = *irp;
@@ -872,7 +868,7 @@ void reader_concurrency_semaphore::evict_readers_in_background() {
     // This is safe since stop() closes _gate;
     (void)with_gate(_close_readers_gate, [this] {
         return repeat([this] {
-            if (_wait_list.empty() || _inactive_reads.empty()) {
+            if (_inactive_reads.empty() || !should_evict_inactive_read()) {
                 _evicting = false;
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
@@ -903,6 +899,17 @@ reader_concurrency_semaphore::can_admit_read(const reader_permit& permit) const 
     }
 
     return {can_admit::yes, reason::all_ok};
+}
+
+bool reader_concurrency_semaphore::should_evict_inactive_read() const noexcept {
+    if (_resources.memory < 0 || _resources.count < 0) {
+        return true;
+    }
+    if (_wait_list.empty()) {
+        return false;
+    }
+    const auto r = can_admit_read(_wait_list.front().permit).why;
+    return r == reason::memory_resources || r == reason::count_resources;
 }
 
 future<> reader_concurrency_semaphore::do_wait_admission(reader_permit permit, read_func func) {
