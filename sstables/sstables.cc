@@ -7,6 +7,7 @@
  */
 
 #include "log.hh"
+#include <concepts>
 #include <vector>
 #include <typeinfo>
 #include <limits>
@@ -202,8 +203,7 @@ const std::unordered_map<sstable_format_types, sstring, enum_hash<sstable_format
 // This assumes that the mappings are small enough, and called unfrequent
 // enough.  If that changes, it would be adviseable to create a full static
 // reverse mapping, even if it is done at runtime.
-template <typename Map, typename Value>
-requires std::equality_comparable_with<typename Map::mapped_type, Value>
+template <typename Map, std::equality_comparable_with<typename Map::mapped_type> Value>
 static typename Map::key_type reverse_map(const Value& v, const Map& map) {
     for (auto& [key, value]: map) {
         if (value == v) {
