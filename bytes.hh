@@ -9,6 +9,7 @@
 #pragma once
 
 #include "seastarx.hh"
+#include <fmt/format.h>
 #include <seastar/core/sstring.hh>
 #include "utils/hashing.hh"
 #include <optional>
@@ -50,6 +51,81 @@ sstring to_hex(const bytes_opt& b);
 
 std::ostream& operator<<(std::ostream& os, const bytes& b);
 std::ostream& operator<<(std::ostream& os, const bytes_opt& b);
+
+template <>
+struct fmt::formatter<fmt_hex> {
+    size_t _group_size_in_bytes = 0;
+    char _delimiter = ' ';
+public:
+    // format_spec := [group_size[delimeter]]
+    // group_size := a char from '0' to '9'
+    // delimeter := a char other than '{'  or '}'
+    //
+    // by default, the given bytes are printed without delimeter, just
+    // like a string. so a string view of {0x20, 0x01, 0x0d, 0xb8} is
+    // printed like:
+    // "20010db8".
+    //
+    // but the format specifier can be used to customize how the bytes
+    // are printed. for instance, to print an bytes_view like IPv6. so
+    // the format specfier would be "{:2:}", where
+    // - "2": bytes are printed in groups of 2 bytes
+    // - ":": each group is delimeted by ":"
+    // and the formatted output will look like:
+    // "2001:0db8:0000"
+    //
+    // or we can mimic how the default format of used by hexdump using
+    // "{:2 }", where
+    // - "2": bytes are printed in group of 2 bytes
+    // - " ": each group is delimeted by " "
+    // and the formatted output will look like:
+    // "2001 0db8 0000"
+    //
+    // or we can just print each bytes and separate them by a dash using
+    // "{:1-}"
+    // and the formatted output will look like:
+    // "20-01-0b-b8-00-00"
+    constexpr auto parse(fmt::format_parse_context& ctx) {
+        // get the delimeter if any
+        auto it = ctx.begin();
+        auto end = ctx.end();
+        if (it != end) {
+            int group_size = *it++ - '0';
+            if (group_size < 0 ||
+                static_cast<size_t>(group_size) > sizeof(uint64_t)) {
+                throw format_error("invalid group_size");
+            }
+            _group_size_in_bytes = group_size;
+            if (it != end) {
+                // optional delimiter
+                _delimiter = *it++;
+            }
+        }
+        if (it != end && *it != '}') {
+            throw format_error("invalid format");
+        }
+        return it;
+    }
+    template <typename FormatContext>
+    auto format(const ::fmt_hex& s, FormatContext& ctx) const {
+        auto out = ctx.out();
+        const auto& v = s.v;
+        if (_group_size_in_bytes > 0) {
+            for (size_t i = 0, size = v.size(); i < size; i++) {
+                if (i != 0 && i % _group_size_in_bytes == 0) {
+                    format_to(out, "{}{:02x}", _delimiter, std::byte(v[i]));
+                } else {
+                    format_to(out, "{:02x}", std::byte(v[i]));
+                }
+            }
+        } else {
+            for (auto b : v) {
+                format_to(out, "{:02x}", std::byte(b));
+            }
+        }
+        return out;
+    }
+};
 
 namespace std {
 
