@@ -381,24 +381,28 @@ class ScyllaServer:
         sleep_interval = 0.1
         cql_up_state = CqlUpState.NOT_CONNECTED
 
+        def report_error(message: str):
+            message += f", server_id {self.server_id}, IP {self.ip_addr}, workdir {self.workdir.name}"
+            message += f", host_id {self.host_id if hasattr(self, 'host_id') else '<missing>'}"
+            message += f", cql [{'connected' if cql_up_state == CqlUpState.CONNECTED else 'not connected'}]"
+            self.logger.error(message)
+            self.logger.error("last line of %s:", self.log_filename)
+            with self.log_filename.open('r') as log_file:
+                log_file.seek(0, 0)
+                self.logger.error(log_file.readlines()[-1].rstrip())
+            log_handler = logging.getLogger().handlers[0]
+            if hasattr(log_handler, 'baseFilename'):
+                logpath = log_handler.baseFilename   # type: ignore
+            else:
+                logpath = "?"
+            raise RuntimeError(message + "\nCheck the log files:\n"
+                                         f"{logpath}\n"
+                                         f"{self.log_filename}")
+
         while time.time() < self.start_time + self.TOPOLOGY_TIMEOUT:
             if self.cmd.returncode:
                 self.cmd = None
-                with self.log_filename.open('r') as log_file:
-                    self.logger.error("failed to start server at host %s in %s",
-                                  self.ip_addr, self.workdir.name)
-                    self.logger.error("last line of %s:", self.log_filename)
-                    log_file.seek(0, 0)
-                    self.logger.error(log_file.readlines()[-1].rstrip())
-                    log_handler = logging.getLogger().handlers[0]
-                    if hasattr(log_handler, 'baseFilename'):
-                        logpath = log_handler.baseFilename   # type: ignore
-                    else:
-                        logpath = "?"
-                    raise RuntimeError(f"Failed to start server with ID = {self.server_id}, IP = {self.ip_addr}.\n"
-                                       "Check the log files:\n"
-                                       f"{logpath}\n"
-                                       f"{self.log_filename}")
+                report_error("failed to start the node")
 
             if hasattr(self, "host_id") or await self.get_host_id(api):
                 cql_up_state = await self.cql_is_up()
@@ -408,17 +412,7 @@ class ScyllaServer:
             # Sleep and retry
             await asyncio.sleep(sleep_interval)
 
-        err = f"Failed to start server with ID = {self.server_id}, IP = {self.ip_addr}."
-        if hasattr(self, "host_id"):
-            err += f" Managed to obtain the server's Host ID ({self.host_id})"
-            if cql_up_state == CqlUpState.CONNECTED:
-                err += " and to connect the CQL driver, but failed to execute a query."
-            else:
-                err += " but failed to connect the CQL driver."
-        else:
-            err += " Failed to obtain the server's Host ID."
-        err += f"\nCheck server log at {self.log_filename}."
-        raise RuntimeError(err)
+        report_error('failed to start the node, timeout reached')
 
     async def force_schema_migration(self) -> None:
         """This is a hack to change schema hash on an existing cluster node
