@@ -127,6 +127,14 @@ public:
     }
 };
 
+template <>
+struct fmt::formatter<bytes> : fmt::formatter<fmt_hex> {
+    template <typename FormatContext>
+    auto format(const ::bytes& s, FormatContext& ctx) const {
+        return fmt::formatter<::fmt_hex>::format(::fmt_hex(bytes_view(s)), ctx);
+    }
+};
+
 namespace std {
 
 // Must be in std:: namespace, or ADL fails
