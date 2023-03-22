@@ -66,7 +66,8 @@ public:
     }
 
     friend inline std::ostream& operator<<(std::ostream& os, const gossip_digest& d) {
-        return os << d._endpoint << ":" << d._generation << ":" << d._max_version;
+        fmt::print(os, "{}:{}:{}", d._endpoint, d._generation, d._max_version);
+        return os;
     }
 }; // class gossip_digest
 
