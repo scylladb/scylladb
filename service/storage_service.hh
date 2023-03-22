@@ -91,30 +91,7 @@ class raft_group0;
 
 enum class disk_error { regular, commit };
 
-class node_ops_meta_data {
-    node_ops_id _ops_uuid;
-    gms::inet_address _coordinator;
-    std::function<future<> ()> _abort;
-    shared_ptr<abort_source> _abort_source;
-    std::function<void ()> _signal;
-    shared_ptr<node_ops_info> _ops;
-    seastar::timer<lowres_clock> _watchdog;
-    std::chrono::seconds _watchdog_interval;
-public:
-    explicit node_ops_meta_data(
-            node_ops_id ops_uuid,
-            gms::inet_address coordinator,
-            std::list<gms::inet_address> ignore_nodes,
-            std::chrono::seconds watchdog_interval,
-            std::function<future<> ()> abort_func,
-            std::function<void ()> signal_func);
-    shared_ptr<node_ops_info> get_ops_info();
-    shared_ptr<abort_source> get_abort_source();
-    future<> abort();
-    void update_watchdog();
-    void cancel_watchdog();
-};
-
+class node_ops_meta_data;
 struct node_ops_ctl;
 
 /**
