@@ -107,6 +107,8 @@ fedora_packages=(
     cargo
     rapidxml-devel
     rust-std-static-wasm32-wasi
+    wabt
+    binaryen
 )
 
 # lld is not available on s390x, see
