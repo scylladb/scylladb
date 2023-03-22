@@ -631,7 +631,7 @@ public:
         return _stream_position.position;
     }
 
-    const sstables::reader_position_tracker& reader_position() {
+    const sstables::reader_position_tracker& reader_position() const {
         return _stream_position;
     }
 
