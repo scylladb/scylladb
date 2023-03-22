@@ -1163,7 +1163,7 @@ public:
         size_t view_update_concurrency_semaphore_limit;
     };
 private:
-    locator::abstract_replication_strategy::ptr_type _replication_strategy;
+    locator::replication_strategy_ptr _replication_strategy;
     locator::vnode_effective_replication_map_ptr _effective_replication_map;
     lw_shared_ptr<keyspace_metadata> _metadata;
     config _config;
@@ -1200,7 +1200,7 @@ public:
      * should eventually be refactored.
      */
     const locator::abstract_replication_strategy& get_replication_strategy() const;
-    locator::abstract_replication_strategy::ptr_type get_replication_strategy_ptr() const {
+    locator::replication_strategy_ptr get_replication_strategy_ptr() const {
         return _replication_strategy;
     }
 

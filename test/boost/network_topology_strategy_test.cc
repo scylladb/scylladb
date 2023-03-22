@@ -71,12 +71,12 @@ static void check_ranges_are_sorted(vnode_effective_replication_map_ptr erm, gms
 }
 
 void strategy_sanity_check(
-    abstract_replication_strategy::ptr_type ars_ptr,
+    replication_strategy_ptr ars_ptr,
     const token_metadata& tm,
     const std::map<sstring, sstring>& options) {
 
-    network_topology_strategy* nts_ptr =
-        dynamic_cast<network_topology_strategy*>(ars_ptr.get());
+    const network_topology_strategy* nts_ptr =
+        dynamic_cast<const network_topology_strategy*>(ars_ptr.get());
 
     //
     // Check that both total and per-DC RFs in options match the corresponding
@@ -94,7 +94,7 @@ void strategy_sanity_check(
 }
 
 void endpoints_check(
-    abstract_replication_strategy::ptr_type ars_ptr,
+    replication_strategy_ptr ars_ptr,
     const token_metadata& tm,
     inet_address_vector_replica_set& endpoints,
     const locator::topology& topo) {
@@ -119,8 +119,8 @@ void endpoints_check(
         }
     }
 
-    network_topology_strategy* nts_ptr =
-        dynamic_cast<network_topology_strategy*>(ars_ptr.get());
+    const network_topology_strategy* nts_ptr =
+        dynamic_cast<const network_topology_strategy*>(ars_ptr.get());
     for (auto& rf : dc_rf) {
         BOOST_CHECK(rf.second == nts_ptr->get_replication_factor(rf.first));
     }
@@ -145,7 +145,7 @@ auto d2t = [](double d) -> int64_t {
  */
 void full_ring_check(const std::vector<ring_point>& ring_points,
                      const std::map<sstring, sstring>& options,
-                     abstract_replication_strategy::ptr_type ars_ptr,
+                     replication_strategy_ptr ars_ptr,
                      locator::token_metadata_ptr tmptr) {
     auto& tm = *tmptr;
     const auto& topo = tm.get_topology();

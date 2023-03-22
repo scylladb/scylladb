@@ -128,6 +128,9 @@ public:
     future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address, locator::endpoint_dc_rack dr) const;
 };
 
+using replication_strategy_ptr = seastar::shared_ptr<const abstract_replication_strategy>;
+using mutable_replication_strategy_ptr = seastar::shared_ptr<abstract_replication_strategy>;
+
 /// \brief Represents effective replication (assignment of replicas to keys).
 ///
 /// It's a result of application of a given replication strategy instance
@@ -140,11 +143,11 @@ public:
 /// keeping the token metadata version alive and seen as in use.
 class effective_replication_map {
 protected:
-    abstract_replication_strategy::ptr_type _rs;
+    replication_strategy_ptr _rs;
     token_metadata_ptr _tmptr;
     size_t _replication_factor;
 public:
-    effective_replication_map(abstract_replication_strategy::ptr_type, token_metadata_ptr, size_t replication_factor) noexcept;
+    effective_replication_map(replication_strategy_ptr, token_metadata_ptr, size_t replication_factor) noexcept;
     virtual ~effective_replication_map() = default;
 
     const abstract_replication_strategy& get_replication_strategy() const noexcept { return *_rs; }
@@ -213,7 +216,7 @@ public: // effective_replication_map
     inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override;
     inet_address_vector_topology_change get_pending_endpoints(const token& search_token, const sstring& ks_name) const override;
 public:
-    explicit vnode_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr, replication_map replication_map, size_t replication_factor) noexcept
+    explicit vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map, size_t replication_factor) noexcept
         : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
         , _replication_map(std::move(replication_map))
     { }
@@ -263,7 +266,7 @@ private:
     dht::token_range_vector do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const inet_address& natural_endpoint)> consider_range_for_endpoint) const;
 
 public:
-    static factory_key make_factory_key(const abstract_replication_strategy::ptr_type& rs, const token_metadata_ptr& tmptr);
+    static factory_key make_factory_key(const replication_strategy_ptr& rs, const token_metadata_ptr& tmptr);
 
     const factory_key& get_factory_key() const noexcept {
         return *_factory_key;
@@ -288,13 +291,13 @@ using mutable_vnode_effective_replication_map_ptr = shared_ptr<vnode_effective_r
 using vnode_erm_ptr = vnode_effective_replication_map_ptr;
 using mutable_vnode_erm_ptr = mutable_vnode_effective_replication_map_ptr;
 
-inline mutable_vnode_erm_ptr make_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr, replication_map replication_map, size_t replication_factor) {
+inline mutable_vnode_erm_ptr make_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map, size_t replication_factor) {
     return seastar::make_shared<vnode_effective_replication_map>(
             std::move(rs), std::move(tmptr), std::move(replication_map), replication_factor);
 }
 
 // Apply the replication strategy over the current configuration and the given token_metadata.
-future<mutable_vnode_erm_ptr> calculate_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr);
+future<mutable_vnode_erm_ptr> calculate_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr);
 
 // Class to hold a coherent view of a keyspace
 // effective replication map on all shards
@@ -395,7 +398,7 @@ public:
     // vnode_effective_replication_map for the local shard.
     //
     // Therefore create should be called first on shard 0, then on all other shards.
-    future<vnode_erm_ptr> create_effective_replication_map(abstract_replication_strategy::ptr_type rs, token_metadata_ptr tmptr);
+    future<vnode_erm_ptr> create_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr);
 
     future<> stop() noexcept;
 
