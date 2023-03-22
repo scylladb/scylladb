@@ -89,3 +89,19 @@ struct hash<gms::inet_address> {
     size_t operator()(gms::inet_address a) const noexcept { return std::hash<net::inet_address>()(a._addr); }
 };
 }
+
+template <>
+struct fmt::formatter<gms::inet_address> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const ::gms::inet_address& x, FormatContext& ctx) const {
+        if (x.addr().is_ipv4()) {
+            return fmt::format_to(ctx.out(), "{}", x.addr());
+        }
+        // print 2 bytes in a group, and use ':' as the delimeter
+        format_to(ctx.out(), "{:2:}", fmt_hex(x.bytes()));
+        if (x.addr().scope() != seastar::net::inet_address::invalid_scope) {
+            return format_to(ctx.out(), "%{}", x.addr().scope());
+        }
+        return ctx.out();
+    }
+};
