@@ -226,6 +226,8 @@ private:
     struct admit_result { can_admit decision; reason why; };
     admit_result can_admit_read(const reader_permit& permit) const noexcept;
 
+    bool should_evict_inactive_read() const noexcept;
+
     void maybe_admit_waiters() noexcept;
 
     void on_permit_created(reader_permit::impl&);
