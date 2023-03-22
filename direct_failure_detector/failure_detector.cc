@@ -478,7 +478,15 @@ static future<bool> ping_with_timeout(pinger::endpoint_id id, clock::timepoint_t
 
     auto f = pinger.ping(id, timeout_as);
     auto sleep_and_abort = [] (clock::timepoint_t timeout, abort_source& timeout_as, clock& c) -> future<> {
-        co_await c.sleep_until(timeout, timeout_as);
+        co_await c.sleep_until(timeout, timeout_as).then_wrapped([&timeout_as] (auto&& f) {
+            // Avoid throwing if sleep was aborted.
+            if (f.failed() && timeout_as.abort_requested()) {
+                // Expected (if ping() resolved first or we were externally aborted).
+                f.ignore_ready_future();
+                return make_ready_future<>();
+            }
+            return std::move(f);
+        });
         if (!timeout_as.abort_requested()) {
             // We resolved before `f`. Abort the operation.
             timeout_as.request_abort();
@@ -501,8 +509,6 @@ static future<bool> ping_with_timeout(pinger::endpoint_id id, clock::timepoint_t
     // Wait on the sleep as well (it should return shortly, being aborted) so we don't discard the future.
     try {
         co_await std::move(sleep_and_abort);
-    } catch (const sleep_aborted&) {
-        // Expected (if `f` resolved first or we were externally aborted).
     } catch (...) {
         // There should be no other exceptions, but just in case... log it and discard,
         // we want to propagate exceptions from `f`, not from sleep.
