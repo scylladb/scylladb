@@ -55,5 +55,3 @@ struct updateable_timeout_config {
 using timeout_config_selector = db::timeout_clock::duration (timeout_config::*);
 
 extern const timeout_config infinite_timeout_config;
-
-timeout_config make_timeout_config(const db::config& cfg);

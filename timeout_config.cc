@@ -36,7 +36,3 @@ timeout_config updateable_timeout_config::current_values() const {
         std::chrono::milliseconds(cas_timeout_in_ms),
     };
 }
-
-timeout_config make_timeout_config(const db::config& cfg) {
-    return updateable_timeout_config(cfg).current_values();
-}
