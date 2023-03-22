@@ -214,9 +214,14 @@ public:
         T item;
         unsigned count;
         unsigned error;
+
+        result(T item, unsigned count, unsigned error) : item(item), count(count), error(error) {}
     };
 
-    using results = chunked_vector<result>;
+    struct results {
+        chunked_vector<result> values;
+        unsigned cardinality;
+    };
 
     results top(unsigned k) const
     {
@@ -225,21 +230,22 @@ public:
         }
 
         results list;
+        list.cardinality = size();
         // _buckets are in ascending order
         for (auto b_it = _buckets.rbegin(); b_it != _buckets.rend(); ++b_it) {
             auto& b = *b_it;
             for (auto& c: b.counters) {
-                if (list.size() == k) {
+                if (list.values.size() == k) {
                     return list;
                 }
-                list.emplace_back(result{c->item, c->count, c->error});
+                list.values.emplace_back(result{c->item, c->count, c->error});
             }
         }
         return list;
     }
 
     void append(const results& res) {
-        for (auto& r: res) {
+        for (auto& r: res.values) {
             append(r.item, r.count, r.error);
         }
     }

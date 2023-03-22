@@ -166,7 +166,10 @@ public:
         toppartitions_data_listener::top_k read;
         toppartitions_data_listener::top_k write;
 
-        results(size_t capacity) : read(capacity), write(capacity) {}
+        unsigned read_cardinality;
+        unsigned write_cardinality;
+
+        results(size_t capacity) : read(capacity), write(capacity), read_cardinality(0), write_cardinality(0) {}
     };
 
     std::chrono::milliseconds duration() const { return _duration; }

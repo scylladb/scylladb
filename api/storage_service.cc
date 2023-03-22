@@ -184,14 +184,14 @@ seastar::future<json::json_return_type> run_toppartitions_query(db::toppartition
     namespace cf = httpd::column_family_json;
     return q.scatter().then([&q, legacy_request] {
         return sleep(q.duration()).then([&q, legacy_request] {
-            return q.gather(q.capacity()).then([&q, legacy_request] (auto topk_results) {
+            return q.gather(q.list_size()).then([&q, legacy_request] (auto topk_results) {
                 apilog.debug("toppartitions query: processing results");
                 cf::toppartitions_query_results results;
 
-                results.read_cardinality = topk_results.read.size();
-                results.write_cardinality = topk_results.write.size();
+                results.read_cardinality = topk_results.read_cardinality;
+                results.write_cardinality = topk_results.write_cardinality;
 
-                for (auto& d: topk_results.read.top(q.list_size())) {
+                for (auto& d: topk_results.read.top(q.list_size()).values) {
                     cf::toppartitions_record r;
                     r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
                     r.shard = d.item.shard;
@@ -199,7 +199,7 @@ seastar::future<json::json_return_type> run_toppartitions_query(db::toppartition
                     r.error = d.error;
                     results.read.push(r);
                 }
-                for (auto& d: topk_results.write.top(q.list_size())) {
+                for (auto& d: topk_results.write.top(q.list_size()).values) {
                     cf::toppartitions_record r;
                     r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
                     r.shard = d.item.shard;
