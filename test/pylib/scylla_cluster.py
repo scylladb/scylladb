@@ -400,6 +400,7 @@ class ScyllaServer:
 
         while time.time() < self.start_time + self.TOPOLOGY_TIMEOUT:
             if self.cmd.returncode:
+                self.cmd = None
                 with self.log_filename.open('r') as log_file:
                     self.logger.error("failed to start server at host %s in %s",
                                   self.ip_addr, self.workdir.name)
