@@ -119,6 +119,7 @@ class config;
 class extensions;
 class rp_handle;
 class data_listeners;
+class toppartitions_data_listener;
 class large_data_handler;
 class system_keyspace;
 class table_selector;
@@ -1432,6 +1433,7 @@ private:
 
     friend db::data_listeners;
     std::unique_ptr<db::data_listeners> _data_listeners;
+    std::unique_ptr<db::toppartitions_data_listener> _toppartitions_listener;
 
     service::migration_notifier& _mnotifier;
     gms::feature_service& _feat;
