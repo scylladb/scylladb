@@ -10,10 +10,14 @@
 #include <seastar/core/alien.hh>
 #include <seastar/core/posix.hh>
 #include <seastar/core/reactor.hh>
+#include <unistd.h>
 
+#include "log.hh"
 #include "lang/wasm.hh"
 #include "lang/wasm_alien_thread_runner.hh"
 #include "seastar/core/posix.hh"
+
+extern logging::logger wasm_logger;
 
 namespace wasm {
 
@@ -38,6 +42,13 @@ alien_thread_runner::alien_thread_runner()
         sigfillset(&mask);
         auto r = ::pthread_sigmask(SIG_BLOCK, &mask, nullptr);
         throw_pthread_error(r);
+
+        errno = 0;
+        int nice_value = nice(10);
+        if (nice_value == -1 && errno != 0) {
+            wasm_logger.warn("Unable to renice the alien thread (system error number {}); the thread will compete with reactor. Try adding CAP_SYS_NICE", errno);
+        }
+
         for (;;) {
             auto work_item = _pending_queue.pop_front();
             if (work_item) {

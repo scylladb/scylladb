@@ -23,7 +23,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include "lang/wasm_alien_thread_runner.hh"
 
-static logging::logger wasm_logger("wasm");
+logging::logger wasm_logger("wasm");
 
 namespace wasm {
 context::context(wasmtime::Engine& engine_ptr, std::string name, instance_cache* cache, uint64_t yield_fuel, uint64_t total_fuel)
