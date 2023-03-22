@@ -172,6 +172,7 @@ private:
         void push_to_admission_queue(reader_permit::impl& p);
         void push_to_memory_queue(reader_permit::impl& p);
         reader_permit::impl& front();
+        const reader_permit::impl& front() const;
     };
 
     wait_queue _wait_list;
@@ -220,6 +221,8 @@ private:
     enum class reason { all_ok = 0, ready_list, used_permits, memory_resources, count_resources };
     struct admit_result { can_admit decision; reason why; };
     admit_result can_admit_read(const reader_permit::impl& permit) const noexcept;
+
+    bool should_evict_inactive_read() const noexcept;
 
     void maybe_admit_waiters() noexcept;
 
