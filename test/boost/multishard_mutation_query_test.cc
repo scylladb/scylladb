@@ -490,7 +490,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_all_multi_range) {
 
 // Best run with SMP>=2
 SEASTAR_THREAD_TEST_CASE(test_read_with_partition_row_limits) {
-    do_with_cql_env_thread([this] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
         using namespace std::chrono_literals;
 
         env.db().invoke_on_all([] (replica::database& db) {
@@ -574,7 +574,7 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
 
 // Best run with SMP>=2
 SEASTAR_THREAD_TEST_CASE(test_read_reversed) {
-    do_with_cql_env_thread([this] (cql_test_env& env) -> future<> {
+    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
         using namespace std::chrono_literals;
 
         auto& db = env.db();

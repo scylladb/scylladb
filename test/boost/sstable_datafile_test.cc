@@ -3021,7 +3021,7 @@ SEASTAR_TEST_CASE(test_crawling_reader_out_of_range_last_range_tombstone_change)
 }
 
 SEASTAR_TEST_CASE(test_crawling_reader_random_schema_random_mutations) {
-    return test_env::do_with_async([this] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         auto random_spec = tests::make_random_schema_specification(
                 get_name(),
                 std::uniform_int_distribution<size_t>(1, 4),
