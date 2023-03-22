@@ -180,18 +180,20 @@ static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
     };
 }
 
-seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, http_context &ctx, bool legacy_request) {
+seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, http_context &ctx, bool per_shard, bool legacy_request) {
     namespace cf = httpd::column_family_json;
-    return q.scatter().then([&q, legacy_request] {
-        return sleep(q.duration()).then([&q, legacy_request] {
-            return q.gather(q.list_size()).then([&q, legacy_request] (auto topk_results) {
+
+    return q.scatter().then([&q, legacy_request, per_shard] {
+        return sleep(q.duration()).then([&q, legacy_request, per_shard] {
+            return q.gather(q.list_size()).then([&q, legacy_request, per_shard] (auto topk_results) {
                 apilog.debug("toppartitions query: processing results");
                 cf::toppartitions_query_results results;
 
                 results.read_cardinality = topk_results.read_cardinality;
                 results.write_cardinality = topk_results.write_cardinality;
 
-                for (auto& d: topk_results.read.top(q.list_size()).values) {
+                unsigned list_size = per_shard ? (q.list_size() * smp::count) : q.list_size();
+                for (auto& d: topk_results.read.top(list_size).values) {
                     cf::toppartitions_record r;
                     r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
                     r.shard = d.item.shard;
@@ -199,7 +201,7 @@ seastar::future<json::json_return_type> run_toppartitions_query(db::toppartition
                     r.error = d.error;
                     results.read.push(r);
                 }
-                for (auto& d: topk_results.write.top(q.list_size()).values) {
+                for (auto& d: topk_results.write.top(list_size).values) {
                     cf::toppartitions_record r;
                     r.partition = (legacy_request ? "" : "(" + d.item.schema->ks_name() + ":" + d.item.schema->cf_name() + ") ") + sstring(d.item);
                     r.shard = d.item.shard;
