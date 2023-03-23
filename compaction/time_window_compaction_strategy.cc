@@ -100,7 +100,7 @@ public:
     };
 };
 
-uint64_t time_window_compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) {
+uint64_t time_window_compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) const {
     if (!ms_meta.min_timestamp || !ms_meta.max_timestamp) {
         // Not enough information, we assume the worst
         return partition_estimate / max_data_segregation_window_count;
@@ -114,7 +114,7 @@ uint64_t time_window_compaction_strategy::adjust_partition_estimate(const mutati
     return partition_estimate / std::max(1UL, uint64_t(estimated_window_count));
 }
 
-reader_consumer_v2 time_window_compaction_strategy::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) {
+reader_consumer_v2 time_window_compaction_strategy::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) const {
     if (ms_meta.min_timestamp && ms_meta.max_timestamp
             && get_window_for(_options, *ms_meta.min_timestamp) == get_window_for(_options, *ms_meta.max_timestamp)) {
         return end_consumer;
@@ -128,7 +128,7 @@ reader_consumer_v2 time_window_compaction_strategy::make_interposer_consumer(con
 }
 
 compaction_descriptor
-time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) {
+time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) const {
     std::vector<shared_sstable> single_window;
     std::vector<shared_sstable> multi_window;
 

@@ -65,16 +65,16 @@ bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& s
     return sst->estimate_droppable_tombstone_ratio(gc_before) >= _tombstone_threshold;
 }
 
-uint64_t compaction_strategy_impl::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) {
+uint64_t compaction_strategy_impl::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) const {
     return partition_estimate;
 }
 
-reader_consumer_v2 compaction_strategy_impl::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) {
+reader_consumer_v2 compaction_strategy_impl::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) const {
     return end_consumer;
 }
 
 compaction_descriptor
-compaction_strategy_impl::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) {
+compaction_strategy_impl::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) const {
     return compaction_descriptor();
 }
 
@@ -447,7 +447,7 @@ public:
         return compaction_strategy_type::null;
     }
 
-    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() override {
+    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const override {
         return std::make_unique<null_backlog_tracker>();
     }
 };
@@ -460,7 +460,7 @@ leveled_compaction_strategy::leveled_compaction_strategy(const std::map<sstring,
     _compaction_counter.resize(leveled_manifest::MAX_LEVELS);
 }
 
-std::unique_ptr<compaction_backlog_tracker::impl> leveled_compaction_strategy::make_backlog_tracker() {
+std::unique_ptr<compaction_backlog_tracker::impl> leveled_compaction_strategy::make_backlog_tracker() const {
     return std::make_unique<leveled_compaction_backlog_tracker>(_max_sstable_size_in_mb, _stcs_options);
 }
 
@@ -493,7 +493,7 @@ time_window_compaction_strategy::time_window_compaction_strategy(const std::map<
     _use_clustering_key_filter = true;
 }
 
-std::unique_ptr<compaction_backlog_tracker::impl> time_window_compaction_strategy::make_backlog_tracker() {
+std::unique_ptr<compaction_backlog_tracker::impl> time_window_compaction_strategy::make_backlog_tracker() const {
     return std::make_unique<time_window_backlog_tracker>(_options, _stcs_options);
 }
 
@@ -684,7 +684,7 @@ compaction_descriptor date_tiered_compaction_strategy::get_sstables_for_compacti
     return sstables::compaction_descriptor({ *it }, service::get_local_compaction_priority());
 }
 
-std::unique_ptr<compaction_backlog_tracker::impl> date_tiered_compaction_strategy::make_backlog_tracker() {
+std::unique_ptr<compaction_backlog_tracker::impl> date_tiered_compaction_strategy::make_backlog_tracker() const {
     return std::make_unique<unimplemented_backlog_tracker>();
 }
 
@@ -697,7 +697,7 @@ size_tiered_compaction_strategy::size_tiered_compaction_strategy(const size_tier
     : _options(options)
 {}
 
-std::unique_ptr<compaction_backlog_tracker::impl> size_tiered_compaction_strategy::make_backlog_tracker() {
+std::unique_ptr<compaction_backlog_tracker::impl> size_tiered_compaction_strategy::make_backlog_tracker() const {
     return std::make_unique<size_tiered_backlog_tracker>(_options);
 }
 
@@ -741,20 +741,20 @@ bool compaction_strategy::use_clustering_key_filter() const {
     return _compaction_strategy_impl->use_clustering_key_filter();
 }
 
-compaction_backlog_tracker compaction_strategy::make_backlog_tracker() {
+compaction_backlog_tracker compaction_strategy::make_backlog_tracker() const {
     return compaction_backlog_tracker(_compaction_strategy_impl->make_backlog_tracker());
 }
 
 sstables::compaction_descriptor
-compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) {
+compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) const {
     return _compaction_strategy_impl->get_reshaping_job(std::move(input), schema, iop, mode);
 }
 
-uint64_t compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) {
+uint64_t compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) const {
     return _compaction_strategy_impl->adjust_partition_estimate(ms_meta, partition_estimate);
 }
 
-reader_consumer_v2 compaction_strategy::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) {
+reader_consumer_v2 compaction_strategy::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) const {
     return _compaction_strategy_impl->make_interposer_consumer(ms_meta, std::move(end_consumer));
 }
 

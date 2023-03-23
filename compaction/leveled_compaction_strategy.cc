@@ -134,7 +134,7 @@ int64_t leveled_compaction_strategy::estimated_pending_compactions(table_state& 
 }
 
 compaction_descriptor
-leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) {
+leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) const {
     std::array<std::vector<shared_sstable>, leveled_manifest::MAX_LEVELS> level_info;
 
     auto is_disjoint = [schema] (const std::vector<shared_sstable>& sstables, unsigned tolerance) -> std::tuple<bool, unsigned> {
