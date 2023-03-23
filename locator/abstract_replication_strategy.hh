@@ -55,7 +55,7 @@ class effective_replication_map_factory;
 class per_table_replication_strategy;
 class tablet_aware_replication_strategy;
 
-class abstract_replication_strategy {
+class abstract_replication_strategy : public seastar::enable_shared_from_this<abstract_replication_strategy> {
     friend class vnode_effective_replication_map;
     friend class per_table_replication_strategy;
     friend class tablet_aware_replication_strategy;
