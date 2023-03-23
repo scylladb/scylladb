@@ -2690,5 +2690,26 @@ adjust_for_collection_as_maps(const expression& e) {
     });
 }
 
+bool is_token_function(const function_call& fun_call) {
+    static thread_local const functions::function_name token_function_name =
+        functions::function_name::native_function("token");
+
+    // Check that function name is "token"
+    const functions::function_name& fun_name =
+        std::visit(overloaded_functor{[](const functions::function_name& fname) { return fname; },
+                                      [](const shared_ptr<functions::function>& fun) { return fun->name(); }},
+                   fun_call.func);
+
+    return fun_name.has_keyspace() ? fun_name == token_function_name : fun_name.name == token_function_name.name;
+}
+
+bool is_token_function(const expression& e) {
+    const function_call* fun_call = as_if<function_call>(&e);
+    if (fun_call == nullptr) {
+        return false;
+    }
+
+    return is_token_function(*fun_call);
+}
 } // namespace expr
 } // namespace cql3

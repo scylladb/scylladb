@@ -824,6 +824,12 @@ bytes_opt value_for(const column_definition&, const expression&, const query_opt
 bool contains_multi_column_restriction(const expression&);
 
 bool has_only_eq_binops(const expression&);
+
+// Check whether the given expression represents
+// a call to the token() function.
+bool is_token_function(const function_call&);
+bool is_token_function(const expression&);
+
 } // namespace expr
 
 } // namespace cql3

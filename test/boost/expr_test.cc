@@ -4255,3 +4255,54 @@ BOOST_AUTO_TEST_CASE(prepare_token_func_without_receiver) {
     check_prepared(prepared_no_receiver);
     check_prepared(prepared_with_receiver);
 }
+
+BOOST_AUTO_TEST_CASE(is_token_function_valid_call) {
+    function_call token_fun_call{.func = functions::function_name::native_function("token"), .args = {}};
+    BOOST_REQUIRE_EQUAL(is_token_function(token_fun_call), true);
+}
+
+BOOST_AUTO_TEST_CASE(is_token_function_invalid_call) {
+    function_call token_fun_call{.func = functions::function_name::native_function("invalid_function"), .args = {}};
+    BOOST_REQUIRE_EQUAL(is_token_function(token_fun_call), false);
+}
+
+BOOST_AUTO_TEST_CASE(is_token_function_valid_call_with_keyspace) {
+    function_call token_fun_call{.func = functions::function_name("system", "token"), .args = {}};
+    BOOST_REQUIRE_EQUAL(is_token_function(token_fun_call), true);
+}
+
+BOOST_AUTO_TEST_CASE(is_token_function_invalid_call_with_keyspace) {
+    function_call token_fun_call{.func = functions::function_name("system", "invalid_token"),
+                                                       .args = {}};
+    BOOST_REQUIRE_EQUAL(is_token_function(token_fun_call), false);
+}
+
+BOOST_AUTO_TEST_CASE(is_token_function_invalid_call_with_invalid_keyspace) {
+    function_call token_fun_call{
+        .func = functions::function_name("invalid_keyspace", "token"), .args = {}};
+    BOOST_REQUIRE_EQUAL(is_token_function(token_fun_call), false);
+}
+
+BOOST_AUTO_TEST_CASE(is_token_function_prepared_token) {
+    schema_ptr table_schema = make_three_pk_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    function_call token_fun{
+        .func = functions::function_name::native_function("token"),
+        .args = {make_int_untyped("123"), make_int_untyped("443"), make_bind_variable(0, int32_type)}};
+
+    expression prepared = prepare_expression(token_fun, db, "test_ks", table_schema.get(), nullptr);
+
+    BOOST_REQUIRE_EQUAL(is_token_function(prepared), true);
+}
+
+BOOST_AUTO_TEST_CASE(is_token_function_prepared_nontoken) {
+    schema_ptr table_schema = make_three_pk_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    function_call now_fun{.func = functions::function_name::native_function("now"), .args = {}};
+
+    expression prepared = prepare_expression(now_fun, db, "test_ks", table_schema.get(), nullptr);
+
+    BOOST_REQUIRE_EQUAL(is_token_function(prepared), false);
+}
