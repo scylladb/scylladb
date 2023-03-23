@@ -9,6 +9,7 @@
 #include "database_fwd.hh"
 #include "compaction/compaction_descriptor.hh"
 #include "compaction/compaction_backlog_manager.hh"
+#include "compaction/compaction_strategy.hh"
 #include "sstables/sstable_set.hh"
 
 #pragma once
@@ -35,6 +36,7 @@ class compaction_group {
     std::unique_ptr<table_state> _table_state;
     // Tokens included in this compaction_groups
     dht::token_range _token_range;
+    sstables::compaction_strategy _compaction_strategy;
     // Holds list of memtables for this group
     lw_shared_ptr<memtable_list> _memtables;
     // SSTable set which contains all non-maintenance sstables
@@ -78,6 +80,9 @@ public:
     const dht::token_range& token_range() const noexcept {
         return _token_range;
     }
+
+    void set_compaction_strategy(sstables::compaction_strategy&& cs) noexcept;
+    sstables::compaction_strategy& compaction_strategy() noexcept;
 
     lw_shared_ptr<memtable_list>& memtables() noexcept;
     size_t memtable_count() const noexcept;

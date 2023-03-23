@@ -415,7 +415,6 @@ private:
     const unsigned _x_log2_compaction_groups = 0;
 
     compaction_manager& _compaction_manager;
-    sstables::compaction_strategy _compaction_strategy;
     std::vector<std::unique_ptr<compaction_group>> _compaction_groups;
     // Compound SSTable set for all the compaction groups, which is useful for operations spanning all of them.
     lw_shared_ptr<sstables::sstable_set> _sstables;
@@ -912,13 +911,7 @@ public:
     unsigned estimate_pending_compactions() const;
 
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
-    const sstables::compaction_strategy& get_compaction_strategy() const {
-        return _compaction_strategy;
-    }
-
-    sstables::compaction_strategy& get_compaction_strategy() {
-        return _compaction_strategy;
-    }
+    const sstables::compaction_strategy& get_compaction_strategy() const;
 
     const compaction_manager& get_compaction_manager() const noexcept {
         return _compaction_manager;

@@ -81,7 +81,7 @@ public:
         return _compacted_undeleted;
     }
     sstables::compaction_strategy& get_compaction_strategy() const noexcept override {
-        return table().get_compaction_strategy();
+        return table().as_table_state().get_compaction_strategy();
     }
     reader_permit make_compaction_reader_permit() const override {
         return _data.semaphore.make_tracking_only_permit(&*schema(), "table_for_tests::table_state", db::no_timeout);
