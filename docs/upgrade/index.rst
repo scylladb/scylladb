@@ -6,10 +6,10 @@ Upgrade ScyllaDB
    :titlesonly:
    :hidden:
 
-   ScyllaDB Enterprise <upgrade-enterprise/index>
    ScyllaDB Open Source <upgrade-opensource/index>
    ScyllaDB Open Source to ScyllaDB Enterprise <upgrade-to-enterprise/index>
    ScyllaDB AMI <ami-upgrade>
+   ScyllaDB Enterprise <https://enterprise.docs.scylladb.com/enterprise/upgrade/upgrade-enterprise/index.html>
 
 Overview
 ---------
@@ -41,13 +41,13 @@ For example, upgrade to patch 4.4.8 before upgrading to version 4.5.
 Procedures for Upgrading ScyllaDB
 -----------------------------------
 
-* :doc:`Upgrade ScyllaDB Enterprise <upgrade-enterprise/index>`
-
 * :doc:`Upgrade ScyllaDB Open Source <upgrade-opensource/index>`
 
 * :doc:`Upgrade from ScyllaDB Open Source to Scylla Enterprise <upgrade-to-enterprise/index>`
 
 * :doc:`Upgrade ScyllaDB AMI <ami-upgrade>`
+
+* `Upgrade ScyllaDB Enterprise <https://enterprise.docs.scylladb.com/enterprise/upgrade/upgrade-enterprise/index.html>`_
 
 
 
