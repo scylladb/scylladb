@@ -370,7 +370,6 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _feat(feat)
     , _shared_token_metadata(stm)
     , _sst_dir_semaphore(sst_dir_sem)
-    , _wasm_engine(wasmtime::create_engine(cfg.wasm_udf_memory_limit()))
     , _stop_barrier(std::move(barrier))
     , _update_memtable_flush_static_shares_action([this, &cfg] { return _memtable_controller.update_static_shares(cfg.memtable_flush_static_shares()); })
     , _memtable_flush_static_shares_observer(cfg.memtable_flush_static_shares.observe(_update_memtable_flush_static_shares_action.make_observer()))

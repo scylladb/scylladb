@@ -1008,6 +1008,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             static sharded<wasm::instance_cache> wasm_instance_cache;
             auto udf_enabled = cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF);
             std::any stop_udf_cache_handlers;
+            std::shared_ptr<rust::Box<wasmtime::Engine>> wasm_engine;
             std::shared_ptr<wasm::alien_thread_runner> alien_runner;
             if (udf_enabled) {
                 supervisor::notify("starting wasm udf cache");
@@ -1016,6 +1017,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 stop_udf_cache_handlers = defer_verbose_shutdown("udf cache", [] {
                     wasm_instance_cache.stop().get();
                 });
+                wasm_engine = std::make_shared<rust::Box<wasmtime::Engine>>(wasmtime::create_engine(cfg->wasm_udf_memory_limit()));
                 alien_runner = std::make_shared<wasm::alien_thread_runner>();
             }
 
@@ -1148,7 +1150,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                                                      std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
-            qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::ref(group0_client)).get();
+            qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::ref(group0_client), wasm_engine).get();
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
             if (udf_enabled) {
