@@ -171,7 +171,13 @@ public:
     static constexpr auto KEYSPACE_NAME_PREFIX = "alternator_";
     static constexpr std::string_view INTERNAL_TABLE_PREFIX = ".scylla.alternator.";
 
-    executor(gms::gossiper& gossiper, service::storage_proxy& proxy, service::migration_manager& mm, db::system_distributed_keyspace& sdks, cdc::metadata& cdc_metadata, smp_service_group ssg, utils::updateable_value<uint32_t> default_timeout_in_ms)
+    executor(gms::gossiper& gossiper,
+             service::storage_proxy& proxy,
+             service::migration_manager& mm,
+             db::system_distributed_keyspace& sdks,
+             cdc::metadata& cdc_metadata,
+             smp_service_group ssg,
+             utils::updateable_value<uint32_t> default_timeout_in_ms)
         : _gossiper(gossiper), _proxy(proxy), _mm(mm), _sdks(sdks), _cdc_metadata(cdc_metadata), _ssg(ssg) {
         s_default_timeout_in_ms = std::move(default_timeout_in_ms);
     }
