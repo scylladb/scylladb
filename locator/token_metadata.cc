@@ -10,6 +10,7 @@
 #include <optional>
 #include "locator/snitch_base.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "locator/tablets.hh"
 #include "log.hh"
 #include "partition_range_compat.hh"
 #include <unordered_map>
@@ -62,6 +63,8 @@ private:
 
     std::vector<token> _sorted_tokens;
 
+    tablet_metadata _tablets;
+
     topology _topology;
 
     long _ring_version = 0;
@@ -71,6 +74,13 @@ private:
     // clone_async() must be updated to copy that member.
 
     void sort_tokens();
+
+    const tablet_metadata& tablets() const { return _tablets; }
+
+    void set_tablets(tablet_metadata&& tablets) {
+        _tablets = std::move(tablets);
+        invalidate_cached_rings();
+    }
 
     struct shallow_copy {};
     token_metadata_impl(shallow_copy, const token_metadata_impl& o) noexcept
@@ -368,6 +378,7 @@ future<token_metadata_impl> token_metadata_impl::clone_only_token_map(bool clone
         ret._sorted_tokens = _sorted_tokens;
         co_await coroutine::maybe_yield();
     }
+    ret._tablets = _tablets;
     co_return ret;
 }
 
@@ -380,6 +391,7 @@ future<> token_metadata_impl::clear_gently() noexcept {
     co_await utils::clear_gently(_pending_ranges_interval_map);
     co_await utils::clear_gently(_sorted_tokens);
     co_await _topology.clear_gently();
+    co_await _tablets.clear_gently();
     co_return;
 }
 
@@ -394,6 +406,14 @@ void token_metadata_impl::sort_tokens() {
     std::sort(sorted.begin(), sorted.end());
 
     _sorted_tokens = std::move(sorted);
+}
+
+const tablet_metadata& token_metadata::tablets() const {
+    return _impl->tablets();
+}
+
+void token_metadata::set_tablets(tablet_metadata tm) {
+    _impl->set_tablets(std::move(tm));
 }
 
 const std::vector<token>& token_metadata_impl::sorted_tokens() const {

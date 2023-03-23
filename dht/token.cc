@@ -282,4 +282,14 @@ compaction_group_of(unsigned most_significant_bits, const token& t) {
     __builtin_unreachable();
 }
 
+token last_token_of_compaction_group(unsigned most_significant_bits, size_t group) {
+    uint64_t n;
+    if (group == ((1ul << most_significant_bits) - 1)) {
+        n = std::numeric_limits<uint64_t>::max();
+    } else {
+        n = ((uint64_t(group) + 1) << (64 - most_significant_bits)) - 1;
+    }
+    return bias(n);
+}
+
 } // namespace dht

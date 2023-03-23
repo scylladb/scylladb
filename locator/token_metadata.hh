@@ -41,6 +41,7 @@ class abstract_replication_strategy;
 using token = dht::token;
 
 class token_metadata;
+class tablet_metadata;
 
 struct host_id_or_endpoint {
     host_id id;
@@ -106,6 +107,8 @@ public:
     token_metadata& operator=(token_metadata&&) noexcept;
     ~token_metadata();
     const std::vector<token>& sorted_tokens() const;
+    const tablet_metadata& tablets() const;
+    void set_tablets(tablet_metadata);
     // Update token->endpoint mappings for a given \c endpoint.
     // \c tokens are all the tokens that are now owned by \c endpoint.
     //
