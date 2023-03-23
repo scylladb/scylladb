@@ -771,13 +771,12 @@ public:
                                                      std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
-            auto udf_enabled = cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF);
-            std::shared_ptr<rust::Box<wasmtime::Engine>> wasm_engine;
-            if (udf_enabled) {
-                wasm_engine = std::make_shared<rust::Box<wasmtime::Engine>>(wasmtime::create_engine(cfg->wasm_udf_memory_limit()));
+            std::optional<wasm::startup_context> wasm_ctx;
+            if (cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF)) {
+                wasm_ctx.emplace(*cfg, dbcfg);
             }
 
-            qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config), auth_prep_cache_config, std::ref(group0_client), wasm_engine).get();
+            qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config), auth_prep_cache_config, std::ref(group0_client), wasm_ctx).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
 
             sys_ks.invoke_on_all([&snitch] (auto& sys_ks) {

@@ -26,6 +26,15 @@
 static logging::logger wasm_logger("wasm");
 
 namespace wasm {
+
+startup_context::startup_context(db::config& cfg, replica::database_config& dbcfg)
+    : alien_runner(std::make_shared<wasm::alien_thread_runner>())
+    , engine(std::make_shared<rust::Box<wasmtime::Engine>>(wasmtime::create_engine(cfg.wasm_udf_memory_limit())))
+    , cache_size(dbcfg.available_memory * cfg.wasm_cache_memory_fraction())
+    , instance_size(cfg.wasm_cache_instance_size_limit())
+    , timer_period(std::chrono::milliseconds(cfg.wasm_cache_timeout_in_ms())) {
+}
+
 context::context(wasmtime::Engine& engine_ptr, std::string name, instance_cache& cache, uint64_t yield_fuel, uint64_t total_fuel)
     : engine_ptr(engine_ptr)
     , function_name(name)

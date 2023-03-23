@@ -13,6 +13,8 @@
 #include "db/functions/function_name.hh"
 #include "rust/wasmtime_bindings.hh"
 #include "lang/wasm_alien_thread_runner.hh"
+#include "db/config.hh"
+#include "replica/database.hh"
 
 namespace wasm {
 
@@ -29,6 +31,16 @@ public:
 
 struct instance_corrupting_exception : public exception {
     explicit instance_corrupting_exception(std::string_view msg) : exception(msg) {}
+};
+
+struct startup_context {
+    std::shared_ptr<alien_thread_runner> alien_runner;
+    std::shared_ptr<rust::Box<wasmtime::Engine>> engine;
+    size_t cache_size;
+    size_t instance_size;
+    seastar::lowres_clock::duration timer_period;
+
+    startup_context(db::config& cfg, replica::database_config& dbcfg);
 };
 
 struct context {
