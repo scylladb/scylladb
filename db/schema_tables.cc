@@ -1867,7 +1867,7 @@ static seastar::future<shared_ptr<cql3::functions::user_function>> create_func(r
                 std::move(body), language, std::move(return_type),
                 row.get_nonnull<bool>("called_on_null_input"), std::move(ctx));
     } else if (language == "wasm") {
-        wasm::context ctx{db.wasm_engine(), name.name, qctx->qp().get_wasm_instance_cache(), db.get_config().wasm_udf_yield_fuel(), db.get_config().wasm_udf_total_fuel()};
+        wasm::context ctx{qctx->qp().wasm_engine(), name.name, qctx->qp().get_wasm_instance_cache(), db.get_config().wasm_udf_yield_fuel(), db.get_config().wasm_udf_total_fuel()};
         co_await wasm::precompile(qctx->qp().alien_runner(), ctx, arg_names, body);
         co_return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types), std::move(arg_names),
                 std::move(body), language, std::move(return_type),

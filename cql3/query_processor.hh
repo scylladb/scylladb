@@ -126,6 +126,7 @@ private:
     // don't bother with expiration on those.
     std::unordered_map<sstring, std::unique_ptr<statements::prepared_statement>> _internal_statements;
 
+    std::shared_ptr<rust::Box<wasmtime::Engine>> _wasm_engine;
     wasm::instance_cache* _wasm_instance_cache;
     std::shared_ptr<wasm::alien_thread_runner> _alien_runner;
 public:
@@ -142,7 +143,7 @@ public:
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
     static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries);
 
-    query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, service::raft_group0_client& group0_client);
+    query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, service::raft_group0_client& group0_client, std::shared_ptr<rust::Box<wasmtime::Engine>> wasm_engine);
 
     ~query_processor();
 
@@ -167,6 +168,10 @@ public:
 
     cql_stats& get_cql_stats() {
         return _cql_stats;
+    }
+
+    wasmtime::Engine& wasm_engine() {
+        return **_wasm_engine;
     }
 
     wasm::instance_cache* get_wasm_instance_cache() {
