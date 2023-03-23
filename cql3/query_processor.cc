@@ -12,6 +12,8 @@
 
 #include <seastar/core/metrics.hh>
 
+#include "lang/wasm_alien_thread_runner.hh"
+#include "lang/wasm_instance_cache.hh"
 #include "service/storage_proxy.hh"
 #include "cql3/CqlParser.hpp"
 #include "cql3/error_collector.hh"
@@ -56,7 +58,7 @@ public:
     }
 };
 
-query_processor::query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, service::raft_group0_client& group0_client, std::shared_ptr<rust::Box<wasmtime::Engine>> wasm_engine)
+query_processor::query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, service::raft_group0_client& group0_client, std::optional<wasm::startup_context> wasm_ctx)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
         , _forwarder(forwarder)
@@ -73,7 +75,9 @@ query_processor::query_processor(service::storage_proxy& proxy, service::forward
         , _authorized_prepared_cache_config_action([this] { update_authorized_prepared_cache_config(); return make_ready_future<>(); })
         , _authorized_prepared_cache_update_interval_in_ms_observer(_db.get_config().permissions_update_interval_in_ms.observe(_auth_prepared_cache_cfg_cb))
         , _authorized_prepared_cache_validity_in_ms_observer(_db.get_config().permissions_validity_in_ms.observe(_auth_prepared_cache_cfg_cb))
-        , _wasm_engine(std::move(wasm_engine))
+        , _wasm_engine(wasm_ctx ? std::move(wasm_ctx->engine) : nullptr)
+        , _wasm_instance_cache(wasm_ctx ? std::make_optional<wasm::instance_cache>(wasm_ctx->cache_size, wasm_ctx->instance_size, wasm_ctx->timer_period) : std::nullopt)
+        , _alien_runner(wasm_ctx ? std::move(wasm_ctx->alien_runner) : nullptr)
         {
     namespace sm = seastar::metrics;
     namespace stm = statements;
@@ -466,6 +470,8 @@ query_processor::~query_processor() {
 future<> query_processor::stop() {
     return _mnotifier.unregister_listener(_migration_subscriber.get()).then([this] {
         return _authorized_prepared_cache.stop().finally([this] { return _prepared_cache.stop(); });
+    }).then([this] {
+        return _wasm_instance_cache ? _wasm_instance_cache->stop() : make_ready_future<>();
     });
 }
 
