@@ -156,7 +156,12 @@ public:
         _driver_version = std::move(driver_version);
     }
 
-    client_state(external_tag, auth::service& auth_service, qos::service_level_controller* sl_controller, timeout_config timeout_config, const socket_address& remote_address = socket_address(), bool thrift = false)
+    client_state(external_tag,
+                 auth::service& auth_service,
+                 qos::service_level_controller* sl_controller,
+                 timeout_config timeout_config,
+                 const socket_address& remote_address = socket_address(),
+                 bool thrift = false)
             : _is_internal(false)
             , _is_thrift(thrift)
             , _remote_address(remote_address)
