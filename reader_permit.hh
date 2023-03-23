@@ -13,6 +13,7 @@
 
 #include "db/timeout_clock.hh"
 #include "schema/schema_fwd.hh"
+#include "tracing/trace_state.hh"
 #include "query_class_config.hh"
 
 namespace seastar {
@@ -98,9 +99,9 @@ private:
     reader_permit() = default;
     reader_permit(shared_ptr<impl>);
     explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name,
-            reader_resources base_resources, db::timeout_clock::time_point timeout);
+            reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
     explicit reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name,
-            reader_resources base_resources, db::timeout_clock::time_point timeout);
+            reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);
 
     reader_permit::impl& operator*() { return *_impl; }
     reader_permit::impl* operator->() { return _impl.get(); }
@@ -162,6 +163,10 @@ public:
     db::timeout_clock::time_point timeout() const noexcept;
 
     void set_timeout(db::timeout_clock::time_point timeout) noexcept;
+
+    const tracing::trace_state_ptr& trace_state() const noexcept;
+
+    void set_trace_state(tracing::trace_state_ptr trace_ptr) noexcept;
 
     // If the read was aborted, throw the exception the read was aborted with.
     // Otherwise no-op.

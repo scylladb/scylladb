@@ -1747,7 +1747,7 @@ view_builder::view_builder(replica::database& db, db::system_keyspace& sys_ks, d
         , _sys_ks(sys_ks)
         , _sys_dist_ks(sys_dist_ks)
         , _mnotifier(mn)
-        , _permit(_db.get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "view_builder", db::no_timeout)) {
+        , _permit(_db.get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "view_builder", db::no_timeout, {})) {
     setup_metrics();
 }
 

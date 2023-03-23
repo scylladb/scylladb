@@ -26,7 +26,7 @@ public:
     }
 
     reader_concurrency_semaphore& semaphore() { return *_semaphore; };
-    reader_permit make_permit() { return _semaphore->make_tracking_only_permit(nullptr, "test", db::no_timeout); }
+    reader_permit make_permit() { return _semaphore->make_tracking_only_permit(nullptr, "test", db::no_timeout, {}); }
 };
 
 } // namespace tests

@@ -175,7 +175,7 @@ void execute_reads(const schema& s, reader_concurrency_semaphore& sem, unsigned 
 
         if (sem.get_stats().waiters) {
             testlog.trace("Waiting for queue to drain");
-            sem.obtain_permit(&s, "drain", 1, db::no_timeout).get();
+            sem.obtain_permit(&s, "drain", 1, db::no_timeout, {}).get();
         }
     }
 

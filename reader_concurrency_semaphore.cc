@@ -50,6 +50,15 @@ struct reader_concurrency_semaphore::inactive_read {
     }
 };
 
+template <>
+struct fmt::formatter<reader_concurrency_semaphore::evict_reason> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const reader_concurrency_semaphore::evict_reason& reason, FormatContext& ctx) const {
+        static const char* value_table[] = {"permit", "time", "manual"};
+        return fmt::format_to(ctx.out(), "{}", value_table[static_cast<int>(reason)]);
+    }
+};
+
 namespace {
 
 void maybe_dump_reader_permit_diagnostics(const reader_concurrency_semaphore& semaphore, std::string_view problem) noexcept;
@@ -140,6 +149,7 @@ private:
     uint64_t _sstables_read = 0;
     size_t _requested_memory = 0;
     uint64_t _oom_kills = 0;
+    tracing::trace_state_ptr _trace_ptr;
 
     // Not strictly related to the permit.
     // Used by the semaphore to to manage the permit.
@@ -204,23 +214,25 @@ private:
 public:
     struct value_tag {};
 
-    impl(reader_concurrency_semaphore& semaphore, const schema* const schema, const std::string_view& op_name, reader_resources base_resources, db::timeout_clock::time_point timeout)
+    impl(reader_concurrency_semaphore& semaphore, const schema* const schema, const std::string_view& op_name, reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
         : _semaphore(semaphore)
         , _schema(schema)
         , _op_name_view(op_name)
         , _base_resources(base_resources)
         , _ttl_timer([this] { on_timeout(); })
+        , _trace_ptr(std::move(trace_ptr))
     {
         set_timeout(timeout);
         _semaphore.on_permit_created(*this);
     }
-    impl(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name, reader_resources base_resources, db::timeout_clock::time_point timeout)
+    impl(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name, reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
         : _semaphore(semaphore)
         , _schema(schema)
         , _op_name(std::move(op_name))
         , _op_name_view(_op_name)
         , _base_resources(base_resources)
         , _ttl_timer([this] { on_timeout(); })
+        , _trace_ptr(std::move(trace_ptr))
     {
         set_timeout(timeout);
         _semaphore.on_permit_created(*this);
@@ -435,6 +447,14 @@ public:
         }
     }
 
+    const tracing::trace_state_ptr& trace_state() const noexcept {
+        return _trace_ptr;
+    }
+
+    void set_trace_state(tracing::trace_state_ptr trace_ptr) noexcept {
+        _trace_ptr = std::move(trace_ptr);
+    }
+
     void check_abort() {
         if (_ex) {
             std::rethrow_exception(_ex);
@@ -478,14 +498,14 @@ reader_permit::reader_permit(shared_ptr<impl> impl) : _impl(std::move(impl))
 }
 
 reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, std::string_view op_name,
-        reader_resources base_resources, db::timeout_clock::time_point timeout)
-    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, op_name, base_resources, timeout))
+        reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
+    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, op_name, base_resources, timeout, std::move(trace_ptr)))
 {
 }
 
 reader_permit::reader_permit(reader_concurrency_semaphore& semaphore, const schema* const schema, sstring&& op_name,
-        reader_resources base_resources, db::timeout_clock::time_point timeout)
-    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, std::move(op_name), base_resources, timeout))
+        reader_resources base_resources, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr)
+    : _impl(::seastar::make_shared<reader_permit::impl>(semaphore, schema, std::move(op_name), base_resources, timeout, std::move(trace_ptr)))
 {
 }
 
@@ -574,6 +594,14 @@ db::timeout_clock::time_point reader_permit::timeout() const noexcept {
 
 void reader_permit::set_timeout(db::timeout_clock::time_point timeout) noexcept {
     _impl->set_timeout(timeout);
+}
+
+const tracing::trace_state_ptr& reader_permit::trace_state() const noexcept {
+    return _impl->trace_state();
+}
+
+void reader_permit::set_trace_state(tracing::trace_state_ptr trace_ptr) noexcept {
+    _impl->set_trace_state(std::move(trace_ptr));
 }
 
 void reader_permit::check_abort() {
@@ -859,6 +887,8 @@ future<> reader_concurrency_semaphore::execution_loop() noexcept {
             permit.on_executing();
             auto e = std::move(permit.aux_data());
 
+            tracing::trace(permit.trace_state(), "[reader concurrency semaphore] executing read");
+
             try {
                 e.func(reader_permit(permit.shared_from_this())).forward_to(std::move(e.pr));
             } catch (...) {
@@ -1086,6 +1116,7 @@ void reader_concurrency_semaphore::do_detach_inactive_reader(reader_permit::impl
     ir.ttl_timer.cancel();
     ir.detach();
     ir.reader.permit()->on_evicted();
+    tracing::trace(permit.trace_state(), "[reader_concurrency_semaphore] evicted, reason: {}", reason);
     try {
         if (ir.notify_handler) {
             ir.notify_handler(reason);
@@ -1242,8 +1273,17 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
         &stats::reads_queued_because_count_resources
     };
 
+    static const char* result_as_string[] = {
+        "admitted immediately",
+        "queued because of non-empty ready list",
+        "queued because of used permits",
+        "queued because of memory resources",
+        "queued because of count resources"
+    };
+
     const auto [admit, why] = can_admit_read(permit);
     ++(_stats.*stats_table[static_cast<int>(why)]);
+    tracing::trace(permit.trace_state(), "[reader concurrency semaphore] {}", result_as_string[static_cast<int>(why)]);
     if (admit != can_admit::yes || !_wait_list.empty()) {
         auto fut = enqueue_waiter(permit, wait_on::admission);
         if (admit == can_admit::yes && !_wait_list.empty()) {
@@ -1254,6 +1294,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
             maybe_dump_reader_permit_diagnostics(*this, "semaphore could admit new reads yet there are waiters");
             maybe_admit_waiters();
         } else if (admit == can_admit::maybe) {
+            tracing::trace(permit.trace_state(), "[reader concurrency semaphore] evicting inactive reads in the background to free up resources");
             ++_stats.reads_queued_with_eviction;
             evict_readers_in_background();
         }
@@ -1383,32 +1424,34 @@ void reader_concurrency_semaphore::on_permit_unblocked() noexcept {
 }
 
 future<reader_permit> reader_concurrency_semaphore::obtain_permit(const schema* const schema, const char* const op_name, size_t memory,
-        db::timeout_clock::time_point timeout) {
-    auto permit = reader_permit(*this, schema, std::string_view(op_name), {1, static_cast<ssize_t>(memory)}, timeout);
+        db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
+    auto permit = reader_permit(*this, schema, std::string_view(op_name), {1, static_cast<ssize_t>(memory)}, timeout, std::move(trace_ptr));
     return do_wait_admission(*permit).then([permit] () mutable {
         return std::move(permit);
     });
 }
 
 future<reader_permit> reader_concurrency_semaphore::obtain_permit(const schema* const schema, sstring&& op_name, size_t memory,
-        db::timeout_clock::time_point timeout) {
-    auto permit = reader_permit(*this, schema, std::move(op_name), {1, static_cast<ssize_t>(memory)}, timeout);
+        db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
+    auto permit = reader_permit(*this, schema, std::move(op_name), {1, static_cast<ssize_t>(memory)}, timeout, std::move(trace_ptr));
     return do_wait_admission(*permit).then([permit] () mutable {
         return std::move(permit);
     });
 }
 
-reader_permit reader_concurrency_semaphore::make_tracking_only_permit(const schema* const schema, const char* const op_name, db::timeout_clock::time_point timeout) {
-    return reader_permit(*this, schema, std::string_view(op_name), {}, timeout);
+reader_permit reader_concurrency_semaphore::make_tracking_only_permit(const schema* const schema, const char* const op_name,
+        db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
+    return reader_permit(*this, schema, std::string_view(op_name), {}, timeout, std::move(trace_ptr));
 }
 
-reader_permit reader_concurrency_semaphore::make_tracking_only_permit(const schema* const schema, sstring&& op_name, db::timeout_clock::time_point timeout) {
-    return reader_permit(*this, schema, std::move(op_name), {}, timeout);
+reader_permit reader_concurrency_semaphore::make_tracking_only_permit(const schema* const schema, sstring&& op_name,
+        db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
+    return reader_permit(*this, schema, std::move(op_name), {}, timeout, std::move(trace_ptr));
 }
 
 future<> reader_concurrency_semaphore::with_permit(const schema* const schema, const char* const op_name, size_t memory,
-        db::timeout_clock::time_point timeout, read_func func) {
-    auto permit = reader_permit(*this, schema, std::string_view(op_name), {1, static_cast<ssize_t>(memory)}, timeout);
+        db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr, read_func func) {
+    auto permit = reader_permit(*this, schema, std::string_view(op_name), {1, static_cast<ssize_t>(memory)}, timeout, std::move(trace_ptr));
     permit->aux_data().func = std::move(func);
     permit->aux_data().permit_keepalive = permit;
     return do_wait_admission(*permit);

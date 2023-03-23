@@ -121,7 +121,7 @@ void stream_manager::init_messaging_service_handler() {
                     utils::fb_utilities::get_broadcast_address())));
         }
         return _mm.local().get_schema_for_write(schema_id, from, _ms.local()).then([this, from, estimated_partitions, plan_id, cf_id, source, reason] (schema_ptr s) mutable {
-          return _db.local().obtain_reader_permit(s, "stream-session", db::no_timeout).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, s] (reader_permit permit) mutable {
+          return _db.local().obtain_reader_permit(s, "stream-session", db::no_timeout, {}).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, s] (reader_permit permit) mutable {
             auto sink = _ms.local().make_sink_for_stream_mutation_fragments(source);
             struct stream_mutation_fragments_cmd_status {
                 bool got_cmd = false;

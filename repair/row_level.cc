@@ -2740,7 +2740,7 @@ public:
             rlogger.trace("repair[{}]: Finished to get memory budget, wanted={}, available={}, max_repair_memory={}",
                     _shard_task.global_repair_id.uuid(), wanted, mem_sem.current(), max);
 
-            auto permit = _shard_task.db.local().obtain_reader_permit(_cf, "repair-meta", db::no_timeout).get0();
+            auto permit = _shard_task.db.local().obtain_reader_permit(_cf, "repair-meta", db::no_timeout, {}).get0();
 
             repair_meta master(_shard_task.rs,
                     _cf,
@@ -3058,7 +3058,7 @@ repair_service::insert_repair_meta(
             reason] (schema_ptr s) {
         auto& db = get_db();
         auto& cf = db.local().find_column_family(s->id());
-        return db.local().obtain_reader_permit(cf, "repair-meta", db::no_timeout).then([s = std::move(s),
+        return db.local().obtain_reader_permit(cf, "repair-meta", db::no_timeout, {}).then([s = std::move(s),
                 &cf,
                 this,
                 from,

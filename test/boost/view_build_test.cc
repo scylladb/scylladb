@@ -442,7 +442,7 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
             sstables::sstable_writer_config sst_cfg = e.db().local().get_user_sstables_manager().configure_writer("test");
             auto& pc = service::get_local_streaming_priority();
 
-            auto permit = e.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout);
+            auto permit = e.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout, {});
             sst->write_components(make_flat_mutation_reader_from_mutations_v2(m.schema(), std::move(permit), {m}), 1ul, s, sst_cfg, {}, pc).get();
             sst->open_data().get();
             t->add_sstable_and_update_cache(sst).get();
@@ -556,7 +556,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
         sstables::sstable_writer_config sst_cfg = e.local_db().get_user_sstables_manager().configure_writer("test");
         auto& pc = service::get_local_streaming_priority();
 
-        auto permit = e.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout);
+        auto permit = e.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout, {});
         sst->write_components(make_flat_mutation_reader_from_mutations_v2(m.schema(), std::move(permit), {m}), 1ul, s, sst_cfg, {}, pc).get();
         sst->open_data().get();
         t->add_sstable_and_update_cache(sst).get();
@@ -566,7 +566,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
         }).get0();
 
         // consume all units except what is needed to admit a single reader.
-        auto sponge_permit = sem.make_tracking_only_permit(s.get(), "sponge", db::no_timeout);
+        auto sponge_permit = sem.make_tracking_only_permit(s.get(), "sponge", db::no_timeout, {});
         auto resources = sponge_permit.consume_resources(sem.available_resources() - reader_resources{1, replica::new_reader_base_cost});
 
         testlog.info("res = [.count={}, .memory={}]", sem.available_resources().count, sem.available_resources().memory);
@@ -630,7 +630,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
             sstables::sstable_writer_config sst_cfg = e.local_db().get_user_sstables_manager().configure_writer("test");
             auto& pc = service::get_local_streaming_priority();
 
-            auto permit = e.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout);
+            auto permit = e.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout, {});
             sst->write_components(make_flat_mutation_reader_from_mutations_v2(m.schema(), std::move(permit), {m}), 1ul, s, sst_cfg, {}, pc).get();
             sst->open_data().get();
             t->add_sstable_and_update_cache(sst).get();
@@ -731,7 +731,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         void check(mutation mut) {
             // First we check that we would be able to create a reader, even
             // though the staging reader consumed all resources.
-            auto permit = _semaphore.obtain_permit(_schema.get(), "consumer_verifier", replica::new_reader_base_cost, db::timeout_clock::now()).get0();
+            auto permit = _semaphore.obtain_permit(_schema.get(), "consumer_verifier", replica::new_reader_base_cost, db::timeout_clock::now(), {}).get0();
 
             const size_t current_rows = rows_in_mut(mut);
             const auto total_rows = _partition_rows.at(mut.decorated_key());
@@ -836,7 +836,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
             return less(a.decorated_key(), b.decorated_key());
         });
 
-        auto permit = sem.obtain_permit(schema.get(), get_name(), replica::new_reader_base_cost, db::no_timeout).get0();
+        auto permit = sem.obtain_permit(schema.get(), get_name(), replica::new_reader_base_cost, db::no_timeout, {}).get0();
 
         auto mt = make_lw_shared<replica::memtable>(schema);
         for (const auto& mut : muts) {
