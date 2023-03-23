@@ -1199,7 +1199,6 @@ public:
      * carry it across a continuation. So it is sort of same for now, but
      * should eventually be refactored.
      */
-    locator::abstract_replication_strategy& get_replication_strategy();
     const locator::abstract_replication_strategy& get_replication_strategy() const;
     locator::abstract_replication_strategy::ptr_type get_replication_strategy_ptr() const {
         return _replication_strategy;

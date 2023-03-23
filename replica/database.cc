@@ -1211,12 +1211,6 @@ keyspace::update_effective_replication_map(locator::effective_replication_map_pt
     _effective_replication_map = std::move(erm);
 }
 
-locator::abstract_replication_strategy&
-keyspace::get_replication_strategy() {
-    return *_replication_strategy;
-}
-
-
 const locator::abstract_replication_strategy&
 keyspace::get_replication_strategy() const {
     return *_replication_strategy;
