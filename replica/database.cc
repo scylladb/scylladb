@@ -782,8 +782,8 @@ do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring
         auto v = co_await read_schema_partition_for_keyspace(proxy, cf_name, name);
         try {
             co_await func(v);
-        } catch (std::exception& e) {
-            dblog.error("Skipping: {}. Exception occurred when loading system table {}: {}", v.first, cf_name, e.what());
+        } catch (...) {
+            dblog.error("Skipping: {}. Exception occurred when loading system table {}: {}", v.first, cf_name, std::current_exception());
         }
     });
 }
