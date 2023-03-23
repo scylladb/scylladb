@@ -83,6 +83,12 @@ future<> toppartitions_data_listener::stop() {
     return make_ready_future<>();
 }
 
+void toppartitions_data_listener::reset() {
+    dblog.debug("toppartitions_data_listener: resetting {}", fmt::ptr(this));
+    _top_k_read = top_k(_capacity);
+    _top_k_write = top_k(_capacity);
+}
+
 flat_mutation_reader_v2 toppartitions_data_listener::on_read(const schema_ptr& s, const dht::partition_range& range,
         const query::partition_slice& slice, flat_mutation_reader_v2&& rd) {
     bool include_all = _table_filters.empty() && _keyspace_filters.empty();

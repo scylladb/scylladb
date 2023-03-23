@@ -165,6 +165,8 @@ public:
         _top_k_write = top_k(capacity);
     }
 
+    void reset();
+
     future<> stop();
 };
 
