@@ -1,0 +1,17 @@
+/* Override theme styles */
+
+.cloud-card img {
+    right: -30px !important;
+}
+
+.enterprise-card img {
+    right: -25px !important;
+}
+
+@media  screen and (min-width: 1024px) {
+    .cloud-card .card,
+    .enterprise-card .card,
+    .opensource-card .card {
+        padding: 20px 30px !important;
+    }
+}
