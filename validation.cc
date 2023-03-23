@@ -59,11 +59,12 @@ validate_column_family(data_dictionary::database db, const sstring& keyspace_nam
         throw exceptions::invalid_request_exception("non-empty table is required");
     }
 
-    try {
-        return db.find_schema(keyspace_name, cf_name);
-    } catch (...) {
+    auto t = db.try_find_table(keyspace_name, cf_name);
+    if (!t) {
         throw exceptions::invalid_request_exception(format("unconfigured table {}", cf_name));
     }
+
+    return t->schema();
 }
 
 void validate_keyspace(data_dictionary::database db, const sstring& keyspace_name) {
