@@ -68,16 +68,16 @@ public:
     // droppable tombstone histogram and gc_before.
     bool worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point compaction_time, const tombstone_gc_state& gc_state);
 
-    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() = 0;
+    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const = 0;
 
-    virtual uint64_t adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate);
+    virtual uint64_t adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) const;
 
-    virtual reader_consumer_v2 make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer);
+    virtual reader_consumer_v2 make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) const;
 
     virtual bool use_interposer_consumer() const {
         return false;
     }
 
-    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode);
+    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) const;
 };
 }

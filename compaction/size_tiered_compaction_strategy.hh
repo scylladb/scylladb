@@ -127,9 +127,9 @@ public:
     most_interesting_bucket(const std::vector<sstables::shared_sstable>& candidates, int min_threshold, int max_threshold,
         size_tiered_compaction_strategy_options options = {});
 
-    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() override;
+    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const override;
 
-    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) override;
+    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) const override;
 
     friend class ::size_tiered_backlog_tracker;
 };

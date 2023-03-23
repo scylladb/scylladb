@@ -63,9 +63,9 @@ public:
     }
     virtual std::unique_ptr<sstable_set_impl> make_sstable_set(schema_ptr schema) const override;
 
-    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() override;
+    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const override;
 
-    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) override;
+    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) const override;
 };
 
 }
