@@ -23,8 +23,12 @@ struct broadcast_table_query {
     service::broadcast_tables::query query;
 };
 
+struct topology_change {
+    std::vector<canonical_mutation> mutations;
+};
+
 struct group0_command {
-    std::variant<service::schema_change, service::broadcast_table_query> change;
+    std::variant<service::schema_change, service::broadcast_table_query, service::topology_change> change;
     canonical_mutation history_append;
 
     std::optional<utils::UUID> prev_state_id;

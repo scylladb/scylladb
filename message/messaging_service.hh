@@ -180,7 +180,9 @@ enum class messaging_verb : int32_t {
     FORWARD_REQUEST = 61,
     GET_GROUP0_UPGRADE_STATE = 62,
     DIRECT_FD_PING = 63,
-    LAST = 64,
+    RAFT_TOPOLOGY_CMD = 64,
+    RAFT_PULL_TOPOLOGY_SNAPSHOT = 65,
+    LAST = 66,
 };
 
 } // namespace netw

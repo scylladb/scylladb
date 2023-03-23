@@ -43,6 +43,8 @@
 #include "cdc/generation_id.hh"
 #include "raft/raft.hh"
 #include "repair/id.hh"
+#include "raft/server.hh"
+#include "service/topology_state_machine.hh"
 
 class node_ops_cmd_request;
 class node_ops_cmd_response;
@@ -757,6 +759,40 @@ private:
     std::unordered_set<gms::inet_address> _normal_state_handled_on_boot;
     bool is_normal_state_handled_on_boot(gms::inet_address);
     future<> wait_for_normal_state_handled_on_boot(const std::unordered_set<gms::inet_address>& nodes, sstring ops, node_ops_id uuid);
+
+    friend class group0_state_machine;
+    bool _raft_topology_change_enabled = false;
+    future<> _raft_state_monitor = make_ready_future<>();
+    // This fibers monitors raft state and start/stops the topology change
+    // coordinator fiber
+    future<> raft_state_monitor_fiber(raft::server&, sharded<db::system_distributed_keyspace>& sys_dist_ks);
+
+     // State machine that is responsible for topology change
+    topology_state_machine _topology_state_machine;
+
+    future<> _topology_change_coordinator = make_ready_future<>();
+    future<> topology_change_coordinator_fiber(raft::server&, raft::term_t, sharded<db::system_distributed_keyspace>&, abort_source&);
+
+    // Those futures hold results of streaming for various operations
+    std::optional<shared_future<>> _bootstrap_result;
+    std::optional<shared_future<>> _decomission_result;
+    std::optional<shared_future<>> _rebuild_result;
+    std::unordered_map<raft::server_id, std::optional<shared_future<>>> _remove_result;
+
+    future<raft_topology_cmd_result> raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, const raft_topology_cmd& cmd);
+
+    future<> raft_bootstrap(raft::server&);
+    future<> raft_decomission();
+    future<> raft_removenode(locator::host_id host_id);
+    future<> raft_replace(raft::server&, raft::server_id, gms::inet_address);
+    future<> raft_rebuild(sstring source_dc);
+
+    // This is called on all nodes for each new command received through raft
+    future<> topology_transition(storage_proxy& proxy, gms::inet_address, std::vector<canonical_mutation>);
+    // load topology state machine snapshot into memory
+    future<> topology_state_load();
+    // Applies received raft snapshot to local state machine persistent storage
+    future<> merge_topology_snapshot(raft_topology_snapshot snp);
 };
 
 }

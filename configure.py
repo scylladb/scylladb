@@ -1036,6 +1036,7 @@ scylla_core = (['message/messaging_service.cc',
                 'tasks/task_manager.cc',
                 'rust/wasmtime_bindings/src/lib.rs',
                 'utils/to_string.cc',
+                'service/topology_state_machine.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')] \
                   + scylla_raft_core
                )
@@ -1151,6 +1152,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/per_partition_rate_limit_info.idl.hh',
         'idl/position_in_partition.idl.hh',
         'idl/experimental/broadcast_tables_lang.idl.hh',
+        'idl/storage_service.idl.hh',
         ]
 
 headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])
