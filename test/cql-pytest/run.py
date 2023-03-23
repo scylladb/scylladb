@@ -274,7 +274,14 @@ def get_cql_cluster(ip, ssl_context=None):
     auth_provider = cassandra.auth.PlainTextAuthProvider(username='cassandra', password='cassandra')
     return cassandra.cluster.Cluster([ip],
         auth_provider=auth_provider,
-        ssl_context=ssl_context)
+        ssl_context=ssl_context,
+        # The default timeout for new connections is 5 seconds, and for
+        # requests made by the control connection is 2 seconds. These should
+        # have been more than enough, but in some extreme cases with a very
+        # slow debug build running on a very busy machine, they may not be.
+        # so let's increase them to 60 seconds. See issue #13239.
+        connect_timeout = 60,
+        control_connection_timeout = 60)
 
 ## Test that CQL is serving, for wait_for_services() below.
 def check_cql(ip, ssl_context=None):
