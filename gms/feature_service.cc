@@ -84,18 +84,7 @@ void feature_service::unregister_feature(feature& f) {
 }
 
 
-void feature_service::enable(const sstring& name) {
-    if (auto it = _registered_features.find(name); it != _registered_features.end()) {
-        auto&& f = it->second;
-        auto& f_ref = f.get();
-        if (db::qctx && !f_ref) {
-            persist_enabled_feature_info(f_ref);
-        }
-        f_ref.enable();
-    }
-}
-
-std::set<std::string_view> feature_service::supported_feature_set() {
+std::set<std::string_view> feature_service::supported_feature_set() const {
     // Add features known by this local node. When a new feature is
     // introduced in scylla, update it here, e.g.,
     // return sstring("FEATURE1,FEATURE2")
@@ -193,25 +182,23 @@ void feature_service::persist_enabled_feature_info(const gms::feature& f) const 
     // Executed in seastar::async context, because `gms::feature::enable`
     // is only allowed to run within a thread context
 
-    std::optional<sstring> raw_old_value = db::system_keyspace::get_scylla_local_param(ENABLED_FEATURES_KEY).get0();
-    if (!raw_old_value) {
-        db::system_keyspace::set_scylla_local_param(ENABLED_FEATURES_KEY, f.name()).get0();
-        return;
-    }
-    auto feats_set = to_feature_set(*raw_old_value);
+    std::set<sstring> feats_set = db::system_keyspace::load_local_enabled_features().get0();
     feats_set.emplace(f.name());
-    db::system_keyspace::set_scylla_local_param(ENABLED_FEATURES_KEY, fmt::to_string(fmt::join(feats_set, ","))).get0();
+    db::system_keyspace::save_local_enabled_features(std::move(feats_set)).get0();
 }
 
-void feature_service::enable(const std::set<std::string_view>& list) {
-    for (gms::feature& f : _registered_features | boost::adaptors::map_values) {
-        if (list.contains(f.name())) {
-            if (db::qctx && !f) {
-                persist_enabled_feature_info(f);
+future<> feature_service::enable(std::set<std::string_view> list) {
+    // `gms::feature::enable` should be run within a seastar thread context
+    return seastar::async([this, list = std::move(list)] {
+        for (gms::feature& f : _registered_features | boost::adaptors::map_values) {
+            if (list.contains(f.name())) {
+                if (db::qctx && !f) {
+                    persist_enabled_feature_info(f);
+                }
+                f.enable();
             }
-            f.enable();
         }
-    }
+    });
 }
 
 } // namespace gms

@@ -57,11 +57,9 @@ public:
     explicit feature_service(feature_config cfg);
     ~feature_service() = default;
     future<> stop();
-    // Has to run inside seastar::async context
-    void enable(const sstring& name);
-    void enable(const std::set<std::string_view>& list);
+    future<> enable(std::set<std::string_view> list);
     db::schema_features cluster_schema_features() const;
-    std::set<std::string_view> supported_feature_set();
+    std::set<std::string_view> supported_feature_set() const;
 
     // Key in the 'system.scylla_local' table, that is used to
     // persist enabled features
