@@ -1061,25 +1061,9 @@ void sstable::do_write_simple(component_type type, const io_priority_class& pc,
     options.io_priority_class = pc;
     auto w = make_component_file_writer(type, std::move(options)).get0();
     std::exception_ptr eptr;
-    try {
-        write_component(_version, w);
-        w.flush();
-    } catch (...) {
-        eptr = std::current_exception();
-    }
-    try {
-        w.close();
-    } catch (...) {
-        std::exception_ptr close_eptr = std::current_exception();
-        sstlog.warn("failed to close file_writer: {}", close_eptr);
-        // If write succeeded but close failed, we rethrow close's exception.
-        if (!eptr) {
-            eptr = close_eptr;
-        }
-    }
-    if (eptr) {
-        std::rethrow_exception(eptr);
-    }
+    write_component(_version, w);
+    w.flush();
+    w.close();
 }
 
 template <component_type Type, typename T>
