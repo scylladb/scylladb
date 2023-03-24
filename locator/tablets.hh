@@ -43,6 +43,7 @@ struct tablet_replica {
     bool operator==(const tablet_replica&) const = default;
 };
 
+std::ostream& operator<<(std::ostream&, tablet_id);
 std::ostream& operator<<(std::ostream&, const tablet_replica&);
 
 using tablet_replica_set = utils::small_vector<tablet_replica, 3>;
@@ -175,6 +176,7 @@ public:
     // Destroys gently.
     // The tablet map is not usable after this call and should be destroyed.
     future<> clear_gently();
+    friend std::ostream& operator<<(std::ostream&, const tablet_map&);
 private:
     void check_tablet_id(tablet_id) const;
 };
@@ -209,6 +211,7 @@ public:
     future<> clear_gently();
 public:
     bool operator==(const tablet_metadata&) const = default;
+    friend std::ostream& operator<<(std::ostream&, const tablet_metadata&);
 };
 
 }
