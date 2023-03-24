@@ -2,10 +2,14 @@ name: "Docs / Publish"
 # For more information,
 # see https://sphinx-theme.scylladb.com/stable/deployment/production.html#available-workflows
 
+env:
+  FLAG: ${{ github.repository == 'scylladb/scylla-enterprise' && 'enterprise' || 'opensource' }}
+
 on:
   push:
     branches:
-      - master
+      - 'master'
+      - 'enterprise'
     paths:
       - "docs/**"
   workflow_dispatch:
@@ -24,12 +28,13 @@ jobs:
         with:
           python-version: 3.7
       - name: Set up env
-        run: make -C docs setupenv
+        run: make -C docs FLAG="${{ env.FLAG }}" setupenv
       - name: Build docs
-        run: make -C docs multiversion
+        run: make -C docs FLAG="${{ env.FLAG }}" multiversion
       - name: Build redirects
-        run: make -C docs redirects
+        run: make -C docs FLAG="${{ env.FLAG }}" redirects
       - name: Deploy docs to GitHub Pages
         run: ./docs/_utils/deploy.sh
+        if: (github.ref_name == 'master' && env.FLAG == 'opensource') || (github.ref_name == 'enterprise' && env.FLAG == 'enterprise')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -2,6 +2,9 @@ name: "Docs / Build PR"
 # For more information,
 # see https://sphinx-theme.scylladb.com/stable/deployment/production.html#available-workflows
 
+env:
+  FLAG: ${{ github.repository == 'scylladb/scylla-enterprise' && 'enterprise' || 'opensource' }}
+
 on:
   pull_request:
     branches:
@@ -23,6 +26,6 @@ jobs:
         with:
           python-version: 3.7
       - name: Set up env
-        run: make -C docs setupenv
+        run: make -C docs FLAG="${{ env.FLAG }}" setupenv
       - name: Build docs
-        run: make -C docs test
+        run: make -C docs FLAG="${{ env.FLAG }}" test
