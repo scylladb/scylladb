@@ -45,8 +45,8 @@ namespace bloom_calculations {
     int constexpr min_k = 1;
     int constexpr EXCESS = 20;
 
-    extern std::vector<std::vector<double>> probs;
-    extern std::vector<int> opt_k_per_buckets;
+    extern const std::vector<std::vector<double>> probs;
+    extern const std::vector<int> opt_k_per_buckets;
 
     /**
      * Given the number of buckets that can be used per element, return a
