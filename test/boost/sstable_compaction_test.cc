@@ -135,7 +135,7 @@ static std::unique_ptr<strategy_control> make_strategy_control_for_test(bool has
 static void assert_table_sstable_count(table_for_tests& t, size_t expected_count) {
     testlog.info("sstable_set_size={}, live_sstable_count={}, expected={}", t->get_sstables()->size(), t->get_stats().live_sstable_count, expected_count);
     BOOST_REQUIRE(t->get_sstables()->size() == expected_count);
-    BOOST_REQUIRE(t->get_stats().live_sstable_count == expected_count);
+    BOOST_REQUIRE(uint64_t(t->get_stats().live_sstable_count) == expected_count);
 }
 
 SEASTAR_TEST_CASE(compaction_manager_basic_test) {
@@ -4233,13 +4233,13 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             auto s = schemas[idx];
             auto cf = tables[idx];
             auto cft = column_family_test(cf);
-            for (auto i = 0; i < num_sstables; i++) {
+            for (size_t i = 0; i < num_sstables; i++) {
                 auto muts = { make_expiring_cell(s, std::chrono::hours(1)) };
                 cft.add_sstable(make_sstable_containing([&sst_gen, idx] { return sst_gen(idx); }, muts)).get();
             }
         };
 
-        for (auto i = 0; i < num_tables; i++) {
+        for (size_t i = 0; i < num_tables; i++) {
             add_sstables_to_table(i, DEFAULT_MIN_COMPACTION_THRESHOLD);
         }
 
@@ -4551,7 +4551,7 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
                 auto tiers = get_total_tiers(target_disk_usage);
 
                 auto t = create_table();
-                for (auto tier_idx = 0; tier_idx < tiers; tier_idx++) {
+                for (size_t tier_idx = 0; tier_idx < tiers; tier_idx++) {
                     auto tier_size = get_size_for_tier(tier_idx);
                     if (tier_size > available_space) {
                         break;
@@ -4628,7 +4628,7 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
 
             std::vector<sstables::shared_sstable> candidates;
             candidates.reserve(all_files);
-            for (auto i = 0; i < all_files; i++) {
+            for (size_t i = 0; i < all_files; i++) {
                 auto current_step = duration_cast<microseconds>(step_base) * i;
                 auto sst = make_sstable_containing(sst_gen, {make_mutation(i, next_timestamp(current_step))});
                 sst->set_sstable_level(sstable_level);

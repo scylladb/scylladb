@@ -1115,6 +1115,7 @@ public:
             case state::release_memory: return "state::release_memory";
             case state::done: return "state::done";
         }
+        std::abort();
     };
 private:
     reader_concurrency_semaphore& _sem;
@@ -1327,7 +1328,7 @@ memory_limit_table create_memory_limit_table(cql_test_env& env, uint64_t target_
 
     const auto sstable_write_concurrency = 16;
 
-    auto num_sstables = 0;
+    uint64_t num_sstables = 0;
     parallel_for_each(boost::irange(0, sstable_write_concurrency), [&] (int i) {
         return seastar::async([&] {
             while (num_sstables != target_num_sstables) {

@@ -377,7 +377,7 @@ void repair_module::done(repair_uniq_id id, bool succeeded) {
 }
 
 repair_status repair_module::get(int id) const {
-    if (id > _sequence_number) {
+    if (std::cmp_greater(id, _sequence_number)) {
         throw std::runtime_error(format("unknown repair id {}", id));
     }
     auto it = _status.find(id);
@@ -390,7 +390,7 @@ repair_status repair_module::get(int id) const {
 
 future<repair_status> repair_module::repair_await_completion(int id, std::chrono::steady_clock::time_point timeout) {
     return seastar::with_gate(async_gate(), [this, id, timeout] {
-        if (id > _sequence_number) {
+        if (std::cmp_greater(id, _sequence_number)) {
             return make_exception_future<repair_status>(std::runtime_error(format("unknown repair id {}", id)));
         }
         return repeat_until_value([this, id, timeout] {
@@ -922,7 +922,7 @@ private:
 future<> shard_repair_task_impl::do_repair_ranges() {
     // Repair tables in the keyspace one after another
     assert(table_names().size() == table_ids.size());
-    for (int idx = 0; idx < table_ids.size(); idx++) {
+    for (size_t idx = 0; idx < table_ids.size(); idx++) {
         auto table_id = table_ids[idx];
         auto table_name = table_names()[idx];
         // repair all the ranges in limited parallelism

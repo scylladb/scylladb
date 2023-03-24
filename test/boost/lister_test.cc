@@ -168,7 +168,7 @@ SEASTAR_TEST_CASE(test_directory_lister_close) {
     auto dl = directory_lister(tmp.path());
     auto initial = tests::random::get_int(count);
     BOOST_TEST_MESSAGE(fmt::format("Getting {} dir entries", initial));
-    for (auto i = 0; i < initial; i++) {
+    for (decltype(initial) i = 0; i < initial; i++) {
         auto de = co_await dl.get();
         BOOST_REQUIRE(de);
     }

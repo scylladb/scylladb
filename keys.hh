@@ -697,6 +697,7 @@ public:
     partition_key(std::vector<bytes> v)
         : compound_wrapper(managed_bytes(c_type::serialize_value(std::move(v))))
     { }
+    partition_key(std::initializer_list<bytes> v) : partition_key(std::vector(v)) {}    
 
     partition_key(partition_key&& v) = default;
     partition_key(const partition_key& v) = default;
@@ -812,6 +813,7 @@ public:
     clustering_key_prefix(std::vector<managed_bytes> v)
         : prefix_compound_wrapper(compound::element_type::serialize_value(std::move(v)))
     { }
+    clustering_key_prefix(std::initializer_list<bytes> v) : clustering_key_prefix(std::vector(v)) {}
 
     clustering_key_prefix(clustering_key_prefix&& v) = default;
     clustering_key_prefix(const clustering_key_prefix& v) = default;

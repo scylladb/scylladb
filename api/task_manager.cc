@@ -205,7 +205,7 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
         while (!q.empty()) {
             auto& current = q.front();
             res.push_back(co_await retrieve_status(current));
-            for (auto i = 0; i < current->get_children().size(); ++i) {
+            for (size_t i = 0; i < current->get_children().size(); ++i) {
                 q.push(co_await current->get_children()[i].copy());
             }
             q.pop();

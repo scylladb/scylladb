@@ -111,7 +111,7 @@ public:
         return _row.is_live(s, column_kind(), base_tombstone, now);
     }
 
-    column_kind column_kind() const {
+    ::column_kind column_kind() const {
         return _key.has_value()
                 ? column_kind::regular_column : column_kind::static_column;
     }

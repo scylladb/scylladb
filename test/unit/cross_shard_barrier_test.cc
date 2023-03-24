@@ -103,14 +103,14 @@ int main(int argc, char **argv) {
             w.invoke_on_all(&worker::loop).get();
             w.stop().get();
 
-            for (int i = 0; i < smp::count * phases_scale; i++) {
+            for (size_t i = 0; i < smp::count * phases_scale; i++) {
                 sharded<worker> w;
                 w.start(utils::cross_shard_barrier()).get();
                 try {
                     w.invoke_on_all(&worker::loop_with_error).get();
                 } catch (...) {
                     auto ph = w.invoke_on(0, [] (auto& w) { return w.get_phase(); }).get0();
-                    for (int c = 1; c < smp::count; c++) {
+                    for (size_t c = 1; c < smp::count; c++) {
                         auto ph_2 = w.invoke_on(c, [] (auto& w) { return w.get_phase(); }).get0();
                         if (ph_2 != ph) {
                             fmt::print("aborted barrier passed shard through\n");

@@ -614,12 +614,12 @@ private:
         int32_t _min_index_interval = DEFAULT_MIN_INDEX_INTERVAL;
         int32_t _max_index_interval = 2048;
         int32_t _memtable_flush_period = 0;
-        speculative_retry _speculative_retry = ::speculative_retry(speculative_retry::type::PERCENTILE, 0.99);
+        ::speculative_retry _speculative_retry = ::speculative_retry(speculative_retry::type::PERCENTILE, 0.99);
         // This is the compaction strategy that will be used by default on tables which don't have one explicitly specified.
         sstables::compaction_strategy_type _compaction_strategy = sstables::compaction_strategy_type::size_tiered;
         std::map<sstring, sstring> _compaction_strategy_options;
         bool _compaction_enabled = true;
-        caching_options _caching_options;
+        ::caching_options _caching_options;
         table_schema_version _version;
         std::unordered_map<sstring, dropped_column> _dropped_columns;
         std::map<bytes, data_type> _collections;

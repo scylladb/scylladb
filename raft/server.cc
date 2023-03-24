@@ -697,10 +697,10 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
         if (const auto* ex = dynamic_cast<const not_a_leader*>(&e)) {
             co_return add_entry_reply{transient_error{std::current_exception(), ex->leader}};
         }
-        if (const auto* ex = dynamic_cast<const dropped_entry*>(&e)) {
+        if (dynamic_cast<const dropped_entry*>(&e)) {
             co_return add_entry_reply{transient_error{std::current_exception(), {}}};
         }
-        if (const auto* ex = dynamic_cast<const conf_change_in_progress*>(&e)) {
+        if (dynamic_cast<const conf_change_in_progress*>(&e)) {
             co_return add_entry_reply{transient_error{std::current_exception(), {}}};
         }
         throw;

@@ -312,15 +312,15 @@ future<call_result_t<M>> call(
     }).handle_exception([] (std::exception_ptr eptr) {
         try {
             std::rethrow_exception(eptr);
-        } catch (raft::not_a_leader e) {
+        } catch (raft::not_a_leader& e) {
             return make_ready_future<call_result_t<M>>(e);
-        } catch (raft::not_a_member e) {
+        } catch (raft::not_a_member& e) {
             return make_ready_future<call_result_t<M>>(e);
-        } catch (raft::dropped_entry e) {
+        } catch (raft::dropped_entry& e) {
             return make_ready_future<call_result_t<M>>(e);
-        } catch (raft::commit_status_unknown e) {
+        } catch (raft::commit_status_unknown& e) {
             return make_ready_future<call_result_t<M>>(e);
-        } catch (raft::stopped_error e) {
+        } catch (raft::stopped_error& e) {
             return make_ready_future<call_result_t<M>>(e);
         } catch (raft::request_aborted&) {
             return make_ready_future<call_result_t<M>>(timed_out_error{});

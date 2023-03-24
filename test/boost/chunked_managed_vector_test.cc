@@ -231,17 +231,17 @@ SEASTAR_TEST_CASE(test_chunk_reserve) {
 
     for (auto conf :
             { // std::make_pair(reserve size, push count)
-                std::make_pair(0, 4000),
-                std::make_pair(100, 4000),
-                std::make_pair(200, 4000),
-                std::make_pair(1000, 4000),
-                std::make_pair(2000, 4000),
-                std::make_pair(3000, 4000),
-                std::make_pair(5000, 4000),
-                std::make_pair(500, 8000),
-                std::make_pair(1000, 8000),
-                std::make_pair(2000, 8000),
-                std::make_pair(8000, 500),
+                std::make_pair(0u, 4000u),
+                std::make_pair(100u, 4000u),
+                std::make_pair(200u, 4000u),
+                std::make_pair(1000u, 4000u),
+                std::make_pair(2000u, 4000u),
+                std::make_pair(3000u, 4000u),
+                std::make_pair(5000u, 4000u),
+                std::make_pair(500u, 8000u),
+                std::make_pair(1000u, 8000u),
+                std::make_pair(2000u, 8000u),
+                std::make_pair(8000u, 500u),
             })
     {
         with_allocator(region.allocator(), [&] {
@@ -275,7 +275,7 @@ SEASTAR_TEST_CASE(test_correctness_when_crossing_chunk_boundary) {
             size_t max_chunk_size = lsa::chunked_managed_vector<int>::max_chunk_capacity();
 
             lsa::chunked_managed_vector<int> v;
-            for (auto i = 0; i < (max_chunk_size + 1); i++) {
+            for (size_t i = 0; i < (max_chunk_size + 1); i++) {
                 v.push_back(i);
             }
             BOOST_REQUIRE(v.back() == max_chunk_size);

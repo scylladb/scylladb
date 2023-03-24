@@ -315,7 +315,7 @@ SEASTAR_THREAD_TEST_CASE(test_stress_eviction) {
         return cf_lru.evict();
     });
 
-    for (int i = 0; i < (cached_size / page_size); ++i) {
+    for (size_t i = 0; i < (cached_size / page_size); ++i) {
         read_to_string(cf, page_size * i, page_size);
     }
 
@@ -335,7 +335,7 @@ SEASTAR_THREAD_TEST_CASE(test_stress_eviction) {
     testlog.debug("Memory: allocated={}, free={}", seastar::memory::stats().allocated_memory(), seastar::memory::stats().free_memory());
     testlog.debug("Starting test...");
 
-    for (int j = 0; j < n_pages * 16; ++j) {
+    for (size_t j = 0; j < n_pages * 16; ++j) {
         testlog.trace("Allocating");
         auto stride = tests::random::get_int(1, 20);
         auto page_idx = tests::random::get_int(n_pages - stride);

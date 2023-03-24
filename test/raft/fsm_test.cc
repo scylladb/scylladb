@@ -1089,7 +1089,7 @@ BOOST_AUTO_TEST_CASE(test_empty_configuration) {
 
     server_id id1 = id();
 
-    raft::configuration cfg({});
+    raft::configuration cfg{config_member_set()};
     raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
     auto follower = create_follower(id1, std::move(log));
     // Initial state is follower
@@ -1107,7 +1107,7 @@ BOOST_AUTO_TEST_CASE(test_empty_configuration) {
     election_timeout(leader);
     BOOST_CHECK(leader.is_leader());
     // Transitioning to an empty configuration is not supported.
-    BOOST_CHECK_THROW(leader.add_entry(raft::configuration({})), std::invalid_argument);
+    BOOST_CHECK_THROW(leader.add_entry(raft::configuration{config_member_set()}), std::invalid_argument);
     leader.add_entry(config_from_ids({id1, id2}));
 
     communicate(leader, follower);

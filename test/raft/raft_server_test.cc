@@ -23,7 +23,7 @@ SEASTAR_THREAD_TEST_CASE(test_check_abort_on_client_api) {
     cluster.stop_server(0, "test crash").get0();
 
     auto check_error = [](const raft::stopped_error& e) {
-        return e.what() == sstring("Raft instance is stopped, reason: \"test crash\"");
+        return sstring(e.what()) == sstring("Raft instance is stopped, reason: \"test crash\"");
     };
     BOOST_CHECK_EXCEPTION(cluster.add_entries(1, 0).get0(), raft::stopped_error, check_error);
     BOOST_CHECK_EXCEPTION(cluster.get_server(0).modify_config({}, {to_raft_id(0)}).get0(), raft::stopped_error, check_error);
