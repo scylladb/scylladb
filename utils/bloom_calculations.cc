@@ -50,7 +50,7 @@ const std::vector<std::vector<double>> probs = {
  * The optimal number of hashes for a given number of bits per element.
  * These values are automatically calculated from the data above.
  */
-std::vector<int> initialize_opt_k() {
+static std::vector<int> initialize_opt_k() {
 
     std::vector<int> arr;
     arr.resize(probs.size());
