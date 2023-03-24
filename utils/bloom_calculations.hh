@@ -130,9 +130,7 @@ namespace bloom_calculations {
      * lower than this, it will throw an unsupported_operation_exception.
      */
     inline double min_supported_bloom_filter_fp_chance() {
-        int max_buckets = probs.size() - 1;
-        int max_K = probs[max_buckets].size() - 1;
-        return probs[max_buckets][max_K];
+        return probs.back().back();
     }
 
 }
