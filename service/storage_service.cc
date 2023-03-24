@@ -1404,6 +1404,18 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
             }
         }
 
+        {
+            // Wait for normal state handler to finish for existing nodes in the cluster.
+            auto ignore_nodes = replacement_info ? get_ignore_dead_nodes_for_replace(get_token_metadata())
+                                                 // TODO: specify ignore_nodes for bootstrap
+                                                 : std::unordered_set<gms::inet_address>{};
+            auto sync_nodes = get_nodes_to_sync_with(ignore_nodes).get();
+            if (replacement_info) {
+                sync_nodes.erase(replacement_info->address);
+            }
+            wait_for_normal_state_handled_on_boot(sync_nodes).get();
+        }
+
         if (!replacement_info) {
             // Even if we reached this point before but crashed, we will make a new CDC generation.
             // It doesn't hurt: other nodes will (potentially) just do more generation switches.
@@ -3052,7 +3064,6 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
     for (;;) {
         // Step 1: Decide who needs to sync data for bootstrap operation
         ctl.sync_nodes = get_nodes_to_sync_with(ctl.ignore_nodes).get();
-        wait_for_normal_state_handled_on_boot(ctl.sync_nodes, "bootstrap", uuid).get();
         ctl.sync_nodes.insert(get_broadcast_address());
 
         // Step 2: Wait until no pending node operations
@@ -3115,7 +3126,6 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
     // Step 1: Decide who needs to sync data for replace operation
     ctl.sync_nodes = get_nodes_to_sync_with(ctl.ignore_nodes).get();
     ctl.sync_nodes.erase(replace_address);
-    wait_for_normal_state_handled_on_boot(ctl.sync_nodes, "replace", uuid).get();
     ctl.sync_nodes.insert(get_broadcast_address());
 
     ctl.start("replace");
@@ -4783,19 +4793,19 @@ bool storage_service::is_normal_state_handled_on_boot(gms::inet_address node) {
 }
 
 // Wait for normal state handler to finish on boot
-future<> storage_service::wait_for_normal_state_handled_on_boot(const std::unordered_set<gms::inet_address>& nodes, sstring ops, node_ops_id uuid) {
-    slogger.info("{}[{}]: Started waiting for normal state handler for nodes {}", ops, uuid, nodes);
+future<> storage_service::wait_for_normal_state_handled_on_boot(const std::unordered_set<gms::inet_address>& nodes) {
+    slogger.info("Started waiting for normal state handler for nodes {}", nodes);
     auto start_time = std::chrono::steady_clock::now();
     for (auto& node: nodes) {
         while (!is_normal_state_handled_on_boot(node)) {
-            slogger.debug("{}[{}]: Waiting for normal state handler for node {}", ops, uuid, node);
+            slogger.debug("Waiting for normal state handler for node {}", node);
             co_await sleep_abortable(std::chrono::milliseconds(100), _abort_source);
             if (std::chrono::steady_clock::now() > start_time + std::chrono::seconds(60)) {
-                throw std::runtime_error(format("{}[{}]: Node {} did not finish normal state handler, reject the node ops", ops, uuid, node));
+                throw std::runtime_error(format("Node {} did not finish normal state handler, reject the node ops", node));
             }
         }
     }
-    slogger.info("{}[{}]: Finished waiting for normal state handler for nodes {}", ops, uuid, nodes);
+    slogger.info("Finished waiting for normal state handler for nodes {}", nodes);
     co_return;
 }
 

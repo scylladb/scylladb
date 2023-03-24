@@ -760,7 +760,7 @@ public:
 private:
     std::unordered_set<gms::inet_address> _normal_state_handled_on_boot;
     bool is_normal_state_handled_on_boot(gms::inet_address);
-    future<> wait_for_normal_state_handled_on_boot(const std::unordered_set<gms::inet_address>& nodes, sstring ops, node_ops_id uuid);
+    future<> wait_for_normal_state_handled_on_boot(const std::unordered_set<gms::inet_address>& nodes);
 
     friend class group0_state_machine;
     bool _raft_topology_change_enabled = false;
