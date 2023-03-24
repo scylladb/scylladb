@@ -59,21 +59,6 @@ schema_ptr test_table_schema() {
 
 using namespace sstables;
 
-class generation_for_sharded_test {
-    std::optional<sstables::generation_type> _gen;
-    shard_id _shard = this_shard_id();
-public:
-    generation_for_sharded_test(std::optional<sstables::generation_type> gen = std::nullopt) noexcept : _gen(std::move(gen)) {};
-
-    // Must be called from a seastar thread.
-    sstables::generation_type regenerate() noexcept {
-        return smp::submit_to(_shard, [&] {
-            _gen = replica::table::make_new_generation(_gen);
-            return *_gen;
-        }).get();
-    }
-};
-
 // Must be called from a seastar thread.
 sstables::shared_sstable
 make_sstable_for_this_shard(std::function<sstables::shared_sstable()> sst_factory) {
