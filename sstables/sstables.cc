@@ -910,14 +910,31 @@ file_writer::~file_writer() {
 }
 
 void file_writer::close() {
+    // Writing into sstable component output stream should be done with care.
+    // In particular -- flushing can happen only once right before closing
+    // the stream. Flushing the stream in between several writes is not going
+    // to work, because file stream would step on unaligned IO and S3 upload
+    // stream would send completion message to the server and would lose any
+    // subsequent write.
     assert(!_closed && "file_writer already closed");
+    std::exception_ptr ex;
+    try {
+        _out.flush().get();
+    } catch (...) {
+        ex = std::current_exception();
+    }
     try {
         _closed = true;
         _out.close().get();
     } catch (...) {
         auto e = std::current_exception();
         sstlog.error("Error while closing {}: {}", get_filename(), e);
-        std::rethrow_exception(e);
+        if (!ex) {
+            ex = std::move(e);
+        }
+    }
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
     }
 }
 
@@ -970,7 +987,6 @@ void sstable::filesystem_storage::open(sstable& sst, const io_priority_class& pc
         bytes b = bytes(reinterpret_cast<const bytes::value_type *>(value.c_str()), value.size());
         write(sst._version, w, b);
     }
-    w.flush();
     w.close();
 
     // Flushing parent directory to guarantee that temporary TOC file reached
@@ -1062,7 +1078,6 @@ void sstable::do_write_simple(component_type type, const io_priority_class& pc,
     auto w = make_component_file_writer(type, std::move(options)).get0();
     std::exception_ptr eptr;
     write_component(_version, w);
-    w.flush();
     w.close();
 }
 
@@ -1318,7 +1333,6 @@ void sstable::rewrite_statistics(const io_priority_class& pc) {
     auto w = make_component_file_writer(component_type::TemporaryStatistics, std::move(options),
             open_flags::wo | open_flags::create | open_flags::truncate).get0();
     write(_version, w, _components->statistics);
-    w.flush();
     w.close();
     // rename() guarantees atomicity when renaming a file into place.
     sstable_write_io_check(rename_file, file_path, filename(component_type::Statistics)).get();

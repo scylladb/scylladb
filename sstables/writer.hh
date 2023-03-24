@@ -71,10 +71,6 @@ public:
         _out.write(reinterpret_cast<const char*>(s.begin()), s.size()).get();
     }
     // Must be called in a seastar thread.
-    void flush() {
-        _out.flush().get();
-    }
-    // Must be called in a seastar thread.
     void close();
 
     uint64_t offset() const {
@@ -131,7 +127,6 @@ serialized_size(sstable_version_types v, const T& object) {
     uint64_t size = 0;
     auto writer = file_writer(make_sizing_output_stream(size));
     write(v, writer, object);
-    writer.flush();
     writer.close();
     return size;
 }
