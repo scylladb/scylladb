@@ -804,7 +804,14 @@ def new_random_table(cql, keyspace, udts=[]):
     compressions = ["LZ4Compressor", "SnappyCompressor", "DeflateCompressor"]
     extras["compression"] = f"{{'sstable_compression': '{random.choice(compressions)}'}}"
 
-    extras["bloom_filter_fp_chance"] = round(random.random(), 5)
+    # see the last element of `probs` defined by scylladb/utils/bloom_calculation.cc,
+    # the minimum false positive rate supported by the bloom filter is determined by
+    # prob's element with the greatest number of buckets. also, because random.random()
+    # could return 0.0, not to mention round() could round a small enough float to 0,
+    # let's add an epislon to ensure that the randomly picked chance is not equal to the
+    # minimum.
+    min_supported_bloom_filter_fp_chance = 6.71e-5 + 1e-5
+    extras["bloom_filter_fp_chance"] = max(min_supported_bloom_filter_fp_chance, round(random.random(), 5))
     extras["crc_check_chance"] = round(random.random(), 5)
     extras["gc_grace_seconds"] = random.randrange(100000, 1000000)
     min_idx_interval = random.randrange(100, 1000)
