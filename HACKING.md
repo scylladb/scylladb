@@ -195,7 +195,7 @@ $ # Edit configuration options as appropriate
 $ SCYLLA_HOME=$HOME/scylla build/release/scylla
 ```
 
-The `scylla.yaml` file in the repository by default writes all database data to `/var/lib/scylla`, which likely requires root access. Change the `data_file_directories` and `commitlog_directory` fields as appropriate.
+The `scylla.yaml` file in the repository by default writes all database data to `/var/lib/scylla`, which likely requires root access. Change the `data_file_directories`, `commitlog_directory` and `schema_commitlog_directory` fields as appropriate.
 
 Scylla has a number of requirements for the file-system and operating system to operate ideally and at peak performance. However, during development, these requirements can be relaxed with the `--developer-mode` flag.
 

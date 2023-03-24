@@ -916,7 +916,7 @@ void database::maybe_init_schema_commitlog() {
     _uses_schema_commitlog = true;
 
     db::commitlog::config c;
-    c.commit_log_location = _cfg.commitlog_directory();
+    c.commit_log_location = _cfg.schema_commitlog_directory();
     c.fname_prefix = db::schema_tables::COMMITLOG_FILENAME_PREFIX;
     c.metrics_category_name = "schema-commitlog";
     c.commitlog_total_space_in_mb = 10 << 20;

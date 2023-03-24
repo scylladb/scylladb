@@ -303,6 +303,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The directory in which Scylla will put all its subdirectories. The location of individual subdirs can be overriden by the respective *_directory options.")
     , commitlog_directory(this, "commitlog_directory", value_status::Used, "",
         "The directory where the commit log is stored. For optimal write performance, it is recommended the commit log be on a separate disk partition (ideally, a separate physical device) from the data file directories.")
+    , schema_commitlog_directory(this, "schema_commitlog_directory", value_status::Used, "",
+        "The directory where the schema commit log is stored. This is a special commitlog instance used for schema and system tables. For optimal write performance, it is recommended the commit log be on a separate disk partition (ideally, a separate physical device) from the data file directories.")
     , data_file_directories(this, "data_file_directories", "datadir", value_status::Used, { },
         "The directory location where table data (SSTables) is stored")
     , hints_directory(this, "hints_directory", value_status::Used, "",
@@ -950,6 +952,10 @@ void db::config::add_per_partition_rate_limit_extension() {
 
 void db::config::setup_directories() {
     maybe_in_workdir(commitlog_directory, "commitlog");
+    if (!schema_commitlog_directory.is_set()) {
+        schema_commitlog_directory(commitlog_directory() + "/schema");
+    }
+    maybe_in_workdir(schema_commitlog_directory, "schema_commitlog");
     maybe_in_workdir(data_file_directories, "data");
     maybe_in_workdir(hints_directory, "hints");
     maybe_in_workdir(view_hints_directory, "view_hints");

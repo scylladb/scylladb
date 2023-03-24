@@ -25,6 +25,12 @@ scylla.yaml is equivalent to the Apache Cassandra cassandra.yaml configuration f
    # separate spindle than the data directories.
    commitlog_directory: /var/lib/scylla/commitlog
 
+   # schema commit log. A special commitlog instance
+   # used for schema and system tables.
+   # When running on magnetic HDD, this should be a
+   # separate spindle than the data directories.
+   # schema_commitlog_directory: /var/lib/scylla/commitlog/schema
+
    # seed_provider class_name is saved for future use.
    # A seed address is mandatory.
    seed_provider:

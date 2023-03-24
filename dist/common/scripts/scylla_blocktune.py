@@ -86,3 +86,4 @@ def tune_yaml(path, nomerges):
     for fs in y['data_file_directories']:
         tune_fs(fs, nomerges)
     tune_fs(y['commitlog_directory'], nomerges)
+    tune_fs(y['schema_commitlog_directory'], nomerges)

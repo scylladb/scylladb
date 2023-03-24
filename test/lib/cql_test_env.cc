@@ -511,6 +511,7 @@ public:
                 data_dir_path = cfg->data_file_directories()[0];
             }
             cfg->commitlog_directory.set(data_dir_path + "/commitlog.dir");
+            cfg->schema_commitlog_directory.set(cfg->commitlog_directory() + "/schema");
             cfg->hints_directory.set(data_dir_path + "/hints.dir");
             cfg->view_hints_directory.set(data_dir_path + "/view_hints.dir");
             cfg->num_tokens.set(256);
@@ -522,6 +523,7 @@ public:
             }
             create_directories((data_dir_path + "/system").c_str());
             create_directories(cfg->commitlog_directory().c_str());
+            create_directories(cfg->schema_commitlog_directory().c_str());
             create_directories(cfg->hints_directory().c_str());
             create_directories(cfg->view_hints_directory().c_str());
             for (unsigned i = 0; i < smp::count; ++i) {

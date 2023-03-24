@@ -36,6 +36,12 @@ num_tokens: 256
 # separate spindle than the data directories.
 # commitlog_directory: /var/lib/scylla/commitlog
 
+# schema commit log. A special commitlog instance
+# used for schema and system tables.
+# When running on magnetic HDD, this should be a
+# separate spindle than the data directories.
+# schema_commitlog_directory: /var/lib/scylla/commitlog/schema
+
 # commitlog_sync may be either "periodic" or "batch."
 #
 # When in batch mode, Scylla won't ack writes until the commit log
