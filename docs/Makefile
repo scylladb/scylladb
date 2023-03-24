@@ -7,12 +7,12 @@ PAPER         :=
 BUILDDIR      := _build
 SOURCEDIR     := .
 PREVIEW_HOST  := 127.0.0.1
-FLAG 	  	  := opensource
-CONF_PATH 	  := ./
+FLAG          := opensource
+CONF_PATH     := ./
 
 # Internal variables
 ifeq ($(FLAG), enterprise)
-	CONF_PATH = ./enterprise
+    CONF_PATH = ./enterprise
 endif
 
 PAPEROPT_a4     := -D latex_paper_size=a4
