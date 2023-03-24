@@ -198,7 +198,7 @@ By default ScyllaDB will try to use cache, but since the data won’t be used ag
 As a consequence it can lead to bad latency on operational workloads due to increased rate of cache misses.
 To prevent this problem, queries from analytical workloads can bypass the cache using the ‘bypass cache’ option.
 
-:ref:`Bypass Cache <select-statement>` is only available with Scylla Enterprise.
+See :ref:`Bypass Cache <bypass-cache>` for more information.
 
 Batching
 ========
