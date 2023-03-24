@@ -452,6 +452,10 @@ public:
     }
 
     void set_trace_state(tracing::trace_state_ptr trace_ptr) noexcept {
+        if (_trace_ptr) {
+            // Create a continuation trace point
+            tracing::trace(trace_ptr, "Continuing paged query, previous page's trace session is {}", _trace_ptr->session_id());
+        }
         _trace_ptr = std::move(trace_ptr);
     }
 
