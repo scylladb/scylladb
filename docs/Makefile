@@ -12,7 +12,7 @@ CONF_PATH     := ./
 
 # Internal variables
 ifeq ($(FLAG), enterprise)
-    CONF_PATH = ./enterprise
+    CONF_PATH = ./_enterprise
 endif
 
 PAPEROPT_a4     := -D latex_paper_size=a4
