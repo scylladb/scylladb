@@ -22,8 +22,6 @@ LATEST_VERSION = "branch-5.1"
 UNSTABLE_VERSIONS = ["master", "branch-5.2"]
 # Set which versions are deprecated.
 DEPRECATED_VERSIONS = [""]
-# Set to enterprise or opensource.
-FLAGS = ["opensource"]
 
 # -- General configuration ------------------------------------------------
 
@@ -141,13 +139,7 @@ html_context = {"html_baseurl": html_baseurl}
 
 
 # -- Initialize Sphinx ----------------------------------------------
-def builder_inited(app):
-    # Add custom flags
-    for flag in FLAGS:
-        app.tags.add(flag)
-
 def setup(sphinx):
-    sphinx.connect('builder-inited', builder_inited)
     warnings.filterwarnings(
         action="ignore",
         category=UserWarning,
