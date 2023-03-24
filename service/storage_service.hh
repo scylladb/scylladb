@@ -294,7 +294,7 @@ private:
     void run_replace_ops(std::unordered_set<token>& bootstrap_tokens, replacement_info replace_info);
     void run_bootstrap_ops(std::unordered_set<token>& bootstrap_tokens);
 
-    std::list<gms::inet_address> get_ignore_dead_nodes_for_replace(const locator::token_metadata& tm);
+    std::unordered_set<gms::inet_address> get_ignore_dead_nodes_for_replace(const locator::token_metadata& tm);
     future<> wait_for_ring_to_settle(std::chrono::milliseconds delay);
 
 public:
