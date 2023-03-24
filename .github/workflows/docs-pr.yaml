@@ -9,6 +9,7 @@ on:
   pull_request:
     branches:
       - master
+      - enterprise
     paths:
       - "docs/**"
 
