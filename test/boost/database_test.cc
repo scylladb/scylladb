@@ -409,14 +409,12 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
 
     const sstring toc_text = "TOC.txt\nData.db\n";
 
-    std::optional<sstables::generation_type> prev_gen;
     std::vector<sstables::generation_type> gen;
-    size_t num_gens = 9;
-    gen.reserve(num_gens);
-    for (auto i = 0; i < num_gens; i++) {
+    constexpr size_t num_gens = 9;
+    std::generate_n(std::back_inserter(gen), num_gens, [prev_gen = std::optional<sstables::generation_type>()]() mutable {
         prev_gen = replica::table::make_new_generation(prev_gen);
-        gen.emplace_back(*prev_gen);
-    }
+        return *prev_gen;
+    });
 
     // Regular log file with single entry
     write_file(gen_filename(gen[2], component_type::TOC), toc_text);
