@@ -2711,5 +2711,48 @@ bool is_token_function(const expression& e) {
 
     return is_token_function(*fun_call);
 }
+
+bool is_partition_token_for_schema(const function_call& fun_call, const schema& table_schema) {
+    if (!is_token_function(fun_call)) {
+        return false;
+    }
+
+    if (fun_call.args.size() != table_schema.partition_key_size()) {
+        return false;
+    }
+
+    auto arguments_iter = fun_call.args.begin();
+    for (const column_definition& partition_key_col : table_schema.partition_key_columns()) {
+        const expression& cur_argument = *arguments_iter;
+
+        const column_value* cur_col = as_if<column_value>(&cur_argument);
+        if (cur_col == nullptr) {
+            // A sanity check that we didn't call the function on an unprepared expression.
+            if (is<unresolved_identifier>(cur_argument)) {
+                on_internal_error(expr_logger,
+                                  format("called is_partition_token with unprepared expression: {}", fun_call));
+            }
+
+            return false;
+        }
+
+        if (cur_col->col != &partition_key_col) {
+            return false;
+        }
+
+        arguments_iter++;
+    }
+
+    return true;
+}
+
+bool is_partition_token_for_schema(const expression& maybe_token, const schema& table_schema) {
+    const function_call* fun_call = as_if<function_call>(&maybe_token);
+    if (fun_call == nullptr) {
+        return false;
+    }
+
+    return is_partition_token_for_schema(*fun_call, table_schema);
+}
 } // namespace expr
 } // namespace cql3
