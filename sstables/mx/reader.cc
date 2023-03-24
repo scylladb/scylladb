@@ -1695,7 +1695,7 @@ static flat_mutation_reader_v2 make_reader(
     // in 'native-reversed' format (if ever).
     if (slice.get().is_reversed()) {
         return make_flat_mutation_reader_v2<mx_sstable_mutation_reader>(
-            std::move(sstable), std::move(schema), std::move(permit), range,
+            std::move(sstable), schema, std::move(permit), range,
             legacy_reverse_slice_to_native_reverse_slice(*schema, slice.get()), pc, std::move(trace_state), fwd, fwd_mr, monitor);
     }
 
