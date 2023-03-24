@@ -295,6 +295,8 @@ private:
     void run_bootstrap_ops(std::unordered_set<token>& bootstrap_tokens);
 
     std::unordered_set<gms::inet_address> get_ignore_dead_nodes_for_replace(const locator::token_metadata& tm);
+    future<std::unordered_set<gms::inet_address>> get_nodes_to_sync_with(
+            const std::unordered_set<gms::inet_address>& ignore_dead_nodes);
     future<> wait_for_ring_to_settle(std::chrono::milliseconds delay);
 
 public:

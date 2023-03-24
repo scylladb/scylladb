@@ -1352,6 +1352,21 @@ std::unordered_set<gms::inet_address> storage_service::get_ignore_dead_nodes_for
     return ignore_nodes;
 }
 
+future<std::unordered_set<gms::inet_address>> storage_service::get_nodes_to_sync_with(
+        const std::unordered_set<gms::inet_address>& ignore_nodes) {
+    std::unordered_set<gms::inet_address> result;
+    for (const auto& [node, _] :_gossiper.get_endpoint_states()) {
+        co_await coroutine::maybe_yield();
+        slogger.info("Check node={}, status={}", node, _gossiper.get_gossip_status(node));
+        if (node != get_broadcast_address() &&
+                _gossiper.is_normal_ring_member(node) &&
+                !ignore_nodes.contains(node)) {
+            result.insert(node);
+        }
+    }
+    co_return result;
+}
+
 // Runs inside seastar::async context
 future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id, const std::optional<replacement_info>& replacement_info) {
     return seastar::async([this, &bootstrap_tokens, &cdc_gen_id, &cdc_gen_service, &replacement_info] {
@@ -3033,17 +3048,8 @@ void storage_service::run_bootstrap_ops(std::unordered_set<token>& bootstrap_tok
 
     auto start_time = std::chrono::steady_clock::now();
     for (;;) {
-        ctl.sync_nodes.clear();
         // Step 1: Decide who needs to sync data for bootstrap operation
-        for (const auto& [node, eps] :_gossiper.get_endpoint_states()) {
-            seastar::thread::maybe_yield();
-            slogger.info("bootstrap[{}]: Check node={}, status={}", uuid, node, _gossiper.get_gossip_status(node));
-            if (node != get_broadcast_address() &&
-                    _gossiper.is_normal_ring_member(node) &&
-                    !ctl.ignore_nodes.contains(node)) {
-                ctl.sync_nodes.insert(node);
-            }
-        }
+        ctl.sync_nodes = get_nodes_to_sync_with(ctl.ignore_nodes).get();
         wait_for_normal_state_handled_on_boot(ctl.sync_nodes, "bootstrap", uuid).get();
         ctl.sync_nodes.insert(get_broadcast_address());
 
@@ -3105,16 +3111,8 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
     auto tmptr = get_token_metadata_ptr();
     ctl.ignore_nodes = get_ignore_dead_nodes_for_replace(*tmptr);
     // Step 1: Decide who needs to sync data for replace operation
-    for (const auto& [node, eps] :_gossiper.get_endpoint_states()) {
-        seastar::thread::maybe_yield();
-        slogger.debug("replace[{}]: Check node={}, status={}", uuid, node, _gossiper.get_gossip_status(node));
-        if (node != get_broadcast_address() &&
-                node != replace_address &&
-                _gossiper.is_normal_ring_member(node) &&
-                !ctl.ignore_nodes.contains(node)) {
-            ctl.sync_nodes.insert(node);
-        }
-    }
+    ctl.sync_nodes = get_nodes_to_sync_with(ctl.ignore_nodes).get();
+    ctl.sync_nodes.erase(replace_address);
     wait_for_normal_state_handled_on_boot(ctl.sync_nodes, "replace", uuid).get();
     ctl.sync_nodes.insert(get_broadcast_address());
 
