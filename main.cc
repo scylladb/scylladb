@@ -1149,6 +1149,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
             qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::ref(group0_client), std::move(wasm_ctx)).get();
+
+            ss.invoke_on_all([&] (service::storage_service& ss) {
+                ss.set_query_processor(qp.local());
+            }).get();
+
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
             sstables::init_metrics().get();
@@ -1226,6 +1231,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // 2. cql_test_env() doesn't do it
             // 3. need to check if it depends on any of the above steps
             sys_ks.local().setup(snitch, messaging).get();
+
+            supervisor::notify("loading tablet metadata");
+            ss.local().load_tablet_metadata().get();
 
             supervisor::notify("starting schema commit log");
 

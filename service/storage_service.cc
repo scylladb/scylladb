@@ -53,6 +53,7 @@
 #include "db/config.hh"
 #include "db/schema_tables.hh"
 #include "replica/database.hh"
+#include "replica/tablets.hh"
 #include <seastar/core/metrics.hh>
 #include "cdc/generation.hh"
 #include "cdc/generation_service.hh"
@@ -4634,6 +4635,24 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
             slogger.warn("Failure to update pending ranges for {} ignored", reason);
         });
     });
+}
+
+void storage_service::on_update_tablet_metadata() {
+    if (this_shard_id() != 0) {
+        // replicate_to_all_cores() takes care of other shards.
+        return;
+    }
+    // FIXME: Avoid reading whole tablet metadata on partial changes.
+    load_tablet_metadata().get();
+}
+
+future<> storage_service::load_tablet_metadata() {
+    if (!_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
+        return make_ready_future<>();
+    }
+    return mutate_token_metadata([this] (mutable_token_metadata_ptr tmptr) -> future<> {
+        tmptr->set_tablets(co_await replica::read_tablet_metadata(*_qp));
+    }, acquire_merge_lock::no);
 }
 
 future<> storage_service::snitch_reconfigured() {

@@ -804,6 +804,10 @@ public:
                 std::ref(snitch)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
+            ss.invoke_on_all([&] (service::storage_service& ss) {
+                ss.set_query_processor(qp.local());
+            }).get();
+
             for (const auto p: all_system_table_load_phases) {
                 replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, raft_gr, *cfg, p).get();
             }
