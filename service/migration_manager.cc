@@ -498,6 +498,14 @@ future<> migration_notifier::update_view(const view_ptr& view, bool columns_chan
     });
 }
 
+future<> migration_notifier::update_tablet_metadata() {
+    return seastar::async([this] {
+        _listeners.thread_for_each([] (migration_listener* listener) {
+            listener->on_update_tablet_metadata();
+        });
+    });
+}
+
 #if 0
 public void notifyUpdateFunction(UDFunction udf)
 {
