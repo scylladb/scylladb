@@ -590,6 +590,12 @@ void migration_notifier::before_drop_column_family(const schema& schema,
     });
 }
 
+void migration_notifier::before_drop_keyspace(const sstring& keyspace_name,
+        std::vector<mutation>& mutations, api::timestamp_type ts) {
+    _listeners.thread_for_each([&mutations, &keyspace_name, ts] (migration_listener* listener) {
+        listener->on_before_drop_keyspace(keyspace_name, mutations, ts);
+    });
+}
 
 #if 0
 public void notifyDropFunction(UDFunction udf)
@@ -745,8 +751,11 @@ future<std::vector<mutation>> migration_manager::prepare_keyspace_drop_announcem
     }
     auto& keyspace = db.find_keyspace(ks_name);
     mlogger.info("Drop Keyspace '{}'", ks_name);
-    auto mutations = db::schema_tables::make_drop_keyspace_mutations(db.features().cluster_schema_features(), keyspace.metadata(), ts);
-    return make_ready_future<std::vector<mutation>>(std::move(mutations));
+    return seastar::async([this, &db, &keyspace, ts, ks_name] {
+        auto mutations = db::schema_tables::make_drop_keyspace_mutations(db.features().cluster_schema_features(), keyspace.metadata(), ts);
+        get_notifier().before_drop_keyspace(ks_name, mutations, ts);
+        return mutations;
+    });
 }
 
 future<std::vector<mutation>> migration_manager::prepare_column_family_drop_announcement(const sstring& ks_name,

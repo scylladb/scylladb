@@ -70,6 +70,7 @@ public:
     virtual void on_before_create_column_family(const schema&, std::vector<mutation>&, api::timestamp_type) {}
     virtual void on_before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>&, api::timestamp_type) {}
     virtual void on_before_drop_column_family(const schema&, std::vector<mutation>&, api::timestamp_type) {}
+    virtual void on_before_drop_keyspace(const sstring& keyspace_name, std::vector<mutation>&, api::timestamp_type) {}
 
     class only_view_notifications;
     class empty_listener;
@@ -130,6 +131,7 @@ public:
     void before_create_column_family(const schema&, std::vector<mutation>&, api::timestamp_type);
     void before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>&, api::timestamp_type);
     void before_drop_column_family(const schema&, std::vector<mutation>&, api::timestamp_type);
+    void before_drop_keyspace(const sstring& keyspace_name, std::vector<mutation>&, api::timestamp_type);
 };
 
 }
