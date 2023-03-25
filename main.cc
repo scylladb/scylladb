@@ -25,6 +25,7 @@
 #include "db/legacy_schema_migrator.hh"
 #include "service/storage_service.hh"
 #include "service/migration_manager.hh"
+#include "service/tablet_allocator.hh"
 #include "service/load_meter.hh"
 #include "service/view_update_backlog_broker.hh"
 #include "service/qos/service_level_controller.hh"
@@ -1110,6 +1111,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             forward_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(token_metadata)).get();
             auto stop_forward_service_handlers = defer_verbose_shutdown("forward service", [&forward_service] {
                 forward_service.stop().get();
+            });
+
+            distributed<service::tablet_allocator> tablet_allocator;
+            if (cfg->check_experimental(db::experimental_features_t::feature::TABLETS)) {
+                tablet_allocator.start(std::ref(mm_notifier), std::ref(db)).get();
+            }
+            auto stop_tablet_allocator = defer_verbose_shutdown("tablet allocator", [&tablet_allocator] {
+                tablet_allocator.stop().get();
             });
 
             // #293 - do not stop anything

@@ -29,6 +29,7 @@
 #include <seastar/core/coroutine.hh>
 #include "utils/UUID_gen.hh"
 #include "service/migration_manager.hh"
+#include "service/tablet_allocator.hh"
 #include "compaction/compaction_manager.hh"
 #include "message/messaging_service.hh"
 #include "service/raft/raft_address_map.hh"
@@ -757,6 +758,12 @@ public:
 
             mm.start(std::ref(mm_notif), std::ref(feature_service), std::ref(ms), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
+
+            distributed<service::tablet_allocator> the_tablet_allocator;
+            the_tablet_allocator.start(std::ref(mm_notif), std::ref(db)).get();
+            auto stop_tablet_allocator = defer([&] {
+                the_tablet_allocator.stop().get();
+            });
 
             cql3::query_processor::memory_config qp_mcfg;
             if (cfg_in.qp_mcfg) {
