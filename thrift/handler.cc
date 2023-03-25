@@ -947,7 +947,7 @@ public:
                     throw NotFoundException();
                 }
 
-                co_return mm.prepare_keyspace_drop_announcement(keyspace, ts);
+                co_return co_await mm.prepare_keyspace_drop_announcement(keyspace, ts);
             });
         });
     }

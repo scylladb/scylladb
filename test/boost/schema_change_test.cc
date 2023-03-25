@@ -477,7 +477,7 @@ SEASTAR_TEST_CASE(test_merging_creates_a_table_even_if_keyspace_was_recreated) {
             {
                 auto group0_guard = mm.start_group0_operation().get();
                 const auto ts = group0_guard.write_timestamp();
-                auto muts = e.migration_manager().local().prepare_keyspace_drop_announcement("ks", ts);
+                auto muts = e.migration_manager().local().prepare_keyspace_drop_announcement("ks", ts).get0();
                 boost::copy(muts, std::back_inserter(all_muts));
                 mm.announce(muts, std::move(group0_guard)).get();
             }
