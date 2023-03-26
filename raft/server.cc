@@ -25,6 +25,7 @@
 
 #include "fsm.hh"
 #include "log.hh"
+#include "raft.hh"
 
 using namespace std::chrono_literals;
 
