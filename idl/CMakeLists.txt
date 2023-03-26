@@ -53,6 +53,7 @@ set(idl_headers
   group0.idl.hh
   hinted_handoff.idl.hh
   storage_proxy.idl.hh
+  storage_service.idl.hh
   group0_state_machine.idl.hh
   forward_request.idl.hh
   replica_exception.idl.hh

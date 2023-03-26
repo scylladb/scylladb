@@ -24,7 +24,8 @@ target_sources(service
     raft/raft_rpc.cc
     raft/raft_sys_table_storage.cc
     storage_proxy.cc
-    storage_service.cc)
+    storage_service.cc
+    topology_state_machine.cc)
 target_include_directories(service
   PUBLIC
     ${CMAKE_SOURCE_DIR})
