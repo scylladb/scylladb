@@ -249,6 +249,8 @@ public:
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr) override;
 
+    virtual const dht::partition_range* get_read_range() const override;
+
     virtual void update_read_range(lw_shared_ptr<const dht::partition_range> range) override;
 
     virtual future<> destroy_reader(stopped_reader reader) noexcept override;
@@ -348,6 +350,14 @@ flat_mutation_reader_v2 read_context::create_reader(
 
     return table.as_mutation_source().make_reader_v2(std::move(schema), rm.rparts->permit, *rm.rparts->range, *rm.rparts->slice, pc,
             std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
+}
+
+const dht::partition_range* read_context::get_read_range() const {
+    auto& rm = _readers[this_shard_id()];
+    if (rm.rparts) {
+        return rm.rparts->range.get();
+    }
+    return nullptr;
 }
 
 void read_context::update_read_range(lw_shared_ptr<const dht::partition_range> range) {

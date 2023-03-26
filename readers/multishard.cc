@@ -246,6 +246,7 @@ public:
     evictable_reader_v2(
             auto_pause ap,
             mutation_source ms,
+            flat_mutation_reader_v2_opt reader,
             schema_ptr schema,
             reader_permit permit,
             const dht::partition_range& pr,
@@ -541,6 +542,7 @@ void evictable_reader_v2::examine_first_fragments(mutation_fragment_v2_opt& mf1,
 evictable_reader_v2::evictable_reader_v2(
         auto_pause ap,
         mutation_source ms,
+        flat_mutation_reader_v2_opt reader,
         schema_ptr schema,
         reader_permit permit,
         const dht::partition_range& pr,
@@ -556,7 +558,8 @@ evictable_reader_v2::evictable_reader_v2(
     , _pc(pc)
     , _trace_state(std::move(trace_state))
     , _fwd_mr(fwd_mr)
-    , _tri_cmp(*_schema) {
+    , _tri_cmp(*_schema)
+    , _reader(std::move(reader)) {
 }
 
 future<> evictable_reader_v2::fill_buffer() {
@@ -669,7 +672,7 @@ flat_mutation_reader_v2 make_auto_paused_evictable_reader_v2(
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr) {
-    return make_flat_mutation_reader_v2<evictable_reader_v2>(evictable_reader_v2::auto_pause::yes, std::move(ms), std::move(schema), std::move(permit), pr, ps,
+    return make_flat_mutation_reader_v2<evictable_reader_v2>(evictable_reader_v2::auto_pause::yes, std::move(ms), std::nullopt, std::move(schema), std::move(permit), pr, ps,
             pc, std::move(trace_state), fwd_mr);
 }
 
@@ -682,7 +685,7 @@ std::pair<flat_mutation_reader_v2, evictable_reader_handle_v2> make_manually_pau
         const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr) {
-    auto reader = std::make_unique<evictable_reader_v2>(evictable_reader_v2::auto_pause::no, std::move(ms), std::move(schema), std::move(permit), pr, ps,
+    auto reader = std::make_unique<evictable_reader_v2>(evictable_reader_v2::auto_pause::no, std::move(ms), std::nullopt, std::move(schema), std::move(permit), pr, ps,
             pc, std::move(trace_state), fwd_mr);
     auto handle = evictable_reader_handle_v2(*reader.get());
     return std::pair(flat_mutation_reader_v2(std::move(reader)), handle);
@@ -820,10 +823,34 @@ future<> shard_reader_v2::do_fill_buffer() {
                 });
                 auto s = gs.get();
                 auto permit = co_await _lifecycle_policy->obtain_reader_permit(s, "shard-reader", timeout(), _trace_state);
-                auto rreader = make_foreign(std::make_unique<evictable_reader_v2>(evictable_reader_v2::auto_pause::yes, std::move(ms),
-                            s, std::move(permit), *_pr, _ps, _pc, _trace_state, _fwd_mr));
+                if (permit.needs_readmission()) {
+                    co_await permit.wait_readmission();
+                }
+                auto underlying_reader = _lifecycle_policy->create_reader(s, permit, *_pr, _ps, _pc, _trace_state, _fwd_mr);
 
                 std::exception_ptr ex;
+
+                try {
+                    // The reader might have been saved from a previous page and
+                    // missed some fast-forwarding since the new page started.
+                    // Fast forward it to the correct range if that is the case.
+                    if (auto pr = _lifecycle_policy->get_read_range(); pr && _pr->start() && pr->after(_pr->start()->value(), dht::ring_position_comparator(*_schema))) {
+                        auto new_pr = _pr.get_owner_shard() == this_shard_id() ? _pr.release() : make_lw_shared<const dht::partition_range>(*_pr);
+                        co_await underlying_reader.fast_forward_to(*new_pr);
+                        _lifecycle_policy->update_read_range(new_pr);
+                        _pr = make_foreign(std::move(new_pr));
+                    }
+                } catch (...) {
+                    ex = std::current_exception();
+                }
+                if (ex) {
+                    co_await underlying_reader.close();
+                    std::rethrow_exception(std::move(ex));
+                }
+
+                auto rreader = make_foreign(std::make_unique<evictable_reader_v2>(evictable_reader_v2::auto_pause::yes, std::move(ms),
+                            std::move(underlying_reader), s, std::move(permit), *_pr, _ps, _pc, _trace_state, _fwd_mr));
+
                 try {
                     tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
                     reader_permit::used_guard ug{rreader->permit()};

@@ -57,6 +57,12 @@ public:
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr) = 0;
 
+    /// Retrieves the read-range for the shard reader.
+    ///
+    /// That lives on the current shard. Returns nullptr if there is no
+    /// reader on the current shard.
+    virtual const dht::partition_range* get_read_range() const = 0;
+
     /// Updates the read-range of the shard reader.
     ///
     /// Gives the lifecycle-policy a chance to update its stored read-range (if

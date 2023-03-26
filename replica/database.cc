@@ -2753,6 +2753,10 @@ flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::da
 
             return cf.make_streaming_reader(std::move(schema), std::move(permit), *_contexts[shard].range, slice, fwd_mr);
         }
+        virtual const dht::partition_range* get_read_range() const override {
+            const auto shard = this_shard_id();
+            return _contexts[shard].range.get();
+        }
         virtual void update_read_range(lw_shared_ptr<const dht::partition_range> range) override {
             const auto shard = this_shard_id();
             _contexts[shard].range = make_foreign(std::move(range));

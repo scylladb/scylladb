@@ -62,6 +62,11 @@ public:
         }
         return _factory_function(std::move(schema), std::move(permit), *_contexts[shard]->range, *_contexts[shard]->slice, pc, std::move(trace_state), fwd_mr);
     }
+    virtual const dht::partition_range* get_read_range() const override {
+        const auto shard = this_shard_id();
+        assert(_contexts[shard]);
+        return _contexts[shard]->range.get();
+    }
     void update_read_range(lw_shared_ptr<const dht::partition_range> range) override {
         const auto shard = this_shard_id();
         assert(_contexts[shard]);
