@@ -45,8 +45,8 @@ namespace bloom_calculations {
     int constexpr min_k = 1;
     int constexpr EXCESS = 20;
 
-    extern std::vector<std::vector<double>> probs;
-    extern std::vector<int> opt_k_per_buckets;
+    extern const std::vector<std::vector<double>> probs;
+    extern const std::vector<int> opt_k_per_buckets;
 
     /**
      * Given the number of buckets that can be used per element, return a
@@ -130,9 +130,7 @@ namespace bloom_calculations {
      * lower than this, it will throw an unsupported_operation_exception.
      */
     inline double min_supported_bloom_filter_fp_chance() {
-        int max_buckets = probs.size() - 1;
-        int max_K = probs[max_buckets].size() - 1;
-        return probs[max_buckets][max_K];
+        return probs.back().back();
     }
 
 }

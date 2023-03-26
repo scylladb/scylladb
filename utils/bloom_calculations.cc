@@ -21,7 +21,7 @@ namespace bloom_calculations {
  * Each cell (i,j) the false positive rate determined by using i buckets per
  * element and j hash functions.
  */
-std::vector<std::vector<double>> probs = {
+const std::vector<std::vector<double>> probs = {
         {1.0}, // dummy row representing 0 buckets per element
         {1.0, 1.0}, // dummy row representing 1 buckets per element
         {1.0, 0.393,  0.400},
@@ -50,7 +50,7 @@ std::vector<std::vector<double>> probs = {
  * The optimal number of hashes for a given number of bits per element.
  * These values are automatically calculated from the data above.
  */
-std::vector<int> initialize_opt_k() {
+static std::vector<int> initialize_opt_k() {
 
     std::vector<int> arr;
     arr.resize(probs.size());
@@ -68,6 +68,6 @@ std::vector<int> initialize_opt_k() {
     return arr;
 }
 
-std::vector<int> opt_k_per_buckets = initialize_opt_k();
+const std::vector<int> opt_k_per_buckets = initialize_opt_k();
 }
 }
