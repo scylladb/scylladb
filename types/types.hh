@@ -12,7 +12,6 @@
 #include <boost/functional/hash.hpp>
 #include <iosfwd>
 #include <sstream>
-#include <iterator>
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
