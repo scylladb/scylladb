@@ -34,6 +34,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/util/lazy.hh>
+#include <seastar/util/short_streams.hh>
 #include <seastar/core/execution_stage.hh>
 #include "utils/result_try.hh"
 #include "utils/result_combinators.hh"
@@ -613,9 +614,9 @@ future<> cql_server::connection::process_request() {
             write_response(make_error(stream, exceptions::exception_code::INVALID,
                     format("request size too large (frame size {:d}; estimate {:d}; allowed {:d}", f.length, mem_estimate, _server._max_request_size),
                     tracing::trace_state_ptr()));
-            return std::exchange(_ready_to_respond, make_ready_future<>()).then([this] {
-                return _read_buf.close();
-            });
+            return std::exchange(_ready_to_respond, make_ready_future<>())
+                .then([this] { return _read_buf.close(); })
+                .then([this] { return util::skip_entire_stream(_read_buf); });
         }
 
         if (_server._stats.requests_serving > _server._max_concurrent_requests) {
@@ -671,12 +672,21 @@ future<> cql_server::connection::process_request() {
             });
             auto istream = buf.get_istream();
             (void)_process_request_stage(this, istream, op, stream, seastar::ref(_client_state), tracing_requested, mem_permit)
-                    .then_wrapped([this, buf = std::move(buf), mem_permit, leave = std::move(leave)] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> response_f) mutable {
+                    .then_wrapped([this, stream, buf = std::move(buf), mem_permit, leave = std::move(leave)] (future<foreign_ptr<std::unique_ptr<cql_server::response>>> response_f) mutable {
                 try {
-                    write_response(response_f.get0(), std::move(mem_permit), _compression);
+                    if (response_f.failed()) {
+                        const auto message = format("request processing failed, error [{}]", response_f.get_exception());
+                        clogger.error("{}: {}", _client_state.get_remote_address(), message);
+                        write_response(make_error(stream, exceptions::exception_code::SERVER_ERROR,
+                            message,
+                            tracing::trace_state_ptr()));
+                    } else {
+                        write_response(response_f.get0(), std::move(mem_permit), _compression);
+                    }
                     _ready_to_respond = _ready_to_respond.finally([leave = std::move(leave)] {});
                 } catch (...) {
-                    clogger.error("request processing failed: {}", std::current_exception());
+                    clogger.error("{}: request processing failed: {}",
+                        _client_state.get_remote_address(), std::current_exception());
                 }
             });
 
