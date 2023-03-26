@@ -687,21 +687,18 @@ future<add_entry_reply> server_impl::execute_modify_config(server_id from,
         // `modify_config` doesn't actually need the entry id for anything
         // but we reuse the `add_entry` RPC verb which requires it.
         co_return add_entry_reply{entry_id{}};
+    } catch (not_a_leader& e) {
+        co_return add_entry_reply{transient_error{std::current_exception(), e.leader}};
+    } catch (dropped_entry&) {
+        co_return add_entry_reply{transient_error{std::current_exception(), {}}};
+    } catch (conf_change_in_progress&) {
+        co_return add_entry_reply{transient_error{std::current_exception(), {}}};
     } catch (raft::error& e) {
         if (is_uncertainty(e)) {
             // Although modify_config() is safe to retry, preserve
             // information that the entry may already have been
             // committed in the return value.
             co_return add_entry_reply{commit_status_unknown()};
-        }
-        if (const auto* ex = dynamic_cast<const not_a_leader*>(&e)) {
-            co_return add_entry_reply{transient_error{std::current_exception(), ex->leader}};
-        }
-        if (dynamic_cast<const dropped_entry*>(&e)) {
-            co_return add_entry_reply{transient_error{std::current_exception(), {}}};
-        }
-        if (dynamic_cast<const conf_change_in_progress*>(&e)) {
-            co_return add_entry_reply{transient_error{std::current_exception(), {}}};
         }
         throw;
     }
