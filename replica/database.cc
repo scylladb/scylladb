@@ -15,6 +15,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/config.hh"
+#include "db/extensions.hh"
 #include "utils/to_string.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_function.hh"
@@ -2165,8 +2166,9 @@ schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& i
 
 future<> database::close_tables(table_kind kind_to_close) {
     auto b = defer([this] { _stop_barrier.abort(); });
-    co_await coroutine::parallel_for_each(_column_families, [kind_to_close](auto& val_pair) -> future<> {
-        table_kind k = is_system_table(*val_pair.second->schema()) ? table_kind::system : table_kind::user;
+    co_await coroutine::parallel_for_each(_column_families, [this, kind_to_close](auto& val_pair) -> future<> {
+        auto& s = val_pair.second->schema();
+        table_kind k = is_system_table(*s) || _cfg.extensions().is_extension_internal_keyspace(s->ks_name()) ? table_kind::system : table_kind::user;
         if (k == kind_to_close) {
             co_await val_pair.second->stop();
         }
@@ -2646,9 +2648,10 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
 }
 
 future<> database::flush_non_system_column_families() {
-    auto non_system_cfs = get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
+    auto non_system_cfs = get_column_families() | boost::adaptors::filtered([this] (auto& uuid_and_cf) {
         auto cf = uuid_and_cf.second;
-        return !is_system_keyspace(cf->schema()->ks_name());
+        auto& ks = cf->schema()->ks_name();
+        return !is_system_keyspace(ks) && !_cfg.extensions().is_extension_internal_keyspace(ks);
     });
     // count CFs first
     auto total_cfs = boost::distance(non_system_cfs);
@@ -2667,9 +2670,10 @@ future<> database::flush_non_system_column_families() {
 }
 
 future<> database::flush_system_column_families() {
-    auto system_cfs = get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
+    auto system_cfs = get_column_families() | boost::adaptors::filtered([this] (auto& uuid_and_cf) {
         auto cf = uuid_and_cf.second;
-        return is_system_keyspace(cf->schema()->ks_name());
+        auto& ks = cf->schema()->ks_name();
+        return is_system_keyspace(ks) || _cfg.extensions().is_extension_internal_keyspace(ks);
     });
     dblog.info("Flushing system tables");
     return parallel_for_each(system_cfs, [] (auto&& uuid_and_cf) {
