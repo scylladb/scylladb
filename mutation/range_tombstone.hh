@@ -102,7 +102,6 @@ public:
         rt2 = std::move(rt1);
         rt1 = std::move(tmp);
     }
-    friend std::ostream& operator<<(std::ostream& out, const range_tombstone& rt);
 
     static bool is_single_clustering_row_tombstone(const schema& s, const clustering_key_prefix& start,
         bound_kind start_kind, const clustering_key_prefix& end, bound_kind end_kind)
@@ -285,4 +284,17 @@ public:
     void apply(range_tombstone rt);
 
     void clear();
+};
+
+template<>
+struct fmt::formatter<range_tombstone> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const range_tombstone& rt, FormatContext& ctx) const {
+        if (rt) {
+            return fmt::format_to(ctx.out(), "{{range_tombstone: start={}, end={}, {}}}",
+                                  rt.position(), rt.end_position(), rt.tomb);
+        } else {
+            return fmt::format_to(ctx.out(), "{{range_tombstone: none}}");
+        }
+    }
 };

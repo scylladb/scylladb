@@ -519,11 +519,11 @@ BOOST_AUTO_TEST_CASE(test_random_list_is_not_overlapped) {
         if (!assert_valid(l)) {
             std::cout << "For input:" << std::endl;
             for (auto&& rt : input) {
-                std::cout << rt << std::endl;
+                fmt::print(std::cout, "{}\n", rt);
             }
             std::cout << "Produced:" << std::endl;
             for (auto&& rt : l) {
-                std::cout << rt << std::endl;
+                fmt::print(std::cout, "{}\n", rt);
             }
             BOOST_REQUIRE(false);
         }

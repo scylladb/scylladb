@@ -430,7 +430,8 @@ std::ostream& operator<<(std::ostream& out, const range_tombstone_list& list) {
 }
 
 std::ostream& operator<<(std::ostream& out, const range_tombstone_entry& rt) {
-    return out << rt._tombstone;
+    fmt::print(out, "{}", rt._tombstone);
+    return out;
 }
 
 bool range_tombstone_list::equal(const schema& s, const range_tombstone_list& other) const {

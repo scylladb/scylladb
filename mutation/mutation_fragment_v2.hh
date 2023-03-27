@@ -12,6 +12,7 @@
 #include "mutation_fragment.hh"
 #include "position_in_partition.hh"
 
+#include <fmt/core.h>
 #include <optional>
 #include <seastar/util/optimized_optional.hh>
 
@@ -74,7 +75,14 @@ public:
         position_in_partition::equal_compare eq(s);
         return _tomb == other._tomb && eq(_pos, other._pos);
     }
-    friend std::ostream& operator<<(std::ostream& out, const range_tombstone_change&);
+};
+
+template<>
+struct fmt::formatter<range_tombstone_change> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const range_tombstone_change& rt, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{{range_tombstone_change: pos={}, {}}}", rt.position(), rt.tombstone());
+    }
 };
 
 template<typename T, typename ReturnType>
