@@ -58,8 +58,7 @@ future<> thrift_controller::do_start_server() {
         return make_ready_future<>();
     }
     return seastar::async([this] {
-        _server = std::make_unique<distributed<thrift_server>>();
-        auto tserver = &*_server;
+        auto tserver = std::make_unique<distributed<thrift_server>>();
         _addr.reset();
 
         auto& cfg = _db.local().get_config();
@@ -81,6 +80,7 @@ future<> thrift_controller::do_start_server() {
         //});
         tserver->invoke_on_all(&thrift_server::listen, socket_address{ip, port}, keepalive).get();
         clogger.info("Thrift server listening on {}:{} ...", ip, port);
+        _server = std::move(tserver);
     });
 }
 
