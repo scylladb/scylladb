@@ -17,6 +17,8 @@ from cassandra.cluster import Session, ResponseFuture                    # type:
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore # pylint: disable=no-name-in-module
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
+from cassandra.policies import TokenAwarePolicy                          # type: ignore
+from cassandra.policies import WhiteListRoundRobinPolicy                 # type: ignore
 from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
 from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
 
@@ -122,6 +124,11 @@ def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool):
         # See issue #11289.
         # NOTE: request_timeout is the main cause of timeouts, even if logs say heartbeat
         request_timeout=200)
+    whitelist_profile = ExecutionProfile(
+        load_balancing_policy=TokenAwarePolicy(WhiteListRoundRobinPolicy(hosts)),
+        consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+        serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
+        request_timeout=200)
     if use_ssl:
         # Scylla does not support any earlier TLS protocol. If you try,
         # you will get mysterious EOF errors (see issue #6971) :-(
@@ -129,7 +136,7 @@ def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool):
     else:
         ssl_context = None
 
-    return Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
+    return Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile, 'whitelist': whitelist_profile},
                    contact_points=hosts,
                    port=port,
                    # TODO: make the protocol version an option, to allow testing with
