@@ -110,7 +110,7 @@ private:
 
     // Returns which compaction type should be performed on a given window bucket.
     bucket_compaction_mode
-    compaction_mode(const bucket_t& bucket, timestamp_type bucket_key, timestamp_type now, size_t min_threshold) const;
+    compaction_mode(const time_window_compaction_strategy_state&, const bucket_t& bucket, timestamp_type bucket_key, timestamp_type now, size_t min_threshold) const;
 
     std::vector<shared_sstable>
     get_next_non_expired_sstables(table_state& table_s, strategy_control& control, std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point compaction_time);
@@ -144,7 +144,8 @@ public:
         return timestamp_type(std::chrono::duration_cast<std::chrono::microseconds>(options.get_sstable_window_size()).count());
     }
 private:
-    void update_estimated_compaction_by_tasks(std::map<timestamp_type, std::vector<shared_sstable>>& tasks,
+    void update_estimated_compaction_by_tasks(time_window_compaction_strategy_state& state,
+        std::map<timestamp_type, std::vector<shared_sstable>>& tasks,
         int min_threshold, int max_threshold);
 
     friend class time_window_backlog_tracker;

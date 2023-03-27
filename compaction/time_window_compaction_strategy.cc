@@ -249,13 +249,14 @@ time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_
 }
 
 time_window_compaction_strategy::bucket_compaction_mode
-time_window_compaction_strategy::compaction_mode(const bucket_t& bucket, timestamp_type bucket_key,
+time_window_compaction_strategy::compaction_mode(const time_window_compaction_strategy_state& state,
+        const bucket_t& bucket, timestamp_type bucket_key,
         timestamp_type now, size_t min_threshold) const {
     // STCS will also be performed on older window buckets, to avoid a bad write and
     // space amplification when something like read repair cause small updates to
     // those past windows.
 
-    if (bucket.size() >= 2 && !is_last_active_bucket(bucket_key, now) && _state.recent_active_windows.contains(bucket_key)) {
+    if (bucket.size() >= 2 && !is_last_active_bucket(bucket_key, now) && state.recent_active_windows.contains(bucket_key)) {
         return bucket_compaction_mode::major;
     } else if (bucket.size() >= size_t(min_threshold)) {
         return bucket_compaction_mode::size_tiered;
@@ -293,7 +294,7 @@ time_window_compaction_strategy::get_compaction_candidates(table_state& table_s,
     // Update the highest window seen, if necessary
     _state.highest_window_seen = std::max(_state.highest_window_seen, p.second);
 
-    update_estimated_compaction_by_tasks(p.first, table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold());
+    update_estimated_compaction_by_tasks(_state, p.first, table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold());
 
     return newest_bucket(table_s, control, std::move(p.first), table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold(),
         _state.highest_window_seen);
@@ -350,7 +351,7 @@ time_window_compaction_strategy::newest_bucket(table_state& table_s, strategy_co
         if (last_active_bucket) {
             _state.recent_active_windows.insert(key);
         }
-        switch (compaction_mode(bucket, key, now, min_threshold)) {
+        switch (compaction_mode(_state, bucket, key, now, min_threshold)) {
         case bucket_compaction_mode::size_tiered: {
             // If we're in the newest bucket, we'll use STCS to prioritize sstables.
             auto stcs_interesting_bucket = size_tiered_compaction_strategy::most_interesting_bucket(bucket, min_threshold, max_threshold, _stcs_options);
@@ -394,16 +395,17 @@ time_window_compaction_strategy::trim_to_threshold(std::vector<shared_sstable> b
     return bucket;
 }
 
-void time_window_compaction_strategy::update_estimated_compaction_by_tasks(std::map<timestamp_type, std::vector<shared_sstable>>& tasks,
+void time_window_compaction_strategy::update_estimated_compaction_by_tasks(time_window_compaction_strategy_state& state,
+                                                                           std::map<timestamp_type, std::vector<shared_sstable>>& tasks,
                                                                            int min_threshold, int max_threshold) {
     int64_t n = 0;
-    timestamp_type now = _state.highest_window_seen;
+    timestamp_type now = state.highest_window_seen;
 
     for (auto& task : tasks) {
         const bucket_t& bucket = task.second;
         timestamp_type bucket_key = task.first;
 
-        switch (compaction_mode(bucket, bucket_key, now, min_threshold)) {
+        switch (compaction_mode(state, bucket, bucket_key, now, min_threshold)) {
         case bucket_compaction_mode::size_tiered:
             n += size_tiered_compaction_strategy::estimated_pending_compactions(bucket, min_threshold, max_threshold, _stcs_options);
             break;
@@ -413,7 +415,7 @@ void time_window_compaction_strategy::update_estimated_compaction_by_tasks(std::
             break;
         }
     }
-    _state.estimated_remaining_tasks = n;
+    state.estimated_remaining_tasks = n;
 }
 
 std::vector<compaction_descriptor>
