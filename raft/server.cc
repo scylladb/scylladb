@@ -12,7 +12,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/copy.hpp>
-#include "boost/range/join.hpp"
+#include <boost/range/join.hpp>
 #include <map>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/future-util.hh>
@@ -25,6 +25,7 @@
 
 #include "fsm.hh"
 #include "log.hh"
+#include "raft.hh"
 
 using namespace std::chrono_literals;
 
