@@ -1291,6 +1291,10 @@ unsigned table::estimate_pending_compactions() const {
     }), unsigned(0));
 }
 
+void compaction_group::set_compaction_strategy_state(compaction::compaction_strategy_state compaction_strategy_state) noexcept {
+    _compaction_strategy_state = std::move(compaction_strategy_state);
+}
+
 void table::set_compaction_strategy(sstables::compaction_strategy_type strategy) {
     tlogger.debug("Setting compaction strategy of {}.{} to {}", _schema->ks_name(), _schema->cf_name(), sstables::compaction_strategy::name(strategy));
     auto new_cs = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
@@ -1299,10 +1303,15 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
         table& t;
         compaction_group& cg;
         compaction_backlog_tracker new_bt;
+        compaction::compaction_strategy_state new_cs_state;
         lw_shared_ptr<sstables::sstable_set> new_sstables;
 
         compaction_group_sstable_set_updater(table& t, compaction_group& cg, sstables::compaction_strategy& new_cs)
-            : t(t), cg(cg), new_bt(new_cs.make_backlog_tracker()) {}
+            : t(t)
+            , cg(cg)
+            , new_bt(new_cs.make_backlog_tracker())
+            , new_cs_state(compaction::compaction_strategy_state::make(new_cs)) {
+        }
 
         void prepare(sstables::compaction_strategy& new_cs) {
             auto move_read_charges = new_cs.type() == t._compaction_strategy.type();
@@ -1321,6 +1330,7 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
         void execute() noexcept {
             t._compaction_manager.register_backlog_tracker(cg.as_table_state(), std::move(new_bt));
             cg.set_main_sstables(std::move(new_sstables));
+            cg.set_compaction_strategy_state(std::move(new_cs_state));
         }
     };
     std::vector<compaction_group_sstable_set_updater> cg_sstable_set_updaters;
@@ -1443,6 +1453,7 @@ compaction_group::compaction_group(table& t, dht::token_range token_range)
     : _t(t)
     , _table_state(std::make_unique<table_state>(t, *this))
     , _token_range(std::move(token_range))
+    , _compaction_strategy_state(compaction::compaction_strategy_state::make(_t._compaction_strategy))
     , _memtables(_t._config.enable_disk_writes ? _t.make_memtable_list(*this) : _t.make_memory_only_memtable_list())
     , _main_sstables(make_lw_shared<sstables::sstable_set>(t._compaction_strategy.make_sstable_set(t.schema())))
     , _maintenance_sstables(t.make_maintenance_sstable_set())
