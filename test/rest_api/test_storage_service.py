@@ -26,7 +26,8 @@ def test_storage_service_keyspaces(cql, this_dc, rest_api):
         resp_user.raise_for_status()
         keyspaces_user = resp_user.json()
         assert keyspace in keyspaces_user
-        assert all(not ks.startswith("system") for ks in keyspaces_user)
+        # don't assume all that starts with system is non-user, but "system" certainly is not.
+        assert not "system" in keyspaces_user
 
         resp_nls = rest_api.send("GET", "storage_service/keyspaces", { "type": "non_local_strategy" })
         resp_nls.raise_for_status()
