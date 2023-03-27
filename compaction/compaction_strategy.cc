@@ -16,6 +16,7 @@
 #include "compaction.hh"
 #include "compaction_strategy.hh"
 #include "compaction_strategy_impl.hh"
+#include "compaction_strategy_state.hh"
 #include "schema/schema.hh"
 #include "sstables/sstable_set.hh"
 #include <boost/range/algorithm/find.hpp>
@@ -785,6 +786,25 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
     }
 
     return compaction_strategy(std::move(impl));
+}
+
+}
+
+namespace compaction {
+
+compaction_strategy_state compaction_strategy_state::make(const compaction_strategy& cs) {
+    switch (cs.type()) {
+        case compaction_strategy_type::null:
+        case compaction_strategy_type::size_tiered:
+        case compaction_strategy_type::date_tiered:
+            return compaction_strategy_state(default_empty_state{});
+        case compaction_strategy_type::leveled:
+            return compaction_strategy_state(leveled_compaction_strategy_state{});
+        case compaction_strategy_type::time_window:
+            return compaction_strategy_state(time_window_compaction_strategy_state{});
+        default:
+            throw std::runtime_error("strategy not supported");
+    }
 }
 
 }
