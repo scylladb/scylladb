@@ -53,7 +53,7 @@ public:
 
     virtual compaction_descriptor get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates) override;
 
-    virtual void notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) override;
+    virtual void notify_completion(table_state& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) override;
 
     // for each level > 0, get newest sstable and use its last key as last
     // compacted key for the previous level.

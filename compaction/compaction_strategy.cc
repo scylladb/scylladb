@@ -724,8 +724,8 @@ std::vector<compaction_descriptor> compaction_strategy::get_cleanup_compaction_j
     return _compaction_strategy_impl->get_cleanup_compaction_jobs(table_s, std::move(candidates));
 }
 
-void compaction_strategy::notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
-    _compaction_strategy_impl->notify_completion(removed, added);
+void compaction_strategy::notify_completion(table_state& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
+    _compaction_strategy_impl->notify_completion(table_s, removed, added);
 }
 
 bool compaction_strategy::parallel_compaction() const {

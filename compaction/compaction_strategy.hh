@@ -52,7 +52,7 @@ public:
 
     // Some strategies may look at the compacted and resulting sstables to
     // get some useful information for subsequent compactions.
-    void notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);
+    void notify_completion(table_state& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);
 
     // Return if parallel compaction is allowed by strategy.
     bool parallel_compaction() const;
