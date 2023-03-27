@@ -221,12 +221,12 @@ time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_
     auto compaction_time = gc_clock::now();
 
     if (candidates.empty()) {
-        _estimated_remaining_tasks = 0;
+        _state.estimated_remaining_tasks = 0;
         return compaction_descriptor();
     }
 
     auto now = db_clock::now();
-    if (now - _last_expired_check > _options.expired_sstable_check_frequency) {
+    if (now - _state.last_expired_check > _options.expired_sstable_check_frequency) {
         clogger.debug("[{}] TWCS expired check sufficiently far in the past, checking for fully expired SSTables", fmt::ptr(this));
 
         // Find fully expired SSTables. Those will be included no matter what.
@@ -238,7 +238,7 @@ time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_
         // Keep checking for fully_expired_sstables until we don't find
         // any among the candidates, meaning they are either already compacted
         // or registered for compaction.
-        _last_expired_check = now;
+        _state.last_expired_check = now;
     } else {
         clogger.debug("[{}] TWCS skipping check for fully expired SSTables", fmt::ptr(this));
     }
@@ -255,7 +255,7 @@ time_window_compaction_strategy::compaction_mode(const bucket_t& bucket, timesta
     // space amplification when something like read repair cause small updates to
     // those past windows.
 
-    if (bucket.size() >= 2 && !is_last_active_bucket(bucket_key, now) && _recent_active_windows.contains(bucket_key)) {
+    if (bucket.size() >= 2 && !is_last_active_bucket(bucket_key, now) && _state.recent_active_windows.contains(bucket_key)) {
         return bucket_compaction_mode::major;
     } else if (bucket.size() >= size_t(min_threshold)) {
         return bucket_compaction_mode::size_tiered;
@@ -291,12 +291,12 @@ std::vector<shared_sstable>
 time_window_compaction_strategy::get_compaction_candidates(table_state& table_s, strategy_control& control, std::vector<shared_sstable> candidate_sstables) {
     auto p = get_buckets(std::move(candidate_sstables), _options);
     // Update the highest window seen, if necessary
-    _highest_window_seen = std::max(_highest_window_seen, p.second);
+    _state.highest_window_seen = std::max(_state.highest_window_seen, p.second);
 
     update_estimated_compaction_by_tasks(p.first, table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold());
 
     return newest_bucket(table_s, control, std::move(p.first), table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold(),
-        _highest_window_seen);
+        _state.highest_window_seen);
 }
 
 timestamp_type
@@ -348,7 +348,7 @@ time_window_compaction_strategy::newest_bucket(table_state& table_s, strategy_co
 
         bool last_active_bucket = is_last_active_bucket(key, now);
         if (last_active_bucket) {
-            _recent_active_windows.insert(key);
+            _state.recent_active_windows.insert(key);
         }
         switch (compaction_mode(bucket, key, now, min_threshold)) {
         case bucket_compaction_mode::size_tiered: {
@@ -374,7 +374,7 @@ time_window_compaction_strategy::newest_bucket(table_state& table_s, strategy_co
             // after that, they will fall into default mode where we'll stop considering them as a recent window
             // which needs major. That's to avoid terrible writeamp as streaming may push data into older windows.
             if (!last_active_bucket) {
-                _recent_active_windows.erase(key);
+                _state.recent_active_windows.erase(key);
             }
             clogger.debug("No compaction necessary for bucket size {} , key {}, now {}", bucket.size(), key, now);
             break;
@@ -397,7 +397,7 @@ time_window_compaction_strategy::trim_to_threshold(std::vector<shared_sstable> b
 void time_window_compaction_strategy::update_estimated_compaction_by_tasks(std::map<timestamp_type, std::vector<shared_sstable>>& tasks,
                                                                            int min_threshold, int max_threshold) {
     int64_t n = 0;
-    timestamp_type now = _highest_window_seen;
+    timestamp_type now = _state.highest_window_seen;
 
     for (auto& task : tasks) {
         const bucket_t& bucket = task.second;
@@ -413,7 +413,7 @@ void time_window_compaction_strategy::update_estimated_compaction_by_tasks(std::
             break;
         }
     }
-    _estimated_remaining_tasks = n;
+    _state.estimated_remaining_tasks = n;
 }
 
 std::vector<compaction_descriptor>

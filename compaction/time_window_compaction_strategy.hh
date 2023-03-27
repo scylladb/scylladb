@@ -64,15 +64,19 @@ public:
 
 using timestamp_type = api::timestamp_type;
 
+struct time_window_compaction_strategy_state {
+    int64_t estimated_remaining_tasks = 0;
+    db_clock::time_point last_expired_check;
+    // As timestamp_type is an int64_t, a primitive type, it must be initialized here.
+    timestamp_type highest_window_seen = 0;
+    // Keep track of all recent active windows that still need to be compacted into a single SSTable
+    std::unordered_set<timestamp_type> recent_active_windows;
+};
+
 class time_window_compaction_strategy : public compaction_strategy_impl {
     time_window_compaction_strategy_options _options;
-    int64_t _estimated_remaining_tasks = 0;
-    db_clock::time_point _last_expired_check;
-    // As timestamp_type is an int64_t, a primitive type, it must be initialized here.
-    timestamp_type _highest_window_seen = 0;
-    // Keep track of all recent active windows that still need to be compacted into a single SSTable
-    std::unordered_set<timestamp_type> _recent_active_windows;
     size_tiered_compaction_strategy_options _stcs_options;
+    time_window_compaction_strategy_state _state;
 public:
     // The maximum amount of buckets we segregate data into when writing into sstables.
     // To prevent an explosion in the number of sstables we cap it.
@@ -146,7 +150,7 @@ private:
     friend class time_window_backlog_tracker;
 public:
     virtual int64_t estimated_pending_compactions(table_state& table_s) const override {
-        return _estimated_remaining_tasks;
+        return _state.estimated_remaining_tasks;
     }
 
     virtual compaction_strategy_type type() const override {
