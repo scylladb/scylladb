@@ -2456,6 +2456,47 @@ BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_with_bind_variable_and_missing
     BOOST_REQUIRE_EQUAL(prepared, expected);
 }
 
+BOOST_AUTO_TEST_CASE(prepare_constant_no_receiver) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression int_const = make_int_const(1234);
+    expression prepared_int_const = prepare_expression(int_const, db, "test_ks", table_schema.get(), nullptr);
+
+    BOOST_REQUIRE_EQUAL(int_const, prepared_int_const);
+
+    expression text_const = make_text_const("helo");
+    expression prepared_text_const = prepare_expression(text_const, db, "test_ks", table_schema.get(), nullptr);
+
+    BOOST_REQUIRE_EQUAL(text_const, prepared_text_const);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_constant_with_receiver) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression int_const = make_int_const(1234);
+    expression prepared_int_const =
+        prepare_expression(int_const, db, "test_ks", table_schema.get(), make_receiver(int32_type));
+
+    BOOST_REQUIRE_EQUAL(int_const, prepared_int_const);
+
+    // Preparing an int32 with int64 receiver fails
+    BOOST_REQUIRE_THROW(prepare_expression(int_const, db, "test_ks", table_schema.get(), make_receiver(long_type)),
+                        exceptions::invalid_request_exception);
+
+    // Preparing an int32 with text receiver fails
+    BOOST_REQUIRE_THROW(prepare_expression(int_const, db, "test_ks", table_schema.get(), make_receiver(utf8_type)),
+                        exceptions::invalid_request_exception);
+
+    // Preparing an int32 with blob receiver works - ints can be implicitly converted to blobs
+    expression prepared_int_blob =
+        prepare_expression(int_const, db, "test_ks", table_schema.get(), make_receiver(bytes_type));
+    expression expected_blob = constant(make_int_const(1234).value, bytes_type);
+
+    BOOST_REQUIRE_EQUAL(prepared_int_blob, expected_blob);
+}
+
 // Test how evaluating a given binary operator behaves when null is present.
 // A binary with null on either side should evaluate to null.
 static void test_evaluate_binop_null(oper_t op, expression valid_lhs, expression valid_rhs) {

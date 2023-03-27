@@ -969,8 +969,20 @@ std::optional<expression> prepare_conjunction(const conjunction& conj,
 std::optional<expression>
 try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
     return expr::visit(overloaded_functor{
-        [] (const constant&) -> std::optional<expression> {
-            on_internal_error(expr_logger, "Can't prepare constant_value, it should not appear in parser output");
+        [&] (const constant& value) -> std::optional<expression> {
+            if (receiver && !is_assignable(expression_test_assignment(value.type, *receiver))) {
+                throw exceptions::invalid_request_exception(
+                    format("cannot assign a constant {:user} of type {} to receiver {} of type {}", value,
+                           value.type->as_cql3_type(), receiver->name, receiver->type->as_cql3_type()));
+            }
+
+            constant result = value;
+            if (receiver) {
+                // The receiver might have a different type from the constant, but this is allowed if the types are compatible.
+                // In such case the type is implictly converted to receiver type.
+                result.type = receiver->type;
+            }
+            return result;
         },
         [&] (const binary_operator& binop) -> std::optional<expression> {
             if (receiver.get() != nullptr && &receiver->type->without_reversed() != boolean_type.get()) {
