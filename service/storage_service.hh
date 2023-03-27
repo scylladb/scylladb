@@ -294,7 +294,9 @@ private:
     void run_replace_ops(std::unordered_set<token>& bootstrap_tokens, replacement_info replace_info);
     void run_bootstrap_ops(std::unordered_set<token>& bootstrap_tokens);
 
-    std::list<gms::inet_address> get_ignore_dead_nodes_for_replace(const locator::token_metadata& tm);
+    std::unordered_set<gms::inet_address> get_ignore_dead_nodes_for_replace(const locator::token_metadata& tm);
+    future<std::unordered_set<gms::inet_address>> get_nodes_to_sync_with(
+            const std::unordered_set<gms::inet_address>& ignore_dead_nodes);
     future<> wait_for_ring_to_settle(std::chrono::milliseconds delay);
 
 public:
@@ -758,7 +760,7 @@ public:
 private:
     std::unordered_set<gms::inet_address> _normal_state_handled_on_boot;
     bool is_normal_state_handled_on_boot(gms::inet_address);
-    future<> wait_for_normal_state_handled_on_boot(const std::unordered_set<gms::inet_address>& nodes, sstring ops, node_ops_id uuid);
+    future<> wait_for_normal_state_handled_on_boot(const std::unordered_set<gms::inet_address>& nodes);
 
     friend class group0_state_machine;
     bool _raft_topology_change_enabled = false;
