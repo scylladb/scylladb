@@ -27,14 +27,21 @@ namespace sstables {
 
 class sstable_set_impl;
 
+struct leveled_compaction_strategy_state {
+    std::optional<std::vector<std::optional<dht::decorated_key>>> last_compacted_keys;
+    std::vector<int> compaction_counter;
+
+    leveled_compaction_strategy_state();
+};
+
 class leveled_compaction_strategy : public compaction_strategy_impl {
     static constexpr int32_t DEFAULT_MAX_SSTABLE_SIZE_IN_MB = 160;
     const sstring SSTABLE_SIZE_OPTION = "sstable_size_in_mb";
 
     int32_t _max_sstable_size_in_mb = DEFAULT_MAX_SSTABLE_SIZE_IN_MB;
-    std::optional<std::vector<std::optional<dht::decorated_key>>> _last_compacted_keys;
-    std::vector<int> _compaction_counter;
     size_tiered_compaction_strategy_options _stcs_options;
+    leveled_compaction_strategy_state _state;
+private:
     int32_t calculate_max_sstable_size_in_mb(std::optional<sstring> option_value) const;
 public:
     static unsigned ideal_level_for_input(const std::vector<sstables::shared_sstable>& input, uint64_t max_sstable_size);

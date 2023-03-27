@@ -457,7 +457,6 @@ leveled_compaction_strategy::leveled_compaction_strategy(const std::map<sstring,
         , _max_sstable_size_in_mb(calculate_max_sstable_size_in_mb(compaction_strategy_impl::get_value(options, SSTABLE_SIZE_OPTION)))
         , _stcs_options(options)
 {
-    _compaction_counter.resize(leveled_manifest::MAX_LEVELS);
 }
 
 std::unique_ptr<compaction_backlog_tracker::impl> leveled_compaction_strategy::make_backlog_tracker() const {
