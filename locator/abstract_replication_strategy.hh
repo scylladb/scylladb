@@ -53,14 +53,17 @@ using endpoint_set = utils::basic_sequenced_set<inet_address, inet_address_vecto
 class vnode_effective_replication_map;
 class effective_replication_map_factory;
 class per_table_replication_strategy;
+class tablet_aware_replication_strategy;
 
 class abstract_replication_strategy {
     friend class vnode_effective_replication_map;
     friend class per_table_replication_strategy;
+    friend class tablet_aware_replication_strategy;
 protected:
     replication_strategy_config_options _config_options;
     replication_strategy_type _my_type;
     bool _per_table = false;
+    bool _uses_tablets = false;
 
     template <typename... Args>
     void err(const char* fmt, Args&&... args) const {
@@ -135,6 +138,9 @@ public:
     bool is_vnode_based() const {
         return !is_per_table();
     }
+
+    bool uses_tablets() const { return _uses_tablets; }
+    const tablet_aware_replication_strategy* maybe_as_tablet_aware() const;
 
     // Use the token_metadata provided by the caller instead of _token_metadata
     // Note: must be called with initialized, non-empty token_metadata.

@@ -7,6 +7,7 @@
  */
 
 #include "locator/abstract_replication_strategy.hh"
+#include "locator/tablet_replication_strategy.hh"
 #include "utils/class_registrator.hh"
 #include "exceptions/exceptions.hh"
 #include <boost/range/algorithm/remove_if.hpp>
@@ -122,6 +123,13 @@ const per_table_replication_strategy* abstract_replication_strategy::maybe_as_pe
         return nullptr;
     }
     return dynamic_cast<const per_table_replication_strategy*>(this);
+}
+
+const tablet_aware_replication_strategy* abstract_replication_strategy::maybe_as_tablet_aware() const {
+    if (!_uses_tablets) {
+        return nullptr;
+    }
+    return dynamic_cast<const tablet_aware_replication_strategy*>(this);
 }
 
 void abstract_replication_strategy::validate_replication_factor(sstring rf)
