@@ -1332,9 +1332,9 @@ BOOST_AUTO_TEST_CASE(prepare_token) {
                                   .build();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
-    expression tok =
-        token({::make_shared<column_identifier_raw>("p1", true), ::make_shared<column_identifier_raw>("p2", true),
-               ::make_shared<column_identifier_raw>("p3", true)});
+    expression tok = token({unresolved_identifier{::make_shared<column_identifier_raw>("p1", true)},
+                            unresolved_identifier{::make_shared<column_identifier_raw>("p2", true)},
+                            unresolved_identifier{::make_shared<column_identifier_raw>("p3", true)}});
 
     expression prepared = prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr);
 
