@@ -5,22 +5,30 @@
 # Tests for accessing alternator-only system tables (from Scylla).
 
 import pytest
+import requests
+
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 
 internal_prefix = '.scylla.alternator.'
 
 # Test that fetching key columns from system tables works
-def test_fetch_from_system_tables(scylla_only, dynamodb):
+def test_fetch_from_system_tables(scylla_only, dynamodb, rest_api):
     client = dynamodb.meta.client
     tables_response = client.scan(TableName=internal_prefix+'system_schema.tables',
             AttributesToGet=['keyspace_name','table_name'])
 
+    # #13332 - don't rely on "system" prefix to decide what is user keyspace or not.
+    resp_user = requests.get(f'{rest_api}/storage_service/keyspaces?type=user', timeout=1)
+    resp_user.raise_for_status()
+    keyspaces_user = resp_user.json()
+
+    keyspaces_done = []
     for item in tables_response['Items']:
         ks_name = item['keyspace_name']
         table_name = item['table_name']
 
-        if not 'system' in ks_name:
+        if ks_name in keyspaces_user:
             continue
 
         col_response = client.query(TableName=internal_prefix+'system_schema.columns',
@@ -32,6 +40,9 @@ def test_fetch_from_system_tables(scylla_only, dynamodb):
         start = time.time()
         response = client.scan(TableName=qualified_name, AttributesToGet=key_columns, Limit=50)
         print(ks_name, table_name, len(str(response)), time.time()-start)
+        keyspaces_done.append(ks_name)
+
+    assert keyspaces_done != {}
 
 def test_block_access_to_non_system_tables_with_virtual_interface(scylla_only, test_table_s, dynamodb):
     client = dynamodb.meta.client
