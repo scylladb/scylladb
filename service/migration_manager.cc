@@ -25,6 +25,7 @@
 #include "view_info.hh"
 #include "schema/schema_builder.hh"
 #include "replica/database.hh"
+#include "replica/tablets.hh"
 #include "db/schema_tables.hh"
 #include "types/user.hh"
 #include "db/system_keyspace.hh"
@@ -132,6 +133,9 @@ void migration_manager::init_messaging_service()
                     "migration request handler: group0 snapshot transfer requested, but canonical mutations not supported");
             }
             cm.emplace_back(co_await db::system_keyspace::get_group0_history(proxy));
+            for (auto&& m : co_await replica::read_tablet_mutations(proxy)) {
+                cm.emplace_back(std::move(m));
+            }
         }
         if (cm_retval_supported) {
             co_return rpc::tuple(std::vector<frozen_mutation>{}, std::move(cm));
