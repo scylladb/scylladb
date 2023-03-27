@@ -2733,6 +2733,9 @@ public:
     sstables::compaction_strategy& get_compaction_strategy() const noexcept override {
         return _t.get_compaction_strategy();
     }
+    compaction::compaction_strategy_state& get_compaction_strategy_state() noexcept override {
+        return _cg._compaction_strategy_state;
+    }
     reader_permit make_compaction_reader_permit() const override {
         return _t.compaction_concurrency_semaphore().make_tracking_only_permit(schema().get(), "compaction", db::no_timeout, {});
     }

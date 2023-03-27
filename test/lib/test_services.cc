@@ -47,6 +47,7 @@ class table_for_tests::table_state : public compaction::table_state {
     std::vector<sstables::shared_sstable> _compacted_undeleted;
     tombstone_gc_state _tombstone_gc_state;
     mutable compaction_backlog_tracker _backlog_tracker;
+    compaction::compaction_strategy_state _compaction_strategy_state;
 private:
     replica::table& table() const noexcept {
         return *_data.cf;
@@ -57,6 +58,7 @@ public:
             , _sstables_manager(sstables_manager)
             , _tombstone_gc_state(nullptr)
             , _backlog_tracker(get_compaction_strategy().make_backlog_tracker())
+            , _compaction_strategy_state(compaction::compaction_strategy_state::make(get_compaction_strategy()))
     {
     }
     const schema_ptr& schema() const noexcept override {
@@ -82,6 +84,9 @@ public:
     }
     sstables::compaction_strategy& get_compaction_strategy() const noexcept override {
         return table().get_compaction_strategy();
+    }
+    compaction::compaction_strategy_state& get_compaction_strategy_state() noexcept override {
+        return _compaction_strategy_state;
     }
     reader_permit make_compaction_reader_permit() const override {
         return _data.semaphore.make_tracking_only_permit(&*schema(), "table_for_tests::table_state", db::no_timeout, {});
