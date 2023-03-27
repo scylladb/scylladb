@@ -76,7 +76,6 @@ struct time_window_compaction_strategy_state {
 class time_window_compaction_strategy : public compaction_strategy_impl {
     time_window_compaction_strategy_options _options;
     size_tiered_compaction_strategy_options _stcs_options;
-    time_window_compaction_strategy_state _state;
 public:
     // The maximum amount of buckets we segregate data into when writing into sstables.
     // To prevent an explosion in the number of sstables we cap it.
@@ -91,6 +90,8 @@ public:
 
     virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const override;
 private:
+    time_window_compaction_strategy_state& get_state(table_state& table_s) const;
+
     static timestamp_type
     to_timestamp_type(time_window_compaction_strategy_options::timestamp_resolutions resolution, int64_t timestamp_from_sstable) {
         switch (resolution) {
@@ -151,7 +152,7 @@ private:
     friend class time_window_backlog_tracker;
 public:
     virtual int64_t estimated_pending_compactions(table_state& table_s) const override {
-        return _state.estimated_remaining_tasks;
+        return get_state(table_s).estimated_remaining_tasks;
     }
 
     virtual compaction_strategy_type type() const override {

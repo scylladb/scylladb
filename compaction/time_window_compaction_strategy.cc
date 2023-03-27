@@ -10,6 +10,7 @@
 #include "leveled_manifest.hh"
 #include "mutation_writer/timestamp_based_splitting_writer.hh"
 #include "mutation/mutation_source_metadata.hh"
+#include "compaction_strategy_state.hh"
 
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
@@ -20,6 +21,10 @@
 namespace sstables {
 
 extern logging::logger clogger;
+
+time_window_compaction_strategy_state& time_window_compaction_strategy::get_state(table_state& table_s) const {
+    return table_s.get_compaction_strategy_state().get<time_window_compaction_strategy_state>();
+}
 
 time_window_compaction_strategy_options::time_window_compaction_strategy_options(const std::map<sstring, sstring>& options) {
     std::chrono::seconds window_unit = DEFAULT_COMPACTION_WINDOW_UNIT;
@@ -218,15 +223,16 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
 
 compaction_descriptor
 time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<shared_sstable> candidates) {
+    auto& state = get_state(table_s);
     auto compaction_time = gc_clock::now();
 
     if (candidates.empty()) {
-        _state.estimated_remaining_tasks = 0;
+        state.estimated_remaining_tasks = 0;
         return compaction_descriptor();
     }
 
     auto now = db_clock::now();
-    if (now - _state.last_expired_check > _options.expired_sstable_check_frequency) {
+    if (now - state.last_expired_check > _options.expired_sstable_check_frequency) {
         clogger.debug("[{}] TWCS expired check sufficiently far in the past, checking for fully expired SSTables", fmt::ptr(this));
 
         // Find fully expired SSTables. Those will be included no matter what.
@@ -238,7 +244,7 @@ time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_
         // Keep checking for fully_expired_sstables until we don't find
         // any among the candidates, meaning they are either already compacted
         // or registered for compaction.
-        _state.last_expired_check = now;
+        state.last_expired_check = now;
     } else {
         clogger.debug("[{}] TWCS skipping check for fully expired SSTables", fmt::ptr(this));
     }
@@ -290,14 +296,15 @@ time_window_compaction_strategy::get_next_non_expired_sstables(table_state& tabl
 
 std::vector<shared_sstable>
 time_window_compaction_strategy::get_compaction_candidates(table_state& table_s, strategy_control& control, std::vector<shared_sstable> candidate_sstables) {
+    auto& state = get_state(table_s);
     auto p = get_buckets(std::move(candidate_sstables), _options);
     // Update the highest window seen, if necessary
-    _state.highest_window_seen = std::max(_state.highest_window_seen, p.second);
+    state.highest_window_seen = std::max(state.highest_window_seen, p.second);
 
-    update_estimated_compaction_by_tasks(_state, p.first, table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold());
+    update_estimated_compaction_by_tasks(state, p.first, table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold());
 
     return newest_bucket(table_s, control, std::move(p.first), table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold(),
-        _state.highest_window_seen);
+        state.highest_window_seen);
 }
 
 timestamp_type
@@ -341,6 +348,7 @@ static std::ostream& operator<<(std::ostream& os, const std::map<timestamp_type,
 std::vector<shared_sstable>
 time_window_compaction_strategy::newest_bucket(table_state& table_s, strategy_control& control, std::map<timestamp_type, std::vector<shared_sstable>> buckets,
         int min_threshold, int max_threshold, timestamp_type now) {
+    auto& state = get_state(table_s);
     clogger.debug("time_window_compaction_strategy::newest_bucket:\n  now {}\n{}", now, buckets);
 
     for (auto&& key_bucket : buckets | boost::adaptors::reversed) {
@@ -349,9 +357,9 @@ time_window_compaction_strategy::newest_bucket(table_state& table_s, strategy_co
 
         bool last_active_bucket = is_last_active_bucket(key, now);
         if (last_active_bucket) {
-            _state.recent_active_windows.insert(key);
+            state.recent_active_windows.insert(key);
         }
-        switch (compaction_mode(_state, bucket, key, now, min_threshold)) {
+        switch (compaction_mode(state, bucket, key, now, min_threshold)) {
         case bucket_compaction_mode::size_tiered: {
             // If we're in the newest bucket, we'll use STCS to prioritize sstables.
             auto stcs_interesting_bucket = size_tiered_compaction_strategy::most_interesting_bucket(bucket, min_threshold, max_threshold, _stcs_options);
@@ -375,7 +383,7 @@ time_window_compaction_strategy::newest_bucket(table_state& table_s, strategy_co
             // after that, they will fall into default mode where we'll stop considering them as a recent window
             // which needs major. That's to avoid terrible writeamp as streaming may push data into older windows.
             if (!last_active_bucket) {
-                _state.recent_active_windows.erase(key);
+                state.recent_active_windows.erase(key);
             }
             clogger.debug("No compaction necessary for bucket size {} , key {}, now {}", bucket.size(), key, now);
             break;

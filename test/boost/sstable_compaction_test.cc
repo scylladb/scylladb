@@ -1475,9 +1475,11 @@ SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
     using namespace std::chrono;
 
     return test_env::do_with_async([] (test_env& env) {
-        auto s = schema_builder("tests", "time_window_strategy")
+        auto builder = schema_builder("tests", "time_window_strategy")
                 .with_column("id", utf8_type, column_kind::partition_key)
-                .with_column("value", int32_type).build();
+                .with_column("value", int32_type);
+        builder.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
+        auto s = builder.build();
 
         auto make_insert = [&] (partition_key key, api::timestamp_type t) {
             mutation m(s, key);
@@ -1572,9 +1574,11 @@ SEASTAR_TEST_CASE(time_window_strategy_size_tiered_behavior_correctness) {
     using namespace std::chrono;
 
     return test_env::do_with_async([] (test_env& env) {
-        auto s = schema_builder("tests", "time_window_strategy")
+        auto builder = schema_builder("tests", "time_window_strategy")
                 .with_column("id", utf8_type, column_kind::partition_key)
-                .with_column("value", int32_type).build();
+                .with_column("value", int32_type);
+        builder.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
+        auto s = builder.build();
 
         auto sst_gen = env.make_sst_factory(s);
 
