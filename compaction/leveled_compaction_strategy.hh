@@ -40,9 +40,10 @@ class leveled_compaction_strategy : public compaction_strategy_impl {
 
     int32_t _max_sstable_size_in_mb = DEFAULT_MAX_SSTABLE_SIZE_IN_MB;
     size_tiered_compaction_strategy_options _stcs_options;
-    leveled_compaction_strategy_state _state;
 private:
     int32_t calculate_max_sstable_size_in_mb(std::optional<sstring> option_value) const;
+
+    leveled_compaction_strategy_state& get_state(table_state& table_s) const;
 public:
     static unsigned ideal_level_for_input(const std::vector<sstables::shared_sstable>& input, uint64_t max_sstable_size);
 
@@ -57,7 +58,7 @@ public:
 
     // for each level > 0, get newest sstable and use its last key as last
     // compacted key for the previous level.
-    void generate_last_compacted_keys(leveled_manifest& manifest);
+    void generate_last_compacted_keys(leveled_compaction_strategy_state&, leveled_manifest& manifest);
 
     virtual int64_t estimated_pending_compactions(table_state& table_s) const override;
 
