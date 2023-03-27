@@ -121,7 +121,7 @@ class large_data_handler;
 class system_keyspace;
 class table_selector;
 
-future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<service::raft_group_registry>& raft_gr, db::config& cfg, db::table_selector&);
+future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<service::raft_group_registry>& raft_gr, db::config& cfg, system_table_load_phase phase);
 
 }
 
@@ -653,6 +653,10 @@ public:
     // to issue disk operations safely.
     void mark_ready_for_writes() {
         update_sstables_known_generation(sstables::generation_from_value(0));
+    }
+
+    bool is_ready_for_writes() const {
+        return _sstable_generation.has_value();
     }
 
     // Creates a mutation reader which covers all data sources for this column family.
@@ -1402,7 +1406,7 @@ private:
 
     using system_keyspace = bool_class<struct system_keyspace_tag>;
     future<> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
-    friend future<> db::system_keyspace_make(db::system_keyspace& sys_ks, distributed<database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<service::raft_group_registry>& raft_gr, db::config& cfg, db::table_selector&);
+    friend future<> db::system_keyspace_make(db::system_keyspace& sys_ks, distributed<database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<service::raft_group_registry>& raft_gr, db::config& cfg, system_table_load_phase);
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
 
@@ -1487,7 +1491,7 @@ public:
     const service::migration_notifier& get_notifier() const { return _mnotifier; }
 
     void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
-    void before_schema_keyspace_init();
+    void maybe_init_schema_commitlog();
     future<> add_column_family_and_make_directory(schema_ptr schema);
 
     /* throws no_such_column_family if missing */

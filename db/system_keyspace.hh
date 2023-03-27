@@ -81,15 +81,6 @@ class system_keyspace_view_build_progress;
 struct truncation_record;
 typedef std::vector<db::replay_position> replay_positions;
 
-class table_selector {
-public:
-    static table_selector& all();
-    static std::unique_ptr<table_selector> all_in_keyspace(sstring);
-public:
-    virtual ~table_selector() = default;
-    virtual bool contains(const schema_ptr&) = 0;
-    virtual bool contains_keyspace(std::string_view) = 0;
-};
 
 struct compaction_history_entry {
     utils::UUID id;
@@ -271,7 +262,7 @@ public:
                          sharded<gms::gossiper>& g,
                          sharded<service::raft_group_registry>& raft_gr,
                          db::config& cfg,
-                         table_selector& = table_selector::all());
+                         system_table_load_phase phase);
 
     /// overloads
 

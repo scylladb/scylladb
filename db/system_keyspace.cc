@@ -99,6 +99,19 @@ namespace {
             props.wait_for_sync_to_commitlog = true;
         }
     });
+    const auto set_use_schema_commitlog = schema_builder::register_static_configurator([](const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
+        static const std::unordered_set<sstring> raft_tables = {
+            system_keyspace::RAFT,
+            system_keyspace::RAFT_SNAPSHOTS,
+            system_keyspace::RAFT_SNAPSHOT_CONFIG,
+            system_keyspace::GROUP0_HISTORY,
+            system_keyspace::DISCOVERY
+        };
+        if (ks_name == system_keyspace::NAME && raft_tables.contains(cf_name)) {
+            props.use_schema_commitlog = true;
+            props.load_phase = system_table_load_phase::phase2;
+        }
+    });
 }
 
 std::unique_ptr<query_context> qctx = {};
@@ -1390,44 +1403,9 @@ struct truncation_record {
     db_clock::time_point time_stamp;
 };
 
-table_selector& table_selector::all() {
-    class all_selector : public table_selector {
-    public:
-        bool contains(const schema_ptr&) override {
-            return true;
-        }
-
-        bool contains_keyspace(std::string_view) override {
-            return true;
-        }
-    };
-    static all_selector instance;
-    return instance;
-}
-
-std::unique_ptr<table_selector> table_selector::all_in_keyspace(sstring name) {
-    class keyspace_selector : public table_selector {
-        sstring _name;
-    public:
-        keyspace_selector(sstring name) : _name(std::move(name)) {}
-
-        bool contains(const schema_ptr& s) override {
-            return s->ks_name() == _name;
-        }
-
-        bool contains_keyspace(std::string_view name) override {
-            return name == _name;
-        }
-    };
-    return std::make_unique<keyspace_selector>(name);
-}
-
 }
 
 namespace db {
-
-typedef utils::UUID truncation_key;
-typedef std::unordered_map<truncation_key, truncation_record> truncation_map;
 
 future<truncation_record> system_keyspace::get_truncation_record(table_id cf_id) {
     if (_db.local().get_config().ignore_truncation_record.is_set()) {
@@ -1636,7 +1614,7 @@ future<> set_scylla_local_param_as(const sstring& key, const T& value) {
     auto type = data_type_for<T>();
     co_await qctx->execute_cql(req, type->to_string_impl(data_value(value)), key).discard_result();
     // Flush the table so that the value is available on boot before commitlog replay.
-    // database::before_schema_keyspace_init() depends on it.
+    // database::maybe_init_schema_commitlog() depends on it.
     co_await smp::invoke_on_all([] () -> future<> {
         co_await qctx->qp().db().real_database().flush(db::system_keyspace::NAME, system_keyspace::SCYLLA_LOCAL);
     });
@@ -2877,8 +2855,8 @@ static bool maybe_write_in_user_memory(schema_ptr s) {
             || s == system_keyspace::raft();
 }
 
-future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, distributed<service::raft_group_registry>& dist_raft_gr, db::config& cfg, table_selector& tables) {
-    if (tables.contains_keyspace(system_keyspace::NAME)) {
+future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss, sharded<gms::gossiper>& dist_gossiper, distributed<service::raft_group_registry>& dist_raft_gr, db::config& cfg, system_table_load_phase phase) {
+    if (phase == system_table_load_phase::phase1) {
         register_virtual_tables(dist_db, dist_ss, dist_gossiper, dist_raft_gr, cfg);
     }
 
@@ -2886,7 +2864,7 @@ future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::
     auto& db_config = db.get_config();
     bool durable = db_config.data_file_directories().size() > 0;
     for (auto&& table : system_keyspace::all_tables(db_config)) {
-        if (!tables.contains(table)) {
+        if (table->static_props().load_phase != phase) {
             continue;
         }
         auto ks_name = table->ks_name();
@@ -2909,13 +2887,13 @@ future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::
         db.add_column_family(ks, table, std::move(cfg));
     }
 
-    if (tables.contains_keyspace(system_keyspace::NAME)) {
+    if (phase == system_table_load_phase::phase1) {
         install_virtual_readers(sys_ks, db);
     }
 }
 
-future<> system_keyspace::make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, distributed<service::raft_group_registry>& raft_gr, db::config& cfg, table_selector& tables) {
-    return system_keyspace_make(*this, db, ss, g, raft_gr, cfg, tables);
+future<> system_keyspace::make(distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, distributed<service::raft_group_registry>& raft_gr, db::config& cfg, system_table_load_phase phase) {
+    return system_keyspace_make(*this, db, ss, g, raft_gr, cfg, phase);
 }
 
 future<locator::host_id> system_keyspace::load_local_host_id() {

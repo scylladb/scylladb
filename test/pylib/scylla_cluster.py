@@ -245,11 +245,7 @@ class ScyllaServer:
 
     async def install_and_start(self, api: ScyllaRESTAPIClient) -> None:
         """Setup and start this server"""
-        try:
-            await self.install()
-        except:
-            await self.uninstall()
-            raise
+        await self.install()
 
         self.logger.info("starting server at host %s in %s...", self.ip_addr, self.workdir.name)
 
@@ -284,11 +280,19 @@ class ScyllaServer:
         # Cleanup any remains of the previously running server in this path
         shutil.rmtree(self.workdir, ignore_errors=True)
 
-        self.workdir.mkdir(parents=True, exist_ok=True)
-        self.config_filename.parent.mkdir(parents=True, exist_ok=True)
-        self._write_config_file()
+        try:
+            self.workdir.mkdir(parents=True, exist_ok=True)
+            self.config_filename.parent.mkdir(parents=True, exist_ok=True)
+            self._write_config_file()
 
-        self.log_file = self.log_filename.open("wb")
+            self.log_file = self.log_filename.open("wb")
+        except:
+            try:
+                shutil.rmtree(self.workdir)
+            except FileNotFoundError:
+                pass
+            self.log_filename.unlink(missing_ok=True)
+            raise
 
     def get_config(self) -> dict[str, object]:
         """Return the contents of conf/scylla.yaml as a dict."""
@@ -379,7 +383,7 @@ class ScyllaServer:
             return False
         # Any other exception may indicate a problem, and is passed to the caller.
 
-    async def start(self, api: ScyllaRESTAPIClient) -> None:
+    async def start(self, api: ScyllaRESTAPIClient, expected_error: Optional[str] = None) -> None:
         """Start an installed server. May be used for restarts."""
 
         env = os.environ.copy()
@@ -398,43 +402,48 @@ class ScyllaServer:
         sleep_interval = 0.1
         cql_up_state = CqlUpState.NOT_CONNECTED
 
+        def report_error(message: str):
+            message += f", server_id {self.server_id}, IP {self.ip_addr}, workdir {self.workdir.name}"
+            message += f", host_id {self.host_id if hasattr(self, 'host_id') else '<missing>'}"
+            message += f", cql [{'connected' if cql_up_state == CqlUpState.CONNECTED else 'not connected'}]"
+            if expected_error is not None:
+                message += f", the node log was expected to contain the string [{expected_error}]"
+            self.logger.error(message)
+            self.logger.error("last line of %s:", self.log_filename)
+            with self.log_filename.open('r') as log_file:
+                log_file.seek(0, 0)
+                self.logger.error(log_file.readlines()[-1].rstrip())
+            log_handler = logging.getLogger().handlers[0]
+            if hasattr(log_handler, 'baseFilename'):
+                logpath = log_handler.baseFilename   # type: ignore
+            else:
+                logpath = "?"
+            raise RuntimeError(message + "\nCheck the log files:\n"
+                                         f"{logpath}\n"
+                                         f"{self.log_filename}")
+
         while time.time() < self.start_time + self.TOPOLOGY_TIMEOUT:
             if self.cmd.returncode:
-                with self.log_filename.open('r') as log_file:
-                    self.logger.error("failed to start server at host %s in %s",
-                                  self.ip_addr, self.workdir.name)
-                    self.logger.error("last line of %s:", self.log_filename)
-                    log_file.seek(0, 0)
-                    self.logger.error(log_file.readlines()[-1].rstrip())
-                    log_handler = logging.getLogger().handlers[0]
-                    if hasattr(log_handler, 'baseFilename'):
-                        logpath = log_handler.baseFilename   # type: ignore
-                    else:
-                        logpath = "?"
-                    raise RuntimeError(f"Failed to start server with ID = {self.server_id}, IP = {self.ip_addr}.\n"
-                                       "Check the log files:\n"
-                                       f"{logpath}\n"
-                                       f"{self.log_filename}")
+                self.cmd = None
+                if expected_error is not None:
+                    with self.log_filename.open('r') as log_file:
+                        for line in log_file.readlines():
+                            if expected_error in line:
+                                return
+                        report_error("the node startup failed, but the log file doesn't contain the expected error")
+                report_error("failed to start the node")
 
             if hasattr(self, "host_id") or await self.get_host_id(api):
                 cql_up_state = await self.cql_is_up()
                 if cql_up_state == CqlUpState.QUERIED:
+                    if expected_error is not None:
+                        report_error("the node started, but was expected to fail with the expected error")
                     return
 
             # Sleep and retry
             await asyncio.sleep(sleep_interval)
 
-        err = f"Failed to start server with ID = {self.server_id}, IP = {self.ip_addr}."
-        if hasattr(self, "host_id"):
-            err += f" Managed to obtain the server's Host ID ({self.host_id})"
-            if cql_up_state == CqlUpState.CONNECTED:
-                err += " and to connect the CQL driver, but failed to execute a query."
-            else:
-                err += " but failed to connect the CQL driver."
-        else:
-            err += " Failed to obtain the server's Host ID."
-        err += f"\nCheck server log at {self.log_filename}."
-        raise RuntimeError(err)
+        report_error('failed to start the node, timeout reached')
 
     async def force_schema_migration(self) -> None:
         """This is a hack to change schema hash on an existing cluster node
@@ -639,11 +648,11 @@ class ScyllaCluster:
     def _seeds(self) -> List[str]:
         return [server.ip_addr for server in self.running.values()]
 
-    async def add_server(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None) -> ServerInfo:
+    async def add_server(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None, config: Optional[dict[str, str]] = None, start: bool = True) -> ServerInfo:
         """Add a new server to the cluster"""
         self.is_dirty = True
 
-        extra_config: dict[str, str] = {}
+        extra_config: dict[str, str] = config.copy() if config else {}
         if replace_cfg:
             replaced_id = replace_cfg.replaced_id
             assert replaced_id in self.servers, \
@@ -684,7 +693,10 @@ class ScyllaCluster:
         try:
             server = self.create_server(params)
             self.logger.info("Cluster %s adding server...", self)
-            await server.install_and_start(self.api)
+            if start:
+                await server.install_and_start(self.api)
+            else:
+                await server.install()
         except Exception as exc:
             self.logger.error("Failed to start Scylla server at host %s in %s: %s",
                           ip_addr, server.workdir.name, str(exc))
@@ -692,9 +704,12 @@ class ScyllaCluster:
                 self.leased_ips.remove(ip_addr)
                 await self.host_registry.release_host(Host(ip_addr))
             raise
-        self.running[server.server_id] = server
+        if start:
+            self.running[server.server_id] = server
+        else:
+            self.stopped[server.server_id] = server
         self.logger.info("Cluster %s added %s", self, server)
-        return ServerInfo(server.server_id, server.ip_addr, server.host_id)
+        return ServerInfo(server.server_id, server.ip_addr)
 
     def endpoint(self) -> str:
         """Get a server id (IP) from running servers"""
@@ -726,9 +741,9 @@ class ScyllaCluster:
         stopped = ", ".join(str(server) for server in self.stopped.values())
         return f"ScyllaCluster(name: {self.name}, running: {running}, stopped: {stopped})"
 
-    def running_servers(self) -> List[Tuple[ServerNum, IPAddress, HostID]]:
+    def running_servers(self) -> List[Tuple[ServerNum, IPAddress]]:
         """Get a list of tuples of server id and IP address of running servers (and not removed)"""
-        return [(server.server_id, server.ip_addr, server.host_id) for server in self.running.values()
+        return [(server.server_id, server.ip_addr) for server in self.running.values()
                 if server.server_id not in self.removed]
 
     def _get_keyspace_count(self) -> int:
@@ -800,7 +815,7 @@ class ScyllaCluster:
         self.logger.debug("Cluster %s marking server %s as removed", self, server_id)
         self.removed.add(server_id)
 
-    async def server_start(self, server_id: ServerNum) -> ActionReturn:
+    async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None) -> ActionReturn:
         """Start a stopped server"""
         if server_id in self.running:
             return ScyllaCluster.ActionReturn(success=True,
@@ -815,7 +830,10 @@ class ScyllaCluster:
         # Put the server in `running` before starting it.
         # Starting may fail and if we didn't add it now it might leak.
         self.running[server_id] = server
-        await server.start(self.api)
+        await server.start(self.api, expected_error)
+        if expected_error is not None:
+            self.running.pop(server_id)
+            self.stopped[server_id] = server
         return ScyllaCluster.ActionReturn(success=True, msg=f"{server} started")
 
     async def server_restart(self, server_id: ServerNum) -> ActionReturn:
@@ -1072,7 +1090,8 @@ class ScyllaClusterManager:
         """Start a specified server (must be stopped)"""
         assert self.cluster
         server_id = ServerNum(int(request.match_info["server_id"]))
-        ret = await self.cluster.server_start(server_id)
+        expected_error = request.query.get("expected_error")
+        ret = await self.cluster.server_start(server_id, expected_error)
         return aiohttp.web.Response(status=200 if ret[0] else 500, text=ret[1])
 
     async def _cluster_server_restart(self, request) -> aiohttp.web.Response:
@@ -1087,10 +1106,9 @@ class ScyllaClusterManager:
         assert self.cluster
         data = await request.json()
         replace_cfg = ReplaceConfig(**data["replace_cfg"]) if "replace_cfg" in data else None
-        s_info = await self.cluster.add_server(replace_cfg, data.get('cmdline'))
+        s_info = await self.cluster.add_server(replace_cfg, data.get('cmdline'), data.get('config'), data.get('start', True))
         return aiohttp.web.json_response({"server_id" : s_info.server_id,
-                                          "ip_addr": s_info.ip_addr,
-                                          "host_id": s_info.host_id})
+                                          "ip_addr": s_info.ip_addr})
 
     async def _cluster_remove_node(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
         """Run remove node on Scylla REST API for a specified server"""

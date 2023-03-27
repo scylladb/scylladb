@@ -119,7 +119,7 @@ class ManagerClient():
         except RuntimeError as exc:
             raise Exception("Failed to get list of running servers") from exc
         assert isinstance(server_info_list, list), "running_servers got unknown data type"
-        return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]), HostID(info[2]))
+        return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]))
                 for info in server_info_list]
 
     async def mark_dirty(self) -> None:
@@ -137,10 +137,11 @@ class ManagerClient():
         logger.debug("ManagerClient stopping gracefully %s", server_id)
         await self.client.get_text(f"/cluster/server/{server_id}/stop_gracefully")
 
-    async def server_start(self, server_id: ServerNum) -> None:
+    async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None) -> None:
         """Start specified server"""
         logger.debug("ManagerClient starting %s", server_id)
-        await self.client.get_text(f"/cluster/server/{server_id}/start")
+        params = {'expected_error': expected_error} if expected_error is not None else None
+        await self.client.get_text(f"/cluster/server/{server_id}/start", params=params)
         self._driver_update()
 
     async def server_restart(self, server_id: ServerNum) -> None:
@@ -149,22 +150,23 @@ class ManagerClient():
         await self.client.get_text(f"/cluster/server/{server_id}/restart")
         self._driver_update()
 
-    async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None) -> ServerInfo:
+    async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None, config: Optional[dict[str, str]] = None, start: bool = True) -> ServerInfo:
         """Add a new server"""
         try:
-            data: dict[str, Any] = {}
+            data: dict[str, Any] = {'start': start}
             if replace_cfg:
                 data['replace_cfg'] = replace_cfg._asdict()
             if cmdline:
                 data['cmdline'] = cmdline
+            if config:
+                data['config'] = config
             server_info = await self.client.put_json("/cluster/addserver", data, response_type="json",
                                                      timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         except Exception as exc:
             raise Exception("Failed to add server") from exc
         try:
             s_info = ServerInfo(ServerNum(int(server_info["server_id"])),
-                                IPAddress(server_info["ip_addr"]),
-                                HostID(server_info["host_id"]))
+                                IPAddress(server_info["ip_addr"]))
         except Exception as exc:
             raise RuntimeError(f"server_add got invalid server data {server_info}") from exc
         logger.debug("ManagerClient added %s", s_info)
