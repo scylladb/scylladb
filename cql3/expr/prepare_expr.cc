@@ -1096,8 +1096,8 @@ test_assignment(const expression& expr, data_dictionary::database db, const sstr
         [&] (const conjunction&) -> test_result {
             on_internal_error(expr_logger, "conjunctions are not yet reachable via test_assignment()");
         },
-        [&] (const column_value&) -> test_result {
-            on_internal_error(expr_logger, "column_values are not yet reachable via test_assignment()");
+        [&] (const column_value& col_val) -> test_result {
+            return expression_test_assignment(col_val.col->type, receiver);
         },
         [&] (const subscript&) -> test_result {
             on_internal_error(expr_logger, "subscripts are not yet reachable via test_assignment()");
