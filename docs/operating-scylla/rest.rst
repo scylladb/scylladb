@@ -6,6 +6,41 @@ ScyllaDB exposes a REST API to retrieve administrative information from a node a
 administrative operations. For example, it allows you to check or update configuration, 
 retrieve cluster-level information, and more.
 
+The :doc:`nodetool </operating-scylla/nodetool>` CLI tool interacts with a *scylla-jmx* process using JMX. 
+The process, in turn, uses the REST API to interact with the ScyllaDB process.
+
+You can interact with the REST API directly using :code:`curl`, ScyllaDB's CLI for REST API, or the Swagger UI.
+
+
+Swagger UI
+^^^^^^^^^^^^
+
+.. warning::
+
+   Do not expose the REST API externally for production systems.
+
+   The following example is only for demonstration, as it exposes the REST API externally and will allow 
+   external access to administration-level information and operations on your cluster. 
+   The API is by default bound to an internal IP (127.0.0.1), blocked for external connections.
+
+
+You can interact with the REST API using the Swagger UI at :code:`your-ip:10000/ui`. 
+
+The following example shows using the Swagger UI with Docker.
+
+#. Run:
+
+    .. code:: sh
+
+      docker run --name some-scylla -p 10000:10000 -d scylladb/scylla:5.0.4 --api-address 0.0.0.0
+
+
+#. Go to http://localhost:10000/ui/.
+
+    .. image:: scylla_swagger_ui.jpeg
+       :alt: Swagger screen capture
+
+
 
 CLI for REST API
 ^^^^^^^^^^^^^^^^^
