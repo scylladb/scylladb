@@ -407,6 +407,20 @@ static schema_ptr make_simple_test_schema() {
         .build();
 }
 
+// Creates a schema_ptr with three partition key columns can be used for testing
+// The schema corresponds to a table created by:
+// CREATE TABLE test_ks.test_cf (pk1 int, pk2 int, pk3 int, ck int, r int, s int static, primary key (pk, ck));
+static schema_ptr make_three_pk_schema() {
+    return schema_builder("test_ks", "test_cf")
+        .with_column("pk1", int32_type, column_kind::partition_key)
+        .with_column("pk2", int32_type, column_kind::partition_key)
+        .with_column("pk3", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("r", int32_type, column_kind::regular_column)
+        .with_column("s", int32_type, column_kind::static_column)
+        .build();
+}
+
 BOOST_AUTO_TEST_CASE(evaluate_partition_key_column) {
     schema_ptr test_schema = make_simple_test_schema();
     auto [inputs, inputs_data] = make_evaluation_inputs(test_schema, {
@@ -4209,4 +4223,35 @@ BOOST_AUTO_TEST_CASE(optimized_constant_like) {
             // repeated for simplicity
             binary_operator(target_var, oper_t::LIKE, make_text_const("xx%")));
     BOOST_REQUIRE(check(std::move(complex), "xxyyz", true));
+}
+
+BOOST_AUTO_TEST_CASE(prepare_token_func_without_receiver) {
+    schema_ptr table_schema = make_three_pk_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression token_fun_call = function_call{
+        .func = functions::function_name::native_function("token"),
+        .args = {column_value(table_schema->get_column_definition("pk1")), make_column("pk2"), make_int_const(1234)}};
+
+    expression prepared_no_receiver = prepare_expression(token_fun_call, db, "test_ks", table_schema.get(), nullptr);
+    expression prepared_with_receiver =
+        prepare_expression(token_fun_call, db, "test_ks", table_schema.get(), make_receiver(long_type));
+
+    auto check_prepared = [&](const expression& prepared) {
+        const function_call* prepared_token = as_if<function_call>(&prepared);
+        BOOST_REQUIRE(prepared_token != nullptr);
+
+        const seastar::shared_ptr<functions::function>* token_fun =
+            std::get_if<shared_ptr<functions::function>>(&prepared_token->func);
+        BOOST_REQUIRE(token_fun != nullptr);
+        BOOST_REQUIRE((*token_fun)->name() == functions::function_name::native_function("token"));
+
+        std::vector<expression> expected_args = {column_value(table_schema->get_column_definition("pk1")),
+                                                 column_value(table_schema->get_column_definition("pk2")),
+                                                 make_int_const(1234)};
+        BOOST_REQUIRE_EQUAL(prepared_token->args, expected_args);
+    };
+
+    check_prepared(prepared_no_receiver);
+    check_prepared(prepared_with_receiver);
 }
