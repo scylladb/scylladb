@@ -57,4 +57,31 @@ future<> shard_major_keyspace_compaction_task_impl::run() {
     });
 }
 
+future<> cleanup_keyspace_compaction_task_impl::run() {
+    co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
+        auto& module = db.get_compaction_manager().get_task_manager_module();
+        auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>({_status.id, _status.shard}, _status.keyspace, _status.id, db, _table_ids);
+        co_await task->done();
+    });
+}
+
+tasks::is_internal shard_cleanup_keyspace_compaction_task_impl::is_internal() const noexcept {
+    return tasks::is_internal::yes;
+}
+
+future<> shard_cleanup_keyspace_compaction_task_impl::run() {
+    // Cleanup smaller tables first, to increase chances of success if low on space.
+    std::ranges::sort(_local_tables, std::less<>(), [&] (const table_id& ti) {
+        try {
+            return _db.find_column_family(ti).get_stats().live_disk_space_used;
+        } catch (const replica::no_such_column_family& e) {
+            return int64_t(-1);
+        }
+    });
+    auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(_db.get_keyspace_local_ranges(_status.keyspace));
+    co_await run_on_existing_tables("force_keyspace_cleanup", _db, _status.keyspace, _local_tables, [&] (replica::table& t) {
+        return t.perform_cleanup_compaction(owned_ranges_ptr);
+    });
+}
+
 }
