@@ -2842,11 +2842,10 @@ storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, froze
 result<storage_proxy::response_id_type>
 storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::token& token, std::unique_ptr<mutation_holder> mh,
         db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
-    auto keyspace_name = s->ks_name();
     replica::table& table = _db.local().find_column_family(s->id());
     auto erm = table.get_effective_replication_map();
     inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints_without_node_being_replaced(token);
-    inet_address_vector_topology_change pending_endpoints = erm->get_pending_endpoints(token, keyspace_name);
+    inet_address_vector_topology_change pending_endpoints = erm->get_pending_endpoints(token, s->ks_name());
 
     slogger.trace("creating write handler for token: {} natural: {} pending: {}", token, natural_endpoints, pending_endpoints);
     tracing::trace(tr_state, "Creating write handler for token: {} natural: {} pending: {}", token, natural_endpoints ,pending_endpoints);
