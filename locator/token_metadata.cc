@@ -340,6 +340,10 @@ token_metadata::tokens_iterator& token_metadata::tokens_iterator::operator++() {
     return *this;
 }
 
+host_id token_metadata::get_my_id() const {
+    return get_host_id(utils::fb_utilities::get_broadcast_address());
+}
+
 inline
 boost::iterator_range<token_metadata::tokens_iterator>
 token_metadata_impl::ring_range(const token& start) const {

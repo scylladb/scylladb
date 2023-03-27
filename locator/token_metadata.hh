@@ -171,6 +171,9 @@ public:
     /** @return a copy of the endpoint-to-id map for read-only operations */
     std::unordered_map<inet_address, host_id> get_endpoint_to_host_id_map_for_reading() const;
 
+    /// Returns host_id of the local node.
+    host_id get_my_id() const;
+
     void add_bootstrap_token(token t, inet_address endpoint);
 
     void add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint);
