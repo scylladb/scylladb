@@ -184,10 +184,9 @@ static std::vector<stream_id> create_stream_ids(
 }
 
 class topology_description_generator final {
-    unsigned _ignore_msb_bits;
     const std::unordered_set<dht::token>& _bootstrap_tokens;
     const locator::token_metadata_ptr _tmptr;
-    const gms::gossiper& _gossiper;
+    const noncopyable_function<std::pair<size_t, uint8_t> (dht::token)>& _get_sharding_info;
 
     // Compute a set of tokens that split the token ring into vnodes
     auto get_tokens() const {
@@ -200,28 +199,12 @@ class topology_description_generator final {
         return tokens;
     }
 
-    // Fetch sharding parameters for a node that owns vnode ending with this.end
-    // Returns <shard_count, ignore_msb> pair.
-    std::pair<size_t, uint8_t> get_sharding_info(dht::token end) const {
-        if (_bootstrap_tokens.contains(end)) {
-            return {smp::count, _ignore_msb_bits};
-        } else {
-            auto endpoint = _tmptr->get_endpoint(end);
-            if (!endpoint) {
-                throw std::runtime_error(
-                        format("Can't find endpoint for token {}", end));
-            }
-            auto sc = get_shard_count(*endpoint, _gossiper);
-            return {sc > 0 ? sc : 1, get_sharding_ignore_msb(*endpoint, _gossiper)};
-        }
-    }
-
     token_range_description create_description(size_t index, dht::token start, dht::token end) const {
         token_range_description desc;
 
         desc.token_range_end = end;
 
-        auto [shard_count, ignore_msb] = get_sharding_info(end);
+        auto [shard_count, ignore_msb] = _get_sharding_info(end);
         desc.streams = create_stream_ids(index, start, end, shard_count, ignore_msb);
         desc.sharding_ignore_msb = ignore_msb;
 
@@ -229,14 +212,14 @@ class topology_description_generator final {
     }
 public:
     topology_description_generator(
-            unsigned ignore_msb_bits,
             const std::unordered_set<dht::token>& bootstrap_tokens,
             const locator::token_metadata_ptr tmptr,
-            const gms::gossiper& gossiper)
-        : _ignore_msb_bits(ignore_msb_bits)
-        , _bootstrap_tokens(bootstrap_tokens)
+            // This function must return sharding parameters for a node that owns the vnode ending with
+            // the given token. Returns <shard_count, ignore_msb> pair.
+            const noncopyable_function<std::pair<size_t, uint8_t> (dht::token)>& get_sharding_info)
+        : _bootstrap_tokens(bootstrap_tokens)
         , _tmptr(std::move(tmptr))
-        , _gossiper(gossiper)
+        , _get_sharding_info(get_sharding_info)
     {}
 
     /*
@@ -349,7 +332,23 @@ future<cdc::generation_id> generation_service::make_new_generation(const std::un
     using namespace std::chrono_literals;
 
     const locator::token_metadata_ptr tmptr = _token_metadata.get();
-    auto gen = topology_description_generator(_cfg.ignore_msb_bits, bootstrap_tokens, tmptr, _gossiper).generate();
+
+    // Fetch sharding parameters for a node that owns vnode ending with this token
+    // using gossiped application states.
+    auto get_sharding_info = [&] (dht::token end) -> std::pair<size_t, uint8_t> {
+        if (bootstrap_tokens.contains(end)) {
+            return {smp::count, _cfg.ignore_msb_bits};
+        } else {
+            auto endpoint = tmptr->get_endpoint(end);
+            if (!endpoint) {
+                throw std::runtime_error(
+                        format("Can't find endpoint for token {}", end));
+            }
+            auto sc = get_shard_count(*endpoint, _gossiper);
+            return {sc > 0 ? sc : 1, get_sharding_ignore_msb(*endpoint, _gossiper)};
+        }
+    };
+    auto gen = topology_description_generator(bootstrap_tokens, tmptr, get_sharding_info).generate();
 
     // We need to call this as late in the procedure as possible.
     // In the V2 format we can do this after inserting the generation data into the table;
