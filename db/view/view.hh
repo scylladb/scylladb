@@ -21,11 +21,6 @@ namespace replica {
 struct cf_stats;
 }
 
-namespace service {
-struct allow_hints_tag;
-using allow_hints = bool_class<allow_hints_tag>;
-}
-
 namespace db {
 
 namespace view {
@@ -314,18 +309,6 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(
         const std::vector<view_and_base>& views);
 
 bool needs_static_row(const mutation_partition& mp, const std::vector<view_and_base>& views);
-
-struct wait_for_all_updates_tag {};
-using wait_for_all_updates = bool_class<wait_for_all_updates_tag>;
-future<> mutate_MV(
-        dht::token base_token,
-        utils::chunked_vector<frozen_mutation_and_schema> view_updates,
-        db::view::stats& stats,
-        replica::cf_stats& cf_stats,
-        tracing::trace_state_ptr tr_state,
-        db::timeout_semaphore_units pending_view_updates,
-        service::allow_hints allow_hints,
-        wait_for_all_updates wait_for_all);
 
 /**
  * create_virtual_column() adds a "virtual column" to a schema builder.

@@ -1614,7 +1614,7 @@ static bool should_update_synchronously(const schema& s) {
 // to a modification of a single base partition, and apply them to the
 // appropriate paired replicas. This is done asynchronously - we do not wait
 // for the writes to complete.
-future<> mutate_MV(
+future<> view_update_generator::mutate_MV(
         dht::token base_token,
         utils::chunked_vector<frozen_mutation_and_schema> view_updates,
         db::view::stats& stats,

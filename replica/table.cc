@@ -34,7 +34,7 @@
 #include "db/system_keyspace.hh"
 #include "db/query_context.hh"
 #include "query-result-writer.hh"
-#include "db/view/view.hh"
+#include "db/view/view_update_generator.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "utils/error_injection.hh"
@@ -1999,7 +1999,7 @@ future<> table::generate_and_propagate_view_updates(shared_ptr<db::view::view_up
         tracing::trace(tr_state, "Generated {} view update mutations", updates->size());
         auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage_of(*updates));
         try {
-            co_await db::view::mutate_MV(base_token, std::move(*updates), _view_stats, *_config.cf_stats, tr_state,
+            co_await gen->mutate_MV(base_token, std::move(*updates), _view_stats, *_config.cf_stats, tr_state,
                 std::move(units), service::allow_hints::yes, db::view::wait_for_all_updates::no);
         } catch (...) {
             // Ignore exceptions: any individual failure to propagate a view update will be reported
@@ -2132,7 +2132,7 @@ future<> table::populate_views(
             size_t units_to_wait_for = std::min(_config.view_update_concurrency_semaphore_limit, update_size);
             auto units = co_await seastar::get_units(*_config.view_update_concurrency_semaphore, units_to_wait_for);
             units.adopt(seastar::consume_units(*_config.view_update_concurrency_semaphore, update_size - units_to_wait_for));
-            co_await db::view::mutate_MV(base_token, std::move(*updates), _view_stats, *_config.cf_stats,
+            co_await gen->mutate_MV(base_token, std::move(*updates), _view_stats, *_config.cf_stats,
                     tracing::trace_state_ptr(), std::move(units), service::allow_hints::no, db::view::wait_for_all_updates::yes);
         } catch (...) {
             if (!err) {

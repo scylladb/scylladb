@@ -9,7 +9,10 @@
 #pragma once
 
 #include "sstables/shared_sstable.hh"
+#include "db/timeout_clock.hh"
+#include "utils/chunked_vector.hh"
 
+#include <seastar/core/sharded.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/condition-variable.hh>
@@ -17,16 +20,33 @@
 
 using namespace seastar;
 
+struct frozen_mutation_and_schema;
+
+namespace dht {
+class token;
+}
+
+namespace tracing {
+class trace_state_ptr;
+}
+
 namespace replica {
 class database;
 class table;
+struct cf_stats;
 }
 
 namespace service {
 class storage_proxy;
+struct allow_hints_tag;
+using allow_hints = bool_class<allow_hints_tag>;
 }
 
 namespace db::view {
+
+class stats;
+struct wait_for_all_updates_tag {};
+using wait_for_all_updates = bool_class<wait_for_all_updates_tag>;
 
 class view_update_generator : public async_sharded_service<view_update_generator> {
 public:
@@ -51,6 +71,16 @@ public:
     future<> start();
     future<> stop();
     future<> register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<replica::table> table);
+
+    future<> mutate_MV(
+            dht::token base_token,
+            utils::chunked_vector<frozen_mutation_and_schema> view_updates,
+            db::view::stats& stats,
+            replica::cf_stats& cf_stats,
+            tracing::trace_state_ptr tr_state,
+            db::timeout_semaphore_units pending_view_updates,
+            service::allow_hints allow_hints,
+            wait_for_all_updates wait_for_all);
 
     ssize_t available_register_units() const { return _registration_sem.available_units(); }
 private:
