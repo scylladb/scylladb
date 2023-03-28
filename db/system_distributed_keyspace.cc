@@ -504,12 +504,10 @@ system_distributed_keyspace::read_cdc_topology_description(
 }
 
 static future<utils::chunked_vector<mutation>> get_cdc_generation_mutations(
-        const replica::database& db,
+        schema_ptr s,
         utils::UUID id,
         const cdc::topology_description& desc,
         size_t mutation_size_threshold) {
-    auto s = db.find_schema(system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::CDC_GENERATIONS_V2);
-
     auto ts = api::new_timestamp();
     utils::chunked_vector<mutation> res;
     res.emplace_back(s, partition_key::from_singular(*s, id));
@@ -568,7 +566,9 @@ system_distributed_keyspace::insert_cdc_generation(
     const size_t L = 60'000'000;
     const auto mutation_size_threshold = std::max(size_t(1), L / (num_replicas * concurrency));
 
-    auto ms = co_await get_cdc_generation_mutations(_qp.db().real_database(), id, desc, mutation_size_threshold);
+    auto s = _qp.db().real_database().find_schema(
+        system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::CDC_GENERATIONS_V2);
+    auto ms = co_await get_cdc_generation_mutations(s, id, desc, mutation_size_threshold);
     co_await max_concurrent_for_each(ms, concurrency, [&] (mutation& m) -> future<> {
         co_await _sp.mutate(
             { std::move(m) },
