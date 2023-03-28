@@ -2269,6 +2269,7 @@ public:
 
 private:
     view_builder& _builder;
+    shared_ptr<view_update_generator> _gen;
     build_step& _step;
     built_views _built_views;
     gc_clock::time_point _now;
@@ -2285,14 +2286,16 @@ private:
     // beyond our limit on mutation size (by default 32 MB).
     size_t _fragments_memory_usage = 0;
 public:
-    consumer(view_builder& builder, build_step& step, gc_clock::time_point now)
+    consumer(view_builder& builder, shared_ptr<view_update_generator> gen, build_step& step, gc_clock::time_point now)
             : _builder(builder)
+            , _gen(std::move(gen))
             , _step(step)
             , _built_views{step}
             , _now(now) {
         if (!step.current_key.key().is_empty(*_step.reader.schema())) {
             load_views_to_build();
         }
+        (void)_gen;
     }
 
     void load_views_to_build() {
@@ -2441,7 +2444,7 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
             step.pslice,
             batch_size,
             query::max_partitions);
-    auto consumer = compact_for_query_v2<view_builder::consumer>(compaction_state, view_builder::consumer{*this, step, now});
+    auto consumer = compact_for_query_v2<view_builder::consumer>(compaction_state, view_builder::consumer{*this, _vug.shared_from_this(), step, now});
     auto built = step.reader.consume_in_thread(std::move(consumer));
     if (auto ds = std::move(*compaction_state).detach_state()) {
         if (ds->current_tombstone) {
