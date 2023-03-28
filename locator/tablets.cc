@@ -157,4 +157,27 @@ std::ostream& operator<<(std::ostream& out, const tablet_metadata& tm) {
     return out << "\n}";
 }
 
+size_t tablet_map::external_memory_usage() const {
+    size_t result = _tablets.external_memory_usage();
+    for (auto&& tablet : _tablets) {
+        result += tablet.replicas.external_memory_usage();
+    }
+    return result;
+}
+
+// Estimates the external memory usage of std::unordered_map<>.
+// Does not include external memory usage of elements.
+template <typename K, typename V>
+static size_t estimate_external_memory_usage(const std::unordered_map<K, V>& map) {
+    return map.bucket_count() * sizeof(void*) + map.size() * (sizeof(std::pair<const K, V>) + 8);
+}
+
+size_t tablet_metadata::external_memory_usage() const {
+    size_t result = estimate_external_memory_usage(_tablets);
+    for (auto&& [id, map] : _tablets) {
+        result += map.external_memory_usage();
+    }
+    return result;
+}
+
 }

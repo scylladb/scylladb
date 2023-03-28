@@ -51,6 +51,7 @@
 #include <utility>
 #include <algorithm>
 #include <stdexcept>
+#include <malloc.h>
 
 namespace utils {
 
@@ -193,6 +194,8 @@ public:
     size_t memory_size() const {
         return _capacity * sizeof(T);
     }
+
+    size_t external_memory_usage() const;
 public:
     template <class ValueType>
     class iterator_type {
@@ -307,6 +310,14 @@ public:
     }
 };
 
+template<typename T, size_t max_contiguous_allocation>
+size_t chunked_vector<T, max_contiguous_allocation>::external_memory_usage() const {
+    size_t result = 0;
+    for (auto&& chunk : _chunks) {
+        result += ::malloc_usable_size(chunk.get());
+    }
+    return result;
+}
 
 template <typename T, size_t max_contiguous_allocation>
 chunked_vector<T, max_contiguous_allocation>::chunked_vector(const chunked_vector& x)
