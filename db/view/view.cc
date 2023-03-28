@@ -2606,7 +2606,7 @@ view_updating_consumer::view_updating_consumer(view_update_generator& gen, schem
     : view_updating_consumer(std::move(schema), std::move(permit), as, staging_reader_handle,
             [table = table.shared_from_this(), excluded_sstables = std::move(excluded_sstables), gen = gen.shared_from_this()] (mutation m) mutable {
         auto s = m.schema();
-        return table->stream_view_replica_updates(std::move(s), std::move(m), db::no_timeout, excluded_sstables);
+        return table->stream_view_replica_updates(gen, std::move(s), std::move(m), db::no_timeout, excluded_sstables);
     })
 { }
 
