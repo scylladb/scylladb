@@ -494,8 +494,16 @@ public:
             _partition_limit -= _rows_in_current_partition > 0;
             auto stop = consumer.consume_end_of_partition();
             if (!sstable_compaction()) {
-                return _row_limit && _partition_limit && stop != stop_iteration::yes
+                stop = _row_limit && _partition_limit && stop != stop_iteration::yes
                        ? stop_iteration::no : stop_iteration::yes;
+                // If we decided to stop earlier but decide to continue now, we
+                // are in effect skipping the partition. Do not leave `_stop` at
+                // `stop_iteration::yes` in this case, reset it back to
+                // `stop_iteration::no` as if we exhausted the partition.
+                if (_stop && !stop) {
+                    _stop = stop_iteration::no;
+                }
+                return stop;
             }
         }
         return stop_iteration::no;
