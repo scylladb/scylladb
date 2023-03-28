@@ -506,31 +506,9 @@ system_distributed_keyspace::read_cdc_topology_description(
 static future<utils::chunked_vector<mutation>> get_cdc_generation_mutations(
         const replica::database& db,
         utils::UUID id,
-        size_t num_replicas,
-        size_t concurrency,
-        const cdc::topology_description& desc) {
-    assert(num_replicas);
+        const cdc::topology_description& desc,
+        size_t mutation_size_threshold) {
     auto s = db.find_schema(system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::CDC_GENERATIONS_V2);
-
-    // To insert the data quickly and efficiently we send it in batches of multiple rows
-    // (each batch represented by a single mutation). We also send multiple such batches concurrently.
-    // However, we need to limit the memory consumption of the operation.
-    // I assume that the memory consumption grows linearly with the number of replicas
-    // (we send to all replicas ``at the same time''), with the batch size (the data must
-    // be copied for each replica?) and with concurrency. These assumptions may be too conservative
-    // but that won't hurt in a significant way (it may hurt the efficiency of the operation a little).
-    // Thus, if we want to limit the memory consumption to L, it should be true that
-    // mutation_size * num_replicas * concurrency <= L, hence
-    // mutation_size <= L / (num_replicas * concurrency).
-    // For example, say L = 10MB, concurrency = 10, num_replicas = 100; we get
-    // mutation_size <= 10MB / 1000 = 10KB.
-    // On the other hand we must have mutation_size >= size of a single row,
-    // so we will use mutation_size <= max(size of single row, L/(num_replicas*concurrency)).
-
-    // It has been tested that sending 1MB batches to 3 replicas with concurrency 20 works OK,
-    // which would correspond to L ~= 60MB. Hence that's the limit we use here.
-    const size_t L = 60'000'000;
-    const auto new_mutation_threshold = std::max(size_t(1), L / (num_replicas * concurrency));
 
     auto ts = api::new_timestamp();
     utils::chunked_vector<mutation> res;
@@ -538,7 +516,7 @@ static future<utils::chunked_vector<mutation>> get_cdc_generation_mutations(
     res.back().set_static_cell(to_bytes("num_ranges"), int32_t(desc.entries().size()), ts);
     size_t size_estimate = 0;
     for (auto& e : desc.entries()) {
-        if (size_estimate >= new_mutation_threshold) {
+        if (size_estimate >= mutation_size_threshold) {
             res.emplace_back(s, partition_key::from_singular(*s, id));
             size_estimate = 0;
         }
@@ -568,8 +546,29 @@ system_distributed_keyspace::insert_cdc_generation(
     using namespace std::chrono_literals;
 
     const size_t concurrency = 10;
+    const size_t num_replicas = ctx.num_token_owners;
 
-    auto ms = co_await get_cdc_generation_mutations(_qp.db().real_database(), id, ctx.num_token_owners, concurrency, desc);
+    // To insert the data quickly and efficiently we send it in batches of multiple rows
+    // (each batch represented by a single mutation). We also send multiple such batches concurrently.
+    // However, we need to limit the memory consumption of the operation.
+    // I assume that the memory consumption grows linearly with the number of replicas
+    // (we send to all replicas ``at the same time''), with the batch size (the data must
+    // be copied for each replica?) and with concurrency. These assumptions may be too conservative
+    // but that won't hurt in a significant way (it may hurt the efficiency of the operation a little).
+    // Thus, if we want to limit the memory consumption to L, it should be true that
+    // mutation_size * num_replicas * concurrency <= L, hence
+    // mutation_size <= L / (num_replicas * concurrency).
+    // For example, say L = 10MB, concurrency = 10, num_replicas = 100; we get
+    // mutation_size <= 10MB / 1000 = 10KB.
+    // On the other hand we must have mutation_size >= size of a single row,
+    // so we will use mutation_size <= max(size of single row, L/(num_replicas*concurrency)).
+
+    // It has been tested that sending 1MB batches to 3 replicas with concurrency 20 works OK,
+    // which would correspond to L ~= 60MB. Hence that's the limit we use here.
+    const size_t L = 60'000'000;
+    const auto mutation_size_threshold = std::max(size_t(1), L / (num_replicas * concurrency));
+
+    auto ms = co_await get_cdc_generation_mutations(_qp.db().real_database(), id, desc, mutation_size_threshold);
     co_await max_concurrent_for_each(ms, concurrency, [&] (mutation& m) -> future<> {
         co_await _sp.mutate(
             { std::move(m) },
