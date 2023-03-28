@@ -96,7 +96,6 @@ view_update_generator::view_update_generator(replica::database& db, sharded<serv
         , _progress_tracker(std::make_unique<progress_tracker>()) {
     setup_metrics();
     discover_staging_sstables();
-    (void)_proxy;
     _db.plug_view_update_generator(*this);
 }
 
