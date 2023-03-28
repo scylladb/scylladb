@@ -50,15 +50,7 @@ bytes from_hex(sstring_view s) {
 }
 
 sstring to_hex(bytes_view b) {
-    static char digits[] = "0123456789abcdef";
-    sstring out = uninitialized_string(b.size() * 2);
-    unsigned end = b.size();
-    for (unsigned i = 0; i != end; ++i) {
-        uint8_t x = b[i];
-        out[2*i] = digits[x >> 4];
-        out[2*i+1] = digits[x & 0xf];
-    }
-    return out;
+    return fmt::to_string(fmt_hex(b));
 }
 
 sstring to_hex(const bytes& b) {
@@ -70,12 +62,14 @@ sstring to_hex(const bytes_opt& b) {
 }
 
 std::ostream& operator<<(std::ostream& os, const bytes& b) {
-    return os << to_hex(b);
+    fmt::print(os, "{}", b);
+    return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const bytes_opt& b) {
     if (b) {
-        return os << *b;
+        fmt::print(os, "{}", *b);
+        return os;
     }
     return os << "null";
 }
@@ -83,11 +77,13 @@ std::ostream& operator<<(std::ostream& os, const bytes_opt& b) {
 namespace std {
 
 std::ostream& operator<<(std::ostream& os, const bytes_view& b) {
-    return os << to_hex(b);
+    fmt::print(os, "{}", fmt_hex(b));
+    return os;
 }
 
 }
 
 std::ostream& operator<<(std::ostream& os, const fmt_hex& b) {
-    return os << to_hex(b.v);
+    fmt::print(os, "{}", b);
+    return os;
 }

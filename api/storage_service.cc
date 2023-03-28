@@ -169,7 +169,7 @@ static ss::token_range token_range_endpoints_to_json(const dht::token_range_endp
     r.rpc_endpoints = d._rpc_endpoints;
     for (auto det : d._endpoint_details) {
         ss::endpoint_detail ed;
-        ed.host = boost::lexical_cast<std::string>(det._host);
+        ed.host = fmt::to_string(det._host);
         ed.datacenter = det._datacenter;
         if (det._rack != "") {
             ed.rack = det._rack;
@@ -493,8 +493,8 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_token_endpoint.set(r, [&ss] (std::unique_ptr<http::request> req) {
         return make_ready_future<json::json_return_type>(stream_range_as_array(ss.local().get_token_to_endpoint_map(), [](const auto& i) {
             storage_service_json::mapper val;
-            val.key = boost::lexical_cast<std::string>(i.first);
-            val.value = boost::lexical_cast<std::string>(i.second);
+            val.key = fmt::to_string(i.first);
+            val.value = fmt::to_string(i.second);
             return val;
         }));
     });
@@ -562,7 +562,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         auto points = ctx.get_token_metadata().get_bootstrap_tokens();
         std::unordered_set<sstring> addr;
         for (auto i: points) {
-            addr.insert(boost::lexical_cast<std::string>(i.second));
+            addr.insert(fmt::to_string(i.second));
         }
         return container_to_vec(addr);
     });

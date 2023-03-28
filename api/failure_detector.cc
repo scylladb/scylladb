@@ -22,7 +22,7 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
         std::vector<fd::endpoint_state> res;
         for (auto i : g.get_endpoint_states()) {
             fd::endpoint_state val;
-            val.addrs = boost::lexical_cast<std::string>(i.first);
+            val.addrs = fmt::to_string(i.first);
             val.is_alive = i.second.is_alive();
             val.generation = i.second.get_heart_beat_state().get_generation();
             val.version = i.second.get_heart_beat_state().get_heart_beat_version();

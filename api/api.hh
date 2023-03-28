@@ -27,7 +27,7 @@ template<class T>
 std::vector<sstring> container_to_vec(const T& container) {
     std::vector<sstring> res;
     for (auto i : container) {
-        res.push_back(boost::lexical_cast<std::string>(i));
+        res.push_back(fmt::to_string(i));
     }
     return res;
 }

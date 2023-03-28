@@ -29,7 +29,7 @@ std::vector<message_counter> map_to_message_counters(
     std::vector<message_counter> res;
     for (auto i : map) {
         res.push_back(message_counter());
-        res.back().key = boost::lexical_cast<sstring>(i.first);
+        res.back().key = fmt::to_string(i.first);
         res.back().value = i.second;
     }
     return res;
