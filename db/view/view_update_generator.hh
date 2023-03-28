@@ -28,7 +28,7 @@ class storage_proxy;
 
 namespace db::view {
 
-class view_update_generator {
+class view_update_generator : public async_sharded_service<view_update_generator> {
 public:
     static constexpr size_t registration_queue_size = 5;
 

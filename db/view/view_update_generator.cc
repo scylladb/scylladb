@@ -97,6 +97,7 @@ view_update_generator::view_update_generator(replica::database& db, sharded<serv
     setup_metrics();
     discover_staging_sstables();
     (void)_proxy;
+    _db.plug_view_update_generator(*this);
 }
 
 view_update_generator::~view_update_generator() {}
@@ -206,6 +207,7 @@ future<> view_update_generator::start() {
 }
 
 future<> view_update_generator::stop() {
+    _db.unplug_view_update_generator();
     _as.request_abort();
     _pending_sstables.signal();
     return std::move(_started).then([this] {

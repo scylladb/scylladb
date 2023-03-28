@@ -123,6 +123,10 @@ class table_selector;
 
 future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<service::raft_group_registry>& raft_gr, db::config& cfg, system_table_load_phase phase);
 
+namespace view {
+class view_update_generator;
+}
+
 }
 
 class mutation_reordered_with_truncate_exception : public std::exception {};
@@ -1323,6 +1327,7 @@ private:
     db::timeout_semaphore _view_update_concurrency_sem{max_memory_pending_view_updates()};
 
     cache_tracker _row_cache_tracker;
+    seastar::shared_ptr<db::view::view_update_generator> _view_update_generator;
 
     inheriting_concrete_execution_stage<
             future<>,
@@ -1399,6 +1404,9 @@ public:
 
     void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
     void unplug_system_keyspace() noexcept;
+
+    void plug_view_update_generator(db::view::view_update_generator& generator) noexcept;
+    void unplug_view_update_generator() noexcept;
 
 private:
     future<> flush_non_system_column_families();
