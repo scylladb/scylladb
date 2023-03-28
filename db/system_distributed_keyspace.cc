@@ -50,6 +50,7 @@ namespace {
     });
 }
 
+extern thread_local data_type cdc_streams_set_type;
 thread_local data_type cdc_streams_set_type = set_type_impl::get_instance(bytes_type, false);
 
 /* See `token_range_description` struct */
@@ -503,39 +504,6 @@ system_distributed_keyspace::read_cdc_topology_description(
     });
 }
 
-static future<utils::chunked_vector<mutation>> get_cdc_generation_mutations(
-        schema_ptr s,
-        utils::UUID id,
-        const cdc::topology_description& desc,
-        size_t mutation_size_threshold) {
-    auto ts = api::new_timestamp();
-    utils::chunked_vector<mutation> res;
-    res.emplace_back(s, partition_key::from_singular(*s, id));
-    res.back().set_static_cell(to_bytes("num_ranges"), int32_t(desc.entries().size()), ts);
-    size_t size_estimate = 0;
-    for (auto& e : desc.entries()) {
-        if (size_estimate >= mutation_size_threshold) {
-            res.emplace_back(s, partition_key::from_singular(*s, id));
-            size_estimate = 0;
-        }
-
-        set_type_impl::native_type streams;
-        streams.reserve(e.streams.size());
-        for (auto& stream: e.streams) {
-            streams.push_back(data_value(stream.to_bytes()));
-        }
-
-        size_estimate += e.streams.size() * 20;
-        auto ckey = clustering_key::from_singular(*s, dht::token::to_int64(e.token_range_end));
-        res.back().set_cell(ckey, to_bytes("streams"), make_set_value(cdc_streams_set_type, std::move(streams)), ts);
-        res.back().set_cell(ckey, to_bytes("ignore_msb"), int8_t(e.sharding_ignore_msb), ts);
-
-        co_await coroutine::maybe_yield();
-    }
-
-    co_return res;
-}
-
 future<>
 system_distributed_keyspace::insert_cdc_generation(
         utils::UUID id,
@@ -568,7 +536,7 @@ system_distributed_keyspace::insert_cdc_generation(
 
     auto s = _qp.db().real_database().find_schema(
         system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::CDC_GENERATIONS_V2);
-    auto ms = co_await get_cdc_generation_mutations(s, id, desc, mutation_size_threshold);
+    auto ms = co_await cdc::get_cdc_generation_mutations(s, id, desc, mutation_size_threshold);
     co_await max_concurrent_for_each(ms, concurrency, [&] (mutation& m) -> future<> {
         co_await _sp.mutate(
             { std::move(m) },
