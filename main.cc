@@ -1603,7 +1603,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             static sharded<db::view::view_builder> view_builder;
             if (cfg->view_building()) {
                 supervisor::notify("starting the view builder");
-                view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier)).get();
+                view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier), std::ref(view_update_generator)).get();
                 view_builder.invoke_on_all([&mm] (db::view::view_builder& vb) { 
                     return vb.start(mm.local());
                 }).get();

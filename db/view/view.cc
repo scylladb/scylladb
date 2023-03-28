@@ -1746,11 +1746,12 @@ future<> mutate_MV(
     });
 }
 
-view_builder::view_builder(replica::database& db, db::system_keyspace& sys_ks, db::system_distributed_keyspace& sys_dist_ks, service::migration_notifier& mn)
+view_builder::view_builder(replica::database& db, db::system_keyspace& sys_ks, db::system_distributed_keyspace& sys_dist_ks, service::migration_notifier& mn, view_update_generator& vug)
         : _db(db)
         , _sys_ks(sys_ks)
         , _sys_dist_ks(sys_dist_ks)
         , _mnotifier(mn)
+        , _vug(vug)
         , _permit(_db.get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "view_builder", db::no_timeout, {})) {
     setup_metrics();
 }

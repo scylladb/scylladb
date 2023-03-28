@@ -917,7 +917,7 @@ public:
             });
 
             sharded<db::view::view_builder> view_builder;
-            view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notif)).get();
+            view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notif), std::ref(view_update_generator)).get();
             view_builder.invoke_on_all([&mm] (db::view::view_builder& vb) {
                 return vb.start(mm.local());
             }).get();
