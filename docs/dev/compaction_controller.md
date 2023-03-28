@@ -56,61 +56,68 @@ Unimplemented
 
 Backlog for one SSTable under STCS:
 
-```
-  (1) Bi = Ei * log4 (T / Si),
+
+```math
+  B_i = E_i \times log_4 \frac{T}{S_i}   \qquad \text{(1)}
 ```
 
-where Ei is the effective size of the SStable, Si is the Size of this SSTable, and T is the total
+where $E_i$ is the effective size of the SStable, $S_i$ is the Size of this SSTable, and $T$ is the total
 size of the Table.
 
 To calculate the backlog, we can use the logarithm in any base, but we choose 4 as that is the
 historical minimum for the number of SSTables being compacted together. Although now that minimum
 could be lifted, this is still a good number of SSTables to aim for in a compaction execution.
 
-T, the total table size, is defined as
+$T$, the total table size, is defined as
 
-```
-  (2) T = Sum(i = 0...N) { Si }.
-```
-
-Ei, the effective size, is defined as
-
-```
-  (3) Ei = Si - Ci,
+```math
+  T = \sum_{i=0}^{N}{S_i}    \qquad \text{(2)}
 ```
 
-where Ci is the total amount of bytes already compacted for this table.
-For tables that are not under compaction, Ci = 0 and Si = Ei.
+$E_i$, the effective size, is defined as
 
-Using the fact that log(a / b) = log(a) - log(b), we rewrite (1) as:
-
+```math
+  E_i = S_i - C_i    \qquad \text{(3)}
 ```
-  Bi = Ei log4(T) - Ei log4(Si)
+
+where $C_i$ is the total amount of bytes already compacted for this table.
+For tables that are not under compaction, $C_i = 0$ and $S_i = E_i$.
+
+Using the fact that $\log\frac{a}{b} = \log a - \log b$, we rewrite (1) as:
+
+```math
+  B_i = E_i \log_4 T - E_i \log_4 S_{i}
 ```
 
 For the entire Table, the Aggregate Backlog (A) is
 
-```
-  A = Sum(i = 0...N) { Ei * log4(T) - Ei * log4(Si) },
+```math
+  A = \sum_{i=0}^N E_i \times \log_4 T - E_i * \log_4 S_i
 ```
 
 which can be expressed as a sum of a table component and a SSTable component:
 
-```
-  A = Sum(i = 0...N) { Ei } * log4(T) - Sum(i = 0...N) { Ei * log4(Si) },
+```math
+  A = \left( \sum_{i=0}^N E_i \times \log_4 T \right) - \left( \sum_{i=0}^N E_i \times \log_4 S_{i} \right)
 ```
 
-and if we define C = Sum(i = 0...N) { Ci }, then we can write
+and if we define
 
+```math
+C = \sum_{i=0}^N C_i
 ```
-  A = (T - C) * log4(T) - Sum(i = 0...N) { (Si - Ci)* log4(Si) }.
+
+then we can write
+
+```math
+  A = (T - C) \times \log_4 T - \sum_{i=0}^N (S_i - C_i) \times \log_4 S_{i}
 ```
 
 Because the SSTable number can be quite big, we'd like to keep iterations to a minimum.  We can do
 that if we rewrite the expression above one more time, yielding:
 
-```
-  (4) A = T * log4(T) - C * log4(T) - (Sum(i = 0...N) { Si * log4(Si) } - Sum(i = 0...N) { Ci * log4(Si) }
+```math
+  A = T \times \log_4 T - C \times \log_4 T - \left( \sum_{i=0}^N S_i \times \log_4 S_i - \sum_{i=0}^N C_i \times \log_4 S_i \right)   \qquad \text{(4)}
 ```
 
 When SSTables are added or removed, we update the static parts of the equation, and every time we
