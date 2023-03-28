@@ -90,9 +90,13 @@ public:
     }
 };
 
-view_update_generator::view_update_generator(replica::database& db) : _db(db), _progress_tracker(std::make_unique<progress_tracker>()) {
+view_update_generator::view_update_generator(replica::database& db, sharded<service::storage_proxy>& proxy)
+        : _db(db)
+        , _proxy(proxy)
+        , _progress_tracker(std::make_unique<progress_tracker>()) {
     setup_metrics();
     discover_staging_sstables();
+    (void)_proxy;
 }
 
 view_update_generator::~view_update_generator() {}

@@ -839,7 +839,7 @@ public:
                 raft_gr.invoke_on_all(&service::raft_group_registry::drain_on_shutdown).get();
             });
 
-            view_update_generator.start(std::ref(db)).get();
+            view_update_generator.start(std::ref(db), std::ref(proxy)).get();
             view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
             auto stop_view_update_generator = defer([&view_update_generator] {
                 view_update_generator.stop().get();

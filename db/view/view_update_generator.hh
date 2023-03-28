@@ -22,6 +22,10 @@ class database;
 class table;
 }
 
+namespace service {
+class storage_proxy;
+}
+
 namespace db::view {
 
 class view_update_generator {
@@ -30,6 +34,7 @@ public:
 
 private:
     replica::database& _db;
+    sharded<service::storage_proxy>& _proxy;
     seastar::abort_source _as;
     future<> _started = make_ready_future<>();
     seastar::condition_variable _pending_sstables;
@@ -40,7 +45,7 @@ private:
     class progress_tracker;
     std::unique_ptr<progress_tracker> _progress_tracker;
 public:
-    view_update_generator(replica::database& db);
+    view_update_generator(replica::database& db, sharded<service::storage_proxy>& proxy);
     ~view_update_generator();
 
     future<> start();
