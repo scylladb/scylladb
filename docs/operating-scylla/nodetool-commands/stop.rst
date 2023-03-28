@@ -7,7 +7,7 @@ Usage
 
 .. code:: sh
 
-          nodetool <options> stop -- <compaction_type>
+          nodetool <options> stop <compaction_type> 
 
 .. versionadded:: version 4.5 ``compaction type``
    
@@ -18,8 +18,8 @@ For example:
 
 .. code:: sh
 
-    nodetool stop compaction
+    nodetool stop COMPACTION
 
-    nodetool stop compaction RESHAPE
+    nodetool stop COMPACTION RESHAPE
 
 .. include:: nodetool-index.rst
