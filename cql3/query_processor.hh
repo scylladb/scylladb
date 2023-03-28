@@ -174,8 +174,8 @@ public:
         return **_wasm_engine;
     }
 
-    wasm::instance_cache* get_wasm_instance_cache() {
-        return _wasm_instance_cache;
+    wasm::instance_cache& wasm_instance_cache() {
+        return *_wasm_instance_cache;
     }
 
     wasm::alien_thread_runner& alien_runner() {
