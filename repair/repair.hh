@@ -33,7 +33,9 @@
 #include "tasks/types.hh"
 
 namespace tasks {
-class repair_module;
+namespace repair {
+class task_manager_module;
+}
 }
 
 namespace replica {

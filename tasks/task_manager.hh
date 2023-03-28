@@ -21,7 +21,9 @@
 #include "utils/serialized_action.hh"
 #include "utils/updateable_value.hh"
 
-class repair_module;
+namespace repair {
+class task_manager_module;
+}
 
 namespace tasks {
 
@@ -146,7 +148,7 @@ public:
         const foreign_task_vector& get_children() const noexcept;
 
         friend class test_task;
-        friend class ::repair_module;
+        friend class ::repair::task_manager_module;
     };
 
     class module : public enable_shared_from_this<module> {

@@ -11,7 +11,7 @@
 #include <vector>
 #include "gms/inet_address.hh"
 #include "repair/repair.hh"
-#include "repair/repair_task.hh"
+#include "repair/task_manager_module.hh"
 #include "tasks/task_manager.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include <seastar/core/distributed.hh>
@@ -55,9 +55,9 @@ public:
 };
 
 class node_ops_metrics {
-    shared_ptr<repair_module> _module;
+    shared_ptr<repair::task_manager_module> _module;
 public:
-    node_ops_metrics(shared_ptr<repair_module> module);
+    node_ops_metrics(shared_ptr<repair::task_manager_module> module);
 
     uint64_t bootstrap_total_ranges{0};
     uint64_t bootstrap_finished_ranges{0};
@@ -91,7 +91,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::system_keyspace>& _sys_ks;
     sharded<db::view::view_update_generator>& _view_update_generator;
-    shared_ptr<repair_module> _repair_module;
+    shared_ptr<repair::task_manager_module> _repair_module;
     service::migration_manager& _mm;
     node_ops_metrics _node_ops_metrics;
     std::unordered_map<node_repair_meta_id, repair_meta_ptr> _repair_metas;
@@ -172,7 +172,7 @@ public:
     gms::gossiper& get_gossiper() noexcept { return _gossiper.local(); }
     size_t max_repair_memory() const { return _max_repair_memory; }
     seastar::semaphore& memory_sem() { return _memory_sem; }
-    repair_module& get_repair_module() noexcept {
+    repair::task_manager_module& get_repair_module() noexcept {
         return *_repair_module;
     }
 
@@ -228,8 +228,8 @@ public:
 
     future<uint32_t> get_next_repair_meta_id();
 
-    friend class user_requested_repair_task_impl;
-    friend class data_sync_repair_task_impl;
+    friend class repair::user_requested_repair_task_impl;
+    friend class repair::data_sync_repair_task_impl;
 };
 
 class repair_info;
@@ -240,7 +240,7 @@ class repair_row;
 class repair_hasher;
 class repair_writer;
 
-future<> repair_cf_range_row_level(shard_repair_task_impl& shard_task,
+future<> repair_cf_range_row_level(repair::shard_repair_task_impl& shard_task,
         sstring cf_name, table_id table_id, dht::token_range range,
         const std::vector<gms::inet_address>& all_peer_nodes);
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
