@@ -237,10 +237,10 @@ stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutat
                 p_i->set_range_tombstone({});
             } else {
                 mplog.trace("{}: inserting sentinel at {}", fmt::ptr(&p), p_sentinel->position());
+                auto insert_result = p._rows.insert_before_hint(p_i, std::move(p_sentinel), cmp);
                 if (tracker) {
-                    tracker->insert(*p_i, *p_sentinel);
+                    tracker->insert(*p_i, *insert_result.first);
                 }
-                p._rows.insert_before_hint(p_i, std::move(p_sentinel), cmp);
             }
         }
     });
