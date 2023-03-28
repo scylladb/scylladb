@@ -13,6 +13,7 @@
 #include "distributed_loader.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
+#include "db/extensions.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/schema_tables.hh"
@@ -51,8 +52,8 @@ bool is_system_keyspace(std::string_view name) {
     return system_keyspaces.contains(name);
 }
 
-bool is_load_prio_keyspace(const sstring& name) {
-    return load_prio_keyspaces.contains(name);
+bool is_load_prio_keyspace(std::string_view name) {
+    return load_prio_keyspaces.contains(sstring(name));
 }
 
 static const std::unordered_set<std::string_view> internal_keyspaces = {
@@ -846,7 +847,7 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<replica::data
                  * in open-source version. But essential for enterprise.
                  * Do _not_ remove or refactor away.
                  */
-                if (prio_only != is_load_prio_keyspace(ks_name)) {
+                if (prio_only != cfg.extensions().is_extension_internal_keyspace(ks_name)) {
                     continue;
                 }
 
