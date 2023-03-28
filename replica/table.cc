@@ -2107,6 +2107,7 @@ table::local_base_lock(
  * @return a future that resolves when the updates have been acknowledged by the view replicas
  */
 future<> table::populate_views(
+        shared_ptr<db::view::view_update_generator> gen,
         std::vector<db::view::view_and_base> views,
         dht::token base_token,
         flat_mutation_reader_v2&& reader,

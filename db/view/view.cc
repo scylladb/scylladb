@@ -2295,7 +2295,6 @@ public:
         if (!step.current_key.key().is_empty(*_step.reader.schema())) {
             load_views_to_build();
         }
-        (void)_gen;
     }
 
     void load_views_to_build() {
@@ -2396,6 +2395,7 @@ public:
             auto close_reader = defer([&reader] { reader.close().get(); });
             reader.upgrade_schema(base_schema);
             _step.base->populate_views(
+                    _gen,
                     std::move(views),
                     _step.current_token(),
                     std::move(reader),

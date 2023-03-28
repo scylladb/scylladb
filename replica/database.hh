@@ -1051,6 +1051,7 @@ public:
 
     // Reader's schema must be the same as the base schema of each of the views.
     future<> populate_views(
+            shared_ptr<db::view::view_update_generator> gen,
             std::vector<db::view::view_and_base>,
             dht::token base_token,
             flat_mutation_reader_v2&&,
