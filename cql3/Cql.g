@@ -10,9 +10,17 @@ options {
 
 @parser::namespace{cql3_parser}
 
+@lexer::preincludes{
+#define SKIP_FOLLOW_SETS
+}
+
 @lexer::includes {
 #include "cql3/error_collector.hh"
 #include "cql3/error_listener.hh"
+}
+
+@parser::preincludes{
+#define SKIP_FOLLOW_SETS
 }
 
 @parser::includes {
