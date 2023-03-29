@@ -25,12 +25,28 @@ submodules=(
 for ent in "${@:-${submodules[@]}}"; do
     submodule=${ent%%:*}
     [ ${submodule} == ${ent} ] && branch="master" || branch=${ent#*:}
-    GIT_DIR="$submodule/.git" git pull --ff-only origin ${branch}
-    SUMMARY=$(git submodule summary $submodule)
-    if grep '^ *<' <<< "$SUMMARY"; then
+    bump_to=origin/${branch}
+
+    pushd .
+    cd $submodule
+    git fetch origin ${branch}
+    if ! git merge-base --is-ancestor HEAD ${bump_to}; then
         echo "Non fast-forward changes detected! Fire three red flares from your flare pistol."
         exit 1
     fi
+    # collect the summary
+    head_ref=$(git rev-parse --short=8 HEAD)
+    branch_ref=$(git rev-parse --short=8 ${branch})
+    count=$(git rev-list --no-merges --count HEAD..${bump_to})
+    # create a summary using the output format of "git submodule summary"
+    SUMMARY="
+* ${submodule} ${head_ref}...${branch_ref} (${count}):
+$(git log --pretty='format:  > %s' --no-merges HEAD..${bump_to})"
+
+    # fast-forward to origin/master
+    git merge --ff-only ${bump_to}
+    popd
+
     if [ ! -z "$SUMMARY" ]; then
         git commit --edit -m "Update $submodule submodule" -m "$SUMMARY" $submodule
     fi
