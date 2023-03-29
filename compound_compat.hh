@@ -516,7 +516,8 @@ public:
 
     template <typename Component>
     friend inline std::ostream& operator<<(std::ostream& os, const std::pair<Component, eoc>& c) {
-        return os << "{value=" << c.first << "; eoc=" << format("0x{:02x}", eoc_type(c.second) & 0xff) << "}";
+        fmt::print(os, "{}", c);
+        return os;
     }
 
     friend std::ostream& operator<<(std::ostream& os, const composite& v);
@@ -527,6 +528,20 @@ public:
         std::strong_ordering operator()(const composite&, const composite&) const;
         std::strong_ordering operator()(composite_view, composite_view) const;
     };
+};
+
+template <typename Component>
+struct fmt::formatter<std::pair<Component, composite::eoc>> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const std::pair<Component, composite::eoc>& c, FormatContext& ctx) const {
+        if constexpr (std::same_as<Component, bytes_view>) {
+            return fmt::format_to(ctx.out(), "{{value={}; eoc={:#02x}}}",
+                                  fmt_hex(c.first), composite::eoc_type(c.second) & 0xff);
+        } else {
+            return fmt::format_to(ctx.out(), "{{value={}; eoc={:#02x}}}",
+                                  c.first, composite::eoc_type(c.second) & 0xff);
+        }
+    }
 };
 
 class composite_view final {
