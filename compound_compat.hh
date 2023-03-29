@@ -662,9 +662,18 @@ composite::composite(const composite_view& v)
     : composite(bytes(v._bytes), v._is_compound)
 { }
 
+template <>
+struct fmt::formatter<composite> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const composite& v, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", composite_view(v));
+    }
+};
+
 inline
 std::ostream& operator<<(std::ostream& os, const composite& v) {
-    return os << composite_view(v);
+    fmt::print(os, "{}", v);
+    return os;
 }
 
 inline
