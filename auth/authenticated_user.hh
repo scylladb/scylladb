@@ -38,11 +38,6 @@ public:
     explicit authenticated_user(std::string_view name);
 };
 
-///
-/// The user name, or "anonymous".
-///
-std::ostream& operator<<(std::ostream&, const authenticated_user&);
-
 inline bool operator==(const authenticated_user& u1, const authenticated_user& u2) noexcept {
     return u1.name == u2.name;
 }
@@ -58,6 +53,21 @@ inline bool is_anonymous(const authenticated_user& u) noexcept {
 }
 
 }
+
+///
+/// The user name, or "anonymous".
+///
+template <>
+struct fmt::formatter<auth::authenticated_user> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const auth::authenticated_user& u, FormatContext& ctx) const {
+        if (u.name) {
+            return fmt::format_to(ctx.out(), "{}", *u.name);
+        } else {
+            return fmt::format_to(ctx.out(), "{}", "anonymous");
+        }
+    }
+};
 
 namespace std {
 
