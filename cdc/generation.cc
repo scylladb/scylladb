@@ -266,8 +266,8 @@ future<utils::chunked_vector<mutation>> get_cdc_generation_mutations(
         schema_ptr s,
         utils::UUID id,
         const cdc::topology_description& desc,
-        size_t mutation_size_threshold) {
-    auto ts = api::new_timestamp();
+        size_t mutation_size_threshold,
+        api::timestamp_type ts) {
     utils::chunked_vector<mutation> res;
     res.emplace_back(s, partition_key::from_singular(*s, id));
     res.back().set_static_cell(to_bytes("num_ranges"), int32_t(desc.entries().size()), ts);

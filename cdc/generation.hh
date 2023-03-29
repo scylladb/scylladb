@@ -135,10 +135,11 @@ bool should_propose_first_generation(const gms::inet_address& me, const gms::gos
 
 // Translates the CDC generation data given by a `cdc::topology_description` into a vector of mutations,
 // using `mutation_size_threshold` to decide on the mutation sizes. The partition key of each mutation
-// is given by `gen_uuid`.
+// is given by `gen_uuid`. The timestamp of each cell in each mutation is given by `mutation_timestamp`.
 //
 // Works for only specific schemas: CDC_GENERATIONS_V2 (in system_distributed_keyspace).
 future<utils::chunked_vector<mutation>> get_cdc_generation_mutations(
-    schema_ptr, utils::UUID gen_uuid, const cdc::topology_description&, size_t mutation_size_threshold);
+    schema_ptr, utils::UUID gen_uuid, const cdc::topology_description&,
+    size_t mutation_size_threshold, api::timestamp_type mutation_timestamp);
 
 } // namespace cdc
