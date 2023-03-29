@@ -1475,9 +1475,11 @@ SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
     using namespace std::chrono;
 
     return test_env::do_with_async([] (test_env& env) {
-        auto s = schema_builder("tests", "time_window_strategy")
+        auto builder = schema_builder("tests", "time_window_strategy")
                 .with_column("id", utf8_type, column_kind::partition_key)
-                .with_column("value", int32_type).build();
+                .with_column("value", int32_type);
+        builder.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
+        auto s = builder.build();
 
         auto make_insert = [&] (partition_key key, api::timestamp_type t) {
             mutation m(s, key);
@@ -1572,9 +1574,11 @@ SEASTAR_TEST_CASE(time_window_strategy_size_tiered_behavior_correctness) {
     using namespace std::chrono;
 
     return test_env::do_with_async([] (test_env& env) {
-        auto s = schema_builder("tests", "time_window_strategy")
+        auto builder = schema_builder("tests", "time_window_strategy")
                 .with_column("id", utf8_type, column_kind::partition_key)
-                .with_column("value", int32_type).build();
+                .with_column("value", int32_type);
+        builder.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
+        auto s = builder.build();
 
         auto sst_gen = env.make_sst_factory(s);
 
@@ -1728,8 +1732,16 @@ SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
 
 SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
     return test_env::do_with_async([] (test_env& env) {
-        auto s = make_shared_schema({}, some_keyspace, some_column_family,
-            {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type);
+        auto make_schema = [&] (sstables::compaction_strategy_type cst) {
+            auto builder = schema_builder("tests", "tombstone_purge")
+                    .with_column("p1", utf8_type, column_kind::partition_key)
+                    .with_column("c1", utf8_type, column_kind::clustering_key)
+                    .with_column("r1", utf8_type);
+            builder.set_compaction_strategy(cst);
+            return builder.build();
+        };
+
+        auto s = make_schema(sstables::compaction_strategy_type::size_tiered);
         auto cf = env.make_table_for_tests(s);
         auto close_cf = deferred_stop(cf);
         auto sst_gen = cf.make_sst_factory();
@@ -1789,9 +1801,13 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         BOOST_REQUIRE(descriptor.sstables.size() == 1);
         BOOST_REQUIRE(descriptor.sstables.front() == sst);
 
+        // Makes sure that get_sstables_for_compaction() is called with a table_state which will provide
+        // the correct LCS state.
+        auto lcs_table = env.make_table_for_tests(make_schema(sstables::compaction_strategy_type::leveled));
+        auto close_lcs_table = deferred_stop(lcs_table);
         cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, options);
         sst->set_sstable_level(1);
-        descriptor = cs.get_sstables_for_compaction(cf.as_table_state(), *strategy_c, { sst });
+        descriptor = cs.get_sstables_for_compaction(lcs_table.as_table_state(), *strategy_c, { sst });
         BOOST_REQUIRE(descriptor.sstables.size() == 1);
         BOOST_REQUIRE(descriptor.sstables.front() == sst);
         // make sure sstable picked for tombstone compaction removal won't be promoted or demoted.

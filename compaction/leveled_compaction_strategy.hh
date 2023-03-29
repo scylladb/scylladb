@@ -27,15 +27,23 @@ namespace sstables {
 
 class sstable_set_impl;
 
+struct leveled_compaction_strategy_state {
+    std::optional<std::vector<std::optional<dht::decorated_key>>> last_compacted_keys;
+    std::vector<int> compaction_counter;
+
+    leveled_compaction_strategy_state();
+};
+
 class leveled_compaction_strategy : public compaction_strategy_impl {
     static constexpr int32_t DEFAULT_MAX_SSTABLE_SIZE_IN_MB = 160;
     const sstring SSTABLE_SIZE_OPTION = "sstable_size_in_mb";
 
     int32_t _max_sstable_size_in_mb = DEFAULT_MAX_SSTABLE_SIZE_IN_MB;
-    std::optional<std::vector<std::optional<dht::decorated_key>>> _last_compacted_keys;
-    std::vector<int> _compaction_counter;
     size_tiered_compaction_strategy_options _stcs_options;
+private:
     int32_t calculate_max_sstable_size_in_mb(std::optional<sstring> option_value) const;
+
+    leveled_compaction_strategy_state& get_state(table_state& table_s) const;
 public:
     static unsigned ideal_level_for_input(const std::vector<sstables::shared_sstable>& input, uint64_t max_sstable_size);
 
@@ -46,11 +54,11 @@ public:
 
     virtual compaction_descriptor get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates) override;
 
-    virtual void notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) override;
+    virtual void notify_completion(table_state& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) override;
 
     // for each level > 0, get newest sstable and use its last key as last
     // compacted key for the previous level.
-    void generate_last_compacted_keys(leveled_manifest& manifest);
+    void generate_last_compacted_keys(leveled_compaction_strategy_state&, leveled_manifest& manifest);
 
     virtual int64_t estimated_pending_compactions(table_state& table_s) const override;
 
@@ -63,9 +71,9 @@ public:
     }
     virtual std::unique_ptr<sstable_set_impl> make_sstable_set(schema_ptr schema) const override;
 
-    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() override;
+    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const override;
 
-    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) override;
+    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) const override;
 };
 
 }

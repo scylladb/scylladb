@@ -64,14 +64,17 @@ public:
 
 using timestamp_type = api::timestamp_type;
 
+struct time_window_compaction_strategy_state {
+    int64_t estimated_remaining_tasks = 0;
+    db_clock::time_point last_expired_check;
+    // As timestamp_type is an int64_t, a primitive type, it must be initialized here.
+    timestamp_type highest_window_seen = 0;
+    // Keep track of all recent active windows that still need to be compacted into a single SSTable
+    std::unordered_set<timestamp_type> recent_active_windows;
+};
+
 class time_window_compaction_strategy : public compaction_strategy_impl {
     time_window_compaction_strategy_options _options;
-    int64_t _estimated_remaining_tasks = 0;
-    db_clock::time_point _last_expired_check;
-    // As timestamp_type is an int64_t, a primitive type, it must be initialized here.
-    timestamp_type _highest_window_seen = 0;
-    // Keep track of all recent active windows that still need to be compacted into a single SSTable
-    std::unordered_set<timestamp_type> _recent_active_windows;
     size_tiered_compaction_strategy_options _stcs_options;
 public:
     // The maximum amount of buckets we segregate data into when writing into sstables.
@@ -87,6 +90,8 @@ public:
 
     virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const override;
 private:
+    time_window_compaction_strategy_state& get_state(table_state& table_s) const;
+
     static timestamp_type
     to_timestamp_type(time_window_compaction_strategy_options::timestamp_resolutions resolution, int64_t timestamp_from_sstable) {
         switch (resolution) {
@@ -106,7 +111,7 @@ private:
 
     // Returns which compaction type should be performed on a given window bucket.
     bucket_compaction_mode
-    compaction_mode(const bucket_t& bucket, timestamp_type bucket_key, timestamp_type now, size_t min_threshold) const;
+    compaction_mode(const time_window_compaction_strategy_state&, const bucket_t& bucket, timestamp_type bucket_key, timestamp_type now, size_t min_threshold) const;
 
     std::vector<shared_sstable>
     get_next_non_expired_sstables(table_state& table_s, strategy_control& control, std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point compaction_time);
@@ -140,13 +145,14 @@ public:
         return timestamp_type(std::chrono::duration_cast<std::chrono::microseconds>(options.get_sstable_window_size()).count());
     }
 private:
-    void update_estimated_compaction_by_tasks(std::map<timestamp_type, std::vector<shared_sstable>>& tasks,
+    void update_estimated_compaction_by_tasks(time_window_compaction_strategy_state& state,
+        std::map<timestamp_type, std::vector<shared_sstable>>& tasks,
         int min_threshold, int max_threshold);
 
     friend class time_window_backlog_tracker;
 public:
     virtual int64_t estimated_pending_compactions(table_state& table_s) const override {
-        return _estimated_remaining_tasks;
+        return get_state(table_s).estimated_remaining_tasks;
     }
 
     virtual compaction_strategy_type type() const override {
@@ -155,17 +161,17 @@ public:
 
     virtual std::unique_ptr<sstable_set_impl> make_sstable_set(schema_ptr schema) const override;
 
-    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() override;
+    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const override;
 
-    virtual uint64_t adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) override;
+    virtual uint64_t adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) const override;
 
-    virtual reader_consumer_v2 make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) override;
+    virtual reader_consumer_v2 make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) const override;
 
     virtual bool use_interposer_consumer() const override {
         return true;
     }
 
-    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) override;
+    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) const override;
 };
 
 }

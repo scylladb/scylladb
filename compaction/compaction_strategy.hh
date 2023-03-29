@@ -52,7 +52,7 @@ public:
 
     // Some strategies may look at the compacted and resulting sstables to
     // get some useful information for subsequent compactions.
-    void notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);
+    void notify_completion(table_state& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);
 
     // Return if parallel compaction is allowed by strategy.
     bool parallel_compaction() const;
@@ -106,11 +106,11 @@ public:
 
     sstable_set make_sstable_set(schema_ptr schema) const;
 
-    compaction_backlog_tracker make_backlog_tracker();
+    compaction_backlog_tracker make_backlog_tracker() const;
 
-    uint64_t adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate);
+    uint64_t adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) const;
 
-    reader_consumer_v2 make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer);
+    reader_consumer_v2 make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) const;
 
     // Returns whether or not interposer consumer is used by a given strategy.
     bool use_interposer_consumer() const;
@@ -126,7 +126,7 @@ public:
     //
     // The caller should also pass a maximum number of SSTables which is the maximum amount of
     // SSTables that can be added into a single job.
-    compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode);
+    compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) const;
 
 };
 

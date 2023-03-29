@@ -271,7 +271,7 @@ public:
         return compaction_strategy_type::date_tiered;
     }
 
-    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() override;
+    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const override;
 };
 
 }
