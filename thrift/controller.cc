@@ -7,6 +7,7 @@
  */
 
 #include "thrift/controller.hh"
+#include "seastar/core/sharded.hh"
 #include "thrift/server.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
@@ -65,15 +66,18 @@ future<> thrift_controller::do_start_server() {
         auto preferred = cfg.rpc_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
         auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
         auto keepalive = cfg.rpc_keepalive();
-        thrift_server_config tsc;
-        tsc.timeout_config = make_timeout_config(cfg);
-        tsc.max_request_size = cfg.thrift_max_message_length_in_mb() * (uint64_t(1) << 20);
 
         auto ip = utils::resolve(cfg.rpc_address, family, preferred).get();
         auto port = cfg.rpc_port();
         _addr.emplace(ip, port);
 
-        tserver->start(sharded_parameter([this] { return _db.local().as_data_dictionary(); }), std::ref(_qp), std::ref(_ss), std::ref(_proxy), std::ref(_auth_service), std::ref(_mem_limiter), tsc).get();
+        auto tsc = sharded_parameter([&cfg] {
+            return thrift_server_config {
+                .timeout_config = updateable_timeout_config(cfg),
+                .max_request_size = cfg.thrift_max_message_length_in_mb() * (uint64_t(1) << 20),
+            };
+        });
+        tserver->start(sharded_parameter([this] { return _db.local().as_data_dictionary(); }), std::ref(_qp), std::ref(_ss), std::ref(_proxy), std::ref(_auth_service), std::ref(_mem_limiter), std::move(tsc)).get();
         // #293 - do not stop anything
         //engine().at_exit([tserver] {
         //    return tserver->stop();

@@ -46,7 +46,7 @@ class storage_proxy;
 namespace redis_transport {
 
 struct redis_server_config {
-    ::timeout_config _timeout_config;
+    ::updateable_timeout_config _timeout_config;
     size_t _max_request_size;
     db::consistency_level _read_consistency_level;
     db::consistency_level _write_consistency_level;
@@ -97,14 +97,11 @@ private:
         void write_reply(const redis_exception&);
         void write_reply(redis_server::result result);
     private:
-        const ::timeout_config& timeout_config() { return _server.timeout_config(); }
         future<result> process_request_one(redis::request&& request, redis::redis_options&, service_permit permit);
         future<result> process_request_internal();
     };
 
     virtual shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr) override;
     future<> unadvertise_connection(shared_ptr<generic_server::connection> conn) override;
-
-    const ::timeout_config& timeout_config() { return _config._timeout_config; }
 };
 }

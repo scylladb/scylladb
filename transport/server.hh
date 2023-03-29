@@ -101,7 +101,7 @@ struct cql_query_state {
 };
 
 struct cql_server_config {
-    ::timeout_config timeout_config;
+    updateable_timeout_config timeout_config;
     size_t max_request_size;
     sstring partitioner_name;
     unsigned sharding_ignore_msb;
@@ -223,7 +223,6 @@ private:
         client_data make_client_data() const;
         const service::client_state& get_client_state() const { return _client_state; }
     private:
-        const ::timeout_config& timeout_config() const { return _server.timeout_config(); }
         friend class process_request_executor;
         future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_request_one(fragmented_temporary_buffer::istream buf, uint8_t op, uint16_t stream, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit);
         unsigned frame_size() const;
@@ -281,7 +280,7 @@ private:
     future<> advertise_new_connection(shared_ptr<generic_server::connection> conn) override;
     future<> unadvertise_connection(shared_ptr<generic_server::connection> conn) override;
 
-    const ::timeout_config& timeout_config() { return _config.timeout_config; }
+    ::timeout_config timeout_config() const { return _config.timeout_config.current_values(); }
 };
 
 class cql_server::event_notifier : public service::migration_listener,

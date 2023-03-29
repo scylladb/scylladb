@@ -566,20 +566,20 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , query_tombstone_page_limit(this, "query_tombstone_page_limit", liveness::LiveUpdate, value_status::Used, 10000,
         "The number of tombstones after which a query cuts a page, even if not full or even empty.")
     /* Network timeout settings */
-    , range_request_timeout_in_ms(this, "range_request_timeout_in_ms", value_status::Used, 10000,
+    , range_request_timeout_in_ms(this, "range_request_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 10000,
         "The time in milliseconds that the coordinator waits for sequential or index scans to complete.")
-    , read_request_timeout_in_ms(this, "read_request_timeout_in_ms", value_status::Used, 5000,
+    , read_request_timeout_in_ms(this, "read_request_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 5000,
         "The time that the coordinator waits for read operations to complete")
-    , counter_write_request_timeout_in_ms(this, "counter_write_request_timeout_in_ms", value_status::Used, 5000,
+    , counter_write_request_timeout_in_ms(this, "counter_write_request_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 5000,
         "The time that the coordinator waits for counter writes to complete.")
-    , cas_contention_timeout_in_ms(this, "cas_contention_timeout_in_ms", value_status::Used, 1000,
+    , cas_contention_timeout_in_ms(this, "cas_contention_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 1000,
         "The time that the coordinator continues to retry a CAS (compare and set) operation that contends with other proposals for the same row.")
-    , truncate_request_timeout_in_ms(this, "truncate_request_timeout_in_ms", value_status::Used, 60000,
+    , truncate_request_timeout_in_ms(this, "truncate_request_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 60000,
         "The time that the coordinator waits for truncates (remove all data from a table) to complete. The long default value allows for a snapshot to be taken before removing the data. If auto_snapshot is disabled (not recommended), you can reduce this time.")
-    , write_request_timeout_in_ms(this, "write_request_timeout_in_ms", value_status::Used, 2000,
+    , write_request_timeout_in_ms(this, "write_request_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 2000,
         "The time in milliseconds that the coordinator waits for write operations to complete.\n"
         "Related information: About hinted handoff writes")
-    , request_timeout_in_ms(this, "request_timeout_in_ms", value_status::Used, 10000,
+    , request_timeout_in_ms(this, "request_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 10000,
         "The default timeout for other, miscellaneous operations.\n"
         "Related information: About hinted handoff writes")
     /* Inter-node settings */
