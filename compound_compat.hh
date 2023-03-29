@@ -640,11 +640,22 @@ public:
     bool operator==(const composite_view& k) const { return k._bytes == _bytes && k._is_compound == _is_compound; }
     bool operator!=(const composite_view& k) const { return !(k == *this); }
 
-    friend inline std::ostream& operator<<(std::ostream& os, composite_view v) {
-        fmt::print(os, "{{{}, compound={}, static={}}}", fmt::join(v.components(), ", "), v._is_compound, v.is_static());
-        return os;
+    friend fmt::formatter<composite_view>;
+};
+
+template <>
+struct fmt::formatter<composite_view> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const composite_view& v, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{{{}, compound={}, static={}}}",
+                              fmt::join(v.components(), ", "), v._is_compound, v.is_static());
     }
 };
+
+inline std::ostream& operator<<(std::ostream& os, composite_view v) {
+    fmt::print(os, "{}", v);
+    return os;
+}
 
 inline
 composite::composite(const composite_view& v)
