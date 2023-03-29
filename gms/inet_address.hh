@@ -98,9 +98,9 @@ struct fmt::formatter<gms::inet_address> : fmt::formatter<std::string_view> {
             return fmt::format_to(ctx.out(), "{}", x.addr());
         }
         // print 2 bytes in a group, and use ':' as the delimeter
-        format_to(ctx.out(), "{:2:}", fmt_hex(x.bytes()));
+        fmt::format_to(ctx.out(), "{:2:}", fmt_hex(x.bytes()));
         if (x.addr().scope() != seastar::net::inet_address::invalid_scope) {
-            return format_to(ctx.out(), "%{}", x.addr().scope());
+            return fmt::format_to(ctx.out(), "%{}", x.addr().scope());
         }
         return ctx.out();
     }

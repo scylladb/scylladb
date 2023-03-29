@@ -113,14 +113,14 @@ public:
         if (_group_size_in_bytes > 0) {
             for (size_t i = 0, size = v.size(); i < size; i++) {
                 if (i != 0 && i % _group_size_in_bytes == 0) {
-                    format_to(out, "{}{:02x}", _delimiter, std::byte(v[i]));
+                    fmt::format_to(out, "{}{:02x}", _delimiter, std::byte(v[i]));
                 } else {
-                    format_to(out, "{:02x}", std::byte(v[i]));
+                    fmt::format_to(out, "{:02x}", std::byte(v[i]));
                 }
             }
         } else {
             for (auto b : v) {
-                format_to(out, "{:02x}", std::byte(b));
+                fmt::format_to(out, "{:02x}", std::byte(b));
             }
         }
         return out;
