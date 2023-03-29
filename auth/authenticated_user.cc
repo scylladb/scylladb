@@ -18,11 +18,6 @@ authenticated_user::authenticated_user(std::string_view name)
         : name(sstring(name)) {
 }
 
-std::ostream& operator<<(std::ostream& os, const authenticated_user& u) {
-    fmt::print(os, "{}", u);
-    return os;
-}
-
 static const authenticated_user the_anonymous_user{};
 
 const authenticated_user& anonymous_user() noexcept {

@@ -38,8 +38,6 @@ public:
     explicit authenticated_user(std::string_view name);
 };
 
-std::ostream& operator<<(std::ostream&, const authenticated_user&);
-
 inline bool operator==(const authenticated_user& u1, const authenticated_user& u2) noexcept {
     return u1.name == u2.name;
 }
