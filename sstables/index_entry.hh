@@ -310,11 +310,11 @@ using index_list = partition_index_page;
 }
 
 inline std::ostream& operator<<(std::ostream& out, const sstables::promoted_index_block_position_view& pos) {
-    std::visit([&out] (const auto& pos) mutable { out << pos; }, pos);
+    std::visit([&out] (const auto& pos) mutable { fmt::print(out, "{}", pos); }, pos);
     return out;
 }
 
 inline std::ostream& operator<<(std::ostream& out, const sstables::promoted_index_block_position& pos) {
-    std::visit([&out] (const auto& pos) mutable { out << pos; }, pos);
+    std::visit([&out] (const auto& pos) mutable { fmt::print(out, "{}", pos); }, pos);
     return out;
 }
