@@ -520,8 +520,6 @@ public:
         return os;
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const composite& v);
-
     struct tri_compare {
         const std::vector<data_type>& _types;
         tri_compare(const std::vector<data_type>& types) : _types(types) {}
@@ -664,12 +662,6 @@ struct fmt::formatter<composite> : fmt::formatter<std::string_view> {
         return fmt::format_to(ctx.out(), "{}", composite_view(v));
     }
 };
-
-inline
-std::ostream& operator<<(std::ostream& os, const composite& v) {
-    fmt::print(os, "{}", v);
-    return os;
-}
 
 inline
 std::strong_ordering composite::tri_compare::operator()(const composite& v1, const composite& v2) const {
