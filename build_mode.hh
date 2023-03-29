@@ -14,7 +14,7 @@
 #endif
 
 #ifndef STRINGIFY
-// We need to levels of indirection
+// We need two levels of indirection
 // to make a string out of the macro name.
 // The outer level expands the macro
 // and the inner level makes a string out of the expanded macro.
