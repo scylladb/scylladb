@@ -11,6 +11,8 @@
 
 namespace service {
 
+logging::logger tsmlogger("topology_state_machine");
+
 const std::pair<const raft::server_id, replica_state>* topology::find(raft::server_id id) {
     auto it = normal_nodes.find(id);
     if (it != normal_nodes.end()) {
@@ -41,8 +43,11 @@ static std::unordered_map<ring_slice::replication_state, sstring> replication_st
 };
 
 std::ostream& operator<<(std::ostream& os, ring_slice::replication_state s) {
-    os << replication_state_to_name_map[s];
-    return os;
+    auto it = replication_state_to_name_map.find(s);
+    if (it == replication_state_to_name_map.end()) {
+        on_internal_error(tsmlogger, "cannot print replication_state");
+    }
+    return os << it->second;
 }
 
 ring_slice::replication_state replication_state_from_string(const sstring& s) {
@@ -51,7 +56,7 @@ ring_slice::replication_state replication_state_from_string(const sstring& s) {
             return e.first;
         }
     }
-    throw std::runtime_error(fmt::format("cannot map name {} to token_state", s));
+    on_internal_error(tsmlogger, format("cannot map name {} to replication_state", s));
 }
 
 static std::unordered_map<node_state, sstring> node_state_to_name_map = {
@@ -66,8 +71,11 @@ static std::unordered_map<node_state, sstring> node_state_to_name_map = {
 };
 
 std::ostream& operator<<(std::ostream& os, node_state s) {
-    os << node_state_to_name_map[s];
-    return os;
+    auto it = node_state_to_name_map.find(s);
+    if (it == node_state_to_name_map.end()) {
+        on_internal_error(tsmlogger, "cannot print node_state");
+    }
+    return os << it->second;
 }
 
 node_state node_state_from_string(const sstring& s) {
@@ -76,7 +84,7 @@ node_state node_state_from_string(const sstring& s) {
             return e.first;
         }
     }
-    throw std::runtime_error(fmt::format("cannot map name {} to node_state", s));
+    on_internal_error(tsmlogger, format("cannot map name {} to node_state", s));
 }
 
 static std::unordered_map<topology_request, sstring> topology_request_to_name_map = {
