@@ -187,6 +187,7 @@ struct hash<cql3::authorized_prepared_statements_cache_key> final {
 };
 
 inline std::ostream& operator<<(std::ostream& out, const cql3::authorized_prepared_statements_cache_key& k) {
-    return out << "{ " << k.key().first << ", " << k.key().second << " }";
+    fmt::print(out, "{{{}, {}}}", k.key().first, k.key().second);
+    return out;
 }
 }
