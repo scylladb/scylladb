@@ -544,6 +544,7 @@ perf_tests = set([
     'test/perf/perf_idl',
     'test/perf/perf_vint',
     'test/perf/perf_big_decimal',
+    'test/perf/perf_cql_parser',
 ])
 
 raft_tests = set([
@@ -1242,7 +1243,6 @@ tests_not_using_seastar_test_framework = set([
     'test/manual/message',
     'test/perf/memory_footprint_test',
     'test/perf/perf_cache_eviction',
-    'test/perf/perf_cql_parser',
     'test/perf/perf_hash',
     'test/perf/perf_mutation',
     'test/perf/perf_collection',
