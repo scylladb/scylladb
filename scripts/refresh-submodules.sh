@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-# The following is the default list of submodules to refresh. To only refreh
+# The following is the default list of submodules to refresh. To only refresh
 # some of them, pass the list of modules to refresh as arguments. For example,
 # "scripts/refresh-submodules.sh seastar tools/java" only refreshes the
 # two submodules seastar and tools/java.
