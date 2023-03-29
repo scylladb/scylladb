@@ -68,6 +68,10 @@ namespace gms {
     class gossiper;
 }
 
+namespace cdc {
+    class topology_description;
+}
+
 bool is_system_keyspace(std::string_view ks_name);
 
 namespace db {
@@ -444,6 +448,10 @@ public:
     static future<bool> group0_history_contains(utils::UUID state_id);
 
     static future<service::topology> load_topology_state();
+
+    // Read CDC generation data with the given UUID as key.
+    // Precondition: the data is known to be present in the table (because it was committed earlier through group 0).
+    future<cdc::topology_description> read_cdc_generation(utils::UUID id);
 
     // The mutation appends the given state ID to the group 0 history table, with the given description if non-empty.
     //

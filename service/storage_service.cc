@@ -371,8 +371,16 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
                     co_await _sys_ks.local().update_peer_info(ip, "host_id", id.uuid());
                 }
                 tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack});
-                tmptr->add_bootstrap_tokens(rs.ring.value().tokens, ip);
-                co_await update_pending_ranges(tmptr, format("bootstrapping node {}/{}", id, ip));
+                if (_topology_state_machine._topology.normal_nodes.empty()) {
+                    // This is the first node in the cluster. Insert the tokens as normal to the token ring early
+                    // so we can perform writes to regular 'distributed' tables during the bootstrap procedure
+                    // (such as the CDC generation write).
+                    // It doesn't break anything to set the tokens to normal early in this single-node case.
+                    co_await tmptr->update_normal_tokens(rs.ring.value().tokens, ip);
+                } else {
+                    tmptr->add_bootstrap_tokens(rs.ring.value().tokens, ip);
+                    co_await update_pending_ranges(tmptr, format("bootstrapping node {}/{}", id, ip));
+                }
                 break;
             case node_state::decommissioning:
             case node_state::removing:
@@ -730,6 +738,17 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                 if (!res) {
                     break;
                 }
+
+                // If a node is bootstrapping, we just committed a new CDC generation in the commit_cdc_generation step.
+                // Publish it to the user-facing distributed CDC description tables.
+                if (node.rs->state == node_state::bootstrapping) {
+                    auto curr_gen_id = node.topology->current_cdc_generation_id.value();
+                    auto gen_data = co_await _sys_ks.local().read_cdc_generation(curr_gen_id.id);
+
+                    co_await sys_dist_ks.local().create_cdc_desc(
+                        curr_gen_id.ts, gen_data, { get_token_metadata().count_normal_token_owners() });
+                }
+
                 raft_topology_cmd cmd{raft_topology_cmd::command::stream_ranges};
                 if (node.rs->state == node_state::removing) {
                     // tell all nodes to stream data of the removed node to new range owners

@@ -67,6 +67,7 @@
 #include "service/topology_state_machine.hh"
 #include "sstables/open_info.hh"
 #include "sstables/generation_type.hh"
+#include "cdc/generation.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -3675,6 +3676,42 @@ future<service::topology> system_keyspace::load_topology_state() {
     }
 
     co_return ret;
+}
+
+future<cdc::topology_description>
+system_keyspace::read_cdc_generation(utils::UUID id) {
+    std::vector<cdc::token_range_description> entries;
+    auto num_ranges = 0;
+    co_await _qp.local().query_internal(
+            format("SELECT range_end, streams, ignore_msb, num_ranges FROM {}.{} WHERE id = ?",
+                   NAME, CDC_GENERATIONS_V3),
+            db::consistency_level::ONE,
+            { id },
+            1000, // for ~1KB rows, ~1MB page size
+            [&] (const cql3::untyped_result_set_row& row) {
+        std::vector<cdc::stream_id> streams;
+        row.get_list_data<bytes>("streams", std::back_inserter(streams));
+        entries.push_back(cdc::token_range_description{
+            dht::token::from_int64(row.get_as<int64_t>("range_end")),
+            std::move(streams),
+            uint8_t(row.get_as<int8_t>("ignore_msb"))});
+        num_ranges = row.get_as<int32_t>("num_ranges");
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    });
+
+    if (entries.empty()) {
+        // The data must be present by precondition.
+        on_internal_error(slogger, format(
+            "read_cdc_generation: data for CDC generation {} not present", id));
+    }
+
+    if (entries.size() != num_ranges) {
+        throw std::runtime_error(format(
+            "read_cdc_generation: wrong number of rows. The `num_ranges` column claimed {} rows,"
+            " but reading the partition returned {}.", num_ranges, entries.size()));
+    }
+
+    co_return cdc::topology_description{std::move(entries)};
 }
 
 future<> system_keyspace::sstables_registry_create_entry(sstring location, utils::UUID uuid, sstring status, sstables::entry_descriptor desc) {
