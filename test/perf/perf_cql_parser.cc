@@ -9,8 +9,8 @@
 
 #include "test/perf/perf.hh"
 
-#include "cql3/error_collector.hh"
-#include "cql3/CqlParser.hpp"
+#include "cql3/query_processor.hh"
+#include "cql3/statements/raw/parsed_statement.hh"
 
 using namespace cql3;
 
@@ -20,14 +20,6 @@ int main(int argc, char* argv[]) {
     std::cout << "Timing CQL statement parsing...\n";
 
     time_it([&] {
-        cql3_parser::CqlLexer::collector_type lexer_error_collector(query);
-        cql3_parser::CqlParser::collector_type parser_error_collector(query);
-        cql3_parser::CqlLexer::InputStreamType input{reinterpret_cast<const ANTLR_UINT8*>(query.data()), ANTLR_ENC_UTF8, static_cast<ANTLR_UINT32>(query.size()), nullptr};
-        cql3_parser::CqlLexer lexer{&input};
-        lexer.set_error_listener(lexer_error_collector);
-        cql3_parser::CqlParser::TokenStreamType tstream(ANTLR_SIZE_HINT, lexer.get_tokSource());
-        cql3_parser::CqlParser parser{&tstream};
-        parser.set_error_listener(parser_error_collector);
-        parser.query();
+        auto _ = cql3::query_processor::parse_statement(query);
     });
 }
