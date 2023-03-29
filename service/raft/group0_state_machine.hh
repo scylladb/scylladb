@@ -13,6 +13,10 @@
 #include "mutation/canonical_mutation.hh"
 #include "service/raft/raft_state_machine.hh"
 
+namespace cdc {
+class generation_service;
+}
+
 namespace service {
 class raft_group0_client;
 class migration_manager;
@@ -73,8 +77,9 @@ class group0_state_machine : public raft_state_machine {
     migration_manager& _mm;
     storage_proxy& _sp;
     storage_service& _ss;
+    cdc::generation_service& _cdc_gen_svc;
 public:
-    group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss) : _client(client), _mm(mm), _sp(sp), _ss(ss) {}
+    group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss, cdc::generation_service& cdc_gen_svc) : _client(client), _mm(mm), _sp(sp), _ss(ss), _cdc_gen_svc(cdc_gen_svc) {}
     future<> apply(std::vector<raft::command_cref> command) override;
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;

@@ -16,6 +16,8 @@ namespace cql3 { class query_processor; }
 
 namespace db { class system_keyspace; }
 
+namespace cdc { class generation_service; }
+
 namespace gms { class gossiper; class feature_service; }
 
 namespace service {
@@ -76,6 +78,7 @@ class raft_group0 {
     db::system_keyspace& _sys_ks;
     raft_group0_client& _client;
     service::storage_service& _ss;
+    cdc::generation_service& _cdc_gen_svc;
 
     // Status of leader discovery. Initially there is no group 0,
     // and the variant contains no state. During initial cluster
@@ -114,7 +117,8 @@ public:
         gms::feature_service& feat,
         db::system_keyspace& sys_ks,
         raft_group0_client& client,
-        storage_service& ss);
+        storage_service& ss,
+        cdc::generation_service& cdc_gen_svc);
 
     // Initialises RPC verbs on all shards.
     // Call after construction but before using the object.

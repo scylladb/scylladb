@@ -107,7 +107,7 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
             _client.set_query_result(cmd.new_state_id, std::move(result));
         },
         [&] (topology_change& chng) -> future<> {
-           return _ss.topology_transition(_sp, cmd.creator_addr, std::move(chng.mutations));
+           return _ss.topology_transition(_sp, _cdc_gen_svc, cmd.creator_addr, std::move(chng.mutations));
         }
         ), cmd.change);
 
@@ -127,7 +127,7 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
     // topology_state_load applies persisted state machine state into
     // memory and thus needs to be protected with apply mutex
     auto read_apply_mutex_holder = co_await get_units(_client._read_apply_mutex, 1);
-    co_await _ss.topology_state_load();
+    co_await _ss.topology_state_load(_cdc_gen_svc);
     _ss._topology_state_machine.event.signal();
 }
 

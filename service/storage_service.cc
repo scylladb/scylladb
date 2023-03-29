@@ -284,7 +284,7 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
     slogger.info("Checking bootstrapping/leaving nodes: ok");
 }
 
-future<> storage_service::topology_state_load() {
+future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_svc) {
 #ifdef SEASTAR_DEBUG
     static bool running = false;
     assert(!running); // The function is not re-entrant
@@ -407,7 +407,7 @@ future<> storage_service::topology_state_load() {
     }));
 }
 
-future<> storage_service::topology_transition(storage_proxy& proxy, gms::inet_address from, std::vector<canonical_mutation> cms) {
+future<> storage_service::topology_transition(storage_proxy& proxy, cdc::generation_service& cdc_gen_svc, gms::inet_address from, std::vector<canonical_mutation> cms) {
     assert(this_shard_id() == 0);
     // write new state into persistent storage
     std::vector<mutation> mutations;
@@ -424,7 +424,7 @@ future<> storage_service::topology_transition(storage_proxy& proxy, gms::inet_ad
 
     co_await proxy.mutate_locally(std::move(mutations), tracing::trace_state_ptr());
 
-    co_await topology_state_load(); // reload new state
+    co_await topology_state_load(cdc_gen_svc); // reload new state
 
     _topology_state_machine.event.signal();
 }
@@ -520,7 +520,7 @@ topology_mutation_builder& topology_mutation_builder::set(const char* cell, cons
     return *this;
 }
 
-future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, raft::term_t term, sharded<db::system_distributed_keyspace>& sys_dist_ks, abort_source& as) {
+future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, raft::term_t term, cdc::generation_service& cdc_gen_svc, sharded<db::system_distributed_keyspace>& sys_dist_ks, abort_source& as) {
     slogger.info("raft topology: start topology coordinator fiber");
 
     auto abort = as.subscribe([this] () noexcept {
@@ -904,7 +904,7 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
     }
 }
 
-future<> storage_service::raft_state_monitor_fiber(raft::server& raft, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
+future<> storage_service::raft_state_monitor_fiber(raft::server& raft, cdc::generation_service& cdc_gen_svc, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
     std::optional<abort_source> as;
     try {
         while (!_abort_source.abort_requested()) {
@@ -921,7 +921,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, sharded<d
             // We are the leader now but that can change any time!
             as.emplace();
             // start topology change coordinator in the background
-            _topology_change_coordinator = topology_change_coordinator_fiber(raft, raft.get_current_term(), sys_dist_ks, *as);
+            _topology_change_coordinator = topology_change_coordinator_fiber(raft, raft.get_current_term(), cdc_gen_svc, sys_dist_ks, *as);
         }
     } catch (...) {
         slogger.info("raft_state_monitor_fiber aborted with {}", std::current_exception());
@@ -1278,7 +1278,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         slogger.info("topology changes are using raft");
 
         // start topology coordinator fiber
-        _raft_state_monitor = raft_state_monitor_fiber(*raft_server, sys_dist_ks);
+        _raft_state_monitor = raft_state_monitor_fiber(*raft_server, cdc_gen_service, sys_dist_ks);
 
         // Need to start system_distributed_keyspace before bootstrap because bootstraping
         // process may access those tables.
