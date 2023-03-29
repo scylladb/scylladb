@@ -416,7 +416,7 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
 
     if (auto gen_id = _topology_state_machine._topology.current_cdc_generation_id) {
         slogger.debug("topology_state_load: current CDC generation ID: {}", *gen_id);
-        // TODO start using the generation for CDC writes
+        co_await cdc_gen_svc.handle_cdc_generation(*gen_id);
     }
 }
 

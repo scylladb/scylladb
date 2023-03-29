@@ -135,6 +135,12 @@ public:
      */
     future<cdc::generation_id> make_new_generation(const std::unordered_set<dht::token>& bootstrap_tokens, bool add_delay);
 
+    /* Retrieve the CDC generation with the given ID from local tables
+     * and start using it for CDC log writes if it's not obsolete.
+     * Precondition: the generation was committed using group 0 and locally applied.
+     */
+    future<> handle_cdc_generation(cdc::generation_id_v2);
+
 private:
     /* Retrieve the CDC generation which starts at the given timestamp (from a distributed table created for this purpose)
      * and start using it for CDC log writes if it's not obsolete.

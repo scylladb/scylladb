@@ -908,6 +908,25 @@ future<> generation_service::check_and_repair_cdc_streams() {
     co_await _sys_ks.local().update_cdc_generation_id(new_gen_id);
 }
 
+future<> generation_service::handle_cdc_generation(cdc::generation_id_v2 gen_id) {
+    auto ts = get_ts(gen_id);
+    if (co_await container().map_reduce(and_reducer(), [ts] (generation_service& svc) {
+        return !svc._cdc_metadata.prepare(ts);
+    })) {
+        co_return;
+    }
+
+    auto gen_data = co_await _sys_ks.local().read_cdc_generation(gen_id.id);
+
+    bool using_this_gen = co_await container().map_reduce(or_reducer(), [ts, &gen_data] (generation_service& svc) {
+        return svc._cdc_metadata.insert(ts, cdc::topology_description{gen_data});
+    });
+
+    if (using_this_gen) {
+        cdc_log.info("Started using generation {}.", gen_id);
+    }
+}
+
 future<> generation_service::handle_cdc_generation(std::optional<cdc::generation_id> gen_id) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
