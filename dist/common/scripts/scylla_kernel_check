@@ -25,7 +25,7 @@ if __name__ == '__main__':
     run('dd if=/dev/zero of=/var/tmp/kernel-check.img bs=1M count=128', shell=True, check=True, stdout=DEVNULL, stderr=DEVNULL)
     run('mkfs.xfs /var/tmp/kernel-check.img', shell=True, check=True, stdout=DEVNULL, stderr=DEVNULL)
     run('mount /var/tmp/kernel-check.img /var/tmp/mnt -o loop', shell=True, check=True, stdout=DEVNULL, stderr=DEVNULL)
-    ret = run('iotune --fs-check --evaluation-directory /var/tmp/mnt', shell=True).returncode
+    ret = run('iotune --fs-check --evaluation-directory /var/tmp/mnt --default-log-level error', shell=True).returncode
     run('umount /var/tmp/mnt', shell=True, check=True)
     shutil.rmtree('/var/tmp/mnt')
     os.remove('/var/tmp/kernel-check.img')
