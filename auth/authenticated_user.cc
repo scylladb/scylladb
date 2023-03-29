@@ -19,12 +19,7 @@ authenticated_user::authenticated_user(std::string_view name)
 }
 
 std::ostream& operator<<(std::ostream& os, const authenticated_user& u) {
-    if (!u.name) {
-        os << "anonymous";
-    } else {
-        os << *u.name;
-    }
-
+    fmt::print(os, "{}", u);
     return os;
 }
 
