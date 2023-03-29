@@ -652,11 +652,6 @@ struct fmt::formatter<composite_view> : fmt::formatter<std::string_view> {
     }
 };
 
-inline std::ostream& operator<<(std::ostream& os, composite_view v) {
-    fmt::print(os, "{}", v);
-    return os;
-}
-
 inline
 composite::composite(const composite_view& v)
     : composite(bytes(v._bytes), v._is_compound)
