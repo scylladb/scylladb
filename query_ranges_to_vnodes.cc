@@ -101,18 +101,6 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
 
         add_range(std::move(splits.first));
         cr = std::move(splits.second);
-
-        // The left bound of cr is bound({upper_bound_token, token_bound::end}, false),
-        // so we can end up with an empty range if the original end bound is its successor.
-        const bool is_empty = cr.end().has_value() &&
-            !cr.end()->is_inclusive() &&
-            !cr.end()->value().has_key() &&
-            cr.end()->value().bound() == dht::ring_position::token_bound::start &&
-            dht::token::to_int64(cr.end()->value().token()) - dht::token::to_int64(cr.start()->value().token()) == 1;
-        if (is_empty) {
-            _i++;
-            return;
-        }
         if (ranges.size() == n) {
             // we have enough ranges
             break;
