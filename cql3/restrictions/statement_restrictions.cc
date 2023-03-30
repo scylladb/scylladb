@@ -88,7 +88,8 @@ void with_current_binary_operator(
 static std::vector<expr::expression> extract_partition_range(
         const expr::expression& where_clause, schema_ptr schema) {
     using namespace expr;
-    struct {
+    struct extract_partition_range_visitor {
+        schema_ptr table_schema;
         std::optional<expression> tokens;
         std::unordered_map<const column_definition*, expression> single_column;
         const binary_operator* current_binary_operator = nullptr;
@@ -186,7 +187,12 @@ static std::vector<expr::expression> extract_partition_range(
         void operator()(const usertype_constructor&) {
             on_internal_error(rlogger, "extract_partition_range(usertype_constructor)");
         }
-    } v;
+    };
+
+    extract_partition_range_visitor v {
+        .table_schema = schema
+    };
+
     expr::visit(v, where_clause);
     if (v.tokens) {
         return {std::move(*v.tokens)};
