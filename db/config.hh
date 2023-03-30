@@ -148,6 +148,7 @@ public:
     named_value<bool> listen_interface_prefer_ipv6;
     named_value<sstring> work_directory;
     named_value<sstring> commitlog_directory;
+    named_value<sstring> schema_commitlog_directory;
     named_value<string_list> data_file_directories;
     named_value<sstring> hints_directory;
     named_value<sstring> view_hints_directory;

@@ -34,6 +34,7 @@ def main():
         mountpoints.add(find_mount_point(d))
 
     mountpoints.add(find_mount_point(cfg['commitlog_directory']))
+    mountpoints.add(find_mount_point(cfg['schema_commitlog_directory']))
     # workaround of #2649
     subprocess.call(["/opt/scylladb/scripts/scylla-blocktune", "--set-nomerges", "1"])
     for d in mountpoints:

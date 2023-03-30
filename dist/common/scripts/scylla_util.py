@@ -229,7 +229,7 @@ def parse_scylla_dirs_with_default(conf='/etc/scylla/scylla.yaml'):
             not len(y['data_file_directories']) or \
             not " ".join(y['data_file_directories']).strip():
         y['data_file_directories'] = [os.path.join(y['workdir'], 'data')]
-    for t in [ "commitlog", "hints", "view_hints", "saved_caches" ]:
+    for t in [ "commitlog", "schema_commitlog", "hints", "view_hints", "saved_caches" ]:
         key = "%s_directory" % t
         if key not in y or not y[key]:
             y[key] = os.path.join(y['workdir'], t)
@@ -246,6 +246,7 @@ def get_scylla_dirs():
     dirs = []
     dirs.extend(y['data_file_directories'])
     dirs.append(y['commitlog_directory'])
+    dirs.append(y['schema_commitlog_directory'])
 
     if 'hints_directory' in y and y['hints_directory']:
         dirs.append(y['hints_directory'])
