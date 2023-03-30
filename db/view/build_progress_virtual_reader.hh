@@ -197,7 +197,7 @@ public:
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) {
         return flat_mutation_reader_v2(std::make_unique<build_progress_reader>(
-                std::move(s),
+                s,
                 std::move(permit),
                 _db.find_column_family(s->ks_name(), system_keyspace::v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS),
                 range,
