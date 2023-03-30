@@ -11,25 +11,15 @@
 #include "abstract_function.hh"
 #include "scalar_function.hh"
 #include "aggregate_function.hh"
+#include "db/functions/stateless_aggregate_function.hh"
 #include "data_dictionary/keyspace_element.hh"
 
 namespace cql3 {
 namespace functions {
 
-class user_aggregate : public abstract_function, public aggregate_function, public data_dictionary::keyspace_element {
-    bytes_opt _initcond;
-    ::shared_ptr<scalar_function> _sfunc;
-    ::shared_ptr<scalar_function> _reducefunc;
-    ::shared_ptr<scalar_function> _finalfunc;
+class user_aggregate : public db::functions::aggregate_function, public data_dictionary::keyspace_element {
 public:
     user_aggregate(function_name fname, bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> reducefunc, ::shared_ptr<scalar_function> finalfunc);
-    virtual std::unique_ptr<aggregate_function::aggregate> new_aggregate() override;
-    virtual ::shared_ptr<aggregate_function> reducible_aggregate_function() override;
-    virtual bool is_pure() const override;
-    virtual bool is_native() const override;
-    virtual bool is_aggregate() const override;
-    virtual bool is_reducible() const override;
-    virtual bool requires_thread() const override;
     bool has_finalfunc() const;
 
     virtual sstring keypace_name() const override { return name().keyspace; }
@@ -38,16 +28,16 @@ public:
     virtual std::ostream& describe(std::ostream& os) const override;
 
     seastar::shared_ptr<scalar_function> sfunc() const {
-        return _sfunc;
+        return _agg.aggregation_function;
     }
     seastar::shared_ptr<scalar_function> reducefunc() const {
-        return _reducefunc;
+        return _agg.state_reduction_function;
     }
     seastar::shared_ptr<scalar_function> finalfunc() const {
-        return _finalfunc;
+        return _agg.state_to_result_function;
     }
     const bytes_opt& initcond() const {
-        return _initcond;
+        return _agg.initial_state;
     }
 };
 

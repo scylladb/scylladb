@@ -60,8 +60,7 @@ static std::vector<::shared_ptr<db::functions::aggregate_function>> get_function
 class forward_aggregates {
 private:
     std::vector<::shared_ptr<db::functions::aggregate_function>> _funcs;
-    std::vector<std::unique_ptr<db::functions::aggregate_function::aggregate>> _aggrs;
-
+    std::vector<db::functions::stateless_aggregate_function> _aggrs;
 public:
     forward_aggregates(const query::forward_request& request);
     void merge(query::forward_result& result, query::forward_result&& other);
@@ -85,10 +84,10 @@ public:
 
 forward_aggregates::forward_aggregates(const query::forward_request& request) {
     _funcs = get_functions(request);
-    std::vector<std::unique_ptr<db::functions::aggregate_function::aggregate>> aggrs;
+    std::vector<db::functions::stateless_aggregate_function> aggrs;
 
     for (auto& func: _funcs) {
-        aggrs.push_back(func->new_aggregate());
+        aggrs.push_back(func->get_aggregate());
     }
     _aggrs = std::move(aggrs);
 }
@@ -113,9 +112,7 @@ void forward_aggregates::merge(query::forward_result &result, query::forward_res
     }
 
     for (size_t i = 0; i < _aggrs.size(); i++) {
-        _aggrs[i]->set_accumulator(result.query_results[i]);
-        _aggrs[i]->reduce(std::move(other.query_results[i]));
-        result.query_results[i] = _aggrs[i]->get_accumulator();
+        result.query_results[i] = _aggrs[i].state_reduction_function->execute(std::vector({std::move(result.query_results[i]), std::move(other.query_results[i])}));
     }
 }
 
@@ -126,7 +123,9 @@ void forward_aggregates::finalize(query::forward_result &result) {
         // as "WHERE p IN ()". We need to build a fake result with the result
         // of empty aggregation.
         for (size_t i = 0; i < _aggrs.size(); i++) {
-            result.query_results.push_back(_aggrs[i]->compute());
+            result.query_results.push_back(_aggrs[i].state_to_result_function
+                    ? _aggrs[i].state_to_result_function->execute(std::vector({_aggrs[i].initial_state}))
+                    : _aggrs[i].initial_state);
         }
         return;
     }
@@ -141,8 +140,9 @@ void forward_aggregates::finalize(query::forward_result &result) {
     }
 
     for (size_t i = 0; i < _aggrs.size(); i++) {
-        _aggrs[i]->set_accumulator(result.query_results[i]);
-        result.query_results[i] = _aggrs[i]->compute();
+        result.query_results[i] = _aggrs[i].state_to_result_function
+            ? _aggrs[i].state_to_result_function->execute(std::vector({std::move(result.query_results[i])}))
+            : result.query_results[i];
     }
 }
 
