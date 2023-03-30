@@ -213,6 +213,7 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
     /// Collects all clustering-column restrictions from an expression.  Presumes the expression only uses
     /// conjunction to combine subexpressions.
     struct visitor {
+        schema_ptr table_schema;
         std::vector<expression> multi; ///< All multi-column restrictions.
         /// All single-clustering-column restrictions, grouped by column.  Each value is either an atom or a
         /// conjunction of atoms.
@@ -313,7 +314,11 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
         void operator()(const usertype_constructor&) {
             on_internal_error(rlogger, "extract_clustering_prefix_restrictions(usertype_constructor)");
         }
-    } v;
+    };
+    visitor v {
+        .table_schema = schema
+    };
+
     expr::visit(v, where_clause);
 
     if (!v.multi.empty()) {
