@@ -37,6 +37,7 @@ bool topology::contains(raft::server_id id) {
 }
 
 static std::unordered_map<ring_slice::replication_state, sstring> replication_state_to_name_map = {
+    {ring_slice::replication_state::commit_cdc_generation, "commit cdc generation"},
     {ring_slice::replication_state::write_both_read_old, "write both read old"},
     {ring_slice::replication_state::write_both_read_new, "write both read new"},
     {ring_slice::replication_state::owner, "owner"},

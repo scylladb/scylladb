@@ -3631,6 +3631,49 @@ future<service::topology> system_keyspace::load_topology_state() {
         }
     }
 
+    {
+        // Here we access static columns, any row will do.
+        auto& some_row = *rs->begin();
+        if (some_row.has("current_cdc_generation_uuid")) {
+            auto gen_uuid = some_row.get_as<utils::UUID>("current_cdc_generation_uuid");
+            if (!some_row.has("current_cdc_generation_timestamp")) {
+                on_internal_error(slogger, format(
+                    "load_topology_state: current CDC generation UUID ({}) present, but timestamp missing", gen_uuid));
+            }
+            auto gen_ts = some_row.get_as<db_clock::time_point>("current_cdc_generation_timestamp");
+            ret.current_cdc_generation_id = cdc::generation_id_v2 {
+                .ts = gen_ts,
+                .id = gen_uuid
+            };
+
+            // Sanity check for CDC generation data consistency.
+            {
+                auto gen_rows = co_await qctx->execute_cql(
+                    format("SELECT count(range_end) as cnt, num_ranges FROM system.{} WHERE id = ?",
+                           CDC_GENERATIONS_V3),
+                    gen_uuid);
+                assert(gen_rows);
+                if (gen_rows->empty()) {
+                    on_internal_error(slogger, format(
+                        "load_topology_state: current CDC generation UUID ({}) present, but data missing", gen_uuid));
+                }
+                auto& row = gen_rows->one();
+                auto counted_ranges = row.get_as<int64_t>("cnt");
+                auto num_ranges = row.get_as<int32_t>("num_ranges");
+                if (counted_ranges != num_ranges) {
+                    on_internal_error(slogger, format(
+                        "load_topology_state: inconsistency in CDC generation data (UUID {}):"
+                        " counted {} ranges, should be {}", gen_uuid, counted_ranges, num_ranges));
+                }
+            }
+        } else {
+            if (!ret.normal_nodes.empty()) {
+                on_internal_error(slogger,
+                    "load_topology_state: normal nodes present but no current CDC generation ID");
+            }
+        }
+    }
+
     co_return ret;
 }
 

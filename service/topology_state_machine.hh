@@ -17,6 +17,7 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
+#include "cdc/generation_id.hh"
 #include "dht/token.hh"
 #include "raft/raft.hh"
 #include "utils/UUID.hh"
@@ -48,6 +49,7 @@ using request_param = std::variant<raft::server_id, sstring, uint32_t>;
 
 struct ring_slice {
     enum class replication_state: uint8_t {
+        commit_cdc_generation,
         write_both_read_old,
         write_both_read_new,
         owner
@@ -89,6 +91,8 @@ struct topology {
     // Holds parameters for a request per node and valid during entire
     // operation untill the node becomes normal
     std::unordered_map<raft::server_id, request_param> req_param;
+
+    std::optional<cdc::generation_id_v2> current_cdc_generation_id;
 
     // Find only nodes in non 'left' state
     const std::pair<const raft::server_id, replica_state>* find(raft::server_id id) const;

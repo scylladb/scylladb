@@ -405,6 +405,11 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
             }
         }
     }));
+
+    if (auto gen_id = _topology_state_machine._topology.current_cdc_generation_id) {
+        slogger.debug("topology_state_load: current CDC generation ID: {}", *gen_id);
+        // TODO start using the generation for CDC writes
+    }
 }
 
 future<> storage_service::topology_transition(storage_proxy& proxy, cdc::generation_service& cdc_gen_svc, gms::inet_address from, std::vector<canonical_mutation> cms) {
@@ -455,6 +460,7 @@ public:
     topology_mutation_builder& set(const char* cell, const std::unordered_set<dht::token>& value);
     topology_mutation_builder& set(const char* cell, const uint32_t& value);
     topology_mutation_builder& set(const char* cell, const utils::UUID& value);
+    topology_mutation_builder& set_current_cdc_generation_id(const cdc::generation_id_v2&);
     topology_mutation_builder& del(const char* cell);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };
@@ -526,6 +532,13 @@ topology_mutation_builder& topology_mutation_builder::set(const char* cell, cons
     } else {
         del(cell);
     }
+    return *this;
+}
+
+topology_mutation_builder& topology_mutation_builder::set_current_cdc_generation_id(
+        const cdc::generation_id_v2& value) {
+    _m.set_static_cell("current_cdc_generation_timestamp", value.ts, _ts);
+    _m.set_static_cell("current_cdc_generation_uuid", value.id, _ts);
     return *this;
 }
 
@@ -651,6 +664,66 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
 
         bool res;
         switch (node.rs->ring.value().state) {
+            case ring_slice::replication_state::commit_cdc_generation: {
+                // make sure all nodes know about new topology and have the new CDC generation data
+                // (we require all nodes to be alive for topo change for now)
+                std::tie(node, res) = co_await exec_global_command(std::move(node), raft_topology_cmd{raft_topology_cmd::command::barrier}, false, replaced_node);
+                if (!res) {
+                    break;
+                }
+
+                // We don't need to add delay to the generation timestamp if this is the first generation.
+                bool add_ts_delay = bool(node.topology->current_cdc_generation_id);
+
+                // Begin the race.
+                // See the large FIXME below.
+                auto cdc_gen_ts = cdc::new_generation_timestamp(add_ts_delay, get_ring_delay());
+                auto cdc_gen_uuid = node.rs->ring.value().new_cdc_generation_data_uuid;
+                cdc::generation_id_v2 cdc_gen_id {
+                    .ts = cdc_gen_ts,
+                    .id = cdc_gen_uuid,
+                };
+
+                {
+                    // Sanity check.
+                    // This could happen if the topology coordinator's clock is broken.
+                    auto curr_gen_id = node.topology->current_cdc_generation_id;
+                    if (curr_gen_id && curr_gen_id->ts >= cdc_gen_ts) {
+                        on_internal_error(slogger, format(
+                            "raft topology: new CDC generation has smaller timestamp than the previous one."
+                            " Old generation ID: {}, new generation ID: {}", *curr_gen_id, cdc_gen_id));
+                    }
+                }
+
+                // Tell all nodes to start using the new CDC generation by updating the topology
+                // with the generation's ID and timestamp.
+                // At the same time move the topology change procedure to the next step.
+                //
+                // FIXME: as in previous implementation with gossiper and ring_delay, this assumes that all nodes
+                // will learn about the new CDC generation before their clocks reach the generation's timestamp.
+                // With this group 0 based implementation, it means that the command must be committed,
+                // replicated and applied on all nodes before their clocks reach the generation's timestamp
+                // (i.e. within 2 * ring_delay = 60 seconds by default if clocks are synchronized). If this
+                // doesn't hold some coordinators might use the wrong CDC streams for some time and CDC stream
+                // readers will miss some data. It's likely that Raft replication doesn't converge as quickly
+                // as gossiping does.
+                //
+                // We could use a two-phase algorithm instead: first tell all nodes to prepare for using
+                // the new generation, then tell all nodes to commit. If some nodes don't manage to prepare
+                // in time, we abort the generation switch. If all nodes prepare, we commit. If a node prepares
+                // but doesn't receive a commit in time, it stops coordinating CDC-enabled writes until it
+                // receives a commit or abort. This solution does not have a safety problem like the one
+                // above, but it has an availability problem when nodes get disconnected from group 0 majority
+                // in the middle of a CDC generation switch (when they are prepared to switch but not
+                // committed) - they won't coordinate CDC-enabled writes until they reconnect to the
+                // majority and commit.
+                topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
+                builder.set("replication_state", ring_slice::replication_state::write_both_read_old)
+                       .set_current_cdc_generation_id(cdc_gen_id);
+                auto str = fmt::format("{}: committed new CDC generation, ID: {}", node.rs->state, cdc_gen_id);
+                co_await update_replica_state(std::move(node), {builder.build()}, std::move(str));
+            }
+                break;
             case ring_slice::ring_slice::replication_state::write_both_read_old: {
                 // make sure all nodes know about new topology (we require all nodes to be alive for topo change for now)
                 std::tie(node, res) = co_await exec_global_command(std::move(node), raft_topology_cmd{raft_topology_cmd::command::barrier}, false, replaced_node);
@@ -810,7 +883,7 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                         builder.set("node_state", node_state::bootstrapping)
                                 .del("topology_request")
                                 .set("tokens", bootstrap_tokens)
-                                .set("replication_state", ring_slice::replication_state::write_both_read_old)
+                                .set("replication_state", ring_slice::replication_state::commit_cdc_generation)
                                 .set("new_cdc_generation_data_uuid", gen_uuid);
                         updates.push_back(builder.build());
                         auto reason = format(
