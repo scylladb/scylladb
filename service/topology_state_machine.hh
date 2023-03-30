@@ -55,6 +55,11 @@ struct ring_slice {
 
     replication_state state;
     std::unordered_set<dht::token> tokens;
+
+    // When a new node joins the cluster, always a new CDC generation is created.
+    // This is the UUID used to access the data of the CDC generation introduced
+    // when the node owning this ring_slice joined (it's the partition key in CDC_GENERATIONS_V3 table).
+    utils::UUID new_cdc_generation_data_uuid;
 };
 
 struct replica_state {

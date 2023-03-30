@@ -454,6 +454,7 @@ public:
     topology_mutation_builder& set(const char* cell, const raft::server_id& value);
     topology_mutation_builder& set(const char* cell, const std::unordered_set<dht::token>& value);
     topology_mutation_builder& set(const char* cell, const uint32_t& value);
+    topology_mutation_builder& set(const char* cell, const utils::UUID& value);
     topology_mutation_builder& del(const char* cell);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };
@@ -484,6 +485,14 @@ topology_mutation_builder& topology_mutation_builder::set(const char* cell, cons
     auto cdef = _s->get_column_definition(cell);
     assert(cdef);
     _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _ts, cdef->type->decompose(int32_t(value))));
+    return *this;
+}
+
+topology_mutation_builder& topology_mutation_builder::set(
+        const char* cell, const utils::UUID& value) {
+    auto cdef = _s->get_column_definition(cell);
+    assert(cdef);
+    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _ts, cdef->type->decompose(value)));
     return *this;
 }
 
@@ -743,12 +752,70 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                         auto tmptr = get_token_metadata_ptr();
                         auto bootstrap_tokens = boot_strapper::get_random_bootstrap_tokens(tmptr, num_tokens, dht::check_token_endpoint::yes);
 
-                        // Write choosen tokens through raft.
+                        auto get_sharding_info = [&] (dht::token end) -> std::pair<size_t, uint8_t> {
+                            if (bootstrap_tokens.contains(end)) {
+                                return {node.rs->shard_count, node.rs->ignore_msb};
+                            } else {
+                                // FIXME: token metadata should directly return host ID for given token. See #12279
+                                auto ep = tmptr->get_endpoint(end);
+                                if (!ep) {
+                                    // get_sharding_info is only called for bootstrap tokens
+                                    // or for tokens present in token_metadata
+                                    on_internal_error(slogger, format(
+                                        "raft topology: make_new_cdc_generation_data: get_sharding_info:"
+                                        " can't find endpoint for token {}", end));
+                                }
+
+                                auto id = tmptr->get_host_id_if_known(*ep);
+                                if (!id) {
+                                    on_internal_error(slogger, format(
+                                        "raft topology: make_new_cdc_generation_data: get_sharding_info:"
+                                        " can't find host ID for endpoint {}, owner of token {}", *ep, end));
+                                }
+
+                                auto ptr = node.topology->find(raft::server_id{id->uuid()});
+                                if (!ptr) {
+                                    on_internal_error(slogger, format(
+                                        "raft topology: make_new_cdc_generation_data: get_sharding_info:"
+                                        " couldn't find node {} in topology, owner of token {}", *id, end));
+                                }
+
+                                auto& rs = ptr->second;
+                                return {rs.shard_count, rs.ignore_msb};
+                            }
+                        };
+
+                        auto [gen_uuid, gen_desc] = cdc::make_new_generation_data(
+                            bootstrap_tokens, get_sharding_info, tmptr);
+                        auto gen_table_schema = _db.local().find_schema(
+                            db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
+
+                        // FIXME: the CDC generation data can be large and not fit in a single command
+                        // (for large clusters, it will introduce reactor stalls and go over commitlog entry
+                        // size limit). We need to split it into multiple mutations by smartly picking
+                        // a `mutation_size_threshold` and sending each mutation as a separate group 0 command.
+                        // We also don't want to serialize the commands - there may be many of them,
+                        // and we don't want to wait for a network round-trip to a quorum between each command.
+                        // So we need to introduce a mechanism for group 0 to send a sequence of commands
+                        // that can be committed concurrently. Also we need to be careful with memory consumption
+                        // with many large mutations.
+                        // See `system_distributed_keyspace::insert_cdc_generation` for inspiration how it
+                        // was done when the mutations were stored in a regular distributed table.
+                        const size_t mutation_size_threshold = 2'000'000;
+                        auto gen_mutations = co_await cdc::get_cdc_generation_mutations(
+                            gen_table_schema, gen_uuid, gen_desc, mutation_size_threshold, node.guard.write_timestamp());
+                        std::vector<canonical_mutation> updates{gen_mutations.begin(), gen_mutations.end()};
+
+                        // Write chosen tokens and CDC generation data through raft.
                         builder.set("node_state", node_state::bootstrapping)
                                 .del("topology_request")
                                 .set("tokens", bootstrap_tokens)
-                                .set("replication_state", ring_slice::replication_state::write_both_read_old);
-                        co_await update_replica_state(std::move(node), {builder.build()}, "bootstrap: assign tokens");
+                                .set("replication_state", ring_slice::replication_state::write_both_read_old)
+                                .set("new_cdc_generation_data_uuid", gen_uuid);
+                        updates.push_back(builder.build());
+                        auto reason = format(
+                            "bootstrap: assign tokens and insert CDC generation data (UUID: {})", gen_uuid);
+                        co_await update_replica_state(std::move(node), {std::move(updates)}, reason);
                         break;
                         }
                     case topology_request::leave:

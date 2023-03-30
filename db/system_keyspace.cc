@@ -3538,9 +3538,16 @@ future<service::topology> system_keyspace::load_topology_state() {
                     host_id, repl_state));
             }
 
+            if (!row.has("new_cdc_generation_data_uuid")) {
+                on_fatal_internal_error(slogger, format(
+                    "load_topology_state: node {} has replication state ({}) but missing CDC generation data UUID",
+                    host_id, repl_state));
+            }
+
             ring_slice = service::ring_slice {
                 .state = repl_state,
                 .tokens = std::move(tokens),
+                .new_cdc_generation_data_uuid = row.get_as<utils::UUID>("new_cdc_generation_data_uuid"),
             };
         }
 
