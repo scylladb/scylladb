@@ -488,7 +488,7 @@ std::pair<std::optional<secondary_index::index>, expr::expression> statement_res
     for (const auto& index : sim.list_indexes()) {
         auto cdef = _schema->get_column_definition(to_bytes(index.target_column()));
         for (const expr::expression& restriction : index_restrictions()) {
-            if (has_token(restriction) || contains_multi_column_restriction(restriction)) {
+            if (has_partition_token(restriction, *_schema) || contains_multi_column_restriction(restriction)) {
                 continue;
             }
 
@@ -566,7 +566,7 @@ void statement_restrictions::add_restriction(const expr::binary_operator& restr,
     } else if (expr::is_multi_column(restr)) {
         // Multi column restrictions are only allowed on clustering columns
         add_multi_column_clustering_key_restriction(restr);
-    } else if (has_token(restr)) {
+    } else if (has_partition_token(restr, *_schema)) {
         // Token always restricts the partition key
         add_token_partition_key_restriction(restr);
     } else if (expr::is_single_column_restriction(restr)) {
@@ -1019,7 +1019,7 @@ dht::partition_range_vector statement_restrictions::get_partition_key_ranges(con
     if (_partition_range_restrictions.empty()) {
         return {dht::partition_range::make_open_ended_both_sides()};
     }
-    if (has_token(_partition_range_restrictions[0])) {
+    if (has_partition_token(_partition_range_restrictions[0], *_schema)) {
         if (_partition_range_restrictions.size() != 1) {
             on_internal_error(
                     rlogger,

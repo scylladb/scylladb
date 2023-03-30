@@ -642,7 +642,7 @@ inline bool is_multi_column(const binary_operator& op) {
     return expr::is<tuple_constructor>(op.lhs);
 }
 
-inline bool has_token(const expression& e) {
+inline bool has_partition_token(const expression& e, const schema& table_schema) {
     return find_binop(e, [] (const binary_operator& o) { return expr::is<token>(o.lhs); });
 }
 

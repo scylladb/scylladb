@@ -181,7 +181,7 @@ public:
     }
 
     bool has_token_restrictions() const {
-        return has_token(_partition_key_restrictions);
+        return has_partition_token(_partition_key_restrictions, *_schema);
     }
 
     // Checks whether the given column has an EQ restriction.
