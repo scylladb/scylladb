@@ -5499,7 +5499,8 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             ++i;
             merged_ranges.push_back(to_token_range(next_range));
         }
-        slogger.trace("creating range read executor with targets {}", filtered_endpoints);
+        slogger.trace("creating range read executor for range {} in table {}.{} with targets {}",
+                      range, schema->ks_name(), schema->cf_name(), filtered_endpoints);
         try {
             db::assure_sufficient_live_nodes(cl, *erm, filtered_endpoints);
         } catch(exceptions::unavailable_exception& ex) {
