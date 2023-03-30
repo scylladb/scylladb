@@ -223,7 +223,7 @@ public:
             mutation_reader::forwarding fwd_mr) {
         return make_flat_mutation_reader_v2<built_indexes_reader>(
                 _db,
-                std::move(s),
+                s,
                 std::move(permit),
                 _db.find_column_family(s->ks_name(), system_keyspace::v3::BUILT_VIEWS),
                 range,
