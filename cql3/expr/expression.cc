@@ -856,7 +856,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                 on_internal_error(expr_logger, "possible_lhs_values: the token function cannot serve as a restriction by itself");
             },
             [] (const unresolved_identifier&) -> value_set {
-                on_internal_error(expr_logger, "is_satisfied_by: an unresolved identifier cannot serve as a restriction");
+                on_internal_error(expr_logger, "possible_lhs_values: an unresolved identifier cannot serve as a restriction");
             },
             [] (const column_mutation_attribute&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: the writetime/ttl functions cannot serve as a restriction by itself");
