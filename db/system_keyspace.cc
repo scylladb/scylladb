@@ -3519,19 +3519,29 @@ future<service::topology> system_keyspace::load_topology_state() {
 
         service::node_state nstate = service::node_state_from_string(row.get_as<sstring>("node_state"));
 
-        std::optional<service::ring_slice::replication_state> tstate;
+        std::optional<service::ring_slice> ring_slice;
         if (row.has("replication_state")) {
-            tstate = service::replication_state_from_string(row.get_as<sstring>("replication_state"));
-        }
+            auto repl_state = service::replication_state_from_string(row.get_as<sstring>("replication_state"));
 
-        std::unordered_set<dht::token> t;
+            std::unordered_set<dht::token> tokens;
+            if (row.has("tokens")) {
+                auto blob = row.get_blob("tokens");
+                auto cdef = topology()->get_column_definition("tokens");
+                auto deserialized = cdef->type->deserialize(blob);
+                auto ts = value_cast<set_type_impl::native_type>(deserialized);
+                tokens = decode_tokens(ts);
+            }
 
-        if (row.has("tokens")) {
-            auto blob = row.get_blob("tokens");
-            auto cdef = topology()->get_column_definition("tokens");
-            auto deserialized = cdef->type->deserialize(blob);
-            auto tokens = value_cast<set_type_impl::native_type>(deserialized);
-            t = decode_tokens(tokens);
+            if (tokens.empty()) {
+                on_fatal_internal_error(slogger, format(
+                    "load_topology_state: node {} has replication state ({}) but missing tokens",
+                    host_id, repl_state));
+            }
+
+            ring_slice = service::ring_slice {
+                .state = repl_state,
+                .tokens = std::move(tokens),
+            };
         }
 
         std::optional<raft::server_id> replaced_id;
@@ -3589,23 +3599,28 @@ future<service::topology> system_keyspace::load_topology_state() {
             }
         }
 
-        if (!tstate && t.size() != 0) {
-            on_fatal_internal_error(slogger, "There cannot be tokens without the replication state");
-        }
         std::unordered_map<raft::server_id, service::replica_state>* map = nullptr;
         if (nstate == service::node_state::normal) {
             map = &ret.normal_nodes;
+            if (!ring_slice) {
+                on_fatal_internal_error(slogger, format(
+                    "load_topology_state: node {} in normal state but missing ring slice", host_id));
+            }
         } else if (nstate == service::node_state::left) {
             ret.left_nodes.emplace(host_id);
         } else if (nstate == service::node_state::none) {
             map = &ret.new_nodes;
         } else {
             map = &ret.transition_nodes;
+            if (!ring_slice) {
+                on_fatal_internal_error(slogger, format(
+                    "load_topology_state: node {} in transitioning state but missing ring slice", host_id));
+            }
         }
         if (map) {
-            map->emplace(host_id, service::replica_state{nstate, std::move(datacenter), std::move(rack), std::move(release_version),
-                tstate ? std::optional<service::ring_slice>(service::ring_slice{*tstate, std::move(t)}) : std::nullopt,
-                shard_count, ignore_msb});
+            map->emplace(host_id, service::replica_state{
+                nstate, std::move(datacenter), std::move(rack), std::move(release_version),
+                ring_slice, shard_count, ignore_msb});
         }
     }
 
