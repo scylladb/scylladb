@@ -83,6 +83,7 @@ namespace {
             system_keyspace::DISCOVERY,
             system_keyspace::BROADCAST_KV_STORE,
             system_keyspace::TOPOLOGY,
+            system_keyspace::CDC_GENERATIONS_V3,
         };
         if (ks_name == system_keyspace::NAME && system_ks_null_shard_tables.contains(cf_name)) {
             props.use_null_sharder = true;
@@ -98,6 +99,7 @@ namespace {
             system_keyspace::DISCOVERY,
             system_keyspace::BROADCAST_KV_STORE,
             system_keyspace::TOPOLOGY,
+            system_keyspace::CDC_GENERATIONS_V3,
         };
         if (ks_name == system_keyspace::NAME && extra_durable_tables.contains(cf_name)) {
             props.wait_for_sync_to_commitlog = true;
@@ -250,8 +252,50 @@ schema_ptr system_keyspace::topology() {
             .with_column("num_tokens", int32_type)
             .with_column("shard_count", int32_type)
             .with_column("ignore_msb", int32_type)
+            .with_column("new_cdc_generation_data_uuid", uuid_type)
+            .with_column("current_cdc_generation_uuid", uuid_type, column_kind::static_column)
+            .with_column("current_cdc_generation_timestamp", timestamp_type, column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_version(generate_schema_version(id))
+            .build();
+    }();
+    return schema;
+}
+
+extern thread_local data_type cdc_streams_set_type;
+
+/* An internal table used by nodes to store CDC generation data.
+ * Written to by Raft Group 0. */
+schema_ptr system_keyspace::cdc_generations_v3() {
+    thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, CDC_GENERATIONS_V3);
+        return schema_builder(NAME, CDC_GENERATIONS_V3, {id})
+            /* The unique identifier of this generation. */
+            .with_column("id", uuid_type, column_kind::partition_key)
+            /* The generation describes a mapping from all tokens in the token ring to a set of stream IDs.
+             * This mapping is built from a bunch of smaller mappings, each describing how tokens in a
+             * subrange of the token ring are mapped to stream IDs; these subranges together cover the entire
+             * token ring.  Each such range-local mapping is represented by a row of this table. The
+             * clustering key of the row is the end of the range being described by this row. The start of
+             * this range is the range_end of the previous row (in the clustering order, which is the integer
+             * order) or of the last row of this partition if this is the first the first row. */
+            .with_column("range_end", long_type, column_kind::clustering_key)
+            /* The set of streams mapped to in this range.  The number of streams mapped to a single range in
+             * a CDC generation is bounded from above by the number of shards on the owner of that range in
+             * the token ring. In other words, the number of elements of this set is bounded by the maximum
+             * of the number of shards over all nodes. The serialized size is obtained by counting about 20B
+             * for each stream. For example, if all nodes in the cluster have at most 128 shards, the
+             * serialized size of this set will be bounded by ~2.5 KB. */
+            .with_column("streams", cdc_streams_set_type)
+            /* The value of the `ignore_msb` sharding parameter of the node which was the owner of this token
+             * range when the generation was first created. Together with the set of streams above it fully
+             * describes the mapping for this particular range. */
+            .with_column("ignore_msb", byte_type)
+            /* Column used for sanity checking. For a given generation it's equal to the number of ranges in
+             * this generation; thus, after the generation is fully inserted, it must be equal to the number
+             * of rows in the partition. */
+            .with_column("num_ranges", int32_type, column_kind::static_column)
+            .with_version(system_keyspace::generate_schema_version(id))
             .build();
     }();
     return schema;
@@ -2838,7 +2882,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
         r.insert(r.end(), {raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery()});
 
         if (cfg.check_experimental(db::experimental_features_t::feature::RAFT)) {
-            r.insert(r.end(), {topology()});
+            r.insert(r.end(), {topology(), cdc_generations_v3()});
         }
 
         if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
