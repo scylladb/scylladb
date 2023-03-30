@@ -126,7 +126,8 @@ private:
     // don't bother with expiration on those.
     std::unordered_map<sstring, std::unique_ptr<statements::prepared_statement>> _internal_statements;
 
-    wasm::instance_cache* _wasm_instance_cache;
+    std::shared_ptr<rust::Box<wasmtime::Engine>> _wasm_engine;
+    std::optional<wasm::instance_cache> _wasm_instance_cache;
     std::shared_ptr<wasm::alien_thread_runner> _alien_runner;
 public:
     static const sstring CQL_VERSION;
@@ -142,7 +143,7 @@ public:
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
     static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries);
 
-    query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, service::raft_group0_client& group0_client);
+    query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, service::raft_group0_client& group0_client, std::optional<wasm::startup_context> wasm_ctx);
 
     ~query_processor();
 
@@ -169,20 +170,16 @@ public:
         return _cql_stats;
     }
 
-    wasm::instance_cache* get_wasm_instance_cache() {
-        return _wasm_instance_cache;
+    wasmtime::Engine& wasm_engine() {
+        return **_wasm_engine;
+    }
+
+    wasm::instance_cache& wasm_instance_cache() {
+        return *_wasm_instance_cache;
     }
 
     wasm::alien_thread_runner& alien_runner() {
         return *_alien_runner;
-    }
-
-    void set_wasm_instance_cache(wasm::instance_cache* cache) {
-        _wasm_instance_cache = cache;
-    }
-
-    void set_alien_runner(std::shared_ptr<wasm::alien_thread_runner> alien_runner) {
-        _alien_runner = std::move(alien_runner);
     }
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key) {

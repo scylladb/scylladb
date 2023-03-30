@@ -19,7 +19,7 @@ SEASTAR_TEST_CASE(test_long_udf_yields) {
     auto wasm_engine = wasmtime::create_engine(1024 * 1024);
     wasm::alien_thread_runner alien_runner;
     auto wasm_cache = std::make_unique<wasm::instance_cache>(100 * 1024 * 1024, 1024 * 1024, std::chrono::seconds(1));
-    auto wasm_ctx = wasm::context(*wasm_engine, "fib", wasm_cache.get(), 100000, 100000000000);
+    auto wasm_ctx = wasm::context(*wasm_engine, "fib", *wasm_cache, 100000, 100000000000);
     // Recursive fibonacci function
     co_await wasm::precompile(alien_runner, wasm_ctx, {}, R"(
 (module

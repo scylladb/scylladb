@@ -26,7 +26,16 @@
 logging::logger wasm_logger("wasm");
 
 namespace wasm {
-context::context(wasmtime::Engine& engine_ptr, std::string name, instance_cache* cache, uint64_t yield_fuel, uint64_t total_fuel)
+
+startup_context::startup_context(db::config& cfg, replica::database_config& dbcfg)
+    : alien_runner(std::make_shared<wasm::alien_thread_runner>())
+    , engine(std::make_shared<rust::Box<wasmtime::Engine>>(wasmtime::create_engine(cfg.wasm_udf_memory_limit())))
+    , cache_size(dbcfg.available_memory * cfg.wasm_cache_memory_fraction())
+    , instance_size(cfg.wasm_cache_instance_size_limit())
+    , timer_period(std::chrono::milliseconds(cfg.wasm_cache_timeout_in_ms())) {
+}
+
+context::context(wasmtime::Engine& engine_ptr, std::string name, instance_cache& cache, uint64_t yield_fuel, uint64_t total_fuel)
     : engine_ptr(engine_ptr)
     , function_name(name)
     , cache(cache)
@@ -304,7 +313,7 @@ seastar::future<bytes_opt> run_script(const db::functions::function_name& name, 
     std::exception_ptr ex;
     bytes_opt ret;
     try {
-        func_inst = ctx.cache->get(name, arg_types, ctx).get0();
+        func_inst = ctx.cache.get(name, arg_types, ctx).get0();
         ret = wasm::run_script(ctx, *func_inst->instance->store, *func_inst->instance->instance, *func_inst->instance->func, arg_types, params, return_type, allow_null_input).get0();
     } catch (const wasm::instance_corrupting_exception& e) {
         func_inst->instance = std::nullopt;
@@ -314,7 +323,7 @@ seastar::future<bytes_opt> run_script(const db::functions::function_name& name, 
     }
     if (func_inst) {
         // The construction of func_inst may have failed due to a insufficient free memory for compiled modules.
-        ctx.cache->recycle(func_inst);
+        ctx.cache.recycle(func_inst);
     }
     if (ex) {
         std::rethrow_exception(std::move(ex));
