@@ -128,6 +128,7 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
     // memory and thus needs to be protected with apply mutex
     auto read_apply_mutex_holder = co_await get_units(_client._read_apply_mutex, 1);
     co_await _ss.topology_state_load();
+    _ss._topology_state_machine.event.signal();
 }
 
 future<> group0_state_machine::transfer_snapshot(gms::inet_address from, raft::snapshot_descriptor snp) {
