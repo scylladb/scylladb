@@ -133,6 +133,13 @@ public:
  */
 bool should_propose_first_generation(const gms::inet_address& me, const gms::gossiper&);
 
+std::pair<utils::UUID, cdc::topology_description> make_new_generation_data(
+    const std::unordered_set<dht::token>& bootstrap_tokens,
+    const noncopyable_function<std::pair<size_t, uint8_t> (dht::token)>& get_sharding_info,
+    const locator::token_metadata_ptr);
+
+db_clock::time_point new_generation_timestamp(bool add_delay, std::chrono::milliseconds ring_delay);
+
 // Translates the CDC generation data given by a `cdc::topology_description` into a vector of mutations,
 // using `mutation_size_threshold` to decide on the mutation sizes. The partition key of each mutation
 // is given by `gen_uuid`. The timestamp of each cell in each mutation is given by `mutation_timestamp`.

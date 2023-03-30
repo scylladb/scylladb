@@ -327,10 +327,27 @@ topology_description limit_number_of_streams_if_needed(topology_description&& de
     return topology_description(std::move(entries));
 }
 
-future<cdc::generation_id> generation_service::make_new_generation(const std::unordered_set<dht::token>& bootstrap_tokens, bool add_delay) {
+std::pair<utils::UUID, cdc::topology_description> make_new_generation_data(
+        const std::unordered_set<dht::token>& bootstrap_tokens,
+        const noncopyable_function<std::pair<size_t, uint8_t>(dht::token)>& get_sharding_info,
+        const locator::token_metadata_ptr tmptr) {
+    auto gen = topology_description_generator(bootstrap_tokens, tmptr, get_sharding_info).generate();
+    auto uuid = utils::make_random_uuid();
+    return {uuid, std::move(gen)};
+}
+
+db_clock::time_point new_generation_timestamp(bool add_delay, std::chrono::milliseconds ring_delay) {
     using namespace std::chrono;
     using namespace std::chrono_literals;
 
+    auto ts = db_clock::now();
+    if (add_delay && ring_delay != 0ms) {
+        ts += 2 * ring_delay + duration_cast<milliseconds>(generation_leeway);
+    }
+    return ts;
+}
+
+future<cdc::generation_id> generation_service::make_new_generation(const std::unordered_set<dht::token>& bootstrap_tokens, bool add_delay) {
     const locator::token_metadata_ptr tmptr = _token_metadata.get();
 
     // Fetch sharding parameters for a node that owns vnode ending with this token
@@ -348,31 +365,19 @@ future<cdc::generation_id> generation_service::make_new_generation(const std::un
             return {sc > 0 ? sc : 1, get_sharding_ignore_msb(*endpoint, _gossiper)};
         }
     };
-    auto gen = topology_description_generator(bootstrap_tokens, tmptr, get_sharding_info).generate();
-
-    // We need to call this as late in the procedure as possible.
-    // In the V2 format we can do this after inserting the generation data into the table;
-    // in the V1 format we must do it before (because the timestamp is the partition key in the V1 format).
-    auto new_generation_timestamp = [add_delay, ring_delay = _cfg.ring_delay] {
-        auto ts = db_clock::now();
-        if (add_delay && ring_delay != 0ms) {
-            ts += 2 * ring_delay + duration_cast<milliseconds>(generation_leeway);
-        }
-        return ts;
-    };
+    auto [uuid, gen] = make_new_generation_data(bootstrap_tokens, get_sharding_info, tmptr);
 
     // Our caller should ensure that there are normal tokens in the token ring.
     auto normal_token_owners = tmptr->count_normal_token_owners();
     assert(normal_token_owners);
 
     if (_feature_service.cdc_generations_v2) {
-        auto uuid = utils::make_random_uuid();
         cdc_log.info("Inserting new generation data at UUID {}", uuid);
         // This may take a while.
         co_await _sys_dist_ks.local().insert_cdc_generation(uuid, gen, { normal_token_owners });
 
         // Begin the race.
-        cdc::generation_id_v2 gen_id{new_generation_timestamp(), uuid};
+        cdc::generation_id_v2 gen_id{new_generation_timestamp(add_delay, _cfg.ring_delay), uuid};
 
         cdc_log.info("New CDC generation: {}", gen_id);
         co_return gen_id;
@@ -401,7 +406,7 @@ future<cdc::generation_id> generation_service::make_new_generation(const std::un
         " a new node or running the checkAndRepairCdcStreams nodetool command.");
 
     // Begin the race.
-    cdc::generation_id_v1 gen_id{new_generation_timestamp()};
+    cdc::generation_id_v1 gen_id{new_generation_timestamp(add_delay, _cfg.ring_delay)};
 
     co_await _sys_dist_ks.local().insert_cdc_topology_description(gen_id, std::move(gen), { normal_token_owners });
 
