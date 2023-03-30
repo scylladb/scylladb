@@ -35,14 +35,33 @@ You can specify more than one SStable.
 
 Schema
 ------
+
 All operations need a schema to interpret the SStables with.
-Currently, there are two ways to obtain the schema:
+This tool tries to auto-detect the location of the ScyllaDB data directories and the name of the table the SStable belongs to.
+If the SStable is located in a ScyllaDB data directory, it works out-of-the-box, without any additional input from the user.
+If the SStable is located at an external path, you need to specify the names of the keyspace and table to which the SStable belongs. In addition, some hints as to where the ScyllaDB data directory is located may also be required.
 
+The schema can be obtained in the following ways:
+
+* Auto-detected - If the SStable is located in the table's directory within the ScyllaDB data directory.
+* ``--keyspace=KEYSPACE --table=TABLE`` - If the SStable is located at an external location, but the ScyllaDB data directory or the config file are located at the standard location. The tool also reads the ``SCYLLA_CONF`` and ``SCYLLA_HOME`` environment variables to try to locate the configuration file.
 * ``--schema-file FILENAME`` - Read the schema definition from a file.
-* ``--system-schema KEYSPACE.TABLE`` - Use the known definition of built-in tables (only works for system tables).
+* ``--system-schema --keyspace=KEYSPACE --table=TABLE`` - Use the known definition of built-in tables (only works for system tables).
+* ``--scylla-data-dir SCYLLA_DATA_DIR_PATH --keyspace=KEYSPACE --table=TABLE`` - Read the schema tables from the data directory at the provided location, needs the keyspace and table name to be provided with ``--keyspace`` and ``--table``.
+* ``--scylla-yaml-file SCYLLA_YAML_FILE_PATH --keyspace=KEYSPACE --table=TABLE`` - Read the schema tables from the data directory path obtained from the configuration, needs the keyspace and table name to be provided with ``--keyspace`` and ``--table``.
 
-By default, the tool uses the first method: ``--schema-file schema.cql``; i.e. it assumes there is a schema file named ``schema.cql`` in the working directory.
-If this fails, it will exit with an error.
+By default (no schema-related options are provided), the tool will try the following sequence:
+
+* Try to load schema from ``schema.cql``.
+* Try to deduce the ScyllaDB data directory path and table names from the SStable path.
+* Try to load the schema from the ScyllaDB directory located at the standard location (``/var/lib/scylla``). For this to succeed, the table name has to be provided via ``--keyspace`` and ``--table``.
+* Try to load the schema from the ScyllaDB directory path obtained from config at the standard location (``./conf/scylla.yaml``). ``SCYLLA_CONF`` and ``SCYLLA_HOME`` environment variables are also checked. For this to succeed, the table name has to be provided via ``--keyspace`` and ``--table``.
+
+The tool stops after the first successful attempt. If none of the above succeed, an error message will be printed.
+A user provided schema in ``schema.cql`` (if present) always takes precedence over other methods. This is deliberate, to allow to manually override the schema to be used.
+
+schema.cql
+^^^^^^^^^^
 
 The schema file should contain all definitions needed to interpret data belonging to the table.
 
@@ -72,7 +91,7 @@ Note:
 * The schema file doesn't have to be called ``schema.cql``, this is just the default name. Any file name is supported (with any extension).
 
 Dropped columns
-^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~
 
 The examined sstable might have columns which were dropped from the schema definition. In this case providing the up-do-date schema will not be enough, the tool will fail when attempting to process a cell for the dropped column.
 Dropped columns can be provided to the tool in the form of insert statements into the ``system_schema.dropped_columns`` system table, in the schema definition file. Example:
