@@ -125,8 +125,8 @@ public:
      */
     void update_topology(inet_address ep, endpoint_dc_rack dr, std::optional<node::state> opt_st = std::nullopt);
     /**
-     * Creates an iterable range of the sorted tokens starting at the token next
-     * after the given one.
+     * Creates an iterable range of the sorted tokens starting at the token t
+     * such that t >= start.
      *
      * @param start A token that will define the beginning of the range
      *
