@@ -782,6 +782,7 @@ future<> generation_service::on_change(gms::inet_address ep, gms::application_st
 }
 
 future<> generation_service::check_and_repair_cdc_streams() {
+    // FIXME: support Raft group 0-based topology changes
     if (!_joined) {
         throw std::runtime_error("check_and_repair_cdc_streams: node not initialized yet");
     }
