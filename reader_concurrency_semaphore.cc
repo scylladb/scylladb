@@ -13,6 +13,7 @@
 #include <seastar/util/log.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/core/metrics.hh>
 
 #include "reader_concurrency_semaphore.hh"
 #include "readers/flat_mutation_reader_v2.hh"
@@ -939,6 +940,8 @@ void reader_concurrency_semaphore::signal(const resources& r) noexcept {
     maybe_admit_waiters();
 }
 
+static const seastar::metrics::label class_label("class");
+
 reader_concurrency_semaphore::reader_concurrency_semaphore(int count, ssize_t memory, sstring name, size_t max_queue_length,
             utils::updateable_value<uint32_t> serialize_limit_multiplier, utils::updateable_value<uint32_t> kill_limit_multiplier)
     : _initial_resources(count, memory)
@@ -947,6 +950,53 @@ reader_concurrency_semaphore::reader_concurrency_semaphore(int count, ssize_t me
     , _max_queue_length(max_queue_length)
     , _serialize_limit_multiplier(std::move(serialize_limit_multiplier))
     , _kill_limit_multiplier(std::move(kill_limit_multiplier))
+    , _metrics({
+        {"database", {
+            seastar::metrics::make_gauge("reads_memory_consumption", [this] { return consumed_resources().memory; },
+                        seastar::metrics::description("Holds the amount of memory consumed by current read operations. "),
+                        {class_label(_name)}),
+
+            seastar::metrics::make_gauge("queued_reads", _stats.waiters,
+                        seastar::metrics::description("Holds the number of currently queued read operations."),
+                        {class_label(_name)}),
+
+            seastar::metrics::make_gauge("paused_reads", _stats.inactive_reads,
+                        seastar::metrics::description("The number of currently active reads that are temporarily paused."),
+                        {class_label(_name)}),
+
+            seastar::metrics::make_counter("paused_reads_permit_based_evictions", _stats.permit_based_evictions,
+                        seastar::metrics::description("The number of paused reads evicted to free up permits."
+                                        " Permits are required for new reads to start, and the database will evict paused reads (if any)"
+                                        " to be able to admit new ones, if there is a shortage of permits."),
+                        {class_label(_name)}),
+
+            seastar::metrics::make_counter("reads_shed_due_to_overload", _stats.total_reads_shed_due_to_overload,
+                        seastar::metrics::description("The number of reads shed because the admission queue reached its max capacity."
+                                        " When the queue is full, excessive reads are shed to avoid overload."),
+                        {class_label(_name)}),
+
+            seastar::metrics::make_gauge("disk_reads", _stats.disk_reads,
+                        seastar::metrics::description("Holds the number of currently active disk read operations. "),
+                        {class_label(_name)}),
+
+            seastar::metrics::make_gauge("sstables_read", _stats.sstables_read,
+                        seastar::metrics::description("Holds the number of currently read sstables. "),
+                        {class_label(_name)}),
+
+            seastar::metrics::make_counter("total_reads", _stats.total_successful_reads,
+                        seastar::metrics::description("Counts the total number of successful user reads on this shard."),
+                        {class_label(_name)}),
+
+            seastar::metrics::make_counter("total_reads_failed", _stats.total_failed_reads,
+                        seastar::metrics::description("Counts the total number of failed user read operations. "
+                                        "Add the total_reads to this value to get the total amount of reads issued on this shard."),
+                        {class_label(_name)}),
+
+            seastar::metrics::make_gauge("active_reads", [this] { return active_reads(); },
+                        seastar::metrics::description("Holds the number of currently active read operations. "),
+                        {class_label(_name)}),
+        }}
+    })
 { }
 
 reader_concurrency_semaphore::reader_concurrency_semaphore(no_limits, sstring name)
