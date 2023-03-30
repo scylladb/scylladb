@@ -245,7 +245,7 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source* 
 
             // Take `_group0_read_apply_mutex` *after* read barrier.
             // Read barrier may wait for `group0_state_machine::apply` which also takes this mutex.
-            auto read_apply_holder = co_await get_units(_read_apply_mutex, 1);
+            auto read_apply_holder = co_await hold_read_apply_mutex();
 
             auto observed_group0_state_id = co_await db::system_keyspace::get_last_group0_state_id();
             auto new_group0_state_id = generate_group0_state_id(observed_group0_state_id);
@@ -411,6 +411,10 @@ future<> raft_group0_client::wait_until_group0_upgraded(abort_source& as) {
     if (as.abort_requested()) {
         throw abort_requested_exception{};
     }
+}
+
+future<semaphore_units<>> raft_group0_client::hold_read_apply_mutex() {
+    return get_units(_read_apply_mutex, 1);
 }
 
 db::system_keyspace& raft_group0_client::sys_ks() {
