@@ -449,7 +449,10 @@ BOOST_AUTO_TEST_CASE(expression_extract_column_restrictions) {
     expression ck1_ck2_restriction = make_multi_column_restriction({&col_ck1, &col_ck2}, oper_t::LT);
     expression conjunction_expr = conjunction{std::vector{ck1_ck2_restriction, r1_restriction2}};
 
-    token token_expr(std::vector<const column_definition*>{&col_pk1, &col_pk2});
+    function_call token_expr = function_call {
+        .func = functions::function_name::native_function("token"),
+        .args = {column_value(&col_pk1), column_value(&col_pk2)}
+    };
     expression token_lt_restriction = binary_operator(token_expr, oper_t::LT, zero_value);
     expression token_gt_restriction = binary_operator(token_expr, oper_t::GT, zero_value);
 

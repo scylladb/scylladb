@@ -66,24 +66,6 @@ expression::operator=(const expression& o) {
     return *this;
 }
 
-token::token(std::vector<expression> args_in)
-    : args(std::move(args_in)) {
-}
-
-token::token(const std::vector<const column_definition*>& col_defs) {
-    args.reserve(col_defs.size());
-    for (const column_definition* col_def : col_defs) {
-        args.push_back(column_value(col_def));
-    }
-}
-
-token::token(const std::vector<::shared_ptr<column_identifier_raw>>& cols) {
-    args.reserve(cols.size());
-    for(const ::shared_ptr<column_identifier_raw>& col : cols) {
-        args.push_back(unresolved_identifier{col});
-    }
-}
-
 binary_operator::binary_operator(expression lhs, oper_t op, expression rhs, comparison_order order)
             : lhs(std::move(lhs))
             , op(op)
@@ -789,7 +771,11 @@ static value_set possible_lhs_values(const column_definition* cdef,
                             }
                             return unbounded_value_set;
                         },
-                        [&] (token) -> value_set {
+                        [&] (const function_call& token_fun_call) -> value_set {
+                            if (!is_partition_token_for_schema(token_fun_call, *table_schema_opt)) {
+                                on_internal_error(expr_logger, "possible_lhs_values: function calls are not supported as the LHS of a binary expression");
+                            }
+
                             if (cdef) {
                                 return unbounded_value_set;
                             }
@@ -831,9 +817,6 @@ static value_set possible_lhs_values(const column_definition* cdef,
                         [] (const column_mutation_attribute&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: writetime/ttl are not supported as the LHS of a binary expression");
                         },
-                        [] (const function_call&) -> value_set {
-                            on_internal_error(expr_logger, "possible_lhs_values: function calls are not supported as the LHS of a binary expression");
-                        },
                         [] (const cast&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: typecasts are not supported as the LHS of a binary expression");
                         },
@@ -859,9 +842,6 @@ static value_set possible_lhs_values(const column_definition* cdef,
             },
             [] (const subscript&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: a subscript cannot serve as a restriction by itself");
-            },
-            [] (const token&) -> value_set {
-                on_internal_error(expr_logger, "possible_lhs_values: the token function cannot serve as a restriction by itself");
             },
             [] (const unresolved_identifier&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: an unresolved identifier cannot serve as a restriction");
@@ -951,7 +931,7 @@ secondary_index::index::supports_expression_v is_supported_by_helper(const expre
                             // We don't use index table for multi-column restrictions, as it cannot avoid filtering.
                             return index::supports_expression_v::from_bool(false);
                         },
-                        [&] (const token&) { return index::supports_expression_v::from_bool(false); },
+                        [&] (const function_call&) { return index::supports_expression_v::from_bool(false); },
                         [&] (const subscript& s) -> ret_t {
                             const column_value& col = get_subscripted_column(s);
                             return idx.supports_subscript_expression(*col.col, oper.op);
@@ -970,9 +950,6 @@ secondary_index::index::supports_expression_v is_supported_by_helper(const expre
                         },
                         [&] (const column_mutation_attribute&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: writetime/ttl are not supported as the LHS of a binary expression");
-                        },
-                        [&] (const function_call&) -> ret_t {
-                            on_internal_error(expr_logger, "is_supported_by: function calls are not supported as the LHS of a binary expression");
                         },
                         [&] (const cast&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: typecasts are not supported as the LHS of a binary expression");
@@ -1096,9 +1073,6 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                         os << to_printer(opr.lhs) << ' ' << opr.op << ' ' << to_printer(opr.rhs);
                     }
                 }
-            },
-            [&] (const token& t) {
-                fmt::print(os, "token({})", fmt::join(t.args | transformed(to_printer), ", "));
             },
             [&] (const column_value& col) {
                 fmt::print(os, "{}", cql3::util::maybe_quote(col.col->name_as_text()));
@@ -1307,7 +1281,7 @@ expression replace_column_def(const expression& expr, const column_definition* n
 
 expression replace_partition_token(const expression& expr, const column_definition* new_cdef, const schema& table_schema) {
     return search_and_replace(expr, [&] (const expression& expr) -> std::optional<expression> {
-        if (expr::is<token>(expr)) {
+        if (is_partition_token_for_schema(expr, table_schema)) {
             return column_value{new_cdef};
         } else {
             return std::nullopt;
@@ -1376,14 +1350,6 @@ bool recurse_until(const expression& e, const noncopyable_function<bool (const e
             [&] (const usertype_constructor& c) {
                 for (auto& [k, v] : c.elements) {
                     if (auto found = recurse_until(v, predicate_fun)) {
-                        return found;
-                    }
-                }
-                return false;
-            },
-            [&] (const token& tok) {
-                for (auto& a : tok.args) {
-                    if (auto found = recurse_until(a, predicate_fun)) {
                         return found;
                     }
                 }
@@ -1464,13 +1430,6 @@ expression search_and_replace(const expression& e,
                         .type = s.type,
                     };
                 },
-                [&](const token& tok) -> expression {
-                    return token {
-                        boost::copy_range<std::vector<expression>>(
-                            tok.args | boost::adaptors::transformed(recurse)
-                        )
-                    };
-                },
                 [&] (LeafExpression auto const& e) -> expression {
                     return e;
                 },
@@ -1545,7 +1504,6 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
             }
         }
 
-        void operator()(const token&) {}
         void operator()(const unresolved_identifier&) {}
         void operator()(const column_mutation_attribute&) {}
         void operator()(const function_call&) {}
@@ -1708,9 +1666,6 @@ cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
         },
         [&](const conjunction& conj) -> cql3::raw_value {
             return evaluate(conj, inputs);
-        },
-        [](const token&) -> cql3::raw_value {
-            on_internal_error(expr_logger, "Can't evaluate token");
         },
         [](const unresolved_identifier&) -> cql3::raw_value {
             on_internal_error(expr_logger, "Can't evaluate unresolved_identifier");
@@ -2251,11 +2206,6 @@ void fill_prepare_context(expression& e, prepare_context& ctx) {
                 fill_prepare_context(child, ctx);
             }
         },
-        [&](token& tok) {
-            for (expression& arg : tok.args) {
-                fill_prepare_context(arg, ctx);
-            }
-        },
         [](unresolved_identifier&) {},
         [&](column_mutation_attribute& a) {
             fill_prepare_context(a.column, ctx);
@@ -2304,9 +2254,6 @@ type_of(const expression& e) {
         },
         [] (const column_value& e) {
             return e.col->type;
-        },
-        [] (const token& e) {
-            return long_type;
         },
         [] (const unresolved_identifier& e) -> data_type {
             on_internal_error(expr_logger, "evaluating type of unresolved_identifier");

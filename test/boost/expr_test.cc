@@ -110,6 +110,13 @@ static unresolved_identifier make_column(const char* col_name) {
     return unresolved_identifier{::make_shared<column_identifier_raw>(col_name, true)};
 }
 
+static function_call make_token(std::vector<expression> args) {
+    return function_call {
+        .func = functions::function_name::native_function("token"),
+        .args = args
+    };
+}
+
 BOOST_AUTO_TEST_CASE(expr_printer_test) {
     expression col_eq_1234 = binary_operator(
         make_column("col"),
@@ -119,7 +126,7 @@ BOOST_AUTO_TEST_CASE(expr_printer_test) {
     BOOST_REQUIRE_EQUAL(expr_print(col_eq_1234), "col = 1234");
 
     expression token_p1_p2_lt_min_56 = binary_operator(
-        token({
+        make_token({
             unresolved_identifier{::make_shared<column_identifier_raw>("p1", true)},
             unresolved_identifier{::make_shared<column_identifier_raw>("p2", true)},
         }),
@@ -1332,21 +1339,23 @@ BOOST_AUTO_TEST_CASE(prepare_token) {
                                   .build();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
-    expression tok = token({unresolved_identifier{::make_shared<column_identifier_raw>("p1", true)},
+    expression tok = make_token({unresolved_identifier{::make_shared<column_identifier_raw>("p1", true)},
                             unresolved_identifier{::make_shared<column_identifier_raw>("p2", true)},
                             unresolved_identifier{::make_shared<column_identifier_raw>("p3", true)}});
 
     expression prepared = prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr);
 
-    expression expected = token({column_value(table_schema->get_column_definition("p1")),
+    std::vector<expression> expected_args = {column_value(table_schema->get_column_definition("p1")),
                                  column_value(table_schema->get_column_definition("p2")),
-                                 column_value(table_schema->get_column_definition("p3"))});
+                                 column_value(table_schema->get_column_definition("p3"))};
 
-    BOOST_REQUIRE_EQUAL(prepared, expected);
+    const function_call* token_fun_call = as_if<function_call>(&prepared);
+    BOOST_REQUIRE(token_fun_call != nullptr);
+    BOOST_REQUIRE(is_token_function(*token_fun_call));
+    BOOST_REQUIRE(std::holds_alternative<shared_ptr<db::functions::function>>(token_fun_call->func));
+    BOOST_REQUIRE_EQUAL(token_fun_call->args, expected_args);
 }
 
-// prepare_expression(token) doesn't validate its arguments,
-// validation is done in a different place
 BOOST_AUTO_TEST_CASE(prepare_token_no_args) {
     schema_ptr table_schema = schema_builder("test_ks", "test_cf")
                                   .with_column("p1", int32_type, column_kind::partition_key)
@@ -1355,11 +1364,10 @@ BOOST_AUTO_TEST_CASE(prepare_token_no_args) {
                                   .build();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
-    expression tok = token(std::vector<expression>());
+    expression tok = make_token(std::vector<expression>());
 
-    expression prepared = prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr);
-
-    BOOST_REQUIRE_EQUAL(tok, prepared);
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_cast_int_int) {

@@ -152,7 +152,10 @@ void preliminary_binop_vaidation_checks(const binary_operator& binop) {
         }
     }
 
-    if (is<token>(binop.lhs)) {
+    // Right now a token() on the LHS means that there's a partition token there.
+    // In the future with relaxed grammar this might no longer be true and this check will have to be revisisted.
+    // Moving the check after preparation would break tests and cassandra compatability.
+    if (is_token_function(binop.lhs)) {
         if (binop.op == oper_t::IN) {
             throw exceptions::invalid_request_exception("IN cannot be used with the token function");
         }
@@ -214,9 +217,9 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
         }
 
         validate_multi_column_relation(lhs_cols, prepared_binop.op);
-    } else if (auto lhs_token = as_if<token>(&prepared_binop.lhs)) {
+    } else if (is_token_function(prepared_binop.lhs)) {
         // Token restriction
-        std::vector<const column_definition*> column_defs = to_column_definitions(lhs_token->args);
+        std::vector<const column_definition*> column_defs = to_column_definitions(as<function_call>(prepared_binop.lhs).args);
         validate_token_relation(column_defs, prepared_binop.op, *schema);
     } else {
         // Anything else

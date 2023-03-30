@@ -70,7 +70,6 @@ struct binary_operator;
 struct conjunction;
 struct column_value;
 struct subscript;
-struct token;
 struct unresolved_identifier;
 struct column_mutation_attribute;
 struct function_call;
@@ -89,7 +88,6 @@ concept ExpressionElement
         || std::same_as<T, binary_operator>
         || std::same_as<T, column_value>
         || std::same_as<T, subscript>
-        || std::same_as<T, token>
         || std::same_as<T, unresolved_identifier>
         || std::same_as<T, column_mutation_attribute>
         || std::same_as<T, function_call>
@@ -109,7 +107,6 @@ concept invocable_on_expression
         && std::invocable<Func, binary_operator>
         && std::invocable<Func, column_value>
         && std::invocable<Func, subscript>
-        && std::invocable<Func, token>
         && std::invocable<Func, unresolved_identifier>
         && std::invocable<Func, column_mutation_attribute>
         && std::invocable<Func, function_call>
@@ -129,7 +126,6 @@ concept invocable_on_expression_ref
         && std::invocable<Func, binary_operator&>
         && std::invocable<Func, column_value&>
         && std::invocable<Func, subscript&>
-        && std::invocable<Func, token&>
         && std::invocable<Func, unresolved_identifier&>
         && std::invocable<Func, column_mutation_attribute&>
         && std::invocable<Func, function_call&>
@@ -228,18 +224,6 @@ const column_value& get_subscripted_column(const subscript&);
 /// Gets the column_definition* out of expression that can be a column_value or subscript
 /// Only columns can be subscripted in CQL, so we can expect that the subscripted expression is a column_value.
 const column_value& get_subscripted_column(const expression&);
-
-/// Represents token(c1, c2) function on LHS of an operator relation.
-/// args contains arguments to the token function.
-struct token {
-    std::vector<expression> args;
-
-    explicit token(std::vector<expression>);
-    explicit token(const std::vector<const column_definition*>&);
-    explicit token(const std::vector<::shared_ptr<column_identifier_raw>>&);
-
-    friend bool operator==(const token&, const token&) = default;
-};
 
 enum class oper_t { EQ, NEQ, LT, LTE, GTE, GT, IN, CONTAINS, CONTAINS_KEY, IS_NOT, LIKE };
 
@@ -429,7 +413,7 @@ struct usertype_constructor {
 // now that all expression types are fully defined, we can define expression::impl
 struct expression::impl final {
     using variant_type = std::variant<
-            conjunction, binary_operator, column_value, token, unresolved_identifier,
+            conjunction, binary_operator, column_value, unresolved_identifier,
             column_mutation_attribute, function_call, cast, field_selection,
             bind_variable, untyped_constant, constant, tuple_constructor, collection_constructor,
             usertype_constructor, subscript>;
@@ -643,13 +627,21 @@ inline bool is_multi_column(const binary_operator& op) {
     return expr::is<tuple_constructor>(op.lhs);
 }
 
+// Check whether the given expression represents
+// a call to the token() function.
+bool is_token_function(const function_call&);
+bool is_token_function(const expression&);
+
+bool is_partition_token_for_schema(const function_call&, const schema&);
+bool is_partition_token_for_schema(const expression&, const schema&);
+
 /// Check whether the expression contains a binary_operator whose LHS is a call to the token
 /// function representing a partition key token.
 /// Examples:
 /// For expression: "token(p1, p2, p3) < 123 AND c = 2" returns true
 /// For expression: "p1 = token(1, 2, 3) AND c = 2" return false
 inline bool has_partition_token(const expression& e, const schema& table_schema) {
-    return find_binop(e, [] (const binary_operator& o) { return expr::is<token>(o.lhs); });
+    return find_binop(e, [&] (const binary_operator& o) { return is_partition_token_for_schema(o.lhs, table_schema); });
 }
 
 inline bool has_slice_or_needs_filtering(const expression& e) {
@@ -831,14 +823,6 @@ bytes_opt value_for(const column_definition&, const expression&, const query_opt
 bool contains_multi_column_restriction(const expression&);
 
 bool has_only_eq_binops(const expression&);
-
-// Check whether the given expression represents
-// a call to the token() function.
-bool is_token_function(const function_call&);
-bool is_token_function(const expression&);
-
-bool is_partition_token_for_schema(const function_call&, const schema&);
-bool is_partition_token_for_schema(const expression&, const schema&);
 } // namespace expr
 
 } // namespace cql3
