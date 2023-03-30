@@ -12,6 +12,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/condition-variable.hh>
+#include <seastar/core/metrics_registration.hh>
 #include "reader_permit.hh"
 #include "utils/updateable_value.hh"
 
@@ -187,6 +188,7 @@ private:
     utils::updateable_value<uint32_t> _serialize_limit_multiplier;
     utils::updateable_value<uint32_t> _kill_limit_multiplier;
     stats _stats;
+    std::optional<seastar::metrics::metric_groups> _metrics;
     bool _stopped = false;
     bool _evicting = false;
     gate _close_readers_gate;
