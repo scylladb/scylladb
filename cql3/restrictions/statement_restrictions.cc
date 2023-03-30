@@ -358,7 +358,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         }
     }
     if (_where.has_value()) {
-        if (!has_token(_partition_key_restrictions)) {
+        if (!has_token_restrictions()) {
             _single_column_partition_key_restrictions = expr::get_single_column_restrictions_map(_partition_key_restrictions);
         }
         if (!expr::contains_multi_column_restriction(_clustering_columns_restrictions)) {
@@ -610,7 +610,7 @@ void statement_restrictions::add_single_column_parition_key_restriction(const ex
                 "Only EQ and IN relation are supported on the partition key "
                 "(unless you use the token() function or allow filtering)");
     }
-    if (has_token(_partition_key_restrictions)) {
+    if (has_token_restrictions()) {
         throw exceptions::invalid_request_exception(
                 format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
                        fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
@@ -625,7 +625,7 @@ void statement_restrictions::add_single_column_parition_key_restriction(const ex
 }
 
 void statement_restrictions::add_token_partition_key_restriction(const expr::binary_operator& restr) {
-    if (!partition_key_restrictions_is_empty() && !has_token(_partition_key_restrictions)) {
+    if (!partition_key_restrictions_is_empty() && !has_token_restrictions()) {
         throw exceptions::invalid_request_exception(
                 format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
                         fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
@@ -736,7 +736,7 @@ void statement_restrictions::process_partition_key_restrictions(bool for_view, b
     // - Is it queriable without 2ndary index, which is always more efficient
     // If a component of the partition key is restricted by a relation, all preceding
     // components must have a EQ. Only the last partition key component can be in IN relation.
-    if (has_token(_partition_key_restrictions)) {
+    if (has_token_restrictions()) {
         _is_key_range = true;
     } else if (expr::is_empty_restriction(_partition_key_restrictions)) {
         _is_key_range = true;
@@ -775,7 +775,7 @@ size_t statement_restrictions::partition_key_restrictions_size() const {
 
 bool statement_restrictions::pk_restrictions_need_filtering() const {
      return !expr::is_empty_restriction(_partition_key_restrictions)
-         && !has_token(_partition_key_restrictions)
+         && !has_token_restrictions()
          && (has_partition_key_unrestricted_components() || expr::has_slice_or_needs_filtering(_partition_key_restrictions));
 }
 
@@ -886,7 +886,7 @@ bounds_slice statement_restrictions::get_clustering_slice() const {
 bool statement_restrictions::parition_key_restrictions_have_supporting_index(const secondary_index::secondary_index_manager& index_manager,
                                       expr::allow_local_index allow_local) const {
     // Token restrictions can't be supported by an index
-    if (has_token(_partition_key_restrictions)) {
+    if (has_token_restrictions()) {
         return false;
     }
 
@@ -1690,7 +1690,7 @@ bool token_known(const statement_restrictions& r) {
 bool statement_restrictions::need_filtering() const {
     using namespace expr;
 
-    if (_uses_secondary_indexing && has_token(_partition_key_restrictions)) {
+    if (_uses_secondary_indexing && has_token_restrictions()) {
         // If there is a token(p1, p2) restriction, no p1, p2 restrictions are allowed in the query.
         // All other restrictions must be on clustering or regular columns.
         int64_t non_pk_restrictions_count = clustering_columns_restrictions_size();
@@ -1787,7 +1787,7 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
 
     const column_definition* token_column = &idx_tbl_schema.clustering_column_at(0);
 
-    if (has_token(_partition_key_restrictions)) {
+    if (has_token_restrictions()) {
         // When there is a token(p1, p2) >/</= ? restriction, it is not allowed to have restrictions on p1 or p2.
         // This means that p1 and p2 can have many different values (token is a hash, can have collisions).
         // Clustering prefix ends after token_restriction, all further restrictions have to be filtered.
