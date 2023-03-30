@@ -27,7 +27,7 @@ struct my_consumer {
 };
 }
 
-static future<> broken_sst(sstring dir, unsigned long generation, schema_ptr s, sstring msg, std::optional<sstring> sst_name,
+static future<> broken_sst(sstring dir, sstables::generation_type::int_t generation, schema_ptr s, sstring msg, std::optional<sstring> sst_name,
     sstable_version_types version = la) {
   return sstables::test_env::do_with_async([=] (sstables::test_env& env) {
     try {
@@ -46,7 +46,7 @@ static future<> broken_sst(sstring dir, unsigned long generation, schema_ptr s, 
   });
 }
 
-static future<> broken_sst(sstring dir, unsigned long generation, sstring msg, std::optional<sstring> sst_name = std::nullopt) {
+static future<> broken_sst(sstring dir, sstables::generation_type::int_t generation, sstring msg, std::optional<sstring> sst_name = std::nullopt) {
     // Using an empty schema for this function, which is only about loading
     // a malformed component and checking that it fails.
     auto s = make_shared_schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type);

@@ -42,12 +42,12 @@ public:
         return table_s.on_compaction_completion(sstables::compaction_completion_desc{ .old_sstables = sstables_to_remove, .new_sstables = new_sstables }, sstables::offstrategy::no);
     }
 
-    static void update_sstables_known_generation(replica::column_family& cf, unsigned generation) {
-        cf.update_sstables_known_generation(generation_from_value(generation));
+    static void update_sstables_known_generation(replica::column_family& cf, sstables::generation_type generation) {
+        cf.update_sstables_known_generation(generation);
     }
 
-    static uint64_t calculate_generation_for_new_table(replica::column_family& cf) {
-        return generation_value(cf.calculate_generation_for_new_table());
+    static sstables::generation_type calculate_generation_for_new_table(replica::column_family& cf) {
+        return cf.calculate_generation_for_new_table();
     }
 };
 

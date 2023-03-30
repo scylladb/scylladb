@@ -173,7 +173,7 @@ sstring sstable_directory::sstable_filename(const sstables::entry_descriptor& de
     return sstable::filename(_sstable_dir.native(), _schema->ks_name(), _schema->cf_name(), desc.version, desc.generation, desc.format, component_type::Data);
 }
 
-generation_type
+std::optional<generation_type>
 sstable_directory::highest_generation_seen() const {
     return _max_generation_seen;
 }
@@ -236,12 +236,23 @@ future<> sstable_directory::components_lister::process(sstable_directory& direct
         _state->descriptors.erase(desc.generation);
     }
 
-    directory._max_generation_seen =  boost::accumulate(_state->generations_found | boost::adaptors::map_keys, generation_from_value(0), [] (generation_type a, generation_type b) {
-        return std::max<generation_type>(a, b);
-    });
+    auto msg = format("After {} scanned, {} descriptors found, {} different files found",
+            location, _state->descriptors.size(), _state->generations_found.size());
 
-    dirlog.debug("After {} scanned, seen generation {}. {} descriptors found, {} different files found ",
-            location, directory._max_generation_seen, _state->descriptors.size(), _state->generations_found.size());
+    if (!_state->generations_found.empty()) {
+        // FIXME: for now set _max_generation_seen is any generation were found
+        // With https://github.com/scylladb/scylladb/issues/10459,
+        // We should do that only if any _numeric_ generations were found
+        directory._max_generation_seen =  boost::accumulate(_state->generations_found | boost::adaptors::map_keys, sstables::generation_type(0), [] (generation_type a, generation_type b) {
+            return std::max<generation_type>(a, b);
+        });
+
+        msg = format("{}, highest generation seen: {}", msg, *directory._max_generation_seen);
+    } else {
+        msg = format("{}, no numeric generation was seen", msg);
+    }
+
+    dirlog.debug("{}", msg);
 
     // _descriptors is everything with a TOC. So after we remove this, what's left is
     // SSTables for which a TOC was not found.
@@ -508,6 +519,22 @@ future<> sstable_directory::replay_pending_delete_log(fs::path pending_delete_lo
     } catch (...) {
         sstlog.warn("Error replaying {}: {}. Ignoring.", pending_delete_log, std::current_exception());
     }
+}
+
+future<std::optional<sstables::generation_type>>
+highest_generation_seen(sharded<sstables::sstable_directory>& directory) {
+    auto highest = co_await directory.map_reduce0(std::mem_fn(&sstables::sstable_directory::highest_generation_seen), sstables::generation_type(0), [] (std::optional<sstables::generation_type> a, std::optional<sstables::generation_type> b) {
+        if (a && b) {
+            return std::max(*a, *b);
+        } else if (a) {
+            return *a;
+        } else if (b) {
+            return *b;
+        } else {
+            return sstables::generation_type(0);
+        }
+    });
+    co_return highest.value() ? std::make_optional(highest): std::nullopt;
 }
 
 }

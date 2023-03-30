@@ -2561,7 +2561,7 @@ const std::vector<option> all_options {
     typed_option<std::string>("output-format", "json", "the output-format, one of (text, json)"),
     typed_option<std::string>("input-file", "the file containing the input"),
     typed_option<std::string>("output-dir", ".", "directory to place the output files to"),
-    typed_option<int64_t>("generation", "generation of generated sstable"),
+    typed_option<sstables::generation_type::int_t>("generation", "generation of generated sstable"),
     typed_option<std::string>("validation-level", "clustering_key", "degree of validation on the output, one of (partition_region, token, partition_key, clustering_key)"),
     typed_option<std::string>("script-file", "script file to load and execute"),
     typed_option<program_options::string_map>("script-arg", {}, "parameter(s) for the script"),

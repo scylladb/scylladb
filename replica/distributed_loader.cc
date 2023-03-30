@@ -282,13 +282,6 @@ distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<r
     co_await run_resharding_jobs(dir, std::move(destinations), db, ks_name, table_name, std::move(creator), iop);
 }
 
-future<sstables::generation_type>
-highest_generation_seen(sharded<sstables::sstable_directory>& directory) {
-    return directory.map_reduce0(std::mem_fn(&sstables::sstable_directory::highest_generation_seen), sstables::generation_from_value(0), [] (sstables::generation_type a, sstables::generation_type b) {
-        return std::max(a, b);
-    });
-}
-
 future<sstables::sstable::version_types>
 highest_version_seen(sharded<sstables::sstable_directory>& dir, sstables::sstable_version_types system_version) {
     using version = sstables::sstable_version_types;
@@ -408,9 +401,9 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
     co_return new_sstables.size();
 }
 
-sstables::shared_sstable make_sstable(replica::table& table, fs::path dir, int64_t generation_value) {
+sstables::shared_sstable make_sstable(replica::table& table, fs::path dir, sstables::generation_type generation_value) {
     auto& sstm = table.get_sstables_manager();
-    return sstm.make_sstable(table.schema(), dir.native(), sstables::generation_from_value(generation_value), sstm.get_highest_supported_format(), sstables::sstable_format_types::big, gc_clock::now(), &error_handler_gen_for_upload_dir);
+    return sstm.make_sstable(table.schema(), dir.native(), generation_value, sstm.get_highest_supported_format(), sstables::sstable_format_types::big, gc_clock::now(), &error_handler_gen_for_upload_dir);
 }
 
 future<>
@@ -442,24 +435,27 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         process_sstable_dir(directory, flags).get();
 
         auto generation = highest_generation_seen(directory).get0();
-        auto shard_generation_base = sstables::generation_value(generation) / smp::count + 1;
+        auto shard_generation_base = generation.value_or(replica::table::make_new_generation()).value() / smp::count + 1;
 
         // We still want to do our best to keep the generation numbers shard-friendly.
         // Each destination shard will manage its own generation counter.
-        std::vector<std::atomic<int64_t>> shard_gen(smp::count);
+        std::vector<std::atomic<sstables::generation_type::int_t>> shard_gen(smp::count);
         for (shard_id s = 0; s < smp::count; ++s) {
             shard_gen[s].store(shard_generation_base * smp::count + s, std::memory_order_relaxed);
         }
 
-        reshard(directory, db, ks, cf, [&global_table, upload, &shard_gen] (shard_id shard) mutable {
-            // we need generation calculated by instance of cf at requested shard
+        // we need generation calculated by instance of cf at requested shard
+        auto new_generation_for_shard = [&] (shard_id shard) {
             auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
-            return make_sstable(*global_table, upload, gen);
+            return sstables::generation_type(gen);
+        };
+
+        reshard(directory, db, ks, cf, [&] (shard_id shard) mutable {
+            return make_sstable(*global_table, upload, new_generation_for_shard(shard));
         }, service::get_local_streaming_priority()).get();
 
-        reshape(directory, db, sstables::reshape_mode::strict, ks, cf, [global_table, upload, &shard_gen] (shard_id shard) {
-            auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
-            return make_sstable(*global_table, upload, gen);
+        reshape(directory, db, sstables::reshape_mode::strict, ks, cf, [&] (shard_id shard) {
+            return make_sstable(*global_table, upload, new_generation_for_shard(shard));
         }, [] (const sstables::shared_sstable&) { return true; }, service::get_local_streaming_priority()).get();
 
         // Move to staging directory to avoid clashes with future uploads. Unique generation number ensures no collisions.
@@ -557,7 +553,7 @@ class table_populator {
     fs::path _base_path;
     std::unordered_map<sstring, lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
     sstables::sstable_version_types _highest_version = sstables::oldest_writable_sstable_format;
-    sstables::generation_type _highest_generation = sstables::generation_from_value(0);
+    std::optional<sstables::generation_type> _highest_generation;
 
 public:
     table_populator(distributed<replica::database>& db, sstring ks, sstring cf)
@@ -655,7 +651,11 @@ future<> table_populator::start_subdir(sstring subdir) {
     auto generation = co_await highest_generation_seen(directory);
 
     _highest_version = std::max(sst_version, _highest_version);
-    _highest_generation = std::max(generation, _highest_generation);
+    if (generation) {
+        _highest_generation = _highest_generation ?
+            std::max(*generation, *_highest_generation) :
+            *generation;
+    }
 }
 
 sstables::shared_sstable make_sstable(replica::table& table, fs::path dir, sstables::generation_type generation, sstables::sstable_version_types v) {
