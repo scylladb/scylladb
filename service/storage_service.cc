@@ -4822,6 +4822,9 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
             if (!ss._raft_topology_change_enabled) {
                co_return raft_topology_snapshot{};
             }
+            // FIXME: make it an rwlock, here we only need to lock for reads,
+            // might be useful if multiple nodes are trying to pull concurrently.
+            auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
             auto rs = co_await db::system_keyspace::query_mutations(proxy, db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
             auto s = ss._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
             std::vector<canonical_mutation> results;

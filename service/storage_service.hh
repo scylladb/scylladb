@@ -786,10 +786,13 @@ private:
     future<> update_topology_with_local_metadata(raft::server&);
 
     // This is called on all nodes for each new command received through raft
+    // raft_group0_client::_read_apply_mutex must be held
     future<> topology_transition(storage_proxy& proxy, cdc::generation_service&, gms::inet_address, std::vector<canonical_mutation>);
     // load topology state machine snapshot into memory
+    // raft_group0_client::_read_apply_mutex must be held
     future<> topology_state_load(cdc::generation_service&);
     // Applies received raft snapshot to local state machine persistent storage
+    // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_topology_snapshot snp);
 };
 
