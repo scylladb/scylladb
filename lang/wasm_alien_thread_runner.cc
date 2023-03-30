@@ -69,11 +69,11 @@ void alien_thread_runner::submit(seastar::promise<rust::Box<wasmtime::Module>>& 
     seastar::noncopyable_function<void()> packaged([f = std::move(f), &p, &alien = seastar::engine().alien(), shard = seastar::this_shard_id()] () mutable {
         try {
             rust::Box<wasmtime::Module> mod = f();
-            seastar::alien::run_on(alien, shard, [&p, mod = std::move(mod)] () mutable {
+            seastar::alien::run_on(alien, shard, [&p, mod = std::move(mod)] () mutable noexcept {
                 p.set_value(std::move(mod));
             });
         } catch (...) {
-            seastar::alien::run_on(alien, shard, [&, eptr = std::current_exception()] {
+            seastar::alien::run_on(alien, shard, [&, eptr = std::current_exception()]() noexcept {
                 p.set_exception(wasm::exception(format("Compilation failed: {}", eptr)));
             });
         }
