@@ -1363,7 +1363,7 @@ expression replace_column_def(const expression& expr, const column_definition* n
     });
 }
 
-expression replace_token(const expression& expr, const column_definition* new_cdef) {
+expression replace_partition_token(const expression& expr, const column_definition* new_cdef, const schema& table_schema) {
     return search_and_replace(expr, [&] (const expression& expr) -> std::optional<expression> {
         if (expr::is<token>(expr)) {
             return column_value{new_cdef};

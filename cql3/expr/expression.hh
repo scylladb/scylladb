@@ -694,7 +694,8 @@ extern expression replace_column_def(const expression&, const column_definition*
 
 // Replaces all occurences of token(p1, p2) on the left hand side with the given colum.
 // For example this changes token(p1, p2) < token(1, 2) to my_column_name < token(1, 2).
-extern expression replace_token(const expression&, const column_definition*);
+// Schema is needed to find out which calls to token() describe the partition token.
+extern expression replace_partition_token(const expression&, const column_definition*, const schema&);
 
 // Recursively copies e and returns it. Calls replace_candidate() on all nodes. If it returns nullopt,
 // continue with the copying. If it returns an expression, that expression replaces the current node.

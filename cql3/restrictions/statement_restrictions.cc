@@ -1791,7 +1791,7 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
         // When there is a token(p1, p2) >/</= ? restriction, it is not allowed to have restrictions on p1 or p2.
         // This means that p1 and p2 can have many different values (token is a hash, can have collisions).
         // Clustering prefix ends after token_restriction, all further restrictions have to be filtered.
-        expr::expression token_restriction = replace_token(_partition_key_restrictions, token_column);
+        expr::expression token_restriction = replace_partition_token(_partition_key_restrictions, token_column, *_schema);
         _idx_tbl_ck_prefix = std::vector{std::move(token_restriction)};
 
         return;
