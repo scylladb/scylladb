@@ -25,7 +25,8 @@ namespace service {
   };
 
   struct raft_topology_snapshot {
-      std::vector<canonical_mutation> mutations;
+      std::vector<canonical_mutation> topology_mutations;
+      std::optional<canonical_mutation> cdc_generation_mutation;
   };
 
   struct raft_topology_pull_params {};

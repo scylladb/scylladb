@@ -156,7 +156,7 @@ future<> group0_state_machine::transfer_snapshot(gms::inet_address from, raft::s
 
     co_await _mm.merge_schema_from(addr, std::move(*cm));
 
-    if (!topology_snp.mutations.empty()) {
+    if (!topology_snp.topology_mutations.empty()) {
         co_await _ss.merge_topology_snapshot(std::move(topology_snp));
     }
 

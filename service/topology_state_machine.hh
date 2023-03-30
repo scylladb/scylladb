@@ -101,7 +101,11 @@ struct topology {
 };
 
 struct raft_topology_snapshot {
-    std::vector<canonical_mutation> mutations;
+    // Mutations for the system.topology table.
+    std::vector<canonical_mutation> topology_mutations;
+
+    // Mutation for system.cdc_generations_v3, contains the current CDC generation data.
+    std::optional<canonical_mutation> cdc_generation_mutation;
 };
 
 struct raft_topology_pull_params {
