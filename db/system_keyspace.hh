@@ -282,6 +282,13 @@ public:
                     const sstring& ks_name,
                     const sstring& cf_name);
 
+    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+    static query_mutations(distributed<service::storage_proxy>& proxy,
+                    const sstring& ks_name,
+                    const sstring& cf_name,
+                    const dht::partition_range& partition_range,
+                    query::clustering_range row_ranges = query::clustering_range::make_open_ended_both_sides());
+
     // Returns all data from given system table.
     // Intended to be used by code which is not performance critical.
     static future<lw_shared_ptr<query::result_set>> query(distributed<service::storage_proxy>& proxy,

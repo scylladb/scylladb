@@ -3003,6 +3003,18 @@ system_keyspace::query_mutations(distributed<service::storage_proxy>& proxy, con
             .then([] (rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> rr_ht) { return std::get<0>(std::move(rr_ht)); });
 }
 
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+system_keyspace::query_mutations(distributed<service::storage_proxy>& proxy, const sstring& ks_name, const sstring& cf_name, const dht::partition_range& partition_range, query::clustering_range row_range) {
+    auto& db = proxy.local().get_db().local();
+    auto schema = db.find_schema(ks_name, cf_name);
+    auto slice = partition_slice_builder(*schema)
+        .with_range(std::move(row_range))
+        .build();
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.local().get_max_result_size(slice), query::tombstone_limit::max);
+    return proxy.local().query_mutations_locally(std::move(schema), std::move(cmd), partition_range, db::no_timeout)
+            .then([] (rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> rr_ht) { return std::get<0>(std::move(rr_ht)); });
+}
+
 future<lw_shared_ptr<query::result_set>>
 system_keyspace::query(distributed<service::storage_proxy>& proxy, const sstring& ks_name, const sstring& cf_name) {
     replica::database& db = proxy.local().get_db().local();
