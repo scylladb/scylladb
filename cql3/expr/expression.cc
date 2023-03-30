@@ -685,7 +685,15 @@ nonwrapping_range<clustering_key_prefix> to_range(oper_t op, const clustering_ke
     return to_range<const clustering_key_prefix&>(op, val);
 }
 
-value_set possible_lhs_values(const column_definition* cdef, const expression& expr, const query_options& options) {
+// When cdef == nullptr it finds possible token values instead of column values.
+// When finding token values the table_schema_opt argument has to point to a valid schema,
+// but it isn't used when finding values for column.
+// The schema is needed to find out whether a call to token() function represents
+// the partition token.
+static value_set possible_lhs_values(const column_definition* cdef,
+                                        const expression& expr,
+                                        const query_options& options,
+                                        const schema* table_schema_opt) {
     const auto type = cdef ? &cdef->type->without_reversed() : long_type.get();
     return expr::visit(overloaded_functor{
             [] (const constant& constant_val) {
@@ -701,7 +709,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                 return boost::accumulate(conj.children, unbounded_value_set,
                         [&] (const value_set& acc, const expression& child) {
                             return intersection(
-                                    std::move(acc), possible_lhs_values(cdef, child, options), type);
+                                    std::move(acc), possible_lhs_values(cdef, child, options, table_schema_opt), type);
                         });
             },
             [&] (const binary_operator& oper) -> value_set {
@@ -886,6 +894,14 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                 on_internal_error(expr_logger, "possible_lhs_values: a user type constructor cannot serve as a restriction by itself");
             },
         }, expr);
+}
+
+value_set possible_column_values(const column_definition* col, const expression& e, const query_options& options) {
+    return possible_lhs_values(col, e, options, nullptr);
+}
+
+value_set possible_partition_token_values(const expression& e, const query_options& options, const schema& table_schema) {
+    return possible_lhs_values(nullptr, e, options, &table_schema);
 }
 
 nonwrapping_range<managed_bytes> to_range(const value_set& s) {
@@ -2468,7 +2484,7 @@ sstring get_columns_in_commons(const expression& a, const expression& b) {
 }
 
 bytes_opt value_for(const column_definition& cdef, const expression& e, const query_options& options) {
-    value_set possible_vals = possible_lhs_values(&cdef, e, options);
+    value_set possible_vals = possible_column_values(&cdef, e, options);
     return std::visit(overloaded_functor {
         [&](const value_list& val_list) -> bytes_opt {
             if (val_list.empty()) {

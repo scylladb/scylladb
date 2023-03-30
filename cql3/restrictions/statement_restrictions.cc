@@ -926,8 +926,10 @@ namespace {
 using namespace expr;
 
 /// Computes partition-key ranges from token atoms in ex.
-dht::partition_range_vector partition_ranges_from_token(const expr::expression& ex, const query_options& options) {
-    auto values = possible_lhs_values(nullptr, ex, options);
+dht::partition_range_vector partition_ranges_from_token(const expr::expression& ex,
+                                                        const query_options& options,
+                                                        const schema& table_schema) {
+    auto values = possible_partition_token_values(ex, options, table_schema);
     if (values == expr::value_set(expr::value_list{})) {
         return {};
     }
@@ -975,7 +977,7 @@ dht::partition_range_vector partition_ranges_from_singles(
     for (const auto& e : expressions) {
         if (const auto arbitrary_binop = find_binop(e, [] (const binary_operator&) { return true; })) {
             if (auto cv = expr::as_if<expr::column_value>(&arbitrary_binop->lhs)) {
-                const value_set vals = possible_lhs_values(cv->col, e, options);
+                const value_set vals = possible_column_values(cv->col, e, options);
                 if (auto lst = std::get_if<value_list>(&vals)) {
                     if (lst->empty()) {
                         return {};
@@ -1004,7 +1006,7 @@ dht::partition_range_vector partition_ranges_from_EQs(
     std::vector<managed_bytes> pk_value(schema.partition_key_size());
     for (const auto& e : eq_expressions) {
         const auto col = expr::get_subscripted_column(find(e, oper_t::EQ)->lhs).col;
-        const auto vals = std::get<value_list>(possible_lhs_values(col, e, options));
+        const auto vals = std::get<value_list>(possible_column_values(col, e, options));
         if (vals.empty()) { // Case of C=1 AND C=2.
             return {};
         }
@@ -1025,7 +1027,7 @@ dht::partition_range_vector statement_restrictions::get_partition_key_ranges(con
                     rlogger,
                     format("Unexpected size of token restrictions: {}", _partition_range_restrictions.size()));
         }
-        return partition_ranges_from_token(_partition_range_restrictions[0], options);
+        return partition_ranges_from_token(_partition_range_restrictions[0], options, *_schema);
     } else if (_partition_range_is_simple) {
         // Special case to avoid extra allocations required for a Cartesian product.
         return partition_ranges_from_EQs(_partition_range_restrictions, options, *_schema);
@@ -1340,7 +1342,7 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
     size_t product_size = 1;
     std::vector<std::vector<managed_bytes>> prior_column_values; // Equality values of columns seen so far.
     for (size_t i = 0; i < single_column_restrictions.size(); ++i) {
-        auto values = possible_lhs_values(
+        auto values = possible_column_values(
                 &schema.clustering_column_at(i), // This should be the LHS of restrictions[i].
                 single_column_restrictions[i],
                 options);
@@ -1410,10 +1412,10 @@ static std::vector<query::clustering_range> get_index_v1_token_range_clustering_
         const column_definition& token_column,
         const expression& token_restriction) {
 
-    // A workaround in order to make possible_lhs_values work properly.
-    // possible_lhs_values looks at the column type and uses this type's comparator.
+    // A workaround in order to make possible_column_values work properly.
+    // possible_column_values looks at the column type and uses this type's comparator.
     // This is a problem because when using blob's comparator, -4 is greater than 4.
-    // This makes possible_lhs_values think that an expression like token(p) > -4 and token(p) < 4
+    // This makes possible_column_values think that an expression like token(p) > -4 and token(p) < 4
     // is impossible to fulfill.
     // Create a fake token column with the type set to bigint, translate the restriction to use this column
     // and use this restriction to calculate possible lhs values.
@@ -1422,7 +1424,7 @@ static std::vector<query::clustering_range> get_index_v1_token_range_clustering_
     expression new_token_restrictions = replace_column_def(token_restriction, &token_column_bigint);
 
     std::variant<value_list, nonwrapping_range<managed_bytes>> values =
-        possible_lhs_values(&token_column_bigint, new_token_restrictions, options);
+        possible_column_values(&token_column_bigint, new_token_restrictions, options);
 
     return std::visit(overloaded_functor {
         [](const value_list& list) {
@@ -1899,7 +1901,7 @@ std::vector<query::clustering_range> statement_restrictions::get_global_index_cl
     std::vector<managed_bytes> pk_value(_schema->partition_key_size());
     for (const auto& e : _partition_range_restrictions) {
         const auto col = expr::as<column_value>(find(e, oper_t::EQ)->lhs).col;
-        const auto vals = std::get<value_list>(possible_lhs_values(col, e, options));
+        const auto vals = std::get<value_list>(possible_column_values(col, e, options));
         if (vals.empty()) { // Case of C=1 AND C=2.
             return {};
         }

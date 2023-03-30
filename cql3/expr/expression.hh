@@ -510,8 +510,8 @@ using value_list = std::vector<managed_bytes>; // Sorted and deduped using value
 /// never singular and never has start > end.  Universal set is a nonwrapping_range with both bounds null.
 using value_set = std::variant<value_list, nonwrapping_range<managed_bytes>>;
 
-/// A set of all column values that would satisfy an expression.  If column is null, a set of all token values
-/// that satisfy.
+/// A set of all column values that would satisfy an expression. The _token_values variant finds
+/// matching values for the partition token function call instead of the column.
 ///
 /// An expression restricts possible values of a column or token:
 /// - `A>5` restricts A from below
@@ -521,7 +521,8 @@ using value_set = std::variant<value_list, nonwrapping_range<managed_bytes>>;
 /// - `A=1 AND A<=0` restricts A to an empty list; no value is able to satisfy the expression
 /// - `A>=NULL` also restricts A to an empty list; all comparisons to NULL are false
 /// - an expression without A "restricts" A to unbounded range
-extern value_set possible_lhs_values(const column_definition*, const expression&, const query_options&);
+extern value_set possible_column_values(const column_definition*, const expression&, const query_options&);
+extern value_set possible_partition_token_values(const expression&, const query_options&, const schema& table_schema);
 
 /// Turns value_set into a range, unless it's a multi-valued list (in which case this throws).
 extern nonwrapping_range<managed_bytes> to_range(const value_set&);
