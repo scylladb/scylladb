@@ -341,7 +341,7 @@ struct sstable_manager_service {
     explicit sstable_manager_service()
         : feature_service(gms::feature_config_from_db_config(dbcfg))
         , dir_sem(1)
-        , sst_man(large_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }) {
+        , sst_man("schema_loader", large_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }) {
     }
 
     future<> stop() {
