@@ -45,6 +45,7 @@
 #include "cql3/functions/user_aggregate.hh"
 #include "utils/overloaded_functor.hh"
 #include "data_dictionary/keyspace_element.hh"
+#include "db/system_keyspace.hh"
 
 static logging::logger dlogger("describe");
 

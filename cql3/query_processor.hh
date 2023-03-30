@@ -23,11 +23,9 @@
 #include "exceptions/exceptions.hh"
 #include "lang/wasm_instance_cache.hh"
 #include "service/migration_listener.hh"
-#include "service/raft/raft_group0_client.hh"
 #include "transport/messages/result_message.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/client_state.hh"
-#include "service/forward_service.hh"
 #include "utils/observable.hh"
 #include "lang/wasm_alien_thread_runner.hh"
 
@@ -35,6 +33,8 @@
 namespace service {
 class migration_manager;
 class query_state;
+class forward_service;
+class raft_group0_client;
 }
 
 namespace cql3 {

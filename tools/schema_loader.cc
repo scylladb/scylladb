@@ -32,6 +32,7 @@
 #include "gms/feature_service.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "tools/schema_loader.hh"
+#include "utils/fb_utilities.hh"
 
 namespace {
 

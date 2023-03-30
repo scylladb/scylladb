@@ -13,6 +13,8 @@
 #include <seastar/core/metrics.hh>
 
 #include "service/storage_proxy.hh"
+#include "service/forward_service.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "cql3/CqlParser.hpp"
 #include "cql3/error_collector.hh"
 #include "cql3/statements/batch_statement.hh"

@@ -7,6 +7,7 @@
  */
 
 #include "querier.hh"
+#include "mutation_query.hh"
 #include "service/priority_manager.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/cql_test_env.hh"
