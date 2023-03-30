@@ -17,6 +17,7 @@
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/query_processor.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
+#include "db/system_keyspace.hh"
 
 namespace cql3 {
 

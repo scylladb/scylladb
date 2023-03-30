@@ -25,6 +25,7 @@
 #include "cql3/values.hh"
 #include "timeout_config.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
+#include "db/system_keyspace.hh"
 
 namespace cql3 {
 
