@@ -240,7 +240,7 @@ class repair_row;
 class repair_hasher;
 class repair_writer;
 
-future<> repair_cf_range_row_level(repair::shard_repair_task_impl& shard_task,
+future<> repair_cf_range_row_level(repair::local_repair_task_impl& shard_task,
         sstring cf_name, table_id table_id, dht::token_range range,
         const std::vector<gms::inet_address>& all_peer_nodes);
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,

@@ -466,7 +466,7 @@ void repair::task_manager_module::abort_all_repairs() {
     for (auto& x : _repairs) {
         auto it = _tasks.find(x.second);
         if (it != _tasks.end()) {
-            auto& impl = dynamic_cast<repair::shard_repair_task_impl&>(*it->second->_impl);
+            auto& impl = dynamic_cast<repair::local_repair_task_impl&>(*it->second->_impl);
             // If the task is aborted, its state will change to failed. One can wait for this with task_manager::task::done().
             (void)impl.abort();
         }
@@ -480,7 +480,7 @@ float repair::task_manager_module::report_progress(streaming::stream_reason reas
     for (auto& x : _repairs) {
         auto it = _tasks.find(x.second);
         if (it != _tasks.end()) {
-            auto& impl = dynamic_cast<repair::shard_repair_task_impl&>(*it->second->_impl);
+            auto& impl = dynamic_cast<repair::local_repair_task_impl&>(*it->second->_impl);
             if (impl.reason() == reason) {
                 nr_ranges_total += impl.ranges_size();
                 nr_ranges_finished += impl.nr_ranges_finished;
@@ -552,7 +552,7 @@ get_sharder_for_tables(seastar::sharded<replica::database>& db, const sstring& k
     return last_s->get_sharder();
 }
 
-repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::module_ptr module,
+repair::local_repair_task_impl::local_repair_task_impl(tasks::task_manager::module_ptr module,
         tasks::task_id id,
         const sstring& keyspace,
         repair_service& repair,
@@ -587,7 +587,7 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
     , _hints_batchlog_flushed(std::move(hints_batchlog_flushed))
 { }
 
-void repair::shard_repair_task_impl::check_failed_ranges() {
+void repair::local_repair_task_impl::check_failed_ranges() {
     rlogger.info("repair[{}]: stats: repair_reason={}, keyspace={}, tables={}, ranges_nr={}, {}",
         global_repair_id.uuid(), _reason, _status.keyspace, table_names(), ranges.size(), _stats.get_stats());
     if (nr_failed_ranges) {
@@ -602,23 +602,23 @@ void repair::shard_repair_task_impl::check_failed_ranges() {
     }
 }
 
-void repair::shard_repair_task_impl::check_in_abort_or_shutdown() {
+void repair::local_repair_task_impl::check_in_abort_or_shutdown() {
     _as.check();
 }
 
-repair_neighbors repair::shard_repair_task_impl::get_repair_neighbors(const dht::token_range& range) {
+repair_neighbors repair::local_repair_task_impl::get_repair_neighbors(const dht::token_range& range) {
     return neighbors.empty() ?
         repair_neighbors(get_neighbors(*erm, _status.keyspace, range, data_centers, hosts, ignore_nodes)) :
         neighbors[range];
 }
 
-size_t repair::shard_repair_task_impl::ranges_size() {
+size_t repair::local_repair_task_impl::ranges_size() {
     return ranges.size() * table_ids.size();
 }
 
 // Repair a single local range, multiple column families.
 // Comparable to RepairSession in Origin
-future<> repair::shard_repair_task_impl::repair_range(const dht::token_range& range, ::table_id table_id) {
+future<> repair::local_repair_task_impl::repair_range(const dht::token_range& range, ::table_id table_id) {
     check_in_abort_or_shutdown();
     ranges_index++;
     repair_neighbors r_neighbors = get_repair_neighbors(range);
@@ -919,7 +919,7 @@ private:
     }
 };
 
-future<> repair::shard_repair_task_impl::do_repair_ranges() {
+future<> repair::local_repair_task_impl::do_repair_ranges() {
     // Repair tables in the keyspace one after another
     assert(table_names().size() == table_ids.size());
     for (size_t idx = 0; idx < table_ids.size(); idx++) {
@@ -975,7 +975,7 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
 // range for which this node holds a replica, and, importantly, each range
 // is assumed to be a indivisible in the sense that all the tokens in has the
 // same nodes as replicas.
-future<> repair::shard_repair_task_impl::run() {
+future<> repair::local_repair_task_impl::run() {
     rs.get_repair_module().add_shard_task_id(global_repair_id.id, _status.id);
     return do_repair_ranges().then([this] {
         check_failed_ranges();
@@ -1215,7 +1215,7 @@ future<> repair::user_requested_repair_task_impl::run() {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed,
                     data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_info, germs] (repair_service& local_repair) mutable -> future<> {
                 local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
-                auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), keyspace,
+                auto task = co_await local_repair._repair_module->make_and_start_task<repair::local_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), keyspace,
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, hints_batchlog_flushed);
                 co_await task->done();
@@ -1321,7 +1321,7 @@ future<> repair::data_sync_repair_task_impl::run() {
                 auto hosts = std::vector<sstring>();
                 auto ignore_nodes = std::unordered_set<gms::inet_address>();
                 bool hints_batchlog_flushed = false;
-                auto task_impl_ptr = std::make_unique<repair::shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace,
+                auto task_impl_ptr = std::make_unique<repair::local_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace,
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, hints_batchlog_flushed);
                 task_impl_ptr->neighbors = std::move(neighbors);

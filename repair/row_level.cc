@@ -2372,7 +2372,7 @@ static void add_to_repair_meta_for_followers(repair_meta& rm) {
 }
 
 class row_level_repair {
-    repair::shard_repair_task_impl& _shard_task;
+    repair::local_repair_task_impl& _shard_task;
     sstring _cf_name;
     table_id _table_id;
     dht::token_range _range;
@@ -2421,7 +2421,7 @@ class row_level_repair {
     gc_clock::time_point _start_time;
 
 public:
-    row_level_repair(repair::shard_repair_task_impl& shard_task,
+    row_level_repair(repair::local_repair_task_impl& shard_task,
             sstring cf_name,
             table_id table_id,
             dht::token_range range,
@@ -2842,7 +2842,7 @@ public:
     }
 };
 
-future<> repair_cf_range_row_level(repair::shard_repair_task_impl& shard_task,
+future<> repair_cf_range_row_level(repair::local_repair_task_impl& shard_task,
         sstring cf_name, table_id table_id, dht::token_range range,
         const std::vector<gms::inet_address>& all_peer_nodes) {
     return seastar::futurize_invoke([&shard_task, cf_name = std::move(cf_name), table_id = std::move(table_id), range = std::move(range), &all_peer_nodes] () mutable {

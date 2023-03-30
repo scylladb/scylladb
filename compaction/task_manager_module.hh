@@ -71,12 +71,12 @@ protected:
     virtual future<> run() override;
 };
 
-class shard_major_keyspace_compaction_task_impl : public major_compaction_task_impl {
+class local_major_keyspace_compaction_task_impl : public major_compaction_task_impl {
 private:
     replica::database& _db;
     std::vector<table_id> _local_tables;
 public:
-    shard_major_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
+    local_major_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             tasks::task_id parent_id,
             replica::database& db,
@@ -129,12 +129,12 @@ protected:
     virtual future<> run() override;
 };
 
-class shard_cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_impl {
+class local_cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_impl {
 private:
     replica::database& _db;
     std::vector<table_id> _local_tables;
 public:
-    shard_cleanup_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
+    local_cleanup_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             tasks::task_id parent_id,
             replica::database& db,

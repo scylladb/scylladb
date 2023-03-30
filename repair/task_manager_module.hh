@@ -92,7 +92,7 @@ protected:
     // TODO: implement progress for data-sync repairs
 };
 
-class shard_repair_task_impl : public repair_task_impl {
+class local_repair_task_impl : public repair_task_impl {
 public:
     repair_service& rs;
     seastar::sharded<replica::database>& db;
@@ -121,7 +121,7 @@ public:
     std::unordered_set<sstring> dropped_tables;
     bool _hints_batchlog_flushed = false;
 public:
-    shard_repair_task_impl(tasks::task_manager::module_ptr module,
+    local_repair_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
             const sstring& keyspace,
             repair_service& repair,

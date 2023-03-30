@@ -34,16 +34,16 @@ future<> major_keyspace_compaction_task_impl::run() {
     co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
         tasks::task_info parent_info{_status.id, _status.shard};
         auto& module = db.get_compaction_manager().get_task_manager_module();
-        auto task = co_await module.make_and_start_task<shard_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos);
+        auto task = co_await module.make_and_start_task<local_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos);
         co_await task->done();
     });
 }
 
-tasks::is_internal shard_major_keyspace_compaction_task_impl::is_internal() const noexcept {
+tasks::is_internal local_major_keyspace_compaction_task_impl::is_internal() const noexcept {
     return tasks::is_internal::yes;
 }
 
-future<> shard_major_keyspace_compaction_task_impl::run() {
+future<> local_major_keyspace_compaction_task_impl::run() {
     // Major compact smaller tables first, to increase chances of success if low on space.
     std::ranges::sort(_local_tables, std::less<>(), [&] (const table_id& ti) {
         try {
@@ -60,16 +60,16 @@ future<> shard_major_keyspace_compaction_task_impl::run() {
 future<> cleanup_keyspace_compaction_task_impl::run() {
     co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
         auto& module = db.get_compaction_manager().get_task_manager_module();
-        auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>({_status.id, _status.shard}, _status.keyspace, _status.id, db, _table_ids);
+        auto task = co_await module.make_and_start_task<local_cleanup_keyspace_compaction_task_impl>({_status.id, _status.shard}, _status.keyspace, _status.id, db, _table_ids);
         co_await task->done();
     });
 }
 
-tasks::is_internal shard_cleanup_keyspace_compaction_task_impl::is_internal() const noexcept {
+tasks::is_internal local_cleanup_keyspace_compaction_task_impl::is_internal() const noexcept {
     return tasks::is_internal::yes;
 }
 
-future<> shard_cleanup_keyspace_compaction_task_impl::run() {
+future<> local_cleanup_keyspace_compaction_task_impl::run() {
     // Cleanup smaller tables first, to increase chances of success if low on space.
     std::ranges::sort(_local_tables, std::less<>(), [&] (const table_id& ti) {
         try {
