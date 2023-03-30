@@ -839,7 +839,7 @@ public:
                 raft_gr.invoke_on_all(&service::raft_group_registry::drain_on_shutdown).get();
             });
 
-            view_update_generator.start(std::ref(db)).get();
+            view_update_generator.start(std::ref(db), std::ref(proxy)).get();
             view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
             auto stop_view_update_generator = defer([&view_update_generator] {
                 view_update_generator.stop().get();
@@ -917,7 +917,7 @@ public:
             });
 
             sharded<db::view::view_builder> view_builder;
-            view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notif)).get();
+            view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notif), std::ref(view_update_generator)).get();
             view_builder.invoke_on_all([&mm] (db::view::view_builder& vb) {
                 return vb.start(mm.local());
             }).get();

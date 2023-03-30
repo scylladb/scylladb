@@ -90,9 +90,13 @@ public:
     }
 };
 
-view_update_generator::view_update_generator(replica::database& db) : _db(db), _progress_tracker(std::make_unique<progress_tracker>()) {
+view_update_generator::view_update_generator(replica::database& db, sharded<service::storage_proxy>& proxy)
+        : _db(db)
+        , _proxy(proxy)
+        , _progress_tracker(std::make_unique<progress_tracker>()) {
     setup_metrics();
     discover_staging_sstables();
+    _db.plug_view_update_generator(*this);
 }
 
 view_update_generator::~view_update_generator() {}
@@ -160,7 +164,7 @@ future<> view_update_generator::start() {
                             ::mutation_reader::forwarding::no);
 
                     inject_failure("view_update_generator_consume_staging_sstable");
-                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(s, std::move(permit), *t, sstables, _as, staging_sstable_reader_handle),
+                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(*this, s, std::move(permit), *t, sstables, _as, staging_sstable_reader_handle),
                         dht::incremental_owned_ranges_checker::make_partition_filter(_db.get_keyspace_local_ranges(s->ks_name())));
                     staging_sstable_reader.close().get();
                     if (result == stop_iteration::yes) {
@@ -202,6 +206,7 @@ future<> view_update_generator::start() {
 }
 
 future<> view_update_generator::stop() {
+    _db.unplug_view_update_generator();
     _as.request_abort();
     _pending_sstables.signal();
     return std::move(_started).then([this] {

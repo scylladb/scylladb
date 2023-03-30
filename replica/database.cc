@@ -47,6 +47,7 @@
 #include "timeout_config.hh"
 #include "service/storage_proxy.hh"
 #include "db/operation_type.hh"
+#include "db/view/view_update_generator.hh"
 
 #include "utils/human_readable.hh"
 #include "utils/fb_utilities.hh"
@@ -1939,7 +1940,11 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
 
     row_locker::lock_holder lock;
     if (!cf.views().empty()) {
-        auto lock_f = co_await coroutine::as_future(cf.push_view_replica_updates(s, m, timeout, std::move(tr_state), get_reader_concurrency_semaphore()));
+        if (!_view_update_generator) {
+            co_await coroutine::return_exception(std::runtime_error("view update generator not plugged to push updates"));
+        }
+
+        auto lock_f = co_await coroutine::as_future(cf.push_view_replica_updates(_view_update_generator, s, m, timeout, std::move(tr_state), get_reader_concurrency_semaphore()));
         if (lock_f.failed()) {
             auto ex = lock_f.get_exception();
             if (is_timeout_exception(ex)) {
@@ -2717,6 +2722,14 @@ void database::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
 void database::unplug_system_keyspace() noexcept {
     _compaction_manager.unplug_system_keyspace();
     _large_data_handler->unplug_system_keyspace();
+}
+
+void database::plug_view_update_generator(db::view::view_update_generator& generator) noexcept {
+    _view_update_generator = generator.shared_from_this();
+}
+
+void database::unplug_view_update_generator() noexcept {
+    _view_update_generator = nullptr;
 }
 
 } // namespace replica
