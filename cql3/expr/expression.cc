@@ -1119,14 +1119,18 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                         to_printer(cma.column));
             },
             [&] (const function_call& fc)  {
-                std::visit(overloaded_functor{
-                    [&] (const functions::function_name& named) {
-                        fmt::print(os, "{}({})", named, fmt::join(fc.args | transformed(to_printer), ", "));
-                    },
-                    [&] (const shared_ptr<functions::function>& anon) {
-                        fmt::print(os, "<anonymous function>({})", fmt::join(fc.args | transformed(to_printer), ", "));
-                    },
-                }, fc.func);
+                if (is_token_function(fc)) {
+                    fmt::print(os, "token({})", fmt::join(fc.args | transformed(to_printer), ", "));
+                } else {
+                    std::visit(overloaded_functor{
+                        [&] (const functions::function_name& named) {
+                            fmt::print(os, "{}({})", named, fmt::join(fc.args | transformed(to_printer), ", "));
+                        },
+                        [&] (const shared_ptr<functions::function>& anon) {
+                            fmt::print(os, "<anonymous function>({})", fmt::join(fc.args | transformed(to_printer), ", "));
+                        },
+                    }, fc.func);
+                }
             },
             [&] (const cast& c)  {
                 std::visit(overloaded_functor{
