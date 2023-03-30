@@ -14,6 +14,7 @@
 #include "gms/inet_address.hh"
 #include "gms/feature_service.hh"
 #include "locator/snitch_base.hh"
+#include "locator/token_range_splitter.hh"
 #include "dht/i_partitioner.hh"
 #include "token_metadata.hh"
 #include "snitch_base.hh"
@@ -190,6 +191,10 @@ public:
     /// Pending replica is a replica which gains ownership of data.
     /// Non-empty only during topology change.
     virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token, const sstring& ks_name) const = 0;
+
+    /// Returns a token_range_splitter which is line with the replica assignment of this replication map.
+    /// The splitter can live longer than this instance.
+    virtual std::unique_ptr<token_range_splitter> make_splitter() const = 0;
 };
 
 using effective_replication_map_ptr = seastar::shared_ptr<const effective_replication_map>;
@@ -248,6 +253,7 @@ public: // effective_replication_map
     inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override;
     inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override;
     inet_address_vector_topology_change get_pending_endpoints(const token& search_token, const sstring& ks_name) const override;
+    std::unique_ptr<token_range_splitter> make_splitter() const override;
 public:
     explicit vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map, size_t replication_factor) noexcept
         : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)

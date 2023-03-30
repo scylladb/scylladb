@@ -107,6 +107,10 @@ inet_address_vector_topology_change vnode_effective_replication_map::get_pending
     return _tmptr->pending_endpoints_for(search_token, ks_name);
 }
 
+std::unique_ptr<token_range_splitter> vnode_effective_replication_map::make_splitter() const {
+    return locator::make_splitter(_tmptr);
+}
+
 const per_table_replication_strategy* abstract_replication_strategy::maybe_as_per_table() const {
     if (!_per_table) {
         return nullptr;

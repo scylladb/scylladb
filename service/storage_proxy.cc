@@ -5580,7 +5580,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     // (which can be expensive in clusters with vnodes)
     auto merge_tokens = !erm->get_replication_strategy().natural_endpoints_depend_on_token();
 
-    query_ranges_to_vnodes_generator ranges_to_vnodes(erm->get_token_metadata_ptr(), schema, std::move(partition_ranges), merge_tokens);
+    query_ranges_to_vnodes_generator ranges_to_vnodes(erm->make_splitter(), schema, std::move(partition_ranges), merge_tokens);
 
     int result_rows_per_range = 0;
     int concurrency_factor = 1;

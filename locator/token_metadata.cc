@@ -113,8 +113,7 @@ public:
      */
     boost::iterator_range<token_metadata::tokens_iterator> ring_range(const token& start) const;
 
-    boost::iterator_range<token_metadata::tokens_iterator> ring_range(
-        const std::optional<dht::partition_range::bound>& start) const;
+    boost::iterator_range<token_metadata::tokens_iterator> ring_range(dht::ring_position_view pos) const;
 
     topology& get_topology() {
         return _topology;
@@ -559,21 +558,8 @@ void token_metadata_impl::add_bootstrap_token(token t, inet_address endpoint) {
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>
-token_metadata_impl::ring_range(const std::optional<dht::partition_range::bound>& start) const {
-    auto r = ring_range(start ? start->value().token() : dht::minimum_token());
-
-    if (!r.empty()) {
-        // We should skip the first token if it's excluded by the range.
-        if (start
-            && !start->is_inclusive()
-            && !start->value().has_key()
-            && start->value().token() == *r.begin())
-        {
-            r.pop_front();
-        }
-    }
-
-    return r;
+token_metadata_impl::ring_range(const dht::ring_position_view start) const {
+    return ring_range(start.token());
 }
 
 void token_metadata_impl::add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
@@ -1026,8 +1012,37 @@ token_metadata::ring_range(const token& start) const {
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>
-token_metadata::ring_range(const std::optional<dht::partition_range::bound>& start) const {
+token_metadata::ring_range(dht::ring_position_view start) const {
     return _impl->ring_range(start);
+}
+
+class token_metadata_ring_splitter : public locator::token_range_splitter {
+    token_metadata_ptr _tmptr;
+    boost::iterator_range<token_metadata::tokens_iterator> _range;
+public:
+    token_metadata_ring_splitter(token_metadata_ptr tmptr)
+        : _tmptr(std::move(tmptr))
+        , _range(_tmptr->sorted_tokens().empty() // ring_range() throws if the ring is empty
+                ? boost::make_iterator_range(token_metadata::tokens_iterator(), token_metadata::tokens_iterator())
+                : _tmptr->ring_range(dht::minimum_token()))
+    { }
+
+    void reset(dht::ring_position_view pos) override {
+        _range = _tmptr->ring_range(pos);
+    }
+
+    std::optional<dht::token> next_token() override {
+        if (_range.empty()) {
+            return std::nullopt;
+        }
+        auto t = *_range.begin();
+        _range.drop_front();
+        return t;
+    }
+};
+
+std::unique_ptr<locator::token_range_splitter> make_splitter(token_metadata_ptr tmptr) {
+    return std::make_unique<token_metadata_ring_splitter>(std::move(tmptr));
 }
 
 topology&

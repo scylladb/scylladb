@@ -20,8 +20,8 @@ const dht::token& end_token(const dht::partition_range& r) {
     return r.end() ? r.end()->value().token() : max_token;
 }
 
-query_ranges_to_vnodes_generator::query_ranges_to_vnodes_generator(const locator::token_metadata_ptr tmptr, schema_ptr s, dht::partition_range_vector ranges, bool local) :
-        _s(s), _ranges(std::move(ranges)), _i(_ranges.begin()), _local(local), _tmptr(std::move(tmptr)) {}
+query_ranges_to_vnodes_generator::query_ranges_to_vnodes_generator(std::unique_ptr<locator::token_range_splitter> splitter, schema_ptr s, dht::partition_range_vector ranges, bool local) :
+        _s(s), _ranges(std::move(ranges)), _i(_ranges.begin()), _local(local), _splitter(std::move(splitter)) {}
 
 dht::partition_range_vector query_ranges_to_vnodes_generator::operator()(size_t n) {
     n = std::min(n, size_t(1024));
@@ -71,8 +71,9 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
     }
 
     // divide the queryRange into pieces delimited by the ring
-    auto ring_iter = _tmptr->ring_range(cr.start());
-    for (const dht::token& upper_bound_token : ring_iter) {
+    _splitter->reset(dht::ring_position_view::for_range_start(cr));
+    while (auto token_opt = _splitter->next_token()) {
+        auto upper_bound_token = *token_opt;
         /*
          * remainder can be a range/bounds of token _or_ keys and we want to split it with a token:
          *   - if remainder is tokens, then we'll just split using the provided token.
@@ -85,15 +86,13 @@ void query_ranges_to_vnodes_generator::process_one_range(size_t n, dht::partitio
          */
 
         dht::ring_position split_point(upper_bound_token, dht::ring_position::token_bound::end);
-        if (!cr.contains(split_point, cmp)) {
+
+        if (cmp(dht::ring_position_view::for_range_end(cr), split_point) <= 0) {
             break; // no more splits
         }
 
-
-        // We shouldn't attempt to split on upper bound, because it may result in
-        // an ambiguous range of the form (x; x]
-        if (end_token(cr) == upper_bound_token) {
-            break;
+        if (cmp(dht::ring_position_view::for_range_start(cr), split_point) >= 0) {
+            continue; // avoid empty splits
         }
 
         std::pair<dht::partition_range, dht::partition_range> splits =

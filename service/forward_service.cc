@@ -513,7 +513,7 @@ future<query::forward_result> forward_service::dispatch(query::forward_request r
     // next_vnode is used to iterate through all vnodes produced by
     // query_ranges_to_vnodes_generator.
     auto next_vnode = [
-        generator = query_ranges_to_vnodes_generator(get_token_metadata_ptr(), schema, req.pr)
+        generator = query_ranges_to_vnodes_generator(erm->make_splitter(), schema, req.pr)
     ] () mutable -> std::optional<dht::partition_range> {
         if (auto vnode = generator(1); !vnode.empty()) {
             return vnode[0];
