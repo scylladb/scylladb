@@ -347,7 +347,7 @@ db_clock::time_point new_generation_timestamp(bool add_delay, std::chrono::milli
     return ts;
 }
 
-future<cdc::generation_id> generation_service::make_new_generation(const std::unordered_set<dht::token>& bootstrap_tokens, bool add_delay) {
+future<cdc::generation_id> generation_service::legacy_make_new_generation(const std::unordered_set<dht::token>& bootstrap_tokens, bool add_delay) {
     const locator::token_metadata_ptr tmptr = _token_metadata.get();
 
     // Fetch sharding parameters for a node that owns vnode ending with this token
@@ -747,7 +747,7 @@ future<> generation_service::after_join(std::optional<cdc::generation_id>&& star
     _joined = true;
 
     // Retrieve the latest CDC generation seen in gossip (if any).
-    co_await scan_cdc_generations();
+    co_await legacy_scan_cdc_generations();
 
     // Ensure that the new CDC stream description table has all required streams.
     // See the function's comment for details.
@@ -778,7 +778,7 @@ future<> generation_service::on_change(gms::inet_address ep, gms::application_st
     auto gen_id = gms::versioned_value::cdc_generation_id_from_string(v.value);
     cdc_log.debug("Endpoint: {}, CDC generation ID change: {}", ep, gen_id);
 
-    return handle_cdc_generation(gen_id);
+    return legacy_handle_cdc_generation(gen_id);
 }
 
 future<> generation_service::check_and_repair_cdc_streams() {
@@ -880,13 +880,13 @@ future<> generation_service::check_and_repair_cdc_streams() {
 
     if (!should_regenerate) {
         if (latest != _gen_id) {
-            co_await do_handle_cdc_generation(*latest);
+            co_await legacy_do_handle_cdc_generation(*latest);
         }
         cdc_log.info("CDC generation {} does not need repair", latest);
         co_return;
     }
 
-    const auto new_gen_id = co_await make_new_generation({}, true);
+    const auto new_gen_id = co_await legacy_make_new_generation({}, true);
 
     // Need to artificially update our STATUS so other nodes handle the generation ID change
     // FIXME: after 0e0282cd nodes do not require a STATUS update to react to CDC generation changes.
@@ -898,7 +898,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
         cdc_log.error("Aborting CDC generation repair due to missing STATUS");
         co_return;
     }
-    // Update _gen_id first, so that do_handle_cdc_generation (which will get called due to the status update)
+    // Update _gen_id first, so that legacy_do_handle_cdc_generation (which will get called due to the status update)
     // won't try to update the gossiper, which would result in a deadlock inside add_local_application_state
     _gen_id = new_gen_id;
     co_await _gossiper.add_local_application_state({
@@ -927,7 +927,7 @@ future<> generation_service::handle_cdc_generation(cdc::generation_id_v2 gen_id)
     }
 }
 
-future<> generation_service::handle_cdc_generation(std::optional<cdc::generation_id> gen_id) {
+future<> generation_service::legacy_handle_cdc_generation(std::optional<cdc::generation_id> gen_id) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
     if (!gen_id) {
@@ -953,10 +953,10 @@ future<> generation_service::handle_cdc_generation(std::optional<cdc::generation
 
     bool using_this_gen = false;
     try {
-        using_this_gen = co_await do_handle_cdc_generation_intercept_nonfatal_errors(*gen_id);
+        using_this_gen = co_await legacy_do_handle_cdc_generation_intercept_nonfatal_errors(*gen_id);
     } catch (generation_handling_nonfatal_exception& e) {
         cdc_log.warn(could_not_retrieve_msg_template, gen_id, e.what(), "retrying in the background");
-        async_handle_cdc_generation(*gen_id);
+        legacy_async_handle_cdc_generation(*gen_id);
         co_return;
     } catch (...) {
         cdc_log.error(could_not_retrieve_msg_template, gen_id, std::current_exception(), "not retrying");
@@ -971,7 +971,7 @@ future<> generation_service::handle_cdc_generation(std::optional<cdc::generation
     }
 }
 
-void generation_service::async_handle_cdc_generation(cdc::generation_id gen_id) {
+void generation_service::legacy_async_handle_cdc_generation(cdc::generation_id gen_id) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
     (void)(([] (cdc::generation_id gen_id, shared_ptr<generation_service> svc) -> future<> {
@@ -979,7 +979,7 @@ void generation_service::async_handle_cdc_generation(cdc::generation_id gen_id) 
             co_await sleep_abortable(std::chrono::seconds(5), svc->_abort_src);
 
             try {
-                bool using_this_gen = co_await svc->do_handle_cdc_generation_intercept_nonfatal_errors(gen_id);
+                bool using_this_gen = co_await svc->legacy_do_handle_cdc_generation_intercept_nonfatal_errors(gen_id);
                 if (using_this_gen) {
                     cdc_log.info("Starting to use generation {}", gen_id);
                     co_await update_streams_description(gen_id, svc->get_sys_dist_ks(),
@@ -1003,7 +1003,7 @@ void generation_service::async_handle_cdc_generation(cdc::generation_id gen_id) 
     })(gen_id, shared_from_this()));
 }
 
-future<> generation_service::scan_cdc_generations() {
+future<> generation_service::legacy_scan_cdc_generations() {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
     std::optional<cdc::generation_id> latest;
@@ -1016,18 +1016,18 @@ future<> generation_service::scan_cdc_generations() {
 
     if (latest) {
         cdc_log.info("Latest generation seen during startup: {}", *latest);
-        co_await handle_cdc_generation(latest);
+        co_await legacy_handle_cdc_generation(latest);
     } else {
         cdc_log.info("No generation seen during startup.");
     }
 }
 
-future<bool> generation_service::do_handle_cdc_generation_intercept_nonfatal_errors(cdc::generation_id gen_id) {
+future<bool> generation_service::legacy_do_handle_cdc_generation_intercept_nonfatal_errors(cdc::generation_id gen_id) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
-    // Use futurize_invoke to catch all exceptions from do_handle_cdc_generation.
+    // Use futurize_invoke to catch all exceptions from legacy_do_handle_cdc_generation.
     return futurize_invoke([this, gen_id] {
-        return do_handle_cdc_generation(gen_id);
+        return legacy_do_handle_cdc_generation(gen_id);
     }).handle_exception([] (std::exception_ptr ep) -> future<bool> {
         try {
             std::rethrow_exception(ep);
@@ -1047,7 +1047,7 @@ future<bool> generation_service::do_handle_cdc_generation_intercept_nonfatal_err
     });
 }
 
-future<bool> generation_service::do_handle_cdc_generation(cdc::generation_id gen_id) {
+future<bool> generation_service::legacy_do_handle_cdc_generation(cdc::generation_id gen_id) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
     auto sys_dist_ks = get_sys_dist_ks();
