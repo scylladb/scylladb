@@ -768,12 +768,8 @@ public:
                 out << ", ";
             }
             first = false;
-            out << "{v=" << v.version_no
-                << ", pos=" << v.it->position()
-                << ", cont=" << v.continuous
-                << ", rt=" << v.rt
-                << ", row_rt=" << v.it->range_tombstone()
-                << "}";
+            fmt::print(out, "{{v={}, pos={}, cont={}, rt={}, row_rt={}}}",
+                       v.version_no, v.it->position(), v.continuous, v.rt, v.it->range_tombstone());
         }
         out << "], heap=[\n  ";
         first = true;
@@ -782,20 +778,16 @@ public:
                 out << ",\n  ";
             }
             first = false;
-            out << "{v=" << v.version_no
-                << ", pos=" << v.it->position()
-                << ", cont=" << v.continuous
-                << ", rt=" << v.rt
-                << ", row_rt=" << v.it->range_tombstone()
-                << "}";
+            fmt::print(out, "{{v={}, pos={}, cont={}, rt={}, row_rt={}}}",
+                       v.version_no, v.it->position(), v.continuous, v.rt, v.it->range_tombstone());
         }
         out << "], latest_iterator=[";
         if (cur._latest_it) {
             mutation_partition::rows_type::iterator i = *cur._latest_it;
             if (!i) {
-                out << "end";
+                fmt::print(out, "end");
             } else {
-                out << i->position();
+                fmt::print(out, "{}", i->position());
             }
         } else {
             out << "<none>";
