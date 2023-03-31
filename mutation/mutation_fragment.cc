@@ -52,16 +52,6 @@ partition_region parse_partition_region(std::string_view s) {
     }
 }
 
-std::ostream& operator<<(std::ostream& out, partition_region r) {
-    fmt::print(out, "{}", r);
-    return out;
-}
-
-std::ostream& operator<<(std::ostream& os, position_in_partition_view::printer p) {
-    fmt::print(os, "{}", p);
-    return os;
-}
-
 std::ostream& operator<<(std::ostream& out, position_in_partition_view pos) {
     fmt::print(out, "{}", pos);
     return out;

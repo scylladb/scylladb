@@ -100,7 +100,6 @@ struct fmt::formatter<partition_region> : fmt::formatter<std::string_view> {
     }
 };
 
-std::ostream& operator<<(std::ostream&, partition_region);
 partition_region parse_partition_region(std::string_view);
 
 class position_in_partition_view {
@@ -254,7 +253,6 @@ public:
     public:
         printer(const schema& schema, const position_in_partition_view& pipv) : _schema(schema), _pipv(pipv) {}
         friend fmt::formatter<printer>;
-        friend std::ostream& operator<<(std::ostream& os, printer p);
     };
 
     // Create a position which is the same as this one but governed by a schema with reversed clustering key order.
@@ -264,8 +262,6 @@ public:
 
     friend fmt::formatter<printer>;
     friend fmt::formatter<position_in_partition_view>;
-    friend std::ostream& operator<<(std::ostream& os, printer p);
-    friend std::ostream& operator<<(std::ostream&, position_in_partition_view);
     friend bool no_clustering_row_between(const schema&, position_in_partition_view, position_in_partition_view);
 };
 
