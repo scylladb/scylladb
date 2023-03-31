@@ -17,6 +17,6 @@ make sure the URL in the URL box is: http://localhost:10000/v2
 The API is split into sections.
 
 ## Config
-By expending the config section you can see all of the available configuration.
+By expanding the config section you can see all of the available configuration.
 
 The values returned by the API are the current values in the system (regardless if it is the default value, taken from a config file or from a command line parameter)
