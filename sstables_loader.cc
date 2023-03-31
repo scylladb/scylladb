@@ -251,11 +251,13 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
 // in there.
 future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
     bool load_and_stream, bool primary_replica_only) {
-    if (_loading_new_sstables) {
-        throw std::runtime_error("Already loading SSTables. Try again later");
-    } else {
-        _loading_new_sstables = true;
+    if (_current) {
+        throw std::runtime_error(format("Already loading {}.{} SSTables. Try again later", _current->first, _current->second));
     }
+
+    _current.emplace(std::make_pair(ks_name, cf_name));
+    auto reset_current = defer([this] { _current.reset(); });
+
     llog.info("Loading new SSTables for keyspace={}, table={}, load_and_stream={}, primary_replica_only={}",
             ks_name, cf_name, load_and_stream, primary_replica_only);
     try {
@@ -272,11 +274,9 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
     } catch (...) {
         llog.warn("Done loading new SSTables for keyspace={}, table={}, load_and_stream={}, primary_replica_only={}, status=failed: {}",
                 ks_name, cf_name, load_and_stream, primary_replica_only, std::current_exception());
-        _loading_new_sstables = false;
         throw;
     }
     llog.info("Done loading new SSTables for keyspace={}, table={}, load_and_stream={}, primary_replica_only={}, status=succeeded",
             ks_name, cf_name, load_and_stream, primary_replica_only);
-    _loading_new_sstables = false;
     co_return;
 }

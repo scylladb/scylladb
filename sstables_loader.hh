@@ -42,7 +42,7 @@ class sstables_loader : public seastar::peering_sharded_service<sstables_loader>
     //
     // It shouldn't be impossible to actively serialize two callers if the need
     // ever arise.
-    bool _loading_new_sstables = false;
+    std::optional<std::pair<sstring, sstring>> _current = {};
 
     future<> load_and_stream(sstring ks_name, sstring cf_name,
             table_id, std::vector<sstables::shared_sstable> sstables,
