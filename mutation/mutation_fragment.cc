@@ -58,29 +58,18 @@ std::ostream& operator<<(std::ostream& out, partition_region r) {
 }
 
 std::ostream& operator<<(std::ostream& os, position_in_partition_view::printer p) {
-    auto& pos = p._pipv;
-    fmt::print(os, "{{position: {},", pos._type);
-    if (pos._ck) {
-        fmt::print(os, "{}", clustering_key_prefix::with_schema_wrapper(p._schema, *pos._ck));
-    } else {
-        fmt::print(os, "null");
-    }
-    fmt::print(os, ", {}}}", int32_t(pos._bound_weight));
+    fmt::print(os, "{}", p);
     return os;
 }
 
 std::ostream& operator<<(std::ostream& out, position_in_partition_view pos) {
-    out << "{position: " << pos._type << ",";
-    if (pos._ck) {
-        out << *pos._ck;
-    } else {
-        out << "null";
-    }
-    return out << "," << int32_t(pos._bound_weight) << "}";
+    fmt::print(out, "{}", pos);
+    return out;
 }
 
 std::ostream& operator<<(std::ostream& out, const position_in_partition& pos) {
-    return out << static_cast<position_in_partition_view>(pos);
+    fmt::print(out, "{}", pos);
+    return out;
 }
 
 std::ostream& operator<<(std::ostream& out, const position_range& range) {

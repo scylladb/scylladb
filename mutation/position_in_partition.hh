@@ -253,6 +253,7 @@ public:
         const position_in_partition_view& _pipv;
     public:
         printer(const schema& schema, const position_in_partition_view& pipv) : _schema(schema), _pipv(pipv) {}
+        friend fmt::formatter<printer>;
         friend std::ostream& operator<<(std::ostream& os, printer p);
     };
 
@@ -261,9 +262,40 @@ public:
         return position_in_partition_view(_type, ::reversed(_bound_weight), _ck);
     }
 
+    friend fmt::formatter<printer>;
+    friend fmt::formatter<position_in_partition_view>;
     friend std::ostream& operator<<(std::ostream& os, printer p);
     friend std::ostream& operator<<(std::ostream&, position_in_partition_view);
     friend bool no_clustering_row_between(const schema&, position_in_partition_view, position_in_partition_view);
+};
+
+template <>
+struct fmt::formatter<position_in_partition_view> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const ::position_in_partition_view& pos, FormatContext& ctx) const {
+        fmt::format_to(ctx.out(), "{{position: {}, ", pos._type);
+        if (pos._ck) {
+            fmt::format_to(ctx.out(), "{}, ", *pos._ck);
+        } else {
+            fmt::format_to(ctx.out(), "null, ");
+        }
+        return fmt::format_to(ctx.out(), "{}}}", int32_t(pos._bound_weight));
+    }
+};
+
+template <>
+struct fmt::formatter<position_in_partition_view::printer> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const ::position_in_partition_view::printer& p, FormatContext& ctx) const {
+        auto& pos = p._pipv;
+        fmt::format_to(ctx.out(), "{{position: {},", pos._type);
+        if (pos._ck) {
+            fmt::format_to(ctx.out(), "{}", clustering_key_prefix::with_schema_wrapper(p._schema, *pos._ck));
+        } else {
+            fmt::format_to(ctx.out(), "null");
+        }
+        return fmt::format_to(ctx.out(), ", {}}}", int32_t(pos._bound_weight));
+    }
 };
 
 class position_in_partition {
@@ -611,6 +643,14 @@ public:
     // Create a position which is the same as this one but governed by a schema with reversed clustering key order.
     position_in_partition reversed() && {
         return position_in_partition(_type, ::reversed(_bound_weight), std::move(_ck));
+    }
+};
+
+template <>
+struct fmt::formatter<position_in_partition> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const ::position_in_partition& pos, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", position_in_partition_view(pos));
     }
 };
 
