@@ -474,26 +474,25 @@ schema_ptr do_load_schema_from_schema_tables(std::filesystem::path scylla_data_p
 
     auto do_load = [&] (std::function<const schema_ptr()> schema_factory) {
         auto s = schema_factory();
-        auto mut_opt = read_schema_table_mutation(
+        return read_schema_table_mutation(
                 sst_man,
                 schema_tables_path / schema_table_table_dir[s],
                 schema_factory,
                 rcs_sem.make_tracking_only_permit(s.get(), "schema_mutation", db::no_timeout, {}),
                 keyspace,
                 {table});
-        if (!mut_opt) {
-            throw std::runtime_error(fmt::format("Failed to read row for keyspace '{}' and table '{}' from schema table '{}.{}': got no result",
-                        keyspace, table, s->ks_name(), s->cf_name()));
-        }
-        return std::move(*mut_opt);
     };
-    mutation tables = do_load(db::schema_tables::tables);
-    mutation columns = do_load(db::schema_tables::columns);
-    mutation view_virtual_columns = do_load(db::schema_tables::view_virtual_columns);
-    mutation computed_columns = do_load(db::schema_tables::computed_columns);
-    mutation indexes = do_load(db::schema_tables::indexes);
-    mutation dropped_columns = do_load(db::schema_tables::dropped_columns);
-    mutation scylla_tables = do_load([] () { return db::schema_tables::scylla_tables(); });
+    mutation_opt tables = do_load(db::schema_tables::tables);
+    mutation_opt columns = do_load(db::schema_tables::columns);
+    mutation_opt view_virtual_columns = do_load(db::schema_tables::view_virtual_columns);
+    mutation_opt computed_columns = do_load(db::schema_tables::computed_columns);
+    mutation_opt indexes = do_load(db::schema_tables::indexes);
+    mutation_opt dropped_columns = do_load(db::schema_tables::dropped_columns);
+    mutation_opt scylla_tables = do_load([] () { return db::schema_tables::scylla_tables(); });
+
+    if (!tables || !columns) {
+        throw std::runtime_error(fmt::format("Failed to find {}.{} in 'tables' and/or 'columns' schema tables", keyspace, table));
+    }
 
     data_dictionary::user_types_metadata utm;
 
@@ -531,7 +530,8 @@ schema_ptr do_load_schema_from_schema_tables(std::filesystem::path scylla_data_p
     db::config dbcfg;
     auto user_type_storage = std::make_shared<single_keyspace_user_types_storage>(std::move(utm));
     db::schema_ctxt ctxt(dbcfg, user_type_storage);
-    schema_mutations muts(tables, columns, view_virtual_columns, computed_columns, indexes, dropped_columns, scylla_tables);
+    schema_mutations muts(std::move(*tables), std::move(*columns), std::move(view_virtual_columns), std::move(computed_columns), std::move(indexes),
+            std::move(dropped_columns), std::move(scylla_tables));
     return db::schema_tables::create_table_from_mutations(ctxt, muts);
 }
 
