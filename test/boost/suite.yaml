@@ -39,3 +39,5 @@ custom_args:
         - '-c1 -m256M'
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test
+flaky:
+    - flaky_test
