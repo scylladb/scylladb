@@ -1197,7 +1197,8 @@ row_cache::row_cache(schema_ptr s, snapshot_source src, cache_tracker& tracker, 
     with_allocator(_tracker.allocator(), [this, cont] {
         cache_entry entry(cache_entry::dummy_entry_tag{});
         entry.set_continuous(bool(cont));
-        _partitions.insert(entry.position().token().raw(), std::move(entry), dht::ring_position_comparator{*_schema});
+        auto raw_token = entry.position().token().raw();
+        _partitions.insert(raw_token, std::move(entry), dht::ring_position_comparator{*_schema});
     });
 }
 
