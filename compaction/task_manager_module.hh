@@ -149,6 +149,70 @@ protected:
     virtual future<> run() override;
 };
 
+class offstrategy_compaction_task_impl : public compaction_task_impl {
+public:
+    offstrategy_compaction_task_impl(tasks::task_manager::module_ptr module,
+            tasks::task_id id,
+            unsigned sequence_number,
+            std::string keyspace,
+            std::string table,
+            std::string entity,
+            tasks::task_id parent_id) noexcept
+        : compaction_task_impl(module, id, sequence_number, std::move(keyspace), std::move(table), std::move(entity), parent_id)
+    {
+        // FIXME: add progress units
+    }
+
+    virtual std::string type() const override {
+        return "offstrategy compaction";
+    }
+protected:
+    virtual future<> run() override = 0;
+};
+
+class offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_task_impl {
+private:
+    sharded<replica::database>& _db;
+    std::vector<table_id> _table_infos;
+    bool& _needed;
+public:
+    offstrategy_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
+            std::string keyspace,
+            sharded<replica::database>& db,
+            std::vector<table_id> table_infos,
+            bool& needed) noexcept
+        : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", tasks::task_id::create_null_id())
+        , _db(db)
+        , _table_infos(std::move(table_infos))
+        , _needed(needed)
+    {}
+protected:
+    virtual future<> run() override;
+};
+
+class local_offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_task_impl {
+private:
+    replica::database& _db;
+    std::vector<table_id> _table_infos;
+    bool& _needed;
+public:
+    local_offstrategy_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
+            std::string keyspace,
+            tasks::task_id parent_id,
+            replica::database& db,
+            std::vector<table_id> table_infos,
+            bool& needed) noexcept
+        : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", parent_id)
+        , _db(db)
+        , _table_infos(std::move(table_infos))
+        , _needed(needed)
+    {}
+
+    virtual tasks::is_internal is_internal() const noexcept override;
+protected:
+    virtual future<> run() override;
+};
+
 class task_manager_module : public tasks::task_manager::module {
 public:
     task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "compaction") {}
