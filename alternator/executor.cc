@@ -3621,7 +3621,7 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
     // We conditionally include these fields when reading CQL tables through alternator.
     if (!is_alternator_keyspace(schema.ks_name()) && (!pos.has_key() || pos.get_bound_weight() != bound_weight::equal)) {
         rjson::add_with_string_name(last_evaluated_key, scylla_paging_region, rjson::empty_object());
-        rjson::add(last_evaluated_key[scylla_paging_region.data()], "S", rjson::from_string(to_string(pos.region())));
+        rjson::add(last_evaluated_key[scylla_paging_region.data()], "S", rjson::from_string(fmt::to_string(pos.region())));
         rjson::add_with_string_name(last_evaluated_key, scylla_paging_weight, rjson::empty_object());
         rjson::add(last_evaluated_key[scylla_paging_weight.data()], "N", static_cast<int>(pos.get_bound_weight()));
     }

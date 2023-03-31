@@ -82,8 +82,25 @@ enum class partition_region : uint8_t {
 
 struct view_and_holder;
 
+template <>
+struct fmt::formatter<partition_region> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const ::partition_region& r, FormatContext& ctx) const {
+        switch (r) {
+            case partition_region::partition_start:
+                return formatter<std::string_view>::format("partition_start", ctx);
+            case partition_region::static_row:
+                return formatter<std::string_view>::format("static_row", ctx);
+            case partition_region::clustered:
+                return formatter<std::string_view>::format("clustered", ctx);
+            case partition_region::partition_end:
+                return formatter<std::string_view>::format("partition_end", ctx);
+        }
+        std::abort(); // compiler will error before we reach here
+    }
+};
+
 std::ostream& operator<<(std::ostream&, partition_region);
-std::string_view to_string(partition_region);
 partition_region parse_partition_region(std::string_view);
 
 class position_in_partition_view {

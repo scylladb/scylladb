@@ -38,16 +38,6 @@ operator<<(std::ostream& os, const partition_end& eop) {
     return os << "{partition_end}";
 }
 
-std::string_view to_string(partition_region r) {
-    switch (r) {
-        case partition_region::partition_start: return "partition_start";
-        case partition_region::static_row: return "static_row";
-        case partition_region::clustered: return "clustered";
-        case partition_region::partition_end: return "partition_end";
-    }
-    std::abort(); // compiler will error before we reach here
-}
-
 partition_region parse_partition_region(std::string_view s) {
     if (s == "partition_start") {
         return partition_region::partition_start;
@@ -63,7 +53,8 @@ partition_region parse_partition_region(std::string_view s) {
 }
 
 std::ostream& operator<<(std::ostream& out, partition_region r) {
-    return out << to_string(r);
+    fmt::print(out, "{}", r);
+    return out;
 }
 
 std::ostream& operator<<(std::ostream& os, position_in_partition_view::printer p) {
