@@ -385,6 +385,29 @@ class ScyllaServer:
         sleep_interval = 0.1
         cql_up_state = CqlUpState.NOT_CONNECTED
 
+        def read_last_line(file_path: pathlib.Path):
+            block_size = 4 * 1024
+            file_size = os.stat(file_path).st_size
+            pos = file_size
+            blocks = []
+            linesep = os.linesep.encode()
+            with file_path.open('rb') as f:
+                linesep_index = -1
+                while pos > 0 and linesep_index == -1:
+                    next_pos = max(pos - block_size, 0)
+                    f.seek(next_pos, os.SEEK_SET)
+                    block = f.read(pos - next_pos)
+                    # ignore the last empty line if any
+                    if pos == file_size and block.endswith(linesep):
+                        block = block[:-len(linesep)]
+                    linesep_index = block.rfind(linesep)
+                    blocks.append(block)
+                    pos = next_pos
+            if linesep_index != -1:
+                blocks[-1] = block[linesep_index + len(linesep):]
+            blocks.reverse()
+            return b''.join(blocks).decode()
+
         def report_error(message: str):
             message += f", server_id {self.server_id}, IP {self.ip_addr}, workdir {self.workdir.name}"
             message += f", host_id {self.host_id if hasattr(self, 'host_id') else '<missing>'}"
@@ -392,10 +415,7 @@ class ScyllaServer:
             if expected_error is not None:
                 message += f", the node log was expected to contain the string [{expected_error}]"
             self.logger.error(message)
-            self.logger.error("last line of %s:", self.log_filename)
-            with self.log_filename.open('r') as log_file:
-                log_file.seek(0, 0)
-                self.logger.error(log_file.readlines()[-1].rstrip())
+            self.logger.error("last line of %s:\n%s", self.log_filename, read_last_line(self.log_filename))
             log_handler = logging.getLogger().handlers[0]
             if hasattr(log_handler, 'baseFilename'):
                 logpath = log_handler.baseFilename   # type: ignore
@@ -410,7 +430,7 @@ class ScyllaServer:
                 self.cmd = None
                 if expected_error is not None:
                     with self.log_filename.open('r') as log_file:
-                        for line in log_file.readlines():
+                        for line in log_file:
                             if expected_error in line:
                                 return
                         report_error("the node startup failed, but the log file doesn't contain the expected error")
