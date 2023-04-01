@@ -626,6 +626,8 @@ future<> sstable_directory::filesystem_components_lister::handle_sstables_pendin
 
 future<std::optional<sstables::generation_type>>
 highest_generation_seen(sharded<sstables::sstable_directory>& directory) {
+    // TODO: use an empty generation instead of an generation_type(0) and
+    // optional<generation_type> for finding the highest generation seen
     auto highest = co_await directory.map_reduce0(std::mem_fn(&sstables::sstable_directory::highest_generation_seen), sstables::generation_type(0), [] (std::optional<sstables::generation_type> a, std::optional<sstables::generation_type> b) {
         if (a && b) {
             return std::max(*a, *b);
