@@ -16,6 +16,7 @@
 #include <seastar/core/sstring.hh>
 #include "log.hh"
 #include "gms/gossiper.hh"
+#include <cmath>
 #include <vector>
 #include <string>
 #include <map>
@@ -123,11 +124,8 @@ void endpoints_check(
 }
 
 auto d2t = [](double d) -> int64_t {
-    // Double to unsigned long conversion will overflow if the
-    // input is greater than numeric_limits<long>::max(), so divide by two and
-    // multiply again later.
     auto scale = std::numeric_limits<unsigned long>::max();
-    return static_cast<unsigned long>(d * static_cast<double>(scale >> 1)) << 1;
+    return static_cast<unsigned long>(std::lerp(0, scale, d));
 };
 
 /**
