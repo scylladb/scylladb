@@ -59,7 +59,7 @@
 #include "repair/repair.hh"
 #include "repair/row_level.hh"
 #include "service/priority_manager.hh"
-#include "utils/generation-number.hh"
+#include "gms/generation-number.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -2948,7 +2948,7 @@ future<> storage_service::start_gossiping() {
                         co_await ss._sys_ks.local().get_local_tokens(),
                         cdc_gen_ts);
                 ss._gossiper.force_newer_generation();
-                co_await ss._gossiper.start_gossiping(utils::get_generation_number());
+                co_await ss._gossiper.start_gossiping(gms::get_generation_number());
             } catch (...) {
                 should_stop_gossiper = true;
             }

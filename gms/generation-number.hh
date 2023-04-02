@@ -8,7 +8,7 @@
 
 #pragma once
 
-namespace utils {
+namespace gms {
 
 int get_generation_number();
 

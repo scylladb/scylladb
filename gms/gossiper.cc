@@ -38,7 +38,7 @@
 #include <boost/range/algorithm/partition.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
-#include "utils/generation-number.hh"
+#include "gms/generation-number.hh"
 #include "locator/token_metadata.hh"
 #include "utils/exceptions.hh"
 
@@ -567,7 +567,7 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, const endpoint
         int local_generation = local_state.get_heart_beat_state().get_generation();
         int remote_generation = remote_state.get_heart_beat_state().get_generation();
         logger.trace("{} local generation {}, remote generation {}", node, local_generation, remote_generation);
-        if (remote_generation > utils::get_generation_number() + MAX_GENERATION_DIFFERENCE) {
+        if (remote_generation > get_generation_number() + MAX_GENERATION_DIFFERENCE) {
             // assume some peer has corrupted memory and is broadcasting an unbelievable generation about another peer (or itself)
             logger.warn("received an invalid gossip generation for peer {}; local generation = {}, received generation = {}",
                 node, local_generation, remote_generation);

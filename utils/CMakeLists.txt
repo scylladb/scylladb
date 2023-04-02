@@ -21,7 +21,6 @@ target_sources(utils
     error_injection.cc
     exceptions.cc
     file_lock.cc
-    generation-number.cc
     gz/crc_combine.cc
     gz/crc_combine_table.cc
     hashers.cc

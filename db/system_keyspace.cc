@@ -51,7 +51,7 @@
 #include "db/view/build_progress_virtual_reader.hh"
 #include "db/schema_tables.hh"
 #include "index/built_indexes_virtual_reader.hh"
-#include "utils/generation-number.hh"
+#include "gms/generation-number.hh"
 #include "db/virtual_table.hh"
 #include "service/storage_service.hh"
 #include "protocol_server.hh"
@@ -3125,11 +3125,11 @@ future<int> system_keyspace::increment_and_get_generation() {
         // seconds-since-epoch isn't a foolproof new generation
         // (where foolproof is "guaranteed to be larger than the last one seen at this ip address"),
         // but it's as close as sanely possible
-        generation = utils::get_generation_number();
+        generation = gms::get_generation_number();
     } else {
         // Other nodes will ignore gossip messages about a node that have a lower generation than previously seen.
         int stored_generation = rs->one().template get_as<int>("gossip_generation") + 1;
-        int now = utils::get_generation_number();
+        int now = gms::get_generation_number();
         if (stored_generation >= now) {
             slogger.warn("Using stored Gossip Generation {} as it is greater than current system time {}."
                         "See CASSANDRA-3654 if you experience problems", stored_generation, now);

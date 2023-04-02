@@ -9,7 +9,7 @@
 #include <chrono>
 #include "generation-number.hh"
 
-namespace utils {
+namespace gms {
 
 int get_generation_number() {
     using namespace std::chrono;
