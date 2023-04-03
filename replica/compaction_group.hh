@@ -62,6 +62,8 @@ private:
     // Update compaction backlog tracker with the same changes applied to the underlying sstable set.
     void backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables);
     static uint64_t calculate_disk_space_used_for(const sstables::sstable_set& set);
+
+    future<> delete_sstables_atomically(std::vector<sstables::shared_sstable> sstables_to_remove);
 public:
     compaction_group(table& t, dht::token_range token_range);
 
