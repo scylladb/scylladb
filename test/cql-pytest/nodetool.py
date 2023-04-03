@@ -77,12 +77,6 @@ def flush(cql, table):
     else:
         run_nodetool(cql, "flush", ks, cf)
 
-def flush_keyspace(cql, ks):
-    if has_rest_api(cql):
-        requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_flush/{ks}')
-    else:
-        run_nodetool(cql, "flush", ks)
-
 def compact(cql, table):
     ks, cf = table.split('.')
     if has_rest_api(cql):

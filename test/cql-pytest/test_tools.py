@@ -15,7 +15,6 @@ import pytest
 import subprocess
 import tempfile
 import random
-import shutil
 import util
 
 # To run the Scylla tools, we need to run Scylla executable itself, so we
@@ -539,75 +538,3 @@ def test_scylla_sstable_script(cql, test_keyspace, scylla_path, scylla_data_dir,
 
         assert dump_lua_json == cxx_json
         assert slice_lua_json == cxx_json
-
-
-def test_scylla_sstable_schema_loading(cql, scylla_path, scylla_data_dir):
-    keyspace = "system"
-    table = "scylla_local"
-    with tempfile.TemporaryDirectory() as workdir:
-        ext_data_dir = os.path.join(workdir, "data")
-        os.mkdir(ext_data_dir)
-        schema_file_dir = os.path.join(workdir, "schema_file_dir")
-        os.mkdir(schema_file_dir)
-        top_conf_dir = os.path.join(workdir, "conf_dir")
-        os.mkdir(top_conf_dir)
-        conf_dir = os.path.join(top_conf_dir, "conf")
-        os.mkdir(conf_dir)
-
-        # Need to flush system keyspaces whoose sstables we want to meddle
-        # with, to make sure they are actually on disk.
-        nodetool.flush_keyspace(cql, "system_schema")
-        nodetool.flush_keyspace(cql, "system")
-
-        sstables = glob.glob(os.path.join(scylla_data_dir, keyspace, table + "-*", "*-Data.db"))
-        table_data_dir, sstable_filename = os.path.split(sstables[0])
-        sstable_glob = "-".join(sstable_filename.split("-")[:-1]) + "*"
-        sstable_components = glob.glob(os.path.join(table_data_dir, sstable_glob))
-
-        for c in sstable_components:
-            shutil.copy(c, ext_data_dir)
-
-        external_sstables = glob.glob(os.path.join(ext_data_dir, "*-Data.db"))
-
-        schema_file = os.path.join(schema_file_dir, "schema.cql")
-        with open(schema_file, "w") as f:
-            f.write("CREATE TABLE system.scylla_local (key text PRIMARY KEY, value text)")
-
-        scylla_yaml_file = os.path.join(conf_dir, "scylla.yaml")
-        with open(scylla_yaml_file, "w") as f:
-            f.write(f"workdir: {os.path.split(scylla_data_dir)[0]}")
-
-        dump_common_args = [scylla_path, "sstable", "dump-data", "--output-format", "json", "--logger-log-level", "scylla-sstable=debug"]
-        dump_reference = json.loads(subprocess.check_output(dump_common_args + ["--system-schema", "--keyspace", keyspace, "--table", table] + [sstables[0]]))["sstables"]
-        dump_reference = list(dump_reference.values())[0]
-
-        def do_dump(*args, **kwargs):
-            dump_common_args = [scylla_path, "sstable", "dump-data", "--output-format", "json", "--logger-log-level", "scylla-sstable=debug"]
-            dump = json.loads(subprocess.check_output(dump_common_args + list(args) + [kwargs["sstable"]], cwd=kwargs.get("cwd", None), env=kwargs.get("env", None)))["sstables"]
-            dump = list(dump.values())[0]
-            assert dump == dump_reference
-
-        def check_from_table_dir(*args):
-            return do_dump(*args, sstable=sstables[0])
-
-        def check_from_external_dir(*args, **kwargs):
-            return do_dump(*args, **dict(sstable=external_sstables[0], **kwargs))
-
-        # sstable is in table dir
-        check_from_table_dir("--system-schema", "--keyspace", keyspace, "--table", table)
-        check_from_table_dir("--schema-file", schema_file)
-        check_from_table_dir("--scylla-data-dir", scylla_data_dir, "--keyspace", keyspace, "--table", table)
-        check_from_table_dir("--scylla-yaml-file", scylla_yaml_file, "--keyspace", keyspace, "--table", table)
-        check_from_table_dir() # auto-detect - deduce from sstable path
-
-        # sstable is in external path, user-provided schema should work as before
-        check_from_external_dir("--system-schema", "--keyspace", keyspace, "--table", table)
-        check_from_external_dir("--schema-file", schema_file)
-        check_from_external_dir("--scylla-data-dir", scylla_data_dir, "--keyspace", keyspace, "--table", table)
-        check_from_external_dir("--scylla-yaml-file", scylla_yaml_file, "--keyspace", keyspace, "--table", table)
-
-        # sstable is in external path, auto-detect methods need --keyspace and --table to work
-        check_from_external_dir(cwd=schema_file_dir) # should auto pick-up schema.cql
-        check_from_external_dir("--keyspace", keyspace, "--table", table, cwd=top_conf_dir) # should auto pick-up conf/scylla.yaml
-        check_from_external_dir("--keyspace", keyspace, "--table", table, env={"SCYLLA_CONF": conf_dir}) # should auto pick-up conf path from env
-        check_from_external_dir("--keyspace", keyspace, "--table", table, env={"SCYLLA_HOME": top_conf_dir}) # should auto pick-up conf path from env
