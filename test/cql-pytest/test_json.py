@@ -172,6 +172,81 @@ def test_fromjson_bigint_nonoverflow_scientific(cql, table1, cassandra_bug):
     # inaccuracy cleanly, here.
     cql.execute(stmt, [p, '115292150460684697.5e1'])
     assert list(cql.execute(f"SELECT bigv from {table1} where p = {p}")) == [(1152921504606846975,)]
+# Test the numbers at bigint64 boundaries represented using fraction. This is
+# almost the same as the test of test_fromjson_bigint_nonoverflow. But it
+# intentionally test with numbers at the boundaries of bigint.
+#
+# we use RapidJson to parse JSON. And RapidJson always uses a C++ double for
+# representing a number internally, if this number in JSON is formatted using
+# scientific-notation, even if it is a legit integer. This has two consequences:
+#
+# - rounding a large integer to a float point number could lose the accuracy,
+#   because of the limit of the precision of IEEE754 double float point. We can
+#   hardly do anything in this area, as we cannot restore the accuracy once it
+#   is lost.
+# - it is difficult to compare a 64-bit float point number with a 64-bit integer
+#   when checking if the float point number is out of the range of bigint.
+#   Because, before converting a bigint from the float point number, Scylla
+#   needs to check if the float point number can be represented by bigint by
+#   comparing it with the minimum value and the maximum value of bigint. If it
+#   is out of the range, Scylla should fail the CQL statement which tries to
+#   insert the out-of-range value. If we just cast the maximum value of bigint
+#   to double, it will again, be rounded. Hence the result of comparing could be
+#   inaccurate if the number in JSON is sitting at the boundaries of the bigint
+#   range.
+#
+# Despite that both of these two problems should be fixed in RapidJson, so it
+# uses an integer for storing the could-have-been-integers value, unlike the
+# first lost-accuracy problem, we could use some more sophiscated way to address
+# the second one.
+#
+# In this test, the numbers at the boundaries of the range supported by bigint
+# are used in the input JSON. These numbers are carefully choosen so that their
+# values are not changed by RapidJson when it rounds them to double, So we can
+# rule out the possible issues caused by the way how RapidJson rounds an large
+# integer. For instance, double(2 ** 64 - 2) will be rounded by RapidJson, but
+# double(2 ** 64 - 1024) will not. The inaccuracy caused by the integer-to-double
+# rounding is not in the scope of this test, as what we intend to test is the
+# numbers at the boundaries of bigint. So the latter is used for this test.
+def test_fromjson_bigint_double_boundary(cql, table1, cassandra_bug):
+    # bigint is 64-bit signed long, see
+    # https://cassandra.apache.org/doc/latest/cassandra/cql/types.html
+    #
+    # -9223372036854775808
+    MIN_BIGINT = -(2 ** 63)
+    # +9223372036854775807
+    MAX_BIGINT = 2 ** 63 - 1
+    p = unique_key_int()
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, bigv) VALUES (?, fromJson(?))")
+    # all the tested number in this test case can be represented by IEEE-754/IEC-559
+    # 64-bit float, in order to verify that we only accept the numbers in the
+    # range of bigint without worrying if RapidJSON nearest rounds them first.
+    #
+    # as Scylla accepts both scientific-notation and the regular fraction format,
+    # we use the latter in this test for more accuracy and simplicity.
+    with pytest.raises(FunctionFailure):
+        # the last IEEE-754 64-bit float point number less than min value
+        # of 64-bit signed long
+        cql.execute(stmt, [p, f"{MIN_BIGINT - 2048}.0"])
+    # the first IEEE-754 64-bit float point number greater than min value of
+    # bigint
+    cql.execute(stmt, [p, '1234.0'])
+    cql.execute(stmt, [p, f'{MIN_BIGINT + 1024}.0'])
+    # the last IEEE-754 64-bit float point number less than max value of
+    # bigint
+    cql.execute(stmt, [p, f'{MAX_BIGINT - 1024}.0'])
+# this test fails when UBSan is enabled, because we are trying to return a double
+# whose value is out of the range of int64_t (bigint)
+@pytest.mark.xfail(reason="issue 13077")
+def test_fromjson_bigint_double_upper_boundary(cql, table1, cassandra_bug):
+    # +9223372036854775807
+    MAX_BIGINT = 2 ** 63 - 1
+    p = unique_key_int()
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, bigv) VALUES (?, fromJson(?))")
+    with pytest.raises(FunctionFailure):
+        # the first IEEE-754 64-bit float point number greater than max value
+        # of 64-bit signed long
+        cql.execute(stmt, [p, f'{MAX_BIGINT + 1}.0'])
 
 # When writing to an integer column, Cassandra's fromJson() function allows
 # not just JSON number constants, it also allows a string containing a number.
