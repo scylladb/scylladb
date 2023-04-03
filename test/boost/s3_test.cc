@@ -12,6 +12,7 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
+#include <seastar/util/closeable.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
@@ -65,6 +66,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload) {
 
     testlog.info("Upload object\n");
     auto out = output_stream<char>(cln->make_upload_sink(name));
+    auto close = seastar::deferred_close(out);
 
     static constexpr unsigned chunk_size = 1024;
     auto rnd = tests::random::get_bytes(chunk_size);
@@ -78,7 +80,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload) {
     out.flush().get();
 
     testlog.info("Closing\n");
-    out.close().get();
+    close.close_now();
 
     testlog.info("Checking file size\n");
     size_t sz = cln->get_object_size(name).get0();
