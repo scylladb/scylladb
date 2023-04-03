@@ -38,16 +38,6 @@ operator<<(std::ostream& os, const partition_end& eop) {
     return os << "{partition_end}";
 }
 
-std::string_view to_string(partition_region r) {
-    switch (r) {
-        case partition_region::partition_start: return "partition_start";
-        case partition_region::static_row: return "static_row";
-        case partition_region::clustered: return "clustered";
-        case partition_region::partition_end: return "partition_end";
-    }
-    std::abort(); // compiler will error before we reach here
-}
-
 partition_region parse_partition_region(std::string_view s) {
     if (s == "partition_start") {
         return partition_region::partition_start;
@@ -62,34 +52,14 @@ partition_region parse_partition_region(std::string_view s) {
     }
 }
 
-std::ostream& operator<<(std::ostream& out, partition_region r) {
-    return out << to_string(r);
-}
-
-std::ostream& operator<<(std::ostream& os, position_in_partition_view::printer p) {
-    auto& pos = p._pipv;
-    fmt::print(os, "{{position: {},", pos._type);
-    if (pos._ck) {
-        fmt::print(os, "{}", clustering_key_prefix::with_schema_wrapper(p._schema, *pos._ck));
-    } else {
-        fmt::print(os, "null");
-    }
-    fmt::print(os, ", {}}}", int32_t(pos._bound_weight));
-    return os;
-}
-
 std::ostream& operator<<(std::ostream& out, position_in_partition_view pos) {
-    out << "{position: " << pos._type << ",";
-    if (pos._ck) {
-        out << *pos._ck;
-    } else {
-        out << "null";
-    }
-    return out << "," << int32_t(pos._bound_weight) << "}";
+    fmt::print(out, "{}", pos);
+    return out;
 }
 
 std::ostream& operator<<(std::ostream& out, const position_in_partition& pos) {
-    return out << static_cast<position_in_partition_view>(pos);
+    fmt::print(out, "{}", pos);
+    return out;
 }
 
 std::ostream& operator<<(std::ostream& out, const position_range& range) {
