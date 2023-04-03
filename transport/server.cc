@@ -16,6 +16,7 @@
 
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
+#include "seastar/core/future.hh"
 #include "types/collection.hh"
 #include "types/list.hh"
 #include "types/set.hh"
@@ -603,9 +604,9 @@ cql_server::connection::connection(cql_server& server, socket_address server_add
 cql_server::connection::~connection() {
 }
 
-void cql_server::connection::on_connection_close()
-{
+future<> cql_server::connection::on_connection_close() {
     _server._notifier->unregister_connection(this);
+    return make_ready_future<>();
 }
 
 std::tuple<net::inet_address, int, client_type> cql_server::connection::make_client_key(const service::client_state& cli_state) {
