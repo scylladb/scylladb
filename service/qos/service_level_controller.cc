@@ -222,12 +222,18 @@ future<>  service_level_controller::notify_service_level_added(sstring name, ser
             try {
                 subscriber->on_before_service_level_add(sl_data.slo, {name}).get();
             } catch (...) {
-                sl_logger.error("notify_service_level_added: exception occurred in one of the observers callbacks {}", std::current_exception());
+                sl_logger.error("notify_before_service_level_added: exception occurred in one of the observers callbacks {}", std::current_exception());
             }
         });
         _service_levels_db.emplace(name, sl_data);
+        _subscribers.thread_for_each([name, sl_data] (qos_configuration_change_subscriber* subscriber) {
+            try {
+                subscriber->on_after_service_level_add(sl_data.slo, {name}).get();
+            } catch (...) {
+                sl_logger.error("notify_after_service_level_added: exception occurred in one of the observers callbacks {}", std::current_exception());
+            }
+        });
     });
-
 }
 
 future<> service_level_controller::notify_service_level_updated(sstring name, service_level_options slo) {
@@ -240,10 +246,17 @@ future<> service_level_controller::notify_service_level_updated(sstring name, se
                 try {
                     subscriber->on_before_service_level_change(slo_before, slo, {name}).get();
                 } catch (...) {
-                    sl_logger.error("notify_service_level_updated: exception occurred in one of the observers callbacks {}", std::current_exception());
+                    sl_logger.error("notify_before_service_level_updated: exception occurred in one of the observers callbacks {}", std::current_exception());
                 }
             });
             sl_it->second.slo = slo;
+            _subscribers.thread_for_each([name, slo_before, slo] (qos_configuration_change_subscriber* subscriber) {
+                try {
+                    subscriber->on_after_service_level_change(slo_before, slo, {name}).get();
+                } catch (...) {
+                    sl_logger.error("notify_after_service_level_updated: exception occurred in one of the observers callbacks {}", std::current_exception());
+                }
+            });
         });
     }
     return f;
