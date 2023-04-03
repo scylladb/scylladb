@@ -10,6 +10,9 @@
 
 #include "mutation/mutation_fragment_v2.hh"
 #include "range_tombstone_list.hh"
+#include "mutation/mutation_fragment_stream_validator.hh"
+
+extern logging::logger mplog;
 
 template<typename T>
 concept RangeTombstoneChangeConsumer = std::invocable<T, range_tombstone_change>;
@@ -37,10 +40,12 @@ class range_tombstone_change_generator {
     // All range_tombstone_change fragments with positions < than this have been emitted.
     position_in_partition _lower_bound = position_in_partition::before_all_clustered_rows();
     const schema& _schema;
+    mutation_fragment_stream_validation_level _validation_level;
 public:
-    range_tombstone_change_generator(const schema& s)
+    range_tombstone_change_generator(const schema& s, mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::none)
         : _range_tombstones(s)
         , _schema(s)
+        , _validation_level(validation_level)
     { }
 
     // Discards deletion information for positions < lower_bound.
@@ -141,6 +146,12 @@ public:
     }
 
     void consume(range_tombstone rt) {
+        if (_validation_level >= mutation_fragment_stream_validation_level::clustering_key) {
+            position_in_partition::tri_compare cmp(_schema);
+            if (cmp(rt.end_position(), _lower_bound) <= 0) {
+                on_internal_error(mplog, format("range_tombstone_change_generator: range_tombstone={} consumed out of order: lower_bound={}", rt, _lower_bound));
+            }
+        }
         _range_tombstones.apply(_schema, std::move(rt));
     }
 
@@ -151,5 +162,9 @@ public:
 
     bool discardable() const {
         return _range_tombstones.empty();
+    }
+
+    mutation_fragment_stream_validation_level validation_level() const noexcept {
+        return _validation_level;
     }
 };
