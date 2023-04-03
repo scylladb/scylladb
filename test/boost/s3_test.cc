@@ -26,11 +26,10 @@
  */
 
 SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
-    const ipv4_addr s3_server(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), 9000);
     const sstring name(fmt::format("/{}/testobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
-    auto cln = s3::client::make(s3_server);
+    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"));
 
     testlog.info("Put object {}\n", name);
     temporary_buffer<char> data = sstring("1234567890").release();
@@ -59,11 +58,10 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload) {
-    const ipv4_addr s3_server(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), 9000);
     const sstring name(fmt::format("/{}/testlargeobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
-    auto cln = s3::client::make(s3_server);
+    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"));
 
     testlog.info("Upload object\n");
     auto out = output_stream<char>(cln->make_upload_sink(name));
@@ -110,11 +108,10 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
-    const ipv4_addr s3_server(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), 9000);
     const sstring name(fmt::format("/{}/testroobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
-    auto cln = s3::client::make(s3_server);
+    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"));
 
     testlog.info("Put object {}\n", name);
     temporary_buffer<char> data = sstring("1234567890ABCDEF").release();

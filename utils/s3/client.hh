@@ -24,15 +24,14 @@ struct range {
 class client : public enable_shared_from_this<client> {
     class upload_sink;
     class readable_file;
-    socket_address _addr;
-    sstring _host;
+    std::string _host;
     http::experimental::client _http;
 
     struct private_tag {};
 
 public:
-    explicit client(socket_address addr, private_tag);
-    static shared_ptr<client> make(socket_address addr);
+    explicit client(std::string host, private_tag);
+    static shared_ptr<client> make(std::string endpoint);
 
     future<uint64_t> get_object_size(sstring object_name);
     future<temporary_buffer<char>> get_object_contiguous(sstring object_name, std::optional<range> range = {});

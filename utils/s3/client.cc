@@ -8,8 +8,12 @@
 
 #include <memory>
 #include <rapidxml.h>
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/classification.hpp>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/seastar.hh>
+#include <seastar/net/dns.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/http/request.hh>
 #include "utils/s3/client.hh"
@@ -39,15 +43,14 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-client::client(socket_address addr, private_tag)
-        : _addr(std::move(addr))
-        , _host(to_sstring(_addr))
-        , _http(_addr)
+client::client(std::string host, private_tag)
+        : _host(std::move(host))
+        , _http(ipv4_addr(_host, 9000 /* temporary hard-coded */))
 {
 }
 
-shared_ptr<client> client::make(socket_address addr) {
-    return seastar::make_shared<client>(std::move(addr), private_tag{});
+shared_ptr<client> client::make(std::string endpoint) {
+    return seastar::make_shared<client>(std::move(endpoint), private_tag{});
 }
 
 future<uint64_t> client::get_object_size(sstring object_name) {
@@ -417,26 +420,27 @@ public:
     virtual future<> discard(uint64_t offset, uint64_t length) override { return make_ready_future<>(); }
 
     class readable_file_handle_impl final : public file_handle_impl {
-        socket_address _addr;
+        std::string _host;
         sstring _object_name;
 
     public:
-        readable_file_handle_impl(socket_address addr, sstring object_name)
-                : _addr(std::move(addr))
+        readable_file_handle_impl(std::string host, sstring object_name)
+                : _host(std::move(host))
                 , _object_name(std::move(object_name))
         {}
 
         virtual std::unique_ptr<file_handle_impl> clone() const override {
-            return std::make_unique<readable_file_handle_impl>(_addr, _object_name);
+            return std::make_unique<readable_file_handle_impl>(_host, _object_name);
         }
 
         virtual shared_ptr<file_impl> to_file() && override {
-            return make_shared<readable_file>(client::make(std::move(_addr)), std::move(_object_name));
+            auto client = seastar::make_shared<s3::client>(std::move(_host), client::private_tag{});
+            return make_shared<readable_file>(std::move(client), std::move(_object_name));
         }
     };
 
     virtual std::unique_ptr<file_handle_impl> dup() override {
-        return std::make_unique<readable_file_handle_impl>(_client->_addr, _object_name);
+        return std::make_unique<readable_file_handle_impl>(_client->_host, _object_name);
     }
 
     virtual future<uint64_t> size(void) override {
