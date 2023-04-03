@@ -2517,7 +2517,9 @@ public:
     }
     future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
         if (offstrategy) {
-            return _t.update_sstable_lists_on_off_strategy_completion(std::move(desc));
+            return _t.update_sstable_lists_on_off_strategy_completion(std::move(desc)).then([this] {
+                _t.trigger_compaction();
+            });
         }
         _t.on_compaction_completion(std::move(desc));
         return make_ready_future<>();
