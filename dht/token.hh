@@ -228,6 +228,13 @@ token next_token(const token& t) {
     return {dht::token::kind::key, t._data + 1};
 }
 
+// Returns the smallest token in the ring which can be associated with a partition key.
+inline
+token first_token() {
+    // dht::token::normalize() does not allow std::numeric_limits<int64_t>::min()
+    return dht::token(dht::token_kind::key, std::numeric_limits<int64_t>::min() + 1);
+}
+
 uint64_t unbias(const token& t);
 token bias(uint64_t n);
 size_t compaction_group_of(unsigned most_significant_bits, const token& t);
