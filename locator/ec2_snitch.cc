@@ -66,17 +66,18 @@ future<sstring> ec2_snitch::aws_api_call(sstring addr, uint16_t port, sstring cm
             ++i;
             return aws_api_call_once(addr, port, cmd, token).then([] (auto res) {
                 return make_ready_future<std::optional<sstring>>(std::move(res));
-            }).handle_exception([&i] (auto ep) {
+            }).handle_exception([this, &i] (auto ep) {
                 try {
                     std::rethrow_exception(ep);
                 } catch (const std::system_error &e) {
-                    logger().error(e.what());
                     if (i >= AWS_API_CALL_RETRIES - 1) {
-                        logger().error("Maximum number of retries exceeded");
+                        logger().error("EC2 API call failed: {}. Maximum number of retries exceeded", e.what());
                         throw e;
+                    } else {
+                        logger().error("EC2 API call failed: {}. Will retry in {} seconds", e.what(), std::chrono::duration_cast<std::chrono::seconds>(_ec2_api_retry.sleep_time()).count());
                     }
                 }
-                return sleep(AWS_API_CALL_RETRY_INTERVAL).then([] {
+                return _ec2_api_retry.retry().then([] {
                     return make_ready_future<std::optional<sstring>>(std::nullopt);
                 });
             });
