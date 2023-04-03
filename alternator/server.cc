@@ -24,6 +24,7 @@
 #include "gms/gossiper.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/fb_utilities.hh"
+#include "utils/aws_sigv4.hh"
 
 static logging::logger slogger("alternator-server");
 
@@ -319,8 +320,13 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
                                                     region = std::move(region),
                                                     service = std::move(service),
                                                     user_signature = std::move(user_signature)] (key_cache::value_ptr key_ptr) {
-        std::string signature = get_signature(user, *key_ptr, std::string_view(host), req._method,
+        std::string signature;
+        try {
+            signature = utils::aws::get_signature(user, *key_ptr, std::string_view(host), req._method,
                 datestamp, signed_headers_str, signed_headers_map, content, region, service, "");
+        } catch (const std::exception& e) {
+            throw api_error::invalid_signature(e.what());
+        }
 
         if (signature != std::string_view(user_signature)) {
             _key_cache.remove(user);

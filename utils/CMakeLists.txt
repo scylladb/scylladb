@@ -42,7 +42,8 @@ target_sources(utils
     to_string.cc
     updateable_value.cc
     utf8.cc
-    uuid.cc)
+    uuid.cc
+    aws_sigv4.cc)
 target_include_directories(utils
   PUBLIC
     ${CMAKE_SOURCE_DIR}

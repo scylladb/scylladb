@@ -1002,6 +1002,7 @@ scylla_core = (['message/messaging_service.cc',
                 'tombstone_gc.cc',
                 'utils/disk-error-handler.cc',
                 'utils/hashers.cc',
+                'utils/aws_sigv4.cc',
                 'duration.cc',
                 'vint-serialization.cc',
                 'utils/arch/powerpc/crc32-vpmsum/crc32_wrapper.cc',
@@ -1902,6 +1903,8 @@ with open(buildfile, 'w') as f:
                     local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
                 if binary not in tests_not_using_seastar_test_framework:
                     local_libs += ' ' + "$seastar_testing_libs_{}".format(mode)
+                else:
+                    local_libs += ' ' + '-lgnutls'
                 # Our code's debugging information is huge, and multiplied
                 # by many tests yields ridiculous amounts of disk space.
                 # So we strip the tests by default; The user can very
