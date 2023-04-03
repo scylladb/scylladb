@@ -705,7 +705,7 @@ public:
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no) const;
 
     flat_mutation_reader_v2 make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range) {
-        return make_streaming_reader(std::move(schema), std::move(permit), range, schema->full_slice());
+        return make_streaming_reader(schema, std::move(permit), range, schema->full_slice());
     }
 
     // Stream reader from the given sstables
