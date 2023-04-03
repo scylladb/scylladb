@@ -174,11 +174,11 @@ def find_scylla():
         scyllas = glob.glob(os.path.join(source_path, 'build/*/scylla'))
         if not scyllas:
             print("Can't find a Scylla executable in {}.\nPlease build Scylla or set SCYLLA to the path of a Scylla executable.".format(source_path))
-            exit(1)
+            sys.exit(1)
         scylla = max(scyllas, key=os.path.getmtime)
     if not os.access(scylla, os.X_OK):
         print("Cannot execute '{}'.\nPlease set SCYLLA to the path of a Scylla executable.".format(scylla))
-        exit(1)
+        sys.exit(1)
     return scylla
 
 def run_scylla_cmd(pid, dir):
@@ -374,7 +374,7 @@ def run_pytest(pytest_dir, additional_parameters):
         os.setsid()
         os.execvp('pytest', ['pytest',
             '-o', 'junit_family=xunit2'] + additional_parameters)
-        exit(1)
+        sys.exit(1)
     # parent:
     run_pytest_pids.add(pid)
     if os.waitpid(pid, 0)[1]:

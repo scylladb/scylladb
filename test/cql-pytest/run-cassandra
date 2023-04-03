@@ -165,10 +165,10 @@ run.wait_for_services(pid, [lambda: check_cql(ip)])
 success = run.run_pytest(sys.path[0], ['--host', ip] + sys.argv[1:])
 if success:
     run.summary = 'Cassandra tests pass'
-    exit(1)
+    sys.exit(1)
 else:
     run.summary = 'Cassandra tests failure'
-    exit(0)
+    sys.exit(0)
 
 # Note that the run.cleanup_all() function runs now, just like on any exit
 # for any reason in this script. It will delete the temporary files and
