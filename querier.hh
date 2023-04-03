@@ -107,7 +107,7 @@ public:
     }
 
     bool is_reversed() const {
-        return _slice->options.contains(query::partition_slice::option::reversed);
+        return _slice->is_reversed();
     }
 
     virtual std::optional<full_position_view> current_position() const = 0;
