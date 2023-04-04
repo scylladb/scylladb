@@ -137,14 +137,26 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer) {
     }).get();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer_reverse) {
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer_legacy_reversed) {
     if (smp::count < 2) {
         std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
         return;
     }
 
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
-        run_mutation_source_tests_reverse(make_populate(true, true), true);
+        run_mutation_source_tests_legacy_reversed(make_populate(true, true), true);
+        return make_ready_future<>();
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_with_tiny_buffer_native_reversed) {
+    if (smp::count < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+        return;
+    }
+
+    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
+        run_mutation_source_tests_native_reversed(make_populate(true, true), true);
         return make_ready_future<>();
     }).get();
 }
