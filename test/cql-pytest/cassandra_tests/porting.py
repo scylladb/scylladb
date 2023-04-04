@@ -170,6 +170,9 @@ assertEmpty = assert_empty
 def assertArrayEquals(a, b):
     assert a == b
 
+def assertEquals(a, b):
+    assert a == b
+
 def getRows(results):
     return list(results)
 
