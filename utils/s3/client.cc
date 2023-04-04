@@ -249,7 +249,7 @@ static constexpr std::string_view multipart_upload_complete_trailer =
 unsigned prepare_multipart_upload_parts(const utils::chunked_vector<sstring>& etags) {
     unsigned ret = multipart_upload_complete_header.size();
 
-    unsigned nr = 0;
+    unsigned nr = 1;
     for (auto& etag : etags) {
         if (etags.empty()) {
             return 0;
@@ -266,7 +266,7 @@ future<> dump_multipart_upload_parts(output_stream<char> out, const utils::chunk
     try {
         co_await out.write(multipart_upload_complete_header.data(), multipart_upload_complete_header.size());
 
-        unsigned nr = 0;
+        unsigned nr = 1;
         for (auto& etag : etags) {
             assert(!etag.empty());
             co_await out.write(format(multipart_upload_complete_entry.data(), etag, nr));
@@ -302,7 +302,7 @@ future<> client::upload_sink::upload_part(unsigned part_number, memory_data_sink
     s3l.trace("PUT part {} {} bytes in {} buffers (upload id {})", part_number, bufs.size(), bufs.buffers().size(), _upload_id);
     auto req = http::request::make("PUT", _client->_host, _object_name);
     req._headers["Content-Length"] = format("{}", bufs.size());
-    req.query_parameters["partNumber"] = format("{}", part_number);
+    req.query_parameters["partNumber"] = format("{}", part_number + 1);
     req.query_parameters["uploadId"] = _upload_id;
     req.write_body("bin", bufs.size(), [this, part_number, bufs = std::move(bufs)] (output_stream<char>&& out_) mutable -> future<> {
         auto out = std::move(out_);
