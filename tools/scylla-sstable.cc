@@ -948,9 +948,8 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
 
     abort_source abort;
     for (const auto& sst : sstables) {
-        sst_log.info("validating {}", sst->get_filename());
         const auto errors = sst->validate(permit, default_priority_class(), abort, [] (sstring what) { sst_log.info("{}", what); }).get();
-        sst_log.info("validated {}: {}", sst->get_filename(), errors == 0 ? "valid" : "invalid");
+        fmt::print("{}: {}\n", sst->get_filename(), errors == 0 ? "valid" : "invalid");
     }
 }
 
