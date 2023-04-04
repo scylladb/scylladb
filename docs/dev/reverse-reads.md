@@ -91,7 +91,10 @@ process the reverse stream as normal.
 ### Request
 
 The `query::partition_slice::options::reversed` flag is set as in the
-legacy format. Clustering ranges in both
+legacy format, and the `query::partition_slice::options::native_reversed` flag
+is set on top of it.
+
+Clustering ranges in both
 `query::partition_slice::_row_ranges` and
 `query::specific_ranges::_ranges`
 (`query::partition_slice::_specific_ranges`) are fully-reversed: they

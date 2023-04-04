@@ -156,6 +156,13 @@ partition_slice_builder::reversed() {
 }
 
 partition_slice_builder&
+partition_slice_builder::native_reversed() {
+    reversed();
+    _options.set<query::partition_slice::option::native_reversed>();
+    return *this;
+}
+
+partition_slice_builder&
 partition_slice_builder::without_partition_key_columns() {
     _options.remove<query::partition_slice::option::send_partition_key>();
     return *this;
