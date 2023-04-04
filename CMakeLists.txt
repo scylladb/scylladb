@@ -23,6 +23,7 @@ include(limit_jobs)
 # Configure Seastar compile options to align with Scylla
 set(CMAKE_CXX_STANDARD "20" CACHE INTERNAL "")
 set(CMAKE_CXX_EXTENSIONS ON CACHE INTERNAL "")
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
 set(Seastar_TESTING ON CACHE BOOL "" FORCE)
 add_subdirectory(seastar)
