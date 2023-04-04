@@ -40,7 +40,7 @@ namespace service {
 /**
  * State related to a client connection.
  */
-class client_state {
+class client_state : private qos::qos_configuration_change_subscriber {
 public:
     enum class auth_state : uint8_t {
         UNINITIALIZED, AUTHENTICATION, READY
@@ -347,9 +347,16 @@ public:
     future<> has_functions_access(data_dictionary::database db, auth::permission p) const;
     future<> has_functions_access(data_dictionary::database db, const sstring& ks, auth::permission p) const;
     future<> has_function_access(data_dictionary::database db, const sstring& ks, const sstring& function_signature, auth::permission p) const;
+public:
+    void register_service_level_subscriber();
+private:
+    virtual future<> on_before_service_level_add(qos::service_level_options slo, qos::service_level_info sl_info) override;
+    virtual future<> on_after_service_level_add(qos::service_level_options slo, qos::service_level_info sl_info) override;
+    virtual future<> on_after_service_level_remove(qos::service_level_info sl_info) override;
+    virtual future<> on_before_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) override;
+    virtual future<> on_after_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) override;
 private:
     future<> has_access(data_dictionary::database db, const sstring& keyspace, auth::command_desc) const;
-
 public:
     future<bool> check_has_permission(auth::command_desc) const;
     future<> ensure_has_permission(auth::command_desc) const;
@@ -421,6 +428,9 @@ public:
     void set_protocol_extensions(cql_transport::cql_protocol_extension_enum_set exts) {
         _enabled_protocol_extensions = std::move(exts);
     }
+
+public:
+    future<> on_client_leave();
 };
 
 }
