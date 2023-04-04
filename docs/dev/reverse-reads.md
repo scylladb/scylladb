@@ -120,3 +120,7 @@ partition that was used in the legacy format example, the native reverse
 version would look like this:
 
     ps{pk1}, sr{}, cr{ck5}, cr{ck4}, rt{(ck4, ck2]}, cr{ck3}, cr{ck2}, ck{ck1}, pe{}
+
+And with range_tombstone_change:
+
+    ps{pk1}, sr{}, cr{ck5}, cr{ck4}, rtc{after(ck4), t}, cr{ck3}, cr{ck2}, rtc{after(ck2), 0}, ck{ck1}, pe{}
