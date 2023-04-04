@@ -76,7 +76,7 @@ void check_expiry(std::string_view signature_date) {
 
 std::string get_signature(std::string_view access_key_id, std::string_view secret_access_key, std::string_view host, std::string_view method,
         std::string_view orig_datestamp, std::string_view signed_headers_str, const std::map<std::string_view, std::string_view>& signed_headers_map,
-        const std::vector<temporary_buffer<char>>& body_content, std::string_view region, std::string_view service, std::string_view query_string) {
+        const std::vector<temporary_buffer<char>>* body_content, std::string_view region, std::string_view service, std::string_view query_string) {
     auto amz_date_it = signed_headers_map.find("x-amz-date");
     if (amz_date_it == signed_headers_map.end()) {
         throw std::runtime_error("X-Amz-Date header is mandatory for signature verification");
@@ -96,7 +96,7 @@ std::string get_signature(std::string_view access_key_id, std::string_view secre
         canonical_headers << fmt::format("{}:{}", header.first, header.second) << '\n';
     }
 
-    std::string payload_hash = apply_sha256(body_content);
+    std::string payload_hash = body_content != nullptr ? apply_sha256(*body_content) : "UNSIGNED-PAYLOAD";
     std::string canonical_request = fmt::format("{}\n{}\n{}\n{}\n{}\n{}", method, canonical_uri, query_string, canonical_headers.str(), signed_headers_str, payload_hash);
 
     std::string_view algorithm = "AWS4-HMAC-SHA256";
