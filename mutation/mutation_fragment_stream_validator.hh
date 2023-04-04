@@ -214,4 +214,5 @@ public:
     /// Equivalent to `operator()(partition_end{})`
     bool on_end_of_partition();
     void on_end_of_stream();
+    mutation_fragment_stream_validator& validator() { return _validator; }
 };
