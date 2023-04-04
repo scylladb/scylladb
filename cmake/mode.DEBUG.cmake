@@ -1,8 +1,8 @@
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
   # -fasan -Og breaks some coroutines on aarch64, use -O0 instead
-  set(default_Seastar_OptimizationLevel_DEBUG "g")
-else()
   set(default_Seastar_OptimizationLevel_DEBUG "0")
+else()
+  set(default_Seastar_OptimizationLevel_DEBUG "g")
 endif()
 set(Seastar_OptimizationLevel_DEBUG
   ${default_Seastar_OptimizationLevel_DEBUG}
