@@ -8,6 +8,7 @@
 
 #include <gnutls/crypto.h>
 #include "utils/hashers.hh"
+#include "db_clock.hh"
 
 // The declared below get_signature() method makes the Signature string for AWS
 // authenticated requests as described in [1]. It can be used in two ways.
@@ -38,6 +39,8 @@ std::string get_signature(std::string_view access_key_id, std::string_view secre
 static inline constexpr std::vector<temporary_buffer<char>>* unsigned_content = nullptr;
 // Same for datestamp checking
 static inline auto omit_datestamp_expiration_check = std::nullopt;
+
+std::string format_time_point(db_clock::time_point tp);
 
 } // aws namespace
 } // utils namespace

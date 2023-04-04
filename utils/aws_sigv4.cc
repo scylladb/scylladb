@@ -47,7 +47,7 @@ static std::string apply_sha256(const std::vector<temporary_buffer<char>>& msg) 
     return to_hex(hasher.finalize());
 }
 
-static std::string format_time_point(db_clock::time_point tp) {
+std::string format_time_point(db_clock::time_point tp) {
     time_t time_point_repr = db_clock::to_time_t(tp);
     std::string time_point_str;
     time_point_str.resize(17);
