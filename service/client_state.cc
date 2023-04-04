@@ -271,3 +271,34 @@ future<> service::client_state::maybe_update_per_service_level_params() {
         _workload_type = slo_opt->workload;
     }
 }
+
+void service::client_state::register_service_level_subscriber() {
+    if (_sl_controller && _user && _user->name) {
+        _sl_controller->register_subscriber(this);
+    }
+}
+
+future<> service::client_state::on_client_leave() {
+    if (_sl_controller && _user && _user->name) {
+        return _sl_controller->unregister_subscriber(this);
+    }
+
+    return make_ready_future<>();
+}
+
+future<> service::client_state::on_before_service_level_add(qos::service_level_options slo, qos::service_level_info sl_info) {
+    return make_ready_future<>();
+}
+
+future<> service::client_state::on_after_service_level_add(qos::service_level_options slo, qos::service_level_info sl_info) {
+    return make_ready_future<>();
+}
+future<> service::client_state::on_after_service_level_remove(qos::service_level_info sl_info) {
+    return maybe_update_per_service_level_params();
+}
+future<> service::client_state::on_before_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) {
+    return make_ready_future<>();
+}
+future<> service::client_state::on_after_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) {
+    return maybe_update_per_service_level_params();
+}

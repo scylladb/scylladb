@@ -606,7 +606,7 @@ cql_server::connection::~connection() {
 
 future<> cql_server::connection::on_connection_close() {
     _server._notifier->unregister_connection(this);
-    return make_ready_future<>();
+    return _client_state.on_client_leave();
 }
 
 std::tuple<net::inet_address, int, client_type> cql_server::connection::make_client_key(const service::client_state& cli_state) {
@@ -934,6 +934,10 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_au
             auto f = client_state.check_user_can_login();
             f = f.then([&client_state] {
                 return client_state.maybe_update_per_service_level_params();
+            });
+            f = f.then([&client_state] {
+                client_state.register_service_level_subscriber();
+                return make_ready_future<>();
             });
             return f.then([this, stream, challenge = std::move(challenge), trace_state]() mutable {
                 return make_ready_future<std::unique_ptr<cql_server::response>>(make_auth_success(stream, std::move(challenge), trace_state));
