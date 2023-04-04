@@ -49,8 +49,11 @@ std::ostream& operator<<(std::ostream& out, const partition_slice& ps) {
         fmt::print(out, ", specific=[{}]", *ps._specific_ranges);
     }
     // FIXME: pretty print options
-    fmt::print(out, ", options={:x}, , partition_row_limit={}}}",
-               ps.options.mask(), ps.partition_row_limit());
+    auto reverse_desc = ps.is_native_reversed() ? "native"
+            : ps.is_legacy_reversed() ? "legacy"
+            : "none";
+    fmt::print(out, ", options={:x}, reverse={}, partition_row_limit={}}}",
+               ps.options.mask(), reverse_desc, ps.partition_row_limit());
     return out;
 }
 
