@@ -244,11 +244,8 @@ future<> service::client_state::maybe_update_per_service_level_params() {
         auto& role_manager = _auth_service->underlying_role_manager();
         auto role_set = co_await role_manager.query_granted(_user->name.value(), auth::recursive_role_query::yes);
         auto slo_opt = co_await _sl_controller->find_service_level(role_set);
-        if (!slo_opt) {
-            co_return;
-        }
         auto slo_timeout_or = [&] (const lowres_clock::duration& default_timeout) {
-            return std::visit(overloaded_functor{
+            return (!slo_opt) ? default_timeout : std::visit(overloaded_functor{
                 [&] (const qos::service_level_options::unset_marker&) -> lowres_clock::duration {
                     return default_timeout;
                 },
