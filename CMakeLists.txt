@@ -14,8 +14,8 @@ set(CMAKE_BUILD_TYPE "${CMAKE_BUILD_TYPE}" CACHE
 set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
   "Debug" "Release" "Dev" "Sanitize")
 string(TOUPPER "${CMAKE_BUILD_TYPE}" build_mode)
-include(mode.common)
 include(mode.${build_mode})
+include(mode.common)
 add_compile_definitions(
     ${Seastar_DEFINITIONS_${build_mode}}
     FMT_DEPRECATED_OSTREAM)

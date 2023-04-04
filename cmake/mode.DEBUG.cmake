@@ -19,3 +19,5 @@ set(Seastar_DEFINITIONS_DEBUG
 
 set(CMAKE_CXX_FLAGS_DEBUG
   " -O${Seastar_OptimizationLevel_DEBUG} -g -gz")
+
+set(stack_usage_threshold_in_KB 40)
