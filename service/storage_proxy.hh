@@ -248,6 +248,7 @@ private:
     scheduling_group_key _stats_key;
     storage_proxy_stats::global_stats _global_stats;
     gms::feature_service& _features;
+    utils::updateable_value<bool> _enable_native_reversed_queries{true};
 
     class remote;
     std::unique_ptr<remote> _remote;
@@ -674,6 +675,8 @@ public:
     virtual void on_leave_cluster(const gms::inet_address& endpoint) override;
     virtual void on_up(const gms::inet_address& endpoint) override;
     virtual void on_down(const gms::inet_address& endpoint) override;
+
+    bool enable_native_reversed_queries() const noexcept;
 
     friend class abstract_read_executor;
     friend class abstract_write_response_handler;

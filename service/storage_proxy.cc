@@ -2735,6 +2735,8 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& 
     slogger.trace("hinted DCs: {}", cfg.hinted_handoff_enabled.to_configuration_string());
     _hints_manager.register_metrics("hints_manager");
     _hints_for_views_manager.register_metrics("hints_for_views_manager");
+
+    _enable_native_reversed_queries = _db.local().get_config().enable_native_reversed_queries;
 }
 
 struct storage_proxy::remote& storage_proxy::remote() {
@@ -6277,6 +6279,10 @@ locator::token_metadata_ptr storage_proxy::get_token_metadata_ptr() const noexce
 
 future<std::vector<dht::token_range_endpoints>> storage_proxy::describe_ring(const sstring& keyspace, bool include_only_local_dc) const {
     return locator::describe_ring(_db.local(), _remote->gossiper(), keyspace, include_only_local_dc);
+}
+
+bool storage_proxy::enable_native_reversed_queries() const noexcept {
+    return features().native_reverse_queries && _enable_native_reversed_queries;
 }
 
 }
