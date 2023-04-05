@@ -9,6 +9,8 @@
 #include <lz4.h>
 #include <zlib.h>
 #include <snappy-c.h>
+#include <snappy.h>
+#include <snappy-sinksource.h>
 
 #include <seastar/util/defer.hh>
 
@@ -43,6 +45,10 @@ public:
     size_t compress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress_max_size(size_t input_len) const override;
+
+    size_t uncompress(bytes_source& in, bytes_ostream&) const override;
+
+    size_t compress(bytes_source& in, bytes_ostream&) const override;
 };
 
 class deflate_processor: public compressor {
@@ -633,3 +639,83 @@ size_t snappy_processor::compress_max_size(size_t input_len) const {
     return snappy_max_compressed_length(input_len);
 }
 
+class BSSource : public snappy::Source {
+    bytes_source& _src;
+    bytes_view _view;
+public:
+    BSSource(bytes_source& in)
+        : _src(in)
+        , _view(in.next())
+    {}
+    size_t Available() const override {
+        return _src.size(); // includes size of current view (_view)
+    }
+    const char* Peek(size_t* len) override {
+        *len = _view.size();
+        return reinterpret_cast<const char*>(_view.data());
+    }
+    void Skip(size_t n) override {
+        assert(n <= _view.size());
+        _view.remove_prefix(n);
+        if (_view.empty()) {
+            _view = _src.next();
+        }
+    }
+};
+
+class BOSSink : public snappy::Sink {
+    bytes_ostream& _os;
+    bytes_mutable_view _view;
+    size_t _written = 0;
+public:
+    BOSSink(bytes_ostream& os)
+        : _os(os)
+    {}
+    ~BOSSink() {
+        _os.remove_suffix(_view.size());
+    }
+    void Append(const char* bytes, size_t n) override {
+        if (reinterpret_cast<const int8_t*>(bytes) != _view.data()) {
+            _os.write(bytes_view(reinterpret_cast<const int8_t*>(bytes), n));
+        } else {
+            _view.remove_prefix(n);
+        }
+        _written += n;
+    }
+    char* GetAppendBuffer(size_t length, char* scratch) override {
+        return GetAppendBufferVariable(length, length, scratch, length, &length);
+    }
+    char* GetAppendBufferVariable(size_t min_size, size_t desired_size_hint, char* scratch, size_t scratch_size, size_t* allocated_size) override {
+        if (_view.size() < min_size) {
+            _os.remove_suffix(_view.size());
+            _view = bytes_mutable_view(_os.write_place_holder(desired_size_hint), desired_size_hint);
+        }
+        *allocated_size = _view.size();
+        return reinterpret_cast<char*>(_view.data());
+    }
+    size_t written() const {
+        return _written;
+    }
+};
+
+size_t snappy_processor::uncompress(bytes_source& in, bytes_ostream& os) const {
+    BSSource src(in);
+    BOSSink sink(os);
+
+    if (!snappy::Uncompress(&src, &sink)) {
+        throw std::runtime_error("snappy uncompression failure");
+    }
+
+    return sink.written();
+}
+
+size_t snappy_processor::compress(bytes_source& in, bytes_ostream& os) const {
+    BSSource src(in);
+    BOSSink sink(os);
+
+    if (!snappy::Compress(&src, &sink)) {
+        throw std::runtime_error("snappy compression failure");
+    }
+
+    return sink.written();
+}
