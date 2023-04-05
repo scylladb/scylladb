@@ -21,6 +21,7 @@ To ensure a successful upgrade, follow the :ref:`documented upgrade procedures <
 
 * You should perform the upgrades consecutively - to each successive X.Y version, **without skipping any major or minor version**.
 * Before you upgrade to the next version, the whole cluster (each node) must be upgraded to the previous version.
+* You cannot perform an upgrade by replacing the nodes in the cluster with new nodes with a different ScyllaDB version. You should never add a new node with a different version to a cluster - if you :doc:`add a node </operating-scylla/procedures/cluster-management/add-node-to-cluster>`, it must have the same X.Y.Z (major.minor.patch) version as the other nodes in the cluster.
 
 Example
 ========
