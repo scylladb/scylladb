@@ -342,7 +342,8 @@ class PythonTestSuite(TestSuite):
             self.scylla_env = dict()
         self.scylla_env['SCYLLA'] = self.scylla_exe
 
-        cluster_size = self.cfg.get("cluster_size", 1)
+        cluster_cfg = self.cfg.get("cluster", {"initial_size": 1})
+        cluster_size = cluster_cfg["initial_size"]
         pool_size = cfg.get("pool_size", 2)
 
         self.create_cluster = self.get_cluster_factory(cluster_size, options)
