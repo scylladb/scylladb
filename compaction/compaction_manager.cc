@@ -685,6 +685,7 @@ sstables::compaction_stopped_exception compaction_task_executor::make_compaction
 compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm)
     : _task_manager_module(make_shared<task_manager_module>(tm))
     , _cfg(std::move(cfg))
+    , _compaction_submission_timer(compaction_sg().cpu, compaction_submission_callback())
     , _compaction_controller(make_compaction_controller(compaction_sg(), static_shares(), [this] () -> float {
         _last_backlog = backlog();
         auto b = _last_backlog / available_memory();
@@ -721,6 +722,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
 compaction_manager::compaction_manager(tasks::task_manager& tm)
     : _task_manager_module(make_shared<task_manager_module>(tm))
     , _cfg(config{ .available_memory = 1 })
+    , _compaction_submission_timer(compaction_sg().cpu, compaction_submission_callback())
     , _compaction_controller(make_compaction_controller(compaction_sg(), 1, [] () -> float { return 1.0; }))
     , _backlog_manager(_compaction_controller)
     , _throughput_updater(serialized_action([this] { return update_throughput(throughput_mbs()); }))
@@ -779,7 +781,7 @@ void compaction_manager::register_metrics() {
 void compaction_manager::enable() {
     assert(_state == state::none || _state == state::disabled);
     _state = state::enabled;
-    _compaction_submission_timer.arm(periodic_compaction_submission_interval());
+    _compaction_submission_timer.arm_periodic(periodic_compaction_submission_interval());
     _waiting_reevalution = postponed_compactions_reevaluation();
 }
 
