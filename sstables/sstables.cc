@@ -554,7 +554,7 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
         // position is little-endian encoded
         auto position = seastar::read_le<uint64_t>(buf.get());
         auto token = schema.get_partitioner().get_token(key_view(key_data));
-        s.entries.push_back({ token, key_data, position });
+        s.entries.push_back(summary_entry{ token, key_data, position });
     }
     // Delete last element which isn't part of the on-disk format.
     s.positions.pop_back();
@@ -1689,7 +1689,7 @@ void maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key
         auto entry_size = 8 + 2 + key.size();  // offset + key_size.size + key.size
         state.next_data_offset_to_write_summary += state.summary_byte_cost * entry_size;
         auto key_data = s.add_summary_data(key);
-        s.entries.push_back({ token, key_data, index_offset });
+        s.entries.push_back(summary_entry{ token, key_data, index_offset });
     }
 }
 
