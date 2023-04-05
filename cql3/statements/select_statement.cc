@@ -236,7 +236,7 @@ const sstring& select_statement::column_family() const {
 }
 
 query::partition_slice
-select_statement::make_partition_slice(const query_options& options) const
+select_statement::make_partition_slice(const query_options& options, bool enable_native_reversed_queries) const
 {
     query::column_id_vector static_columns;
     query::column_id_vector regular_columns;
@@ -268,12 +268,14 @@ select_statement::make_partition_slice(const query_options& options) const
         };
         std::sort(bounds.begin(), bounds.end(), bounds_sorter);
     }
+    auto slice_opts = _opts;
     if (_is_reversed) {
         std::reverse(bounds.begin(), bounds.end());
+        slice_opts.set_if<query::partition_slice::option::native_reversed>(enable_native_reversed_queries);
         ++_stats.reverse_queries;
     }
     return query::partition_slice(std::move(bounds),
-        std::move(static_columns), std::move(regular_columns), _opts, nullptr, get_per_partition_limit(options));
+        std::move(static_columns), std::move(regular_columns), slice_opts, nullptr, get_per_partition_limit(options));
 }
 
 uint64_t select_statement::do_get_limit(const query_options& options,
@@ -357,7 +359,7 @@ select_statement::do_execute(query_processor& qp,
     _stats.select_partition_range_scan += _range_scan;
     _stats.select_partition_range_scan_no_bypass_cache += _range_scan_no_bypass_cache;
 
-    auto slice = make_partition_slice(options);
+    auto slice = make_partition_slice(options, qp.proxy().enable_native_reversed_queries());
     auto max_result_size = qp.proxy().get_max_result_size(slice);
     auto command = ::make_lw_shared<query::read_command>(
             _schema->id(),
@@ -523,7 +525,7 @@ generate_base_key_from_index_pk(const partition_key& index_pk, const std::option
 lw_shared_ptr<query::read_command>
 indexed_table_select_statement::prepare_command_for_base_query(query_processor& qp, const query_options& options,
         service::query_state& state, gc_clock::time_point now, bool use_paging) const {
-    auto slice = make_partition_slice(options);
+    auto slice = make_partition_slice(options, qp.proxy().enable_native_reversed_queries());
     if (use_paging) {
         slice.options.set<query::partition_slice::option::allow_short_read>();
         slice.options.set<query::partition_slice::option::send_partition_key>();
@@ -1532,7 +1534,7 @@ parallelized_select_statement::do_execute(
     _stats.select_partition_range_scan_no_bypass_cache += _range_scan_no_bypass_cache;
     _stats.select_parallelized += 1;
 
-    auto slice = make_partition_slice(options);
+    auto slice = make_partition_slice(options, qp.proxy().enable_native_reversed_queries());
     auto command = ::make_lw_shared<query::read_command>(
         _schema->id(),
         _schema->version(),
