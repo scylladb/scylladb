@@ -872,6 +872,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "Bypass in-memory data cache (the row cache) when performing reversed queries.")
     , enable_optimized_reversed_reads(this, "enable_optimized_reversed_reads", liveness::LiveUpdate, value_status::Used, true,
             "Use a new optimized algorithm for performing reversed reads.")
+    , enable_native_reversed_queries(this, "enable_native_reversed_queries", liveness::LiveUpdate, value_status::Used, true,
+            "Optimize reverse read queries using native reverse reads internally.")
     , enable_cql_config_updates(this, "enable_cql_config_updates", liveness::LiveUpdate, value_status::Used, true,
             "Make the system.config table UPDATEable")
     , enable_parallelized_aggregation(this, "enable_parallelized_aggregation", liveness::LiveUpdate, value_status::Used, true,

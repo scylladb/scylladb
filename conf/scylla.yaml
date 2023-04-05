@@ -545,6 +545,10 @@ murmur3_partitioner_ignore_msb_bits: 12
 # Set to `false` to fall-back to the old algorithm.
 # enable_optimized_reversed_reads: true
 
+# Coordinator-side option for optimizing reverse read queries using native reverse reads internally.
+# Set to `false` to fall-back to the legacy half-reversed internal reads.
+# enable_native_reversed_queries: true
+
 # Use on a new, parallel algorithm for performing aggregate queries.
 # Set to `false` to fall-back to the old algorithm.
 # enable_parallelized_aggregation: true
