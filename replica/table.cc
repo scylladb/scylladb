@@ -2669,9 +2669,11 @@ public:
     }
     future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
         if (offstrategy) {
-            return _cg.update_sstable_lists_on_off_strategy_completion(std::move(desc));
+            co_await _cg.update_sstable_lists_on_off_strategy_completion(std::move(desc));
+            _cg.trigger_compaction();
+            co_return;
         }
-        return _cg.update_main_sstable_list_on_compaction_completion(std::move(desc));
+        co_await _cg.update_main_sstable_list_on_compaction_completion(std::move(desc));
     }
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return _t.is_auto_compaction_disabled_by_user();
