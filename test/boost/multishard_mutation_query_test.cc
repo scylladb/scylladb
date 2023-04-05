@@ -17,10 +17,10 @@
 #include "test/lib/eventually.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/mutation_assertions.hh"
-#include "test/lib/test_table.hh"
 #include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/random_schema.hh"
 
 #include "test/lib/scylla_test_case.hh"
 
@@ -28,7 +28,116 @@
 
 #include <boost/range/algorithm/sort.hpp>
 
-const sstring KEYSPACE_NAME = "multishard_mutation_query_test";
+const sstring KEYSPACE_NAME = "ks";
+
+namespace {
+
+struct generated_table {
+    schema_ptr schema;
+    std::vector<dht::decorated_key> keys;
+    std::vector<frozen_mutation> compacted_frozen_mutations;
+};
+
+class random_schema_specification : public tests::random_schema_specification {
+    sstring _table_name;
+    std::unique_ptr<tests::random_schema_specification> _underlying_spec;
+public:
+    random_schema_specification(sstring ks_name, sstring table_name, bool force_clustering_column)
+        : tests::random_schema_specification(std::move(ks_name))
+        , _table_name(std::move(table_name))
+        , _underlying_spec(tests::make_random_schema_specification(
+                keyspace_name(),
+                std::uniform_int_distribution<size_t>(1, 4),
+                std::uniform_int_distribution<size_t>(size_t(force_clustering_column), 4),
+                std::uniform_int_distribution<size_t>(1, 4),
+                std::uniform_int_distribution<size_t>(0, 4)))
+    { }
+    virtual sstring table_name(std::mt19937& engine) override { return _table_name; }
+    virtual sstring udt_name(std::mt19937& engine) override { return _underlying_spec->udt_name(engine); }
+    virtual std::vector<data_type> partition_key_columns(std::mt19937& engine) override { return _underlying_spec->partition_key_columns(engine); }
+    virtual std::vector<data_type> clustering_key_columns(std::mt19937& engine) override { return _underlying_spec->clustering_key_columns(engine); }
+    virtual std::vector<data_type> regular_columns(std::mt19937& engine) override { return _underlying_spec->regular_columns(engine); }
+    virtual std::vector<data_type> static_columns(std::mt19937& engine) override { return _underlying_spec->static_columns(engine); }
+};
+
+} // anonymous namespace
+
+static generated_table create_test_table(
+        cql_test_env& env,
+        uint32_t seed,
+        sstring ks_name,
+        sstring tbl_name,
+        bool force_clustering_column,
+        std::uniform_int_distribution<size_t> partitions,
+        std::uniform_int_distribution<size_t> clustering_rows,
+        std::uniform_int_distribution<size_t> range_tombstones,
+        tests::timestamp_generator ts_gen) {
+    auto random_schema_spec = std::make_unique<random_schema_specification>(ks_name, tbl_name, force_clustering_column);
+    auto random_schema = tests::random_schema(seed, *random_schema_spec);
+
+    testlog.info("\n{}", random_schema.cql());
+
+    random_schema.create_with_cql(env).get();
+
+    const auto mutations = tests::generate_random_mutations(
+            seed,
+            random_schema,
+            ts_gen,
+            tests::no_expiry_expiry_generator(),
+            partitions,
+            clustering_rows,
+            range_tombstones).get();
+
+    auto schema = random_schema.schema();
+
+    std::vector<dht::decorated_key> keys;
+    std::vector<frozen_mutation> compacted_frozen_mutations;
+    keys.reserve(mutations.size());
+    compacted_frozen_mutations.reserve(mutations.size());
+    {
+        gate write_gate;
+        for (const auto& mut : mutations) {
+            keys.emplace_back(mut.decorated_key());
+            compacted_frozen_mutations.emplace_back(freeze(mut.compacted()));
+            (void)with_gate(write_gate, [&] {
+                return smp::submit_to(dht::shard_of(*schema, mut.decorated_key().token()), [&env, gs = global_schema_ptr(schema), mut = freeze(mut)] () mutable {
+                    return env.local_db().apply(gs.get(), std::move(mut), {}, db::commitlog_force_sync::no, db::no_timeout);
+                });
+            });
+            thread::maybe_yield();
+        }
+        write_gate.close().get();
+    }
+
+    return {random_schema.schema(), keys, compacted_frozen_mutations};
+}
+
+api::timestamp_type no_tombstone_timestamp_generator(std::mt19937& engine, tests::timestamp_destination destination, api::timestamp_type min_timestamp) {
+    switch (destination) {
+        case tests::timestamp_destination::partition_tombstone:
+        case tests::timestamp_destination::row_tombstone:
+        case tests::timestamp_destination::collection_tombstone:
+        case tests::timestamp_destination::range_tombstone:
+            return api::missing_timestamp;
+        default:
+            return std::uniform_int_distribution<api::timestamp_type>(min_timestamp, api::max_timestamp)(engine);
+    }
+}
+
+static std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_table(cql_test_env& env, sstring ks_name,
+        sstring tbl_name, int partition_count = 10 * smp::count, int row_per_partition_count = 10) {
+    auto res = create_test_table(
+            env,
+            tests::random::get_int<uint32_t>(),
+            std::move(ks_name),
+            std::move(tbl_name),
+            true,
+            std::uniform_int_distribution<size_t>(partition_count, partition_count),
+            std::uniform_int_distribution<size_t>(row_per_partition_count, row_per_partition_count),
+            std::uniform_int_distribution<size_t>(0, 0),
+            no_tombstone_timestamp_generator);
+    return {std::move(res.schema), std::move(res.keys)};
+}
 
 static uint64_t aggregate_querier_cache_stat(distributed<replica::database>& db, uint64_t query::querier_cache::stats::*stat) {
     return map_reduce(boost::irange(0u, smp::count), [stat, &db] (unsigned shard) {
@@ -70,7 +179,7 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
             db.set_querier_cache_entry_ttl(1s);
         }).get();
 
-        auto [s, _] = test::create_test_table(env, KEYSPACE_NAME, "test_abandoned_read");
+        auto [s, _] = create_test_table(env, KEYSPACE_NAME, get_name());
         (void)_;
 
         auto cmd = query::read_command(
@@ -87,10 +196,6 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
                 query::is_first_page::yes);
 
         query_mutations_on_all_shards(env.db(), s, cmd, {query::full_partition_range}, nullptr, db::no_timeout).get();
-
-        check_cache_population(env.db(), 1);
-
-        sleep(2s).get();
 
         require_eventually_empty_caches(env.db());
 
@@ -133,7 +238,7 @@ static std::pair<typename ResultBuilder::end_result_type, size_t>
 read_partitions_with_generic_paged_scan(distributed<replica::database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
         const dht::partition_range_vector& original_ranges, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
     const auto query_uuid = is_stateful ? query_id::create_random_id() : query_id::create_null_id();
-    ResultBuilder res_builder(s, slice);
+    ResultBuilder res_builder(s, slice, page_size);
     auto cmd = query::read_command(
             s->id(),
             s->version(),
@@ -156,25 +261,23 @@ read_partitions_with_generic_paged_scan(distributed<replica::database>& db, sche
         auto res = ResultBuilder::query(db, s, cmd, *ranges, nullptr, db::no_timeout);
         has_more = res_builder.add(*res);
         cmd.is_first_page = query::is_first_page::no;
+        if (page_hook && has_more) {
+            page_hook(0);
+        }
     }
 
     if (!has_more) {
         return std::pair(std::move(res_builder).get_end_result(), 1);
     }
 
-    unsigned npages = 0;
 
     const auto cmp = dht::ring_position_comparator(*s);
+
+    unsigned npages = 1;
 
     // Rest of the pages. Loop until an empty page turns up. Not very
     // sophisticated but simple and safe.
     while (has_more) {
-        if (page_hook) {
-            page_hook(npages);
-        }
-
-        ++npages;
-
         // Force freeing the vector to avoid hiding any bugs related to storing
         // references to the ranges vector (which is not alive between pages in
         // real life).
@@ -212,6 +315,12 @@ read_partitions_with_generic_paged_scan(distributed<replica::database>& db, sche
         }
 
         has_more = res_builder.add(*res);
+        if (has_more) {
+            if (page_hook) {
+                page_hook(npages);
+            }
+            npages++;
+        }
     }
 
     return std::pair(std::move(res_builder).get_end_result(), npages);
@@ -232,6 +341,7 @@ public:
 private:
     schema_ptr _s;
     const query::partition_slice& _slice;
+    uint64_t _page_size = 0;
     std::vector<mutation> _results;
     std::optional<dht::decorated_key> _last_pkey;
     std::optional<clustering_key> _last_ckey;
@@ -260,7 +370,7 @@ public:
         return std::get<0>(query_mutations_on_all_shards(db, std::move(s), cmd, ranges, std::move(trace_state), timeout).get());
     }
 
-    explicit mutation_result_builder(schema_ptr s, const query::partition_slice& slice) : _s(std::move(s)), _slice(slice) { }
+    explicit mutation_result_builder(schema_ptr s, const query::partition_slice& slice, uint64_t page_size) : _s(std::move(s)), _slice(slice), _page_size(page_size) { }
 
     bool add(const reconcilable_result& res) {
         auto it = res.partitions().begin();
@@ -292,7 +402,7 @@ public:
             _results.emplace_back(std::move(mut));
         }
 
-        return true;
+        return res.is_short_read() || res.row_count() >= _page_size;
     }
 
     const dht::decorated_key& last_pkey() const { return _last_pkey.value(); }
@@ -311,6 +421,7 @@ public:
 private:
     schema_ptr _s;
     const query::partition_slice& _slice;
+    uint64_t _page_size = 0;
     std::vector<query::result_set_row> _rows;
     std::optional<dht::decorated_key> _last_pkey;
     std::optional<clustering_key> _last_ckey;
@@ -344,7 +455,7 @@ public:
         return std::get<0>(query_data_on_all_shards(db, std::move(s), cmd, ranges, query::result_options::only_result(), std::move(trace_state), timeout).get());
     }
 
-    explicit data_result_builder(schema_ptr s, const query::partition_slice& slice) : _s(std::move(s)), _slice(slice) { }
+    explicit data_result_builder(schema_ptr s, const query::partition_slice& slice, uint64_t page_size) : _s(std::move(s)), _slice(slice), _page_size(page_size) { }
 
     bool add(const query::result& raw_res) {
         auto res = query::result_set::from_raw_result(_s, _slice, raw_res);
@@ -362,7 +473,7 @@ public:
                 _last_pkey_rows = 1;
             }
         }
-        return true;
+        return raw_res.is_short_read() || res.rows().size() >= _page_size;
     }
 
     const dht::decorated_key& last_pkey() const { return _last_pkey.value(); }
@@ -410,14 +521,20 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, "test_read_all");
+        auto [s, pkeys] = create_test_table(env, KEYSPACE_NAME, get_name());
 
         // First read all partition-by-partition (not paged).
         auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
 
+        uint64_t lookups = 0;
+
         // Then do a paged range-query, with reader caching
-        auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t) {
-            check_cache_population(env.db(), 1);
+        auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t page) {
+            const auto new_lookups = aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::lookups);
+            if (page) {
+                tests::require(new_lookups > lookups);
+            }
+            lookups = new_lookups;
             tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
             tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), 0u);
         }).first;
@@ -451,13 +568,18 @@ SEASTAR_THREAD_TEST_CASE(test_read_all_multi_range) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, "test_read_all");
+        auto [s, pkeys] = create_test_table(env, KEYSPACE_NAME, get_name());
 
         const auto limit = std::numeric_limits<uint64_t>::max();
 
         const auto slice = s->full_slice();
 
+        testlog.info("pkeys.size()={}", pkeys.size());
+
         for (const auto step : {1ul, pkeys.size() / 4u, pkeys.size() / 2u}) {
+            if (!step) {
+                continue;
+            }
 
             dht::partition_range_vector ranges;
             ranges.push_back(dht::partition_range::make_ending_with({*pkeys.begin(), false}));
@@ -506,7 +628,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_with_partition_row_limits) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, get_name(), 2, 10);
+        auto [s, pkeys] = create_test_table(env, KEYSPACE_NAME, get_name(), 2, 10);
 
         unsigned i = 0;
 
@@ -524,9 +646,15 @@ SEASTAR_THREAD_TEST_CASE(test_read_with_partition_row_limits) {
             // First read all partition-by-partition (not paged).
             auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
 
+            uint64_t lookups = 0;
+
             // Then do a paged range-query, with reader caching
-            auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t) {
-                check_cache_population(env.db(), 1);
+            auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t page) {
+                const auto new_lookups = aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::lookups);
+                if (page) {
+                    tests::require(new_lookups > lookups);
+                }
+                lookups = new_lookups;
                 tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
                 tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), 0u);
             }).first;
@@ -552,28 +680,41 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, "test_evict_a_shard_reader_on_each_page");
+        auto [s, pkeys] = create_test_table(env, KEYSPACE_NAME, get_name());
 
         // First read all partition-by-partition (not paged).
         auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
 
+        int64_t lookups = 0;
+        uint64_t evictions = 0;
+
         // Then do a paged range-query
         auto [results2, npages] = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t page) {
-            check_cache_population(env.db(), 1);
+            const auto new_lookups = aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::lookups);
+            if (page) {
+                tests::require(new_lookups > lookups, std::source_location::current());
+            }
+            lookups = new_lookups;
 
-            env.db().invoke_on(page % smp::count, [&] (replica::database& db) {
-                return db.get_querier_cache().evict_one();
-            }).get();
+            for (unsigned shard = 0; shard < smp::count; ++shard) {
+                auto evicted = smp::submit_to(shard, [&] {
+                    return env.local_db().get_querier_cache().evict_one();
+                }).get();
+                if (evicted) {
+                    ++evictions;
+                    break;
+                }
+            }
 
-            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
-            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses), page);
+            tests::require(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses) >= page, std::source_location::current());
+            tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u, std::source_location::current());
         });
 
         check_results_are_equal(results1, results2);
 
         tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
         tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::time_based_evictions), 0u);
-        tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::resource_based_evictions), npages);
+        tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::resource_based_evictions), evictions);
 
         require_eventually_empty_caches(env.db());
 
@@ -588,7 +729,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_reversed) {
 
         auto& db = env.db();
 
-        auto [s, pkeys] = test::create_test_table(env, KEYSPACE_NAME, get_name(), 4, 8);
+        auto [s, pkeys] = create_test_table(env, KEYSPACE_NAME, get_name(), 4, 8);
 
         unsigned i = 0;
 
@@ -719,196 +860,6 @@ struct serializer<blob_header> {
 
 namespace {
 
-const uint32_t min_blob_size = sizeof(blob_header);
-
-static bytes make_payload(const schema& schema, size_t size, const partition_key& pk, const clustering_key* const ck) {
-    assert(size >= min_blob_size);
-
-    blob_header head;
-    head.size = size;
-
-    size_t size_needed = min_blob_size;
-
-    auto pk_components = pk.explode(schema);
-    size_needed += calculate_serialized_size(pk_components);
-
-    head.includes_pk = size_needed <= size;
-    head.has_ck = bool(ck);
-
-    auto ck_components = std::vector<bytes>{};
-    if (ck) {
-        ck_components = ck->explode(schema);
-        size_needed += calculate_serialized_size(ck_components);
-    }
-    head.includes_ck = ck && size_needed <= size;
-
-    auto buf_os = buffer_ostream(size);
-    ser::serialize(buf_os, head);
-    if (head.includes_pk) {
-        ser::serialize(buf_os, pk_components);
-    }
-    if (ck && head.includes_ck) {
-        ser::serialize(buf_os, ck_components);
-    }
-
-    return std::move(buf_os).detach();
-}
-
-static bool validate_payload(const schema& schema, atomic_cell_value_view payload_view, const partition_key& pk, const clustering_key* const ck) {
-    auto istream = fragmented_memory_input_stream(fragment_range(payload_view).begin(), payload_view.size());
-    auto head = ser::deserialize(istream, boost::type<blob_header>{});
-
-    const size_t actual_size = payload_view.size();
-
-    if (head.size != actual_size) {
-        testlog.error("Validating payload for pk={}, ck={} failed, sizes differ: stored={}, actual={}", pk, seastar::lazy_deref(ck), head.size,
-                actual_size);
-        return false;
-    }
-
-    if (!head.includes_pk) {
-        return true;
-    }
-
-    auto stored_pk = partition_key::from_exploded(schema, ser::deserialize(istream, boost::type<std::vector<bytes>>{}));
-    if (!stored_pk.equal(schema, pk)) {
-        testlog.error("Validating payload for pk={}, ck={} failed, pks differ: stored={}, actual={}", pk, seastar::lazy_deref(ck), stored_pk, pk);
-        return false;
-    }
-
-    if (bool(ck) != head.has_ck) {
-        const auto stored = head.has_ck ? "clustering" : "static";
-        const auto actual = ck ? "clustering" : "static";
-        testlog.error("Validating payload for pk={}, ck={} failed, row types differ: stored={}, actual={}", pk, seastar::lazy_deref(ck), stored, actual);
-        return false;
-    }
-
-    if (!ck || !head.has_ck || !head.includes_ck) {
-        return true;
-    }
-
-    auto stored_ck = clustering_key::from_exploded(schema, ser::deserialize(istream, boost::type<std::vector<bytes>>{}));
-    if (!stored_ck.equal(schema, *ck)) {
-        testlog.error("Validating payload for pk={}, ck={} failed, cks differ: stored={}, actual={}", pk, seastar::lazy_deref(ck), stored_ck, *ck);
-        return false;
-    }
-
-    return true;
-}
-
-template <typename RandomEngine>
-static test::population_description create_fuzzy_test_table(cql_test_env& env, RandomEngine& rnd_engine) {
-    testlog.info("Generating combinations...");
-
-    const std::optional<std::uniform_int_distribution<int>> static_row_configurations[] = {
-        std::nullopt,
-        std::uniform_int_distribution<int>(min_blob_size,   100),
-        std::uniform_int_distribution<int>(          101, 1'000),
-    };
-
-    const std::uniform_int_distribution<int> clustering_row_count_configurations[] = {
-        std::uniform_int_distribution<int>( 0,   2),
-        std::uniform_int_distribution<int>( 3,  49),
-        std::uniform_int_distribution<int>(50, 999),
-    };
-
-    const std::uniform_int_distribution<int> clustering_row_configurations[] = {
-        std::uniform_int_distribution<int>(     min_blob_size, min_blob_size + 10),
-        std::uniform_int_distribution<int>(min_blob_size + 11,                200),
-        std::uniform_int_distribution<int>(               201,              1'000),
-    };
-
-    // std::pair(count, size)
-    const std::pair<std::uniform_int_distribution<int>, std::uniform_int_distribution<int>> range_deletion_configurations[] = {
-        std::pair(std::uniform_int_distribution<int>(0, 1), std::uniform_int_distribution<int>(1, 2)),
-        std::pair(std::uniform_int_distribution<int>(1, 2), std::uniform_int_distribution<int>(1, 3)),
-        std::pair(std::uniform_int_distribution<int>(1, 2), std::uniform_int_distribution<int>(4, 7)),
-        std::pair(std::uniform_int_distribution<int>(3, 9), std::uniform_int_distribution<int>(2, 9)),
-        std::pair(std::uniform_int_distribution<int>(30, 99), std::uniform_int_distribution<int>(1, 2)),
-    };
-
-    std::vector<test::partition_configuration> partition_configs;
-
-    auto count_for = [] (size_t s, size_t cc, size_t cs, size_t d) {
-#ifdef DEBUG
-        const auto tier1_count = 1;
-        const auto tier2_count = 1;
-        const auto tier3_count = 0;
-#else
-        const auto tier1_count = 100;
-        const auto tier2_count = 10;
-        const auto tier3_count = 2;
-#endif
-        if (s > 1 || cc > 1 || cs > 1 || d > 1) {
-            return tier3_count;
-        }
-        if (s > 0 || cc > 0 || cs > 0 || d > 0) {
-            return tier2_count;
-        }
-        return tier1_count;
-    };
-
-    // Generate (almost) all combinations of the above.
-    for (size_t s = 0; s < std::size(static_row_configurations); ++s) {
-        for (size_t cc = 0; cc < std::size(clustering_row_count_configurations); ++cc) {
-            // We don't want to generate partitions that are too huge.
-            // So don't allow loads of large rows. This is achieved by
-            // omitting from the last (largest) size configurations when the
-            // larger count configurations are reached.
-            const size_t omit_from_end = std::max(0, int(cc) - 1);
-            for (size_t cs = 0; cs < std::size(clustering_row_configurations) - omit_from_end; ++cs) {
-                for (size_t d = 0; d < std::size(range_deletion_configurations); ++d) {
-                    const auto count = count_for(s, cc, cs, d);
-                    const auto [range_delete_count_config, range_delete_size_config] = range_deletion_configurations[d];
-                    partition_configs.push_back(test::partition_configuration{
-                            static_row_configurations[s],
-                            clustering_row_count_configurations[cc],
-                            clustering_row_configurations[cs],
-                            range_delete_count_config,
-                            range_delete_size_config,
-                            count});
-                }
-            }
-        }
-    }
-
-    auto config_distribution = std::uniform_int_distribution<int>(0, 1);
-    const auto extreme_static_row_dist = std::uniform_int_distribution<int>(1'001, 10'000);
-    const auto extreme_clustering_row_count_dist = std::uniform_int_distribution<int>(1'000, 10'000);
-    const auto extreme_clustering_row_dist = std::uniform_int_distribution<int>(1'001, 10'000);
-
-    // Extreme cases, just one of each.
-    const auto [range_delete_count_config, range_delete_size_config] = range_deletion_configurations[config_distribution(rnd_engine)];
-    partition_configs.push_back(test::partition_configuration{
-            extreme_static_row_dist,
-            clustering_row_count_configurations[config_distribution(rnd_engine)],
-            clustering_row_configurations[config_distribution(rnd_engine)],
-            range_delete_count_config,
-            range_delete_size_config,
-            1});
-    partition_configs.push_back(test::partition_configuration{
-            static_row_configurations[config_distribution(rnd_engine)],
-            extreme_clustering_row_count_dist,
-            clustering_row_configurations[config_distribution(rnd_engine)],
-            range_delete_count_config,
-            range_delete_size_config,
-            1});
-    partition_configs.push_back(test::partition_configuration{
-            static_row_configurations[config_distribution(rnd_engine)],
-            clustering_row_count_configurations[config_distribution(rnd_engine)],
-            extreme_clustering_row_dist,
-            range_delete_count_config,
-            range_delete_size_config,
-            1});
-
-    const auto partition_count = boost::accumulate(partition_configs, size_t(0),
-            [] (size_t c, const test::partition_configuration& part_config) { return c + part_config.count; });
-
-    testlog.info("Done. Generated {} combinations, {} partitions in total.", partition_configs.size(), partition_count);
-
-    return test::create_test_table(env, KEYSPACE_NAME, "fuzzy_test", rnd_engine(), std::move(partition_configs), &make_payload);
-}
-
 template <typename RandomEngine>
 static nonwrapping_range<int> generate_range(RandomEngine& rnd_engine, int start, int end, bool allow_open_ended_start = true) {
     assert(start < end);
@@ -943,13 +894,19 @@ static nonwrapping_range<int> generate_range(RandomEngine& rnd_engine, int start
 
 template <typename RandomEngine>
 static query::clustering_row_ranges
-generate_clustering_ranges(RandomEngine& rnd_engine, const schema& schema, const std::vector<test::partition_description>& part_descs) {
+generate_clustering_ranges(RandomEngine& rnd_engine, const schema& schema, const std::vector<mutation>& mutations) {
+    if (!schema.clustering_key_size()) {
+        return {};
+    }
+
     std::vector<clustering_key> all_cks;
     std::set<clustering_key, clustering_key::less_compare> all_cks_sorted{clustering_key::less_compare(schema)};
 
-    for (const auto& part_desc : part_descs) {
-        all_cks_sorted.insert(part_desc.live_rows.cbegin(), part_desc.live_rows.cend());
-        all_cks_sorted.insert(part_desc.dead_rows.cbegin(), part_desc.dead_rows.cend());
+    for (const auto& mut : mutations) {
+        for (const auto& row : mut.partition().clustered_rows()) {
+            all_cks_sorted.insert(row.key());
+        }
+        thread::maybe_yield();
     }
     all_cks.reserve(all_cks_sorted.size());
     all_cks.insert(all_cks.end(), all_cks_sorted.cbegin(), all_cks_sorted.cend());
@@ -975,56 +932,33 @@ generate_clustering_ranges(RandomEngine& rnd_engine, const schema& schema, const
     return clustering_key_ranges;
 }
 
-struct expected_partition {
-    const dht::decorated_key& dkey;
-    bool has_static_row;
-    std::vector<clustering_key> live_rows;
-    std::vector<clustering_key> dead_rows;
-    query::clustering_row_ranges range_tombstones;
-};
-
-static std::vector<expected_partition>
-slice_partitions(const schema& schema, const std::vector<test::partition_description>& partitions,
+static std::vector<mutation>
+slice_partitions(const schema& schema, const std::vector<mutation>& partitions,
         const nonwrapping_range<int>& partition_index_range, const query::partition_slice& slice) {
     const auto& sb = partition_index_range.start();
     const auto& eb = partition_index_range.end();
     auto it = sb ? partitions.cbegin() + sb->value() + !sb->is_inclusive() : partitions.cbegin();
     const auto end = eb ? partitions.cbegin() + eb->value() + eb->is_inclusive() : partitions.cend();
 
-    const auto tri_cmp = clustering_key::tri_compare(schema);
     const auto& row_ranges = slice.default_row_ranges();
 
-    std::vector<expected_partition> sliced_partitions;
+    std::vector<mutation> sliced_partitions;
     for (;it != end; ++it) {
-        auto sliced_live_rows = test::slice_keys(schema, it->live_rows, row_ranges);
-        auto sliced_dead_rows = test::slice_keys(schema, it->dead_rows, row_ranges);
-
-        query::clustering_row_ranges overlapping_range_tombstones;
-        std::copy_if(it->range_tombstones.cbegin(), it->range_tombstones.cend(), std::back_inserter(overlapping_range_tombstones),
-                [&] (const query::clustering_range& rt) {
-                    return std::any_of(row_ranges.cbegin(), row_ranges.cend(), [&] (const query::clustering_range& r) {
-                        return rt.overlaps(r, clustering_key::tri_compare(schema));
-                    });
-                });
-
-        if (sliced_live_rows.empty() && sliced_dead_rows.empty() && overlapping_range_tombstones.empty() && !it->has_static_row) {
-            continue;
-        }
-        sliced_partitions.emplace_back(expected_partition{it->dkey, it->has_static_row, std::move(sliced_live_rows), std::move(sliced_dead_rows),
-                std::move(overlapping_range_tombstones)});
+        sliced_partitions.push_back(it->sliced(row_ranges));
+        thread::maybe_yield();
     }
     return sliced_partitions;
 }
 
 static void
-validate_result_size(size_t i, schema_ptr schema, const std::vector<mutation>& results, const std::vector<expected_partition>& expected_partitions) {
+validate_result_size(size_t i, schema_ptr schema, const std::vector<mutation>& results, const std::vector<mutation>& expected_partitions) {
     if (results.size() == expected_partitions.size()) {
         return;
     }
 
     auto expected = std::set<dht::decorated_key, dht::decorated_key::less_comparator>(dht::decorated_key::less_comparator(schema));
     for (const auto& p : expected_partitions) {
-       expected.insert(p.dkey);
+       expected.insert(p.decorated_key());
     }
 
     auto actual = std::set<dht::decorated_key, dht::decorated_key::less_comparator>(dht::decorated_key::less_comparator(schema));
@@ -1047,146 +981,6 @@ validate_result_size(size_t i, schema_ptr schema, const std::vector<mutation>& r
     }
 }
 
-[[nodiscard]] static bool validate_row(const schema& s, const partition_key& pk, const clustering_key* const ck, column_kind kind, const row& r) {
-    bool OK = true;
-    const auto& cdef = s.column_at(kind, 0);
-    if (auto* cell = r.find_cell(0)) {
-        OK &= tests::check(validate_payload(s, cell->as_atomic_cell(cdef).value(), pk, ck));
-    }
-    return OK;
-}
-
-[[nodiscard]] static bool validate_static_row(const schema& s, const partition_key& pk, const row& sr) {
-    return validate_row(s, pk, {}, column_kind::static_column, sr);
-}
-
-[[nodiscard]] static bool validate_regular_row(const schema& s, const partition_key& pk, const clustering_key& ck, const deletable_row& dr) {
-    return validate_row(s, pk, &ck, column_kind::regular_column, dr.cells());
-}
-
-struct pkey_with_schema {
-    const dht::decorated_key& key;
-    const schema& s;
-    bool operator==(const pkey_with_schema& pk) const {
-        return key.equal(s, pk.key);
-    }
-};
-
-static std::ostream& operator<<(std::ostream& os, const pkey_with_schema& pk) {
-    os << pk.key;
-    return os;
-}
-
-struct ckey_with_schema {
-    const clustering_key& key;
-    const schema& s;
-    bool operator==(const ckey_with_schema& ck) const {
-        return key.equal(s, ck.key);
-    }
-};
-
-static std::ostream& operator<<(std::ostream& os, const ckey_with_schema& ck) {
-    os << ck.key;
-    return os;
-}
-
-struct with_schema_wrapper {
-    const schema& s;
-
-    pkey_with_schema operator()(const dht::decorated_key& pkey) const {
-        return pkey_with_schema{pkey, s};
-    }
-    ckey_with_schema operator()(const clustering_key& ckey) const {
-        return ckey_with_schema{ckey, s};
-    }
-};
-
-static void validate_result(size_t i, const mutation& result_mut, const expected_partition& expected_part) {
-    testlog.trace("[scan#{}]: validating {}: has_static_row={}, live_rows={}, dead_rows={}", i, expected_part.dkey, expected_part.has_static_row,
-            expected_part.live_rows, expected_part.dead_rows);
-
-    auto& schema = *result_mut.schema();
-    const auto wrapper = with_schema_wrapper{schema};
-
-    bool OK = true;
-
-    tests::require_equal(result_mut.partition().static_row().empty(), !expected_part.has_static_row);
-    OK &= validate_static_row(schema, expected_part.dkey.key(), result_mut.partition().static_row().get());
-
-    const auto& res_rows = result_mut.partition().clustered_rows();
-    auto res_it = res_rows.begin();
-    const auto res_end = res_rows.end();
-
-    auto exp_live_it = expected_part.live_rows.cbegin();
-    const auto exp_live_end = expected_part.live_rows.cend();
-
-    auto exp_dead_it = expected_part.dead_rows.cbegin();
-    const auto exp_dead_end = expected_part.dead_rows.cend();
-
-    for (; res_it != res_end && (exp_live_it != exp_live_end || exp_dead_it != exp_dead_end); ++res_it) {
-        const bool is_live = res_it->row().is_live(schema, column_kind::regular_column);
-
-        // Check that we have remaining expected rows of the respective liveness.
-        if (is_live) {
-            tests::require(exp_live_it != exp_live_end);
-        } else {
-            tests::require(exp_dead_it != exp_dead_end);
-        }
-
-        testlog.trace("[scan#{}]: validating {}/{}: is_live={}", i, expected_part.dkey, res_it->key(), is_live);
-
-        if (is_live) {
-            OK &= tests::check_equal(wrapper(res_it->key()), wrapper(*exp_live_it++));
-        } else {
-            // FIXME: Only a fraction of the dead rows is present in the result.
-            if (!res_it->key().equal(schema, *exp_dead_it)) {
-                testlog.trace("[scan#{}]: validating {}/{}: dead row in the result is not the expected one: {} != {}", i, expected_part.dkey,
-                        res_it->key(), res_it->key(), *exp_dead_it);
-            }
-
-            // The dead row is not the one we expected it to be. Check that at
-            // least that it *is* among the expected dead rows.
-            if (!res_it->key().equal(schema, *exp_dead_it)) {
-                auto it = std::find_if(exp_dead_it, exp_dead_end, [&] (const clustering_key& key) {
-                    return key.equal(schema, res_it->key());
-                });
-                OK &= tests::check(it != exp_dead_it);
-
-                testlog.trace("[scan#{}]: validating {}/{}: skipped over {} expected dead rows", i, expected_part.dkey,
-                        res_it->key(), std::distance(exp_dead_it, it));
-                exp_dead_it = it;
-            }
-            ++exp_dead_it;
-        }
-        OK &= validate_regular_row(schema, expected_part.dkey.key(), res_it->key(), res_it->row());
-    }
-
-    // We don't want to call res_rows.calculate_size() as it has linear complexity.
-    // Instead, check that after iterating through the results and expected
-    // results in lock-step, both have reached the end.
-    OK &= tests::check(res_it == res_end);
-    if (res_it != res_end) {
-        testlog.error("[scan#{}]: validating {} failed: result contains unexpected trailing rows: {}", i, expected_part.dkey,
-                boost::copy_range<std::vector<clustering_key>>(
-                        boost::iterator_range<mutation_partition::rows_type::const_iterator>(res_it, res_end)
-                        | boost::adaptors::transformed([] (const rows_entry& e) { return e.key(); })));
-    }
-
-    OK &= tests::check(exp_live_it == exp_live_end);
-    if (exp_live_it != exp_live_end) {
-        testlog.error("[scan#{}]: validating {} failed: {} expected live rows missing from result", i, expected_part.dkey,
-                std::distance(exp_live_it, exp_live_end));
-    }
-
-    // FIXME: see note about dead rows above.
-    if (exp_dead_it != exp_dead_end) {
-        testlog.trace("[scan#{}]: validating {}: {} expected dead rows missing from result", i, expected_part.dkey,
-                std::distance(exp_dead_it, exp_dead_end));
-    }
-
-    tests::require(OK);
-}
-
 struct fuzzy_test_config {
     uint32_t seed;
     std::chrono::seconds timeout;
@@ -1196,17 +990,23 @@ struct fuzzy_test_config {
 
 static void
 run_fuzzy_test_scan(size_t i, fuzzy_test_config cfg, distributed<replica::database>& db, schema_ptr schema,
-        const std::vector<test::partition_description>& part_descs) {
+        const std::vector<frozen_mutation>& frozen_mutations) {
     const auto seed = cfg.seed + (i + 1) * this_shard_id();
     auto rnd_engine = std::mt19937(seed);
 
-    auto partition_index_range = generate_range(rnd_engine, 0, part_descs.size() - 1);
-    auto partition_range = partition_index_range.transform([&part_descs] (int i) {
-        return dht::ring_position(part_descs[i].dkey);
+    std::vector<mutation> mutations;
+    for (const auto& mut : frozen_mutations) {
+        mutations.emplace_back(mut.unfreeze(schema));
+        thread::maybe_yield();
+    }
+
+    auto partition_index_range = generate_range(rnd_engine, 0, mutations.size() - 1);
+    auto partition_range = partition_index_range.transform([&mutations] (int i) {
+        return dht::ring_position(mutations[i].decorated_key());
     });
 
     const auto partition_slice = partition_slice_builder(*schema)
-        .with_ranges(generate_clustering_ranges(rnd_engine, *schema, part_descs))
+        .with_ranges(generate_clustering_ranges(rnd_engine, *schema, mutations))
         .with_option<query::partition_slice::option::allow_short_read>()
         .build();
 
@@ -1217,16 +1017,15 @@ run_fuzzy_test_scan(size_t i, fuzzy_test_config cfg, distributed<replica::databa
 
     const auto [results, npages] = read_partitions_with_paged_scan(db, schema, 1000, 1024, is_stateful, partition_range, partition_slice);
 
-    const auto expected_partitions = slice_partitions(*schema, part_descs, partition_index_range, partition_slice);
+    const auto expected_partitions = slice_partitions(*schema, mutations, partition_index_range, partition_slice);
 
     validate_result_size(i, schema, results, expected_partitions);
 
-    const auto wrapper = with_schema_wrapper{*schema};
     auto exp_it = expected_partitions.cbegin();
     auto res_it = results.cbegin();
     while (res_it != results.cend() && exp_it != expected_partitions.cend()) {
-        tests::require_equal(wrapper(res_it->decorated_key()), wrapper(exp_it->dkey));
-        validate_result(i, *res_it++, *exp_it++);
+        assert_that(*res_it++).is_equal_to(*exp_it++);
+        thread::maybe_yield();
     }
 
     testlog.trace("[scan#{}]: validated all partitions, both the expected and actual partition list should be exhausted now", i);
@@ -1266,10 +1065,10 @@ future<> run_concurrently(size_t count, size_t concurrency, noncopyable_function
 
 static future<>
 run_fuzzy_test_workload(fuzzy_test_config cfg, distributed<replica::database>& db, schema_ptr schema,
-        const std::vector<test::partition_description>& part_descs) {
-    return run_concurrently(cfg.scans, cfg.concurrency, [cfg, &db, schema = std::move(schema), &part_descs] (size_t i) {
-        return seastar::async([i, cfg, &db, schema, &part_descs] () mutable {
-            run_fuzzy_test_scan(i, cfg, db, std::move(schema), part_descs);
+        const std::vector<frozen_mutation>& frozen_mutations) {
+    return run_concurrently(cfg.scans, cfg.concurrency, [cfg, &db, schema = std::move(schema), &frozen_mutations] (size_t i) {
+        return seastar::async([i, cfg, &db, schema, &frozen_mutations] () mutable {
+            run_fuzzy_test_scan(i, cfg, db, std::move(schema), frozen_mutations);
         });
     });
 }
@@ -1285,24 +1084,35 @@ SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
         const auto seed = tests::random::get_int<uint32_t>();
         testlog.info("fuzzy test seed: {}", seed);
 
-        auto rnd_engine = std::mt19937(seed);
-
-        auto pop_desc = create_fuzzy_test_table(env, rnd_engine);
+        auto tbl = create_test_table(env, seed, "ks", get_name(), false,
+#ifdef DEBUG
+                std::uniform_int_distribution<size_t>(8, 32), // partitions
+                std::uniform_int_distribution<size_t>(0, 100), // clustering-rows
+                std::uniform_int_distribution<size_t>(0, 10), // range-tombstones
+#elif DEVEL
+                std::uniform_int_distribution<size_t>(16, 64), // partitions
+                std::uniform_int_distribution<size_t>(0, 100), // clustering-rows
+                std::uniform_int_distribution<size_t>(0, 100), // range-tombstones
+#else
+                std::uniform_int_distribution<size_t>(32, 64), // partitions
+                std::uniform_int_distribution<size_t>(0, 1000), // clustering-rows
+                std::uniform_int_distribution<size_t>(0, 1000), // range-tombstones
+#endif
+                tests::default_timestamp_generator());
 
 #if defined DEBUG
         auto cfg = fuzzy_test_config{seed, std::chrono::seconds{8}, 1, 1};
 #elif defined DEVEL
-        auto cfg = fuzzy_test_config{seed, std::chrono::seconds{2}, 8, 4};
+        auto cfg = fuzzy_test_config{seed, std::chrono::seconds{2}, 2, 4};
 #else
-        auto cfg = fuzzy_test_config{seed, std::chrono::seconds{2}, 16, 256};
+        auto cfg = fuzzy_test_config{seed, std::chrono::seconds{2}, 4, 8};
 #endif
 
         testlog.info("Running test workload with configuration: seed={}, timeout={}s, concurrency={}, scans={}", cfg.seed, cfg.timeout.count(),
                 cfg.concurrency, cfg.scans);
 
-        const auto& partitions = pop_desc.partitions;
-        smp::invoke_on_all([cfg, db = &env.db(), gs = global_schema_ptr(pop_desc.schema), &partitions] {
-            return run_fuzzy_test_workload(cfg, *db, gs.get(), partitions);
+        smp::invoke_on_all([cfg, db = &env.db(), gs = global_schema_ptr(tbl.schema), &compacted_frozen_mutations = tbl.compacted_frozen_mutations] {
+            return run_fuzzy_test_workload(cfg, *db, gs.get(), compacted_frozen_mutations);
         }).handle_exception([seed] (std::exception_ptr e) {
             testlog.error("Test workload failed with exception {}."
                     " To repeat this particular run, replace the random seed of the test, with that of this run ({})."

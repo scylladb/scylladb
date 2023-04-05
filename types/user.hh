@@ -43,6 +43,7 @@ public:
     std::optional<size_t> idx_of_field(const bytes& name) const;
     bool is_multi_cell() const { return _is_multi_cell; }
     virtual data_type freeze() const override;
+    bytes get_name() const { return _name; }
     sstring get_name_as_string() const;
     sstring get_name_as_cql_string() const;
 

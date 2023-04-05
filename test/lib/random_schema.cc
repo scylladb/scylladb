@@ -14,6 +14,7 @@
 #include "mutation/mutation.hh"
 #include "mutation/mutation_fragment.hh"
 #include "schema/schema_builder.hh"
+#include "test/lib/cql_test_env.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/random_utils.hh"
 #include "types/list.hh"
@@ -103,7 +104,17 @@ type_generator::type_generator(random_schema_specification& spec) : _spec(spec) 
 
 data_type type_generator::operator()(std::mt19937& engine, is_multi_cell multi_cell) {
     auto dist = std::uniform_int_distribution<size_t>(0, _generators.size() - 1);
-    return _generators.at(dist(engine))(engine, multi_cell);
+    auto type = _generators.at(dist(engine))(engine, multi_cell);
+    // duration type is not allowed in:
+    // * primary key components
+    // * as member types of collections
+    //
+    // To cover all this, we simply disallow it altogether when multi_cell is
+    // no, which will be the case in all the above cases.
+    while (!multi_cell && type == duration_type) {
+        type = (*this)(engine, multi_cell);
+    }
+    return type;
 }
 
 namespace {
@@ -133,12 +144,13 @@ private:
     std::vector<data_type> generate_types(std::mt19937& engine, std::uniform_int_distribution<size_t>& count_dist,
             type_generator::is_multi_cell multi_cell, bool allow_reversed = false) {
         std::uniform_int_distribution<uint8_t> reversed_dist{0, uint8_t(allow_reversed)};
+        std::uniform_int_distribution<uint8_t> multi_cell_dist{0, uint8_t(bool(multi_cell))};
 
         std::vector<data_type> types;
 
         const auto count = count_dist(engine);
         for (size_t c = 0; c < count; ++c) {
-            auto type = _type_generator(engine, multi_cell);
+            auto type = _type_generator(engine, type_generator::is_multi_cell(bool(multi_cell_dist(engine))));
             if (reversed_dist(engine)) {
                 types.emplace_back(make_shared<reversed_type_impl>(std::move(type)));
             } else {
@@ -169,7 +181,7 @@ public:
         return format("table{}", generate_unique_id(engine, _used_table_ids));
     }
     virtual sstring udt_name(std::mt19937& engine) override {
-        return format("UDT{}", generate_unique_id(engine, _used_udt_ids));
+        return format("udt{}", generate_unique_id(engine, _used_udt_ids));
     }
     virtual std::vector<data_type> partition_key_columns(std::mt19937& engine) override {
         return generate_types(engine, _partition_column_count_dist, type_generator::is_multi_cell::no, false);
@@ -760,13 +772,13 @@ schema_ptr build_random_schema(uint32_t seed, random_schema_specification& spec)
         builder.with_column(to_bytes(format("pk{}", pk)), std::move(pk_columns[pk]), column_kind::partition_key);
     }
 
-    if (const auto ck_columns = spec.clustering_key_columns(engine); !ck_columns.empty()) {
-        for (size_t ck = 0; ck < ck_columns.size(); ++ck) {
-            builder.with_column(to_bytes(format("ck{}", ck)), std::move(ck_columns[ck]), column_kind::clustering_key);
-        }
+    const auto ck_columns = spec.clustering_key_columns(engine);
+    for (size_t ck = 0; ck < ck_columns.size(); ++ck) {
+        builder.with_column(to_bytes(format("ck{}", ck)), std::move(ck_columns[ck]), column_kind::clustering_key);
     }
 
-    if (const auto static_columns = spec.static_columns(engine); !static_columns.empty()) {
+    if (!ck_columns.empty()) {
+        const auto static_columns = spec.static_columns(engine);
         for (size_t s = 0; s < static_columns.size(); ++s) {
             builder.with_column(to_bytes(format("s{}", s)), std::move(static_columns[s]), column_kind::static_column);
         }
@@ -782,48 +794,52 @@ schema_ptr build_random_schema(uint32_t seed, random_schema_specification& spec)
 }
 
 sstring udt_to_str(const user_type_impl& udt) {
-    std::vector<sstring> fields;
-    for (size_t i = 0; i < udt.field_types().size(); ++i) {
-        fields.emplace_back(format("{} {}", udt.field_name_as_string(i), udt.field_type(i)->as_cql3_type().to_string()));
-    }
-    return format("CREATE TYPE {} (\n\t{})",
-            udt.get_name_as_string(),
-            boost::algorithm::join(fields, ",\n\t"));
+    std::stringstream ss;
+    udt.describe(ss);
+    return ss.str();
 }
 
-// Single element overload, for convenience.
-std::unordered_set<const user_type_impl*> dump_udts(data_type type) {
-    if (auto maybe_user_type = dynamic_cast<const user_type_impl*>(type.get())) {
-        return {maybe_user_type};
-    }
-    return {};
-}
+struct udt_list {
+    std::vector<const user_type_impl*> vector;
 
-std::unordered_set<const user_type_impl*> dump_udts(const std::vector<data_type>& types) {
-    std::unordered_set<const user_type_impl*> udts;
+    void insert(const user_type_impl* udt) {
+        auto it = std::find(vector.begin(), vector.end(), udt);
+        if (it == vector.end()) {
+            vector.push_back(udt);
+        }
+    }
+
+    void merge(udt_list other) {
+        for (auto& udt : other.vector) {
+            insert(udt);
+        }
+    }
+};
+
+udt_list dump_udts(const std::vector<data_type>& types) {
+    udt_list udts;
     for (const auto& dt : types) {
         const auto* const type = dt.get();
         if (auto maybe_user_type = dynamic_cast<const user_type_impl*>(type)) {
-            udts.insert(maybe_user_type);
             udts.merge(dump_udts(maybe_user_type->field_types()));
+            udts.insert(maybe_user_type);
         } else if (auto maybe_tuple_type = dynamic_cast<const tuple_type_impl*>(type)) {
             udts.merge(dump_udts(maybe_tuple_type->all_types()));
         } else if (auto maybe_list_type = dynamic_cast<const list_type_impl*>(type)) {
-            udts.merge(dump_udts(maybe_list_type->get_elements_type()));
+            udts.merge(dump_udts({maybe_list_type->get_elements_type()}));
         } else if (auto maybe_set_type = dynamic_cast<const set_type_impl*>(type)) {
-            udts.merge(dump_udts(maybe_set_type->get_elements_type()));
+            udts.merge(dump_udts({maybe_set_type->get_elements_type()}));
         } else if (auto maybe_map_type = dynamic_cast<const map_type_impl*>(type)) {
-            udts.merge(dump_udts(maybe_map_type->get_keys_type()));
-            udts.merge(dump_udts(maybe_map_type->get_values_type()));
+            udts.merge(dump_udts({maybe_map_type->get_keys_type(), maybe_map_type->get_values_type()}));
         } else if (auto maybe_reversed_type = dynamic_cast<const reversed_type_impl*>(type)) {
-            udts.merge(dump_udts(maybe_reversed_type->underlying_type()));
+            udts.merge(dump_udts({maybe_reversed_type->underlying_type()}));
         }
     }
     return udts;
 }
 
-std::vector<sstring> dump_udts(const schema& schema) {
-    std::unordered_set<const user_type_impl*> udts;
+std::vector<const user_type_impl*> dump_udts(const schema& schema) {
+    udt_list udts;
 
     const auto cdefs_to_types = [] (const schema::const_iterator_range_type& cdefs) -> std::vector<data_type> {
         return boost::copy_range<std::vector<data_type>>(cdefs |
@@ -835,8 +851,7 @@ std::vector<sstring> dump_udts(const schema& schema) {
     udts.merge(dump_udts(cdefs_to_types(schema.regular_columns())));
     udts.merge(dump_udts(cdefs_to_types(schema.static_columns())));
 
-    return boost::copy_range<std::vector<sstring>>(udts |
-            boost::adaptors::transformed([] (const user_type_impl* const udt) { return udt_to_str(*udt); }));
+    return udts.vector;
 }
 
 std::vector<sstring> columns_specs(schema_ptr schema, column_kind kind) {
@@ -936,7 +951,8 @@ sstring random_schema::cql() const {
 
     sstring udts_str;
     if (!udts.empty()) {
-        udts_str = boost::algorithm::join(udts, "\n");
+        udts_str = boost::algorithm::join(udts |
+                boost::adaptors::transformed([] (const user_type_impl* const udt) { return udt_to_str(*udt); }), "\n");
     }
 
     std::vector<sstring> col_specs;
@@ -1064,6 +1080,89 @@ void random_schema::delete_range(
     md.add_range_tombstone(std::move(range), tombstone{ts_gen(engine, timestamp_destination::range_tombstone, api::min_timestamp), deletion_time});
 }
 
+future<> random_schema::create_with_cql(cql_test_env& env) {
+    return async([this, &env] {
+        const auto ks_name = _schema->ks_name();
+        const auto tbl_name = _schema->cf_name();
+
+        for (const auto& udt : dump_udts(*_schema)) {
+            env.execute_cql(udt_to_str(*udt)).get();
+            eventually_true([&] () mutable {
+                return env.db().map_reduce0([&] (replica::database& db) {
+                    return db.user_types().get(ks_name).has_type(udt->get_name());
+                }, true, std::logical_and<bool>{}).get();
+            });
+        }
+
+        auto& db = env.local_db();
+
+        std::stringstream ss;
+        _schema->describe(db, ss, false);
+
+        env.execute_cql(ss.str()).get();
+
+        env.require_table_exists(ks_name, tbl_name).get();
+        auto& tbl = db.find_column_family(ks_name, tbl_name);
+
+        _schema = tbl.schema();
+    });
+}
+
+future<std::vector<mutation>> generate_random_mutations(
+        uint32_t seed,
+        tests::random_schema& random_schema,
+        timestamp_generator ts_gen,
+        expiry_generator exp_gen,
+        std::uniform_int_distribution<size_t> partition_count_dist,
+        std::uniform_int_distribution<size_t> clustering_row_count_dist,
+        std::uniform_int_distribution<size_t> range_tombstone_count_dist) {
+    auto engine = std::mt19937(seed);
+    const auto schema_has_clustering_columns = random_schema.schema()->clustering_key_size() > 0;
+    const auto partition_count = partition_count_dist(engine);
+    std::vector<mutation> muts;
+    muts.reserve(partition_count);
+    for (size_t pk = 0; pk != partition_count; ++pk) {
+        auto mut = random_schema.new_mutation(pk);
+        random_schema.set_partition_tombstone(engine, mut, ts_gen, exp_gen);
+        random_schema.add_static_row(engine, mut, ts_gen, exp_gen);
+
+        if (!schema_has_clustering_columns) {
+            muts.emplace_back(mut.build(random_schema.schema()));
+            continue;
+        }
+
+        const auto clustering_row_count = clustering_row_count_dist(engine);
+        const auto range_tombstone_count = range_tombstone_count_dist(engine);
+        auto ckeys = random_schema.make_ckeys(std::max(clustering_row_count, range_tombstone_count));
+
+        for (uint32_t ck = 0; ck < ckeys.size(); ++ck) {
+            random_schema.add_row(engine, mut, ckeys[ck], ts_gen, exp_gen);
+            co_await coroutine::maybe_yield();
+        }
+
+        for (size_t i = 0; i < range_tombstone_count; ++i) {
+            const auto a = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
+            const auto b = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
+            random_schema.delete_range(
+                    engine,
+                    mut,
+                    nonwrapping_range<tests::data_model::mutation_description::key>::make(ckeys.at(std::min(a, b)), ckeys.at(std::max(a, b))),
+                    ts_gen,
+                    exp_gen);
+            co_await coroutine::maybe_yield();
+        }
+        muts.emplace_back(mut.build(random_schema.schema()));
+    }
+    boost::sort(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
+            return a.decorated_key().less_compare(*s, b.decorated_key());
+            });
+    auto range = boost::unique(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
+            return a.decorated_key().equal(*s, b.decorated_key());
+            });
+    muts.erase(range.end(), muts.end());
+    co_return std::move(muts);
+}
+
 future<std::vector<mutation>> generate_random_mutations(
         tests::random_schema& random_schema,
         timestamp_generator ts_gen,
@@ -1071,52 +1170,8 @@ future<std::vector<mutation>> generate_random_mutations(
         std::uniform_int_distribution<size_t> partition_count_dist,
         std::uniform_int_distribution<size_t> clustering_row_count_dist,
         std::uniform_int_distribution<size_t> range_tombstone_count_dist) {
-    auto engine = std::mt19937(tests::random::get_int<uint32_t>());
-    const auto schema_has_clustering_columns = random_schema.schema()->clustering_key_size() > 0;
-    const auto partition_count = partition_count_dist(engine);
-    std::vector<mutation> muts;
-    muts.reserve(partition_count);
-    return do_with(std::move(engine), std::move(muts), [=, &random_schema] (std::mt19937& engine,
-            std::vector<mutation>& muts) mutable {
-        auto r = boost::irange(size_t{0}, partition_count);
-        return do_for_each(r.begin(), r.end(), [=, &random_schema, &engine, &muts] (size_t pk) mutable {
-            auto mut = random_schema.new_mutation(pk);
-            random_schema.set_partition_tombstone(engine, mut, ts_gen, exp_gen);
-            random_schema.add_static_row(engine, mut, ts_gen, exp_gen);
-
-            if (!schema_has_clustering_columns) {
-                muts.emplace_back(mut.build(random_schema.schema()));
-                return;
-            }
-
-            auto ckeys = random_schema.make_ckeys(clustering_row_count_dist(engine));
-            const auto clustering_row_count = ckeys.size();
-            for (uint32_t ck = 0; ck < clustering_row_count; ++ck) {
-                random_schema.add_row(engine, mut, ckeys[ck], ts_gen, exp_gen);
-            }
-
-            for (size_t i = 0; i < 4; ++i) {
-                const auto a = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
-                const auto b = tests::random::get_int<size_t>(0, ckeys.size() - 1, engine);
-                random_schema.delete_range(
-                        engine,
-                        mut,
-                        nonwrapping_range<tests::data_model::mutation_description::key>::make(ckeys.at(std::min(a, b)), ckeys.at(std::max(a, b))),
-                        ts_gen,
-                        exp_gen);
-            }
-            muts.emplace_back(mut.build(random_schema.schema()));
-        }).then([&random_schema, &muts] () mutable {
-            boost::sort(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
-                return a.decorated_key().less_compare(*s, b.decorated_key());
-            });
-            auto range = boost::unique(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
-                return a.decorated_key().equal(*s, b.decorated_key());
-            });
-            muts.erase(range.end(), muts.end());
-            return std::move(muts);
-        });
-    });
+    return generate_random_mutations(tests::random::get_int<uint32_t>(), random_schema, std::move(ts_gen), std::move(exp_gen), partition_count_dist,
+            clustering_row_count_dist, range_tombstone_count_dist);
 }
 
 future<std::vector<mutation>> generate_random_mutations(tests::random_schema& random_schema, size_t partition_count) {
