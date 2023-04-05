@@ -23,3 +23,5 @@ set(Seastar_DEFINITIONS_DEBUG
 
 set(CMAKE_STATIC_LINKER_FLAGS_RELEASE
   "-Wl,--gc-sections")
+
+set(stack_usage_threshold_in_KB 13)

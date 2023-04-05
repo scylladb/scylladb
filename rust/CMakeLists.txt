@@ -40,7 +40,7 @@ function(generate_cxxbridge name)
   set(outputs ${header} ${source})
   set(command ${CXXBRIDGE} ${input} --include ${parsed_args_INCLUDE})
   add_custom_command(
-    DEPENDS ${input} ${include}
+    DEPENDS ${input}
     OUTPUT ${outputs}
     COMMAND ${command} --header --output ${header}
     COMMAND ${command} --output ${source})
@@ -59,7 +59,7 @@ add_custom_command(
   COMMAND ${CXXBRIDGE} --header --output ${cxx_header})
 generate_cxxbridge(wasmtime_bindings
   INPUT wasmtime_bindings/src/lib.rs
-  INCLUDE ${cxx_header}
+  INCLUDE rust/cxx.h
   OUTPUT_DIR "${binding_gen_build_dir}"
   SOURCES wasmtime_bindings_sources)
 
@@ -72,7 +72,7 @@ target_sources(wasmtime_bindings
     ${cxx_header}
     ${wasmtime_bindings_sources})
 target_include_directories(wasmtime_bindings
-  INTERFACE
+  PUBLIC
     ${scylla_gen_build_dir})
 target_link_libraries(wasmtime_bindings
   INTERFACE Rust::rust_combined)
@@ -80,7 +80,7 @@ target_link_libraries(wasmtime_bindings
 # only for testing
 generate_cxxbridge(inc
   INPUT inc/src/lib.rs
-  INCLUDE ${cxx_header}
+  INCLUDE rust/cxx.h
   OUTPUT_DIR "${binding_gen_build_dir}"
   SOURCES inc_sources)
 
@@ -90,7 +90,7 @@ target_sources(inc
     ${cxx_header}
     ${inc_sources})
 target_include_directories(inc
-  INTERFACE
+  PUBLIC
     ${scylla_gen_build_dir})
 target_link_libraries(inc
   INTERFACE Rust::rust_combined)
