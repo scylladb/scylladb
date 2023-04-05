@@ -2133,20 +2133,24 @@ void reconcilable_result_builder::consume_new_partition(const dht::decorated_key
         !has_ck_selector(_slice.row_ranges(_schema, dk.key()));
     _static_row_is_alive = false;
     _live_rows = 0;
+    mplog.debug("reconcilable_result_builder: consume: schema={} key={} reversed={}", _schema.version(), dk.key(), _reversed);
     _mutation_consumer.emplace(streamed_mutation_freezer(_schema, dk.key(), _reversed));
 }
 
 void reconcilable_result_builder::consume(tombstone t) {
+    mplog.trace("reconcilable_result_builder: consume: tombstone={}", t);
     _mutation_consumer->consume(t);
 }
 
 stop_iteration reconcilable_result_builder::consume(static_row&& sr, tombstone, bool is_alive) {
     _static_row_is_alive = is_alive;
     _memory_accounter.update(sr.memory_usage(_schema));
+    mplog.trace("reconcilable_result_builder: consume: static_row is_alive={}", is_alive);
     return _mutation_consumer->consume(std::move(sr));
 }
 
 stop_iteration reconcilable_result_builder::consume(clustering_row&& cr, row_tombstone, bool is_alive) {
+    mplog.trace("reconcilable_result_builder: consume: row={} is_alive={}", cr.key(), is_alive);
     if (_rt_assembler.needs_flush()) {
         if (auto rt_opt = _rt_assembler.flush(_schema, position_in_partition::after_key(_schema, cr.key()))) {
             consume(std::move(*rt_opt));
@@ -2166,6 +2170,7 @@ stop_iteration reconcilable_result_builder::consume(clustering_row&& cr, row_tom
 }
 
 stop_iteration reconcilable_result_builder::consume(range_tombstone&& rt) {
+    mplog.trace("reconcilable_result_builder: consume: range_tombstone={}", rt);
     _memory_accounter.update(rt.memory_usage(_schema));
     if (_reversed) {
         // undo reversing done for the native reversed format, coordinator still uses old reversing format
@@ -2175,6 +2180,7 @@ stop_iteration reconcilable_result_builder::consume(range_tombstone&& rt) {
 }
 
 stop_iteration reconcilable_result_builder::consume(range_tombstone_change&& rtc) {
+    mplog.trace("reconcilable_result_builder: consume: range_tombstone_change={}", rtc);
     if (auto rt_opt = _rt_assembler.consume(_schema, std::move(rtc))) {
         return consume(std::move(*rt_opt));
     }
@@ -2182,6 +2188,7 @@ stop_iteration reconcilable_result_builder::consume(range_tombstone_change&& rtc
 }
 
 stop_iteration reconcilable_result_builder::consume_end_of_partition() {
+    mplog.trace("reconcilable_result_builder: consume end of partition");
     _rt_assembler.on_end_of_stream();
     if (_live_rows == 0 && _static_row_is_alive && _return_static_content_on_partition_with_no_rows) {
         ++_live_rows;
@@ -2199,6 +2206,7 @@ stop_iteration reconcilable_result_builder::consume_end_of_partition() {
 }
 
 reconcilable_result reconcilable_result_builder::consume_end_of_stream() {
+    mplog.trace("reconcilable_result_builder: consume end of stream");
     return reconcilable_result(_total_live_rows, std::move(_result),
                                query::short_read(bool(_stop)),
                                std::move(_memory_accounter).done());
