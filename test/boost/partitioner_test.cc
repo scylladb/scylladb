@@ -603,3 +603,23 @@ SEASTAR_THREAD_TEST_CASE(test_dht_subtract_ranges) {
         BOOST_REQUIRE(contained);
     }
 }
+
+SEASTAR_THREAD_TEST_CASE(test_split_token_range_msb) {
+    dht::token_comparator cmp;
+    for (auto msb : {0, 1, 2, 3, 8}) {
+        auto ranges = dht::split_token_range_msb(msb);
+        BOOST_REQUIRE_EQUAL(ranges.size(), 1 << msb);
+
+        std::optional<dht::token> prev_last_token;
+        for (int i = 0; i < ranges.size(); i++) {
+            auto t = dht::last_token_of_compaction_group(msb, i);
+            testlog.debug("msb: {}, t: {}, range: {}", msb, t, ranges[i]);
+            BOOST_REQUIRE(ranges[i].contains(t, cmp));
+            if (prev_last_token) {
+                BOOST_REQUIRE(ranges[i].contains(dht::next_token(*prev_last_token), cmp));
+                BOOST_REQUIRE(!ranges[i].contains(*prev_last_token, cmp));
+            }
+            prev_last_token = t;
+        }
+    }
+}
