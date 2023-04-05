@@ -6006,9 +6006,14 @@ void storage_proxy::sort_endpoints_by_proximity(const locator::topology& topo, i
 }
 
 inet_address_vector_replica_set storage_proxy::get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const {
-    auto eps = get_live_endpoints(erm, token);
-    sort_endpoints_by_proximity(erm.get_topology(), eps);
-    return eps;
+    auto endpoints = erm.get_token_metadata_ptr()->endpoints_for_reading(token, ks_name);
+    if (!endpoints) {
+        endpoints = erm.get_natural_endpoints_without_node_being_replaced(token);
+    }
+    auto it = boost::range::remove_if(*endpoints, std::not_fn(std::bind_front(&storage_proxy::is_alive, this)));
+    endpoints->erase(it, endpoints->end());
+    sort_endpoints_by_proximity(erm.get_topology(), *endpoints);
+    return std::move(*endpoints);
 }
 
 bool storage_proxy::is_alive(const gms::inet_address& ep) const {
