@@ -10,6 +10,8 @@
 #include <zlib.h>
 #include <snappy-c.h>
 
+#include <seastar/util/defer.hh>
+
 #include "compress.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/class_registrator.hh"
@@ -52,6 +54,10 @@ public:
     size_t compress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress_max_size(size_t input_len) const override;
+
+    size_t uncompress(bytes_source& in, bytes_ostream&) const override;
+
+    size_t compress(bytes_source& in, bytes_ostream&) const override;
 };
 
 compressor::compressor(sstring name, bool writes_uncompressed_size)
@@ -493,6 +499,100 @@ size_t deflate_processor::compress(const char* input,
     } else {
         throw std::runtime_error("deflate compression failure");
     }
+}
+
+size_t deflate_processor::uncompress(bytes_source& in, bytes_ostream& os) const {
+    z_stream zs = { 0, };
+
+    if (inflateInit(&zs) != Z_OK) {
+        throw std::runtime_error("deflate uncompression init failure");
+    }
+
+    auto cleanup = defer([&zs] {
+        inflateEnd(&zs);
+    });
+
+    auto pos = os.size();
+
+    for (;;) {
+        auto frag = in.next();
+        if (frag.empty()) {
+            break;
+        }
+
+        auto size = frag.size();
+        auto flush = in.size() == size ? Z_FINISH : Z_NO_FLUSH;
+        auto ret = Z_OK;
+
+        zs.next_in = reinterpret_cast<Bytef*>(const_cast<int8_t*>(frag.data()));
+        zs.avail_in = size;
+
+        do {
+            if (zs.avail_out == 0) {
+                auto osize = std::max(64u, 2 * zs.avail_in);;
+                auto out = os.write_place_holder(osize);
+                zs.next_out = reinterpret_cast<Bytef*>(out);
+                zs.avail_out = osize;
+            }
+
+            ret = inflate(&zs, flush);
+
+            if (ret == Z_STREAM_ERROR) {
+                throw std::runtime_error("deflate uncompression failure");
+            }
+        } while (zs.avail_out == 0);
+    }
+
+    os.remove_suffix(zs.avail_out);
+
+    return os.size() - pos;
+}
+
+size_t deflate_processor::compress(bytes_source& in, bytes_ostream& os) const {
+    z_stream zs = { 0, };
+
+    if (deflateInit(&zs, Z_DEFAULT_COMPRESSION) != Z_OK) {
+        throw std::runtime_error("deflate compression init failure");
+    }
+
+    auto cleanup = defer([&zs] {
+        deflateEnd(&zs);
+    });
+
+    auto pos = os.size();
+
+    for (;;) {
+        auto frag = in.next();
+        if (frag.empty()) {
+            break;
+        }
+
+        auto size = frag.size();
+        auto flush = in.size() == size ? Z_FINISH : Z_NO_FLUSH;
+        auto ret = Z_OK;
+
+        zs.next_in = reinterpret_cast<Bytef*>(const_cast<int8_t*>(frag.data()));
+        zs.avail_in = size;
+
+        do {
+            if (zs.avail_out == 0) {
+                auto osize = std::max(64u, 2 * zs.avail_in);
+                auto out = os.write_place_holder(osize);
+                zs.next_out = reinterpret_cast<Bytef*>(out);
+                zs.avail_out = osize;
+            }
+
+            ret = ::deflate(&zs, flush);
+
+            if (ret == Z_STREAM_ERROR) {
+                throw std::runtime_error("deflate compression failure");
+            }
+        } while (zs.avail_out == 0);
+    }
+
+    os.remove_suffix(zs.avail_out);
+
+    return os.size() - pos;
 }
 
 size_t deflate_processor::compress_max_size(size_t input_len) const {
