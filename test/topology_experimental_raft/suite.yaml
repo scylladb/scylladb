@@ -1,6 +1,7 @@
 type: Topology
 pool_size: 4
-cluster_size: 0
+cluster:
+  initial_size: 0
 extra_scylla_config_options:
     authenticator: AllowAllAuthenticator
     authorizer: AllowAllAuthorizer
