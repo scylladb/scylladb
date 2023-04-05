@@ -52,7 +52,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm_ext/is_sorted.hpp>
 #include <boost/range/algorithm/sort.hpp>
-#include <regex>
+#include <boost/regex.hpp>
 #include <seastar/core/align.hh>
 #include "mutation/range_tombstone_list.hh"
 #include "counters.hh"
@@ -2363,13 +2363,13 @@ sstable::make_crawling_reader(
 }
 
 static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sstring* const provided_ks, sstring* const provided_cf) {
-    static std::regex la_mx("(la|m[cde])-(\\d+)-(\\w+)-(.*)");
-    static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
+    static boost::regex la_mx("(la|m[cde])-(\\d+)-(\\w+)-(.*)");
+    static boost::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
-    static std::regex dir(format(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/({}|{}|{}|{})(?:/[^/]+)?)?/?",
+    static boost::regex dir(format(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/({}|{}|{}|{})(?:/[^/]+)?)?/?",
             sstables::staging_dir, sstables::quarantine_dir, sstables::upload_dir, sstables::snapshots_dir).c_str());
 
-    std::smatch match;
+    boost::smatch match;
 
     sstable::version_types version;
 
@@ -2387,11 +2387,11 @@ static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sst
 
     sstlog.debug("Make descriptor sstdir: {}; fname: {}", sstdir, fname);
     std::string s(fname);
-    if (std::regex_match(s, match, la_mx)) {
+    if (boost::regex_match(s, match, la_mx)) {
         std::string sdir(sstdir);
-        std::smatch dirmatch;
+        boost::smatch dirmatch;
         if (!ks_cf_provided) {
-            if (std::regex_match(sdir, dirmatch, dir)) {
+            if (boost::regex_match(sdir, dirmatch, dir)) {
                 ks = dirmatch[1].str();
                 cf = dirmatch[2].str();
             } else {
@@ -2402,7 +2402,7 @@ static entry_descriptor make_entry_descriptor(sstring sstdir, sstring fname, sst
         generation = match[2].str();
         format = sstring(match[3].str());
         component = sstring(match[4].str());
-    } else if (std::regex_match(s, match, ka)) {
+    } else if (boost::regex_match(s, match, ka)) {
         if (!ks_cf_provided) {
             ks = match[1].str();
             cf = match[2].str();
