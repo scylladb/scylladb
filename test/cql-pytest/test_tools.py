@@ -15,6 +15,7 @@ import pytest
 import subprocess
 import tempfile
 import random
+import shutil
 import util
 
 # To run the Scylla tools, we need to run Scylla executable itself, so we
@@ -538,3 +539,202 @@ def test_scylla_sstable_script(cql, test_keyspace, scylla_path, scylla_data_dir,
 
         assert dump_lua_json == cxx_json
         assert slice_lua_json == cxx_json
+
+
+@pytest.fixture(scope="function")
+def temp_workdir():
+    """ Creates a temporary work directory, for the scope of a single test. """
+    with tempfile.TemporaryDirectory() as workdir:
+        yield workdir
+
+
+@pytest.fixture(scope="class")
+def system_scylla_local_sstable_prepared(cql, scylla_data_dir):
+    """ Prepares the system.scylla_local table for the needs of the schema loading tests.
+
+    Namely:
+    * Disable auto-compaction for the system and system-schema keyspaces.
+    * Flushes said keyspaces.
+    * Locates an sstable belonging to system.scylla_local and returns it.
+    """
+    with nodetool.no_autocompaction_context(cql, "system", "system_schema"):
+        # Need to flush system keyspaces whoose sstables we want to meddle
+        # with, to make sure they are actually on disk.
+        nodetool.flush_keyspace(cql, "system_schema")
+        nodetool.flush_keyspace(cql, "system")
+        sstables = glob.glob(os.path.join(scylla_data_dir, "system", "scylla_local-*", "*-Data.db"))
+        yield sstables[0]
+
+
+@pytest.fixture(scope="class")
+def system_scylla_local_schema_file():
+    """ Prepares a schema.cql with the schema of system.scylla_local. """
+    with tempfile.NamedTemporaryFile("w+t") as f:
+        f.write("CREATE TABLE system.scylla_local (key text PRIMARY KEY, value text)")
+        f.flush()
+        yield f.name
+
+
+@pytest.fixture(scope="class")
+def scylla_home_dir(scylla_data_dir):
+    """ Create a temporary directory structure to be used as SCYLLA_HOME.
+
+    The top-level directory contains a conf dir, which contains a scylla.yaml,
+    which has the workdir configuration item set.
+    The top level directory can be used as SCYLLA_HOME, while the conf dir can be
+    used as SCYLLA_CONF environment variables respectively, allowing scylla sstable
+    tool to locate the work-directory of the node.
+    """
+    with tempfile.TemporaryDirectory() as scylla_home:
+        conf_dir = os.path.join(scylla_home, "conf")
+        os.mkdir(conf_dir)
+
+        scylla_yaml_file = os.path.join(conf_dir, "scylla.yaml")
+        with open(scylla_yaml_file, "w") as f:
+            f.write(f"workdir: {os.path.split(scylla_data_dir)[0]}")
+
+        yield scylla_home
+
+
+@pytest.fixture(scope="class")
+def system_scylla_local_reference_dump(scylla_path, system_scylla_local_sstable_prepared):
+    """ Produce a reference json dump of the system.scylla_local sstable. """
+    dump_reference = subprocess.check_output([
+        scylla_path,
+        "sstable",
+        "dump-data",
+        "--output-format", "json",
+        "--logger-log-level", "scylla-sstable=debug",
+        "--system-schema",
+        "--keyspace", "system",
+        "--table", "scylla_local",
+        system_scylla_local_sstable_prepared])
+    dump_reference = json.loads(dump_reference)["sstables"]
+    return list(dump_reference.values())[0]
+
+
+class TestScyllaSsstableSchemaLoading:
+    """ Test class containing all the schema loader tests.
+
+    Helps in providing a natural scope of all the specialized fixtures shared by
+    these tests.
+    """
+    keyspace = "system"
+    table = "scylla_local"
+
+    def check(self, scylla_path, extra_args, sstable, dump_reference, cwd=None, env=None):
+        dump_common_args = [scylla_path, "sstable", "dump-data", "--output-format", "json", "--logger-log-level", "scylla-sstable=debug"]
+        dump = json.loads(subprocess.check_output(dump_common_args + extra_args + [sstable], cwd=cwd, env=env))["sstables"]
+        dump = list(dump.values())[0]
+        assert dump == dump_reference
+
+    def copy_sstable_to_external_dir(self, system_scylla_local_sstable_prepared, temp_workdir):
+        table_data_dir, sstable_filename = os.path.split(system_scylla_local_sstable_prepared)
+        sstable_glob = "-".join(sstable_filename.split("-")[:-1]) + "*"
+        sstable_components = glob.glob(os.path.join(table_data_dir, sstable_glob))
+
+        for c in sstable_components:
+            shutil.copy(c, temp_workdir)
+
+        return glob.glob(os.path.join(temp_workdir, "*-Data.db"))[0]
+
+    def test_table_dir_system_schema(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump):
+        self.check(
+                scylla_path,
+                ["--system-schema", "--keyspace", self.keyspace, "--table", self.table],
+                system_scylla_local_sstable_prepared,
+                system_scylla_local_reference_dump)
+
+    def test_table_dir_schema_file(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, system_scylla_local_schema_file):
+        self.check(
+                scylla_path,
+                ["--schema-file", system_scylla_local_schema_file],
+                system_scylla_local_sstable_prepared,
+                system_scylla_local_reference_dump)
+
+    def test_table_dir_data_dir(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, scylla_data_dir):
+        self.check(
+                scylla_path,
+                ["--scylla-data-dir", scylla_data_dir, "--keyspace", self.keyspace, "--table", self.table],
+                system_scylla_local_sstable_prepared,
+                system_scylla_local_reference_dump)
+
+    def test_table_dir_scylla_yaml(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, scylla_home_dir):
+        scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
+        self.check(
+                scylla_path,
+                ["--scylla-yaml-file", scylla_yaml_file, "--keyspace", self.keyspace, "--table", self.table],
+                system_scylla_local_sstable_prepared,
+                system_scylla_local_reference_dump)
+
+    def test_external_dir_system_schema(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, temp_workdir):
+        ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
+        self.check(
+                scylla_path,
+                ["--system-schema", "--keyspace", self.keyspace, "--table", self.table],
+                ext_sstable,
+                system_scylla_local_reference_dump)
+
+    def test_external_dir_schema_file(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, temp_workdir, system_scylla_local_schema_file):
+        ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
+        self.check(
+                scylla_path,
+                ["--schema-file", system_scylla_local_schema_file],
+                ext_sstable,
+                system_scylla_local_reference_dump)
+
+
+    def test_external_dir_data_dir(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, temp_workdir, scylla_data_dir):
+        ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
+        self.check(
+                scylla_path,
+                ["--scylla-data-dir", scylla_data_dir, "--keyspace", self.keyspace, "--table", self.table],
+                ext_sstable,
+                system_scylla_local_reference_dump)
+
+    def test_external_dir_scylla_yaml(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, temp_workdir, scylla_home_dir):
+        ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
+        scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
+        self.check(
+                scylla_path,
+                ["--scylla-yaml-file", scylla_yaml_file, "--keyspace", self.keyspace, "--table", self.table],
+                ext_sstable,
+                system_scylla_local_reference_dump)
+
+    def test_external_dir_autodetect_schema_file(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, temp_workdir, system_scylla_local_schema_file):
+        ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
+        shutil.copy(system_scylla_local_schema_file, os.path.join(temp_workdir, "schema.cql"))
+        self.check(
+                scylla_path,
+                [],
+                ext_sstable,
+                system_scylla_local_reference_dump,
+                cwd=temp_workdir)
+
+    def test_external_dir_autodetect_conf_dir(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, temp_workdir, scylla_home_dir):
+        ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
+        self.check(
+                scylla_path,
+                ["--keyspace", self.keyspace, "--table", self.table],
+                ext_sstable,
+                system_scylla_local_reference_dump,
+                cwd=scylla_home_dir)
+
+    def test_external_dir_autodetect_conf_dir_conf_env(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, temp_workdir, scylla_home_dir):
+        ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
+        conf_dir = os.path.join(scylla_home_dir, "conf")
+        self.check(
+                scylla_path,
+                ["--keyspace", self.keyspace, "--table", self.table],
+                ext_sstable,
+                system_scylla_local_reference_dump,
+                env={"SCYLLA_CONF": conf_dir})
+
+    def test_external_dir_autodetect_conf_dir_home_env(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, temp_workdir, scylla_home_dir):
+        ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
+        self.check(
+                scylla_path,
+                ["--keyspace", self.keyspace, "--table", self.table],
+                ext_sstable,
+                system_scylla_local_reference_dump,
+                env={"SCYLLA_HOME": scylla_home_dir})
