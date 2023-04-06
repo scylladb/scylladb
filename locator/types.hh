@@ -25,6 +25,10 @@ using inet_address = gms::inet_address;
 struct endpoint_dc_rack {
     sstring dc;
     sstring rack;
+
+    static thread_local const endpoint_dc_rack default_location;
+
+    bool operator==(const endpoint_dc_rack&) const = default;
 };
 
 using dc_rack_fn = seastar::noncopyable_function<endpoint_dc_rack(inet_address)>;

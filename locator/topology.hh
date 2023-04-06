@@ -13,6 +13,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <compare>
+#include <iostream>
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
@@ -25,29 +26,147 @@ using namespace seastar;
 
 namespace locator {
 
+class topology;
+
+class node;
+using node_holder = std::unique_ptr<node>;
+
+class node {
+public:
+    using this_node = bool_class<struct this_node_tag>;
+    using idx_type = int;
+
+    enum class state {
+        none = 0,
+        joining,    // while bootstrapping, replacing
+        normal,
+        leaving,    // while decommissioned, removed, replaced
+        left        // after decommissioned, removed, replaced
+    };
+
+private:
+    const topology* _topology;
+    host_id _host_id;
+    inet_address _endpoint;
+    endpoint_dc_rack _dc_rack;
+    state _state;
+
+    // Is this node the `localhost` instance
+    this_node _is_this_node;
+    idx_type _idx = -1;
+
+public:
+    node(const locator::topology* topology, locator::host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, state state, this_node is_this_node = this_node::no, idx_type idx = -1);
+
+    node(const node&) = delete;
+    node(node&&) = delete;
+
+    const topology* topology() const noexcept {
+        return _topology;
+    }
+
+    const host_id& host_id() const noexcept {
+        return _host_id;
+    }
+
+    const inet_address& endpoint() const noexcept {
+        return _endpoint;
+    }
+
+    const endpoint_dc_rack& dc_rack() const noexcept {
+        return _dc_rack;
+    }
+
+    // Is this "localhost"?
+    this_node is_this_node() const noexcept { return _is_this_node; }
+
+    // idx < 0 means "unassigned"
+    idx_type idx() const noexcept { return _idx; }
+
+    state get_state() const noexcept { return _state; }
+
+    static std::string to_string(state);
+
+private:
+    static node_holder make(const locator::topology* topology, locator::host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, state state, node::this_node is_this_node = this_node::no, idx_type idx = -1);
+    node_holder clone() const;
+
+    void set_topology(const locator::topology* topology) noexcept { _topology = topology; }
+    void set_idx(idx_type idx) noexcept { _idx = idx; }
+    void set_state(state state) noexcept { _state = state; }
+
+    friend class topology;
+};
+
 class topology {
 public:
     struct config {
+        host_id this_host_id;
+        inet_address this_endpoint;
         endpoint_dc_rack local_dc_rack;
         bool disable_proximity_sorting = false;
     };
     topology(config cfg);
-    topology(topology&&) = default;
+    topology(topology&&) noexcept;
 
     topology& operator=(topology&&) = default;
 
     future<topology> clone_gently() const;
     future<> clear_gently() noexcept;
 
+public:
+    const node* this_node() const noexcept {
+        return _nodes.size() ? _nodes.front().get() : nullptr;
+    }
+
+    // Adds a node with given host_id, endpoint, and DC/rack.
+    const node* add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr, node::state state);
+
+    // Optionally updates node's current host_id, endpoint, or DC/rack.
+    // Note: the host_id may be updated from null to non-null after a new node gets a new, random host_id,
+    // or a peer node host_id may be updated when the node is replaced with another node using the same ip address.
+    const node* update_node(node* node, std::optional<host_id> opt_id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st);
+
+    // Removes a node using its host_id
+    // Returns true iff the node was found and removed.
+    bool remove_node(host_id id);
+
+    // Looks up a node by its host_id.
+    // Returns a pointer to the node if found, or nullptr otherwise.
+    const node* find_node(host_id id) const noexcept;
+
+    // Looks up a node by its inet_address.
+    // Returns a pointer to the node if found, or nullptr otherwise.
+    const node* find_node(const inet_address& ep) const noexcept;
+
+    // Finds a node by its index
+    // Returns a pointer to the node if found, or nullptr otherwise.
+    const node* find_node(node::idx_type idx) const noexcept;
+
+    // Returns true if a node with given host_id is found
+    bool has_node(host_id id) const noexcept;
+    bool has_node(inet_address id) const noexcept;
+
     /**
      * Stores current DC/rack assignment for ep
+     *
+     * Adds or updates a node with given endpoint
      */
-    void update_endpoint(const inet_address& ep, endpoint_dc_rack dr);
+    const node* add_or_update_endpoint(inet_address ep, std::optional<host_id> opt_id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st);
+
+    // Legacy entry point from token_metadata::update_topology
+    const node* add_or_update_endpoint(inet_address ep, endpoint_dc_rack dr, std::optional<node::state> opt_st) {
+        return add_or_update_endpoint(ep, std::nullopt, std::move(dr), std::move(opt_st));
+    }
+    const node* add_or_update_endpoint(inet_address ep, host_id id) {
+        return add_or_update_endpoint(ep, id, std::nullopt, std::nullopt);
+    }
 
     /**
      * Removes current DC/rack assignment for ep
+     * Returns true if the node was found and removed.
      */
-    void remove_endpoint(inet_address ep);
+    bool remove_endpoint(inet_address ep);
 
     /**
      * Returns true iff contains given endpoint.
@@ -71,11 +190,48 @@ public:
         return _datacenters;
     }
 
+    // Get dc/rack location of this node
+    const endpoint_dc_rack& get_location() const noexcept {
+        return this_node()->dc_rack();
+    }
+    // Get dc/rack location of a node identified by host_id
+    // The specified node must exist.
+    const endpoint_dc_rack& get_location(host_id id) const {
+        return find_node(id)->dc_rack();
+    }
+    // Get dc/rack location of a node identified by endpoint
+    // The specified node must exist.
     const endpoint_dc_rack& get_location(const inet_address& ep) const;
-    sstring get_rack() const;
-    sstring get_rack(inet_address ep) const;
-    sstring get_datacenter() const;
-    sstring get_datacenter(inet_address ep) const;
+
+    // Get datacenter of this node
+    const sstring& get_datacenter() const noexcept {
+        return get_location().dc;
+    }
+    // Get datacenter of a node identified by host_id
+    // The specified node must exist.
+    const sstring& get_datacenter(host_id id) const {
+        return get_location(id).dc;
+    }
+    // Get datacenter of a node identified by endpoint
+    // The specified node must exist.
+    const sstring& get_datacenter(inet_address ep) const {
+        return get_location(ep).dc;
+    }
+
+    // Get rack of this node
+    const sstring& get_rack() const noexcept {
+        return get_location().rack;
+    }
+    // Get rack of a node identified by host_id
+    // The specified node must exist.
+    const sstring& get_rack(host_id id) const {
+        return get_location(id).rack;
+    }
+    // Get rack of a node identified by endpoint
+    // The specified node must exist.
+    const sstring& get_rack(inet_address ep) const {
+        return get_location(ep).rack;
+    }
 
     auto get_local_dc_filter() const noexcept {
         return [ this, local_dc = get_datacenter() ] (inet_address ep) {
@@ -96,7 +252,20 @@ public:
 
 private:
     // default constructor for cloning purposes
-    topology() = default;
+    topology() noexcept;
+
+    const node* add_node(node_holder node);
+    void remove_node(const node* node);
+
+    static std::string debug_format(const node*);
+
+    void index_node(const node* node);
+    void unindex_node(const node* node);
+    node_holder pop_node(const node* node);
+
+    static node* make_mutable(const node* nptr) {
+        return const_cast<node*>(nptr);
+    }
 
     /**
      * compares two endpoints in relation to the target endpoint, returning as
@@ -109,6 +278,14 @@ private:
      */
     std::weak_ordering compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
 
+    unsigned _shard;
+    std::vector<node_holder> _nodes;
+    std::unordered_map<host_id, const node*> _nodes_by_host_id;
+    std::unordered_map<inet_address, const node*> _nodes_by_endpoint;
+
+    std::unordered_map<sstring, std::unordered_set<const node*>> _dc_nodes;
+    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<const node*>>> _dc_rack_nodes;
+
     /** multi-map: DC -> endpoints in that DC */
     std::unordered_map<sstring,
                        std::unordered_set<inet_address>>
@@ -119,9 +296,6 @@ private:
                        std::unordered_map<sstring,
                                           std::unordered_set<inet_address>>>
         _dc_racks;
-
-    /** reverse-lookup map: endpoint -> current known dc/rack assignment */
-    std::unordered_map<inet_address, endpoint_dc_rack> _current_locations;
 
     bool _sort_by_proximity = true;
 
@@ -135,3 +309,26 @@ public:
 };
 
 } // namespace locator
+
+namespace std {
+
+std::ostream& operator<<(std::ostream& out, const locator::node& node);
+std::ostream& operator<<(std::ostream& out, const locator::node::state& state);
+
+} // namespace std
+
+template <>
+struct fmt::formatter<locator::node> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const locator::node& node, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}/{}", node.host_id(), node.endpoint());
+    }
+};
+
+template <>
+struct fmt::formatter<locator::node::state> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const locator::node::state& state, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", locator::node::to_string(state));
+    }
+};

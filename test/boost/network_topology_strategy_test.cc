@@ -8,6 +8,9 @@
 
 #include <boost/test/unit_test.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include "gms/inet_address.hh"
+#include "locator/types.hh"
+#include "utils/UUID_gen.hh"
 #include "utils/fb_utilities.hh"
 #include "utils/sequenced_set.hh"
 #include "locator/network_topology_strategy.hh"
@@ -36,6 +39,7 @@ using namespace locator;
 struct ring_point {
     double point;
     inet_address host;
+    host_id id = host_id::create_random_id();
 };
 
 void print_natural_endpoints(double point, const inet_address_vector_replica_set v) {
@@ -142,9 +146,9 @@ auto d2t = [](double d) -> int64_t {
 void full_ring_check(const std::vector<ring_point>& ring_points,
                      const std::map<sstring, sstring>& options,
                      abstract_replication_strategy::ptr_type ars_ptr,
-                     locator::token_metadata_ptr tmptr,
-                     const locator::topology& topo) {
+                     locator::token_metadata_ptr tmptr) {
     auto& tm = *tmptr;
+    const auto& topo = tm.get_topology();
     strategy_sanity_check(ars_ptr, tm, options);
 
     auto erm = calculate_effective_replication_map(ars_ptr, tmptr).get0();
@@ -173,18 +177,12 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
     }
 }
 
-std::unique_ptr<locator::topology> generate_topology(const std::vector<ring_point>& pts) {
-    auto topo = std::make_unique<locator::topology>(locator::topology::config{});
-
+locator::endpoint_dc_rack make_endpoint_dc_rack(gms::inet_address endpoint) {
     // This resembles rack_inferring_snitch dc/rack generation which is
     // still in use by this test via token_metadata internals
-    for (const auto& p : pts) {
-        auto rack = std::to_string(uint8_t(p.host.bytes()[2]));
-        auto dc = std::to_string(uint8_t(p.host.bytes()[1]));
-        topo->update_endpoint(p.host, { dc, rack });
-    }
-
-    return topo;
+    auto dc = std::to_string(uint8_t(endpoint.bytes()[1]));
+    auto rack = std::to_string(uint8_t(endpoint.bytes()[2]));
+    return locator::endpoint_dc_rack{dc, rack};
 }
 
 // Run in a seastar thread.
@@ -200,7 +198,11 @@ void simple_test() {
     auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
-    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, locator::token_metadata::config{});
+    locator::token_metadata::config tm_cfg;
+    tm_cfg.topo_cfg.this_host_id = host_id::create_random_id();
+    tm_cfg.topo_cfg.this_endpoint = utils::fb_utilities::get_broadcast_address();
+    tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
+    locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
 
     std::vector<ring_point> ring_points = {
         { 1.0,  inet_address("192.100.10.1") },
@@ -216,18 +218,14 @@ void simple_test() {
         { 11.0, inet_address("192.102.40.2") }
     };
 
-    auto topo = generate_topology(ring_points);
-
-    std::unordered_map<inet_address, std::unordered_set<token>> endpoint_tokens;
-    for (const auto& [ring_point, endpoint] : ring_points) {
-        endpoint_tokens[endpoint].insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
-    }
-
     // Initialize the token_metadata
-    stm.mutate_token_metadata([&endpoint_tokens, &topo] (token_metadata& tm) -> future<> {
-        for (auto&& i : endpoint_tokens) {
-            tm.update_topology(i.first, topo->get_location(i.first));
-            co_await tm.update_normal_tokens(std::move(i.second), i.first);
+    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+        auto& topo = tm.get_topology();
+        for (const auto& [ring_point, endpoint, id] : ring_points) {
+            std::unordered_set<token> tokens;
+            tokens.insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
+            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
+            co_await tm.update_normal_tokens(std::move(tokens), endpoint);
         }
     }).get();
 
@@ -242,8 +240,7 @@ void simple_test() {
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", options323);
 
-
-    full_ring_check(ring_points, options323, ars_ptr, stm.get(), *topo);
+    full_ring_check(ring_points, options323, ars_ptr, stm.get());
 
     ///////////////
     // Create the replication strategy
@@ -256,7 +253,7 @@ void simple_test() {
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", options320);
 
-    full_ring_check(ring_points, options320, ars_ptr, stm.get(), *topo);
+    full_ring_check(ring_points, options320, ars_ptr, stm.get());
 
     //
     // Check cache invalidation: invalidate the cache and run a full ring
@@ -268,7 +265,7 @@ void simple_test() {
         tm.invalidate_cached_rings();
         return make_ready_future<>();
     }).get();
-    full_ring_check(ring_points, options320, ars_ptr, stm.get(), *topo);
+    full_ring_check(ring_points, options320, ars_ptr, stm.get());
 }
 
 // Run in a seastar thread.
@@ -328,19 +325,18 @@ void heavy_origin_test() {
         }
     }
 
-    auto topo = generate_topology(ring_points);
-
-    stm.mutate_token_metadata([&tokens, &topo] (token_metadata& tm) -> future<> {
-        for (auto&& i : tokens) {
-            tm.update_topology(i.first, topo->get_location(i.first));
-            co_await tm.update_normal_tokens(std::move(i.second), i.first);
+    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+        auto& topo = tm.get_topology();
+        for (const auto& [ring_point, endpoint, id] : ring_points) {
+            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
+            co_await tm.update_normal_tokens(std::move(tokens[endpoint]), endpoint);
         }
     }).get();
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", config_options);
 
-    full_ring_check(ring_points, config_options, ars_ptr, stm.get(), *topo);
+    full_ring_check(ring_points, config_options, ars_ptr, stm.get());
 }
 
 
@@ -396,7 +392,7 @@ static bool has_sufficient_replicas(
 
 static locator::endpoint_set calculate_natural_endpoints(
                 const token& search_token, const token_metadata& tm,
-                locator::topology& topo,
+                const locator::topology& topo,
                 const std::unordered_map<sstring, size_t>& datacenters) {
     //
     // We want to preserve insertion order so that the first added endpoint
@@ -434,7 +430,7 @@ static locator::endpoint_set calculate_natural_endpoints(
     // the members of a DC
     //
     const std::unordered_map<sstring,
-                       std::unordered_set<inet_address>>&
+                       std::unordered_set<inet_address>>
         all_endpoints = tp.get_datacenter_endpoints();
     //
     // all racks in a DC so we can check when we have exhausted all racks in a
@@ -442,7 +438,7 @@ static locator::endpoint_set calculate_natural_endpoints(
     //
     const std::unordered_map<sstring,
                        std::unordered_map<sstring,
-                                          std::unordered_set<inet_address>>>&
+                                          std::unordered_set<inet_address>>>
         racks = tp.get_datacenter_racks();
 
     // not aware of any cluster members
@@ -506,7 +502,7 @@ static locator::endpoint_set calculate_natural_endpoints(
 }
 
 // Called in a seastar thread.
-static void test_equivalence(const shared_token_metadata& stm, std::unique_ptr<locator::topology> topo, const std::unordered_map<sstring, size_t>& datacenters) {
+static void test_equivalence(const shared_token_metadata& stm, const locator::topology& topo, const std::unordered_map<sstring, size_t>& datacenters) {
     class my_network_topology_strategy : public network_topology_strategy {
     public:
         using network_topology_strategy::network_topology_strategy;
@@ -524,7 +520,7 @@ static void test_equivalence(const shared_token_metadata& stm, std::unique_ptr<l
     const token_metadata& tm = *stm.get();
     for (size_t i = 0; i < 1000; ++i) {
         auto token = dht::token::get_random_token();
-        auto expected = calculate_natural_endpoints(token, tm, *topo, datacenters);
+        auto expected = calculate_natural_endpoints(token, tm, topo, datacenters);
         auto actual = nts.calculate_natural_endpoints(token, tm).get0();
 
         // Because the old algorithm does not put the nodes in the correct order in the case where more replicas
@@ -539,7 +535,7 @@ static void test_equivalence(const shared_token_metadata& stm, std::unique_ptr<l
 }
 
 
-std::unique_ptr<locator::topology> generate_topology(const std::unordered_map<sstring, size_t> datacenters, const std::vector<inet_address>& nodes) {
+void generate_topology(topology& topo, const std::unordered_map<sstring, size_t> datacenters, const std::vector<inet_address>& nodes) {
     auto& e1 = seastar::testing::local_random_engine;
 
     std::unordered_map<sstring, size_t> racks_per_dc;
@@ -559,16 +555,12 @@ std::unique_ptr<locator::topology> generate_topology(const std::unordered_map<ss
         out = std::fill_n(out, rf, std::cref(dc));
     }
 
-    auto topo = std::make_unique<locator::topology>(locator::topology::config{});
-
     for (auto& node : nodes) {
         const sstring& dc = dcs[udist(0, dcs.size() - 1)(e1)];
         auto rc = racks_per_dc.at(dc);
         auto r = udist(0, rc)(e1);
-        topo->update_endpoint(node, { dc, to_sstring(r) });
+        topo.add_node(host_id::create_random_id(), node, {dc, to_sstring(r)}, locator::node::state::normal);
     }
-
-    return topo;
 }
 
 SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
@@ -595,7 +587,6 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
     for (size_t run = 0; run < RUNS; ++run) {
         semaphore sem(1);
         shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{});
-        auto topo = generate_topology(datacenters, nodes);
 
         std::unordered_set<dht::token> random_tokens;
         while (random_tokens.size() < nodes.size() * VNODES) {
@@ -610,13 +601,13 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
             }
         }
         
-        stm.mutate_token_metadata([&endpoint_tokens, &topo] (token_metadata& tm) -> future<> {
+        stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+            generate_topology(tm.get_topology(), datacenters, nodes);
             for (auto&& i : endpoint_tokens) {
-                tm.update_topology(i.first, topo->get_location(i.first));
                 co_await tm.update_normal_tokens(std::move(i.second), i.first);
             }
         }).get();
-        test_equivalence(stm, std::move(topo), datacenters);
+        test_equivalence(stm, stm.get()->get_topology(), datacenters);
     }
 }
 
@@ -703,21 +694,25 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
 
     semaphore sem(1);
     shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{});
-    auto topo = generate_topology(datacenters, nodes);
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
+        auto& topo = tm.get_topology();
+        generate_topology(topo, datacenters, nodes);
 
-    const auto& address = nodes[tests::random::get_int<size_t>(0, NODES-1)];
-    const auto& a1 = nodes[tests::random::get_int<size_t>(0, NODES-1)];
-    const auto& a2 = nodes[tests::random::get_int<size_t>(0, NODES-1)];
+        const auto& address = nodes[tests::random::get_int<size_t>(0, NODES-1)];
+        const auto& a1 = nodes[tests::random::get_int<size_t>(0, NODES-1)];
+        const auto& a2 = nodes[tests::random::get_int<size_t>(0, NODES-1)];
 
-    topo->test_compare_endpoints(address, address, address);
-    topo->test_compare_endpoints(address, address, a1);
-    topo->test_compare_endpoints(address, a1, address);
-    topo->test_compare_endpoints(address, a1, a1);
-    topo->test_compare_endpoints(address, a1, a2);
-    topo->test_compare_endpoints(address, a2, a1);
+        topo.test_compare_endpoints(address, address, address);
+        topo.test_compare_endpoints(address, address, a1);
+        topo.test_compare_endpoints(address, a1, address);
+        topo.test_compare_endpoints(address, a1, a1);
+        topo.test_compare_endpoints(address, a1, a2);
+        topo.test_compare_endpoints(address, a2, a1);
 
-    topo->test_compare_endpoints(bogus_address, bogus_address, bogus_address);
-    topo->test_compare_endpoints(address, bogus_address, bogus_address);
-    topo->test_compare_endpoints(address, a1, bogus_address);
-    topo->test_compare_endpoints(address, bogus_address, a2);
+        topo.test_compare_endpoints(bogus_address, bogus_address, bogus_address);
+        topo.test_compare_endpoints(address, bogus_address, bogus_address);
+        topo.test_compare_endpoints(address, a1, bogus_address);
+        topo.test_compare_endpoints(address, bogus_address, a2);
+        return make_ready_future<>();
+    }).get();
 }

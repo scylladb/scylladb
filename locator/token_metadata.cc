@@ -19,6 +19,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <boost/range/adaptors.hpp>
+#include "seastar/core/smp.hh"
 #include "utils/stall_free.hh"
 #include "utils/fb_utilities.hh"
 
@@ -101,8 +102,8 @@ public:
         return _bootstrap_tokens;
     }
 
-    void update_topology(inet_address ep, endpoint_dc_rack dr) {
-        _topology.update_endpoint(ep, std::move(dr));
+    void update_topology(inet_address ep, endpoint_dc_rack dr, std::optional<node::state> opt_st) {
+        _topology.add_or_update_endpoint(ep, std::move(dr), std::move(opt_st));
     }
 
     /**
@@ -302,6 +303,7 @@ public:
 
     void invalidate_cached_rings() {
         _ring_version = ++_static_ring_version;
+        tlogger.debug("ring_version={}", _ring_version);
     }
 
     friend class token_metadata;
@@ -519,6 +521,7 @@ void token_metadata_impl::debug_show() const {
 }
 
 void token_metadata_impl::update_host_id(const host_id& host_id, inet_address endpoint) {
+    _topology.add_or_update_endpoint(endpoint, host_id);
     _endpoint_to_host_id_map[endpoint] = host_id;
 }
 
@@ -849,7 +852,7 @@ void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
     for (auto& x : tmp) {
         auto& endpoint = x.first;
         auto& tokens = x.second;
-        all_left_metadata->update_topology(endpoint, get_dc_rack(endpoint));
+        all_left_metadata->update_topology(endpoint, get_dc_rack(endpoint), node::state::joining);
         all_left_metadata->update_normal_tokens(tokens, endpoint).get();
         auto address_ranges = strategy.get_ranges(endpoint, *all_left_metadata).get0();
         for (const dht::token_range& x : address_ranges) {
@@ -1022,8 +1025,8 @@ token_metadata::get_bootstrap_tokens() const {
 }
 
 void
-token_metadata::update_topology(inet_address ep, endpoint_dc_rack dr) {
-    _impl->update_topology(ep, std::move(dr));
+token_metadata::update_topology(inet_address ep, endpoint_dc_rack dr, std::optional<node::state> opt_st) {
+    _impl->update_topology(ep, std::move(dr), std::move(opt_st));
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>
@@ -1251,6 +1254,32 @@ future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_funct
     tm.invalidate_cached_rings();
     co_await func(tm);
     set(make_token_metadata_ptr(std::move(tm)));
+}
+
+future<> shared_token_metadata::mutate_on_all_shards(sharded<shared_token_metadata>& stm, seastar::noncopyable_function<future<> (token_metadata&)> func) {
+    auto base_shard = this_shard_id();
+    assert(base_shard == 0);
+    auto lk = co_await stm.local().get_lock();
+
+    std::vector<mutable_token_metadata_ptr> pending_token_metadata_ptr;
+    pending_token_metadata_ptr.resize(smp::count);
+    auto tmptr = make_token_metadata_ptr(co_await stm.local().get()->clone_async());
+    auto& tm = *tmptr;
+    // bump the token_metadata ring_version
+    // to invalidate cached token/replication mappings
+    // when the modified token_metadata is committed.
+    tm.invalidate_cached_rings();
+    co_await func(tm);
+
+    // Apply the mutated token_metadata only after successfully cloning it on all shards.
+    pending_token_metadata_ptr[base_shard] = tmptr;
+    co_await smp::invoke_on_others(base_shard, [&] () -> future<> {
+        pending_token_metadata_ptr[this_shard_id()] = make_token_metadata_ptr(co_await tm.clone_async());
+    });
+
+    co_await stm.invoke_on_all([&] (shared_token_metadata& stm) {
+        stm.set(std::move(pending_token_metadata_ptr[this_shard_id()]));
+    });
 }
 
 host_id_or_endpoint::host_id_or_endpoint(const sstring& s, param_type restrict) {

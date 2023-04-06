@@ -29,7 +29,7 @@ void set_endpoint_snitch(http_context& ctx, routes& r, sharded<locator::snitch_p
         if (!topology.has_endpoint(ep)) {
             // Cannot return error here, nodetool status can race, request
             // info about just-left node and not handle it nicely
-            return sstring(locator::production_snitch_base::default_dc);
+            return locator::endpoint_dc_rack::default_location.dc;
         }
         return topology.get_datacenter(ep);
     });
@@ -40,7 +40,7 @@ void set_endpoint_snitch(http_context& ctx, routes& r, sharded<locator::snitch_p
         if (!topology.has_endpoint(ep)) {
             // Cannot return error here, nodetool status can race, request
             // info about just-left node and not handle it nicely
-            return sstring(locator::production_snitch_base::default_rack);
+            return locator::endpoint_dc_rack::default_location.rack;
         }
         return topology.get_rack(ep);
     });
