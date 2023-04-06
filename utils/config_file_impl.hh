@@ -10,7 +10,7 @@
 #pragma once
 
 #include <iterator>
-#include <regex>
+#include <boost/regex.hpp>
 
 #include <yaml-cpp/yaml.h>
 #include <boost/any.hpp>
@@ -107,11 +107,11 @@ void validate(boost::any& out, const std::vector<std::string>& in, std::unordere
         out = boost::any(map_type());
     }
 
-    static const std::regex key(R"foo((?:^|\:)([^=:]+)=)foo");
+    static const boost::regex key(R"foo((?:^|\:)([^=:]+)=)foo");
 
     auto* p = boost::any_cast<map_type>(&out);
     for (const auto& s : in) {
-        std::sregex_iterator i(s.begin(), s.end(), key), e;
+        boost::sregex_iterator i(s.begin(), s.end(), key), e;
 
         if (i == e) {
             throw boost::program_options::invalid_option_value(s);
