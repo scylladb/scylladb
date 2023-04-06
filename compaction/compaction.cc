@@ -696,11 +696,12 @@ private:
     // to be compacted together.
     future<> consume_without_gc_writer(gc_clock::time_point compaction_time) {
         auto consumer = make_interposer_consumer([this] (flat_mutation_reader_v2 reader) mutable {
-            return seastar::async([this, reader = std::move(reader)] () mutable {
-                auto close_reader = deferred_close(reader);
+          return with_closeable(std::move(reader), [&] (auto& reader) {
+            return seastar::async([this, &reader] () {
                 auto cfc = compacted_fragments_writer(get_compacted_fragments_writer());
                 reader.consume_in_thread(std::move(cfc));
             });
+          });
         });
         const auto& gc_state = _table_s.get_tombstone_gc_state();
         return consumer(make_compacting_reader(make_sstable_reader(), compaction_time, max_purgeable_func(), gc_state));
@@ -716,9 +717,8 @@ private:
         }
         auto consumer = make_interposer_consumer([this, now] (flat_mutation_reader_v2 reader) mutable
         {
-            return seastar::async([this, reader = std::move(reader), now] () mutable {
-                auto close_reader = deferred_close(reader);
-
+          return with_closeable(std::move(reader), [&] (auto& reader) {
+            return seastar::async([this, now, &reader] () {
                 if (enable_garbage_collected_sstable_writer()) {
                     using compact_mutations = compact_for_compaction_v2<compacted_fragments_writer, compacted_fragments_writer>;
                     auto cfc = compact_mutations(*schema(), now,
@@ -738,6 +738,7 @@ private:
                     noop_compacted_fragments_consumer());
                 reader.consume_in_thread(std::move(cfc));
             });
+          });
         });
         return consumer(make_sstable_reader());
     }
