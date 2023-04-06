@@ -14,7 +14,7 @@
 #include <cctype>
 #include <optional>
 #include <limits>
-#include <regex>
+#include <boost/regex.hpp>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -260,15 +260,15 @@ std::optional<cql_duration> parse_duration_standard_format(std::string_view s) {
     //
 
     static const auto pattern =
-            std::regex("(\\d+)(y|Y|mo|MO|mO|Mo|w|W|d|D|h|H|s|S|ms|MS|mS|Ms|us|US|uS|Us|µs|µS|ns|NS|nS|Ns|m|M)");
+            boost::regex("(\\d+)(y|Y|mo|MO|mO|Mo|w|W|d|D|h|H|s|S|ms|MS|mS|Ms|us|US|uS|Us|µs|µS|ns|NS|nS|Ns|m|M)");
 
     auto iter = s.cbegin();
-    std::cmatch match;
+    boost::cmatch match;
 
     duration_builder b;
 
     // `match_continuous` ensures that the entire string must be included in a match.
-    while (std::regex_search(iter, s.end(), match, pattern, std::regex_constants::match_continuous)) {
+    while (boost::regex_search(iter, s.end(), match, pattern, boost::regex_constants::match_continuous)) {
         iter += match.length();
 
         auto symbol = match[2].str();
@@ -298,10 +298,10 @@ std::optional<cql_duration> parse_duration_standard_format(std::string_view s) {
 }
 
 std::optional<cql_duration> parse_duration_iso8601_format(std::string_view s) {
-    static const auto pattern = std::regex("P((\\d+)Y)?((\\d+)M)?((\\d+)D)?(T((\\d+)H)?((\\d+)M)?((\\d+)S)?)?");
+    static const auto pattern = boost::regex("P((\\d+)Y)?((\\d+)M)?((\\d+)D)?(T((\\d+)H)?((\\d+)M)?((\\d+)S)?)?");
 
-    std::cmatch match;
-    if (!std::regex_match(s.data(), match, pattern)) {
+    boost::cmatch match;
+    if (!boost::regex_match(s.data(), match, pattern)) {
         return {};
     }
 
@@ -338,10 +338,10 @@ std::optional<cql_duration> parse_duration_iso8601_format(std::string_view s) {
 }
 
 std::optional<cql_duration> parse_duration_iso8601_alternative_format(std::string_view s) {
-    static const auto pattern = std::regex("P(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})");
+    static const auto pattern = boost::regex("P(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})");
 
-    std::cmatch match;
-    if (!std::regex_match(s.data(), match, pattern)) {
+    boost::cmatch match;
+    if (!boost::regex_match(s.data(), match, pattern)) {
         return {};
     }
 
@@ -356,10 +356,10 @@ std::optional<cql_duration> parse_duration_iso8601_alternative_format(std::strin
 }
 
 std::optional<cql_duration> parse_duration_iso8601_week_format(std::string_view s) {
-    static const auto pattern = std::regex("P(\\d+)W");
+    static const auto pattern = boost::regex("P(\\d+)W");
 
-    std::cmatch match;
-    if (!std::regex_match(s.data(), match, pattern)) {
+    boost::cmatch match;
+    if (!boost::regex_match(s.data(), match, pattern)) {
         return {};
     }
 
