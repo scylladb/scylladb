@@ -8,7 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 
-#include <regex>
+#include <boost/regex.hpp>
 #include <stdexcept>
 #include "index_target.hh"
 #include "index/secondary_index.hh"
@@ -22,7 +22,7 @@ using db::index::secondary_index;
 
 const sstring index_target::target_option_name = "target";
 const sstring index_target::custom_index_option_name = "class_name";
-const std::regex index_target::target_regex("^(keys|entries|values|full)\\((.+)\\)$");
+const boost::regex index_target::target_regex("^(keys|entries|values|full)\\((.+)\\)$");
 
 sstring index_target::column_name() const {
     struct as_string_visitor {
@@ -59,8 +59,8 @@ index_target::target_type index_target::from_sstring(const sstring& s)
 }
 
 index_target::target_type index_target::from_target_string(const sstring& target) {
-    std::cmatch match;
-    if (std::regex_match(target.data(), match, target_regex)) {
+    boost::cmatch match;
+    if (boost::regex_match(target.data(), match, target_regex)) {
         return index_target::from_sstring(match[1].str());
     }
     return target_type::regular_values;
@@ -86,15 +86,15 @@ sstring index_target::unescape_target_column(std::string_view str) {
         str.remove_suffix(1);
         // remove doubled quotes in the middle of the string, which to_cql_string()
         // adds. This code is inefficient but rarely called so it's fine.
-        static const std::regex double_quote_re("\"\"");
-        return std::regex_replace(std::string(str), double_quote_re, "\"");
+        static const boost::regex double_quote_re("\"\"");
+        return boost::regex_replace(std::string(str), double_quote_re, "\"");
     }
     return sstring(str);
 }
 
 sstring index_target::column_name_from_target_string(const sstring& target) {
-    std::cmatch match;
-    if (std::regex_match(target.data(), match, target_regex)) {
+    boost::cmatch match;
+    if (boost::regex_match(target.data(), match, target_regex)) {
         return unescape_target_column(match[2].str());
     }
     return unescape_target_column(target);
