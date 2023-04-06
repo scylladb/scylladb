@@ -252,8 +252,11 @@ unsigned prepare_multipart_upload_parts(const utils::chunked_vector<sstring>& et
     unsigned nr = 1;
     for (auto& etag : etags) {
         if (etag.empty()) {
+            // 0 here means some part failed to upload, see comment in upload_part()
+            // Caller checks it an aborts the multipart upload altogether
             return 0;
         }
+        // length of the format string - four braces + length of the etag + length of the number
         ret += multipart_upload_complete_entry.size() - 4 + etag.size() + format("{}", nr).size();
         nr++;
     }
