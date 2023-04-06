@@ -6,6 +6,8 @@
 import time
 import asyncio
 import logging
+import pathlib
+import os
 
 from typing import Callable, Awaitable, Optional, TypeVar, Generic
 
@@ -75,6 +77,29 @@ async def wait_for_cql_and_get_hosts(cql: Session, servers: list[ServerInfo], de
     await asyncio.gather(*(wait_for_cql(cql, h, deadline) for h in hosts))
 
     return hosts
+
+def read_last_line(file_path: pathlib.Path):
+    block_size = 4 * 1024
+    file_size = os.stat(file_path).st_size
+    pos = file_size
+    blocks = []
+    linesep = os.linesep.encode()
+    with file_path.open('rb') as f:
+        linesep_index = -1
+        while pos > 0 and linesep_index == -1:
+            next_pos = max(pos - block_size, 0)
+            f.seek(next_pos, os.SEEK_SET)
+            block = f.read(pos - next_pos)
+            # ignore the last empty line if any
+            if pos == file_size and block.endswith(linesep):
+                block = block[:-len(linesep)]
+            linesep_index = block.rfind(linesep)
+            blocks.append(block)
+            pos = next_pos
+    if linesep_index != -1:
+        blocks[-1] = block[linesep_index + len(linesep):]
+    blocks.reverse()
+    return b''.join(blocks).decode()
 
 
 unique_name.last_ms = 0
