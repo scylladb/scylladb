@@ -41,7 +41,7 @@
 #include "release.hh"
 #include "log.hh"
 #include <seastar/core/enum.hh>
-#include <seastar/net/inet_address.hh>
+#include "gms/inet_address.hh"
 #include "index/secondary_index.hh"
 #include "message/messaging_service.hh"
 #include "mutation_query.hh"
@@ -63,6 +63,7 @@
 #include "idl/frozen_mutation.dist.impl.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "client_data.hh"
+#include "service/topology_state_machine.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -3408,55 +3409,15 @@ future<mutation> system_keyspace::get_group0_history(distributed<service::storag
 
 static constexpr auto GROUP0_UPGRADE_STATE_KEY = "group0_upgrade_state";
 
-future<service::group0_upgrade_state> system_keyspace::load_group0_upgrade_state() {
-    auto s = co_await get_scylla_local_param_as<sstring>(GROUP0_UPGRADE_STATE_KEY);
-
-    if (!s || *s == "use_pre_raft_procedures") {
-        co_return service::group0_upgrade_state::use_pre_raft_procedures;
-    } else if (*s == "synchronize") {
-        co_return service::group0_upgrade_state::synchronize;
-    } else if (*s == "use_post_raft_procedures") {
-        co_return service::group0_upgrade_state::use_post_raft_procedures;
-    } else if (*s == "recovery") {
-        co_return service::group0_upgrade_state::recovery;
-    }
-
-    slogger.error(
-            "load_group0_upgrade_state(): unknown value '{}' for key 'group0_upgrade_state' in Scylla local table."
-            " Did you change the value manually?"
-            " Correct values are: 'use_pre_raft_procedures', 'synchronize', 'use_post_raft_procedures', 'recovery'."
-            " Assuming 'recovery'.", *s);
-    // We don't call `on_internal_error` which would probably prevent the node from starting, but enter `recovery`
-    // allowing the user to fix their cluster.
-    co_return service::group0_upgrade_state::recovery;
+future<std::optional<sstring>> system_keyspace::load_group0_upgrade_state() {
+    return get_scylla_local_param_as<sstring>(GROUP0_UPGRADE_STATE_KEY);
 }
 
-future<> system_keyspace::save_group0_upgrade_state(service::group0_upgrade_state s) {
-    auto value = [s] () constexpr {
-        switch (s) {
-            case service::group0_upgrade_state::use_post_raft_procedures:
-                return "use_post_raft_procedures";
-            case service::group0_upgrade_state::synchronize:
-                return "synchronize";
-            case service::group0_upgrade_state::recovery:
-                // It should not be necessary to ever save this state internally - the user sets it manually
-                // (e.g. from cqlsh) if recovery is needed - but handle the case anyway.
-                return "recovery";
-            case service::group0_upgrade_state::use_pre_raft_procedures:
-                // It should not be necessary to ever save this state, but handle the case anyway.
-                return "use_pre_raft_procedures";
-        }
-
-        on_internal_error(slogger, format(
-                "save_group0_upgrade_state: given value is outside the set of possible values (integer value: {})."
-                " This may have been caused by undefined behavior; best restart your system.",
-                static_cast<uint8_t>(s)));
-    }();
-
+future<> system_keyspace::save_group0_upgrade_state(sstring value) {
     return set_scylla_local_param(GROUP0_UPGRADE_STATE_KEY, value);
 }
 
-future<service::topology_state_machine::topology_type> system_keyspace::load_topology_state() {
+future<service::topology> system_keyspace::load_topology_state() {
     auto rs = co_await qctx->execute_cql(
         format("SELECT * FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
     assert(rs);
@@ -3566,68 +3527,6 @@ future<service::topology_state_machine::topology_type> system_keyspace::load_top
     }
 
     co_return ret;
-}
-
-system_keyspace::topology_mutation_builder::topology_mutation_builder(api::timestamp_type ts, raft::server_id id) :
-        _s(topology()),
-        _m(_s, partition_key::from_singular(*_s, TOPOLOGY)),
-        _ts(ts),
-        _r(_m.partition().clustered_row(*_s, clustering_key::from_singular(*_s, id.uuid()))) {
-            _r.apply(row_marker(_ts));
-}
-
-system_keyspace::topology_mutation_builder& system_keyspace::topology_mutation_builder::set(const char* cell, const sstring& value) {
-    auto cdef = _s->get_column_definition(cell);
-    assert(cdef);
-    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _ts, cdef->type->decompose(value)));
-    return *this;
-}
-
-system_keyspace::topology_mutation_builder& system_keyspace::topology_mutation_builder::set(const char* cell, const raft::server_id& value) {
-    auto cdef = _s->get_column_definition(cell);
-    assert(cdef);
-    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _ts, cdef->type->decompose(value.uuid())));
-    return *this;
-}
-
-system_keyspace::topology_mutation_builder& system_keyspace::topology_mutation_builder::set(const char* cell, const uint32_t& value) {
-    auto cdef = _s->get_column_definition(cell);
-    assert(cdef);
-    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _ts, cdef->type->decompose(int32_t(value))));
-    return *this;
-}
-
-system_keyspace::topology_mutation_builder& system_keyspace::topology_mutation_builder::del(const char* cell) {
-    auto cdef = _s->get_column_definition(cell);
-    assert(cdef);
-    if (!cdef->type->is_multi_cell()) {
-        _r.cells().apply(*cdef, atomic_cell::make_dead(_ts, gc_clock::now()));
-    } else {
-        collection_mutation_description cm;
-        cm.tomb = tombstone{_ts, gc_clock::now()};
-        _r.cells().apply(*cdef, cm.serialize(*cdef->type));
-    }
-    return *this;
-}
-
-system_keyspace::topology_mutation_builder& system_keyspace::topology_mutation_builder::set(const char* cell, const std::unordered_set<dht::token>& tokens) {
-    auto cdef = _s->get_column_definition(cell);
-    assert(cdef);
-    collection_mutation_description cm;
-    if (tokens.size()) {
-        auto vtype = static_pointer_cast<const set_type_impl>(cdef->type)->get_elements_type();
-
-        cm.cells.reserve(tokens.size());
-
-        for (auto&& value : tokens) {
-            cm.cells.emplace_back(vtype->decompose(value.to_sstring()), atomic_cell::make_live(*bytes_type, _ts, bytes_view()));
-        }
-
-        _r.cells().apply(*cdef, cm.serialize(*cdef->type));
-    } else {
-        del(cell);
-    }
-    return *this;
 }
 
 sstring system_keyspace_name() {

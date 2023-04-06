@@ -73,6 +73,7 @@
 #include "idl/storage_service.dist.hh"
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_address_map.hh"
+#include "types/set.hh"
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -437,6 +438,87 @@ future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
    co_await _db.local().apply(freeze(muts), db::no_timeout);
 }
 
+class topology_mutation_builder {
+    schema_ptr _s;
+    mutation _m;
+    api::timestamp_type _ts;
+    deletable_row& _r;
+public:
+    topology_mutation_builder(api::timestamp_type ts, raft::server_id);
+    template<typename T>
+    topology_mutation_builder& set(const char* cell, const T& value) {
+        return set(cell, sstring{fmt::format("{}", value)});
+    }
+    topology_mutation_builder& set(const char* cell, const sstring& value);
+    topology_mutation_builder& set(const char* cell, const raft::server_id& value);
+    topology_mutation_builder& set(const char* cell, const std::unordered_set<dht::token>& value);
+    topology_mutation_builder& set(const char* cell, const uint32_t& value);
+    topology_mutation_builder& del(const char* cell);
+    canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
+};
+
+topology_mutation_builder::topology_mutation_builder(api::timestamp_type ts, raft::server_id id) :
+        _s(db::system_keyspace::topology()),
+        _m(_s, partition_key::from_singular(*_s, db::system_keyspace::TOPOLOGY)),
+        _ts(ts),
+        _r(_m.partition().clustered_row(*_s, clustering_key::from_singular(*_s, id.uuid()))) {
+            _r.apply(row_marker(_ts));
+}
+
+topology_mutation_builder& topology_mutation_builder::set(const char* cell, const sstring& value) {
+    auto cdef = _s->get_column_definition(cell);
+    assert(cdef);
+    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _ts, cdef->type->decompose(value)));
+    return *this;
+}
+
+topology_mutation_builder& topology_mutation_builder::set(const char* cell, const raft::server_id& value) {
+    auto cdef = _s->get_column_definition(cell);
+    assert(cdef);
+    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _ts, cdef->type->decompose(value.uuid())));
+    return *this;
+}
+
+topology_mutation_builder& topology_mutation_builder::set(const char* cell, const uint32_t& value) {
+    auto cdef = _s->get_column_definition(cell);
+    assert(cdef);
+    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _ts, cdef->type->decompose(int32_t(value))));
+    return *this;
+}
+
+topology_mutation_builder& topology_mutation_builder::del(const char* cell) {
+    auto cdef = _s->get_column_definition(cell);
+    assert(cdef);
+    if (!cdef->type->is_multi_cell()) {
+        _r.cells().apply(*cdef, atomic_cell::make_dead(_ts, gc_clock::now()));
+    } else {
+        collection_mutation_description cm;
+        cm.tomb = tombstone{_ts, gc_clock::now()};
+        _r.cells().apply(*cdef, cm.serialize(*cdef->type));
+    }
+    return *this;
+}
+
+topology_mutation_builder& topology_mutation_builder::set(const char* cell, const std::unordered_set<dht::token>& tokens) {
+    auto cdef = _s->get_column_definition(cell);
+    assert(cdef);
+    collection_mutation_description cm;
+    if (tokens.size()) {
+        auto vtype = static_pointer_cast<const set_type_impl>(cdef->type)->get_elements_type();
+
+        cm.cells.reserve(tokens.size());
+
+        for (auto&& value : tokens) {
+            cm.cells.emplace_back(vtype->decompose(value.to_sstring()), atomic_cell::make_live(*bytes_type, _ts, bytes_view()));
+        }
+
+        _r.cells().apply(*cdef, cm.serialize(*cdef->type));
+    } else {
+        del(cell);
+    }
+    return *this;
+}
+
 future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, raft::term_t term, sharded<db::system_distributed_keyspace>& sys_dist_ks, abort_source& as) {
     slogger.info("raft topology: start topology coordinator fiber");
 
@@ -585,7 +667,7 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                     }
                 }
                 // Streaming completed. We can now move tokens state to ring_slice::ring_slice::replication_state::write_both_read_new
-                db::system_keyspace::topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
+                topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
                 builder.set("replication_state", ring_slice::replication_state::write_both_read_new);
                 auto str = fmt::format("{}: streaming completed for node {}", node.rs->state, node.id);
                 co_await update_replica_state(std::move(node), {builder.build()}, std::move(str));
@@ -600,7 +682,7 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                 }
                 switch(node.rs->state) {
                 case node_state::bootstrapping: {
-                    db::system_keyspace::topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
+                    topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
                     builder.set("replication_state", ring_slice::replication_state::owner)
                            .set("node_state", node_state::normal);
                     co_await update_replica_state(std::move(node), {builder.build()}, "bootstrap: read fence completed");
@@ -608,7 +690,7 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                     break;
                 case node_state::decommissioning:
                 case node_state::removing: {
-                    db::system_keyspace::topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
+                    topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
                     builder.del("replication_state")
                            .del("tokens")
                            .set("node_state", node_state::left);
@@ -617,13 +699,13 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                     }
                     break;
                 case node_state::replacing: {
-                    db::system_keyspace::topology_mutation_builder builder1(node.guard.write_timestamp(), node.id);
+                    topology_mutation_builder builder1(node.guard.write_timestamp(), node.id);
                     // Move new node to 'normal'
                     builder1.set("replication_state", ring_slice::replication_state::owner)
                             .set("node_state", node_state::normal);
 
                     // Move old node to 'left'
-                    db::system_keyspace::topology_mutation_builder builder2(node.guard.write_timestamp(), replaced_node);
+                    topology_mutation_builder builder2(node.guard.write_timestamp(), replaced_node);
                     builder2.del("replication_state")
                             .del("tokens")
                             .set("node_state", node_state::left);
@@ -650,7 +732,7 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
             case node_state::none: {
                 // if the state is none there have to be either 'join' or 'replace' request
                 // if the state is normal there have to be either 'leave', 'remove' or 'rebuild' request
-                db::system_keyspace::topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
+                topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
                 switch (node.request.value()) {
                     case topology_request::join: {
                         assert(!node.rs->ring);
@@ -702,7 +784,7 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                         break;
                         }
                     case topology_request::rebuild: {
-                        db::system_keyspace::topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
+                        topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
                         builder.set("node_state", node_state::rebuilding)
                                 .del("topology_request");
                         co_await update_replica_state(std::move(node), {builder.build()}, "start rebuilding");
@@ -719,7 +801,7 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                 break;
             case node_state::rebuilding: {
                 node = co_await exec_direct_command(std::move(node), raft_topology_cmd{raft_topology_cmd::command::stream_ranges});
-                db::system_keyspace::topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
+                topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
                 builder.set("node_state", node_state::normal)
                        .del("rebuild_option");
                 co_await update_replica_state(std::move(node), {builder.build()}, "rebuilding completed");
@@ -870,7 +952,7 @@ future<> storage_service::raft_replace(raft::server& raft_server, raft::server_i
         }
 
         auto& rs = it->second;
-        db::system_keyspace::topology_mutation_builder builder(guard.write_timestamp(), raft_server.id());
+        topology_mutation_builder builder(guard.write_timestamp(), raft_server.id());
         builder.set("node_state", node_state::none)
                .set("datacenter", rs.datacenter)
                .set("rack", rs.rack)
@@ -904,7 +986,7 @@ future<> storage_service::raft_bootstrap(raft::server& raft_server) {
         slogger.info("raft topology: adding myself to topology: {}", raft_server.id());
         // Current topology does not contains this node. Bootstrap is needed!
         auto guard = co_await _group0->client().start_operation(&_abort_source);
-        db::system_keyspace::topology_mutation_builder builder(guard.write_timestamp(), raft_server.id());
+        topology_mutation_builder builder(guard.write_timestamp(), raft_server.id());
         builder.set("node_state", node_state::none)
                .set("datacenter", _snitch.local()->get_datacenter())
                .set("rack", _snitch.local()->get_rack())
@@ -2859,7 +2941,7 @@ future<> storage_service::raft_decomission() {
         }
 
         slogger.info("raft topology: request decomission for: {}", raft_server.id());
-        db::system_keyspace::topology_mutation_builder builder(guard.write_timestamp(), raft_server.id());
+        topology_mutation_builder builder(guard.write_timestamp(), raft_server.id());
         builder.set("topology_request", topology_request::leave);
         topology_change change{{builder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, fmt::format("decomission: request decomission for {}", raft_server.id()));
@@ -3205,7 +3287,7 @@ future<> storage_service::raft_removenode(locator::host_id host_id) {
         }
 
         slogger.info("raft topology: request removenode for: {}", id);
-        db::system_keyspace::topology_mutation_builder builder(guard.write_timestamp(), id);
+        topology_mutation_builder builder(guard.write_timestamp(), id);
         builder.set("topology_request", topology_request::remove);
         topology_change change{{builder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, fmt::format("removenode: request remove for {}", id));
@@ -3726,7 +3808,7 @@ future<> storage_service::raft_rebuild(sstring source_dc) {
         }
 
         slogger.info("raft topology: request rebuild for: {}", raft_server.id());
-        db::system_keyspace::topology_mutation_builder builder(guard.write_timestamp(), raft_server.id());
+        topology_mutation_builder builder(guard.write_timestamp(), raft_server.id());
         builder.set("topology_request", topology_request::rebuild)
                .set("rebuild_option", source_dc);
         topology_change change{{builder.build()}};
