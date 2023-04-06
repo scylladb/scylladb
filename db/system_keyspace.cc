@@ -41,7 +41,7 @@
 #include "release.hh"
 #include "log.hh"
 #include <seastar/core/enum.hh>
-#include <seastar/net/inet_address.hh>
+#include "gms/inet_address.hh"
 #include "index/secondary_index.hh"
 #include "message/messaging_service.hh"
 #include "mutation_query.hh"
@@ -63,6 +63,7 @@
 #include "idl/frozen_mutation.dist.impl.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "client_data.hh"
+#include "service/topology_state_machine.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -3416,7 +3417,7 @@ future<> system_keyspace::save_group0_upgrade_state(sstring value) {
     return set_scylla_local_param(GROUP0_UPGRADE_STATE_KEY, value);
 }
 
-future<service::topology_state_machine::topology_type> system_keyspace::load_topology_state() {
+future<service::topology> system_keyspace::load_topology_state() {
     auto rs = co_await qctx->execute_cql(
         format("SELECT * FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
     assert(rs);

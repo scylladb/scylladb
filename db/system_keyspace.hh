@@ -15,19 +15,14 @@
 #include <vector>
 #include "schema/schema_fwd.hh"
 #include "utils/UUID.hh"
-#include "gms/inet_address.hh"
 #include "query-result-set.hh"
 #include "db_clock.hh"
-#include "db/commitlog/replay_position.hh"
 #include "mutation_query.hh"
 #include "system_keyspace_view_types.hh"
 #include <map>
 #include <seastar/core/distributed.hh>
 #include "cdc/generation_id.hh"
 #include "locator/host_id.hh"
-#include "service/raft/group0_fwd.hh"
-#include "tasks/task_manager.hh"
-#include "service/topology_state_machine.hh"
 #include "mutation/canonical_mutation.hh"
 
 namespace service {
@@ -35,6 +30,7 @@ namespace service {
 class storage_proxy;
 class storage_service;
 class raft_group_registry;
+struct topology;
 
 namespace paxos {
     class paxos_state;
@@ -53,6 +49,7 @@ namespace cql3 {
 }
 
 namespace gms {
+    class inet_address;
     class feature;
     class feature_service;
 }
@@ -79,6 +76,7 @@ using system_keyspace_view_name = std::pair<sstring, sstring>;
 class system_keyspace_view_build_progress;
 
 struct truncation_record;
+struct replay_position;
 typedef std::vector<db::replay_position> replay_positions;
 
 
@@ -436,7 +434,7 @@ public:
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
     static future<bool> group0_history_contains(utils::UUID state_id);
 
-    static future<service::topology_state_machine::topology_type> load_topology_state();
+    static future<service::topology> load_topology_state();
 
     // The mutation appends the given state ID to the group 0 history table, with the given description if non-empty.
     //
