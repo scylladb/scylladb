@@ -11,7 +11,7 @@
 #include <string>
 #include <sys/stat.h>
 #include <malloc.h>
-#include <regex>
+#include <boost/regex.hpp>
 #include <filesystem>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/reversed.hpp>
@@ -128,19 +128,19 @@ const std::string db::commitlog::descriptor::SEPARATOR("-");
 const std::string db::commitlog::descriptor::FILENAME_PREFIX("CommitLog" + SEPARATOR);
 const std::string db::commitlog::descriptor::FILENAME_EXTENSION(".log");
 
-static const std::regex allowed_prefix("[a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR);
-static const std::regex filename_match("(?:Recycled-)?([a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR + ")(\\d+)(?:" + db::commitlog::descriptor::SEPARATOR + "(\\d+))?\\" + db::commitlog::descriptor::FILENAME_EXTENSION);
+static const boost::regex allowed_prefix("[a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR);
+static const boost::regex filename_match("(?:Recycled-)?([a-zA-Z]+" + db::commitlog::descriptor::SEPARATOR + ")(\\d+)(?:" + db::commitlog::descriptor::SEPARATOR + "(\\d+))?\\" + db::commitlog::descriptor::FILENAME_EXTENSION);
 
 db::commitlog::descriptor::descriptor(const std::string& filename, const std::string& fname_prefix)
     : descriptor([&filename, &fname_prefix]() {
-        std::smatch m;
+        boost::smatch m;
         // match both legacy and new version of commitlogs Ex: CommitLog-12345.log and CommitLog-4-12345.log.
         auto cbegin = filename.cbegin();
         auto pos = filename.rfind('/');
         if (pos != std::string::npos) {
             cbegin += pos + 1;
         }
-        if (!std::regex_match(cbegin, filename.cend(), m, filename_match)) {
+        if (!boost::regex_match(cbegin, filename.cend(), m, filename_match)) {
             throw std::domain_error("Cannot parse the version of the file: " + filename);
         }
         if (m[1].str() != fname_prefix) {
@@ -1394,7 +1394,7 @@ db::commitlog::segment_manager::segment_manager(config c)
     if (!cfg.metrics_category_name.empty()) {
         create_counters(cfg.metrics_category_name);
     }
-    if (!std::regex_match(cfg.fname_prefix, allowed_prefix)) {
+    if (!boost::regex_match(cfg.fname_prefix, allowed_prefix)) {
         throw std::invalid_argument("Invalid filename prefix: " + cfg.fname_prefix);
     }
 }
