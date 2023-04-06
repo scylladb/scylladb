@@ -301,34 +301,6 @@ The content is dumped in JSON, using the following schema:
         },
         "pos": Uint64
     }
-    )",
-                dump_index_operation},
-    /* dump-compression-info */
-        {"dump-compression-info",
-                "Dump content of sstable compression info(s)",
-    R"(
-    Dumps the content of the compression-info component. Contains compression
-    parameters and maps positions into the uncompressed data to that into compressed
-    data. Note that compression happens over chunks with configurable size, so to
-    get data at a position in the middle of a compressed chunk, the entire chunk has
-    to be decompressed.
-    For more information about the sstable components and the format itself, visit
-    https://docs.scylladb.com/architecture/sstable/.
-
-    The content is dumped in JSON, using the following schema:
-
-    $ROOT := { "$sstable_path": $SSTABLE, ... }
-
-    $SSTABLE := {
-        "name": String,
-        "options": {
-            "$option_name": String,
-            ...
-        },
-        "chunk_len": Uint,
-        "data_len": Uint64,
-        "offsets": [Uint64, ...]
-    }
 
 dump-compression-info
 ^^^^^^^^^^^^^^^^^^^^^
