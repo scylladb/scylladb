@@ -11,7 +11,7 @@
 #include "thrift_validation.hh"
 #include "thrift/utils.hh"
 #include "db/system_keyspace.hh"
-#include <regex>
+#include <boost/regex.hpp>
 #include "utils/fb_utilities.hh"
 
 using namespace thrift;
@@ -44,8 +44,8 @@ void validate_keyspace_not_system(const std::string& keyspace) {
 
 void validate_ks_def(const KsDef& ks_def) {
     validate_keyspace_not_system(ks_def.name);
-    std::regex name_regex("\\w+");
-    if (!std::regex_match(ks_def.name, name_regex)) {
+    boost::regex name_regex("\\w+");
+    if (!boost::regex_match(ks_def.name, name_regex)) {
         throw make_exception<InvalidRequestException>("\"{}\" is not a valid keyspace name", ks_def.name);
     }
     if (ks_def.name.length() > schema::NAME_LENGTH) {
@@ -54,8 +54,8 @@ void validate_ks_def(const KsDef& ks_def) {
 }
 
 void validate_cf_def(const CfDef& cf_def) {
-    std::regex name_regex("\\w+");
-    if (!std::regex_match(cf_def.name, name_regex)) {
+    boost::regex name_regex("\\w+");
+    if (!boost::regex_match(cf_def.name, name_regex)) {
         throw make_exception<InvalidRequestException>("\"{}\" is not a valid column family name", cf_def.name);
     }
     if (cf_def.name.length() > schema::NAME_LENGTH) {
