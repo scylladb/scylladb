@@ -436,24 +436,6 @@ public:
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
     static future<bool> group0_history_contains(utils::UUID state_id);
 
-    class topology_mutation_builder {
-        schema_ptr _s;
-        mutation _m;
-        api::timestamp_type _ts;
-        deletable_row& _r;
-    public:
-        topology_mutation_builder(api::timestamp_type ts, raft::server_id);
-        template<typename T>
-        topology_mutation_builder& set(const char* cell, const T& value) {
-            return set(cell, sstring{fmt::format("{}", value)});
-        }
-        topology_mutation_builder& set(const char* cell, const sstring& value);
-        topology_mutation_builder& set(const char* cell, const raft::server_id& value);
-        topology_mutation_builder& set(const char* cell, const std::unordered_set<dht::token>& value);
-        topology_mutation_builder& set(const char* cell, const uint32_t& value);
-        topology_mutation_builder& del(const char* cell);
-        canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
-    };
     static future<service::topology_state_machine::topology_type> load_topology_state();
 
     // The mutation appends the given state ID to the group 0 history table, with the given description if non-empty.

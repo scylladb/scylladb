@@ -3528,68 +3528,6 @@ future<service::topology_state_machine::topology_type> system_keyspace::load_top
     co_return ret;
 }
 
-system_keyspace::topology_mutation_builder::topology_mutation_builder(api::timestamp_type ts, raft::server_id id) :
-        _s(topology()),
-        _m(_s, partition_key::from_singular(*_s, TOPOLOGY)),
-        _ts(ts),
-        _r(_m.partition().clustered_row(*_s, clustering_key::from_singular(*_s, id.uuid()))) {
-            _r.apply(row_marker(_ts));
-}
-
-system_keyspace::topology_mutation_builder& system_keyspace::topology_mutation_builder::set(const char* cell, const sstring& value) {
-    auto cdef = _s->get_column_definition(cell);
-    assert(cdef);
-    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _ts, cdef->type->decompose(value)));
-    return *this;
-}
-
-system_keyspace::topology_mutation_builder& system_keyspace::topology_mutation_builder::set(const char* cell, const raft::server_id& value) {
-    auto cdef = _s->get_column_definition(cell);
-    assert(cdef);
-    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _ts, cdef->type->decompose(value.uuid())));
-    return *this;
-}
-
-system_keyspace::topology_mutation_builder& system_keyspace::topology_mutation_builder::set(const char* cell, const uint32_t& value) {
-    auto cdef = _s->get_column_definition(cell);
-    assert(cdef);
-    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _ts, cdef->type->decompose(int32_t(value))));
-    return *this;
-}
-
-system_keyspace::topology_mutation_builder& system_keyspace::topology_mutation_builder::del(const char* cell) {
-    auto cdef = _s->get_column_definition(cell);
-    assert(cdef);
-    if (!cdef->type->is_multi_cell()) {
-        _r.cells().apply(*cdef, atomic_cell::make_dead(_ts, gc_clock::now()));
-    } else {
-        collection_mutation_description cm;
-        cm.tomb = tombstone{_ts, gc_clock::now()};
-        _r.cells().apply(*cdef, cm.serialize(*cdef->type));
-    }
-    return *this;
-}
-
-system_keyspace::topology_mutation_builder& system_keyspace::topology_mutation_builder::set(const char* cell, const std::unordered_set<dht::token>& tokens) {
-    auto cdef = _s->get_column_definition(cell);
-    assert(cdef);
-    collection_mutation_description cm;
-    if (tokens.size()) {
-        auto vtype = static_pointer_cast<const set_type_impl>(cdef->type)->get_elements_type();
-
-        cm.cells.reserve(tokens.size());
-
-        for (auto&& value : tokens) {
-            cm.cells.emplace_back(vtype->decompose(value.to_sstring()), atomic_cell::make_live(*bytes_type, _ts, bytes_view()));
-        }
-
-        _r.cells().apply(*cdef, cm.serialize(*cdef->type));
-    } else {
-        del(cell);
-    }
-    return *this;
-}
-
 sstring system_keyspace_name() {
     return system_keyspace::NAME;
 }
