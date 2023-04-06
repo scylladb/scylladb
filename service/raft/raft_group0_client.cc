@@ -328,7 +328,28 @@ raft_group0_client::raft_group0_client(service::raft_group_registry& raft_gr, db
 }
 
 future<> raft_group0_client::init() {
-    _upgrade_state = co_await _sys_ks.load_group0_upgrade_state();
+    auto value = [] (std::optional<sstring> s) {
+        if (!s || *s == "use_pre_raft_procedures") {
+            return service::group0_upgrade_state::use_pre_raft_procedures;
+        } else if (*s == "synchronize") {
+            return service::group0_upgrade_state::synchronize;
+        } else if (*s == "use_post_raft_procedures") {
+            return service::group0_upgrade_state::use_post_raft_procedures;
+        } else if (*s == "recovery") {
+            return service::group0_upgrade_state::recovery;
+        }
+
+        logger.error(
+                "load_group0_upgrade_state(): unknown value '{}' for key 'group0_upgrade_state' in Scylla local table."
+                " Did you change the value manually?"
+                " Correct values are: 'use_pre_raft_procedures', 'synchronize', 'use_post_raft_procedures', 'recovery'."
+                " Assuming 'recovery'.", *s);
+        // We don't call `on_internal_error` which would probably prevent the node from starting, but enter `recovery`
+        // allowing the user to fix their cluster.
+        return service::group0_upgrade_state::recovery;
+    };
+
+    _upgrade_state = value(co_await _sys_ks.load_group0_upgrade_state());
     if (_upgrade_state == group0_upgrade_state::recovery) {
         logger.warn("RECOVERY mode.");
     }
@@ -349,7 +370,28 @@ future<> raft_group0_client::set_group0_upgrade_state(group0_upgrade_state state
     // they will eventually finish (say, due to abort) and release it.
     auto holder = co_await _upgrade_lock.hold_write_lock();
 
-    co_await _sys_ks.save_group0_upgrade_state(state);
+    auto value = [] (group0_upgrade_state s) constexpr {
+        switch (s) {
+            case service::group0_upgrade_state::use_post_raft_procedures:
+                return "use_post_raft_procedures";
+            case service::group0_upgrade_state::synchronize:
+                return "synchronize";
+            case service::group0_upgrade_state::recovery:
+                // It should not be necessary to ever save this state internally - the user sets it manually
+                // (e.g. from cqlsh) if recovery is needed - but handle the case anyway.
+                return "recovery";
+            case service::group0_upgrade_state::use_pre_raft_procedures:
+                // It should not be necessary to ever save this state, but handle the case anyway.
+                return "use_pre_raft_procedures";
+        }
+
+        on_internal_error(logger, format(
+                "save_group0_upgrade_state: given value is outside the set of possible values (integer value: {})."
+                " This may have been caused by undefined behavior; best restart your system.",
+                static_cast<uint8_t>(s)));
+    };
+
+    co_await _sys_ks.save_group0_upgrade_state(value(state));
     _upgrade_state = state;
     if (_upgrade_state == group0_upgrade_state::use_post_raft_procedures) {
         _upgraded.broadcast();
