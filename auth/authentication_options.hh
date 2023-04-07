@@ -26,8 +26,6 @@ enum class authentication_option {
     options
 };
 
-std::ostream& operator<<(std::ostream&, authentication_option);
-
 using authentication_option_set = std::unordered_set<authentication_option>;
 
 using custom_options = std::unordered_map<sstring, sstring>;
