@@ -41,8 +41,6 @@ enum class resource_kind {
     data, role, service_level, functions
 };
 
-std::ostream& operator<<(std::ostream&, resource_kind);
-
 ///
 /// Type tag for constructing data resources.
 ///

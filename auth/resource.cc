@@ -25,11 +25,6 @@
 
 namespace auth {
 
-std::ostream& operator<<(std::ostream& os, resource_kind kind) {
-    fmt::print(os, "{}", kind);
-    return os;
-}
-
 static const std::unordered_map<resource_kind, std::string_view> roots{
         {resource_kind::data, "data"},
         {resource_kind::role, "roles"},

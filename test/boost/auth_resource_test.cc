@@ -16,6 +16,15 @@
 
 #include "utils/to_string.hh"
 
+namespace auth {
+
+std::ostream& operator<<(std::ostream& os, resource_kind kind) {
+    fmt::print(os, "{}", kind);
+    return os;
+}
+
+}
+
 BOOST_AUTO_TEST_CASE(root_of) {
     //
     // data
