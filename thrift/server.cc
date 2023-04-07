@@ -60,12 +60,12 @@ thrift_server::thrift_server(data_dictionary::database db,
                              service::memory_limiter& ml,
                              thrift_server_config config)
         : _stats(new thrift_stats(*this))
-        , _handler_factory(create_handler_factory(db, qp, ss, proxy, auth_service, config.timeout_config, _current_permit).release())
+        , _config(std::move(config))
+        , _handler_factory(create_handler_factory(db, qp, ss, proxy, auth_service, _config.timeout_config, _current_permit).release())
         , _protocol_factory(new TBinaryProtocolFactoryT<TMemoryBuffer>())
         , _processor_factory(new CassandraAsyncProcessorFactory(_handler_factory))
         , _memory_available(ml.get_semaphore())
-        , _max_concurrent_requests(db.get_config().max_concurrent_requests_per_shard)
-        , _config(std::move(config)) {
+        , _max_concurrent_requests(db.get_config().max_concurrent_requests_per_shard) {
 }
 
 thrift_server::~thrift_server() {

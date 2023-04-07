@@ -104,6 +104,7 @@ private:
     std::vector<server_socket> _listeners;
     std::unique_ptr<thrift_stats> _stats;
     service_permit _current_permit = empty_service_permit();
+    thrift_server_config _config;
     thrift_std::shared_ptr<::cassandra::CassandraCobSvIfFactory> _handler_factory;
     std::unique_ptr<apache::thrift::protocol::TProtocolFactory> _protocol_factory;
     thrift_std::shared_ptr<apache::thrift::async::TAsyncProcessorFactory> _processor_factory;
@@ -115,7 +116,6 @@ private:
     semaphore& _memory_available;
     utils::updateable_value<uint32_t> _max_concurrent_requests;
     size_t _requests_shed;
-    thrift_server_config _config;
     boost::intrusive::list<connection> _connections_list;
     seastar::gate _stop_gate;
 public:
