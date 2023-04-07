@@ -13,10 +13,7 @@
 namespace auth {
 
 std::ostream& operator<<(std::ostream& os, authentication_option a) {
-    switch (a) {
-        case authentication_option::password: os << "PASSWORD"; break;
-        case authentication_option::options: os << "OPTIONS"; break;
-    }
+    fmt::print(os, "{}", a);
 
     return os;
 }
