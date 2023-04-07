@@ -26,13 +26,7 @@
 namespace auth {
 
 std::ostream& operator<<(std::ostream& os, resource_kind kind) {
-    switch (kind) {
-        case resource_kind::data: os << "data"; break;
-        case resource_kind::role: os << "role"; break;
-        case resource_kind::service_level: os << "service_level"; break;
-        case resource_kind::functions: os << "functions"; break;
-    }
-
+    fmt::print(os, "{}", kind);
     return os;
 }
 
