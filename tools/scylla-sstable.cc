@@ -1478,8 +1478,8 @@ class json_mutation_stream_parser {
             maybe_read_some();
         }
         stream(stream&&) = default;
-        ~stream() {
-            _is.close().get();
+        future<> close() {
+            return _is.close();
         }
         Ch Peek() const {
             return *_current.get();
@@ -2298,14 +2298,21 @@ private:
             , _handler(std::move(schema), std::move(permit), _queue)
             , _thread([this] { _reader.Parse(_stream, _handler); })
         { }
-        ~impl() {
-            _thread.join().get();
-        }
         future<mutation_fragment_v2_opt> operator()() {
             return _queue.pop_eventually().handle_exception([this] (std::exception_ptr e) -> mutation_fragment_v2_opt {
                 auto err_off = _reader.GetErrorOffset();
                 throw std::runtime_error(fmt::format("parsing input failed at line {}, offset {}: {}", _stream.line(), err_off - _stream.last_line_feed_pos(), e));
+            }).then([this] (mutation_fragment_v2_opt&& mfo) -> future<mutation_fragment_v2_opt> {
+                if (mfo) {
+                    return make_ready_future<mutation_fragment_v2_opt>(std::move(mfo));
+                }
+                return close().then([] { return make_ready_future<mutation_fragment_v2_opt>(); });
             });
+        }
+
+        future<> close() {
+            co_await _thread.join();
+            co_await _stream.close();
         }
     };
     std::unique_ptr<impl> _impl;
