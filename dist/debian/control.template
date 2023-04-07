@@ -17,7 +17,7 @@ Conflicts: %{product}-server (<< 1.1)
 
 Package: %{product}-server
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, %{product}-conf (= ${binary:Version}), %{product}-python3 (= ${binary:Version})
+Depends: ${misc:Depends}, %{product}-conf (= ${binary:Version}), %{product}-python3 (= ${binary:Version})
 Description: Scylla database server binaries 
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
@@ -26,7 +26,7 @@ Package: %{product}-server-dbg
 Section: debug
 Priority: extra
 Architecture: any
-Depends: %{product}-server (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
+Depends: %{product}-server (= ${binary:Version}), ${misc:Depends}
 Description: debugging symbols for %{product}-server
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
