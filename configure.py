@@ -11,6 +11,7 @@
 import argparse
 import copy
 import os
+import pathlib
 import platform
 import re
 import shlex
@@ -1723,12 +1724,58 @@ def prepare_advanced_optimizations(*, modes, build_modes, args):
             modes[mode]['has_lto'] = True
             modes[mode]['lib_cflags'] += ' -flto=thin -ffat-lto-objects'
 
-        profile_path = None    # Absolute path to the profile, for use in compiler flags. Can't use $builddir because it's also passed to seastar.
-        profile_target = None  # Path with $builddir in front, for consistency with all other ninja targets.
+        # Absolute path (in case of the initial profile) or path
+        # beginning with $builddir (in case of generated profiles),
+        # for use in ninja dependency rules.
+        # Using absoulte paths only would work too, but we use
+        # $builddir for consistency with all other ninja targets.
+        profile_target = None
+        # Absolute path to the profile, for use in compiler flags.
+        # Can't use $builddir here because the flags are also passed
+        # to seastar, which doesn't understand ninja variables.
+        profile_path = None
 
         if args.use_profile:
             profile_path = os.path.abspath(args.use_profile)
-            profile_target = args.use_profile
+            profile_target = profile_path
+        elif args.use_profile is None:
+            # Use the default profile. There is a rule in later part of configure.py
+            # which extracts the default profile from an archive in pgo/profiles,
+            # (stored in git LFS) to build/
+
+            default_profile_archive_path = f"pgo/profiles/{platform.machine()}/profile.profdata.xz"
+            default_profile_filename = pathlib.Path(default_profile_archive_path).stem
+
+            # We are checking whether the profile archive is compressed,
+            # instead of just checking for its existence, because of how git LFS works.
+            #
+            # When a file is stored in LFS, the underlying git repository only receives a text file stub
+            # containing some metadata of the actual file. On checkout, LFS filters download the actual
+            # file based on that metadata and substitute it for the stub.
+            # If LFS is disabled or not installed, git will simply check out the stub,
+            # which will be a regular text file.
+            #
+            # By ignoring existing but uncompressed profile files we are accommodating users who don't
+            # have LFS installed yet, or don't want to be forced to use it.
+            #
+            validate_archive = subprocess.run(["file", default_profile_archive_path], capture_output=True)
+            if "compressed data" in validate_archive.stdout.decode():
+                default_profile_filename = pathlib.Path(default_profile_archive_path).stem
+                profile_path = os.path.abspath("build/" + default_profile_filename)
+                profile_target = "$builddir/" + default_profile_filename
+                modes[mode].setdefault('profile_recipe', '')
+                modes[mode]['profile_recipe'] += textwrap.dedent(f"""\
+                    rule xz_uncompress
+                        command = xz --uncompress --stdout $in > $out
+                        description = XZ_UNCOMPRESS $in to $out
+                    build {profile_target}: xz_uncompress {default_profile_archive_path}
+                    """)
+            else:
+                # Avoid breaking existing pipelines without git-lfs installed.
+                print(f"WARNING: {default_profile_archive_path} is not an archive. Building without a profile.", file=sys.stderr)
+        else:
+            # Passing --use-profile="" explicitly disables the default profile.
+            pass
 
         # pgso (profile-guided size-optimization) adds optsize hints (-Os) to cold code.
         # We don't want to optimize anything for size, because that's a potential source
