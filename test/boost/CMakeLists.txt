@@ -118,9 +118,6 @@ add_scylla_test(managed_vector_test
 add_scylla_test(memtable_test
   KIND SEASTAR)
 add_scylla_test(multishard_mutation_query_test
-  SOURCES
-    multishard_mutation_query_test.cc
-    test_table.cc
   KIND SEASTAR)
 add_scylla_test(murmur_hash_test
   KIND BOOST)
