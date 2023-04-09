@@ -1831,6 +1831,8 @@ future<> view_builder::start(service::migration_manager& mm) {
             (void)_build_step.trigger();
             return make_ready_future<>();
         });
+    }).handle_exception_type([] (const seastar::sleep_aborted& e) {
+        vlogger.debug("start aborted: {}", e.what());
     }).handle_exception([] (std::exception_ptr eptr) {
         vlogger.error("start failed: {}", eptr);
         return make_ready_future<>();
