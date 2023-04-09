@@ -10,7 +10,7 @@
 
 
 #include <inttypes.h>
-#include <regex>
+#include <boost/regex.hpp>
 
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/adjacent_find.hpp>
@@ -165,8 +165,8 @@ create_table_statement::raw_statement::raw_statement(cf_name name, bool if_not_e
 std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     // Column family name
     const sstring& cf_name = _cf_name->get_column_family();
-    std::regex name_regex("\\w+");
-    if (!std::regex_match(std::string(cf_name), name_regex)) {
+    boost::regex name_regex("\\w+");
+    if (!boost::regex_match(std::string(cf_name), name_regex)) {
         throw exceptions::invalid_request_exception(format("\"{}\" is not a valid table name (must be alphanumeric character only: [0-9A-Za-z]+)", cf_name.c_str()));
     }
     if (cf_name.size() > size_t(schema::NAME_LENGTH)) {

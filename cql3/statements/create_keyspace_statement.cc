@@ -22,7 +22,7 @@
 #include "db/config.hh"
 #include "gms/feature_service.hh"
 
-#include <regex>
+#include <boost/regex.hpp>
 #include <stdexcept>
 
 bool is_system_keyspace(std::string_view keyspace);
@@ -59,8 +59,8 @@ void create_keyspace_statement::validate(query_processor& qp, const service::cli
         throw exceptions::invalid_request_exception("system keyspace is not user-modifiable");
     }
     // keyspace name
-    std::regex name_regex("\\w+");
-    if (!std::regex_match(name, name_regex)) {
+    boost::regex name_regex("\\w+");
+    if (!boost::regex_match(name, name_regex)) {
         throw exceptions::invalid_request_exception(format("\"{}\" is not a valid keyspace name", _name.c_str()));
     }
     if (name.length() > schema::NAME_LENGTH) {

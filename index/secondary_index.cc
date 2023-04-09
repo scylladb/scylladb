@@ -12,7 +12,7 @@
 #include "index/target_parser.hh"
 #include "cql3/statements/index_target.hh"
 
-#include <regex>
+#include <boost/regex.hpp>
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/algorithm/string/join.hpp>
 #include <boost/range/adaptors.hpp>
@@ -27,7 +27,7 @@ namespace secondary_index {
 static constexpr auto PK_TARGET_KEY = "pk";
 static constexpr auto CK_TARGET_KEY = "ck";
 
-static const std::regex target_regex("^(keys|entries|values|full)\\((.+)\\)$");
+static const boost::regex target_regex("^(keys|entries|values|full)\\((.+)\\)$");
 
 target_parser::target_info target_parser::parse(schema_ptr schema, const index_metadata& im) {
     sstring target = im.options().at(cql3::statements::index_target::target_option_name);
@@ -50,8 +50,8 @@ target_parser::target_info target_parser::parse(schema_ptr schema, const sstring
         return cdef;
     };
 
-    std::cmatch match;
-    if (std::regex_match(target.data(), match, target_regex)) {
+    boost::cmatch match;
+    if (boost::regex_match(target.data(), match, target_regex)) {
         info.type = index_target::from_sstring(match[1].str());
         info.pk_columns.push_back(get_column(index_target::unescape_target_column(match[2].str())));
         return info;

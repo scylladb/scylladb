@@ -25,7 +25,7 @@
 #include <chrono>
 #include <sstream>
 #include <string>
-#include <regex>
+#include <boost/regex.hpp>
 #include <concepts>
 #include <ctime>
 #include <cstdlib>
@@ -234,7 +234,7 @@ timeuuid_type_impl::timeuuid_type_impl()
 
 timestamp_type_impl::timestamp_type_impl() : simple_type_impl(kind::timestamp, timestamp_type_name, 8) {}
 
-static boost::posix_time::ptime get_time(const std::smatch& sm) {
+static boost::posix_time::ptime get_time(const boost::smatch& sm) {
     // Unfortunately boost::date_time  parsers are more strict with regards
     // to the expected date format than we need to be.
     auto year = boost::lexical_cast<int>(sm[1]);
@@ -298,17 +298,17 @@ int64_t timestamp_from_string(sstring_view s) {
             return v;
         }
 
-        static const std::regex date_re("^(\\d{4})-(\\d+)-(\\d+)([ tT](\\d+):(\\d+)(:(\\d+)(\\.(\\d+))?)?)?");
-        std::smatch dsm;
-        if (!std::regex_search(str, dsm, date_re)) {
+        static const boost::regex date_re("^(\\d{4})-(\\d+)-(\\d+)([ tT](\\d+):(\\d+)(:(\\d+)(\\.(\\d+))?)?)?");
+        boost::smatch dsm;
+        if (!boost::regex_search(str, dsm, date_re)) {
             throw marshal_exception(format("Unable to parse timestamp from '{}'", str));
         }
         auto t = get_time(dsm);
 
         auto tz = dsm.suffix().str();
-        static const std::regex tz_re("([\\+-]\\d{2}:?(\\d{2})?)");
-        std::smatch tsm;
-        if (std::regex_match(tz, tsm, tz_re)) {
+        static const boost::regex tz_re("([\\+-]\\d{2}:?(\\d{2})?)");
+        boost::smatch tsm;
+        if (boost::regex_match(tz, tsm, tz_re)) {
             t -= get_utc_offset(tsm.str());
         } else if (tz.empty()) {
             typedef boost::date_time::c_local_adjustor<boost::posix_time::ptime> local_tz;
@@ -335,7 +335,7 @@ db_clock::time_point timestamp_type_impl::from_sstring(sstring_view s) {
 
 simple_date_type_impl::simple_date_type_impl() : simple_type_impl{kind::simple_date, simple_date_type_name, {}} {}
 
-static date::year_month_day get_simple_date_time(const std::smatch& sm) {
+static date::year_month_day get_simple_date_time(const boost::smatch& sm) {
     auto year = boost::lexical_cast<long>(sm[1]);
     auto month = boost::lexical_cast<unsigned>(sm[2]);
     auto day = boost::lexical_cast<unsigned>(sm[3]);
@@ -358,9 +358,9 @@ uint32_t simple_date_type_impl::from_sstring(sstring_view s) {
         return v;
     }
     auto str = std::string(s); // FIXME: this copy probably can be avoided
-    static const std::regex date_re("^(-?\\d+)-(\\d+)-(\\d+)");
-    std::smatch dsm;
-    if (!std::regex_match(str, dsm, date_re)) {
+    static const boost::regex date_re("^(-?\\d+)-(\\d+)-(\\d+)");
+    boost::smatch dsm;
+    if (!boost::regex_match(str, dsm, date_re)) {
         throw marshal_exception(format("Unable to coerce '{}' to a formatted date (long)", str));
     }
     auto t = get_simple_date_time(dsm);
@@ -2448,12 +2448,12 @@ static std::vector<sstring_view> split_field_strings(sstring_view v) {
 
 // Replace "\:" with ":" and "\@" with "@".
 static std::string unescape(sstring_view s) {
-    return std::regex_replace(std::string(s), std::regex("\\\\([@:])"), "$1");
+    return boost::regex_replace(std::string(s), boost::regex("\\\\([@:])"), "$1");
 }
 
 // Replace ":" with "\:" and "@" with "\@".
 static std::string escape(sstring_view s) {
-    return std::regex_replace(std::string(s), std::regex("[@:]"), "\\$0");
+    return boost::regex_replace(std::string(s), boost::regex("[@:]"), "\\\\$0");
 }
 
 // Concat list of bytes into a single bytes.
@@ -2605,16 +2605,16 @@ seastar::net::inet_address inet_addr_type_impl::from_sstring(sstring_view s) {
 }
 
 utils::UUID uuid_type_impl::from_sstring(sstring_view s) {
-    static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
-    if (!std::regex_match(s.begin(), s.end(), re)) {
+    static const boost::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
+    if (!boost::regex_match(s.begin(), s.end(), re)) {
         throw marshal_exception(format("Cannot parse uuid from '{}'", s));
     }
     return utils::UUID(s);
 }
 
 utils::UUID timeuuid_type_impl::from_sstring(sstring_view s) {
-    static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
-    if (!std::regex_match(s.begin(), s.end(), re)) {
+    static const boost::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
+    if (!boost::regex_match(s.begin(), s.end(), re)) {
         throw marshal_exception(format("Invalid UUID format ({})", s));
     }
     utils::UUID v(s);

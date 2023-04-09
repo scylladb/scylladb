@@ -13,7 +13,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include "cql3/column_identifier.hh"
 #include <variant>
-#include <regex>
+#include <boost/regex.hpp>
 
 namespace cql3 {
 
@@ -22,7 +22,7 @@ namespace statements {
 struct index_target {
     static const sstring target_option_name;
     static const sstring custom_index_option_name;
-    static const std::regex target_regex;
+    static const boost::regex target_regex;
 
     enum class target_type {
         regular_values, collection_values, keys, keys_and_values, full

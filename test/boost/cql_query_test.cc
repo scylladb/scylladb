@@ -39,7 +39,7 @@
 #include "utils/fmt-compat.hh"
 #include "schema/schema_builder.hh"
 #include "service/migration_manager.hh"
-#include <regex>
+#include <boost/regex.hpp>
 #include "gms/feature.hh"
 #include "db/query_context.hh"
 #include "service/qos/qos_common.hh"
@@ -4124,7 +4124,7 @@ SEASTAR_TEST_CASE(test_view_with_two_regular_base_columns_in_key) {
  * a more robust testing.
  */
 std::string normalize_white_space(const std::string& str) {
-  return std::regex_replace(std::regex_replace(" " + str + " ", std::regex("\\s+"), " "), std::regex(", "), ",");
+  return boost::regex_replace(boost::regex_replace(" " + str + " ", boost::regex("\\s+"), " "), boost::regex(", "), ",");
 }
 
 SEASTAR_TEST_CASE(test_describe_simple_schema) {

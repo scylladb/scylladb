@@ -8,7 +8,7 @@
 
 #include <iostream>
 #include <iterator>
-#include <regex>
+#include <boost/regex.hpp>
 
 #include "cql3_type.hh"
 #include "cql3/util.hh"
@@ -464,11 +464,11 @@ sstring maybe_quote(const sstring& identifier) {
     if (num_quotes == 0) {
         return make_sstring("\"", identifier, "\"");
     }
-    static const std::regex double_quote_re("\"");
+    static const boost::regex double_quote_re("\"");
     std::string result;
     result.reserve(2 + identifier.size() + num_quotes);
     result.push_back('"');
-    std::regex_replace(std::back_inserter(result), identifier.begin(), identifier.end(), double_quote_re, "\"\"");
+    boost::regex_replace(std::back_inserter(result), identifier.begin(), identifier.end(), double_quote_re, "\"\"");
     result.push_back('"');
     return result;
 }
@@ -490,11 +490,11 @@ static sstring quote_with(const sstring& str) {
     }
 
     static const std::string double_quote_str{C, C};
-    static const std::regex quote_re(std::string{C});
+    static const boost::regex quote_re(std::string{C});
     std::string result;
     result.reserve(2 + str.size() + num_quotes);
     result.push_back(C);
-    std::regex_replace(std::back_inserter(result), str.begin(), str.end(), quote_re, double_quote_str);
+    boost::regex_replace(std::back_inserter(result), str.begin(), str.end(), quote_re, double_quote_str);
     result.push_back(C);
     return result;
 }
