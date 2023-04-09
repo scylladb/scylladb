@@ -189,14 +189,22 @@ class TestSuite(ABC):
 
     async def run(self, test: 'Test', options: argparse.Namespace):
         try:
-            for i in range(1, self.FLAKY_RETRIES):
+            i = 0
+            while True:
+                i += 1
                 if i > 1:
-                    test.is_flaky_failure = True
+                    if not options.run_until_it_pass:
+                        test.is_flaky_failure = True
                     logging.info("Retrying test %s after a flaky fail, retry %d", test.uname, i)
                     test.reset()
                 await test.run(options)
-                if test.success or not test.is_flaky or test.is_cancelled:
+                if test.success or test.is_cancelled:
                     break
+                if options.run_until_it_pass:
+                    continue
+                if not test.is_flaky or i >= self.FLAKY_RETRIES:
+                    break
+
         finally:
             self.pending_test_count -= 1
             self.n_failed += int(not test.success)
@@ -1138,6 +1146,8 @@ def parse_cmd_line() -> argparse.Namespace:
                              "is only supported by python tests for now, other tests ignore it. "
                              "By default, the marker filter is not applied and all tests will be run without exception."
                              "To exclude e.g. slow tests you can write --markers 'not slow'.")
+    parser.add_argument('--run-until-it-pass', action='store_true', default=False,
+                        help="Continue running tests until they pass")
 
     scylla_additional_options = parser.add_argument_group('Additional options for Scylla tests')
     scylla_additional_options.add_argument('--x-log2-compaction-groups', action="store", default="0", type=int,
