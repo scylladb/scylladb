@@ -129,6 +129,12 @@ public:
     bool is_per_table() const { return _per_table; }
     const per_table_replication_strategy* maybe_as_per_table() const;
 
+    // Returns true iff this replication strategy is based on vnodes.
+    // If this is the case, all tables governed by this replication strategy share the effective replication map.
+    bool is_vnode_based() const {
+        return !is_per_table();
+    }
+
     // Use the token_metadata provided by the caller instead of _token_metadata
     // Note: must be called with initialized, non-empty token_metadata.
     future<dht::token_range_vector> get_ranges(inet_address ep, token_metadata_ptr tmptr) const;

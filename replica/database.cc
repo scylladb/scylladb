@@ -1151,6 +1151,18 @@ std::vector<sstring> database::get_non_local_strategy_keyspaces() const {
     return res;
 }
 
+std::vector<sstring> database::get_non_local_vnode_based_strategy_keyspaces() const {
+    std::vector<sstring> res;
+    res.reserve(_keyspaces.size());
+    for (auto const& i : _keyspaces) {
+        auto&& rs = i.second.get_replication_strategy();
+        if (rs.get_type() != locator::replication_strategy_type::local && rs.is_vnode_based()) {
+            res.push_back(i.first);
+        }
+    }
+    return res;
+}
+
 std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> database::get_non_local_strategy_keyspaces_erms() const {
     std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> res;
     res.reserve(_keyspaces.size());

@@ -3299,7 +3299,7 @@ future<> storage_service::decommission() {
 
                 ss.update_pending_ranges(format("decommission {}", endpoint)).get();
 
-                auto non_system_keyspaces = db.get_non_local_strategy_keyspaces();
+                auto non_system_keyspaces = db.get_non_local_vnode_based_strategy_keyspaces();
                 for (const auto& keyspace_name : non_system_keyspaces) {
                     if (ss.get_token_metadata().has_pending_ranges(keyspace_name, ss.get_broadcast_address())) {
                         throw std::runtime_error("data is currently moving to this node; unable to leave the ring");

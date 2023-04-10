@@ -1524,6 +1524,7 @@ public:
     std::vector<sstring> get_user_keyspaces() const;
     std::vector<sstring> get_all_keyspaces() const;
     std::vector<sstring> get_non_local_strategy_keyspaces() const;
+    std::vector<sstring> get_non_local_vnode_based_strategy_keyspaces() const;
     std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> get_non_local_strategy_keyspaces_erms() const;
     column_family& find_column_family(std::string_view ks, std::string_view name);
     const column_family& find_column_family(std::string_view ks, std::string_view name) const;
