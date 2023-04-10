@@ -25,17 +25,6 @@
 
 namespace auth {
 
-std::ostream& operator<<(std::ostream& os, resource_kind kind) {
-    switch (kind) {
-        case resource_kind::data: os << "data"; break;
-        case resource_kind::role: os << "role"; break;
-        case resource_kind::service_level: os << "service_level"; break;
-        case resource_kind::functions: os << "functions"; break;
-    }
-
-    return os;
-}
-
 static const std::unordered_map<resource_kind, std::string_view> roots{
         {resource_kind::data, "data"},
         {resource_kind::role, "roles"},

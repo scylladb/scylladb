@@ -26,8 +26,6 @@ enum class authentication_option {
     options
 };
 
-std::ostream& operator<<(std::ostream&, authentication_option);
-
 using authentication_option_set = std::unordered_set<authentication_option>;
 
 using custom_options = std::unordered_map<sstring, sstring>;
@@ -49,3 +47,18 @@ public:
 };
 
 }
+
+template <>
+struct fmt::formatter<auth::authentication_option> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const auth::authentication_option a, FormatContext& ctx) const {
+        using enum auth::authentication_option;
+        switch (a) {
+        case password:
+            return formatter<std::string_view>::format("PASSWORD", ctx);
+        case options:
+            return formatter<std::string_view>::format("OPTIONS", ctx);
+        }
+        std::abort();
+    }
+};

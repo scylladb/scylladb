@@ -6,7 +6,6 @@ target_sources(scylla_auth
     allow_all_authenticator.cc
     allow_all_authorizer.cc
     authenticated_user.cc
-    authentication_options.cc
     authenticator.cc
     common.cc
     default_authorizer.cc
