@@ -823,7 +823,8 @@ The ``tombstone_gc`` option allows you to prevent data resurrection. With the ``
 are only removed after :term:`repair` is performed. Unlike  ``gc_grace_seconds``, ``tombstone_gc`` has no time constraints - when 
 the ``repair`` mode is on, tombstones garbage collection will wait until repair is run. 
 
-The ``tombstone_gc`` option can be enabled using ``ALTER TABLE`` and ``CREATE TABLE``. For example:
+You can enable the after-repair tombstone GC by setting the ``repair`` mode using 
+``ALTER TABLE`` or ``CREATE TABLE``. For example:
 
 .. code-block:: cql
 
@@ -832,10 +833,6 @@ The ``tombstone_gc`` option can be enabled using ``ALTER TABLE`` and ``CREATE TA
 .. code-block:: cql
 
     ALTER TABLE ks.cf WITH tombstone_gc = {'mode':'repair'} ;
-
-.. note::
-  The ``tombstone_gc`` option was added in ScyllaDB 5.0 as an experimental feature, and it is disabled by default. 
-  You need to explicitly specify the ``repair`` mode table property to enable the feature. 
 
 The following modes are available:
 
@@ -846,7 +843,7 @@ The following modes are available:
    * - Mode
      - Description
    * - ``timeout``
-     - Tombstone GC is performed after the wait time specified with ``gc_grace_seconds``. Default in ScyllaDB 5.0.
+     - Tombstone GC is performed after the wait time specified with ``gc_grace_seconds`` (default).
    * - ``repair``
      - Tombstone GC is performed after repair is run.
    * - ``disabled``
