@@ -161,7 +161,7 @@ public:
     host_id_or_endpoint parse_host_id_and_endpoint(const sstring& host_id_string) const;
 
     /** @return a copy of the endpoint-to-id map for read-only operations */
-    const std::unordered_map<inet_address, host_id>& get_endpoint_to_host_id_map_for_reading() const;
+    std::unordered_map<inet_address, host_id> get_endpoint_to_host_id_map_for_reading() const;
 
     void add_bootstrap_token(token t, inet_address endpoint);
 

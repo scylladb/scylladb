@@ -53,9 +53,6 @@ private:
     // Track the unique set of nodes in _token_to_endpoint_map
     std::unordered_set<inet_address> _normal_token_owners;
 
-    /** Maintains endpoint to host ID map of every node in the cluster */
-    std::unordered_map<inet_address, locator::host_id> _endpoint_to_host_id_map;
-
     std::unordered_map<token, inet_address> _bootstrap_tokens;
     std::unordered_set<inet_address> _leaving_endpoints;
     // The map between the existing node to be replaced and the replacing node
@@ -148,7 +145,7 @@ public:
     std::optional<inet_address> get_endpoint_for_host_id(host_id) const;
 
     /** @return a copy of the endpoint-to-id map for read-only operations */
-    const std::unordered_map<inet_address, host_id>& get_endpoint_to_host_id_map_for_reading() const;
+    std::unordered_map<inet_address, host_id> get_endpoint_to_host_id_map_for_reading() const;
 
     void add_bootstrap_token(token t, inet_address endpoint);
 
@@ -367,7 +364,6 @@ future<token_metadata_impl> token_metadata_impl::clone_only_token_map(bool clone
         co_await coroutine::maybe_yield();
     }
     ret._normal_token_owners = _normal_token_owners;
-    ret._endpoint_to_host_id_map = _endpoint_to_host_id_map;
     ret._topology = co_await _topology.clone_gently();
     if (clone_sorted_tokens) {
         ret._sorted_tokens = _sorted_tokens;
@@ -379,7 +375,6 @@ future<token_metadata_impl> token_metadata_impl::clone_only_token_map(bool clone
 future<> token_metadata_impl::clear_gently() noexcept {
     co_await utils::clear_gently(_token_to_endpoint_map);
     co_await utils::clear_gently(_normal_token_owners);
-    co_await utils::clear_gently(_endpoint_to_host_id_map);
     co_await utils::clear_gently(_bootstrap_tokens);
     co_await utils::clear_gently(_leaving_endpoints);
     co_await utils::clear_gently(_replacing_endpoints);
@@ -508,10 +503,6 @@ void token_metadata_impl::debug_show() const {
         for (auto x : _token_to_endpoint_map) {
             fmt::print("inet_address={}, token={}\n", x.second, x.first);
         }
-        fmt::print("Endpoint -> host_id\n");
-        for (auto x : _endpoint_to_host_id_map) {
-            fmt::print("inet_address={}, uuid={}\n", x.first, x.second);
-        }
         fmt::print("Sorted Token\n");
         for (auto x : _sorted_tokens) {
             fmt::print("token={}\n", x);
@@ -522,39 +513,40 @@ void token_metadata_impl::debug_show() const {
 
 void token_metadata_impl::update_host_id(const host_id& host_id, inet_address endpoint) {
     _topology.add_or_update_endpoint(endpoint, host_id);
-    _endpoint_to_host_id_map[endpoint] = host_id;
 }
 
 host_id token_metadata_impl::get_host_id(inet_address endpoint) const {
-    if (!_endpoint_to_host_id_map.contains(endpoint)) {
+    if (const auto* node = _topology.find_node(endpoint)) [[likely]] {
+        return node->host_id();
+    } else {
         throw std::runtime_error(format("host_id for endpoint {} is not found", endpoint));
     }
-    return _endpoint_to_host_id_map.at(endpoint);
 }
 
 std::optional<host_id> token_metadata_impl::get_host_id_if_known(inet_address endpoint) const {
-    auto it = _endpoint_to_host_id_map.find(endpoint);
-    if (it == _endpoint_to_host_id_map.end()) {
-        return { };
+    if (const auto* node = _topology.find_node(endpoint)) [[likely]] {
+        return node->host_id();
+    } else {
+        return std::nullopt;
     }
-    return it->second;
 }
 
 std::optional<inet_address> token_metadata_impl::get_endpoint_for_host_id(host_id host_id) const {
-    auto beg = _endpoint_to_host_id_map.cbegin();
-    auto end = _endpoint_to_host_id_map.cend();
-    auto it = std::find_if(beg, end, [host_id] (auto x) {
-        return x.second == host_id;
-    });
-    if (it == end) {
-        return {};
+    if (const auto* node = _topology.find_node(host_id)) [[likely]] {
+        return node->endpoint();
     } else {
-        return (*it).first;
+        return std::nullopt;
     }
 }
 
-const std::unordered_map<inet_address, host_id>& token_metadata_impl::get_endpoint_to_host_id_map_for_reading() const{
-    return _endpoint_to_host_id_map;
+std::unordered_map<inet_address, host_id> token_metadata_impl::get_endpoint_to_host_id_map_for_reading() const {
+    const auto& nodes = _topology.get_nodes_by_endpoint();
+    std::unordered_map<inet_address, host_id> map;
+    map.reserve(nodes.size());
+    for (const auto& [endpoint, node] : nodes) {
+        map[endpoint] = node->host_id();
+    }
+    return map;
 }
 
 bool token_metadata_impl::is_normal_token_owner(inet_address endpoint) const {
@@ -635,7 +627,6 @@ void token_metadata_impl::remove_endpoint(inet_address endpoint) {
     _topology.remove_endpoint(endpoint);
     _leaving_endpoints.erase(endpoint);
     del_replacing_endpoint(endpoint);
-    _endpoint_to_host_id_map.erase(endpoint);
     invalidate_cached_rings();
 }
 
@@ -1080,7 +1071,7 @@ host_id_or_endpoint token_metadata::parse_host_id_and_endpoint(const sstring& ho
     return res;
 }
 
-const std::unordered_map<inet_address, host_id>&
+std::unordered_map<inet_address, host_id>
 token_metadata::get_endpoint_to_host_id_map_for_reading() const {
     return _impl->get_endpoint_to_host_id_map_for_reading();
 }

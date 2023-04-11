@@ -2093,7 +2093,7 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
 future<std::unordered_map<sstring, sstring>>
 view_builder::view_build_statuses(sstring keyspace, sstring view_name) const {
     return _sys_dist_ks.view_status(std::move(keyspace), std::move(view_name)).then([] (std::unordered_map<locator::host_id, sstring> status) {
-        auto& endpoint_to_host_id = service::get_local_storage_proxy().get_token_metadata_ptr()->get_endpoint_to_host_id_map_for_reading();
+        auto endpoint_to_host_id = service::get_local_storage_proxy().get_token_metadata_ptr()->get_endpoint_to_host_id_map_for_reading();
         return boost::copy_range<std::unordered_map<sstring, sstring>>(endpoint_to_host_id
                 | boost::adaptors::transformed([&status] (const std::pair<gms::inet_address, locator::host_id>& p) {
                     auto it = status.find(p.second);
