@@ -569,6 +569,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager] {
           try {
+              if (opts.contains("relabel-config-file") && !opts["relabel-config-file"].as<sstring>().empty()) {
+                  // calling update_relabel_config_from_file can cause an exception that would stop startup
+                  // that's on purpose, it means the configuration is broken and needs to be fixed
+                  utils::update_relabel_config_from_file(opts["relabel-config-file"].as<sstring>()).get();
+              }
             // disable reactor stall detection during startup
             auto blocked_reactor_notify_ms = engine().get_blocked_reactor_notify_ms();
             smp::invoke_on_all([] {
