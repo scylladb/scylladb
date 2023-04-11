@@ -59,8 +59,6 @@ private:
     future<> _started = make_ready_future<>();
     seastar::condition_variable _pending_sstables;
     named_semaphore _registration_sem{registration_queue_size, named_semaphore_exception_factory{"view update generator"}};
-    std::unordered_map<lw_shared_ptr<replica::table>, std::vector<sstables::shared_sstable>> _sstables_with_tables;
-    std::unordered_map<lw_shared_ptr<replica::table>, std::vector<sstables::shared_sstable>> _sstables_to_move;
     metrics::metric_groups _metrics;
     class progress_tracker;
     std::unique_ptr<progress_tracker> _progress_tracker;
@@ -89,6 +87,7 @@ private:
     bool should_throttle() const;
     void setup_metrics();
     void discover_staging_sstables();
+    std::unordered_map<lw_shared_ptr<replica::table>, std::vector<sstables::shared_sstable>> get_sstables_to_process();
 };
 
 }

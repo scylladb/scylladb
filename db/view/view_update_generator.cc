@@ -95,7 +95,6 @@ view_update_generator::view_update_generator(replica::database& db, sharded<serv
         , _proxy(proxy)
         , _progress_tracker(std::make_unique<progress_tracker>()) {
     setup_metrics();
-    discover_staging_sstables();
     _db.plug_view_update_generator(*this);
 }
 
@@ -106,31 +105,27 @@ future<> view_update_generator::start() {
     attr.sched_group = _db.get_streaming_scheduling_group();
     _started = seastar::async(std::move(attr), [this]() mutable {
         auto drop_sstable_references = defer([&] () noexcept {
-            // Clear sstable references so sstables_manager::stop() doesn't hang.
-            vug_logger.info("leaving {} unstaged sstables unprocessed",
-                    _sstables_to_move.size(), _sstables_with_tables.size());
-            _sstables_to_move.clear();
-            _sstables_with_tables.clear();
             _progress_tracker = {};
         });
         while (!_as.abort_requested()) {
-            if (_sstables_with_tables.empty()) {
+            auto sstables_with_tables = get_sstables_to_process();
+            std::unordered_map<lw_shared_ptr<replica::table>, std::vector<sstables::shared_sstable>> sstables_to_move;
+            if (sstables_with_tables.empty()) {
                 _pending_sstables.wait().get();
+                continue;
             }
-
-            // To ensure we don't race with updates, move the entire content
-            // into a local variable.
-            auto sstables_with_tables = std::exchange(_sstables_with_tables, {});
-
+            auto uuid = utils::make_random_uuid();
             // If we got here, we will process all tables we know about so far eventually so there
             // is no starvation
             for (auto table_it = sstables_with_tables.begin(); table_it != sstables_with_tables.end(); table_it = sstables_with_tables.erase(table_it)) {
                 auto& [t, sstables] = *table_it;
                 schema_ptr s = t->schema();
 
-                vug_logger.trace("Processing {}.{}: {} sstables", s->ks_name(), s->cf_name(), sstables.size());
-
-                const auto num_sstables = sstables.size();
+                for (auto& sst : sstables) {
+                    _progress_tracker->on_sstable_registration(sst);
+                }
+                auto start_time = lowres_clock::now();
+                vug_logger.info("[{}] Started processing {}.{}: {} sstables", uuid, s->ks_name(), s->cf_name(), sstables.size());
 
                 try {
                     // Exploit the fact that sstables in the staging directory
@@ -141,7 +136,17 @@ future<> view_update_generator::start() {
                         ssts->insert(sst);
                     }
 
-                    auto permit = _db.obtain_reader_permit(*t, "view_update_generator", db::no_timeout, {}).get0();
+                    std::optional<reader_permit> permit;
+                    while (!_as.abort_requested()) {
+                        try {
+                            auto timeout = db::timeout_clock::now() + std::chrono::minutes(5);
+                            permit = _db.obtain_reader_permit(*t, "view_update_generator", timeout, {}).get0();
+                            break;
+                        } catch (...) {
+                            vug_logger.warn("[{}] Processing {}.{}: failed to get reader permit {}, try again...", uuid, s->ks_name(), s->cf_name(), std::current_exception());
+                        }
+                    }
+
                     auto ms = mutation_source([this, ssts] (
                                 schema_ptr s,
                                 reader_permit permit,
@@ -156,7 +161,7 @@ future<> view_update_generator::start() {
                     auto [staging_sstable_reader, staging_sstable_reader_handle] = make_manually_paused_evictable_reader_v2(
                             std::move(ms),
                             s,
-                            permit,
+                            *permit,
                             query::full_partition_range,
                             s->full_slice(),
                             service::get_local_streaming_priority(),
@@ -165,31 +170,29 @@ future<> view_update_generator::start() {
                     auto close_sr = deferred_close(staging_sstable_reader);
 
                     inject_failure("view_update_generator_consume_staging_sstable");
-                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(*this, s, std::move(permit), *t, sstables, _as, staging_sstable_reader_handle),
+                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(*this, s, std::move(*permit), *t, sstables, _as, staging_sstable_reader_handle),
                         dht::incremental_owned_ranges_checker::make_partition_filter(_db.get_keyspace_local_ranges(s->ks_name())));
                     if (result == stop_iteration::yes) {
                         break;
                     }
                 } catch (...) {
-                    vug_logger.warn("Processing {} failed for table {}:{}. Will retry...", s->ks_name(), s->cf_name(), std::current_exception());
-                    // Need to add sstables back to the set so we can retry later. By now it may
-                    // have had other updates.
-                    std::move(sstables.begin(), sstables.end(), std::back_inserter(_sstables_with_tables[t]));
+                    vug_logger.warn("[{}] Processing {} failed for table {}:{}. Will retry...", uuid, s->ks_name(), s->cf_name(), std::current_exception());
                     break;
                 }
                 try {
                     inject_failure("view_update_generator_collect_consumed_sstables");
                     _progress_tracker->on_sstables_deregistration(sstables);
                     // collect all staging sstables to move in a map, grouped by table.
-                    std::move(sstables.begin(), sstables.end(), std::back_inserter(_sstables_to_move[t]));
+                    std::move(sstables.begin(), sstables.end(), std::back_inserter(sstables_to_move[t]));
                 } catch (...) {
                     // Move from staging will be retried upon restart.
                     vug_logger.warn("Moving {} from staging failed: {}:{}. Ignoring...", s->ks_name(), s->cf_name(), std::current_exception());
                 }
-                _registration_sem.signal(num_sstables);
+                auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(lowres_clock::now() - start_time).count();
+                vug_logger.info("[{}] Finished processing {}.{}: {} sstables, duration={}s", uuid, s->ks_name(), s->cf_name(), sstables.size(), duration);
             }
             // For each table, move the processed staging sstables into the table's base dir.
-            for (auto it = _sstables_to_move.begin(); it != _sstables_to_move.end(); ) {
+            for (auto it = sstables_to_move.begin(); it != sstables_to_move.end(); ) {
                 auto& [t, sstables] = *it;
                 try {
                     inject_failure("view_update_generator_move_staging_sstable");
@@ -198,7 +201,7 @@ future<> view_update_generator::start() {
                     // Move from staging will be retried upon restart.
                     vug_logger.warn("Moving some sstable from staging failed: {}. Ignoring...", std::current_exception());
                 }
-                it = _sstables_to_move.erase(it);
+                it = sstables_to_move.erase(it);
             }
         }
     });
@@ -209,9 +212,7 @@ future<> view_update_generator::stop() {
     _db.unplug_view_update_generator();
     _as.request_abort();
     _pending_sstables.signal();
-    return std::move(_started).then([this] {
-        _registration_sem.broken();
-    });
+    return std::move(_started);
 }
 
 bool view_update_generator::should_throttle() const {
@@ -223,16 +224,9 @@ future<> view_update_generator::register_staging_sstable(sstables::shared_sstabl
         return make_ready_future<>();
     }
     inject_failure("view_update_generator_registering_staging_sstable");
-    _progress_tracker->on_sstable_registration(sst);
-    _sstables_with_tables[table].push_back(std::move(sst));
-
     _pending_sstables.signal();
-    if (should_throttle()) {
-        return _registration_sem.wait(1);
-    } else {
-        _registration_sem.consume(1);
-        return make_ready_future<>();
-    }
+
+    return make_ready_future<>();
 }
 
 void view_update_generator::setup_metrics() {
@@ -240,15 +234,17 @@ void view_update_generator::setup_metrics() {
 
     _metrics.add_group("view_update_generator", {
         sm::make_gauge("pending_registrations", sm::description("Number of tasks waiting to register staging sstables"),
-                [this] { return _registration_sem.waiters(); }),
+                [] { return 0; }),
 
         sm::make_gauge("queued_batches_count", 
+                // TODO: return correct count
                 sm::description("Number of sets of sstables queued for view update generation"),
-                [this] { return _sstables_with_tables.size(); }),
+                [] { return 0; }),
 
         sm::make_gauge("sstables_to_move_count",
                 sm::description("Number of sets of sstables which are already processed and wait to be moved from their staging directory"),
-                [this] { return _sstables_to_move.size(); }),
+                // TODO: return correct count
+                [] { return 0; }),
 
         sm::make_gauge("sstables_pending_work",
                 sm::description("Number of bytes remaining to be processed from SSTables for view updates"),
@@ -256,19 +252,24 @@ void view_update_generator::setup_metrics() {
     });
 }
 
-void view_update_generator::discover_staging_sstables() {
+std::unordered_map<lw_shared_ptr<replica::table>, std::vector<sstables::shared_sstable>>
+view_update_generator::get_sstables_to_process() {
+    size_t nr = 0;
+    static constexpr size_t max_sst_per_batch = 32;
+    std::unordered_map<lw_shared_ptr<replica::table>, std::vector<sstables::shared_sstable>> sstables;
     for (auto& x : _db.get_column_families()) {
         auto t = x.second->shared_from_this();
-        for (auto sstables = t->get_sstables(); sstables::shared_sstable sst : *sstables) {
+        for (auto ssts = t->get_sstables(); sstables::shared_sstable sst : *ssts) {
             if (sst->requires_view_building()) {
-                _progress_tracker->on_sstable_registration(sst);
-                _sstables_with_tables[t].push_back(std::move(sst));
-                // we're at early stage here, no need to kick _pending_sstables (the
-                // bulding fiber is not running), neither we can wait on the semaphore
-                _registration_sem.consume(1);
+                sstables[t].push_back(std::move(sst));
+                ++nr;
+                if (nr >= max_sst_per_batch) {
+                    return sstables;
+                }
             }
         }
     }
+    return sstables;
 }
 
 }
