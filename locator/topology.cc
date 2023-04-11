@@ -363,8 +363,7 @@ node_holder topology::pop_node(const node* node) {
 
     unindex_node(node);
 
-    // this node?
-    if (node->idx() == 0) {
+    if (node->is_this_node()) {
         on_internal_error(tlogger, format("topology[{}]: {}: cannot pop this_node", fmt::ptr(this), debug_format(node)));
     }
 
