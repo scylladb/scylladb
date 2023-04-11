@@ -7,9 +7,13 @@
  */
 
 #include "cql3/statements/request_validations.hh"
+#include "exceptions/exceptions.hh"
+#include "schema/schema.hh"
 #include "seastar/util/defer.hh"
 #include "cql3/prepare_context.hh"
 #include "types/list.hh"
+#include <iterator>
+#include <ranges>
 
 namespace cql3 {
 namespace expr {
@@ -95,10 +99,21 @@ void validate_token_relation(const std::vector<const column_definition*> column_
             pk.end(), [](auto* c1, auto& c2) {
                 return c1 == &c2; // same, not "equal".
         })) {
-
+        std::vector<const column_definition*> unique_columns;
+        std::ranges::unique_copy(column_defs, std::back_inserter(unique_columns));
+        if (unique_columns.size() < column_defs.size()) {
+            throw exceptions::invalid_request_exception(
+                "The token() function contains duplicate partition key components");
+        }
+        if (unique_columns.size() < pk.size()) {
+            throw exceptions::invalid_request_exception(
+                "The token() function must be applied to all partition key components or none of them");
+        }
         throw exceptions::invalid_request_exception(
                 format("The token function arguments must be in the partition key order: {}",
-                        std::to_string(column_defs)));
+                       fmt::join(boost::adaptors::transform(pk, [](const column_definition& cd) {
+                           return cd.name_as_text();
+                       }), ", ")));
     }
 }
 
