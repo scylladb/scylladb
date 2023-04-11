@@ -94,24 +94,25 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
     }
     sstring attribute_name(v->GetString(), v->GetStringLength());
 
-    std::map<sstring, sstring> tags_map = get_tags_of_table_or_throw(schema);
-    if (enabled) {
-        if (tags_map.contains(TTL_TAG_KEY)) {
-            co_return api_error::validation("TTL is already enabled");
+    co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [&](std::map<sstring, sstring>& tags_map) {
+        if (enabled) {
+            if (tags_map.contains(TTL_TAG_KEY)) {
+                throw api_error::validation("TTL is already enabled");
+            }
+            tags_map[TTL_TAG_KEY] = attribute_name;
+        } else {
+            auto i = tags_map.find(TTL_TAG_KEY);
+            if (i == tags_map.end()) {
+                throw api_error::validation("TTL is already disabled");
+            } else if (i->second != attribute_name) {
+                throw api_error::validation(format(
+                    "Requested to disable TTL on attribute {}, but a different attribute {} is enabled.",
+                    attribute_name, i->second));
+            }
+            tags_map.erase(TTL_TAG_KEY);
         }
-        tags_map[TTL_TAG_KEY] = attribute_name;
-    } else {
-        auto i = tags_map.find(TTL_TAG_KEY);
-        if (i == tags_map.end()) {
-            co_return api_error::validation("TTL is already disabled");
-        } else if (i->second != attribute_name) {
-            co_return api_error::validation(format(
-                "Requested to disable TTL on attribute {}, but a different attribute {} is enabled.",
-                attribute_name, i->second));
-        }
-        tags_map.erase(TTL_TAG_KEY);
-    }
-    co_await db::update_tags(_mm, schema, std::move(tags_map));
+    });
+
     // Prepare the response, which contains a TimeToLiveSpecification
     // basically identical to the request's
     rjson::value response = rjson::empty_object();
