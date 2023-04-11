@@ -250,6 +250,8 @@ public:
      */
     void sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const;
 
+    void for_each_node(std::function<void(const node*)> func) const;
+
 private:
     // default constructor for cloning purposes
     topology() noexcept;

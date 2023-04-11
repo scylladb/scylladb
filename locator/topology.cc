@@ -495,6 +495,14 @@ std::weak_ordering topology::compare_endpoints(const inet_address& address, cons
     return d1 <=> d2;
 }
 
+void topology::for_each_node(std::function<void(const node*)> func) const {
+    for (const auto& np : _nodes) {
+        if (np) {
+            func(np.get());
+        }
+    }
+}
+
 } // namespace locator
 
 namespace std {
