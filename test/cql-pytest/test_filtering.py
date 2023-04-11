@@ -393,3 +393,18 @@ def test_filter_and_fetch_size(cql, test_keyspace, use_index, driver_bug_1):
         s.fetch_size = 3
         results = cql.execute(s)
         assert len(results.current_rows) == 3
+
+# token() function should either take all parition key components or none of them,
+# if the key(s) are specified, they should be listed in the paritition key order
+# Reproduces #13468
+def test_filter_token(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, x int, PRIMARY KEY (pk, ck)') as table:
+        with pytest.raises(InvalidRequest, match='duplicate partition key'):
+            cql.execute(f'SELECT pk FROM {table} WHERE token(pk, pk) = 0')
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, x int, PRIMARY KEY ((pk, ck))') as table:
+        with pytest.raises(InvalidRequest, match='all partition key components'):
+            cql.execute(f'SELECT pk FROM {table} WHERE token(x) = 0')
+        with pytest.raises(InvalidRequest, match='all partition key components'):
+            cql.execute(f'SELECT pk FROM {table} WHERE token(pk) = 0')
+        with pytest.raises(InvalidRequest, match='partition key order'):
+            cql.execute(f'SELECT pk FROM {table} WHERE token(ck, pk) = 0')
