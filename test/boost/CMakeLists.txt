@@ -1,7 +1,13 @@
+add_scylla_test(aggregate_fcts_test
+  KIND SEASTAR)
+add_scylla_test(allocation_strategy_test
+  KIND SEASTAR)
 add_scylla_test(anchorless_list_test
   KIND BOOST)
 add_scylla_test(alternator_unit_test
   KIND BOOST)
+add_scylla_test(auth_test
+  KIND SEASTAR)
 add_scylla_test(auth_passwords_test
   KIND BOOST
   LIBRARIES auth)
@@ -21,19 +27,59 @@ add_scylla_test(btree_test
   KIND SEASTAR)
 add_scylla_test(bytes_ostream_test
   KIND SEASTAR)
+add_scylla_test(cache_flat_mutation_reader_test
+  KIND SEASTAR)
+add_scylla_test(cached_file_test
+  KIND SEASTAR)
 add_scylla_test(caching_options_test
   KIND BOOST)
+add_scylla_test(canonical_mutation_test
+  KIND SEASTAR)
 add_scylla_test(cartesian_product_test
   KIND BOOST)
+add_scylla_test(castas_fcts_test
+  KIND SEASTAR)
+add_scylla_test(cdc_test
+  KIND SEASTAR)
+add_scylla_test(cdc_generation_test
+  KIND SEASTAR)
+add_scylla_test(cell_locker_test
+  KIND SEASTAR)
 add_scylla_test(checksum_utils_test
   KIND BOOST)
+add_scylla_test(chunked_managed_vector_test
+  KIND SEASTAR)
 add_scylla_test(chunked_vector_test
   KIND BOOST)
+add_scylla_test(clustering_ranges_walker_test
+  KIND SEASTAR)
+add_scylla_test(column_mapping_test
+  KIND SEASTAR)
+add_scylla_test(commitlog_test
+  KIND SEASTAR)
+add_scylla_test(compound_test
+  KIND SEASTAR)
 add_scylla_test(compress_test
   KIND BOOST)
+add_scylla_test(config_test
+  KIND SEASTAR)
+add_scylla_test(continuous_data_consumer_test
+  KIND SEASTAR)
+add_scylla_test(counter_test
+  KIND SEASTAR)
 add_scylla_test(cql_auth_syntax_test
   KIND BOOST
   LIBRARIES cql3)
+add_scylla_test(cql_auth_query_test
+  KIND SEASTAR)
+add_scylla_test(cql_functions_test
+  KIND SEASTAR)
+add_scylla_test(cql_query_group_test
+  KIND SEASTAR)
+add_scylla_test(cql_query_large_test
+  KIND SEASTAR)
+add_scylla_test(cql_query_like_test
+  KIND SEASTAR)
 add_scylla_test(cql_query_test
   KIND SEASTAR
   LIBRARIES cql3)
@@ -69,6 +115,18 @@ add_scylla_test(exceptions_optimized_test
 add_scylla_test(expr_test
   KIND BOOST
   LIBRARIES cql3)
+add_scylla_test(extensions_test
+  KIND SEASTAR)
+add_scylla_test(filtering_test
+  KIND SEASTAR)
+add_scylla_test(flat_mutation_reader_test
+  KIND SEASTAR)
+add_scylla_test(flush_queue_test
+  KIND SEASTAR)
+add_scylla_test(fragmented_temporary_buffer_test
+  KIND SEASTAR)
+add_scylla_test(frozen_mutation_test
+  KIND SEASTAR)
 add_scylla_test(gossiping_property_file_snitch_test
   KIND SEASTAR)
 add_scylla_test(group0_test
@@ -84,7 +142,11 @@ add_scylla_test(idl_test
   LIBRARIES idl)
 add_scylla_test(index_with_paging_test
   KIND SEASTAR)
+add_scylla_test(input_stream_test
+  KIND SEASTAR)
 add_scylla_test(intrusive_array_test
+  KIND SEASTAR)
+add_scylla_test(json_cql_query_test
   KIND SEASTAR)
 add_scylla_test(json_test
   KIND BOOST
@@ -161,6 +223,8 @@ add_scylla_test(rate_limiter_test
   KIND SEASTAR)
 add_scylla_test(reader_concurrency_semaphore_test
   KIND SEASTAR)
+add_scylla_test(recent_entries_map_test
+  KIND SEASTAR)
 add_scylla_test(repair_test
   KIND SEASTAR)
 add_scylla_test(restrictions_test
@@ -181,6 +245,8 @@ add_scylla_test(secondary_index_test
 add_scylla_test(serialization_test
   KIND BOOST)
 add_scylla_test(serialized_action_test
+  KIND SEASTAR)
+add_scylla_test(service_level_controller_test
   KIND SEASTAR)
 add_scylla_test(small_vector_test
   KIND SEASTAR)
@@ -204,6 +270,8 @@ add_scylla_test(sstable_resharding_test
   KIND SEASTAR)
 add_scylla_test(sstable_directory_test
   KIND SEASTAR)
+add_scylla_test(sstable_set_test
+  KIND SEASTAR)
 add_scylla_test(sstable_test
   KIND SEASTAR)
 add_scylla_test(sstable_move_test
@@ -211,6 +279,8 @@ add_scylla_test(sstable_move_test
 add_scylla_test(statement_restrictions_test
   KIND SEASTAR
   LIBRARIES cql3)
+add_scylla_test(stall_free_test
+  KIND SEASTAR)
 add_scylla_test(storage_proxy_test
   KIND SEASTAR)
 add_scylla_test(summary_test
@@ -222,6 +292,8 @@ add_scylla_test(tracing_test
 add_scylla_test(transport_test
   KIND SEASTAR)
 add_scylla_test(types_test
+  KIND SEASTAR)
+add_scylla_test(type_json_test
   KIND SEASTAR)
 add_scylla_test(utf8_test
   KIND BOOST
