@@ -748,11 +748,10 @@ public:
     }
 
     friend std::ostream& operator<<(std::ostream& out, const partition_snapshot_row_cursor& cur) {
-        out << "{cursor: position=" << cur._position
-            << ", cont=" << cur.continuous()
-            << ", rt=" << cur.range_tombstone();
+        fmt::print(out, "{{cursor: position={}, cont={}, rt={}}}",
+                   cur._position, cur.continuous(), cur.range_tombstone());
         if (cur.range_tombstone() != cur.range_tombstone_for_row()) {
-            out << ", row_rt=" << cur.range_tombstone_for_row();
+            fmt::print(out, ", row_rt={}", cur.range_tombstone_for_row());
         }
         out << ", ";
         if (cur._reversed) {
