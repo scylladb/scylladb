@@ -190,13 +190,13 @@ protected:
     virtual future<> run() override;
 };
 
-class local_offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_task_impl {
+class shard_offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_task_impl {
 private:
     replica::database& _db;
     std::vector<table_id> _table_infos;
     bool& _needed;
 public:
-    local_offstrategy_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
+    shard_offstrategy_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             tasks::task_id parent_id,
             replica::database& db,

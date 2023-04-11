@@ -89,17 +89,17 @@ future<> offstrategy_keyspace_compaction_task_impl::run() {
         bool needed = false;
         tasks::task_info parent_info{_status.id, _status.shard};
         auto& module = db.get_compaction_manager().get_task_manager_module();
-        auto task = co_await module.make_and_start_task<local_offstrategy_keyspace_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos, needed);
+        auto task = co_await module.make_and_start_task<shard_offstrategy_keyspace_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos, needed);
         co_await task->done();
         co_return needed;
     }, false, std::plus<bool>());
 }
 
-tasks::is_internal local_offstrategy_keyspace_compaction_task_impl::is_internal() const noexcept {
+tasks::is_internal shard_offstrategy_keyspace_compaction_task_impl::is_internal() const noexcept {
     return tasks::is_internal::yes;
 }
 
-future<> local_offstrategy_keyspace_compaction_task_impl::run() {
+future<> shard_offstrategy_keyspace_compaction_task_impl::run() {
     co_await run_on_existing_tables("perform_keyspace_offstrategy_compaction", _db, _status.keyspace, _table_infos, [this] (replica::table& t) -> future<> {
         _needed |= co_await t.perform_offstrategy_compaction();
     });
