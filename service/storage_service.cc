@@ -2790,12 +2790,15 @@ public:
     void refresh_sync_nodes(std::function<bool(gms::inet_address)> sync_to_node = [] (gms::inet_address) { return true; }) {
         // sync data with all normal token owners
         sync_nodes.clear();
-        for (const auto& [node, host_id] : tmptr->get_endpoint_to_host_id_map_for_reading()) {
+        const auto& topo = tmptr->get_topology();
+        topo.for_each_node([&] (const locator::node* np) {
             seastar::thread::maybe_yield();
+            // FIXME: use node* rather than endpoint
+            auto node = np->endpoint();
             if (!ignore_nodes.contains(node) && sync_to_node(node)) {
                 sync_nodes.insert(node);
             }
-        }
+        });
 
         for (auto& node : sync_nodes) {
             if (!ss.gossiper().is_alive(node)) {
