@@ -80,6 +80,8 @@ public:
 
     migration_notifier& get_notifier() { return _notifier; }
     const migration_notifier& get_notifier() const { return _notifier; }
+    service::storage_proxy& get_storage_proxy() { return _storage_proxy; }
+    const service::storage_proxy& get_storage_proxy() const { return _storage_proxy; }
 
     future<> submit_migration_task(const gms::inet_address& endpoint, bool can_ignore_down_node = true);
 
