@@ -2135,7 +2135,7 @@ std::ostream& operator<<(std::ostream& os, operation_type op_type) {
 std::ostream&
 operator<<(std::ostream& os, const exploded_clustering_prefix& ecp) {
     // Can't pass to_hex() to transformed(), since it is overloaded, so wrap:
-    auto enhex = [] (auto&& x) { return to_hex(x); };
+    auto enhex = [] (auto&& x) { return fmt_hex(x); };
     fmt::print(os, "prefix{{{}}}", fmt::join(ecp._v | boost::adaptors::transformed(enhex), ":"));
     return os;
 }
