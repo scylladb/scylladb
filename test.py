@@ -37,6 +37,7 @@ from test.pylib.host_registry import HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.util import LogPrefixAdapter
 from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager, merge_cmdline_options
+from test.pylib.minio_server import MinioServer
 from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union
 
 output_is_a_tty = sys.stdout.isatty()
@@ -1246,6 +1247,11 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
             if isinstance(result, bool):
                 continue    # skip signaled task result
             console.print_progress(result)
+
+    ms = MinioServer(options.tmpdir, TestSuite.hosts, LogPrefixAdapter(logging.getLogger('minio'), {'prefix': 'minio'}))
+    await ms.start()
+    TestSuite.artifacts.add_exit_artifact(None, ms.stop)
+
     console.print_start_blurb()
     try:
         TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)

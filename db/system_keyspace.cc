@@ -64,6 +64,8 @@
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "client_data.hh"
 #include "service/topology_state_machine.hh"
+#include "sstables/open_info.hh"
+#include "sstables/generation_type.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -1010,6 +1012,23 @@ schema_ptr system_keyspace::broadcast_kv_store() {
         return schema_builder(NAME, BROADCAST_KV_STORE, id)
             .with_column("key", utf8_type, column_kind::partition_key)
             .with_column("value", utf8_type)
+            .with_version(generate_schema_version(id))
+            .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::sstables_registry() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, SSTABLES_REGISTRY);
+        return schema_builder(NAME, SSTABLES_REGISTRY, id)
+            .with_column("location", utf8_type, column_kind::partition_key)
+            .with_column("generation", long_type, column_kind::clustering_key)
+            .with_column("uuid", uuid_type)
+            .with_column("status", utf8_type)
+            .with_column("version", utf8_type)
+            .with_column("format", utf8_type)
+            .set_comment("SSTables ownership table")
             .with_version(generate_schema_version(id))
             .build();
     }();
@@ -2823,6 +2842,9 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
             r.insert(r.end(), {broadcast_kv_store()});
         }
     }
+    if (cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
+        r.insert(r.end(), {sstables_registry()});
+    }
     // legacy schema
     r.insert(r.end(), {
                     // TODO: once we migrate hints/batchlog and add convertor
@@ -3527,6 +3549,54 @@ future<service::topology> system_keyspace::load_topology_state() {
     }
 
     co_return ret;
+}
+
+future<> system_keyspace::sstables_registry_create_entry(sstring location, utils::UUID uuid, sstring status, sstables::entry_descriptor desc) {
+    static const auto req = format("INSERT INTO system.{} (location, generation, uuid, status, version, format) VALUES (?, ?, ?, ?, ?, ?)", SSTABLES_REGISTRY);
+    slogger.trace("Inserting {}.{}:{} into {}", location, desc.generation.value(), uuid, SSTABLES_REGISTRY);
+    co_await execute_cql(req, location, desc.generation.value(), uuid, status, fmt::to_string(desc.version), fmt::to_string(desc.format)).discard_result();
+}
+
+future<utils::UUID> system_keyspace::sstables_registry_lookup_entry(sstring location, sstables::generation_type gen) {
+    static const auto req = format("SELECT uuid FROM system.{} WHERE location = ? AND generation = ?", SSTABLES_REGISTRY);
+    slogger.trace("Looking up {}.{} in {}", location, gen.value(), SSTABLES_REGISTRY);
+    auto msg = co_await execute_cql(req, location, gen.value());
+    if (msg->empty() || !msg->one().has("uuid")) {
+        slogger.trace("ERROR: Cannot find {}.{} in {}", location, gen.value(), SSTABLES_REGISTRY);
+        co_await coroutine::return_exception(std::runtime_error("No entry in sstables registry"));
+    }
+
+    auto uuid = msg->one().get_as<utils::UUID>("uuid");
+    slogger.trace("Found {}.{}:{} in {}", location, gen.value(), uuid, SSTABLES_REGISTRY);
+    co_return uuid;
+}
+
+future<> system_keyspace::sstables_registry_update_entry_status(sstring location, sstables::generation_type gen, sstring status) {
+    static const auto req = format("UPDATE system.{} SET status = ? WHERE location = ? AND generation = ?", SSTABLES_REGISTRY);
+    slogger.trace("Updating {}.{} -> {} in {}", location, gen.value(), status, SSTABLES_REGISTRY);
+    co_await execute_cql(req, status, location, gen.value()).discard_result();
+}
+
+future<> system_keyspace::sstables_registry_delete_entry(sstring location, sstables::generation_type gen) {
+    static const auto req = format("DELETE FROM system.{} WHERE location = ? AND generation = ?", SSTABLES_REGISTRY);
+    slogger.trace("Removing {}.{} from {}", location, gen.value(), SSTABLES_REGISTRY);
+    co_await execute_cql(req, location, gen.value()).discard_result();
+}
+
+future<> system_keyspace::sstables_registry_list(sstring location, sstable_registry_entry_consumer consumer) {
+    static const auto req = format("SELECT uuid, status, generation, version, format FROM system.{} WHERE location = ?", SSTABLES_REGISTRY);
+    slogger.trace("Listing {} entries from {}", location, SSTABLES_REGISTRY);
+
+    co_await _qp.local().query_internal(req, db::consistency_level::ONE, { location }, 1000, [ consumer = std::move(consumer) ] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+        auto uuid = row.get_as<utils::UUID>("uuid");
+        auto status = row.get_as<sstring>("status");
+        auto gen = sstables::generation_from_value(row.get_as<int64_t>("generation"));
+        auto ver = sstables::version_from_string(row.get_as<sstring>("version"));
+        auto fmt = sstables::format_from_string(row.get_as<sstring>("format"));
+        sstables::entry_descriptor desc("", "", "", gen, ver, fmt, sstables::component_type::TOC);
+        co_await consumer(std::move(uuid), std::move(status), std::move(desc));
+        co_return stop_iteration::no;
+    });
 }
 
 sstring system_keyspace_name() {

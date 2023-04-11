@@ -28,6 +28,7 @@
 
 namespace db {
 
+class system_keyspace;
 class large_data_handler;
 class config;
 
@@ -71,12 +72,15 @@ private:
 
     reader_concurrency_semaphore _sstable_metadata_concurrency_sem;
     directory_semaphore& _dir_semaphore;
+    seastar::shared_ptr<db::system_keyspace> _sys_ks;
+
 public:
     explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem);
     virtual ~sstables_manager();
 
     // Constructs a shared sstable
     shared_sstable make_sstable(schema_ptr schema,
+            const data_dictionary::storage_options& storage, // FIXME -- move dir on options
             sstring dir,
             generation_type generation,
             sstable_version_types v = get_highest_sstable_version(),
@@ -85,7 +89,7 @@ public:
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
             size_t buffer_size = default_sstable_buffer_size);
 
-    std::unique_ptr<sstable_directory::components_lister> get_components_lister(std::filesystem::path dir);
+    std::unique_ptr<sstable_directory::components_lister> get_components_lister(const data_dictionary::storage_options& storage, std::filesystem::path dir);
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
     const db::config& config() const { return _db_config; }
@@ -108,6 +112,16 @@ public:
     // sstables have been destroyed.
     future<> close();
     directory_semaphore& dir_semaphore() noexcept { return _dir_semaphore; }
+
+    void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
+    void unplug_system_keyspace() noexcept;
+
+    // Only for sstable::storage usage
+    db::system_keyspace& system_keyspace() const noexcept {
+        assert(_sys_ks && "System keyspace is not plugged");
+        return *_sys_ks;
+    }
+
 private:
     void add(sstable* sst);
     // Transition the sstable to the "inactive" state. It has no

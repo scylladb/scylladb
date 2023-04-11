@@ -13,6 +13,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/util/defer.hh>
 
+#include "data_dictionary/storage_options.hh"
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
 #include "gms/feature_service.hh"
@@ -87,7 +88,8 @@ public:
     shared_sstable make_sstable(schema_ptr schema, sstring dir, sstables::generation_type generation,
             sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
             size_t buffer_size = default_sstable_buffer_size, gc_clock::time_point now = gc_clock::now()) {
-        return _impl->mgr.make_sstable(std::move(schema), dir, generation, v, f, now, default_io_error_handler_gen(), buffer_size);
+        data_dictionary::storage_options local;
+        return _impl->mgr.make_sstable(std::move(schema), local, dir, generation, v, f, now, default_io_error_handler_gen(), buffer_size);
     }
 
     shared_sstable make_sstable(schema_ptr schema, sstring dir, sstable::version_types v = sstables::get_highest_sstable_version()) {

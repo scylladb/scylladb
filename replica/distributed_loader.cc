@@ -403,7 +403,7 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
 
 sstables::shared_sstable make_sstable(replica::table& table, fs::path dir, sstables::generation_type generation_value) {
     auto& sstm = table.get_sstables_manager();
-    return sstm.make_sstable(table.schema(), dir.native(), generation_value, sstm.get_highest_supported_format(), sstables::sstable_format_types::big, gc_clock::now(), &error_handler_gen_for_upload_dir);
+    return sstm.make_sstable(table.schema(), table.get_storage_options(), dir.native(), generation_value, sstm.get_highest_supported_format(), sstables::sstable_format_types::big, gc_clock::now(), &error_handler_gen_for_upload_dir);
 }
 
 future<>
@@ -420,6 +420,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         directory.start(
             sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
             sharded_parameter([&global_table] { return global_table->schema(); }),
+            sharded_parameter([&global_table] { return global_table->get_storage_options_ptr(); }),
             upload, service::get_local_streaming_priority(),
             &error_handler_gen_for_upload_dir
         ).get();
@@ -480,6 +481,7 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
         directory.start(
             sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
             sharded_parameter([&global_table] { return global_table->schema(); }),
+            sharded_parameter([&global_table] { return global_table->get_storage_options_ptr(); }),
             upload, service::get_local_streaming_priority(),
             &error_handler_gen_for_upload_dir
         ).get();
@@ -625,6 +627,7 @@ future<> table_populator::start_subdir(sstring subdir) {
     co_await directory.start(
         sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
         sharded_parameter([&global_table] { return global_table->schema(); }),
+        sharded_parameter([&global_table] { return global_table->get_storage_options_ptr(); }),
         fs::path(sstdir), default_priority_class(),
         default_io_error_handler_gen()
     );
@@ -659,7 +662,7 @@ future<> table_populator::start_subdir(sstring subdir) {
 }
 
 sstables::shared_sstable make_sstable(replica::table& table, fs::path dir, sstables::generation_type generation, sstables::sstable_version_types v) {
-    return table.get_sstables_manager().make_sstable(table.schema(), dir.native(), generation, v, sstables::sstable_format_types::big);
+    return table.get_sstables_manager().make_sstable(table.schema(), table.get_storage_options(), dir.native(), generation, v, sstables::sstable_format_types::big);
 }
 
 future<> table_populator::populate_subdir(sstring subdir, allow_offstrategy_compaction do_allow_offstrategy_compaction, must_exist dir_must_exist) {
@@ -739,7 +742,7 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
 
         sstring cfname = cf->schema()->cf_name();
         auto sstdir = ks.column_family_directory(ksdir, cfname, uuid);
-        dblog.info("Keyspace {}: Reading CF {} id={} version={}", ks_name, cfname, uuid, s->version());
+        dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={}", ks_name, cfname, uuid, s->version(), cf->get_storage_options().type_string());
 
         auto metadata = table_populator(db, ks_name, cfname);
         std::exception_ptr ex;

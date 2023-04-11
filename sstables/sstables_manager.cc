@@ -13,6 +13,7 @@
 #include "db/config.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
+#include "db/system_keyspace.hh"
 
 namespace sstables {
 
@@ -43,6 +44,7 @@ const locator::host_id& sstables_manager::get_local_host_id() const {
 }
 
 shared_sstable sstables_manager::make_sstable(schema_ptr schema,
+        const data_dictionary::storage_options& storage,
         sstring dir,
         generation_type generation,
         sstable_version_types v,
@@ -50,7 +52,7 @@ shared_sstable sstables_manager::make_sstable(schema_ptr schema,
         gc_clock::time_point now,
         io_error_handler_gen error_handler_gen,
         size_t buffer_size) {
-    return make_lw_shared<sstable>(std::move(schema), std::move(dir), generation, v, f, get_large_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);
+    return make_lw_shared<sstable>(std::move(schema), storage, std::move(dir), generation, v, f, get_large_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);
 }
 
 sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
@@ -107,8 +109,23 @@ future<> sstables_manager::close() {
     co_await _sstable_metadata_concurrency_sem.stop();
 }
 
-std::unique_ptr<sstable_directory::components_lister> sstables_manager::get_components_lister(std::filesystem::path dir) {
-    return std::make_unique<sstable_directory::components_lister>(std::move(dir));
+std::unique_ptr<sstable_directory::components_lister> sstables_manager::get_components_lister(const data_dictionary::storage_options& storage, std::filesystem::path dir) {
+    return std::visit(overloaded_functor {
+        [dir] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstable_directory::components_lister> {
+            return std::make_unique<sstable_directory::filesystem_components_lister>(std::move(dir));
+        },
+        [this, dir] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
+            return std::make_unique<sstable_directory::system_keyspace_components_lister>(system_keyspace(), dir.native());
+        }
+    }, storage.value);
+}
+
+void sstables_manager::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
+    _sys_ks = sys_ks.shared_from_this();
+}
+
+void sstables_manager::unplug_system_keyspace() noexcept {
+    _sys_ks = nullptr;
 }
 
 }   // namespace sstables

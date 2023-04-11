@@ -19,6 +19,7 @@
 #include "sstables/shared_sstable.hh"            // sstables::shared_sstable
 #include "sstables/version.hh"                   // sstable versions
 #include "compaction/compaction_descriptor.hh"     // for compaction_sstable_creator_fn
+#include "data_dictionary/storage_options.hh"
 #include "sstables/open_info.hh"                 // for entry_descriptor and foreign_sstable_open_info, chunked_vector wants to know if they are move constructible
 #include "utils/chunked_vector.hh"
 #include "utils/phased_barrier.hh"
@@ -27,6 +28,7 @@
 #include "sstables/generation_type.hh"
 
 class compaction_manager;
+namespace db { class system_keyspace; }
 
 namespace sstables {
 
@@ -66,6 +68,13 @@ public:
     };
 
     class components_lister {
+    public:
+        virtual future<> process(sstable_directory& directory, fs::path location, process_flags flags) = 0;
+        virtual future<> commit() = 0;
+        virtual ~components_lister() {}
+    };
+
+    class filesystem_components_lister final : public components_lister {
         struct scan_state {
             using scan_multimap = std::unordered_multimap<generation_type, std::filesystem::path>;
             using scan_descriptors = utils::chunked_vector<sstables::entry_descriptor>;
@@ -91,10 +100,21 @@ public:
         future<> close();
 
     public:
-        components_lister(std::filesystem::path dir);
+        filesystem_components_lister(std::filesystem::path dir);
 
-        future<> process(sstable_directory& directory, fs::path location, process_flags flags);
-        future<> commit();
+        virtual future<> process(sstable_directory& directory, fs::path location, process_flags flags) override;
+        virtual future<> commit() override;
+    };
+
+    class system_keyspace_components_lister final : public components_lister {
+        db::system_keyspace& _sys_ks;
+        sstring _location;
+
+    public:
+        system_keyspace_components_lister(db::system_keyspace& sys_ks, sstring location);
+
+        virtual future<> process(sstable_directory& directory, fs::path location, process_flags flags) override;
+        virtual future<> commit() override;
     };
 
 private:
@@ -105,6 +125,7 @@ private:
 
     sstables_manager& _manager;
     schema_ptr _schema;
+    lw_shared_ptr<const data_dictionary::storage_options> _storage_opts;
     std::filesystem::path _sstable_dir;
     ::io_priority_class _io_priority;
     io_error_handler_gen _error_handler_gen;
@@ -155,6 +176,7 @@ private:
 public:
     sstable_directory(sstables_manager& manager,
             schema_ptr schema,
+            lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
             std::filesystem::path sstable_dir,
             ::io_priority_class io_prio,
             io_error_handler_gen error_handler_gen);

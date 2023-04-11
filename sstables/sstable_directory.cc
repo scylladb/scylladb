@@ -20,6 +20,7 @@
 #include "sstable_directory.hh"
 #include "utils/lister.hh"
 #include "replica/database.hh"
+#include "db/system_keyspace.hh"
 
 static logging::logger dirlog("sstable_directory");
 
@@ -34,36 +35,44 @@ bool manifest_json_filter(const fs::path&, const directory_entry& entry) {
     return true;
 }
 
-sstable_directory::components_lister::components_lister(std::filesystem::path dir)
+sstable_directory::filesystem_components_lister::filesystem_components_lister(std::filesystem::path dir)
         : _lister(dir, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter)
         , _state(std::make_unique<scan_state>())
 {
 }
 
-future<sstring> sstable_directory::components_lister::get() {
+future<sstring> sstable_directory::filesystem_components_lister::get() {
     auto de = co_await _lister.get();
     co_return sstring(de ? de->name : "");
 }
 
-future<> sstable_directory::components_lister::close() {
+future<> sstable_directory::filesystem_components_lister::close() {
     return _lister.close();
+}
+
+sstable_directory::system_keyspace_components_lister::system_keyspace_components_lister(db::system_keyspace& sys_ks, sstring location)
+        : _sys_ks(sys_ks)
+        , _location(std::move(location))
+{
 }
 
 sstable_directory::sstable_directory(sstables_manager& manager,
         schema_ptr schema,
+        lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
         fs::path sstable_dir,
         ::io_priority_class io_prio,
         io_error_handler_gen error_handler_gen)
     : _manager(manager)
     , _schema(std::move(schema))
+    , _storage_opts(std::move(storage_opts))
     , _sstable_dir(std::move(sstable_dir))
     , _io_priority(std::move(io_prio))
     , _error_handler_gen(error_handler_gen)
-    , _lister(_manager.get_components_lister(_sstable_dir))
+    , _lister(_manager.get_components_lister(*_storage_opts, _sstable_dir))
     , _unshared_remote_sstables(smp::count)
 {}
 
-void sstable_directory::components_lister::handle(sstables::entry_descriptor desc, fs::path filename) {
+void sstable_directory::filesystem_components_lister::handle(sstables::entry_descriptor desc, fs::path filename) {
     if ((generation_value(desc.generation) % smp::count) != this_shard_id()) {
         return;
     }
@@ -111,7 +120,7 @@ void sstable_directory::validate(sstables::shared_sstable sst, process_flags fla
 }
 
 future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc) const {
-    auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
+    auto sst = _manager.make_sstable(_schema, *_storage_opts, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
     co_await sst->load(_io_priority);
     co_return sst;
 }
@@ -141,7 +150,7 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_f
 }
 
 future<std::vector<shard_id>> sstable_directory::get_shards_for_this_sstable(const sstables::entry_descriptor& desc, process_flags flags) const {
-    auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
+    auto sst = _manager.make_sstable(_schema, *_storage_opts, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
     co_await sst->load_owner_shards(_io_priority);
     validate(sst, flags);
     co_return sst->get_shards_for_this_sstable();
@@ -184,11 +193,11 @@ sstable_directory::highest_version_seen() const {
 }
 
 future<> sstable_directory::process_sstable_dir(process_flags flags) {
-    dirlog.debug("Start processing directory {} for SSTables", _sstable_dir);
+    dirlog.debug("Start processing directory {} for SSTables (storage {})", _sstable_dir, _storage_opts->type_string());
     return _lister->process(*this, _sstable_dir, flags);
 }
 
-future<> sstable_directory::components_lister::process(sstable_directory& directory, fs::path location, process_flags flags) {
+future<> sstable_directory::filesystem_components_lister::process(sstable_directory& directory, fs::path location, process_flags flags) {
     // It seems wasteful that each shard is repeating this scan, and to some extent it is.
     // However, we still want to open the files and especially call process_dir() in a distributed
     // fashion not to overload any shard. Also in the common case the SSTables will all be
@@ -277,16 +286,35 @@ future<> sstable_directory::components_lister::process(sstable_directory& direct
     }
 }
 
+future<> sstable_directory::system_keyspace_components_lister::process(sstable_directory& directory, fs::path location, process_flags flags) {
+    return _sys_ks.sstables_registry_list(location.native(), [this, flags, &directory] (utils::UUID uuid, sstring status, entry_descriptor desc) {
+        if (status != "sealed") {
+            // FIXME -- handle
+            return make_ready_future<>();
+        }
+        if ((generation_value(desc.generation) % smp::count) != this_shard_id()) {
+            return make_ready_future<>();
+        }
+
+        dirlog.debug("Processing {} entry from {}", uuid, _location);
+        return directory.process_descriptor(std::move(desc), flags);
+    });
+}
+
 future<> sstable_directory::commit_directory_changes() {
     return _lister->commit().finally([x = std::move(_lister)] {});
 }
 
-future<> sstable_directory::components_lister::commit() {
+future<> sstable_directory::filesystem_components_lister::commit() {
     // Remove all files scheduled for removal
     return parallel_for_each(std::exchange(_state->files_for_removal, {}), [] (sstring path) {
         dirlog.info("Removing file {}", path);
         return remove_file(std::move(path));
     });
+}
+
+future<> sstable_directory::system_keyspace_components_lister::commit() {
+    return make_ready_future<>();
 }
 
 future<>
@@ -304,7 +332,7 @@ sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_dire
 }
 
 future<shared_sstable> sstable_directory::load_foreign_sstable(foreign_sstable_open_info& info) {
-    auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
+    auto sst = _manager.make_sstable(_schema, *_storage_opts, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
     co_await sst->load(std::move(info));
     co_return sst;
 }
@@ -443,11 +471,11 @@ future<> sstable_directory::delete_atomically(std::vector<shared_sstable> ssts) 
                 // since we know that the worst thing filesystem storage driver can
                 // do is to prepend/drop the trailing slash, it should be enough to
                 // compare prefixes of both ... prefixes
-                assert(compare_sstable_storage_prefix(first->_storage.prefix(), sst->_storage.prefix()));
+                assert(compare_sstable_storage_prefix(first->_storage->prefix(), sst->_storage->prefix()));
             }
         }
 
-        sstring pending_delete_dir = first->_storage.prefix() + "/" + sstable::pending_delete_dir_basename();
+        sstring pending_delete_dir = first->_storage->prefix() + "/" + sstable::pending_delete_dir_basename();
         sstring pending_delete_log = format("{}/sstables-{}-{}.log", pending_delete_dir, gen_tracker.min(), gen_tracker.max());
         sstring tmp_pending_delete_log = pending_delete_log + ".tmp";
         sstlog.trace("Writing {}", tmp_pending_delete_log);

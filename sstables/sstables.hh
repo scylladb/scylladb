@@ -43,6 +43,10 @@
 class sstable_assertions;
 class cached_file;
 
+namespace data_dictionary {
+class storage_options;
+}
+
 namespace db {
 class large_data_handler;
 }
@@ -144,6 +148,7 @@ public:
     using manager_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
 public:
     sstable(schema_ptr schema,
+            const data_dictionary::storage_options& storage,
             sstring dir,
             generation_type generation,
             version_types v,
@@ -471,51 +476,53 @@ public:
 
     using mark_for_removal = bool_class<class mark_for_removal_tag>;
 
-    class filesystem_storage {
+    class storage {
         friend class test;
-        sstring dir;
-        std::optional<sstring> temp_dir; // Valid while the sstable is being created, until sealed
 
-    private:
-        future<> check_create_links_replay(const sstable& sst, const sstring& dst_dir, generation_type dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
-        future<> remove_temp_dir();
-        future<> create_links(const sstable& sst, const sstring& dir) const;
-        future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
-        future<> touch_temp_dir(const sstable& sst);
-        future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay);
-
-        void change_dir_for_test(sstring nd) {
-            dir = std::move(nd);
+        // Internal, but can also be used by tests
+        virtual void change_dir_for_test(sstring nd) {
+            assert(false && "Changing directory not implemented");
+        }
+        virtual future<> create_links(const sstable& sst, const sstring& dir) const {
+            assert(false && "Direct links creation not implemented");
+        }
+        virtual future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay) {
+            assert(false && "Direct move not implemented");
         }
 
     public:
-        explicit filesystem_storage(sstring dir_) : dir(std::move(dir_)) {}
+        virtual ~storage() {}
 
         using absolute_path = bool_class<class absolute_path_tag>; // FIXME -- should go away eventually
-        future<> seal(const sstable& sst);
-        future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const;
 
-        // Moves the files around with .move() method. States are basedir subdirectories
-        // with the exception that normal state maps to the basedir itself. If the sstable
-        // is already in the target state, this is a noop.
-        // Moving in a snapshot or upload will move to a subdirectory of the current directory.
-        future<> change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay);
-
+        virtual future<> seal(const sstable& sst) = 0;
+        virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const = 0;
+        virtual future<> change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay) = 0;
         // runs in async context
-        void open(sstable& sst, const io_priority_class& pc);
-        future<> wipe(const sstable& sst) noexcept;
-        future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity);
+        virtual void open(sstable& sst, const io_priority_class& pc) = 0;
+        virtual future<> wipe(const sstable& sst) noexcept = 0;
+        virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) = 0;
+        virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) = 0;
+        virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) = 0;
+        struct stat {
+            uint64_t bytes_on_disk = 0;
+            uint64_t filter_file_size = 0;
+        };
+        virtual future<stat> get_stats(const sstable& sst) = 0;
 
-        sstring prefix() const { return dir; }
+        virtual sstring prefix() const  = 0;
     };
 
-    const filesystem_storage& get_storage() const {
-        return _storage;
+    const storage& get_storage() const {
+        return *_storage;
     }
+
+    class filesystem_storage;
+    class s3_storage;
 
 private:
     sstring filename(component_type f) const {
-        return filename(_storage.prefix(), f);
+        return filename(_storage->prefix(), f);
     }
 
     sstring filename(const sstring& dir, component_type f) const {
@@ -559,7 +566,7 @@ private:
     schema_ptr _schema;
     generation_type _generation{0};
 
-    filesystem_storage _storage;
+    std::unique_ptr<storage> _storage;
 
     const version_types _version;
     const format_types _format;
@@ -726,6 +733,8 @@ private:
     }
 
     future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
+    // runs in async context (called from storage::open)
+    void write_toc(file_writer w);
 public:
     future<> read_toc() noexcept;
 

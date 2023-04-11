@@ -76,13 +76,15 @@ struct table_for_tests {
     sstables::shared_sstable make_sstable() {
         auto& table = *_data->cf;
         auto& sstables_manager = table.get_sstables_manager();
-        return sstables_manager.make_sstable(_data->s, _data->cfg.datadir, table.calculate_generation_for_new_table());
+        data_dictionary::storage_options local;
+        return sstables_manager.make_sstable(_data->s, local, _data->cfg.datadir, table.calculate_generation_for_new_table());
     }
 
     sstables::shared_sstable make_sstable(sstables::sstable_version_types version) {
         auto& table = *_data->cf;
         auto& sstables_manager = table.get_sstables_manager();
-        return sstables_manager.make_sstable(_data->s, _data->cfg.datadir, table.calculate_generation_for_new_table(), version);
+        data_dictionary::storage_options local;
+        return sstables_manager.make_sstable(_data->s, local, _data->cfg.datadir, table.calculate_generation_for_new_table(), version);
     }
 
     std::function<sstables::shared_sstable()> make_sst_factory() {
