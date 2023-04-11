@@ -774,7 +774,6 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
         co_return api_error::access_denied("Incorrect resource identifier");
     }
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
-    std::map<sstring, sstring> tags_map = get_tags_of_table_or_throw(schema);
     const rjson::value* tags = rjson::find(request, "Tags");
     if (!tags || !tags->IsArray()) {
         co_return api_error::validation("Cannot parse tags");
@@ -782,8 +781,9 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
     if (tags->Size() < 1) {
         co_return api_error::validation("The number of tags must be at least 1") ;
     }
-    update_tags_map(*tags, tags_map,  update_tags_action::add_tags);
-    co_await db::update_tags(_mm, schema, std::move(tags_map));
+    co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
+        update_tags_map(*tags, tags_map, update_tags_action::add_tags);
+    });
     co_return json_string("");
 }
 
@@ -801,9 +801,9 @@ future<executor::request_return_type> executor::untag_resource(client_state& cli
 
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
 
-    std::map<sstring, sstring> tags_map = get_tags_of_table_or_throw(schema);
-    update_tags_map(*tags, tags_map, update_tags_action::delete_tags);
-    co_await db::update_tags(_mm, schema, std::move(tags_map));
+    co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
+        update_tags_map(*tags, tags_map, update_tags_action::delete_tags);
+    });
     co_return json_string("");
 }
 

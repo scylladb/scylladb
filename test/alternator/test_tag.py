@@ -12,6 +12,7 @@ import pytest
 from botocore.exceptions import ClientError
 import re
 import time
+import threading
 from util import multiset, create_test_table, unique_table_name, random_string
 from packaging.version import Version
 
@@ -291,3 +292,53 @@ def test_tag_lsi_gsi(table_lsi_gsi):
         table_lsi_gsi.meta.client.tag_resource(ResourceArn=gsi_arn, Tags=tags)
     with pytest.raises(ClientError, match='ValidationException.*ResourceArn'):
         table_lsi_gsi.meta.client.tag_resource(ResourceArn=lsi_arn, Tags=tags)
+
+# Test that if we concurrently add tags A and B to a table, both survive.
+# If the process of adding tag A involved reading the current tags, adding
+# A and then over-writing the tags back, if we did this for A and B
+# concurrently the risk is that both would read the state before both changes.
+# To solve this, Scylla needs to serialize tag modification. This test
+# is designed to fail if this serialization is missing.  Reproduces #6389
+@pytest.mark.veryslow
+def test_concurrent_tag(dynamodb, test_table):
+    client = test_table.meta.client
+    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    # Unfortunately by default Python threads print their exceptions
+    # (e.g., assertion failures) but don't propagate them to the join(),
+    # so the overall test doesn't fail. The following Thread wrapper
+    # causes join() to rethrow the exception, so the test will fail.
+    class ThreadWrapper(threading.Thread):
+        def run(self):
+            try:
+                self.ret = self._target(*self._args, **self._kwargs)
+            except BaseException as e:
+                self.exception = e
+        def join(self, timeout=None):
+            super().join(timeout)
+            if hasattr(self, 'exception'):
+                raise self.exception
+            return self.ret
+
+    def tag_untag_once(tag):
+        client.tag_resource(ResourceArn=arn, Tags=[{'Key': tag, 'Value': 'Hello'}])
+        # Check that the tag that we just added is still on the table (and
+        # wasn't overwritten by a concurrent addition of a different tag):
+        got = test_table.meta.client.list_tags_of_resource(ResourceArn=arn)['Tags']
+        assert [x['Value'] for x in got if x['Key']==tag] == ['Hello']
+        client.untag_resource(ResourceArn=arn, TagKeys=[tag])
+        got = test_table.meta.client.list_tags_of_resource(ResourceArn=arn)['Tags']
+        assert [x['Value'] for x in got if x['Key']==tag] == []
+    def tag_loop(tag, count):
+        for i in range(count):
+            tag_untag_once(tag)
+    # The more iterations we do, the higher the chance of reproducing
+    # this issue. On my laptop, count = 100 reproduces the bug every time.
+    # Lower numbers have some chance of not catching the bug. If this
+    # issue starts to xpass, we may need to increase the count.
+    count = 200
+    t1 = ThreadWrapper(target=lambda: tag_loop('A', count))
+    t2 = ThreadWrapper(target=lambda: tag_loop('B', count))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
