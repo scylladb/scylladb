@@ -17,7 +17,8 @@
 logging::logger klog("keys");
 
 std::ostream& operator<<(std::ostream& out, const partition_key& pk) {
-    return out << "pk{" << to_hex(managed_bytes_view(pk.representation())) << "}";
+    fmt::print(out, "pk{{{}}}", managed_bytes_view(pk.representation()));
+    return out;
 }
 
 template<typename T>
@@ -63,7 +64,8 @@ std::ostream& operator<<(std::ostream& out, const partition_key_view& pk) {
 }
 
 std::ostream& operator<<(std::ostream& out, const clustering_key_prefix& ckp) {
-    return out << "ckp{" << to_hex(managed_bytes_view(ckp.representation())) << "}";
+    fmt::print(out, "ckp{{{}}}", managed_bytes_view(ckp.representation()));
+    return out;
 }
 
 const legacy_compound_view<partition_key_view::c_type>

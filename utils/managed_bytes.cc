@@ -23,7 +23,7 @@ managed_bytes::do_linearize_pure() const {
 }
 
 sstring to_hex(const managed_bytes& b) {
-    return to_hex(managed_bytes_view(b));
+    return fmt::to_string(managed_bytes_view(b));
 }
 
 sstring to_hex(const managed_bytes_opt& b) {
