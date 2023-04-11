@@ -2,6 +2,8 @@ import subprocess
 import logging
 import yaml
 import os
+import socket
+import minimalcontainer
 
 
 class ScyllaSetup:
@@ -35,7 +37,10 @@ class ScyllaSetup:
 
     def _run(self, *args, **kwargs):
         logging.info('running: {}'.format(args))
-        subprocess.check_call(*args, **kwargs)
+        if not minimalcontainer.is_minimal_container():
+            subprocess.check_call(*args, **kwargs)
+        else:
+            minimalcontainer.run_script(args, kwargs)
 
     def developerMode(self):
         self._run(['/opt/scylladb/scripts/scylla_dev_mode_setup', '--developer-mode', self._developerMode])
@@ -65,7 +70,10 @@ class ScyllaSetup:
             os.makedirs(data_dir)
 
         if self._io_setup == "1":
-            self._run(['/opt/scylladb/scripts/scylla_io_setup'])
+            if not minimalcontainer.is_minimal_container():
+                self._run(['/opt/scylladb/scripts/scylla_io_setup'])
+            else:
+                minimalcontainer.io_setup()
 
     def cqlshrc(self):
         home = os.environ['HOME']
@@ -74,7 +82,7 @@ class ScyllaSetup:
         elif self._listenAddress:
             hostname = self._listenAddress
         else:
-            hostname = subprocess.check_output(['hostname', '-i']).decode('ascii').strip()
+            hostname = socket.gethostbyname(socket.gethostname())
         with open("%s/.cqlshrc" % home, "w") as cqlshrc:
             cqlshrc.write("[connection]\nhostname = %s\n" % hostname)
 
@@ -101,7 +109,7 @@ class ScyllaSetup:
             args += ["--overprovisioned"]
 
         if self._listenAddress is None:
-            self._listenAddress = subprocess.check_output(['hostname', '-i']).decode('ascii').strip()
+            self._listenAddress = socket.gethostbyname(socket.gethostname())
 
         if self._rpcAddress is None:
             self._rpcAddress = self._listenAddress
