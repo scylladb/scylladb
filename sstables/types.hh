@@ -126,16 +126,26 @@ inline std::ostream& operator<<(std::ostream& o, indexable_element e) {
 
 class summary_entry {
 public:
-    dht::token token;
+    int64_t raw_token;
     bytes_view key;
     uint64_t position;
+
+    explicit summary_entry(dht::token token, bytes_view key, uint64_t position)
+            : raw_token(dht::token::to_int64(token))
+            , key(key)
+            , position(position) {
+    }
 
     key_view get_key() const {
         return key_view{key};
     }
 
+    dht::token get_token() const {
+        return dht::token::from_int64(raw_token);
+    }
+
     decorated_key_view get_decorated_key() const {
-        return decorated_key_view(token, get_key());
+        return decorated_key_view(get_token(), get_key());
     }
 
     bool operator==(const summary_entry& x) const {

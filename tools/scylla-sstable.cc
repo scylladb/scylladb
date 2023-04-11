@@ -981,7 +981,7 @@ void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::
 
             auto pkey = e.get_key().to_partition_key(*schema);
             writer.Key("key");
-            writer.DataKey(*schema, pkey, e.token);
+            writer.DataKey(*schema, pkey, e.get_token());
             writer.Key("position");
             writer.Uint64(e.position);
 
