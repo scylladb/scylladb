@@ -63,6 +63,7 @@
 #include "db/rate_limiter.hh"
 #include "db/operation_type.hh"
 #include "utils/serialized_action.hh"
+#include "compaction/compaction_fwd.hh"
 #include "compaction/compaction_manager.hh"
 #include "utils/disk-error-handler.hh"
 #include "rust/wasmtime_bindings.hh"
@@ -96,10 +97,6 @@ class compaction_data;
 class sstable_set;
 class directory_semaphore;
 
-}
-
-namespace compaction {
-class table_state;
 }
 
 namespace ser {
@@ -549,7 +546,7 @@ private:
     // Select a compaction group from a given key.
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const noexcept;
     // Select a compaction group from a given sstable based on its token range.
-    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) noexcept;
+    compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept;
     // Returns a list of all compaction groups.
     const std::vector<std::unique_ptr<compaction_group>>& compaction_groups() const noexcept;
     // Safely iterate through compaction groups, while performing async operations on them.
@@ -1124,6 +1121,15 @@ public:
     compaction::table_state& as_table_state() const noexcept;
     // Safely iterate through table states, while performing async operations on them.
     future<> parallel_foreach_table_state(std::function<future<>(compaction::table_state&)> action);
+
+    // Add sst to or remove it from the sstables_requiring_cleanup set.
+    bool update_sstable_cleanup_state(const sstables::shared_sstable& sst, compaction::owned_ranges_ptr owned_ranges_ptr);
+
+    // Returns true if the sstable requries cleanup.
+    bool requires_cleanup(const sstables::shared_sstable& sst) const;
+
+    // Returns true if any of the sstables requries cleanup.
+    bool requires_cleanup(const sstables::sstable_set& set) const;
 
     friend class compaction_group;
 };

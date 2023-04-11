@@ -557,7 +557,7 @@ compaction_group& table::compaction_group_for_key(partition_key_view key, const 
     return compaction_group_for_token(dht::get_token(*s, key));
 }
 
-compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) noexcept {
+compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept {
     // FIXME: a sstable can belong to more than one group, change interface to reflect that.
     return compaction_group_for_token(sst->get_first_decorated_key().token());
 }
@@ -1910,11 +1910,12 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         tlogger.debug("cleaning out row cache");
     }));
     rebuild_statistics();
-    co_await coroutine::parallel_for_each(p->remove, [p] (pruner::removed_sstable& r) {
+    co_await coroutine::parallel_for_each(p->remove, [this, p] (pruner::removed_sstable& r) -> future<> {
         if (r.enable_backlog_tracker) {
             remove_sstable_from_backlog_tracker(r.cg.get_backlog_tracker(), r.sst);
         }
-        return sstables::sstable_directory::delete_atomically({r.sst});
+        co_await sstables::sstable_directory::delete_atomically({r.sst});
+        update_sstable_cleanup_state(r.sst, {});
     });
     co_return p->rp;
 }
@@ -2833,6 +2834,24 @@ data_dictionary::table
 table::as_data_dictionary() const {
     static constinit data_dictionary_impl _impl;
     return _impl.wrap(*this);
+}
+
+bool table::update_sstable_cleanup_state(const sstables::shared_sstable& sst, compaction::owned_ranges_ptr owned_ranges_ptr) {
+    // FIXME: it's possible that the sstable belongs to multiple compaction_groups
+    auto& cg = compaction_group_for_sstable(sst);
+    return get_compaction_manager().update_sstable_cleanup_state(cg.as_table_state(), sst, std::move(owned_ranges_ptr));
+}
+
+bool table::requires_cleanup(const sstables::shared_sstable& sst) const {
+    auto& cg = compaction_group_for_sstable(sst);
+    return get_compaction_manager().requires_cleanup(cg.as_table_state(), sst);
+}
+
+bool table::requires_cleanup(const sstables::sstable_set& set) const {
+    return bool(set.for_each_sstable_until([this] (const sstables::shared_sstable &sst) {
+        auto& cg = compaction_group_for_sstable(sst);
+        return stop_iteration(_compaction_manager.requires_cleanup(cg.as_table_state(), sst));
+    }));
 }
 
 } // namespace replica

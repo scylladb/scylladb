@@ -1998,7 +1998,7 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
 
             auto local_ranges = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(ks_name));
             auto descriptor = sstables::compaction_descriptor({std::move(sst)}, default_priority_class(), compaction_descriptor::default_level,
-                compaction_descriptor::default_max_sstable_bytes, run_identifier, compaction_type_options::make_cleanup(std::move(local_ranges)));
+                compaction_descriptor::default_max_sstable_bytes, run_identifier, compaction_type_options::make_cleanup(), std::move(local_ranges));
             auto ret = compact_sstables(std::move(descriptor), cf, sst_gen).get0();
 
             BOOST_REQUIRE(ret.new_sstables.size() == 1);
@@ -3571,23 +3571,23 @@ SEASTAR_TEST_CASE(sstable_needs_cleanup_test) {
     {
         auto local_ranges = { token_range(0, 9) };
         auto sst = sst_gen(keys[0], keys[9]);
-        BOOST_REQUIRE(!needs_cleanup(sst, local_ranges, s));
+        BOOST_REQUIRE(!needs_cleanup(sst, local_ranges));
     }
 
     {
         auto local_ranges = { token_range(0, 1), token_range(3, 4), token_range(5, 6) };
 
         auto sst = sst_gen(keys[0], keys[1]);
-        BOOST_REQUIRE(!needs_cleanup(sst, local_ranges, s));
+        BOOST_REQUIRE(!needs_cleanup(sst, local_ranges));
 
         auto sst2 = sst_gen(keys[2], keys[2]);
-        BOOST_REQUIRE(needs_cleanup(sst2, local_ranges, s));
+        BOOST_REQUIRE(needs_cleanup(sst2, local_ranges));
 
         auto sst3 = sst_gen(keys[0], keys[6]);
-        BOOST_REQUIRE(needs_cleanup(sst3, local_ranges, s));
+        BOOST_REQUIRE(needs_cleanup(sst3, local_ranges));
 
         auto sst5 = sst_gen(keys[7], keys[7]);
-        BOOST_REQUIRE(needs_cleanup(sst5, local_ranges, s));
+        BOOST_REQUIRE(needs_cleanup(sst5, local_ranges));
     }
   });
 }
@@ -4885,4 +4885,29 @@ SEASTAR_TEST_CASE(compaction_manager_stop_and_drain_race_test) {
 
     testlog.info("stopping compaction manager");
     co_await cm.stop();
+}
+
+SEASTAR_TEST_CASE(test_print_shared_sstables_vector) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pks = ss.make_pkeys(2);
+        auto sst_gen = env.make_sst_factory(s);
+
+        std::vector<sstables::shared_sstable> ssts(2);
+
+        auto mut0 = mutation(s, pks[0]);
+        mut0.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+        ssts[0] = make_sstable_containing(sst_gen, {std::move(mut0)});
+
+        auto mut1 = mutation(s, pks[1]);
+        mut1.partition().apply_insert(*s, ss.make_ckey(1), ss.new_timestamp());
+        ssts[1] = make_sstable_containing(sst_gen, {std::move(mut1)});
+
+        std::string msg = format("{}", ssts);
+        for (const auto& sst : ssts) {
+            auto gen_str = format("{}", sst->generation());
+            BOOST_REQUIRE(msg.find(gen_str) != std::string::npos);
+        }
+    });
 }

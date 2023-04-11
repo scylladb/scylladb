@@ -9,9 +9,9 @@
 
 #pragma once
 
-namespace compaction {
+#include "compaction/compaction_fwd.hh"
 
-class table_state;
+namespace compaction {
 
 // Used by manager to set goals and constraints on compaction strategies
 class strategy_control {
