@@ -161,6 +161,12 @@ struct convert<::object_storage_endpoint_param> {
         ep.endpoint = node["name"].as<std::string>();
         ep.config.port = node["port"].as<unsigned>();
         ep.config.use_https = node["https"] && node["https"].as<bool>();
+        if (node["aws_region"]) {
+            ep.config.aws.emplace();
+            ep.config.aws->region = node["aws_region"].as<std::string>();
+            ep.config.aws->key = node["aws_key"].as<std::string>();
+            ep.config.aws->secret = node["aws_secret"].as<std::string>();
+        }
         return true;
     }
 };
