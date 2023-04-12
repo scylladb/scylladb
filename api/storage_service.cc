@@ -736,15 +736,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
         apilog.info("upgrade_sstables: keyspace={} tables={} exclude_current_version={}", keyspace, table_infos, exclude_current_version);
+
+        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+        auto task = co_await compaction_module.make_and_start_task<upgrade_sstables_compaction_task_impl>({}, std::move(keyspace), db, get_table_ids(table_infos), exclude_current_version);
         try {
-            co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
-                auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(keyspace));
-                co_await run_on_existing_tables("upgrade_sstables", db, keyspace, table_infos, [&] (replica::table& t) {
-                    return t.parallel_foreach_table_state([&] (compaction::table_state& ts) {
-                        return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, exclude_current_version);
-                    });
-                });
-            });
+            co_await task->done();
         } catch (...) {
             apilog.error("upgrade_sstables: keyspace={} tables={} failed: {}", keyspace, table_infos, std::current_exception());
             throw;

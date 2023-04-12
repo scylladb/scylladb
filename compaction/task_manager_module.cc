@@ -105,4 +105,26 @@ future<> shard_offstrategy_keyspace_compaction_task_impl::run() {
     });
 }
 
+future<> upgrade_sstables_compaction_task_impl::run() {
+    co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
+        tasks::task_info parent_info{_status.id, _status.shard};
+        auto& compaction_module = db.get_compaction_manager().get_task_manager_module();
+        auto task = co_await compaction_module.make_and_start_task<shard_upgrade_sstables_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos, _exclude_current_version);
+        co_await task->done();
+    });
+}
+
+tasks::is_internal shard_upgrade_sstables_compaction_task_impl::is_internal() const noexcept {
+    return tasks::is_internal::yes;
+}
+
+future<> shard_upgrade_sstables_compaction_task_impl::run() {
+    auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(_db.get_keyspace_local_ranges(_status.keyspace));
+    co_await run_on_existing_tables("upgrade_sstables", _db, _status.keyspace, _table_infos, [&] (replica::table& t) -> future<> {
+        return t.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
+            return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, _exclude_current_version);
+        });
+    });
+}
+
 }
