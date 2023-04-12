@@ -317,6 +317,20 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
         co_return *ip;
     };
 
+    // We must check here that the node supports all features enabled
+    // in the cluster so far. If we won't do that then there is a risk
+    // that further commands might depend on some features that the current
+    // node doesn't understand and it might risk misinterpreting them.
+    //
+    // An interesting and useful side effect of those checks is that
+    // performing a successful read barrier makes sure that the local node
+    // supports all cluster's features.
+    const auto supported_features = _feature_service.supported_feature_set();
+    const auto enabled_features = _topology_state_machine._topology.calculate_enabled_features();
+    auto enabled_features_v = boost::copy_range<std::set<std::string_view>>(enabled_features);
+    service::topology::check_knows_enabled_features(supported_features, enabled_features_v);
+    co_await _feature_service.enable(std::move(enabled_features_v), _sys_ks.local());
+
     for (const auto& id: _topology_state_machine._topology.left_nodes) {
         auto ip = co_await id2ip(id);
         if (_gossiper.get_live_members().contains(ip) || _gossiper.get_unreachable_members().contains(ip)) {
