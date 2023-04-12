@@ -18,6 +18,13 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
 #include "utils/s3/client.hh"
+#include "utils/s3/creds.hh"
+
+s3::endpoint_config_ptr make_minio_config() {
+    s3::endpoint_config cfg = {
+    };
+    return make_lw_shared<s3::endpoint_config>(std::move(cfg));
+}
 
 /*
  * Tests below expect minio server to be running on localhost
@@ -29,7 +36,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
     const sstring name(fmt::format("/{}/testobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
-    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"));
+    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config());
 
     testlog.info("Put object {}\n", name);
     temporary_buffer<char> data = sstring("1234567890").release();
@@ -61,7 +68,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload) {
     const sstring name(fmt::format("/{}/testlargeobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
-    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"));
+    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config());
 
     testlog.info("Upload object\n");
     auto out = output_stream<char>(cln->make_upload_sink(name));
@@ -111,7 +118,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
     const sstring name(fmt::format("/{}/testroobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
-    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"));
+    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config());
 
     testlog.info("Put object {}\n", name);
     temporary_buffer<char> data = sstring("1234567890ABCDEF").release();

@@ -3299,7 +3299,7 @@ class sstable::s3_storage final : public sstable::storage {
 
 public:
     s3_storage(sstring endpoint, s3::endpoint_config_ptr cfg, sstring bucket, sstring dir)
-        : _client(s3::client::make(std::move(endpoint)))
+        : _client(s3::client::make(std::move(endpoint), std::move(cfg)))
         , _bucket(std::move(bucket))
         , _location(std::move(dir))
     {

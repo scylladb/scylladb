@@ -43,14 +43,15 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-client::client(std::string host, private_tag)
+client::client(std::string host, endpoint_config_ptr cfg, private_tag)
         : _host(std::move(host))
+        , _cfg(std::move(cfg))
         , _http(ipv4_addr(_host, 9000 /* temporary hard-coded */))
 {
 }
 
-shared_ptr<client> client::make(std::string endpoint) {
-    return seastar::make_shared<client>(std::move(endpoint), private_tag{});
+shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg) {
+    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), private_tag{});
 }
 
 future<uint64_t> client::get_object_size(sstring object_name) {
@@ -421,26 +422,28 @@ public:
 
     class readable_file_handle_impl final : public file_handle_impl {
         std::string _host;
+        endpoint_config_ptr _cfg;
         sstring _object_name;
 
     public:
-        readable_file_handle_impl(std::string host, sstring object_name)
+        readable_file_handle_impl(std::string host, endpoint_config_ptr cfg, sstring object_name)
                 : _host(std::move(host))
+                , _cfg(std::move(cfg))
                 , _object_name(std::move(object_name))
         {}
 
         virtual std::unique_ptr<file_handle_impl> clone() const override {
-            return std::make_unique<readable_file_handle_impl>(_host, _object_name);
+            return std::make_unique<readable_file_handle_impl>(_host, _cfg, _object_name);
         }
 
         virtual shared_ptr<file_impl> to_file() && override {
-            auto client = seastar::make_shared<s3::client>(std::move(_host), client::private_tag{});
+            auto client = seastar::make_shared<s3::client>(std::move(_host), std::move(_cfg), client::private_tag{});
             return make_shared<readable_file>(std::move(client), std::move(_object_name));
         }
     };
 
     virtual std::unique_ptr<file_handle_impl> dup() override {
-        return std::make_unique<readable_file_handle_impl>(_client->_host, _object_name);
+        return std::make_unique<readable_file_handle_impl>(_client->_host, _client->_cfg, _object_name);
     }
 
     virtual future<uint64_t> size(void) override {

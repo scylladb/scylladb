@@ -10,6 +10,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/http/client.hh>
+#include "utils/s3/creds.hh"
 
 using namespace seastar;
 class memory_data_sink_buffers;
@@ -25,13 +26,14 @@ class client : public enable_shared_from_this<client> {
     class upload_sink;
     class readable_file;
     std::string _host;
+    endpoint_config_ptr _cfg;
     http::experimental::client _http;
 
     struct private_tag {};
 
 public:
-    explicit client(std::string host, private_tag);
-    static shared_ptr<client> make(std::string endpoint);
+    explicit client(std::string host, endpoint_config_ptr cfg, private_tag);
+    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg);
 
     future<uint64_t> get_object_size(sstring object_name);
     future<temporary_buffer<char>> get_object_contiguous(sstring object_name, std::optional<range> range = {});
