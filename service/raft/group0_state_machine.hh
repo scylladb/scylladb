@@ -13,8 +13,16 @@
 #include "mutation/canonical_mutation.hh"
 #include "service/raft/raft_state_machine.hh"
 
+namespace db {
+class system_keyspace;
+}
+
 namespace cdc {
 class generation_service;
+}
+
+namespace gms {
+class feature_service;
 }
 
 namespace service {
@@ -78,8 +86,10 @@ class group0_state_machine : public raft_state_machine {
     storage_proxy& _sp;
     storage_service& _ss;
     cdc::generation_service& _cdc_gen_svc;
+    gms::feature_service& _fs;
+    db::system_keyspace& _sys_ks;
 public:
-    group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss, cdc::generation_service& cdc_gen_svc) : _client(client), _mm(mm), _sp(sp), _ss(ss), _cdc_gen_svc(cdc_gen_svc) {}
+    group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss, cdc::generation_service& cdc_gen_svc, gms::feature_service& fs, db::system_keyspace& sys_ks) : _client(client), _mm(mm), _sp(sp), _ss(ss), _cdc_gen_svc(cdc_gen_svc), _fs(fs), _sys_ks(sys_ks) {}
     future<> apply(std::vector<raft::command_cref> command) override;
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;
