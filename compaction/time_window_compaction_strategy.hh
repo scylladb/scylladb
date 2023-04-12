@@ -51,6 +51,7 @@ private:
     std::chrono::seconds sstable_window_size = DEFAULT_COMPACTION_WINDOW_UNIT * DEFAULT_COMPACTION_WINDOW_SIZE;
     db_clock::duration expired_sstable_check_frequency = DEFAULT_EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS();
     timestamp_resolutions timestamp_resolution = timestamp_resolutions::microsecond;
+    bool enable_optimized_twcs_queries{true};
 public:
     time_window_compaction_strategy_options(const time_window_compaction_strategy_options&);
     time_window_compaction_strategy_options(time_window_compaction_strategy_options&&);

@@ -71,6 +71,11 @@ time_window_compaction_strategy_options::time_window_compaction_strategy_options
             timestamp_resolution = valid_timestamp_resolutions.at(it->second);
         }
     }
+
+    it = options.find("enable_optimized_twcs_queries");
+    if (it != options.end() && it->second == "false") {
+        enable_optimized_twcs_queries = false;
+    }
 }
 
 time_window_compaction_strategy_options::time_window_compaction_strategy_options(time_window_compaction_strategy_options&&) = default;
