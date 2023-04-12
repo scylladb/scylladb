@@ -5258,9 +5258,12 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
                 cdc_generation_mutation.emplace(rs->partitions().begin()->mut().unfreeze(s));
             }
 
+            std::vector<sstring> enabled_features = boost::copy_range<std::vector<sstring>>(ss._topology_state_machine._topology.calculate_enabled_features());
+
             co_return raft_topology_snapshot{
                 .topology_mutations = std::move(topology_mutations),
                 .cdc_generation_mutation = std::move(cdc_generation_mutation),
+                .enabled_features = std::move(enabled_features),
             };
         });
     });

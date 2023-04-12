@@ -124,6 +124,11 @@ struct raft_topology_snapshot {
 
     // Mutation for system.cdc_generations_v3, contains the current CDC generation data.
     std::optional<canonical_mutation> cdc_generation_mutation;
+
+    // Features enabled by the cluster, based on the current system.topology table state.
+    // The receiving node must check whether it understands all of the features first
+    // before applying, because the format of the snapshot might depend on them.
+    std::vector<sstring> enabled_features;
 };
 
 struct raft_topology_pull_params {

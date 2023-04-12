@@ -33,6 +33,7 @@
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "partition_slice_builder.hh"
+#include "service/topology_state_machine.hh"
 #include "timestamp.hh"
 #include "utils/overloaded_functor.hh"
 #include <optional>
@@ -147,6 +148,19 @@ future<> group0_state_machine::transfer_snapshot(gms::inet_address from, raft::s
     }
 
     auto topology_snp = co_await ser::storage_service_rpc_verbs::send_raft_pull_topology_snapshot(&_mm._messaging, addr, service::raft_topology_pull_params{});
+
+    // If the snapshot transfer happens before the node inserts its features
+    // to the `topology` table then we don't have a guarantee that this node
+    // will support all of the cluster's features. Do the check unconditionally
+    // here.
+    // It is important to check this here because some parts of the snapshot
+    // or further commands might depend on the feature being enabled. If we
+    // proceed without doing it then we risk further errors, or - what's even
+    // worse - mis-interpretation.
+    const auto supported_features = _fs.supported_feature_set();
+    auto enabled_features_v = boost::copy_range<std::set<std::string_view>>(topology_snp.enabled_features);
+    service::topology::check_knows_enabled_features(supported_features, enabled_features_v);
+    co_await _fs.enable(std::move(enabled_features_v), _sys_ks);
 
     auto history_mut = extract_history_mutation(*cm, _sp.data_dictionary());
 
