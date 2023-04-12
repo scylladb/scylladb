@@ -14,6 +14,7 @@ namespace s3 {
 
 struct endpoint_config {
     unsigned port;
+    bool use_https;
 };
 
 using endpoint_config_ptr = seastar::lw_shared_ptr<endpoint_config>;

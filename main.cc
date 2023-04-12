@@ -160,6 +160,7 @@ struct convert<::object_storage_endpoint_param> {
     static bool decode(const Node& node, ::object_storage_endpoint_param& ep) {
         ep.endpoint = node["name"].as<std::string>();
         ep.config.port = node["port"].as<unsigned>();
+        ep.config.use_https = node["https"] && node["https"].as<bool>();
         return true;
     }
 };
