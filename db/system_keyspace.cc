@@ -256,11 +256,13 @@ schema_ptr system_keyspace::topology() {
             .with_column("num_tokens", int32_type)
             .with_column("shard_count", int32_type)
             .with_column("ignore_msb", int32_type)
+            .with_column("supported_features", set_type_impl::get_instance(utf8_type, true))
             .with_column("new_cdc_generation_data_uuid", uuid_type, column_kind::static_column)
             .with_column("transition_state", utf8_type, column_kind::static_column)
             .with_column("current_cdc_generation_uuid", uuid_type, column_kind::static_column)
             .with_column("current_cdc_generation_timestamp", timestamp_type, column_kind::static_column)
             .with_column("global_topology_request", utf8_type, column_kind::static_column)
+            .with_column("enabled_features", set_type_impl::get_instance(utf8_type, true), column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_version(generate_schema_version(id))
             .build();
