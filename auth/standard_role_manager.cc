@@ -465,6 +465,8 @@ standard_role_manager::grant(std::string_view grantee_name, std::string_view rol
 
    return when_all_succeed(check_redundant(), check_cycle()).then_unpack([this, role_name, grantee_name] {
        return this->modify_membership(grantee_name, role_name, membership_change::add);
+   }).then([this, grantee_name, role_name] {
+        return notify_role_granted(grantee_name, role_name);
    });
 }
 
@@ -485,6 +487,8 @@ standard_role_manager::revoke(std::string_view revokee_name, std::string_view ro
             return make_ready_future<>();
         }).then([this, revokee_name, role_name] {
             return this->modify_membership(revokee_name, role_name, membership_change::remove);
+        }).then([this, revokee_name, role_name] {
+            return notify_role_revoked(revokee_name, role_name);
         });
     });
 }
@@ -599,7 +603,10 @@ future<> standard_role_manager::set_attribute(std::string_view role_name, std::s
             if (!role_exists) {
                 throw auth::nonexistant_role(role_name);
             }
-            return _qp.execute_internal(query, {sstring(role_name), sstring(attribute_name), sstring(attribute_value)}, cql3::query_processor::cache_internal::yes).discard_result();
+            return _qp.execute_internal(query, {sstring(role_name), sstring(attribute_name), sstring(attribute_value)}, cql3::query_processor::cache_internal::yes)
+            .then([&role_name, &attribute_name, &attribute_value, this] (auto) {
+                return notify_attribute_set(role_name, attribute_name, attribute_value);
+            });
         });
     });
 
@@ -612,7 +619,10 @@ future<> standard_role_manager::remove_attribute(std::string_view role_name, std
             if (!role_exists) {
                 throw auth::nonexistant_role(role_name);
             }
-            return _qp.execute_internal(query, {sstring(role_name), sstring(attribute_name)}, cql3::query_processor::cache_internal::yes).discard_result();
+            return _qp.execute_internal(query, {sstring(role_name), sstring(attribute_name)}, cql3::query_processor::cache_internal::yes)
+            .then([&role_name, &attribute_name, this] (auto) {
+                return notify_attribute_removed(role_name, attribute_name);
+            });
         });
     });
 }
