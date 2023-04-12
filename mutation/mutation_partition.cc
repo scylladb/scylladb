@@ -1055,7 +1055,7 @@ operator<<(std::ostream& os, const mutation_partition::printer& p) {
     auto& mp = p._mutation_partition;
     os << "mutation_partition: {\n";
     if (mp._tombstone) {
-        os << indent << "tombstone: " << mp._tombstone << ",\n";
+        fmt::print(os, "{}tombstone: {},\n", indent, mp._tombstone);
     }
     if (!mp._row_tombstones.empty()) {
         fmt::print(os, "{}range_tombstones: {{{}}},\n", indent, fmt::join(prefixed("\n    ", mp._row_tombstones), ","));

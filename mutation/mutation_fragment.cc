@@ -30,7 +30,9 @@ operator<<(std::ostream& os, const static_row::printer& p) {
 
 std::ostream&
 operator<<(std::ostream& os, const partition_start& ph) {
-    return os << "{partition_start: pk "<< ph._key << " partition_tombstone " << ph._partition_tombstone << "}";
+    fmt::print(os, "{{partition_start: pk {} partition_tombstone {}}}",
+               ph._key, ph._partition_tombstone);
+    return os;
 }
 
 std::ostream&

@@ -164,3 +164,15 @@ std::ostream& operator<<(std::ostream& os, const std::weak_ordering& order);
 std::ostream& operator<<(std::ostream& os, const std::partial_ordering& order);
 
 } // namespace std
+
+template<typename T>
+struct fmt::formatter<std::optional<T>> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const std::optional<T>& opt, FormatContext& ctx) const {
+        if (opt) {
+            return fmt::format_to(ctx.out(), "{}", *opt);
+        } else {
+            return fmt::format_to(ctx.out(), "{{}}");
+        }
+     }
+};

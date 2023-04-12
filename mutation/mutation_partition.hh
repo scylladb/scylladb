@@ -689,16 +689,21 @@ public:
     void apply(shadowable_tombstone t) noexcept {
         _tomb.apply(t._tomb);
     }
+};
 
-    friend std::ostream& operator<<(std::ostream& out, const shadowable_tombstone& t) {
+template <>
+struct fmt::formatter<shadowable_tombstone> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const shadowable_tombstone& t, FormatContext& ctx) const {
         if (t) {
-            return out << "{shadowable tombstone: timestamp=" << t.tomb().timestamp
-                   << ", deletion_time=" << t.tomb().deletion_time.time_since_epoch().count()
-                   << "}";
+            return fmt::format_to(ctx.out(),
+                                  "{{shadowable tombstone: timestamp={}, deletion_time={}}}",
+                                  t.tomb().timestamp, t.tomb(), t.tomb().deletion_time.time_since_epoch().count());
         } else {
-            return out << "{shadowable tombstone: none}";
+            return fmt::format_to(ctx.out(),
+                                  "{{shadowable tombstone: none}}");
         }
-    }
+     }
 };
 
 template<>
@@ -792,10 +797,11 @@ public:
 
     friend std::ostream& operator<<(std::ostream& out, const row_tombstone& t) {
         if (t) {
-            return out << "{row_tombstone: " << t._regular << (t.is_shadowable() ? t._shadowable : shadowable_tombstone()) << "}";
+            fmt::print(out, "{{row_tombstone: {}{}}}",  t._regular, t.is_shadowable() ? t._shadowable : shadowable_tombstone());
         } else {
-            return out << "{row_tombstone: none}";
+            fmt::print(out, "{{row_tombstone: none}}");
         }
+        return out;
     }
 };
 
