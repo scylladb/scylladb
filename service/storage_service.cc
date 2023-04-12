@@ -412,6 +412,10 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
                 on_fatal_internal_error(slogger, format("Unexpected state {} for node {}", rs.state, id));
             }
         }
+
+        if (_db.local().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
+            tmptr->set_tablets(co_await replica::read_tablet_metadata(*_qp));
+        }
     }));
 
     if (auto gen_id = _topology_state_machine._topology.current_cdc_generation_id) {
