@@ -17,6 +17,7 @@
 #include "gms/feature_service.hh"
 #include "repair/row_level.hh"
 #include "replica/compaction_group.hh"
+#include "utils/overloaded_functor.hh"
 #include <boost/program_options.hpp>
 #include <iostream>
 #include <seastar/util/defer.hh>
@@ -161,12 +162,25 @@ std::unique_ptr<db::config> make_db_config(sstring temp_dir) {
     return cfg;
 }
 
+std::unordered_map<sstring, s3::endpoint_config_ptr> make_storage_options_config(const data_dictionary::storage_options& so) {
+    std::unordered_map<sstring, s3::endpoint_config_ptr> cfg;
+    std::visit(overloaded_functor {
+        [] (const data_dictionary::storage_options::local& loc) mutable -> void {
+        },
+        [&cfg] (const data_dictionary::storage_options::s3& os) mutable -> void {
+            cfg[os.endpoint] = make_lw_shared<s3::endpoint_config>(s3::endpoint_config {
+            });
+        }
+    }, so.value);
+    return cfg;
+}
+
 test_env::impl::impl(test_env_config cfg)
     : dir()
     , db_config(make_db_config(dir.path().native()))
     , dir_sem(1)
     , feature_service(gms::feature_config_from_db_config(*db_config))
-    , mgr(cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler, *db_config, feature_service, cache_tracker, memory::stats().total_memory(), dir_sem)
+    , mgr(cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler, *db_config, feature_service, cache_tracker, memory::stats().total_memory(), dir_sem, make_storage_options_config(cfg.storage))
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env")
     , storage(std::move(cfg.storage))
 { }
