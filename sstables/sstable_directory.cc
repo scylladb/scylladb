@@ -119,14 +119,14 @@ void sstable_directory::validate(sstables::shared_sstable sst, process_flags fla
     }
 }
 
-future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc) const {
+future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc, sstables::sstable_open_config cfg) const {
     auto sst = _manager.make_sstable(_schema, *_storage_opts, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
-    co_await sst->load(_io_priority);
+    co_await sst->load(_io_priority, cfg);
     co_return sst;
 }
 
 future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc, process_flags flags) const {
-    auto sst = co_await load_sstable(std::move(desc));
+    auto sst = co_await load_sstable(std::move(desc), flags.sstable_open_config);
     validate(sst, flags);
     if (flags.need_mutate_level) {
         dirlog.trace("Mutating {} to level 0\n", sst->get_filename());
