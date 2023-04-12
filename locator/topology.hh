@@ -250,6 +250,8 @@ public:
      */
     void sort_by_proximity(inet_address address, inet_address_vector_replica_set& addresses) const;
 
+    void for_each_node(std::function<void(const node*)> func) const;
+
 private:
     // default constructor for cloning purposes
     topology() noexcept;
@@ -304,6 +306,11 @@ private:
 
     void calculate_datacenters();
 
+    const std::unordered_map<inet_address, const node*>& get_nodes_by_endpoint() const noexcept {
+        return _nodes_by_endpoint;
+    };
+
+    friend class token_metadata_impl;
 public:
     void test_compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
 };
