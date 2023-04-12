@@ -53,6 +53,10 @@ public:
     friend bool operator>(const big_decimal& x, const big_decimal& y) { return x.compare(y) > 0; }
 };
 
-inline std::ostream& operator<<(std::ostream& s, const big_decimal& v) {
-    return s << v.to_string();
-}
+template <>
+struct fmt::formatter<big_decimal> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const big_decimal& v, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", v.to_string());
+    }
+};
