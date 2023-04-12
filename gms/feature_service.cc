@@ -183,6 +183,14 @@ std::set<sstring> feature_service::to_feature_set(sstring features_string) {
     return features;
 }
 
+sstring feature_service::from_feature_set(const std::set<sstring>& feature_set) {
+    return fmt::to_string(fmt::join(feature_set, ","));
+}
+
+sstring feature_service::from_feature_set(const std::set<std::string_view>& feature_set) {
+    return fmt::to_string(fmt::join(feature_set, ","));
+}
+
 class persistent_feature_enabler : public i_endpoint_state_change_subscriber {
     gossiper& _g;
     feature_service& _feat;

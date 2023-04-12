@@ -126,6 +126,9 @@ public:
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
 
     static std::set<sstring> to_feature_set(sstring features_string);
+    static sstring from_feature_set(const std::set<sstring>& feature_set);
+    static sstring from_feature_set(const std::set<std::string_view>& feature_set);
+
     future<> enable_features_on_startup(db::system_keyspace&);
     future<> enable_features_on_join(gossiper&, db::system_keyspace&);
 };

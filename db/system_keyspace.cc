@@ -3361,7 +3361,7 @@ future<std::set<sstring>> system_keyspace::load_local_enabled_features() {
 }
 
 future<> system_keyspace::save_local_enabled_features(std::set<sstring> features) {
-    auto features_str = fmt::to_string(fmt::join(features, ","));
+    auto features_str = gms::feature_service::from_feature_set(features);
     co_await set_scylla_local_param(gms::feature_service::ENABLED_FEATURES_KEY, features_str);
 }
 
