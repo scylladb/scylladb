@@ -1755,8 +1755,9 @@ SEASTAR_TEST_CASE(test_commitlog_replay_compression_deflate) {
     co_await do_test_commitlog_replay_compression("DeflateCompressor");
 }
 
-// Note: not testing ZstdCompressor. Something does not work right with it. Gets allocation
-// errors. Not sure why. 
+SEASTAR_TEST_CASE(test_commitlog_replay_compression_zstd) {
+    co_await do_test_commitlog_replay_compression("ZstdCompressor");
+}
 
 static future<> do_test_commitlog_add_entries_compressed(std::string_view compressor_name) {
     commitlog::config cfg;
@@ -1834,4 +1835,8 @@ SEASTAR_TEST_CASE(test_commitlog_add_entries_compressed_snappy) {
 
 SEASTAR_TEST_CASE(test_commitlog_add_entries_compressed_deflate) {
     co_await do_test_commitlog_add_entries_compressed("DeflateCompressor");
+}
+
+SEASTAR_TEST_CASE(test_commitlog_add_entries_compressed_zstd) {
+    co_await do_test_commitlog_add_entries_compressed("ZstdCompressor");
 }
