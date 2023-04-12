@@ -454,8 +454,6 @@ protected:
         setup_new_compaction(descriptor.run_identifier);
 
         cmlog.info0("User initiated compaction started on behalf of {}.{}", t->schema()->ks_name(), t->schema()->cf_name());
-        compaction_backlog_tracker bt(std::make_unique<user_initiated_backlog_tracker>(_cm._compaction_controller.backlog_of_shares(200), _cm.available_memory()));
-        _cm.register_backlog_tracker(bt);
 
         // Now that the sstables for major compaction are registered
         // and the user_initiated_backlog_tracker is set up
