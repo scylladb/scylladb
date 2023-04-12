@@ -1552,8 +1552,6 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
         tlogger.warn("Writes disabled, column family no durable.");
     }
     set_metrics();
-
-    update_optimized_twcs_queries_flag();
 }
 
 partition_presence_checker
@@ -1943,18 +1941,7 @@ void table::set_schema(schema_ptr s) {
     }
 
     set_compaction_strategy(_schema->compaction_strategy());
-    update_optimized_twcs_queries_flag();
     trigger_compaction();
-}
-
-void table::update_optimized_twcs_queries_flag() {
-    auto& opts = _schema->compaction_strategy_options();
-    auto it = opts.find("enable_optimized_twcs_queries");
-    if (it != opts.end() && it->second == "false") {
-        _config.enable_optimized_twcs_queries = false;
-    } else {
-        _config.enable_optimized_twcs_queries = true;
-    }
 }
 
 static std::vector<view_ptr>::iterator find_view(std::vector<view_ptr>& views, const view_ptr& v) {

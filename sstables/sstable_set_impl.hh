@@ -109,13 +109,14 @@ private:
 
     schema_ptr _schema;
     schema_ptr _reversed_schema; // == _schema->make_reversed();
+    bool _enable_optimized_twcs_queries;
     // s.min_position() -> s, ordered using _schema
     lw_shared_ptr<container_t> _sstables;
     // s.max_position().reversed() -> s, ordered using _reversed_schema; the set of values is the same as in _sstables
     lw_shared_ptr<container_t> _sstables_reversed;
 
 public:
-    time_series_sstable_set(schema_ptr schema);
+    time_series_sstable_set(schema_ptr schema, bool enable_optimized_twcs_queries);
     time_series_sstable_set(const time_series_sstable_set& s);
 
     virtual std::unique_ptr<sstable_set_impl> clone() const override;
