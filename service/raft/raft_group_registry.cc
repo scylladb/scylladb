@@ -152,6 +152,15 @@ void raft_group_registry::init_rpc_verbs() {
             const rpc::client_info& cinfo,
             const raft::group_id& gid, raft::server_id from, raft::server_id dst, auto handler) {
         constexpr bool is_one_way = std::is_void_v<std::invoke_result_t<decltype(handler), raft_rpc&>>;
+        const auto& my_id = get_my_raft_id();
+        if (my_id != dst) {
+            if constexpr (is_one_way) {
+                rslog.debug("Got message for server {}, but my id is {}", dst, my_id);
+                return make_ready_future<rpc::no_wait_type>(netw::messaging_service::no_wait());
+            } else {
+                throw raft_destination_id_not_correct{*_my_id, dst};
+            }
+        }
 
         return container().invoke_on(shard_for_group(gid),
                 [addr = netw::messaging_service::get_source(cinfo).addr, from, gid, handler] (raft_group_registry& self) mutable {
