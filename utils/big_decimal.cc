@@ -135,7 +135,7 @@ sstring big_decimal::to_string() const
     return str;
 }
 
-std::strong_ordering big_decimal::compare(const big_decimal& other) const
+std::strong_ordering big_decimal::operator<=>(const big_decimal& other) const
 {
     auto max_scale = std::max(_scale, other._scale);
     boost::multiprecision::cpp_int rescale(10);

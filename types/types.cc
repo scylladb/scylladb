@@ -2346,7 +2346,7 @@ struct compare_visitor {
       return with_empty_checks([&] {
         auto a = deserialize_value(d, v1);
         auto b = deserialize_value(d, v2);
-        return a.compare(b);
+        return a <=> b;
       });
     }
     std::strong_ordering operator()(const varint_type_impl& v) {
