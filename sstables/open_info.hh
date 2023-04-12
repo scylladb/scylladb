@@ -64,6 +64,10 @@ struct sstable_open_config {
     // FIXME: Enable it by default once the root cause of large allocation when reading sstable in reverse is fixed.
     //  Ref: https://github.com/scylladb/scylladb/issues/11642
     bool load_first_and_last_position_metadata = false;
+    // If the bloom filter is not loaded, the SSTable will use an always-present
+    // filter, meaning that the SSTable will be opened on every single-partition
+    // read.
+    bool load_bloom_filter = true;
 };
 
 }

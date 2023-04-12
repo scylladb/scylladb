@@ -1526,8 +1526,8 @@ future<> sstable::drop_caches() {
     });
 }
 
-future<> sstable::read_filter(const io_priority_class& pc) {
-    if (!has_component(component_type::Filter)) {
+future<> sstable::read_filter(const io_priority_class& pc, sstable_open_config cfg) {
+    if (!cfg.load_bloom_filter || !has_component(component_type::Filter)) {
         _components->filter = std::make_unique<utils::filter::always_present_filter>();
         return make_ready_future<>();
     }
@@ -1568,7 +1568,7 @@ future<> sstable::load(const io_priority_class& pc, sstable_open_config cfg) noe
     co_await read_statistics(pc);
     co_await coroutine::all(
             [&] { return read_compression(pc); },
-            [&] { return read_filter(pc); },
+            [&] { return read_filter(pc, cfg); },
             [&] { return read_summary(pc); });
     validate_min_max_metadata();
     validate_max_local_deletion_time();

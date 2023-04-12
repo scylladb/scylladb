@@ -624,7 +624,7 @@ private:
     void write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features, run_identifier identifier,
             std::optional<scylla_metadata::large_data_stats> ld_stats, sstring origin);
 
-    future<> read_filter(const io_priority_class& pc);
+    future<> read_filter(const io_priority_class& pc, sstable_open_config cfg = {});
 
     void write_filter(const io_priority_class& pc);
 
