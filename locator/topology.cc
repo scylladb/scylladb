@@ -220,7 +220,7 @@ const node* topology::update_node(node* node, std::optional<host_id> opt_id, std
         }
     }
     if (opt_st) {
-        changed = node->get_state() != *opt_st;
+        changed |= node->get_state() != *opt_st;
     }
 
     if (!changed) {
