@@ -22,6 +22,7 @@
 
 s3::endpoint_config_ptr make_minio_config() {
     s3::endpoint_config cfg = {
+        .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
     };
     return make_lw_shared<s3::endpoint_config>(std::move(cfg));
 }

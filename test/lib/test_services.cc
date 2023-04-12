@@ -169,6 +169,7 @@ std::unordered_map<sstring, s3::endpoint_config_ptr> make_storage_options_config
         },
         [&cfg] (const data_dictionary::storage_options::s3& os) mutable -> void {
             cfg[os.endpoint] = make_lw_shared<s3::endpoint_config>(s3::endpoint_config {
+                .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
             });
         }
     }, so.value);
@@ -215,7 +216,7 @@ data_dictionary::storage_options make_test_object_storage_options() {
     data_dictionary::storage_options ret;
     ret.value = data_dictionary::storage_options::s3 {
         .bucket = tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"),
-        .endpoint = format("{}:9000", tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST")),
+        .endpoint = tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"),
     };
     return ret;
 }

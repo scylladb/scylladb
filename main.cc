@@ -159,6 +159,7 @@ template<>
 struct convert<::object_storage_endpoint_param> {
     static bool decode(const Node& node, ::object_storage_endpoint_param& ep) {
         ep.endpoint = node["name"].as<std::string>();
+        ep.config.port = node["port"].as<unsigned>();
         return true;
     }
 };

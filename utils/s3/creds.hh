@@ -13,6 +13,7 @@
 namespace s3 {
 
 struct endpoint_config {
+    unsigned port;
 };
 
 using endpoint_config_ptr = seastar::lw_shared_ptr<endpoint_config>;

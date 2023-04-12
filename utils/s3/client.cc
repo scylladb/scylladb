@@ -46,7 +46,7 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
 client::client(std::string host, endpoint_config_ptr cfg, private_tag)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
-        , _http(ipv4_addr(_host, 9000 /* temporary hard-coded */))
+        , _http(ipv4_addr(_host, _cfg->port))
 {
 }
 
