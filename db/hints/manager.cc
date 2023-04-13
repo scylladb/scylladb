@@ -1364,6 +1364,19 @@ public:
             dir_set.add_sharded(_hints_directory);
             manager_logger.debug("Creating and validating hint directories: {}", _hints_directory);
             co_await _dirs.create_and_verify(std::move(dir_set));
+            co_await lister::scan_dir(_hints_directory, {}, [this] (fs::path path, directory_entry de) -> future<> {
+                if (!de.type) {
+                    throw std::runtime_error(fmt::format("Unexpected entry {} with uknown type, in hints directory {}", path.native(), _hints_directory));
+                }
+                switch (*de.type) {
+                    case directory_entry_type::directory:
+                        co_await lister::rmdir(path);
+                    case directory_entry_type::regular:
+                        co_await remove_file(path.native());
+                    default:
+                        throw std::runtime_error(fmt::format("Unexpected entry {} with unexpected type, in hints directory {}", path.native(), _hints_directory));
+                }
+            });
             _state = state::created_and_validated;
         });
     }
