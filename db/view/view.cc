@@ -566,7 +566,6 @@ struct value_getter {
 private:
     // Schemas of base table and view.
     const schema& _base;
-    const view_ptr& _view;
 
     const partition_key& _base_key;
     const clustering_or_static_row& _update;
@@ -574,15 +573,13 @@ private:
     const bool _backing_secondary_index;
 
 public:
-    value_getter(const schema& base, const view_ptr& view, const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing, bool backing_secondary_index)
+    value_getter(const schema& base, const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing, bool backing_secondary_index)
         : _base(base)
-        , _view(view)
         , _base_key(base_key)
         , _update(update)
         , _existing(existing)
         , _backing_secondary_index(backing_secondary_index)
     {
-        (void)_view;
     }
 
     using vector_type = utils::small_vector<view_managed_key_view_and_action, 1>;
@@ -651,7 +648,7 @@ private:
 
 std::vector<view_updates::view_row_entry>
 view_updates::get_view_rows(const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing) {
-    value_getter getter(*_base, _view, base_key, update, existing, _backing_secondary_index);
+    value_getter getter(*_base, base_key, update, existing, _backing_secondary_index);
     auto get_value = boost::adaptors::transformed(std::ref(getter));
 
 
