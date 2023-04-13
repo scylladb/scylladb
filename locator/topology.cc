@@ -509,6 +509,18 @@ void topology::for_each_node(std::function<void(const node*)> func) const {
 
 namespace std {
 
+std::ostream& operator<<(std::ostream& out, const locator::topology& t) {
+    out << "{this_host_id: " << t._cfg.this_host_id
+        << ", this_endpoint: " << t._cfg.this_endpoint
+        << ", dc: " << t._cfg.local_dc_rack.dc
+        << ", rack: " << t._cfg.local_dc_rack.rack
+        << ", nodes:\n";
+    for (auto&& node : t._nodes) {
+        out << "  " << locator::topology::debug_format(&*node) << "\n";
+    }
+    return out << "}";
+}
+
 std::ostream& operator<<(std::ostream& out, const locator::node& node) {
     fmt::print(out, "{}", node);
     return out;
