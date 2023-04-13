@@ -1359,13 +1359,12 @@ public:
             return make_ready_future<>();
         }
 
-        return with_semaphore(_lock, 1, [this] () {
+        return with_semaphore(_lock, 1, [this] () -> future<> {
             utils::directories::set dir_set;
             dir_set.add_sharded(_hints_directory);
             manager_logger.debug("Creating and validating hint directories: {}", _hints_directory);
-            return _dirs.create_and_verify(std::move(dir_set)).then([this] {
-                _state = state::created_and_validated;
-            });
+            co_await _dirs.create_and_verify(std::move(dir_set));
+            _state = state::created_and_validated;
         });
     }
 
