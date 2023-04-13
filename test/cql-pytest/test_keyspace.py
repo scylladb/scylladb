@@ -241,6 +241,16 @@ def test_storage_options_alter_type(cql, scylla_only):
         with pytest.raises(InvalidRequest):
             res = cql.execute(f"ALTER KEYSPACE {keyspace} {ksdef_local}")
 
+# Test that server-side desc statement is able to describe storage options, when not local.
+def test_storage_options_describe(cql, scylla_only):
+    ksdef = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
+            "AND STORAGE = {'type': 'S3', 'bucket': '42', 'endpoint': 'localhost'}"
+
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        desc_output = cql.execute(f"DESC KEYSPACE \"{keyspace}\"").one().create_statement
+
+        assert "{'type': 'S3', 'bucket': '42', 'endpoint': 'localhost'}" in desc_output
+
 # TODO: more tests for "WITH REPLICATION" syntax in CREATE TABLE.
 # TODO: check the "AND DURABLE_WRITES" option of CREATE TABLE.
 # TODO: confirm case insensitivity without quotes, and case sensitivity with them.
