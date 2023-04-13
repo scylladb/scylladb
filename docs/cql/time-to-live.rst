@@ -46,9 +46,20 @@ It’s also possible to set the TTL when performing an INSERT. To do this use:
 
         INSERT INTO heartrate(pet_chip_id, name, heart_rate) VALUES (c63e71f0-936e-11ea-bb37-0242ac130002, 'Rocky', 87) USING TTL 30;
 
-In this case, a TTL of 30 seconds is set. 
+In this case, a TTL of 30 seconds is set for each column. 
 
 
+When you set a TTL with an INSERT operation, the TTL will be applied to each individual column. If you UPDATE a column later without specifying a new TTL, the column's TTL will be updated to either 0 (no expiry) or the table-level TTL. If a column is updated without specifying a TTL, after the TTL that was set for the row during the INSERT operation has elapsed, all columns except the updated one will be expired. However, the row will still be available due to the presence of the unexpired column.
+
+.. code-block:: cql
+
+        INSERT INTO heartrate(pet_chip_id, name, heart_rate) VALUES (c63e71f0-936e-11ea-bb37-0242ac130002, 'Rocky', 87) USING TTL 30;
+
+        UPDATE heartrate SET heart_rate = 110 WHERE pet_chip_id = c63e71f0-936e-11ea-bb37-0242ac130002;
+
+After waiting for 30 seconds and running the SELECT command again, you will receive null values for all fields except for the heart_rate field. To expire the entire row after the initial TTL that was set during the INSERT operation, make sure to update the column with the appropriate TTL value.
+
+  
 TTL for a Table
 ^^^^^^^^^^^^^^^
 Use the CREATE TABLE or ALTER TABLE commands and set the default_time_to_live value: 
