@@ -118,7 +118,7 @@ public:
     const config& get_config() const noexcept { return _cfg; }
 
     const node* this_node() const noexcept {
-        return _nodes.size() ? _nodes.front().get() : nullptr;
+        return _this_node;
     }
 
     // Adds a node with given host_id, endpoint, and DC/rack.
@@ -194,7 +194,7 @@ public:
 
     // Get dc/rack location of this node
     const endpoint_dc_rack& get_location() const noexcept {
-        return this_node()->dc_rack();
+        return _this_node ? _this_node->dc_rack() : _cfg.local_dc_rack;
     }
     // Get dc/rack location of a node identified by host_id
     // The specified node must exist.
@@ -255,6 +255,7 @@ public:
     void for_each_node(std::function<void(const node*)> func) const;
 
 private:
+    bool is_configured_this_node(const node&) const;
     const node* add_node(node_holder node);
     void remove_node(const node* node);
 
@@ -281,6 +282,7 @@ private:
 
     unsigned _shard;
     config _cfg;
+    const node* _this_node = nullptr;
     std::vector<node_holder> _nodes;
     std::unordered_map<host_id, const node*> _nodes_by_host_id;
     std::unordered_map<inet_address, const node*> _nodes_by_endpoint;

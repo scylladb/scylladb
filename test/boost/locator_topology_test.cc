@@ -46,11 +46,10 @@ SEASTAR_THREAD_TEST_CASE(test_add_node) {
     });
 
     std::unordered_set<const locator::node*> nodes;
-    nodes.insert(topo.this_node());
 
     nodes.insert(topo.add_node(id2, ep2, endpoint_dc_rack::default_location, node::state::normal));
+    nodes.insert(topo.add_node(id1, ep1, endpoint_dc_rack::default_location, node::state::normal));
 
-    BOOST_REQUIRE_THROW(topo.add_node(id1, ep1, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
     BOOST_REQUIRE_THROW(topo.add_node(id1, ep2, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
     BOOST_REQUIRE_THROW(topo.add_node(id2, ep1, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
     BOOST_REQUIRE_THROW(topo.add_node(id2, ep2, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
@@ -88,6 +87,8 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
     auto reset_on_internal_abort = seastar::defer([] {
         set_abort_on_internal_error(true);
     });
+
+    topo.add_or_update_endpoint(ep1, endpoint_dc_rack::default_location, node::state::normal);
 
     auto node = topo.this_node();
     auto mutable_node = const_cast<locator::node*>(node);
