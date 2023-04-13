@@ -65,14 +65,9 @@ future<> topology::clear_gently() noexcept {
     co_await utils::clear_gently(_nodes);
 }
 
-topology::topology() noexcept
-        : _shard(this_shard_id())
-{
-    tlogger.trace("topology[{}]: default-constructed", fmt::ptr(this));
-}
-
 topology::topology(config cfg)
         : _shard(this_shard_id())
+        , _cfg(cfg)
         , _sort_by_proximity(!cfg.disable_proximity_sorting)
 {
     tlogger.trace("topology[{}]: constructing using config: host_id={} endpoint={} dc={} rack={}", fmt::ptr(this),
@@ -84,6 +79,7 @@ topology::topology(config cfg)
 
 topology::topology(topology&& o) noexcept
     : _shard(o._shard)
+    , _cfg(std::move(o._cfg))
     , _nodes(std::move(o._nodes))
     , _nodes_by_host_id(std::move(o._nodes_by_host_id))
     , _nodes_by_endpoint(std::move(o._nodes_by_endpoint))
@@ -105,7 +101,7 @@ topology::topology(topology&& o) noexcept
 }
 
 future<topology> topology::clone_gently() const {
-    topology ret;
+    topology ret(_cfg);
     tlogger.debug("topology[{}]: clone_gently to {} from shard {}", fmt::ptr(this), fmt::ptr(&ret), _shard);
     for (const auto& nptr : _nodes) {
         if (nptr) {
