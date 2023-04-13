@@ -13,8 +13,12 @@
 #include "compound_compat.hh"
 #include "utils/managed_bytes.hh"
 #include "utils/hashing.hh"
+#include "utils/utf8.hh"
 #include "replica/database_fwd.hh"
 #include "schema/schema_fwd.hh"
+#include <boost/iterator/zip_iterator.hpp>
+#include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/iterator_range_core.hpp>
 #include <compare>
 
 //
@@ -669,8 +673,16 @@ public:
 
     // A trichotomic comparator which orders keys according to their ordering on the ring.
     std::strong_ordering ring_order_tri_compare(const schema& s, partition_key_view o) const;
+};
 
-    friend std::ostream& operator<<(std::ostream& out, const partition_key_view& pk);
+template <>
+struct fmt::formatter<partition_key_view> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const partition_key_view& pk, FormatContext& ctx) const {
+        return with_linearized(pk.representation(), [&] (bytes_view v) {
+            return fmt::format_to(ctx.out(), "pk{{{}}}", fmt_hex(v));
+        });
+    }
 };
 
 class partition_key : public compound_wrapper<partition_key, partition_key_view> {
@@ -745,11 +757,42 @@ public:
     void validate(const schema& s) const {
         return s.partition_key_type()->validate(representation());
     }
-
-    friend std::ostream& operator<<(std::ostream& out, const partition_key& pk);
 };
 
-std::ostream& operator<<(std::ostream& out, const partition_key::with_schema_wrapper& pk);
+template <>
+struct fmt::formatter<partition_key> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const partition_key& pk, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "pk{{{}}}", managed_bytes_view(pk.representation()));
+    }
+};
+
+template <>
+struct fmt::formatter<partition_key::with_schema_wrapper> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const partition_key::with_schema_wrapper& pk, FormatContext& ctx) const {
+        const auto& [schema, key] = pk;
+        const auto& types = key.get_compound_type(schema)->types();
+        const auto components = key.components(schema);
+        return fmt::format_to(
+            ctx.out(), "{}",
+            fmt::join(boost::make_iterator_range(
+                          boost::make_zip_iterator(boost::make_tuple(types.begin(),
+                                                                     components.begin())),
+                          boost::make_zip_iterator(boost::make_tuple(types.end(),
+                                                                     components.end()))) |
+                      boost::adaptors::transformed([](const auto& type_and_component) {
+                          auto& [type, component] = type_and_component;
+                          auto key = type->to_string(to_bytes(component));
+                          if (utils::utf8::validate((const uint8_t *) key.data(), key.size())) {
+                              return key;
+                          } else {
+                              return sstring("<non-utf8-key>");
+                          }
+                      }),
+                      ":"));
+    }
+};
 
 class exploded_clustering_prefix {
     std::vector<bytes> _v;
@@ -859,11 +902,37 @@ public:
         }
         return false;
     }
-
-    friend std::ostream& operator<<(std::ostream& out, const clustering_key_prefix& ckp);
 };
 
-std::ostream& operator<<(std::ostream& out, const clustering_key_prefix::with_schema_wrapper& pk);
+template <>
+struct fmt::formatter<clustering_key_prefix> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const clustering_key_prefix& ckp, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "ckp{{{}}}", managed_bytes_view(ckp.representation()));
+    }
+};
+
+template <>
+struct fmt::formatter<clustering_key_prefix::with_schema_wrapper> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const clustering_key_prefix::with_schema_wrapper& pk, FormatContext& ctx) const {
+        const auto& [schema, key] = pk;
+        const auto& types = key.get_compound_type(schema)->types();
+        const auto components = key.components(schema);
+        return fmt::format_to(
+            ctx.out(), "{}",
+            fmt::join(boost::make_iterator_range(
+                          boost::make_zip_iterator(boost::make_tuple(types.begin(),
+                                                                     components.begin())),
+                          boost::make_zip_iterator(boost::make_tuple(types.end(),
+                                                                     components.end()))) |
+                      boost::adaptors::transformed([](const auto& type_and_component) {
+                          auto& [type, component] = type_and_component;
+                          return type->to_string(to_bytes(component));
+                      }),
+                      ":"));
+    }
+};
 
 template<>
 struct appending_hash<partition_key_view> {

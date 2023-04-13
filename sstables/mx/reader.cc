@@ -85,9 +85,8 @@ public:
     };
 
     inline friend std::ostream& operator<<(std::ostream& o, const mp_row_consumer_m::range_tombstone_start& rt_start) {
-        o << "{ clustering: " << rt_start.ck
-          << ", kind: " << rt_start.kind
-          << ", tombstone: " << rt_start.tomb << " }";
+        fmt::print(o, "{{ clustering: {}, kind: {}, tombstone: {}}}",
+                   rt_start.ck, rt_start.kind, rt_start.tomb);
         return o;
     }
 

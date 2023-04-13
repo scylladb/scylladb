@@ -12,61 +12,8 @@
 #include "dht/i_partitioner.hh"
 #include "clustering_bounds_comparator.hh"
 #include <boost/algorithm/string.hpp>
-#include "utils/utf8.hh"
 
 logging::logger klog("keys");
-
-std::ostream& operator<<(std::ostream& out, const partition_key& pk) {
-    fmt::print(out, "pk{{{}}}", managed_bytes_view(pk.representation()));
-    return out;
-}
-
-template<typename T>
-static std::ostream& print_key(std::ostream& out, const T& key_with_schema) {
-    const auto& [schema, key] = key_with_schema;
-    auto type_iterator = key.get_compound_type(schema)->types().begin();
-    bool first = true;
-    for (auto&& e : key.components(schema)) {
-        if (!first) {
-            out << ":";
-        }
-        first = false;
-        out << (*type_iterator)->to_string(to_bytes(e));
-        ++type_iterator;
-    }
-    return out;
-}
-
-std::ostream& operator<<(std::ostream& out, const partition_key::with_schema_wrapper& pk) {
-    const auto& [schema, key] = pk;
-    auto type_iterator = key.get_compound_type(schema)->types().begin();
-    bool first = true;
-    for (auto&& e : key.components(schema)) {
-        if (!first) {
-            out << ":";
-        }
-        first = false;
-        auto keystr = (*type_iterator)->to_string(to_bytes(e));
-        out << (utils::utf8::validate((const uint8_t *) keystr.data(), keystr.size()) ? keystr : "<non-utf8-key>");
-        ++type_iterator;
-    }
-    return out;
-}
-
-std::ostream& operator<<(std::ostream& out, const clustering_key_prefix::with_schema_wrapper& ck) {
-    return print_key(out, ck);
-}
-
-std::ostream& operator<<(std::ostream& out, const partition_key_view& pk) {
-    return with_linearized(pk.representation(), [&] (bytes_view v) {
-        return std::ref(out << "pk{" << to_hex(v) << "}");
-    });
-}
-
-std::ostream& operator<<(std::ostream& out, const clustering_key_prefix& ckp) {
-    fmt::print(out, "ckp{{{}}}", managed_bytes_view(ckp.representation()));
-    return out;
-}
 
 const legacy_compound_view<partition_key_view::c_type>
 partition_key_view::legacy_form(const schema& s) const {

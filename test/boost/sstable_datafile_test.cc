@@ -583,7 +583,7 @@ void test_sliced_read_row_presence(shared_sstable sst, schema_ptr s, reader_perm
                     return ck_eq(x, cr.key());
                 });
                 if (it == expected_cr.end()) {
-                    std::cout << "unexpected clustering row: " << cr.key() << "\n";
+                    fmt::print(std::cout, "unexpected clustering row: {}\n", cr.key());
                 }
                 BOOST_REQUIRE(it != expected_cr.end());
                 expected_cr.erase(it);

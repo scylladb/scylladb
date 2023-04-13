@@ -16,6 +16,7 @@
 #include <boost/range/adaptor/sliced.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <compare>
+#include <fmt/format.h>
 
 template <typename Comparator, typename T>
 concept IntervalComparatorFor = requires (T a, T b, Comparator& cmp) {
@@ -410,7 +411,8 @@ private:
 template<typename U>
 std::ostream& operator<<(std::ostream& out, const wrapping_interval<U>& r) {
     if (r.is_singular()) {
-        return out << "{" << r.start()->value() << "}";
+        fmt::print(out, "{{{}}}", r.start()->value());
+        return out;
     }
 
     if (!r.start()) {
@@ -421,13 +423,13 @@ std::ostream& operator<<(std::ostream& out, const wrapping_interval<U>& r) {
         } else {
             out << "(";
         }
-        out << r.start()->value() << ", ";
+        fmt::print(out, "{},", r.start()->value());
     }
 
     if (!r.end()) {
         out << "+inf)";
     } else {
-        out << r.end()->value();
+        fmt::print(out, "{}", r.end()->value());
         if (r.end()->is_inclusive()) {
             out << "]";
         } else {
