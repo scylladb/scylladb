@@ -30,6 +30,7 @@ struct storage_options {
 
     storage_options() = default;
 
+    bool is_local_type() const noexcept;
     std::string_view type_string() const;
     std::map<sstring, sstring> to_map() const;
 

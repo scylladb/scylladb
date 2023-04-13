@@ -275,6 +275,10 @@ std::vector<view_ptr> keyspace_metadata::views() const {
             | boost::adaptors::transformed([] (auto&& s) { return view_ptr(s); }));
 }
 
+bool storage_options::is_local_type() const noexcept {
+    return std::holds_alternative<local>(value);
+}
+
 storage_options::value_type storage_options::from_map(std::string_view type, std::map<sstring, sstring> values) {
     if (type == "LOCAL") {
         if (!values.empty()) {
@@ -358,6 +362,12 @@ std::ostream& keyspace_metadata::describe(std::ostream& os) const {
        << " WITH replication = {'class': " << cql3::util::single_quote(_strategy_name);
     for (const auto& opt: _strategy_options) {
         os << ", " << cql3::util::single_quote(opt.first) << ": " << cql3::util::single_quote(opt.second);
+    }
+    if (!_storage_options->is_local_type()) {
+        os << "} AND storage = {'type': " << cql3::util::single_quote(sstring(_storage_options->type_string()));
+        for (const auto& e : _storage_options->to_map()) {
+            os << ", " << cql3::util::single_quote(e.first) << ": " << cql3::util::single_quote(e.second);
+        }
     }
     os << "} AND durable_writes = " << std::boolalpha << _durable_writes << std::noboolalpha << ";";
 
