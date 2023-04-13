@@ -571,6 +571,7 @@ private:
     const partition_key& _base_key;
     const clustering_or_static_row& _update;
     const std::optional<clustering_or_static_row>& _existing;
+    const bool _backing_secondary_index;
 
 public:
     value_getter(const schema& base, const view_ptr& view, const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing)
@@ -579,6 +580,7 @@ public:
         , _base_key(base_key)
         , _update(update)
         , _existing(existing)
+        , _backing_secondary_index(service::get_local_storage_proxy().local_db().find_column_family(_base.id()).get_index_manager().is_index(*_view))
     {}
 
     using vector_type = utils::small_vector<view_managed_key_view_and_action, 1>;
@@ -614,7 +616,7 @@ private:
         if (!cdef.is_computed()) {
             //FIXME(sarna): this legacy code is here for backward compatibility and should be removed
             // once "computed_columns feature" is supported by every node
-            if (!service::get_local_storage_proxy().local_db().find_column_family(_base.id()).get_index_manager().is_index(*_view)) {
+            if (!_backing_secondary_index) {
                 throw std::logic_error(format("Column {} doesn't exist in base and this view is not backing a secondary index", cdef.name_as_text()));
             }
             computed_value = legacy_token_column_computation().compute_value(_base, _base_key);
