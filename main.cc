@@ -1351,12 +1351,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_stream_manager(ctx).get();
             });
 
-            supervisor::notify("starting hinted handoff manager");
-            if (!hinted_handoff_enabled.is_disabled_for_all()) {
-                hints_dir_initializer.ensure_rebalanced().get();
-            }
-            view_hints_dir_initializer.ensure_rebalanced().get();
-
             proxy.invoke_on_all([&lifecycle_notifier, &gossiper] (service::storage_proxy& local_proxy) {
                 lifecycle_notifier.local().register_subscriber(&local_proxy);
                 return local_proxy.start_hints_manager(gossiper.local().shared_from_this());
