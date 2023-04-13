@@ -489,11 +489,6 @@ Can Scylla Enterprise in-memory tables be used without having a mirror file on d
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 No. In Scylla Enterprise 2018.1.7, in-memory tables are always persistent using an on-disk mirror file.
 
-What happens if we apply an ``ALTER`` CQL command to change a table from/to in memory?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-It goes in and out of in-memory, as expected. This is :ref:`documented <change-a-table-to-an-in-memory-table>` in the Scylla Docs. 
-
 Can I change the coredump mount point? 
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
