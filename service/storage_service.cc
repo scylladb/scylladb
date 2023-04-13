@@ -2910,7 +2910,7 @@ public:
             }
         }
         if (!nodes_down.empty()) {
-            errors.emplace_back(format("The {} command failed for nodes={}: the needed nodes are down. It is highly recommended to fix the down nodes and try again", op_desc, nodes_failed));
+            errors.emplace_back(format("The {} command failed for nodes={}: the needed nodes are down. It is highly recommended to fix the down nodes and try again", op_desc, nodes_down));
         }
         if (!errors.empty()) {
             co_await coroutine::return_exception(std::runtime_error(fmt::to_string(fmt::join(errors, "; "))));
