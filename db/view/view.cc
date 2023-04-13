@@ -574,14 +574,16 @@ private:
     const bool _backing_secondary_index;
 
 public:
-    value_getter(const schema& base, const view_ptr& view, const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing)
+    value_getter(const schema& base, const view_ptr& view, const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing, bool backing_secondary_index)
         : _base(base)
         , _view(view)
         , _base_key(base_key)
         , _update(update)
         , _existing(existing)
-        , _backing_secondary_index(service::get_local_storage_proxy().local_db().find_column_family(_base.id()).get_index_manager().is_index(*_view))
-    {}
+        , _backing_secondary_index(backing_secondary_index)
+    {
+        (void)_view;
+    }
 
     using vector_type = utils::small_vector<view_managed_key_view_and_action, 1>;
     vector_type operator()(const column_definition& cdef) {
@@ -649,7 +651,7 @@ private:
 
 std::vector<view_updates::view_row_entry>
 view_updates::get_view_rows(const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing) {
-    value_getter getter(*_base, _view, base_key, update, existing);
+    value_getter getter(*_base, _view, base_key, update, existing, _backing_secondary_index);
     auto get_value = boost::adaptors::transformed(std::ref(getter));
 
 
@@ -1452,7 +1454,8 @@ view_update_builder make_view_update_builder(
                                               " base schema version of the view ({}) for view {}.{} of {}.{}",
                 base->version(), v.base->base_schema()->version(), v.view->ks_name(), v.view->cf_name(), base->ks_name(), base->cf_name()));
         }
-        return view_updates(std::move(v));
+        bool is_index = base_table.get_index_manager().is_index(v.view);
+        return view_updates(std::move(v), is_index);
     }));
     return view_update_builder(base_table, base, std::move(vs), std::move(updates), std::move(existings), now);
 }
