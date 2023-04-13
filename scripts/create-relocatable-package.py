@@ -181,5 +181,5 @@ ar.reloc_add('fix_system_distributed_tables.py')
 ar.close()
 gzip_process.communicate()
 if gzip_process.returncode != 0:
-    print('pigz returned {gzip_process.returncode}!', file=sys.stderr)
+    print(f'pigz returned {gzip_process.returncode}!', file=sys.stderr)
     sys.exit(1)
