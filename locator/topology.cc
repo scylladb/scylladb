@@ -182,7 +182,7 @@ const node* topology::update_node(node* node, std::optional<host_id> opt_id, std
                 on_internal_error(tlogger, format("Updating node host_id to null is disallowed: {}: new host_id={}", debug_format(node), *opt_id));
             }
             if (node->is_this_node() && node->host_id()) {
-                on_internal_error(tlogger, format("This node host_id is alredy set: {}: new host_id={}", debug_format(node), *opt_id));
+                on_internal_error(tlogger, format("This node host_id is already set: {}: new host_id={}", debug_format(node), *opt_id));
             }
             if (_nodes_by_host_id.contains(*opt_id)) {
                 on_internal_error(tlogger, format("Cannot update node host_id: {}: new host_id already exists: {}", debug_format(node), debug_format(_nodes_by_host_id[*opt_id])));
