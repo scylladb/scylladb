@@ -443,11 +443,15 @@ bool topology::has_endpoint(inet_address ep) const
 }
 
 const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
-    if (ep == utils::fb_utilities::get_broadcast_address()) {
-        return get_location();
-    }
     if (auto node = find_node(ep)) {
         return node->dc_rack();
+    }
+    // We should do the following check after lookup in nodes.
+    // In tests, there may be no config for local node, so fall back to get_location()
+    // only if no mapping is found. Otherwise, get_location() will return empty location
+    // from config or random node, neither of which is correct.
+    if (ep == _cfg.this_endpoint) {
+        return get_location();
     }
     // FIXME -- this shouldn't happen. After topology is stable and is
     // correctly populated with endpoints, this should be replaced with
