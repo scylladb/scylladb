@@ -1036,6 +1036,10 @@ public:
         return _index_manager;
     }
 
+    const secondary_index::secondary_index_manager& get_index_manager() const noexcept {
+        return _index_manager;
+    }
+
     sstables::sstables_manager& get_sstables_manager() noexcept {
         return _sstables_manager;
     }
