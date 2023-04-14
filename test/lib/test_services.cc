@@ -48,6 +48,7 @@ class table_for_tests::table_state : public compaction::table_state {
     tombstone_gc_state _tombstone_gc_state;
     mutable compaction_backlog_tracker _backlog_tracker;
     compaction::compaction_strategy_state _compaction_strategy_state;
+    std::string _group_id;
 private:
     replica::table& table() const noexcept {
         return *_data.cf;
@@ -59,6 +60,7 @@ public:
             , _tombstone_gc_state(nullptr)
             , _backlog_tracker(get_compaction_strategy().make_backlog_tracker())
             , _compaction_strategy_state(compaction::compaction_strategy_state::make(get_compaction_strategy()))
+            , _group_id("table_for_tests::table_state")
     {
     }
     const schema_ptr& schema() const noexcept override {
@@ -115,6 +117,9 @@ public:
     }
     compaction_backlog_tracker& get_backlog_tracker() override {
         return _backlog_tracker;
+    }
+    const std::string& get_group_id() const noexcept override {
+        return _group_id;
     }
 };
 
