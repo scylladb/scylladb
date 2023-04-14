@@ -97,6 +97,20 @@ function log {
     fi
 }
 
+function get_json_field {
+    local json_obj=$1
+    local field_name=$2
+    local field_val=$(jq -r ".${field_name}" <<< "$json_obj")
+
+    if [[ -z $field_val ]]
+    then
+        echo "error: failed to get field '$field_name' from: $json_obj" >&2
+        exit 1
+    fi
+
+    echo $field_val
+}
+
 for required in eu-unstrip jq curl git; do
     if ! type $required >& /dev/null; then
         echo "error: missing required program $required, please install first" >&2
@@ -197,13 +211,13 @@ then
     exit 1
 fi
 
-RESPONSE_BUILD_ID=$(jq -r .build_id <<< $BUILD)
-VERSION=$(jq -r .version <<< $BUILD)
-PRODUCT=$(jq -r .product <<< $BUILD)
-RELEASE=$(jq -r .release <<< $BUILD)
-ARCH=$(jq -r .arch <<< $BUILD)
-BUILD_MODE=$(jq -r .build_mode <<< $BUILD)
-PACKAGE_URL=$(jq -r .package_url <<< $BUILD)
+RESPONSE_BUILD_ID=$(get_json_field "$BUILD" "build_id")
+VERSION=$(get_json_field "$BUILD" "version")
+PRODUCT=$(get_json_field "$BUILD" "product")
+RELEASE=$(get_json_field "$BUILD" "release")
+ARCH=$(get_json_field "$BUILD" "arch")
+BUILD_MODE=$(get_json_field "$BUILD" "build_mode")
+PACKAGE_URL=$(get_json_field "$BUILD" "package_url")
 
 if [[ "$RESPONSE_BUILD_ID" != "$BUILD_ID" ]]
 then
