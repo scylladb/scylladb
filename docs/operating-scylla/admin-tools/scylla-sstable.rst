@@ -17,7 +17,7 @@ This tool is similar to SStableDump_, with notable differences:
 * Expanded scope: this tool supports much more than dumping SStable data components (see `Supported Operations`_).
 * More flexible on how schema is obtained and where SStables are located: SStableDump_ only supports dumping SStables located in their native data directory. To dump an SStable, one has to clone the entire ScyllaDB data directory tree, including system table directories and even config files. ``scylla sstable`` can dump sstables from any path with multiple choices on how to obtain the schema, see Schema_.
 
-Currently, SStableDump_ works better on production systems as it automatically loads the schema from the system tables, unlike ``scylla sstable``, which has to be provided with the schema explicitly. On the other hand ``scylla sstable`` works better for off-line investigations, as it can be used with as little as just a schema definition file and a single sstable. In the future we plan on closing this gap -- adding support for automatic schema-loading for ``scylla sstable`` too -- and completely supplant SStableDump_ with ``scylla sstable``.
+``scylla sstable`` was developed to supplant SStableDump_ as ScyllaDB-native tool, better tailored for the needs of ScyllaDB.
 
 .. _SStableDump: /operating-scylla/admin-tools/sstabledump
 
@@ -35,14 +35,33 @@ You can specify more than one SStable.
 
 Schema
 ------
+
 All operations need a schema to interpret the SStables with.
-Currently, there are two ways to obtain the schema:
+This tool tries to auto-detect the location of the ScyllaDB data directories and the name of the table the SStable belongs to.
+If the SStable is located in a ScyllaDB data directory, it works out-of-the-box, without any additional input from the user.
+If the SStable is located at an external path, you need to specify the names of the keyspace and table to which the SStable belongs. In addition, some hints as to where the ScyllaDB data directory is located may also be required.
 
+The schema can be obtained in the following ways:
+
+* Auto-detected - If the SStable is located in the table's directory within the ScyllaDB data directory.
+* ``--keyspace=KEYSPACE --table=TABLE`` - If the SStable is located at an external location, but the ScyllaDB data directory or the config file are located at the standard location. The tool also reads the ``SCYLLA_CONF`` and ``SCYLLA_HOME`` environment variables to try to locate the configuration file.
 * ``--schema-file FILENAME`` - Read the schema definition from a file.
-* ``--system-schema KEYSPACE.TABLE`` - Use the known definition of built-in tables (only works for system tables).
+* ``--system-schema --keyspace=KEYSPACE --table=TABLE`` - Use the known definition of built-in tables (only works for system tables).
+* ``--scylla-data-dir SCYLLA_DATA_DIR_PATH --keyspace=KEYSPACE --table=TABLE`` - Read the schema tables from the data directory at the provided location, needs the keyspace and table name to be provided with ``--keyspace`` and ``--table``.
+* ``--scylla-yaml-file SCYLLA_YAML_FILE_PATH --keyspace=KEYSPACE --table=TABLE`` - Read the schema tables from the data directory path obtained from the configuration, needs the keyspace and table name to be provided with ``--keyspace`` and ``--table``.
 
-By default, the tool uses the first method: ``--schema-file schema.cql``; i.e. it assumes there is a schema file named ``schema.cql`` in the working directory.
-If this fails, it will exit with an error.
+By default (no schema-related options are provided), the tool will try the following sequence:
+
+* Try to load schema from ``schema.cql``.
+* Try to deduce the ScyllaDB data directory path and table names from the SStable path.
+* Try to load the schema from the ScyllaDB directory located at the standard location (``/var/lib/scylla``). For this to succeed, the table name has to be provided via ``--keyspace`` and ``--table``.
+* Try to load the schema from the ScyllaDB directory path obtained from config at the standard location (``./conf/scylla.yaml``). ``SCYLLA_CONF`` and ``SCYLLA_HOME`` environment variables are also checked. For this to succeed, the table name has to be provided via ``--keyspace`` and ``--table``.
+
+The tool stops after the first successful attempt. If none of the above succeed, an error message will be printed.
+A user provided schema in ``schema.cql`` (if present) always takes precedence over other methods. This is deliberate, to allow to manually override the schema to be used.
+
+schema.cql
+^^^^^^^^^^
 
 The schema file should contain all definitions needed to interpret data belonging to the table.
 
@@ -72,7 +91,7 @@ Note:
 * The schema file doesn't have to be called ``schema.cql``, this is just the default name. Any file name is supported (with any extension).
 
 Dropped columns
-^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~
 
 The examined sstable might have columns which were dropped from the schema definition. In this case providing the up-do-date schema will not be enough, the tool will fail when attempting to process a cell for the dropped column.
 Dropped columns can be provided to the tool in the form of insert statements into the ``system_schema.dropped_columns`` system table, in the schema definition file. Example:
@@ -281,34 +300,6 @@ The content is dumped in JSON, using the following schema:
             "value": String
         },
         "pos": Uint64
-    }
-    )",
-                dump_index_operation},
-    /* dump-compression-info */
-        {"dump-compression-info",
-                "Dump content of sstable compression info(s)",
-    R"(
-    Dumps the content of the compression-info component. Contains compression
-    parameters and maps positions into the uncompressed data to that into compressed
-    data. Note that compression happens over chunks with configurable size, so to
-    get data at a position in the middle of a compressed chunk, the entire chunk has
-    to be decompressed.
-    For more information about the sstable components and the format itself, visit
-    https://docs.scylladb.com/architecture/sstable/.
-
-    The content is dumped in JSON, using the following schema:
-
-    $ROOT := { "$sstable_path": $SSTABLE, ... }
-
-    $SSTABLE := {
-        "name": String,
-        "options": {
-            "$option_name": String,
-            ...
-        },
-        "chunk_len": Uint,
-        "data_len": Uint64,
-        "offsets": [Uint64, ...]
     }
 
 dump-compression-info
