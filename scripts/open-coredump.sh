@@ -30,6 +30,12 @@ It extracts the build-id from the coredump, retrieves metadata for that
 build, downloads the binary package, the source code and finally
 launches the dbuild container, with everything ready to load the
 coredump.
+Sometimes the metadata retrieved from the build lacks the package URL.
+In this case, the scylla package can be downloaded manually and extracted
+into the artifact directory (see below) using the "scylla.package" name.
+When this directory exists, the script will not attempt to extract the
+package URL from the metadata and dowload the package itself, instead it
+will use the provided package.
 
 The script is idempotent: running it after the prepartory steps will
 re-use what is already donwloaded. It is *strongly* recommended to run
@@ -97,9 +103,24 @@ function log {
     fi
 }
 
+function get_json_field {
+    local json_obj=$1
+    local field_name=$2
+    local optional=${3:-0}
+    local field_val=$(jq -r ".${field_name}" <<< "$json_obj")
+
+    if [[ -z $field_val ]] && [[ $optional -eq 0 ]]
+    then
+        echo "error: failed to get field '$field_name' from: $json_obj" >&2
+        exit 1
+    fi
+
+    echo $field_val
+}
+
 for required in eu-unstrip jq curl git; do
     if ! type $required >& /dev/null; then
-        echo "error: missing required program $required, please install first"
+        echo "error: missing required program $required, please install first" >&2
         exit 1
     fi
 done
@@ -142,7 +163,7 @@ do
             shift 2
             ;;
         *)
-            echo "unrecognized option: $1, see $0 -h for usage"
+            echo "error: unrecognized option: $1, see $0 -h for usage" >&2
             exit 1
             ;;
     esac
@@ -152,7 +173,7 @@ COREFILE=$1
 shift 1
 if ! [[ -f $COREFILE ]]
 then
-    echo "error: ${COREFILE} is not a valid path to a core file"
+    echo "error: ${COREFILE} is not a valid path to a core file" >&2
     exit 1
 fi
 COREDIR=$(dirname ${COREFILE})
@@ -180,7 +201,7 @@ case "${SCYLLA_GDB_PY_SOURCE}" in
     ("repo"|"package"|"none")
         ;;
     *)
-        echo "error: invalid value for option SCYLLA_GDB_PY_SOURCE, has to be one of repo, package or none, got: ${SCYLLA_GDB_PY_SOURCE}"
+        echo "error: invalid value for option SCYLLA_GDB_PY_SOURCE, has to be one of repo, package or none, got: ${SCYLLA_GDB_PY_SOURCE}" >&2
         exit 1
         ;;
 esac
@@ -193,30 +214,36 @@ BUILD=$(curl -s -X GET "${SCYLLA_S3_RELOC_SERVER_URL}/build.json?build_id=${BUIL
 
 if [[ -z "$BUILD" ]]
 then
-    echo "Failed to retrieve build information from ${SCYLLA_S3_RELOC_SERVER_URL}"
+    echo "error: failed to retrieve build information from ${SCYLLA_S3_RELOC_SERVER_URL}" >&2
     exit 1
 fi
 
-RESPONSE_BUILD_ID=$(jq -r .build_id <<< $BUILD)
-VERSION=$(jq -r .version <<< $BUILD)
-PRODUCT=$(jq -r .product <<< $BUILD)
-RELEASE=$(jq -r .release <<< $BUILD)
-ARCH=$(jq -r .arch <<< $BUILD)
-BUILD_MODE=$(jq -r .build_mode <<< $BUILD)
-PACKAGE_URL=$(jq -r .package_url <<< $BUILD)
+RESPONSE_BUILD_ID=$(get_json_field "$BUILD" "build_id")
+VERSION=$(get_json_field "$BUILD" "version")
+PRODUCT=$(get_json_field "$BUILD" "product")
+RELEASE=$(get_json_field "$BUILD" "release")
+ARCH=$(get_json_field "$BUILD" "arch")
+BUILD_MODE=$(get_json_field "$BUILD" "build_mode")
+PACKAGE_URL=$(get_json_field "$BUILD" "package_url" 1)
 
 if [[ "$RESPONSE_BUILD_ID" != "$BUILD_ID" ]]
 then
-    echo "Mismatching build id: requested ${BUILD_ID} but got ${RESPONSE_BUILD_ID}";
+    echo "error: mismatching build id: requested ${BUILD_ID} but got ${RESPONSE_BUILD_ID}" >&2
     exit 1
 fi
 
 log "Matching build is ${PRODUCT}-${VERSION} ${RELEASE} ${BUILD_MODE}-${ARCH}"
 
-PACKAGE_FILE=$(basename ${PACKAGE_URL})
-
 if ! [[ -d ${ARTIFACT_DIR}/scylla.package ]]
 then
+    if [[ -z $PACKAGE_URL ]]
+    then
+        echo "error: no package_url in build object: ${BUILD}" >&2
+        echo "" >&2
+        echo "The package can be provided manually by placing it (unpacked) to "${ARTIFACT_DIR}/scylla.package" to work around this problem." >&2
+        exit 1
+    fi
+    PACKAGE_FILE=$(basename ${PACKAGE_URL})
     if ! [[ -f ${ARTIFACT_DIR}/${PACKAGE_FILE} ]]
     then
         log "Downloading relocatable package from ${PACKAGE_URL}"
