@@ -30,6 +30,12 @@ It extracts the build-id from the coredump, retrieves metadata for that
 build, downloads the binary package, the source code and finally
 launches the dbuild container, with everything ready to load the
 coredump.
+Sometimes the metadata retrieved from the build lacks the package URL.
+In this case, the scylla package can be downloaded manually and extracted
+into the artifact directory (see below) using the "scylla.package" name.
+When this directory exists, the script will not attempt to extract the
+package URL from the metadata and dowload the package itself, instead it
+will use the provided package.
 
 The script is idempotent: running it after the prepartory steps will
 re-use what is already donwloaded. It is *strongly* recommended to run
@@ -100,9 +106,10 @@ function log {
 function get_json_field {
     local json_obj=$1
     local field_name=$2
+    local optional=${3:-0}
     local field_val=$(jq -r ".${field_name}" <<< "$json_obj")
 
-    if [[ -z $field_val ]]
+    if [[ -z $field_val ]] && [[ $optional -eq 0 ]]
     then
         echo "error: failed to get field '$field_name' from: $json_obj" >&2
         exit 1
@@ -217,7 +224,7 @@ PRODUCT=$(get_json_field "$BUILD" "product")
 RELEASE=$(get_json_field "$BUILD" "release")
 ARCH=$(get_json_field "$BUILD" "arch")
 BUILD_MODE=$(get_json_field "$BUILD" "build_mode")
-PACKAGE_URL=$(get_json_field "$BUILD" "package_url")
+PACKAGE_URL=$(get_json_field "$BUILD" "package_url" 1)
 
 if [[ "$RESPONSE_BUILD_ID" != "$BUILD_ID" ]]
 then
@@ -227,10 +234,16 @@ fi
 
 log "Matching build is ${PRODUCT}-${VERSION} ${RELEASE} ${BUILD_MODE}-${ARCH}"
 
-PACKAGE_FILE=$(basename ${PACKAGE_URL})
-
 if ! [[ -d ${ARTIFACT_DIR}/scylla.package ]]
 then
+    if [[ -z $PACKAGE_URL ]]
+    then
+        echo "error: no package_url in build object: ${BUILD}" >&2
+        echo "" >&2
+        echo "The package can be provided manually by placing it (unpacked) to "${ARTIFACT_DIR}/scylla.package" to work around this problem." >&2
+        exit 1
+    fi
+    PACKAGE_FILE=$(basename ${PACKAGE_URL})
     if ! [[ -f ${ARTIFACT_DIR}/${PACKAGE_FILE} ]]
     then
         log "Downloading relocatable package from ${PACKAGE_URL}"
