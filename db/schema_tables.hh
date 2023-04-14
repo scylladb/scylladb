@@ -128,6 +128,7 @@ schema_ptr indexes();
 schema_ptr tables();
 schema_ptr scylla_tables(schema_features features = schema_features::full());
 schema_ptr views();
+schema_ptr types();
 schema_ptr computed_columns();
 // Belongs to the "system" keyspace
 schema_ptr scylla_table_schema_history();
