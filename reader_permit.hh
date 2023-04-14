@@ -83,9 +83,9 @@ public:
         waiting_for_admission,
         waiting_for_memory,
         waiting_for_execution,
-        active_unused,
-        active_used,
-        active_blocked,
+        active,
+        active_need_cpu,
+        active_await,
         inactive,
         evicted,
     };
