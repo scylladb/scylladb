@@ -166,6 +166,7 @@ async def test_upgrade_with_no_schema_commitlog(manager: ManagerClient, random_t
 
 @pytest.mark.asyncio
 @log_run_time
+@pytest.mark.replication_factor(1)
 async def test_raft_upgrade_basic(manager: ManagerClient, random_tables: RandomTables):
     """
     kbr-: the test takes about 7 seconds in dev mode on my laptop.
@@ -200,6 +201,7 @@ async def test_raft_upgrade_basic(manager: ManagerClient, random_tables: RandomT
 
 @pytest.mark.asyncio
 @log_run_time
+@pytest.mark.replication_factor(1)
 async def test_recover_stuck_raft_upgrade(manager: ManagerClient, random_tables: RandomTables):
     """
     We enable Raft on every server and the upgrade procedure starts.  All servers join group 0. Then one
@@ -284,6 +286,7 @@ async def test_recover_stuck_raft_upgrade(manager: ManagerClient, random_tables:
 
 @pytest.mark.asyncio
 @log_run_time
+@pytest.mark.replication_factor(1)
 async def test_recovery_after_majority_loss(manager: ManagerClient, random_tables: RandomTables):
     """
     We successfully upgrade a cluster. Eventually however all servers but one fail - group 0
