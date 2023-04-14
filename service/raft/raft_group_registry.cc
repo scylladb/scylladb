@@ -151,6 +151,8 @@ void raft_group_registry::init_rpc_verbs() {
     auto handle_raft_rpc = [this] (
             const rpc::client_info& cinfo,
             const raft::group_id& gid, raft::server_id from, raft::server_id dst, auto handler) {
+        constexpr bool is_one_way = std::is_void_v<std::invoke_result_t<decltype(handler), raft_rpc&>>;
+
         return container().invoke_on(shard_for_group(gid),
                 [addr = netw::messaging_service::get_source(cinfo).addr, from, gid, handler] (raft_group_registry& self) mutable {
             // Update the address mappings for the rpc module
@@ -163,7 +165,12 @@ void raft_group_registry::init_rpc_verbs() {
             // change the address map of a healthy cluster.
             self._address_map.opt_add_entry(from, std::move(addr));
             // Execute the actual message handling code
-            return handler(rpc);
+            if constexpr (is_one_way) {
+                handler(rpc);
+                return netw::messaging_service::no_wait();
+            } else {
+                return handler(rpc);
+            }
         });
     };
 
@@ -181,7 +188,6 @@ void raft_group_registry::init_rpc_verbs() {
             // so we are copying entries to this shard if it isn't equal the original one.
             rpc.append_entries(std::move(from),
                 this_shard_id() == original_shard_id ? std::move(append_request) : append_request.copy());
-            return netw::messaging_service::no_wait();
         });
     });
 
@@ -189,7 +195,6 @@ void raft_group_registry::init_rpc_verbs() {
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::append_reply reply) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, reply = std::move(reply)] (raft_rpc& rpc) mutable {
             rpc.append_entries_reply(std::move(from), std::move(reply));
-            return netw::messaging_service::no_wait();
         });
     });
 
@@ -197,7 +202,6 @@ void raft_group_registry::init_rpc_verbs() {
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::vote_request vote_request) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, vote_request] (raft_rpc& rpc) mutable {
             rpc.request_vote(std::move(from), std::move(vote_request));
-            return netw::messaging_service::no_wait();
         });
     });
 
@@ -205,7 +209,6 @@ void raft_group_registry::init_rpc_verbs() {
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::vote_reply vote_reply) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, vote_reply] (raft_rpc& rpc) mutable {
             rpc.request_vote_reply(std::move(from), std::move(vote_reply));
-            return netw::messaging_service::no_wait();
         });
     });
 
@@ -213,7 +216,6 @@ void raft_group_registry::init_rpc_verbs() {
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::timeout_now timeout_now) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, timeout_now] (raft_rpc& rpc) mutable {
             rpc.timeout_now_request(std::move(from), std::move(timeout_now));
-            return netw::messaging_service::no_wait();
         });
     });
 
@@ -221,7 +223,6 @@ void raft_group_registry::init_rpc_verbs() {
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::read_quorum read_quorum) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, read_quorum] (raft_rpc& rpc) mutable {
             rpc.read_quorum_request(std::move(from), std::move(read_quorum));
-            return netw::messaging_service::no_wait();
         });
     });
 
@@ -229,7 +230,6 @@ void raft_group_registry::init_rpc_verbs() {
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::read_quorum_reply read_quorum_reply) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, read_quorum_reply] (raft_rpc& rpc) mutable {
             rpc.read_quorum_reply(std::move(from), std::move(read_quorum_reply));
-            return netw::messaging_service::no_wait();
         });
     });
 
