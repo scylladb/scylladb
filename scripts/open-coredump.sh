@@ -99,7 +99,7 @@ function log {
 
 for required in eu-unstrip jq curl git; do
     if ! type $required >& /dev/null; then
-        echo "error: missing required program $required, please install first"
+        echo "error: missing required program $required, please install first" >&2
         exit 1
     fi
 done
@@ -142,7 +142,7 @@ do
             shift 2
             ;;
         *)
-            echo "unrecognized option: $1, see $0 -h for usage"
+            echo "error: unrecognized option: $1, see $0 -h for usage" >&2
             exit 1
             ;;
     esac
@@ -152,7 +152,7 @@ COREFILE=$1
 shift 1
 if ! [[ -f $COREFILE ]]
 then
-    echo "error: ${COREFILE} is not a valid path to a core file"
+    echo "error: ${COREFILE} is not a valid path to a core file" >&2
     exit 1
 fi
 COREDIR=$(dirname ${COREFILE})
@@ -180,7 +180,7 @@ case "${SCYLLA_GDB_PY_SOURCE}" in
     ("repo"|"package"|"none")
         ;;
     *)
-        echo "error: invalid value for option SCYLLA_GDB_PY_SOURCE, has to be one of repo, package or none, got: ${SCYLLA_GDB_PY_SOURCE}"
+        echo "error: invalid value for option SCYLLA_GDB_PY_SOURCE, has to be one of repo, package or none, got: ${SCYLLA_GDB_PY_SOURCE}" >&2
         exit 1
         ;;
 esac
@@ -193,7 +193,7 @@ BUILD=$(curl -s -X GET "${SCYLLA_S3_RELOC_SERVER_URL}/build.json?build_id=${BUIL
 
 if [[ -z "$BUILD" ]]
 then
-    echo "Failed to retrieve build information from ${SCYLLA_S3_RELOC_SERVER_URL}"
+    echo "error: failed to retrieve build information from ${SCYLLA_S3_RELOC_SERVER_URL}" >&2
     exit 1
 fi
 
@@ -207,7 +207,7 @@ PACKAGE_URL=$(jq -r .package_url <<< $BUILD)
 
 if [[ "$RESPONSE_BUILD_ID" != "$BUILD_ID" ]]
 then
-    echo "Mismatching build id: requested ${BUILD_ID} but got ${RESPONSE_BUILD_ID}";
+    echo "error: mismatching build id: requested ${BUILD_ID} but got ${RESPONSE_BUILD_ID}" >&2
     exit 1
 fi
 
