@@ -26,6 +26,5 @@ RUN dnf -y update \
 RUN mkdir -p /root/.m2/repository
 ENV JAVA8_HOME=/usr/lib/jvm/java-1.8.0-openjdk
 ENV CLANG_ARCH=$TARGETARCH
-#RUN if [ "$CLANG_ARCH" = "amd64" ] ; then (chmod +x ./clang_lto_pgo.sh && ./clang_lto_pgo.sh) else echo "Unsupported Arch ($CLANG_ARCH) for clang optimization" ; fi
 RUN chmod +x ./clang_lto_pgo.sh && ./clang_lto_pgo.sh
 CMD /bin/bash
