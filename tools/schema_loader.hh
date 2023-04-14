@@ -61,4 +61,13 @@ future<schema_ptr> load_one_schema_from_file(std::filesystem::path path);
 /// all schema and experimental features enabled.
 schema_ptr load_system_schema(std::string_view keyspace, std::string_view table);
 
+/// Load the schema of the table with the designated keyspace and table name,
+/// from the system schema table sstables.
+///
+/// The schema table sstables are accessed for read only. In general this method
+/// tries very hard to have no side-effects.
+/// The \p scylla_data_path parameter is expected to point to the scylla data
+/// directory, which is usually /var/lib/scylla/data.
+future<schema_ptr> load_schema_from_schema_tables(std::filesystem::path scylla_data_path, std::string_view keyspace, std::string_view table);
+
 } // namespace tools
