@@ -1264,9 +1264,15 @@ protected:
             std::exception_ptr ex;
             try {
                 table_state& t = *_compacting_table;
-                auto maintenance_sstables = t.maintenance_sstable_set().all();
+                auto size = t.maintenance_sstable_set().size();
+                if (!size) {
+                    cmlog.debug("Skipping off-strategy compaction for {}.{}, No candidates were found",
+                            t.schema()->ks_name(), t.schema()->cf_name());
+                    finish_compaction();
+                    co_return std::nullopt;
+                }
                 cmlog.info("Starting off-strategy compaction for {}.{}, {} candidates were found",
-                        t.schema()->ks_name(), t.schema()->cf_name(), maintenance_sstables->size());
+                        t.schema()->ks_name(), t.schema()->cf_name(), size);
                 co_await run_offstrategy_compaction(_compaction_data);
                 finish_compaction();
                 cmlog.info("Done with off-strategy compaction for {}.{}", t.schema()->ks_name(), t.schema()->cf_name());
