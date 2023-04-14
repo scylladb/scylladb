@@ -542,12 +542,13 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         api::req_param<std::chrono::milliseconds, unsigned> duration{*req, "duration", 1000ms};
         api::req_param<unsigned> capacity(*req, "capacity", 256);
         api::req_param<unsigned> list_size(*req, "list_size", 10);
+        api::req_param<bool> per_shard(*req, "per_shard", false);
 
         apilog.info("toppartitions query: #table_filters={} #keyspace_filters={} duration={} list_size={} capacity={}",
             !table_filters.empty() ? std::to_string(table_filters.size()) : "all", !keyspace_filters.empty() ? std::to_string(keyspace_filters.size()) : "all", duration.param, list_size.param, capacity.param);
 
-        return seastar::do_with(db::toppartitions_query(ctx.db, std::move(table_filters), std::move(keyspace_filters), duration.value, list_size, capacity), [&ctx] (db::toppartitions_query& q) {
-            return run_toppartitions_query(q, ctx);
+        return seastar::do_with(db::toppartitions_query(ctx.db, std::move(table_filters), std::move(keyspace_filters), duration.value, list_size, capacity), [&ctx, per_shard] (db::toppartitions_query& q) {
+            return run_toppartitions_query(q, ctx, per_shard);
         });
     });
 
