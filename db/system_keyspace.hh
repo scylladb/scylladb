@@ -467,6 +467,9 @@ public:
     future<std::optional<sstring>> load_group0_upgrade_state();
     future<> save_group0_upgrade_state(sstring);
 
+    future<bool> get_must_synchronize_topology();
+    future<> set_must_synchronize_topology(bool);
+
     system_keyspace(sharded<cql3::query_processor>& qp, sharded<replica::database>& db) noexcept;
     ~system_keyspace();
     future<> start(const locator::snitch_ptr&);
