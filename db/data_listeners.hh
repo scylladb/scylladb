@@ -158,6 +158,14 @@ public:
 
     virtual void on_write(const schema_ptr& s, const frozen_mutation& m) override;
 
+    const top_k get_top_k_read() const {
+        return _top_k_read;
+    }
+
+    const top_k get_top_k_write() const {
+        return _top_k_write;
+    }
+
     void set_capacity(size_t capacity) {
         _capacity = capacity;
 

@@ -1434,6 +1434,7 @@ private:
     friend db::data_listeners;
     std::unique_ptr<db::data_listeners> _data_listeners;
     std::unique_ptr<db::toppartitions_data_listener> _toppartitions_listener;
+    timer<seastar::lowres_clock> _toppartitions_timer;
 
     service::migration_notifier& _mnotifier;
     gms::feature_service& _feat;
@@ -1707,6 +1708,8 @@ public:
         return _cfg;
     }
     const db::extensions& extensions() const;
+
+    void on_toppartitions_timer();
 
     sstables::sstables_manager& get_user_sstables_manager() const noexcept {
         assert(_user_sstables_manager);
