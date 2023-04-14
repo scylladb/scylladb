@@ -767,30 +767,40 @@ struct fmt::formatter<partition_key> : fmt::formatter<std::string_view> {
     }
 };
 
-template <>
-struct fmt::formatter<partition_key::with_schema_wrapper> : fmt::formatter<std::string_view> {
-    template <typename FormatContext>
-    auto format(const partition_key::with_schema_wrapper& pk, FormatContext& ctx) const {
-        const auto& [schema, key] = pk;
-        const auto& types = key.get_compound_type(schema)->types();
-        const auto components = key.components(schema);
-        return fmt::format_to(
+namespace detail {
+
+enum class do_validate_utf8 { no, yes };
+template <typename WithSchemaWrapper, typename FormatContext>
+auto format_pk(const WithSchemaWrapper& pk, FormatContext& ctx, do_validate_utf8 validate_utf8) {
+    const auto& [schema, key] = pk;
+    const auto& types = key.get_compound_type(schema)->types();
+    const auto components = key.components(schema);
+    return fmt::format_to(
             ctx.out(), "{}",
             fmt::join(boost::make_iterator_range(
                           boost::make_zip_iterator(boost::make_tuple(types.begin(),
                                                                      components.begin())),
                           boost::make_zip_iterator(boost::make_tuple(types.end(),
                                                                      components.end()))) |
-                      boost::adaptors::transformed([](const auto& type_and_component) {
+                      boost::adaptors::transformed([validate_utf8](const auto& type_and_component) {
                           auto& [type, component] = type_and_component;
                           auto key = type->to_string(to_bytes(component));
-                          if (utils::utf8::validate((const uint8_t *) key.data(), key.size())) {
-                              return key;
-                          } else {
+                          if (validate_utf8 == do_validate_utf8::yes &&
+                              !utils::utf8::validate((const uint8_t *) key.data(), key.size())) {
                               return sstring("<non-utf8-key>");
                           }
+                          return key;
                       }),
                       ":"));
+
+    }
+} // namespace detail
+
+template <>
+struct fmt::formatter<partition_key::with_schema_wrapper> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const partition_key::with_schema_wrapper& pk, FormatContext& ctx) const {
+        return ::detail::format_pk(pk, ctx, ::detail::do_validate_utf8::yes);
     }
 };
 
@@ -916,21 +926,7 @@ template <>
 struct fmt::formatter<clustering_key_prefix::with_schema_wrapper> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const clustering_key_prefix::with_schema_wrapper& pk, FormatContext& ctx) const {
-        const auto& [schema, key] = pk;
-        const auto& types = key.get_compound_type(schema)->types();
-        const auto components = key.components(schema);
-        return fmt::format_to(
-            ctx.out(), "{}",
-            fmt::join(boost::make_iterator_range(
-                          boost::make_zip_iterator(boost::make_tuple(types.begin(),
-                                                                     components.begin())),
-                          boost::make_zip_iterator(boost::make_tuple(types.end(),
-                                                                     components.end()))) |
-                      boost::adaptors::transformed([](const auto& type_and_component) {
-                          auto& [type, component] = type_and_component;
-                          return type->to_string(to_bytes(component));
-                      }),
-                      ":"));
+        return ::detail::format_pk(pk, ctx, ::detail::do_validate_utf8::no);
     }
 };
 
