@@ -65,6 +65,7 @@ public:
         bool enable_dangerous_direct_import_of_cassandra_counters = false;
         bool allow_loading_materialized_view = false;
         bool sort_sstables_according_to_owner = true;
+        sstables::sstable_open_config sstable_open_config;
     };
 
     class components_lister {
@@ -155,7 +156,7 @@ private:
 private:
     future<> process_descriptor(sstables::entry_descriptor desc, process_flags flags);
     void validate(sstables::shared_sstable sst, process_flags flags) const;
-    future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc) const;
+    future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc, sstables::sstable_open_config cfg = {}) const;
     future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc, process_flags flags) const;
 
     template <typename Container, typename Func>

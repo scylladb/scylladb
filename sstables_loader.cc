@@ -262,7 +262,12 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
         if (load_and_stream) {
             ::table_id table_id;
             std::vector<std::vector<sstables::shared_sstable>> sstables_on_shards;
-            std::tie(table_id, sstables_on_shards) = co_await replica::distributed_loader::get_sstables_from_upload_dir(_db, ks_name, cf_name);
+            // Load-and-stream reads the entire content from SSTables, therefore it can afford to discard the bloom filter
+            // that might otherwise consume a significant amount of memory.
+            sstables::sstable_open_config cfg {
+                .load_bloom_filter = false,
+            };
+            std::tie(table_id, sstables_on_shards) = co_await replica::distributed_loader::get_sstables_from_upload_dir(_db, ks_name, cf_name, cfg);
             co_await container().invoke_on_all([&sstables_on_shards, ks_name, cf_name, table_id, primary_replica_only] (sstables_loader& loader) mutable -> future<> {
                 co_await loader.load_and_stream(ks_name, cf_name, table_id, std::move(sstables_on_shards[this_shard_id()]), primary_replica_only);
             });

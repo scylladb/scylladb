@@ -11,6 +11,7 @@
 
 #include "version.hh"
 #include "shared_sstable.hh"
+#include "open_info.hh"
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/future.hh>
@@ -128,17 +129,6 @@ constexpr auto table_subdirectories = std::to_array({
 });
 
 constexpr const char* repair_origin = "repair";
-
-struct sstable_open_config {
-    // Load the first and last position in partition, populating the
-    // `_first_partition_first_position` and `_last_partition_last_position`
-    // fields respectively. Problematic sstables might fail to load. Set to
-    // false if you want to disable this, to be able to read such sstables.
-    // Should only be disabled for diagnostics purposes.
-    // FIXME: Enable it by default once the root cause of large allocation when reading sstable in reverse is fixed.
-    //  Ref: https://github.com/scylladb/scylladb/issues/11642
-    bool load_first_and_last_position_metadata = false;
-};
 
 class sstable : public enable_lw_shared_from_this<sstable> {
     friend ::sstable_assertions;
@@ -634,7 +624,7 @@ private:
     void write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features, run_identifier identifier,
             std::optional<scylla_metadata::large_data_stats> ld_stats, sstring origin);
 
-    future<> read_filter(const io_priority_class& pc);
+    future<> read_filter(const io_priority_class& pc, sstable_open_config cfg = {});
 
     void write_filter(const io_priority_class& pc);
 

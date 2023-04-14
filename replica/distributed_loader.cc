@@ -512,8 +512,8 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
 }
 
 future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
-distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>& db, sstring ks, sstring cf) {
-    return seastar::async([&db, ks = std::move(ks), cf = std::move(cf)] {
+distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg) {
+    return seastar::async([&db, ks = std::move(ks), cf = std::move(cf), cfg] {
         global_column_family_ptr global_table(db, ks, cf);
         sharded<sstables::sstable_directory> directory;
         auto table_id = global_table->schema()->id();
@@ -536,6 +536,7 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
             .enable_dangerous_direct_import_of_cassandra_counters = db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters(),
             .allow_loading_materialized_view = false,
             .sort_sstables_according_to_owner = false,
+            .sstable_open_config = cfg,
         };
         process_sstable_dir(directory, flags).get();
         directory.invoke_on_all([&sstables_on_shards] (sstables::sstable_directory& d) mutable {
