@@ -24,7 +24,6 @@ extern logging::logger apilog;
 namespace api {
 using namespace httpd;
 
-using namespace std;
 using namespace json;
 namespace cf = httpd::column_family_json;
 
@@ -56,7 +55,7 @@ const table_id& get_uuid(const sstring& name, const replica::database& db) {
     return get_uuid(ks, cf, db);
 }
 
-future<> foreach_column_family(http_context& ctx, const sstring& name, function<void(replica::column_family&)> f) {
+future<> foreach_column_family(http_context& ctx, const sstring& name, std::function<void(replica::column_family&)> f) {
     auto uuid = get_uuid(name, ctx.db.local());
 
     return ctx.db.invoke_on_all([f, uuid](replica::database& db) {
@@ -305,7 +304,7 @@ ratio_holder filter_recent_false_positive_as_ratio_holder(const sstables::shared
 
 void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace>& sys_ks) {
     cf::get_column_family_name.set(r, [&ctx] (const_req req){
-        vector<sstring> res;
+        std::vector<sstring> res;
         for (auto i: ctx.db.local().get_column_families_mapping()) {
             res.push_back(i.first.first + ":" + i.first.second);
         }
@@ -325,7 +324,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         });
 
     cf::get_column_family_name_keyspace.set(r, [&ctx] (const_req req){
-        vector<sstring> res;
+        std::vector<sstring> res;
         for (auto i = ctx.db.local().get_keyspaces().cbegin(); i!=  ctx.db.local().get_keyspaces().cend(); i++) {
             res.push_back(i->first);
         }
