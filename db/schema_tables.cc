@@ -909,19 +909,25 @@ read_keyspace_mutation(distributed<service::storage_proxy>& proxy, const sstring
 static thread_local semaphore the_merge_lock {1};
 
 future<> merge_lock() {
-    slogger.trace("merge_lock at {}", current_backtrace());
+    if (slogger.is_enabled(log_level::trace)) {
+        slogger.trace("merge_lock at {}", current_backtrace());
+    }
     return smp::submit_to(0, [] { return the_merge_lock.wait(); });
 }
 
 future<> merge_unlock() {
-    slogger.trace("merge_unlock at {}", current_backtrace());
+    if (slogger.is_enabled(log_level::trace)) {
+        slogger.trace("merge_unlock at {}", current_backtrace());
+    }
     return smp::submit_to(0, [] { the_merge_lock.signal(); });
 }
 
 future<semaphore_units<>> hold_merge_lock() noexcept {
     assert(this_shard_id() == 0);
 
-    slogger.trace("hold_merge_lock at {}", current_backtrace());
+    if (slogger.is_enabled(log_level::trace)) {
+        slogger.trace("hold_merge_lock at {}", current_backtrace());
+    }
     return get_units(the_merge_lock, 1);
 }
 
