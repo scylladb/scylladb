@@ -26,4 +26,18 @@ struct msg_addr {
     msg_addr(gms::inet_address ip, uint32_t cpu) noexcept : addr(ip), cpu_id(cpu) { }
 };
 
-}
+std::ostream& operator<<(std::ostream& os, const netw::msg_addr& x);
+
+} // namespace netw
+
+namespace fmt {
+
+template <>
+struct formatter<netw::msg_addr> : formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const netw::msg_addr& id, FormatContext& ctx) const {
+        return format_to(ctx.out(), "{}.{}", id.addr, id.cpu_id);
+    }
+};
+
+} // namespace fmt
