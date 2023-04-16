@@ -3460,7 +3460,7 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
 
 class node_ops_meta_data {
     node_ops_id _ops_uuid;
-    gms::inet_address _coordinator;
+    netw::msg_addr _coordinator;
     std::function<future<> ()> _abort;
     shared_ptr<abort_source> _abort_source;
     std::function<void ()> _signal;
@@ -3470,7 +3470,7 @@ class node_ops_meta_data {
 public:
     explicit node_ops_meta_data(
             node_ops_id ops_uuid,
-            gms::inet_address coordinator,
+            netw::msg_addr coordinator,
             std::list<gms::inet_address> ignore_nodes,
             std::chrono::seconds watchdog_interval,
             std::function<future<> ()> abort_func,
@@ -3482,7 +3482,7 @@ public:
     void cancel_watchdog();
 };
 
-void storage_service::node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req) {
+void storage_service::node_ops_cmd_check(const netw::msg_addr& coordinator, const node_ops_cmd_request& req) {
     auto ops_uuids = boost::copy_range<std::vector<node_ops_id>>(_node_ops| boost::adaptors::map_keys);
     std::string msg;
     if (req.cmd == node_ops_cmd::removenode_prepare || req.cmd == node_ops_cmd::replace_prepare ||
@@ -3526,7 +3526,7 @@ void storage_service::on_node_ops_registered(node_ops_id ops_uuid) {
 }
 
 void storage_service::node_ops_insert(node_ops_id ops_uuid,
-                                      gms::inet_address coordinator,
+                                      netw::msg_addr coordinator,
                                       std::list<inet_address> ignore_nodes,
                                       std::function<future<>()> abort_func) {
     auto watchdog_interval = std::chrono::seconds(_db.local().get_config().nodeops_watchdog_timeout_seconds());
@@ -3536,7 +3536,7 @@ void storage_service::node_ops_insert(node_ops_id ops_uuid,
     on_node_ops_registered(ops_uuid);
 }
 
-future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req) {
+future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(netw::msg_addr coordinator, node_ops_cmd_request req) {
     return seastar::async([this, coordinator, req = std::move(req)] () mutable {
         auto ops_uuid = req.ops_uuid;
         slogger.debug("node_ops_cmd_handler cmd={}, ops_uuid={}", req.cmd, ops_uuid);
@@ -4576,7 +4576,7 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
     });
 
     _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
-        auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        auto coordinator = netw::messaging_service::get_source(cinfo);
         return container().invoke_on(0, [coordinator, req = std::move(req)] (auto& ss) mutable {
             return ss.node_ops_cmd_handler(coordinator, std::move(req));
         });
@@ -4950,7 +4950,7 @@ bool storage_service::is_repair_based_node_ops_enabled(streaming::stream_reason 
 
 node_ops_meta_data::node_ops_meta_data(
         node_ops_id ops_uuid,
-        gms::inet_address coordinator,
+        netw::msg_addr coordinator,
         std::list<gms::inet_address> ignore_nodes,
         std::chrono::seconds watchdog_interval,
         std::function<future<> ()> abort_func,
