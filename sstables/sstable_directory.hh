@@ -159,10 +159,9 @@ private:
     future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc, sstables::sstable_open_config cfg = {}) const;
     future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc, process_flags flags) const;
 
-    template <typename Container, typename Func>
-    requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>
+    template <std::ranges::range Container, typename Func>
+    requires std::is_invocable_r_v<future<>, Func, typename std::ranges::range_value_t<Container>&>
     future<> parallel_for_each_restricted(Container& C, Func&& func);
-
     future<> load_foreign_sstables(sstable_entry_descriptor_vector info_vec);
 
     // Sort the sstable according to owner

@@ -429,8 +429,8 @@ sstable_directory::filter_sstables(std::function<future<bool>(sstables::shared_s
     _unshared_local_sstables = std::move(filtered);
 }
 
-template <typename Container, typename Func>
-requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>
+template <std::ranges::range Container, typename Func>
+requires std::is_invocable_r_v<future<>, Func, typename std::ranges::range_value_t<Container>&>
 future<>
 sstable_directory::parallel_for_each_restricted(Container& c, Func&& func) {
     return do_with(std::move(func), [this, &c] (Func& func) mutable {
