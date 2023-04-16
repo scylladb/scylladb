@@ -716,3 +716,112 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
         return make_ready_future<>();
     }).get();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
+    inet_address ip1("192.168.0.1");
+    inet_address ip2("192.168.0.2");
+    inet_address ip3("192.168.0.3");
+
+    auto host1 = host_id(utils::make_random_uuid());
+    auto host2 = host_id(utils::make_random_uuid());
+    auto host3 = host_id(utils::make_random_uuid());
+
+    auto ip1_dc_rack = endpoint_dc_rack{ "dc1", "rack_ip1" };
+    auto ip1_dc_rack_v2 = endpoint_dc_rack{ "dc1", "rack_ip1_v2" };
+
+    semaphore sem(1);
+    shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
+        topology::config{
+            .this_endpoint = ip1,
+            .local_dc_rack = ip1_dc_rack,
+        }
+    });
+
+    // get_location() should work before any node is added
+
+    BOOST_REQUIRE(stm.get()->get_topology().get_location() == ip1_dc_rack);
+
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
+        tm.update_host_id(host2, ip2);
+        tm.update_host_id(host1, ip1); // this_node added last on purpose
+        return make_ready_future<>();
+    }).get();
+
+    const node* n1 = stm.get()->get_topology().find_node(host1);
+    BOOST_REQUIRE(n1);
+    BOOST_REQUIRE(bool(n1->is_this_node()));
+    BOOST_REQUIRE_EQUAL(n1->host_id(), host1);
+    BOOST_REQUIRE_EQUAL(n1->endpoint(), ip1);
+    BOOST_REQUIRE(n1->dc_rack() == ip1_dc_rack);
+    BOOST_REQUIRE(stm.get()->get_topology().get_location() == ip1_dc_rack);
+
+    const node* n2 = stm.get()->get_topology().find_node(host2);
+    BOOST_REQUIRE(n2);
+    BOOST_REQUIRE(!bool(n2->is_this_node()));
+    BOOST_REQUIRE_EQUAL(n2->host_id(), host2);
+    BOOST_REQUIRE_EQUAL(n2->endpoint(), ip2);
+    BOOST_REQUIRE(n2->dc_rack() == endpoint_dc_rack::default_location);
+
+    // Removing local node
+
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
+        tm.remove_endpoint(ip1);
+        tm.update_host_id(host3, ip3);
+        return make_ready_future<>();
+    }).get();
+
+    n1 = stm.get()->get_topology().find_node(host1);
+    BOOST_REQUIRE(!n1);
+    n1 = stm.get()->get_topology().find_node(ip1);
+    BOOST_REQUIRE(!n1);
+
+    // Removing node with no local node
+
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
+        tm.remove_endpoint(ip2);
+        return make_ready_future<>();
+    }).get();
+
+    n2 = stm.get()->get_topology().find_node(host2);
+    BOOST_REQUIRE(!n2);
+    n2 = stm.get()->get_topology().find_node(ip2);
+    BOOST_REQUIRE(!n2);
+
+    // Repopulate after clear_gently()
+
+    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+        co_await tm.clear_gently();
+        tm.update_host_id(host2, ip2);
+        tm.update_host_id(host1, ip1); // this_node added last on purpose
+    }).get();
+
+    n1 = stm.get()->get_topology().find_node(host1);
+    BOOST_REQUIRE(n1);
+    BOOST_REQUIRE(bool(n1->is_this_node()));
+    BOOST_REQUIRE_EQUAL(n1->host_id(), host1);
+    BOOST_REQUIRE_EQUAL(n1->endpoint(), ip1);
+    BOOST_REQUIRE(n1->dc_rack() == ip1_dc_rack);
+    BOOST_REQUIRE(stm.get()->get_topology().get_location() == ip1_dc_rack);
+
+    n2 = stm.get()->get_topology().find_node(host2);
+    BOOST_REQUIRE(n2);
+    BOOST_REQUIRE(!bool(n2->is_this_node()));
+    BOOST_REQUIRE_EQUAL(n2->host_id(), host2);
+    BOOST_REQUIRE_EQUAL(n2->endpoint(), ip2);
+    BOOST_REQUIRE(n2->dc_rack() == endpoint_dc_rack::default_location);
+
+    // get_location() should pick up endpoint_dc_rack from node info
+
+    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+        co_await tm.clear_gently();
+        tm.get_topology().add_or_update_endpoint(ip1, host1, ip1_dc_rack_v2, node::state::leaving);
+    }).get();
+
+    n1 = stm.get()->get_topology().find_node(host1);
+    BOOST_REQUIRE(n1);
+    BOOST_REQUIRE(bool(n1->is_this_node()));
+    BOOST_REQUIRE_EQUAL(n1->host_id(), host1);
+    BOOST_REQUIRE_EQUAL(n1->endpoint(), ip1);
+    BOOST_REQUIRE(n1->dc_rack() == ip1_dc_rack_v2);
+    BOOST_REQUIRE(stm.get()->get_topology().get_location() == ip1_dc_rack_v2);
+}
