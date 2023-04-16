@@ -17,7 +17,6 @@
 
 #include "db/data_listeners.hh"
 
-using namespace std;
 using namespace std::chrono_literals;
 
 class table_listener : public db::data_listener {

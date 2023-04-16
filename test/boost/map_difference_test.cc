@@ -15,7 +15,8 @@
 #include <map>
 #include <set>
 
-using namespace std;
+using std::map;
+using std::set;
 
 BOOST_AUTO_TEST_CASE(both_empty) {
     map<int, int> left;
