@@ -161,7 +161,8 @@ private:
 
     template <typename Container, typename Func>
     requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>
-    future<> parallel_for_each_restricted(Container&& C, Func&& func);
+    future<> parallel_for_each_restricted(Container& C, Func&& func);
+
     future<> load_foreign_sstables(sstable_entry_descriptor_vector info_vec);
 
     // Sort the sstable according to owner
@@ -221,7 +222,14 @@ public:
 
     // Helper function that processes all unshared SSTables belonging to this shard, respecting the
     // concurrency limit.
+    // Note that this function is destructive, draining _shared_local_sstables.
     future<> do_for_each_sstable(std::function<future<>(sstables::shared_sstable)> func);
+
+    // Helper function that processes all unshared SSTables belonging to this shard, respecting the
+    // concurrency limit.
+    // sstables for which `func` returns a true value are kept in _shared_local_sstables, while
+    // those for which `func` returns false are erased from the list.
+    future<> filter_sstables(std::function<future<bool>(sstables::shared_sstable)> func);
 
     // Retrieves the list of shared SSTables in this object. The list will be reset once this
     // is called.
