@@ -2342,7 +2342,7 @@ future<> sstable::filesystem_storage::change_state(const sstable& sst, sstring t
         co_return; // Already there
     }
 
-    sstlog.info("Moving sstable {} to {} in {}", sst.get_filename(), to, path);
+    sstlog.info("Moving sstable {} to {}", sst.get_filename(), path);
     co_await move(sst, path.native(), std::move(new_generation), delay_commit);
 }
 
