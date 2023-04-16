@@ -226,7 +226,8 @@ sstable_directory::process_sstable_dir(process_flags flags) {
 
     // _descriptors is everything with a TOC. So after we remove this, what's left is
     // SSTables for which a TOC was not found.
-    co_await parallel_for_each_restricted(state.descriptors, [this, flags, &state] (std::tuple<generation_type, sstables::entry_descriptor>&& t) {
+    auto descriptors = std::move(state.descriptors);
+    co_await parallel_for_each_restricted(descriptors, [this, flags, &state] (std::tuple<generation_type, sstables::entry_descriptor>&& t) {
         auto& desc = std::get<1>(t);
         state.generations_found.erase(desc.generation);
         // This will try to pre-load this file and throw an exception if it is invalid
@@ -272,7 +273,7 @@ sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_dire
 
 future<>
 sstable_directory::load_foreign_sstables(sstable_info_vector info_vec) {
-    return parallel_for_each_restricted(info_vec, [this] (sstables::foreign_sstable_open_info& info) {
+    co_await parallel_for_each_restricted(info_vec, [this] (sstables::foreign_sstable_open_info& info) {
         auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
         return sst->load(std::move(info)).then([sst, this] {
             _unshared_local_sstables.push_back(sst);
@@ -456,13 +457,27 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
 
 future<>
 sstable_directory::do_for_each_sstable(std::function<future<>(sstables::shared_sstable)> func) {
-    return parallel_for_each_restricted(_unshared_local_sstables, std::move(func));
+    auto sstables = std::move(_unshared_local_sstables);
+    co_await parallel_for_each_restricted(sstables, std::move(func));
+}
+
+future<>
+sstable_directory::filter_sstables(std::function<future<bool>(sstables::shared_sstable)> func) {
+    std::vector<sstables::shared_sstable> filtered;
+    co_await parallel_for_each_restricted(_unshared_local_sstables, [func = std::move(func), &filtered] (sstables::shared_sstable sst) -> future<> {
+        auto keep = co_await func(sst);
+        if (keep) {
+            filtered.emplace_back(sst);
+        }
+    });
+    _unshared_local_sstables = std::move(filtered);
 }
 
 template <typename Container, typename Func>
+requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>
 future<>
-sstable_directory::parallel_for_each_restricted(Container&& C, Func&& func) {
-    return do_with(std::move(C), std::move(func), [this] (Container& c, Func& func) mutable {
+sstable_directory::parallel_for_each_restricted(Container& c, Func&& func) {
+    return do_with(std::move(func), [this, &c] (Func& func) mutable {
       return max_concurrent_for_each(c, _manager.dir_semaphore()._concurrency, [this, &func] (auto& el) mutable {
         return with_semaphore(_manager.dir_semaphore()._sem, 1, [this, &func,  el = std::move(el)] () mutable {
             return func(el);

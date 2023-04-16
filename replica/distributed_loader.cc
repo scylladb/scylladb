@@ -176,10 +176,12 @@ collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir, sharded<r
         sstables::sstable_directory::sstable_info_vector need_cleanup;
         if (sorted_owned_ranges_ptr) {
             auto& table = db.local().find_column_family(ks_name, table_name);
-            co_await d.do_for_each_sstable([&] (sstables::shared_sstable sst) -> future<> {
+            co_await d.filter_sstables([&] (sstables::shared_sstable sst) -> future<bool> {
                 if (table.update_sstable_cleanup_state(sst, *sorted_owned_ranges_ptr)) {
                     need_cleanup.push_back(co_await sst->get_open_info());
+                    co_return false;
                 }
+                co_return true;
             });
         }
         if (shared_sstables.empty() && need_cleanup.empty()) {
