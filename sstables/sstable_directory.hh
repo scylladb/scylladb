@@ -130,7 +130,7 @@ private:
 
     template <typename Container, typename Func>
     requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>
-    future<> parallel_for_each_restricted(Container& C, Func&& func);
+    future<> parallel_for_each_restricted(Container& C, Func func);
     future<> load_foreign_sstables(sstable_info_vector info_vec);
 
     std::vector<sstables::shared_sstable> _unsorted_sstables;

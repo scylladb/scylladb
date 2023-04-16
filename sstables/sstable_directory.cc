@@ -476,13 +476,10 @@ sstable_directory::filter_sstables(std::function<future<bool>(sstables::shared_s
 template <typename Container, typename Func>
 requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>
 future<>
-sstable_directory::parallel_for_each_restricted(Container& c, Func&& func) {
-    return do_with(std::move(func), [this, &c] (Func& func) mutable {
-      return max_concurrent_for_each(c, _manager.dir_semaphore()._concurrency, [this, &func] (auto& el) mutable {
-        return with_semaphore(_manager.dir_semaphore()._sem, 1, [this, &func,  el = std::move(el)] () mutable {
-            return func(el);
-        });
-      });
+sstable_directory::parallel_for_each_restricted(Container& c, Func func) {
+    co_await max_concurrent_for_each(c, _manager.dir_semaphore()._concurrency, [&] (auto& el) -> future<>{
+        auto units = co_await get_units(_manager.dir_semaphore()._sem, 1);
+        co_await func(el);
     });
 }
 
