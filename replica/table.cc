@@ -31,6 +31,7 @@
 #include "compaction/compaction_manager.hh"
 #include "compaction/table_state.hh"
 #include "sstables/sstable_directory.hh"
+#include "sstables/sstable_set_impl.hh"
 #include "db/system_keyspace.hh"
 #include "db/query_context.hh"
 #include "query-result-writer.hh"
@@ -2835,6 +2836,212 @@ bool table::requires_cleanup(const sstables::sstable_set& set) const {
         auto& cg = compaction_group_for_sstable(sst);
         return stop_iteration(_compaction_manager.requires_cleanup(cg.as_table_state(), sst));
     }));
+}
+
+unsigned compaction_group::sstable_set::x_log2_compaction_groups(size_t number_of_cgs) {
+    if (number_of_cgs & (number_of_cgs - 1)) {
+        on_internal_error(tlogger, format("Number of compaction groups ({}) is not aligned to power-of-two.", number_of_cgs));
+    }
+    return std::log2(number_of_cgs);
+}
+
+compaction_group::sstable_set::sstable_sets_t
+compaction_group::sstable_set::initialize_sstable_sets(const std::vector<std::unique_ptr<compaction_group>>& cgs) const {
+    if (cgs.empty()) {
+        on_internal_error(tlogger, "Compaction group SSTable set cannot be initialized with a empty list.");
+    }
+    return boost::copy_range<sstable_sets_t>(cgs | boost::adaptors::transformed([] (const std::unique_ptr<compaction_group>& cg) {
+        return std::make_pair(cg->token_range(), cg->make_compound_sstable_set());
+    }));
+}
+
+unsigned compaction_group::sstable_set::group_of(const sstable_sets_t& sets, const dht::token& t) {
+    auto idx = dht::compaction_group_of(x_log2_compaction_groups(sets.size()), t);
+    if (idx >= sets.size()) {
+        throw std::out_of_range(format("Token {} was mapped to an nonexistent compaction group {}. Valid range [0..{}].",
+                                       t, idx, sets.size() - 1));
+    }
+    return idx;
+}
+
+unsigned compaction_group::sstable_set::group_of(const dht::token& t) const {
+    return group_of(_cg_sstable_sets, t);
+}
+
+std::pair<unsigned, unsigned> compaction_group::sstable_set::groups_of(const dht::token_range& tr) const {
+    auto start = group_of(tr.start() ? tr.start()->value() : dht::minimum_token());
+    auto end = group_of(tr.end() ? tr.end()->value() : dht::maximum_token());
+    return std::make_pair(start, end);
+}
+
+std::unique_ptr<sstable_set_impl> compaction_group::sstable_set::clone() const {
+    sstable_sets_t sets;
+    sets.reserve(_cg_sstable_sets.size());
+    for (const auto& set : _cg_sstable_sets) {
+        sets.push_back(std::make_pair(set.first, make_lw_shared(*set.second)));
+    }
+    return std::make_unique<compaction_group::sstable_set>(_schema, std::move(sets));
+}
+
+std::vector<shared_sstable> compaction_group::sstable_set::select(const dht::partition_range& pr) const {
+    dht::token_range tr = pr.transform(std::mem_fn(&dht::ring_position::token));
+    std::unordered_set<shared_sstable> r;
+
+    for (auto& set : select_group_sets(tr)) {
+        if (!tr.overlaps(set.first, dht::token_comparator())) {
+            continue;
+        }
+        auto ssts = set.second->select(pr);
+        r.insert(std::make_move_iterator(ssts.begin()), std::make_move_iterator(ssts.end()));
+    }
+    return std::vector<shared_sstable>(std::make_move_iterator(r.begin()), std::make_move_iterator(r.end()));
+}
+
+lw_shared_ptr<const sstable_list> compaction_group::sstable_set::all() const {
+    sstable_list r;
+    for (const auto& set : _cg_sstable_sets) {
+        auto all = set.second->all();
+        r.insert(std::make_move_iterator(all->begin()), std::make_move_iterator(all->end()));
+    }
+    return make_lw_shared(std::move(r));
+}
+
+stop_iteration
+compaction_group::sstable_set::for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const {
+    for (auto& set : _cg_sstable_sets) {
+        if (set.second->for_each_sstable_until([&func] (const shared_sstable& sst) { return func(sst); })) {
+            return stop_iteration::yes;
+        }
+    }
+    return stop_iteration::no;
+}
+
+std::vector<sstable_run> compaction_group::sstable_set::select_sstable_runs(const std::vector<shared_sstable>& sstables) const {
+    // only invoked in the context of a single compaction group's SSTable set.
+    throw_with_backtrace<std::bad_function_call>();
+}
+
+void compaction_group::sstable_set::insert(shared_sstable sst) {
+    // only invoked in the context of a single compaction group's SSTable set.
+    throw_with_backtrace<std::bad_function_call>();
+}
+void compaction_group::sstable_set::erase(shared_sstable sst) {
+    // only invoked in the context of a single compaction group's SSTable set.
+    throw_with_backtrace<std::bad_function_call>();
+}
+
+size_t compaction_group::sstable_set::size() const noexcept {
+    return boost::accumulate(_cg_sstable_sets | boost::adaptors::transformed([] (const auto& set) {
+        return set.second->size();
+    }), size_t(0));
+}
+
+class compaction_group::sstable_set::incremental_selector : public incremental_selector_impl {
+    const schema& _schema;
+    const sstable_sets_t& _cg_sstable_sets;
+    unsigned _current_group;
+    std::unique_ptr<sstables::sstable_set::incremental_selector> _current_selector;
+private:
+    std::unique_ptr<sstables::sstable_set::incremental_selector>
+    make_selector(unsigned group) const {
+        return std::make_unique<sstables::sstable_set::incremental_selector>(
+                _cg_sstable_sets[group].second->make_incremental_selector());
+    }
+
+    sstables::sstable_set::incremental_selector& maybe_advance_selector(const dht::token& t) {
+        unsigned next_group = group_of(_cg_sstable_sets, t);
+
+        if (next_group < _current_group) {
+            on_internal_error(tlogger, format("Token {} caused incremental selection of compaction groups to go backwards, " \
+                                       "the range of current group is {}", t, _cg_sstable_sets[_current_group].first));
+        }
+
+        if (next_group > _current_group) {
+            _current_selector = make_selector(next_group);
+            _current_group = next_group;
+        }
+
+        return *_current_selector;
+    }
+
+    const dht::token& first_token_of_next_group(const dht::token& t) {
+        unsigned group = group_of(_cg_sstable_sets, t);
+
+        if (group == _cg_sstable_sets.size() - 1) {
+            return dht::maximum_token();
+        }
+        return _cg_sstable_sets[group + 1].first.start()->value();
+    }
+public:
+    incremental_selector(const schema& schema, const sstable_sets_t& sets)
+            : _schema(schema)
+            , _cg_sstable_sets(sets)
+            , _current_group(group_of(sets, dht::minimum_token()))
+            , _current_selector(make_selector(_current_group)) {
+    }
+
+    incremental_selector(const incremental_selector&) = delete;
+    incremental_selector(incremental_selector&&) = delete;
+
+    virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext> select(const dht::ring_position_view& pos) override {
+        const dht::token& t = pos.token();
+        auto& selector = maybe_advance_selector(t);
+
+        auto ret = selector.select(pos);
+
+        auto cmp = dht::ring_position_comparator(_schema);
+
+        // Next position must always be the minimum of next_position returned by incremental selector *and*
+        //      first position of next compaction group.
+        // That guarantees one group's selector won't prevent incremental selection to continue on the
+        // subsequent groups once the current one is exhausted.
+        dht::ring_position_view next_position = ret.next_position;
+        dht::ring_position_view first_pos_of_next_group = dht::ring_position_view(first_token_of_next_group(t));
+        if (cmp(first_pos_of_next_group, next_position) < 0) {
+            next_position = first_pos_of_next_group;
+        }
+
+        // By restricting current range to current position, incremental_selector will refresh the set of
+        // SSTables *and* next_position on every new token.
+        // That's important as SSTable's token range may cross the token range boundary of the compaction
+        // group(s) it's assigned to, e.g. after a split.
+        // next position is still used by the combined reader, to avoid calling the selector needlessly.
+        const dht::partition_range current_range = dht::partition_range::make_singular(dht::ring_position::starting_at(t));
+
+        return std::make_tuple(std::move(current_range), ret.sstables, dht::ring_position_ext(next_position));
+    }
+};
+
+std::unique_ptr<incremental_selector_impl> compaction_group::sstable_set::make_incremental_selector() const {
+    return std::make_unique<incremental_selector>(*_schema, _cg_sstable_sets);
+}
+
+flat_mutation_reader_v2
+compaction_group::sstable_set::create_single_key_sstable_reader(
+        replica::table* table,
+        schema_ptr schema,
+        reader_permit permit,
+        utils::estimated_histogram& sstable_histogram,
+        const dht::partition_range& pr,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr) const {
+    const dht::token& t = pr.start()->value().token(); // can assume single key; enforced by sstable_set.
+    auto& set = _cg_sstable_sets[group_of(t)];
+
+    if (!set.first.contains(t, dht::token_comparator())) {
+        on_internal_error(tlogger, format("Requested token {} doesn't overlap with the compaction group of range {}", t, set.first));
+    }
+
+    return set.second->create_single_key_sstable_reader(table, std::move(schema), std::move(permit), sstable_histogram,
+                                                        pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
+}
+
+sstables::sstable_set
+compaction_group::sstable_set::make(schema_ptr schema, const std::vector<std::unique_ptr<compaction_group>>& cgs) {
+    return sstables::sstable_set(std::make_unique<compaction_group::sstable_set>(schema, cgs), schema);
 }
 
 } // namespace replica

@@ -11,7 +11,9 @@
 #include "compaction/compaction_backlog_manager.hh"
 #include "compaction/compaction_strategy_state.hh"
 #include "sstables/sstable_set.hh"
+#include "sstables/sstable_set_impl.hh"
 #include "compaction/compaction_fwd.hh"
+#include <span>
 
 #pragma once
 
@@ -121,6 +123,61 @@ public:
     uint64_t total_disk_space_used() const noexcept;
 
     compaction::table_state& as_table_state() const noexcept;
+
+    class sstable_set;
+};
+
+class compaction_group::sstable_set : public sstable_set_impl {
+    using sstable_sets_t = std::vector<std::pair<const dht::token_range, lw_shared_ptr<sstables::sstable_set>>>;
+
+    schema_ptr _schema;
+    sstable_sets_t _cg_sstable_sets;
+private:
+    static unsigned x_log2_compaction_groups(size_t number_of_cgs);
+    sstable_sets_t initialize_sstable_sets(const std::vector<std::unique_ptr<compaction_group>>& cgs) const;
+    static unsigned group_of(const sstable_sets_t& sets, const dht::token& t);
+    unsigned group_of(const dht::token& t) const;
+    std::pair<unsigned, unsigned> groups_of(const dht::token_range& tr) const;
+
+    auto select_group_sets(const dht::token_range& tr) const {
+        auto [start, end] = groups_of(tr);
+        // TODO: switch to std::ranges::subrange(...), it's now broken in clang 15.
+        return std::span(_cg_sstable_sets.begin() + start, _cg_sstable_sets.begin() + end + 1);
+    }
+public:
+    explicit sstable_set(schema_ptr schema, sstable_sets_t sets) noexcept
+            : _schema(std::move(schema))
+            , _cg_sstable_sets(std::move(sets)) {}
+
+    explicit sstable_set(schema_ptr schema, const std::vector<std::unique_ptr<compaction_group>>& cgs)
+            : _schema(std::move(schema))
+            , _cg_sstable_sets(initialize_sstable_sets(cgs)) {}
+
+    virtual std::unique_ptr<sstable_set_impl> clone() const override;
+    virtual std::vector<shared_sstable> select(const dht::partition_range& pr = query::full_partition_range) const override;
+    virtual std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const override;
+    virtual lw_shared_ptr<const sstable_list> all() const override;
+    virtual stop_iteration for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const override;
+    virtual void insert(shared_sstable sst) override;
+    virtual void erase(shared_sstable sst) override;
+    virtual size_t size() const noexcept override;
+    virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
+
+    virtual flat_mutation_reader_v2 create_single_key_sstable_reader(
+            replica::table*,
+            schema_ptr,
+            reader_permit,
+            utils::estimated_histogram&,
+            const dht::partition_range&,
+            const query::partition_slice&,
+            const io_priority_class&,
+            tracing::trace_state_ptr,
+            streamed_mutation::forwarding,
+            mutation_reader::forwarding) const override;
+
+    static sstables::sstable_set make(schema_ptr schema, const std::vector<std::unique_ptr<compaction_group>>& cgs);
+
+    class incremental_selector;
 };
 
 // Used by the tests to increase the default number of compaction groups by increasing the minimum to X.
