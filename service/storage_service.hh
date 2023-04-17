@@ -11,13 +11,13 @@
 
 #pragma once
 
+#include <seastar/core/shared_future.hh>
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "inet_address_vectors.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/condition-variable.hh>
-#include "dht/i_partitioner.hh"
 #include "dht/token_range_endpoints.hh"
 #include <seastar/core/sleep.hh>
 #include "gms/application_state.hh"
@@ -25,21 +25,14 @@
 #include <seastar/core/gate.hh>
 #include "utils/fb_utilities.hh"
 #include "replica/database_fwd.hh"
-#include "db/schema_features.hh"
-#include "streaming/stream_state.hh"
 #include "streaming/stream_reason.hh"
 #include <seastar/core/distributed.hh>
 #include "utils/disk-error-handler.hh"
 #include "service/migration_listener.hh"
-#include "protocol_server.hh"
-#include "gms/feature_service.hh"
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/rwlock.hh>
-#include "sstables/version.hh"
-#include "sstables/shared_sstable.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/lowres_clock.hh>
-#include "locator/snitch_base.hh"
 #include "cdc/generation_id.hh"
 #include "raft/raft.hh"
 #include "repair/id.hh"
@@ -51,6 +44,7 @@ class node_ops_cmd_response;
 class node_ops_info;
 enum class node_ops_cmd : uint32_t;
 class repair_service;
+class protocol_server;
 
 namespace cql3 { class query_processor; }
 

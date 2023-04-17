@@ -73,6 +73,7 @@
 #include "idl/storage_service.dist.hh"
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_address_map.hh"
+#include "protocol_server.hh"
 #include "types/set.hh"
 
 #include <boost/algorithm/string/split.hpp>
