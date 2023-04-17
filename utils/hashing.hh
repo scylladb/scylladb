@@ -35,6 +35,12 @@ concept Hasher =
         { h.update(ptr, size) } noexcept -> std::same_as<void>;
     };
 
+template<typename H, typename ValueType>
+concept HasherReturning = Hasher<H> &&
+    requires (H& h) {
+        { h.finalize() } -> std::convertible_to<ValueType>;
+    };
+
 class hasher {
 public:
     virtual ~hasher() = default;
