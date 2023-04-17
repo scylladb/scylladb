@@ -63,7 +63,7 @@ struct host_id_or_endpoint {
     }
 
     bool has_endpoint() const noexcept {
-        return endpoint != gms::inet_address();
+        return bool(endpoint);
     }
 
     // Map the host_id to endpoint based on whichever of them is set,

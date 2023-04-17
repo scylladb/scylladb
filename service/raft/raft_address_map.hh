@@ -311,7 +311,7 @@ public:
     // deprecation period ends.
     std::optional<raft::server_id> find_by_addr(gms::inet_address addr) const {
         rslog.warn("Finding Raft nodes by IP addresses is deprecated. Please use Host IDs instead.");
-        if (addr == gms::inet_address{}) {
+        if (!addr) {
             on_internal_error(rslog, "raft_address_map::find_by_addr: called with an empty address");
         }
         auto it = std::find_if(_map.begin(), _map.end(), [&](auto&& mapping) { return mapping.second._addr == addr; });
@@ -355,7 +355,7 @@ public:
     // arriving.
     // Used primarily from Raft RPC to speed up Raft at boot.
     void opt_add_entry(raft::server_id id, gms::inet_address addr) {
-        if (addr == gms::inet_address{}) {
+        if (!addr) {
             on_internal_error(rslog, format("IP address missing for {}", id));
         }
         handle_add_or_update_entry(id, gms::generation_type{}, addr, false);
@@ -369,7 +369,7 @@ public:
     // set_nonexpiring()) to mark the entry as non expiring.
     void add_or_update_entry(raft::server_id id, gms::inet_address addr,
             gms::generation_type generation_number = {}) {
-        if (addr == gms::inet_address{}) {
+        if (!addr) {
             on_internal_error(rslog, format("IP address missing for {}", id));
         }
         handle_add_or_update_entry(id, generation_number, addr, true);

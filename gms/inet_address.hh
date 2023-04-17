@@ -68,6 +68,10 @@ public:
     }
     friend struct std::hash<inet_address>;
 
+    explicit operator bool() const noexcept {
+        return _addr != net::inet_address();
+    }
+
     using opt_family = std::optional<net::inet_address::family>;
 
     static future<inet_address> lookup(sstring, opt_family family = {}, opt_family preferred = {});

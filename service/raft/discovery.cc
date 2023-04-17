@@ -10,7 +10,7 @@
 namespace service {
 
 void check_peer(const discovery_peer& peer) {
-    if (peer.ip_addr == gms::inet_address{}) {
+    if (!peer.ip_addr) {
         throw std::logic_error("Discovery requires peer internet address to be set");
     }
 }

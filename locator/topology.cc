@@ -144,7 +144,7 @@ bool topology::is_configured_this_node(const node& n) const {
     if (_cfg.this_host_id && n.host_id()) { // Selection by host_id
         return _cfg.this_host_id == n.host_id();
     }
-    if (_cfg.this_endpoint != inet_address()) { // Selection by endpoint
+    if (_cfg.this_endpoint) { // Selection by endpoint
         return _cfg.this_endpoint == n.endpoint();
     }
     return false; // No selection;
@@ -223,7 +223,7 @@ const node* topology::update_node(node* node, std::optional<host_id> opt_id, std
     }
     if (opt_ep) {
         if (*opt_ep != node->endpoint()) {
-            if (*opt_ep == inet_address{}) {
+            if (!*opt_ep) {
                 on_internal_error(tlogger, format("Updating node endpoint to null is disallowed: {}: new endpoint={}", debug_format(node), *opt_ep));
             }
             changed = true;
@@ -314,7 +314,7 @@ void topology::index_node(const node* node) {
             on_internal_error(tlogger, format("topology[{}]: {}: node already exists", fmt::ptr(this), debug_format(node)));
         }
     }
-    if (node->endpoint() != inet_address{}) {
+    if (node->endpoint()) {
         auto eit = _nodes_by_endpoint.find(node->endpoint());
         if (eit != _nodes_by_endpoint.end()) {
             if (eit->second->is_leaving() || eit->second->left()) {
