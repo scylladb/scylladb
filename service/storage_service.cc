@@ -992,7 +992,9 @@ future<> storage_service::raft_bootstrap(raft::server& raft_server) {
                .set("rack", _snitch.local()->get_rack())
                .set("release_version", version::release())
                .set("topology_request", topology_request::join)
-               .set("num_tokens", _db.local().get_config().num_tokens());
+               .set("num_tokens", _db.local().get_config().num_tokens())
+               .set("shard_count", smp::count)
+               .set("ignore_msb", _db.local().get_config().murmur3_partitioner_ignore_msb_bits());
         topology_change change{{builder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, "bootstrap: add myself to topology");
         try {
@@ -1001,6 +1003,73 @@ future<> storage_service::raft_bootstrap(raft::server& raft_server) {
             slogger.info("raft topology: bootstrap: concurrent operation is detected, retrying.");
         }
     }
+}
+
+future<> storage_service::update_topology_with_local_metadata(raft::server& raft_server) {
+    // TODO: include more metadata here
+    auto local_shard_count = smp::count;
+    auto local_ignore_msb = _db.local().get_config().murmur3_partitioner_ignore_msb_bits();
+    auto local_release_version = version::release();
+
+    auto synchronized = [&] () {
+        auto it = _topology_state_machine._topology.find(raft_server.id());
+        if (!it) {
+            throw std::runtime_error{"Removed from topology while performing metadata update"};
+        }
+
+        auto& replica_state = it->second;
+
+        return replica_state.shard_count == local_shard_count
+            && replica_state.ignore_msb == local_ignore_msb
+            && replica_state.release_version == local_release_version;
+    };
+
+    // We avoid performing a read barrier if we're sure that our metadata stored in topology
+    // is the same as local metadata. Note that only we can update our metadata, other nodes cannot.
+    //
+    // We use a persisted flag `must_update_topology` to avoid the following scenario:
+    // 1. the node restarts and its metadata changes
+    // 2. the node commits the new metadata to topology, but before the update is applied
+    //    to the local state machine, the node crashes
+    // 3. then the metadata changes back to old values and node restarts again
+    // 4. the local state machine tells us that we're in sync, which is wrong
+    // If the persisted flag is true, it tells us that we attempted a metadata change earlier,
+    // forcing us to perform a read barrier even when the local state machine tells us we're in sync.
+
+    if (synchronized() && !(co_await _sys_ks.local().get_must_synchronize_topology())) {
+        co_return;
+    }
+
+    while (true) {
+        slogger.info("raft topology: refreshing topology to check if it's synchronized with local metadata");
+
+        auto guard = co_await _group0->client().start_operation(&_abort_source);
+
+        if (synchronized()) {
+            break;
+        }
+
+        slogger.info("raft topology: updating topology with local metadata");
+
+        co_await _sys_ks.local().set_must_synchronize_topology(true);
+
+        topology_mutation_builder builder(guard.write_timestamp(), raft_server.id());
+        builder.set("shard_count", local_shard_count)
+               .set("ignore_msb", local_ignore_msb)
+               .set("release_version", local_release_version);
+        topology_change change{{builder.build()}};
+        group0_command g0_cmd = _group0->client().prepare_command(
+                std::move(change), guard, format("{}: update topology with local metadata", raft_server.id()));
+
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), &_abort_source);
+        } catch (group0_concurrent_modification&) {
+            slogger.info("raft topology: update topology with local metadata:"
+                         " concurrent operation is detected, retrying.");
+        }
+    }
+
+    co_await _sys_ks.local().set_must_synchronize_topology(false);
 }
 
 future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_service,
@@ -1231,6 +1300,8 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         if (_topology_state_machine._topology.left_nodes.contains(raft_server->id())) {
             throw std::runtime_error("A node that already left the cluster cannot be restarted");
         }
+
+        co_await update_topology_with_local_metadata(*raft_server);
 
         // Node state is enough to know that bootstrap has completed, but to make legacy code happy
         // let it know that the bootstrap is completed as well

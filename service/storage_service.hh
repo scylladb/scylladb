@@ -789,6 +789,7 @@ private:
     future<> raft_removenode(locator::host_id host_id);
     future<> raft_replace(raft::server&, raft::server_id, gms::inet_address);
     future<> raft_rebuild(sstring source_dc);
+    future<> update_topology_with_local_metadata(raft::server&);
 
     // This is called on all nodes for each new command received through raft
     future<> topology_transition(storage_proxy& proxy, gms::inet_address, std::vector<canonical_mutation>);

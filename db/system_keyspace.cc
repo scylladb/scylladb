@@ -247,6 +247,8 @@ schema_ptr system_keyspace::topology() {
             .with_column("replaced_id", uuid_type)
             .with_column("rebuild_option", utf8_type)
             .with_column("num_tokens", int32_type)
+            .with_column("shard_count", int32_type)
+            .with_column("ignore_msb", int32_type)
             .set_comment("Current state of topology change machine")
             .with_version(generate_schema_version(id))
             .build();
@@ -3439,6 +3441,17 @@ future<> system_keyspace::save_group0_upgrade_state(sstring value) {
     return set_scylla_local_param(GROUP0_UPGRADE_STATE_KEY, value);
 }
 
+static constexpr auto MUST_SYNCHRONIZE_TOPOLOGY_KEY = "must_synchronize_topology";
+
+future<bool> system_keyspace::get_must_synchronize_topology() {
+    auto opt = co_await get_scylla_local_param_as<bool>(MUST_SYNCHRONIZE_TOPOLOGY_KEY);
+    co_return opt.value_or(false);
+}
+
+future<> system_keyspace::set_must_synchronize_topology(bool value) {
+    return set_scylla_local_param_as<bool>(MUST_SYNCHRONIZE_TOPOLOGY_KEY, value);
+}
+
 future<service::topology> system_keyspace::load_topology_state() {
     auto rs = co_await qctx->execute_cql(
         format("SELECT * FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
@@ -3456,6 +3469,8 @@ future<service::topology> system_keyspace::load_topology_state() {
         auto rack = row.get_as<sstring>("rack");
         auto release_version = row.get_as<sstring>("release_version");
         uint32_t num_tokens = row.get_as<int32_t>("num_tokens");
+        size_t shard_count = row.get_as<int32_t>("shard_count");
+        uint8_t ignore_msb = row.get_as<int32_t>("ignore_msb");
 
         service::node_state nstate = service::node_state_from_string(row.get_as<sstring>("node_state"));
 
@@ -3544,7 +3559,8 @@ future<service::topology> system_keyspace::load_topology_state() {
         }
         if (map) {
             map->emplace(host_id, service::replica_state{nstate, std::move(datacenter), std::move(rack), std::move(release_version),
-                tstate ? std::optional<service::ring_slice>(service::ring_slice{*tstate, std::move(t)}) : std::nullopt});
+                tstate ? std::optional<service::ring_slice>(service::ring_slice{*tstate, std::move(t)}) : std::nullopt,
+                shard_count, ignore_msb});
         }
     }
 
