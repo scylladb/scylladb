@@ -26,7 +26,7 @@
  */
 
 SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
-    const ipv4_addr s3_server(::getenv("MINIO_SERVER_ADDRESS"), 9000);
+    const ipv4_addr s3_server(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), 9000);
     const sstring name(fmt::format("/{}/testobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
@@ -59,7 +59,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload) {
-    const ipv4_addr s3_server(::getenv("MINIO_SERVER_ADDRESS"), 9000);
+    const ipv4_addr s3_server(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), 9000);
     const sstring name(fmt::format("/{}/testlargeobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
@@ -110,7 +110,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
-    const ipv4_addr s3_server(::getenv("MINIO_SERVER_ADDRESS"), 9000);
+    const ipv4_addr s3_server(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), 9000);
     const sstring name(fmt::format("/{}/testroobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");

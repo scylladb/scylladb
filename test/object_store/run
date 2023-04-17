@@ -31,13 +31,13 @@ print(f'Start scylla (dir={test_tempdir}')
 pid = run.run_with_generated_dir(cmd, get_tempdir)
 ip = run.pid_to_ip(pid)
 run.wait_for_services(pid, [ lambda: check_cql(ip) ])
-minio_server_address = os.environ['MINIO_SERVER_ADDRESS']
+s3_server_address = os.environ['S3_SERVER_ADDRESS_FOR_TEST']
 s3_public_bucket = os.environ['S3_PUBLIC_BUCKET_FOR_TEST']
 
-print(f'Create keyspace (minio listening at {minio_server_address})')
+print(f'Create keyspace (minio listening at {s3_server_address})')
 cluster = run.get_cql_cluster(ip)
 conn = cluster.connect()
-conn.execute("CREATE KEYSPACE test_ks WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': '1' } AND STORAGE = { 'type': 'S3', 'endpoint': '" + f'{minio_server_address}' + ":9000', 'bucket': '" + f'{s3_public_bucket}' + "' };")
+conn.execute("CREATE KEYSPACE test_ks WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': '1' } AND STORAGE = { 'type': 'S3', 'endpoint': '" + f'{s3_server_address}' + ":9000', 'bucket': '" + f'{s3_public_bucket}' + "' };")
 conn.execute("CREATE TABLE test_ks.test_cf ( name text primary key, value text );")
 conn.execute("INSERT INTO test_ks.test_cf ( name, value ) VALUES ('0', 'zero');")
 conn.execute("INSERT INTO test_ks.test_cf ( name, value ) VALUES ('1', 'one');")
