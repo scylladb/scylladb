@@ -72,9 +72,7 @@ void large_data_handler::unplug_system_keyspace() noexcept {
 }
 
 template <typename T> static std::string key_to_str(const T& key, const schema& s) {
-    std::ostringstream oss;
-    oss << key.with_schema(s);
-    return oss.str();
+    return fmt::to_string(key.with_schema(s));
 }
 
 sstring large_data_handler::sst_filename(const sstables::sstable& sst) {

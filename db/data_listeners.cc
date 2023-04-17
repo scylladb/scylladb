@@ -46,9 +46,7 @@ void data_listeners::on_write(const schema_ptr& s, const frozen_mutation& m) {
 }
 
 toppartitions_item_key::operator sstring() const {
-    std::ostringstream oss;
-    oss << key.key().with_schema(*schema);
-    return oss.str();
+    return fmt::to_string(key.key().with_schema(*schema));
 }
 
 toppartitions_data_listener::toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters,
