@@ -62,15 +62,11 @@ public:
         return addr().as_ipv4_address().ip;
     }
     sstring to_sstring() const;
-    friend inline bool operator==(const inet_address& x, const inet_address& y) noexcept {
-        return x._addr == y._addr;
+    bool operator==(const inet_address& x) const noexcept {
+        return _addr == x._addr;
     }
-    friend inline bool operator!=(const inet_address& x, const inet_address& y) noexcept {
-        using namespace std::rel_ops;
-        return x._addr != y._addr;
-    }
-    friend inline bool operator<(const inet_address& x, const inet_address& y) noexcept {
-        return x.bytes() < y.bytes();
+    auto operator<=>(const inet_address& x) const noexcept {
+        return bytes() <=> x.bytes();
     }
     friend struct std::hash<inet_address>;
 
