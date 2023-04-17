@@ -13,7 +13,9 @@
 #include <compare>
 #include <limits>
 #include <iostream>
+#include <type_traits>
 #include <boost/range/adaptors.hpp>
+#include <seastar/core/smp.hh>
 #include <seastar/core/sstring.hh>
 
 namespace sstables {
@@ -55,6 +57,35 @@ Target generations_from_values(std::initializer_list<generation_type::int_t> val
         return generation_type(value);
     }));
 }
+
+class sstable_generation_generator {
+    // We still want to do our best to keep the generation numbers shard-friendly.
+    // Each destination shard will manage its own generation counter.
+    //
+    // operator() is called by multiple shards in parallel when performing reshard,
+    // so we have to use atomic<> here.
+    using int_t = sstables::generation_type::int_t;
+    int_t _last_generation;
+    static int_t base_generation(int_t highest_generation) {
+        // get the base generation so we can increment it by smp::count without
+        // conflicting with other shards
+        return highest_generation - highest_generation % seastar::smp::count + seastar::this_shard_id();
+    }
+public:
+    explicit sstable_generation_generator(int64_t last_generation)
+        : _last_generation(base_generation(last_generation)) {}
+    void update_known_generation(int64_t generation) {
+        if (generation > _last_generation) {
+            _last_generation = generation;
+        }
+    }
+    sstables::generation_type operator()() {
+        // each shard has its own "namespace" so we increment the generation id
+        // by smp::count to avoid name confliction of sstables
+        _last_generation += seastar::smp::count;
+        return sstables::generation_from_value(_last_generation);
+    }
+};
 
 } //namespace sstables
 
