@@ -54,6 +54,7 @@
 #include "utils/generation-number.hh"
 #include "db/virtual_table.hh"
 #include "service/storage_service.hh"
+#include "protocol_server.hh"
 #include "gms/gossiper.hh"
 #include "service/paxos/paxos_state.hh"
 #include "service/raft/raft_group_registry.hh"
