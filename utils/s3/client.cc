@@ -251,7 +251,7 @@ unsigned prepare_multipart_upload_parts(const utils::chunked_vector<sstring>& et
 
     unsigned nr = 1;
     for (auto& etag : etags) {
-        if (etags.empty()) {
+        if (etag.empty()) {
             return 0;
         }
         ret += multipart_upload_complete_entry.size() - 4 + etag.size() + format("{}", nr).size();
