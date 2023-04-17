@@ -6,8 +6,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#pragma once
+
 #include <gnutls/crypto.h>
-#include "utils/hashers.hh"
 #include "db_clock.hh"
 
 // The declared below get_signature() method makes the Signature string for AWS
