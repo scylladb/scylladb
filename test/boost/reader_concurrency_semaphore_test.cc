@@ -1359,3 +1359,40 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_necessary_evicting) {
         semaphore.set_resources(initial_resources);
     }
 }
+
+// Check that a waiter permit which was queued due to the _ready_list not being
+// empty, will be executed right after the previous read in _ready_list is
+// executed, even if said read doesn't trigger admission checks via releasing
+// resources.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_execution_stage_wakeup) {
+    const auto initial_resources = reader_concurrency_semaphore::resources{2, 4 * 1024};
+    reader_concurrency_semaphore semaphore(initial_resources.count, initial_resources.memory, get_name(), 100);
+    auto stop_sem = deferred_stop(semaphore);
+
+    auto permit1 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout).get();
+
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted_immediately, 1);
+
+    bool func_called = false;
+    auto func_fut = semaphore.with_ready_permit(permit1, [&] (reader_permit permit) {
+        func_called = true;
+        return sleep(std::chrono::milliseconds(1));
+    });
+    // permit1 should be on the ready list, not executed yet
+    BOOST_REQUIRE(!func_called);
+    BOOST_REQUIRE_EQUAL(semaphore.waiters(), 0);
+
+    // trying to obtain a second permit should block on the _ready_list
+    auto permit2_fut = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_queued_because_ready_list, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted, 1);
+
+    // After func runs, the _ready_list becomes empty and the waiting permit should be admitted
+    func_fut.get();
+    BOOST_REQUIRE_EQUAL(semaphore.waiters(), 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted, 2);
+
+    permit2_fut.get();
+}

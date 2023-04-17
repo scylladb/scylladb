@@ -659,6 +659,8 @@ future<> reader_concurrency_semaphore::execution_loop() noexcept {
                 co_await coroutine::maybe_yield();
             }
         }
+
+        maybe_admit_waiters();
     }
 }
 
