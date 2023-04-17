@@ -58,16 +58,14 @@ class test_env {
         db::nop_large_data_handler nop_ld_handler;
         test_env_sstables_manager mgr;
         reader_concurrency_semaphore semaphore;
-        std::optional<sstables::generation_type> generation;
+        sstables::sstable_generation_generator gen{0};
 
         impl(test_env_config cfg);
         impl(impl&&) = delete;
         impl(const impl&) = delete;
 
         sstables::generation_type new_generation() noexcept {
-            auto ret = replica::table::make_new_generation(generation);
-            generation = ret;
-            return ret;
+            return gen();
         }
     };
     std::unique_ptr<impl> _impl;

@@ -8,6 +8,7 @@
 
 
 #include <seastar/core/seastar.hh>
+#include <seastar/core/smp.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/file.hh>
@@ -409,11 +410,11 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
 
     const sstring toc_text = "TOC.txt\nData.db\n";
 
+    sstables::sstable_generation_generator gen_generator(0);
     std::vector<sstables::generation_type> gen;
     constexpr size_t num_gens = 9;
-    std::generate_n(std::back_inserter(gen), num_gens, [prev_gen = std::optional<sstables::generation_type>()]() mutable {
-        prev_gen = replica::table::make_new_generation(prev_gen);
-        return *prev_gen;
+    std::generate_n(std::back_inserter(gen), num_gens, [&] {
+        return gen_generator();
     });
 
     // Regular log file with single entry

@@ -12,8 +12,10 @@
 #include <seastar/core/aligned_buffer.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/smp.hh>
 #include <seastar/util/closeable.hh>
 
+#include "sstables/generation_type.hh"
 #include "sstables/sstables.hh"
 #include "compaction/compaction_manager.hh"
 #include "sstables/key.hh"
@@ -172,8 +174,9 @@ SEASTAR_TEST_CASE(missing_summary_first_last_sane) {
 }
 
 static future<sstable_ptr> do_write_sst(test_env& env, schema_ptr schema, sstring load_dir, sstring write_dir, sstables::generation_type generation) {
-    return env.reusable_sst(std::move(schema), load_dir, generation).then([write_dir, generation] (sstable_ptr sst) {
-        sstables::test(sst).change_generation_number(replica::table::make_new_generation(generation));
+    return env.reusable_sst(std::move(schema), load_dir, generation).then([write_dir, generation] (sstable_ptr sst) mutable {
+        sstable_generation_generator gen(generation.value());
+        sstables::test(sst).change_generation_number(gen());
         sstables::test(sst).change_dir(write_dir);
         auto fut = sstables::test(sst).store();
         return std::move(fut).then([sst = std::move(sst)] {
@@ -182,9 +185,9 @@ static future<sstable_ptr> do_write_sst(test_env& env, schema_ptr schema, sstrin
     });
 }
 
-static future<> write_sst_info(schema_ptr schema, sstring load_dir, sstring write_dir, sstables::generation_type::int_t generation) {
+static future<> write_sst_info(schema_ptr schema, sstring load_dir, sstring write_dir, sstables::generation_type generation) {
     return test_env::do_with([schema = std::move(schema), load_dir = std::move(load_dir), write_dir = std::move(write_dir), generation] (test_env& env) {
-        return do_write_sst(env, std::move(schema), load_dir, write_dir, sstables::generation_type(generation)).then([] (auto ptr) { return make_ready_future<>(); });
+        return do_write_sst(env, std::move(schema), load_dir, write_dir, generation).then([] (auto ptr) { return make_ready_future<>(); });
     });
 }
 
@@ -239,7 +242,8 @@ static future<> compare_files(sstdesc file1, sstdesc file2, component_type compo
 static future<> check_component_integrity(component_type component) {
     auto tmp = make_lw_shared<tmpdir>();
     auto s = make_schema_for_compressed_sstable();
-    return write_sst_info(s, "test/resource/sstables/compressed", tmp->path().string(), 1).then([component, tmp] {
+    sstables::generation_type gen(1);
+    return write_sst_info(s, "test/resource/sstables/compressed", tmp->path().string(), gen).then([component, tmp] {
         return compare_files(sstdesc{"test/resource/sstables/compressed", 1 },
                              sstdesc{tmp->path().string(), 2 },
                              component);
