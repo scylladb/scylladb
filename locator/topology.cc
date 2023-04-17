@@ -318,44 +318,39 @@ void topology::unindex_node(const node* node) {
 
     const auto& dc = node->dc_rack().dc;
     const auto& rack = node->dc_rack().rack;
-    if (auto dit = _dc_endpoints.find(dc); dit != _dc_endpoints.end()) {
-        const auto& ep = node->endpoint();
-        auto& eps = dit->second;
-        eps.erase(ep);
-        if (eps.empty()) {
-            _dc_racks.erase(dc);
-            _dc_endpoints.erase(dit);
-        } else {
-            auto& racks = _dc_racks[dc];
-            if (auto rit = racks.find(rack); rit != racks.end()) {
-                eps = rit->second;
+    if (_dc_nodes.contains(dc)) {
+        bool found = _dc_nodes.at(dc).erase(node);
+        if (found) {
+            if (auto dit = _dc_endpoints.find(dc); dit != _dc_endpoints.end()) {
+                const auto& ep = node->endpoint();
+                auto& eps = dit->second;
                 eps.erase(ep);
                 if (eps.empty()) {
-                    racks.erase(rit);
+                    _dc_rack_nodes.erase(dc);
+                    _dc_racks.erase(dc);
+                    _dc_endpoints.erase(dit);
+                } else {
+                    _dc_rack_nodes[dc][rack].erase(node);
+                    auto& racks = _dc_racks[dc];
+                    if (auto rit = racks.find(rack); rit != racks.end()) {
+                        eps = rit->second;
+                        eps.erase(ep);
+                        if (eps.empty()) {
+                            racks.erase(rit);
+                        }
+                    }
                 }
             }
         }
     }
-    if (auto dit = _dc_nodes.find(dc); dit != _dc_nodes.end()) {
-        auto& nodes = dit->second;
-        nodes.erase(node);
-        if (nodes.empty()) {
-            _dc_rack_nodes.erase(dc);
-            _datacenters.erase(dc);
-            _dc_nodes.erase(dit);
-        } else {
-            auto& racks = _dc_rack_nodes[dc];
-            if (auto rit = racks.find(rack); rit != racks.end()) {
-                nodes = rit->second;
-                nodes.erase(node);
-                if (nodes.empty()) {
-                    racks.erase(rit);
-                }
-            }
-        }
+    auto host_it = _nodes_by_host_id.find(node->host_id());
+    if (host_it != _nodes_by_host_id.end() && host_it->second == node) {
+        _nodes_by_host_id.erase(host_it);
     }
-    _nodes_by_host_id.erase(node->host_id());
-    _nodes_by_endpoint.erase(node->endpoint());
+    auto ep_it = _nodes_by_endpoint.find(node->endpoint());
+    if (ep_it != _nodes_by_endpoint.end() && ep_it->second == node) {
+        _nodes_by_endpoint.erase(ep_it);
+    }
 }
 
 node_holder topology::pop_node(const node* node) {

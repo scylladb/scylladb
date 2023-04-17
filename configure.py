@@ -506,6 +506,7 @@ scylla_tests = set([
     'test/boost/exceptions_optimized_test',
     'test/boost/exceptions_fallback_test',
     'test/boost/s3_test',
+    'test/boost/locator_topology_test',
     'test/manual/ec2_snitch_test',
     'test/manual/enormous_table_scan_test',
     'test/manual/gce_snitch_test',
