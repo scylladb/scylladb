@@ -41,8 +41,6 @@ public:
     virtual void update(const char* ptr, size_t size) noexcept = 0;
 };
 
-static_assert(Hasher<hasher>);
-
 template<typename T>
 struct appending_hash;
 
