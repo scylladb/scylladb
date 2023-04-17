@@ -38,19 +38,13 @@ public:
 
     sstring to_string() const;
 
-    std::strong_ordering compare(const big_decimal& other) const;
+    std::strong_ordering operator<=>(const big_decimal& other) const;
 
     big_decimal& operator+=(const big_decimal& other);
     big_decimal& operator-=(const big_decimal& other);
     big_decimal operator+(const big_decimal& other) const;
     big_decimal operator-(const big_decimal& other) const;
     big_decimal div(const ::uint64_t y, const rounding_mode mode) const;
-    friend bool operator<(const big_decimal& x, const big_decimal& y) { return x.compare(y) < 0; }
-    friend bool operator<=(const big_decimal& x, const big_decimal& y) { return x.compare(y) <= 0; }
-    friend bool operator==(const big_decimal& x, const big_decimal& y) { return x.compare(y) == 0; }
-    friend bool operator!=(const big_decimal& x, const big_decimal& y) { return x.compare(y) != 0; }
-    friend bool operator>=(const big_decimal& x, const big_decimal& y) { return x.compare(y) >= 0; }
-    friend bool operator>(const big_decimal& x, const big_decimal& y) { return x.compare(y) > 0; }
 };
 
 template <>
