@@ -41,14 +41,6 @@ Scylla nodetool repair command supports the following options:
 
      nodetool repair -et 90874935784
      nodetool repair --end-token 90874935784
-
-- ``-seq``, ``--sequential`` Use *-seq* to carry out a sequential repair.
-
-  For example, a sequential repair of all keyspaces on a node:
-
-  ::
-
-     nodetool repair -seq
      
 - ``-hosts`` ``--in-hosts`` syncs the **repair master** data subset only between a list of nodes, using host ID or Address. The list *must* include the **repair master**.
 
