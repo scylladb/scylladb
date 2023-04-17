@@ -1009,6 +1009,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
     // TODO: include more metadata here
     auto local_shard_count = smp::count;
     auto local_ignore_msb = _db.local().get_config().murmur3_partitioner_ignore_msb_bits();
+    auto local_release_version = version::release();
 
     auto synchronized = [&] () {
         auto it = _topology_state_machine._topology.find(raft_server.id());
@@ -1019,7 +1020,8 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
         auto& replica_state = it->second;
 
         return replica_state.shard_count == local_shard_count
-            && replica_state.ignore_msb == local_ignore_msb;
+            && replica_state.ignore_msb == local_ignore_msb
+            && replica_state.release_version == local_release_version;
     };
 
     // We avoid performing a read barrier if we're sure that our metadata stored in topology
@@ -1053,7 +1055,8 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
 
         topology_mutation_builder builder(guard.write_timestamp(), raft_server.id());
         builder.set("shard_count", local_shard_count)
-               .set("ignore_msb", local_ignore_msb);
+               .set("ignore_msb", local_ignore_msb)
+               .set("release_version", local_release_version);
         topology_change change{{builder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(
                 std::move(change), guard, format("{}: update topology with local metadata", raft_server.id()));
