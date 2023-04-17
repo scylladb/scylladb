@@ -145,6 +145,7 @@ Target generations_from_values(std::initializer_list<generation_type::int_t> val
     }));
 }
 
+using uuid_identifiers = bool_class<struct uuid_identifiers_tag>;
 class sstable_generation_generator {
     // We still want to do our best to keep the generation numbers shard-friendly.
     // Each destination shard will manage its own generation counter.
@@ -166,9 +167,8 @@ public:
             _last_generation = generation;
         }
     }
-    // TODO: remove the default value of uuid_identifier, and use related configuration
-    sstables::generation_type operator()(bool uuid_identifier = false) {
-        if (uuid_identifier) {
+    generation_type operator()(uuid_identifiers use_uuid = uuid_identifiers::no) {
+        if (use_uuid) {
             return generation_type(utils::UUID_gen::get_time_UUID());
         }
         // each shard has its own "namespace" so we increment the generation id

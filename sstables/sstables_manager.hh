@@ -121,6 +121,7 @@ public:
     }
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
+    bool uuid_sstable_identifiers() const;
     const db::config& config() const { return _db_config; }
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
 
