@@ -461,7 +461,7 @@ bool sstable_directory::compare_sstable_storage_prefix(const sstring& prefix_a, 
     return size_a == size_b && sstring::traits_type::compare(prefix_a.begin(), prefix_b.begin(), size_a) == 0;
 }
 
-future<> sstable_directory::delete_atomically(std::vector<shared_sstable> ssts) {
+future<> sstable_directory::delete_with_pending_deletion_log(std::vector<shared_sstable> ssts) {
     if (ssts.empty()) {
         return make_ready_future<>();
     }
@@ -536,8 +536,8 @@ future<> sstable_directory::delete_atomically(std::vector<shared_sstable> ssts) 
     });
 }
 
-// FIXME: Go through maybe_delete_large_partitions_entry on recovery
-// since this is an indication we crashed in the middle of delete_atomically
+// FIXME: Go through maybe_delete_large_partitions_entry on recovery since
+// this is an indication we crashed in the middle of delete_with_pending_deletion_log
 future<> sstable_directory::replay_pending_delete_log(fs::path pending_delete_log) {
     sstlog.debug("Reading pending_deletes log file {}", pending_delete_log);
     fs::path pending_delete_dir = pending_delete_log.parent_path();

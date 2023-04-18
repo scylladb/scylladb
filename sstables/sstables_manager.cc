@@ -108,6 +108,10 @@ void sstables_manager::maybe_done() {
     }
 }
 
+future<> sstables_manager::delete_atomically(std::vector<shared_sstable> ssts) {
+    return sstable_directory::delete_with_pending_deletion_log(std::move(ssts));
+}
+
 future<> sstables_manager::close() {
     _closing = true;
     maybe_done();

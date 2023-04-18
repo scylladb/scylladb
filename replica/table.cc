@@ -1076,8 +1076,8 @@ table::sstable_list_builder::build_new_list(const sstables::sstable_set& current
 future<>
 compaction_group::delete_sstables_atomically(std::vector<sstables::shared_sstable> sstables_to_remove) {
     return seastar::try_with_gate(_t._sstable_deletion_gate, [this, sstables_to_remove = std::move(sstables_to_remove)] () mutable {
-        return with_semaphore(_t._sstable_deletion_sem, 1, [sstables_to_remove = std::move(sstables_to_remove)] () mutable {
-            return sstables::sstable_directory::delete_atomically(std::move(sstables_to_remove));
+        return with_semaphore(_t._sstable_deletion_sem, 1, [this, sstables_to_remove = std::move(sstables_to_remove)] () mutable {
+            return _t.get_sstables_manager().delete_atomically(std::move(sstables_to_remove));
         });
     }).handle_exception([] (std::exception_ptr ex) {
         // There is nothing more we can do here.
@@ -1915,7 +1915,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         if (r.enable_backlog_tracker) {
             remove_sstable_from_backlog_tracker(r.cg.get_backlog_tracker(), r.sst);
         }
-        co_await sstables::sstable_directory::delete_atomically({r.sst});
+        co_await get_sstables_manager().delete_atomically({r.sst});
         erase_sstable_cleanup_state(r.sst);
     });
     co_return p->rp;
