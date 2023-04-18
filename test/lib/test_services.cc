@@ -168,6 +168,14 @@ test_env::impl::impl(test_env_config cfg)
     , storage(std::move(cfg.storage))
 { }
 
+future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, test_env_config cfg) {
+    return seastar::async([func = std::move(func), cfg = std::move(cfg)] () mutable {
+        test_env env(std::move(cfg));
+        auto close_env = defer([&] { env.stop().get(); });
+        func(env);
+    });
+}
+
 }
 
 static std::pair<int, char**> rebuild_arg_list_without(int argc, char** argv, const char* filter_out, bool exclude_positional_arg = false) {

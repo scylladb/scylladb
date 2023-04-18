@@ -197,13 +197,7 @@ public:
         });
     }
 
-    static inline future<> do_with_async(noncopyable_function<void (test_env&)> func, test_env_config cfg = {}) {
-        return seastar::async([func = std::move(func), cfg = std::move(cfg)] () mutable {
-            test_env env(std::move(cfg));
-            auto close_env = defer([&] { env.stop().get(); });
-            func(env);
-        });
-    }
+    static future<> do_with_async(noncopyable_function<void (test_env&)> func, test_env_config cfg = {});
 
     static inline future<> do_with_sharded_async(noncopyable_function<void (sharded<test_env>&)> func) {
         return seastar::async([func = std::move(func)] {
