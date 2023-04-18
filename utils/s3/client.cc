@@ -313,8 +313,7 @@ class client::upload_sink_base : public data_sink_impl {
     future<> start_upload();
     future<> finalize_upload();
     future<> maybe_flush();
-    future<> do_flush();
-    future<> upload_part(unsigned part_number, memory_data_sink_buffers bufs);
+    future<> upload_part(memory_data_sink_buffers bufs);
     future<> abort_upload();
 
     bool upload_started() const noexcept {
@@ -358,17 +357,8 @@ public:
 
 future<> client::upload_sink_base::maybe_flush() {
     if (_bufs.size() >= minimum_part_size) {
-        co_await do_flush();
+        co_await upload_part(std::move(_bufs));
     }
-}
-
-future<> client::upload_sink_base::do_flush() {
-    if (!upload_started()) {
-        co_await start_upload();
-    }
-    auto pn = _part_etags.size();
-    _part_etags.emplace_back();
-    co_await upload_part(pn, std::move(_bufs));
 }
 
 sstring parse_multipart_upload_id(sstring& body) {
@@ -452,7 +442,13 @@ future<> client::upload_sink_base::start_upload() {
     });
 }
 
-future<> client::upload_sink_base::upload_part(unsigned part_number, memory_data_sink_buffers bufs) {
+future<> client::upload_sink_base::upload_part(memory_data_sink_buffers bufs) {
+    if (!upload_started()) {
+        co_await start_upload();
+    }
+
+    unsigned part_number = _part_etags.size();
+    _part_etags.emplace_back();
     s3l.trace("PUT part {} {} bytes in {} buffers (upload id {})", part_number, bufs.size(), bufs.buffers().size(), _upload_id);
     auto req = http::request::make("PUT", _client->_host, _object_name);
     req._headers["Content-Length"] = format("{}", bufs.size());
@@ -509,7 +505,7 @@ future<> client::upload_sink_base::finalize_upload() {
         co_return;
     }
 
-    co_await do_flush();
+    co_await upload_part(std::move(_bufs));
 
     s3l.trace("wait for {} parts to complete (upload id {})", _part_etags.size(), _upload_id);
     co_await _flush_sem.wait(flush_concurrency);
