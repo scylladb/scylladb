@@ -345,7 +345,12 @@ public:
     }
 
     virtual future<> flush() override {
-        return finalize_upload();
+        if (_bufs.size() != 0) {
+            co_await upload_part(std::move(_bufs));
+        }
+        if (upload_started()) {
+            co_await finalize_upload();
+        }
     }
 
     virtual future<> close() override;
@@ -501,12 +506,6 @@ future<> client::upload_sink_base::abort_upload() {
 }
 
 future<> client::upload_sink_base::finalize_upload() {
-    if (_bufs.size() == 0) {
-        co_return;
-    }
-
-    co_await upload_part(std::move(_bufs));
-
     s3l.trace("wait for {} parts to complete (upload id {})", _part_etags.size(), _upload_id);
     co_await _flush_sem.wait(flush_concurrency);
 
