@@ -1243,7 +1243,8 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_set<gms::inet_address> loaded_endpoints,
         std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
-        std::chrono::milliseconds delay) {
+        std::chrono::milliseconds delay,
+        cql3::query_processor& qp) {
     std::unordered_set<token> bootstrap_tokens;
     std::map<gms::application_state, gms::versioned_value> app_states;
     /* The timestamp of the CDC streams generation that this node has proposed when joining.
@@ -1413,7 +1414,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     co_await _gossiper.start_gossiping(generation_number, app_states, advertise);
 
     assert(_group0);
-    co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, raft_replace_info, *this);
+    co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, raft_replace_info, *this, qp);
 
     raft::server* raft_server = co_await [this] () -> future<raft::server*> {
         if (!_raft_topology_change_enabled) {
@@ -1479,7 +1480,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
             throw std::runtime_error(err);
         }
 
-        co_await _group0->finish_setup_after_join(*this);
+        co_await _group0->finish_setup_after_join(*this, qp);
         co_return;
     }
 
@@ -1637,7 +1638,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     }
 
     assert(_group0);
-    co_await _group0->finish_setup_after_join(*this);
+    co_await _group0->finish_setup_after_join(*this, qp);
     co_await cdc_gen_service.after_join(std::move(cdc_gen_id));
 }
 
@@ -2452,13 +2453,13 @@ future<> storage_service::uninit_messaging_service_part() {
 }
 
 future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
-        sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, raft_group0& group0) {
+        sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, raft_group0& group0, cql3::query_processor& qp) {
     assert(this_shard_id() == 0);
 
     _group0 = &group0;
     _raft_topology_change_enabled = _group0->is_raft_enabled() && _db.local().get_config().check_experimental(db::experimental_features_t::feature::RAFT);
 
-    return seastar::async([this, &cdc_gen_service, &sys_dist_ks, &proxy] {
+    return seastar::async([this, &cdc_gen_service, &sys_dist_ks, &proxy, &qp] {
         set_mode(mode::STARTING);
 
         std::unordered_set<inet_address> loaded_endpoints;
@@ -2519,7 +2520,7 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
         for (auto& x : loaded_peer_features) {
             slogger.info("peer={}, supported_features={}", x.first, x.second);
         }
-        join_token_ring(cdc_gen_service, sys_dist_ks, proxy, std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay()).get();
+        join_token_ring(cdc_gen_service, sys_dist_ks, proxy, std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), qp).get();
     });
 }
 

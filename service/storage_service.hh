@@ -328,7 +328,7 @@ public:
      * \see init_messaging_service_part
      */
     future<> join_cluster(cdc::generation_service& cdc_gen_service,
-            sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, service::raft_group0&);
+            sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, service::raft_group0&, cql3::query_processor& qp);
 
     future<> drain_on_shutdown();
 
@@ -344,7 +344,7 @@ private:
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_set<gms::inet_address> loaded_endpoints,
             std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
-            std::chrono::milliseconds);
+            std::chrono::milliseconds, cql3::query_processor& qp);
     future<> start_sys_dist_ks();
 public:
 

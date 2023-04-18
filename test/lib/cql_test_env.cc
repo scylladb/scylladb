@@ -893,14 +893,14 @@ public:
 
             service::raft_group0 group0_service{
                     abort_sources.local(), raft_gr.local(), ms,
-                    gossiper.local(), qp.local(), mm.local(), feature_service.local(), sys_ks.local(), group0_client, cdc_generation_service.local()};
+                    gossiper.local(), mm.local(), feature_service.local(), sys_ks.local(), group0_client, cdc_generation_service.local()};
             group0_service.start().get();
             auto stop_group0_service = defer([&group0_service] {
                 group0_service.abort().get();
             });
 
             try {
-                ss.local().join_cluster(cdc_generation_service.local(), sys_dist_ks, proxy, group0_service).get();
+                ss.local().join_cluster(cdc_generation_service.local(), sys_dist_ks, proxy, group0_service, qp.local()).get();
             } catch (std::exception& e) {
                 // if any of the defers crashes too, we'll never see
                 // the error
