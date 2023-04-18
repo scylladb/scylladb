@@ -25,6 +25,7 @@ struct range {
 class client : public enable_shared_from_this<client> {
     class upload_sink_base;
     class upload_sink;
+    class upload_jumbo_sink;
     class readable_file;
     std::string _host;
     endpoint_config_ptr _cfg;
@@ -54,6 +55,7 @@ public:
 
     file make_readable_file(sstring object_name);
     data_sink make_upload_sink(sstring object_name);
+    data_sink make_upload_jumbo_sink(sstring object_name, std::optional<unsigned> max_parts_per_piece = {});
 
     void update_config(endpoint_config_ptr);
 
