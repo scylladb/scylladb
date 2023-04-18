@@ -297,22 +297,18 @@ future<> client::delete_object(sstring object_name) {
 }
 
 class client::upload_sink_base : public data_sink_impl {
-    // "Each part must be at least 5 MB in size, except the last part."
-    // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
-    static constexpr size_t minimum_part_size = 5 << 20;
     static constexpr int flush_concurrency = 3;
 
     shared_ptr<client> _client;
     http::experimental::client& _http;
     sstring _object_name;
-    memory_data_sink_buffers _bufs;
     sstring _upload_id;
     utils::chunked_vector<sstring> _part_etags;
     semaphore _flush_sem{flush_concurrency};
 
+protected:
     future<> start_upload();
     future<> finalize_upload();
-    future<> maybe_flush();
     future<> upload_part(memory_data_sink_buffers bufs);
     future<> abort_upload();
 
@@ -332,39 +328,12 @@ public:
         throw_with_backtrace<std::runtime_error>("s3 put(net::packet) unsupported");
     }
 
-    virtual future<> put(temporary_buffer<char> buf) override {
-        _bufs.put(std::move(buf));
-        return maybe_flush();
-    }
-
-    virtual future<> put(std::vector<temporary_buffer<char>> data) override {
-        for (auto&& buf : data) {
-            _bufs.put(std::move(buf));
-        }
-        return maybe_flush();
-    }
-
-    virtual future<> flush() override {
-        if (_bufs.size() != 0) {
-            co_await upload_part(std::move(_bufs));
-        }
-        if (upload_started()) {
-            co_await finalize_upload();
-        }
-    }
-
     virtual future<> close() override;
 
     virtual size_t buffer_size() const noexcept override {
         return 128 * 1024;
     }
 };
-
-future<> client::upload_sink_base::maybe_flush() {
-    if (_bufs.size() >= minimum_part_size) {
-        co_await upload_part(std::move(_bufs));
-    }
-}
 
 sstring parse_multipart_upload_id(sstring& body) {
     auto doc = std::make_unique<rapidxml::xml_document<>>();
@@ -535,10 +504,42 @@ future<> client::upload_sink_base::close() {
 }
 
 class client::upload_sink final : public client::upload_sink_base {
+    // "Each part must be at least 5 MB in size, except the last part."
+    // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
+    static constexpr size_t minimum_part_size = 5 << 20;
+
+    memory_data_sink_buffers _bufs;
+    future<> maybe_flush() {
+        if (_bufs.size() >= minimum_part_size) {
+            co_await upload_part(std::move(_bufs));
+        }
+    }
+
 public:
     upload_sink(shared_ptr<client> cln, sstring object_name)
         : upload_sink_base(std::move(cln), std::move(object_name))
     {}
+
+    virtual future<> put(temporary_buffer<char> buf) override {
+        _bufs.put(std::move(buf));
+        return maybe_flush();
+    }
+
+    virtual future<> put(std::vector<temporary_buffer<char>> data) override {
+        for (auto&& buf : data) {
+            _bufs.put(std::move(buf));
+        }
+        return maybe_flush();
+    }
+
+    virtual future<> flush() override {
+        if (_bufs.size() != 0) {
+            co_await upload_part(std::move(_bufs));
+        }
+        if (upload_started()) {
+            co_await finalize_upload();
+        }
+    }
 };
 
 data_sink client::make_upload_sink(sstring object_name) {
