@@ -46,6 +46,7 @@ public:
 
 struct test_env_config {
     db::large_data_handler* large_data_handler = nullptr;
+    data_dictionary::storage_options storage; // will be local by default
 };
 
 class test_env {
@@ -59,6 +60,7 @@ class test_env {
         test_env_sstables_manager mgr;
         reader_concurrency_semaphore semaphore;
         sstables::sstable_generation_generator gen{0};
+        data_dictionary::storage_options storage;
 
         impl(test_env_config cfg);
         impl(impl&&) = delete;
@@ -86,8 +88,7 @@ public:
     shared_sstable make_sstable(schema_ptr schema, sstring dir, sstables::generation_type generation,
             sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
             size_t buffer_size = default_sstable_buffer_size, gc_clock::time_point now = gc_clock::now()) {
-        data_dictionary::storage_options local;
-        return _impl->mgr.make_sstable(std::move(schema), local, dir, generation, v, f, now, default_io_error_handler_gen(), buffer_size);
+        return _impl->mgr.make_sstable(std::move(schema), _impl->storage, dir, generation, v, f, now, default_io_error_handler_gen(), buffer_size);
     }
 
     shared_sstable make_sstable(schema_ptr schema, sstring dir, sstable::version_types v = sstables::get_highest_sstable_version()) {
