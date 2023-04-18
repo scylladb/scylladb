@@ -976,6 +976,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 fd.stop().get();
             });
 
+            raft_gr.start(cfg->consistent_cluster_management(),
+                std::ref(raft_address_map), std::ref(messaging), std::ref(gossiper), std::ref(fd)).get();
+
+            // group0 client exists only on shard 0.
+            // The client has to be created before `stop_raft` since during
+            // destruction it has to exist until raft_gr.stop() completes.
+            service::raft_group0_client group0_client{raft_gr.local(), sys_ks.local()};
+
+            service::raft_group0 group0_service{
+                    stop_signal.as_local_abort_source(), raft_gr.local(), messaging,
+                    gossiper.local(), feature_service.local(), sys_ks.local(), group0_client};
+
             supervisor::notify("initializing storage service");
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
@@ -1116,14 +1128,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
-
-            raft_gr.start(cfg->consistent_cluster_management(),
-                std::ref(raft_address_map), std::ref(messaging), std::ref(gossiper), std::ref(fd)).get();
-
-            // group0 client exists only on shard 0.
-            // The client has to be created before `stop_raft` since during
-            // destruction it has to exist until raft_gr.stop() completes.
-            service::raft_group0_client group0_client{raft_gr.local(), sys_ks.local()};
 
             supervisor::notify("starting migration manager");
             debug::the_migration_manager = &mm;
@@ -1478,9 +1482,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
              */
             db.local().enable_autocompaction_toggle();
 
-            service::raft_group0 group0_service{
-                    stop_signal.as_local_abort_source(), raft_gr.local(), messaging,
-                    gossiper.local(), feature_service.local(), sys_ks.local(), group0_client};
             group0_service.start().get();
             auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
                 group0_service.abort().get();
