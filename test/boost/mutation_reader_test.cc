@@ -3674,6 +3674,46 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_clear_tombstone_in_discontinued_p
     check(empty_buffer, "end of stream");
 }
 
+SEASTAR_THREAD_TEST_CASE(test_evictable_reader_next_pos_is_partition_start) {
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, 0);
+    auto stop_sem = deferred_stop(semaphore);
+    simple_schema s;
+    auto schema = s.schema();
+    auto permit = semaphore.make_tracking_only_permit(s.schema().get(), get_name(), db::no_timeout);
+
+    auto pk = s.make_pkey();
+    const auto prange = dht::partition_range::make_open_ended_both_sides();
+
+    std::deque<mutation_fragment_v2> frags;
+    frags.emplace_back(*schema, permit, partition_start(pk, {}));
+    for (size_t ck = 0; ck < 1000; ++ck) {
+        frags.emplace_back(*schema, permit, range_tombstone_change(position_in_partition::before_key(s.make_ckey(ck)), tombstone(s.new_timestamp(), {})));
+    }
+    frags.emplace_back(*schema, permit, range_tombstone_change(position_in_partition::before_key(s.make_ckey(1001)), tombstone()));
+    frags.emplace_back(*schema, permit, partition_end{});
+
+    const auto max_buf_size = frags[0].memory_usage() + frags[1].memory_usage() + frags[2].memory_usage();
+
+    auto ms = mutation_source([&frags, max_buf_size] (
+            schema_ptr schema,
+            reader_permit permit,
+            const dht::partition_range& pr,
+            const query::partition_slice& ps) {
+        auto rd = make_flat_mutation_reader_from_fragments(std::move(schema), std::move(permit), std::move(frags), pr, ps);
+        rd.set_max_buffer_size(max_buf_size);
+        return rd;
+    });
+
+    auto [rd, handle] = make_manually_paused_evictable_reader_v2(ms, schema, permit, prange, schema->full_slice(), default_priority_class(), {},
+            mutation_reader::forwarding::no);
+    auto stop_rd = deferred_close(rd);
+    rd.set_max_buffer_size(max_buf_size);
+
+    rd.fill_buffer().get();
+    auto buf1 = rd.detach_buffer();
+    BOOST_REQUIRE_EQUAL(buf1.size(), 3);
+}
+
 struct mutation_bounds {
     std::optional<mutation> m;
     position_in_partition lower;
