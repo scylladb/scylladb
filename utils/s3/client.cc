@@ -347,7 +347,7 @@ future<> client::upload_sink::upload_part(unsigned part_number, memory_data_sink
 future<> client::upload_sink::abort_upload() {
     s3l.trace("DELETE upload {}", _upload_id);
     auto req = http::request::make("DELETE", _client->_host, _object_name);
-    req.query_parameters["uploadId"] = std::move(_upload_id);
+    req.query_parameters["uploadId"] = std::exchange(_upload_id, ""); // now upload_started() returns false
     co_await _http.make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
 }
 
@@ -369,7 +369,7 @@ future<> client::upload_sink::finalize_upload() {
 
     s3l.trace("POST upload completion {} parts (upload id {})", _part_etags.size(), _upload_id);
     auto req = http::request::make("POST", _client->_host, _object_name);
-    req.query_parameters["uploadId"] = std::move(_upload_id);
+    req.query_parameters["uploadId"] = std::exchange(_upload_id, ""); // now upload_started() returns false
     req.write_body("xml", parts_xml_len, [this] (output_stream<char>&& out) -> future<> {
         return dump_multipart_upload_parts(std::move(out), _part_etags);
     });
