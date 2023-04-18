@@ -15,7 +15,9 @@ import pytest
 import subprocess
 import tempfile
 import random
+import requests
 import shutil
+import time
 import util
 
 # To run the Scylla tools, we need to run Scylla executable itself, so we
@@ -557,11 +559,20 @@ def system_scylla_local_sstable_prepared(cql, scylla_data_dir):
     * Flushes said keyspaces.
     * Locates an sstable belonging to system.scylla_local and returns it.
     """
+    rest_api_url = nodetool.rest_api_url(cql)
+
+    def ks_has_compactions(ks):
+        res = requests.get(f'{rest_api_url}/task_manager/list_module_tasks/compaction', params={'keyspace': ks})
+        compactions = json.loads(res.text)
+        return len(compactions) > 0
+
     with nodetool.no_autocompaction_context(cql, "system", "system_schema"):
         # Need to flush system keyspaces whoose sstables we want to meddle
         # with, to make sure they are actually on disk.
         nodetool.flush_keyspace(cql, "system_schema")
         nodetool.flush_keyspace(cql, "system")
+        while ks_has_compactions('system_schema') or ks_has_compactions('system'):
+            time.sleep(0.1)
         sstables = glob.glob(os.path.join(scylla_data_dir, "system", "scylla_local-*", "*-Data.db"))
         yield sstables[0]
 
