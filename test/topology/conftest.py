@@ -161,7 +161,6 @@ def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool):
                    )
 
 
-@pytest.mark.asyncio
 @pytest.fixture(scope="session")
 async def manager_internal(event_loop, request):
     """Session fixture to set up client object for communicating with the Cluster API.
