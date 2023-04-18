@@ -296,7 +296,7 @@ future<> client::delete_object(sstring object_name) {
     co_await _http.make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
 }
 
-class client::upload_sink : public data_sink_impl {
+class client::upload_sink_base : public data_sink_impl {
     // "Each part must be at least 5 MB in size, except the last part."
     // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
     static constexpr size_t minimum_part_size = 5 << 20;
@@ -322,7 +322,7 @@ class client::upload_sink : public data_sink_impl {
     }
 
 public:
-    upload_sink(shared_ptr<client> cln, sstring object_name)
+    upload_sink_base(shared_ptr<client> cln, sstring object_name)
         : _client(std::move(cln))
         , _http(_client->_http)
         , _object_name(std::move(object_name))
@@ -356,13 +356,13 @@ public:
     }
 };
 
-future<> client::upload_sink::maybe_flush() {
+future<> client::upload_sink_base::maybe_flush() {
     if (_bufs.size() >= minimum_part_size) {
         co_await do_flush();
     }
 }
 
-future<> client::upload_sink::do_flush() {
+future<> client::upload_sink_base::do_flush() {
     if (!upload_started()) {
         co_await start_upload();
     }
@@ -436,7 +436,7 @@ future<> dump_multipart_upload_parts(output_stream<char> out, const utils::chunk
     }
 }
 
-future<> client::upload_sink::start_upload() {
+future<> client::upload_sink_base::start_upload() {
     s3l.trace("POST uploads {}", _object_name);
     auto rep = http::request::make("POST", _client->_host, _object_name);
     rep.query_parameters["uploads"] = "";
@@ -452,7 +452,7 @@ future<> client::upload_sink::start_upload() {
     });
 }
 
-future<> client::upload_sink::upload_part(unsigned part_number, memory_data_sink_buffers bufs) {
+future<> client::upload_sink_base::upload_part(unsigned part_number, memory_data_sink_buffers bufs) {
     s3l.trace("PUT part {} {} bytes in {} buffers (upload id {})", part_number, bufs.size(), bufs.buffers().size(), _upload_id);
     auto req = http::request::make("PUT", _client->_host, _object_name);
     req._headers["Content-Length"] = format("{}", bufs.size());
@@ -496,7 +496,7 @@ future<> client::upload_sink::upload_part(unsigned part_number, memory_data_sink
     }).finally([units = std::move(units)] {});
 }
 
-future<> client::upload_sink::abort_upload() {
+future<> client::upload_sink_base::abort_upload() {
     s3l.trace("DELETE upload {}", _upload_id);
     auto req = http::request::make("DELETE", _client->_host, _object_name);
     req.query_parameters["uploadId"] = std::exchange(_upload_id, ""); // now upload_started() returns false
@@ -504,7 +504,7 @@ future<> client::upload_sink::abort_upload() {
     co_await _http.make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
 }
 
-future<> client::upload_sink::finalize_upload() {
+future<> client::upload_sink_base::finalize_upload() {
     if (_bufs.size() == 0) {
         co_return;
     }
@@ -530,7 +530,7 @@ future<> client::upload_sink::finalize_upload() {
     co_await _http.make_request(std::move(req), ignore_reply);
 }
 
-future<> client::upload_sink::close() {
+future<> client::upload_sink_base::close() {
     if (upload_started()) {
         s3l.warn("closing incomplete multipart upload -> aborting");
         co_await abort_upload();
@@ -538,6 +538,13 @@ future<> client::upload_sink::close() {
         s3l.trace("closing multipart upload");
     }
 }
+
+class client::upload_sink final : public client::upload_sink_base {
+public:
+    upload_sink(shared_ptr<client> cln, sstring object_name)
+        : upload_sink_base(std::move(cln), std::move(object_name))
+    {}
+};
 
 data_sink client::make_upload_sink(sstring object_name) {
     return data_sink(std::make_unique<upload_sink>(shared_from_this(), std::move(object_name)));

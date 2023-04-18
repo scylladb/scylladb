@@ -23,6 +23,7 @@ struct range {
 };
 
 class client : public enable_shared_from_this<client> {
+    class upload_sink_base;
     class upload_sink;
     class readable_file;
     std::string _host;
