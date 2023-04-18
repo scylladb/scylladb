@@ -462,9 +462,6 @@ bool sstable_directory::compare_sstable_storage_prefix(const sstring& prefix_a, 
 }
 
 future<> sstable_directory::delete_with_pending_deletion_log(std::vector<shared_sstable> ssts) {
-    if (ssts.empty()) {
-        return make_ready_future<>();
-    }
     return seastar::async([ssts = std::move(ssts)] {
         shared_sstable first = nullptr;
         min_max_tracker<generation_type> gen_tracker;
