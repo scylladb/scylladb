@@ -274,7 +274,7 @@ SEASTAR_TEST_CASE(datafile_generation_15) {
     return sstable_compression_test(compressor::deflate);
 }
 
-SEASTAR_TEST_CASE(datafile_generation_16) {
+future<> test_datafile_generation_16(test_env_config cfg) {
     return test_env::do_with_async([] (test_env& env) {
         auto s = uncompressed_schema();
 
@@ -293,7 +293,16 @@ SEASTAR_TEST_CASE(datafile_generation_16) {
         auto sst = make_sstable_containing(env.make_sstable(s), mtp);
         // Not crashing is enough
         BOOST_REQUIRE(sst);
-    });
+        sst->destroy().get();
+    }, std::move(cfg));
+}
+
+SEASTAR_TEST_CASE(datafile_generation_16) {
+    return test_datafile_generation_16({});
+}
+
+SEASTAR_TEST_CASE(datafile_generation_16_s3) {
+    return test_datafile_generation_16(test_env_config{ .storage = make_test_object_storage_options() });
 }
 
 // mutation_reader for sstable keeping all the required objects alive.
