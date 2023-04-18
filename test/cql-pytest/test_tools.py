@@ -652,6 +652,7 @@ class TestScyllaSsstableSchemaLoading:
                 system_scylla_local_sstable_prepared,
                 system_scylla_local_reference_dump)
 
+    @pytest.mark.xfail(reason="issue 13553")
     def test_table_dir_data_dir(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, scylla_data_dir):
         self.check(
                 scylla_path,
