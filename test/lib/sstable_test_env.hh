@@ -49,6 +49,8 @@ struct test_env_config {
     data_dictionary::storage_options storage; // will be local by default
 };
 
+data_dictionary::storage_options make_test_object_storage_options();
+
 class test_env {
     struct impl {
         tmpdir dir;
@@ -176,6 +178,7 @@ public:
     reader_concurrency_semaphore& semaphore() { return _impl->semaphore; }
     db::config& db_config() { return *_impl->db_config; }
     tmpdir& tempdir() noexcept { return _impl->dir; }
+    data_dictionary::storage_options get_storage_options() const noexcept { return _impl->storage; }
 
     reader_permit make_reader_permit(const schema* const s, const char* n, db::timeout_clock::time_point timeout) {
         return _impl->semaphore.make_tracking_only_permit(s, n, timeout, {});

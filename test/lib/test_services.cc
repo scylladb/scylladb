@@ -9,6 +9,8 @@
 #include "test/lib/scylla_tests_cmdline_options.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/sstable_test_env.hh"
+#include "test/lib/cql_test_env.hh"
+#include "test/lib/test_utils.hh"
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
 #include "dht/i_partitioner.hh"
@@ -169,11 +171,38 @@ test_env::impl::impl(test_env_config cfg)
 { }
 
 future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, test_env_config cfg) {
+    if (!cfg.storage.is_local_type()) {
+        struct test_env_with_cql {
+            noncopyable_function<void(test_env&)> func;
+            test_env_config cfg;
+            test_env_with_cql(noncopyable_function<void(test_env&)> fn, test_env_config c) : func(std::move(fn)), cfg(std::move(c)) {}
+        };
+        auto wrap = std::make_shared<test_env_with_cql>(std::move(func), std::move(cfg));
+        auto db_cfg = make_shared<db::config>();
+        db_cfg->experimental_features({db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS});
+        return do_with_cql_env_thread([wrap = std::move(wrap)] (auto& cql_env) mutable {
+            test_env env(std::move(wrap->cfg));
+            auto close_env = defer([&] { env.stop().get(); });
+            env.manager().plug_system_keyspace(cql_env.get_system_keyspace().local());
+            auto unplu = defer([&env] { env.manager().unplug_system_keyspace(); });
+            wrap->func(env);
+        }, std::move(db_cfg));
+    }
+
     return seastar::async([func = std::move(func), cfg = std::move(cfg)] () mutable {
         test_env env(std::move(cfg));
         auto close_env = defer([&] { env.stop().get(); });
         func(env);
     });
+}
+
+data_dictionary::storage_options make_test_object_storage_options() {
+    data_dictionary::storage_options ret;
+    ret.value = data_dictionary::storage_options::s3 {
+        .bucket = tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"),
+        .endpoint = format("{}:9000", tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST")),
+    };
+    return ret;
 }
 
 }
