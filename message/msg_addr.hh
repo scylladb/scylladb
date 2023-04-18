@@ -36,7 +36,7 @@ template <>
 struct formatter<netw::msg_addr> : formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const netw::msg_addr& id, FormatContext& ctx) const {
-        return format_to(ctx.out(), "{}.{}", id.addr, id.cpu_id);
+        return format_to(ctx.out(), "{}#{}", id.addr, id.cpu_id);
     }
 };
 
