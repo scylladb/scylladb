@@ -427,6 +427,8 @@ class s3_storage : public sstables::storage {
 
     future<> ensure_remote_prefix(const sstable& sst);
 
+    static future<> delete_with_system_keyspace(std::vector<shared_sstable>);
+
 public:
     s3_storage(sstring endpoint, s3::endpoint_config_ptr cfg, sstring bucket, sstring dir)
         : _client(s3::client::make(std::move(endpoint), std::move(cfg)))
@@ -448,7 +450,7 @@ public:
         return _client->close();
     }
     virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const override {
-        return sstable_directory::delete_with_pending_deletion_log;
+        return delete_with_system_keyspace;
     }
 
     virtual sstring prefix() const override { return _location; }
@@ -521,6 +523,18 @@ future<> s3_storage::wipe(const sstable& sst) noexcept {
     });
 
     co_await sys_ks.sstables_registry_delete_entry(_location, sst.generation());
+}
+
+future<> s3_storage::delete_with_system_keyspace(std::vector<shared_sstable> ssts) {
+    co_await coroutine::parallel_for_each(ssts, [] (shared_sstable sst) -> future<> {
+        const s3_storage* storage = dynamic_cast<const s3_storage*>(&sst->get_storage());
+        if (!storage) {
+            on_fatal_internal_error(sstlog, "Atomically deleted sstables must be of same storage type");
+        }
+
+        // FIXME -- need atomicity, see #13567
+        co_await sst->unlink();
+    });
 }
 
 future<> s3_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs) const {
