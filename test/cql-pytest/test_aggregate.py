@@ -131,7 +131,6 @@ def test_timeuuid(cql, test_keyspace):
 # Check floating-point aggregations with non-finite results - inf and nan.
 # Reproduces issue #13551: sum of +inf and -inf produced an error instead
 # of a NaN as in Cassandra (and in older Scylla).
-@pytest.mark.xfail(reason="issue #13551")
 def test_aggregation_inf_nan(cql, table1):
     p = unique_key_int()
     # Add a single infinity value, see we can read it back as infinity,

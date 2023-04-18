@@ -147,8 +147,14 @@ template<typename NarrowT, typename WideT>
 NarrowT
 narrow(WideT acc) {
     NarrowT ret = static_cast<NarrowT>(acc);
-    if (static_cast<WideT>(ret) != acc) {
-        throw exceptions::overflow_error_exception("Sum overflow. Values should be casted to a wider type.");
+    // The following check only makes sense when NarrowT and WideT are two
+    // different integeral types and we want to check that NarrowT isn't too
+    // narrow. Let's avoid the check when they are the same type - it is
+    // useless, and worse - wrong for the floating-point case (issue #13564).
+    if constexpr (!std::is_same<WideT, NarrowT>::value) {
+        if (static_cast<WideT>(ret) != acc) {
+            throw exceptions::overflow_error_exception("Sum overflow. Values should be casted to a wider type.");
+        }
     }
     return ret;
 }
