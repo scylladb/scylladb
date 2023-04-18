@@ -12,6 +12,7 @@ from typing import List
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient, IPAddress
+import logging
 import pytest
 from cassandra.cluster import Session, ResponseFuture                    # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore # pylint: disable=no-name-in-module
@@ -22,6 +23,8 @@ from cassandra.policies import WhiteListRoundRobinPolicy                 # type:
 from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
 from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
 
+
+logger = logging.getLogger(__name__)
 
 print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
 
