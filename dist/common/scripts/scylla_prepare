@@ -12,6 +12,7 @@ import sys
 import glob
 import platform
 import distro
+import yaml
 
 from scylla_util import *
 from subprocess import run
@@ -132,12 +133,25 @@ def verify_cpu():
                     print('\nIf this is a virtual machine, please update its CPU feature configuration or upgrade to a newer hypervisor.')
                     sys.exit(1)
 
+CLOUD_SNITCHES = ['Ec2Snitch', 'Ec2MultiRegionSnitch', 'GoogleCloudSnitch', 'AzureSnitch']
+def verify_cloud_snitch():
+    with open(etcdir_p() / 'scylla/scylla.yaml') as f:
+        scylla_yaml = yaml.safe_load(f)
+    endpoint_snitch = scylla_yaml['endpoint_snitch']
+    if endpoint_snitch in CLOUD_SNITCHES:
+        if not systemd_unit.available('scylla-cloud-snitch.service') or not systemd_unit('scylla-cloud-snitch.service').is_enabled():
+            print(f'ERROR: Could not initialize endpoint_snitch: {endpoint_snitch}')
+            print('Please install scylla-machine-image package.')
+            sys.exit(1)
+
 if __name__ == '__main__':
     verify_cpu()
+    verify_cloud_snitch()
 
     if os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
+
     cfg = sysconfig_parser(sysconfdir_p() / 'scylla-server')
     mode = cfg.get('NETWORK_MODE')
 

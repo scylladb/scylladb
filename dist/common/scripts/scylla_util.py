@@ -398,6 +398,15 @@ class systemd_unit:
     def disable(self):
         return run('systemctl {} disable {}'.format(self.ctlparam, self._unit), shell=True, check=True)
 
+    def is_enabled(self):
+        res = out('systemctl {} is-enabled {}'.format(self.ctlparam, self._unit), ignore_error=True)
+        if res == 'enabled':
+            return True
+        elif res == 'disabled':
+            return False
+        else:
+            raise SystemdException('systemctl {} is-enabled {} failed: {}'.format(self.ctlparam, self._unit, res))
+
     def is_active(self):
         return out('systemctl {} is-active {}'.format(self.ctlparam, self._unit), ignore_error=True)
 
