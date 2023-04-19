@@ -1507,10 +1507,10 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     }
 
     auto read_func = [&, this] (reader_permit permit) {
-        reader_permit::used_guard ug{permit};
+        reader_permit::need_cpu_guard ncpu_guard{permit};
         permit.set_max_result_size(max_result_size);
         return cf.query(std::move(s), std::move(permit), cmd, opts, ranges, trace_state, get_result_memory_limiter(),
-                timeout, &querier_opt).then([&result, ug = std::move(ug)] (lw_shared_ptr<query::result> res) {
+                timeout, &querier_opt).then([&result, ncpu_guard = std::move(ncpu_guard)] (lw_shared_ptr<query::result> res) {
             result = std::move(res);
         });
     };
@@ -1574,10 +1574,10 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     }
 
     auto read_func = [&] (reader_permit permit) {
-        reader_permit::used_guard ug{permit};
+        reader_permit::need_cpu_guard ncpu_guard{permit};
         permit.set_max_result_size(max_result_size);
         return cf.mutation_query(std::move(s), std::move(permit), cmd, range,
-                std::move(trace_state), std::move(accounter), timeout, &querier_opt).then([&result, ug = std::move(ug)] (reconcilable_result res) {
+                std::move(trace_state), std::move(accounter), timeout, &querier_opt).then([&result, ncpu_guard = std::move(ncpu_guard)] (reconcilable_result res) {
             result = std::move(res);
         });
     };

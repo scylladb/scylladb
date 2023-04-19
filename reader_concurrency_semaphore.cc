@@ -1246,7 +1246,7 @@ reader_concurrency_semaphore::can_admit_read(const reader_permit::impl& permit) 
     }
 
     if (!all_need_cpu_permits_are_awaiting()) {
-        return {can_admit::no, reason::used_permits};
+        return {can_admit::no, reason::need_cpu_permits};
     }
 
     if (!has_available_units(permit.base_resources())) {
