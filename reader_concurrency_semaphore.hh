@@ -201,7 +201,7 @@ private:
 
     bool has_available_units(const resources& r) const;
 
-    bool all_used_permits_are_stalled() const;
+    bool all_need_cpu_permits_are_awaiting() const;
 
     [[nodiscard]] std::exception_ptr check_queue_size(std::string_view queue_name);
 
@@ -241,11 +241,11 @@ private:
     void on_permit_created(reader_permit::impl&);
     void on_permit_destroyed(reader_permit::impl&) noexcept;
 
-    void on_permit_used() noexcept;
-    void on_permit_unused() noexcept;
+    void on_permit_need_cpu() noexcept;
+    void on_permit_not_need_cpu() noexcept;
 
-    void on_permit_blocked() noexcept;
-    void on_permit_unblocked() noexcept;
+    void on_permit_awaits() noexcept;
+    void on_permit_not_awaits() noexcept;
 
     std::runtime_error stopped_exception();
 

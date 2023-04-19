@@ -106,13 +106,13 @@ private:
     reader_permit::impl& operator*() { return *_impl; }
     reader_permit::impl* operator->() { return _impl.get(); }
 
-    void mark_used() noexcept;
+    void mark_need_cpu() noexcept;
 
-    void mark_unused() noexcept;
+    void mark_not_need_cpu() noexcept;
 
-    void mark_blocked() noexcept;
+    void mark_awaits() noexcept;
 
-    void mark_unblocked() noexcept;
+    void mark_not_awaits() noexcept;
 
     operator bool() const { return bool(_impl); }
 
@@ -218,13 +218,13 @@ class reader_permit::used_guard {
     reader_permit_opt _permit;
 public:
     explicit used_guard(reader_permit permit) noexcept : _permit(std::move(permit)) {
-        _permit->mark_used();
+        _permit->mark_need_cpu();
     }
     used_guard(used_guard&&) noexcept = default;
     used_guard(const used_guard&) = delete;
     ~used_guard() {
         if (_permit) {
-            _permit->mark_unused();
+            _permit->mark_not_need_cpu();
         }
     }
     used_guard& operator=(used_guard&&) = delete;
@@ -243,13 +243,13 @@ class reader_permit::blocked_guard {
     reader_permit_opt _permit;
 public:
     explicit blocked_guard(reader_permit permit) noexcept : _permit(std::move(permit)) {
-        _permit->mark_blocked();
+        _permit->mark_awaits();
     }
     blocked_guard(blocked_guard&&) noexcept = default;
     blocked_guard(const blocked_guard&) = delete;
     ~blocked_guard() {
         if (_permit) {
-            _permit->mark_unblocked();
+            _permit->mark_not_awaits();
         }
     }
     blocked_guard& operator=(blocked_guard&&) = delete;

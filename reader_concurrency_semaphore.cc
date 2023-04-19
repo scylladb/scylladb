@@ -156,29 +156,29 @@ private:
     auxiliary_data _aux_data;
 
 private:
-    void on_permit_used() {
-        _semaphore.on_permit_used();
+    void on_permit_need_cpu() {
+        _semaphore.on_permit_need_cpu();
         _marked_as_used = true;
     }
-    void on_permit_unused() {
-        _semaphore.on_permit_unused();
+    void on_permit_not_need_cpu() {
+        _semaphore.on_permit_not_need_cpu();
         _marked_as_used = false;
     }
-    void on_permit_blocked() {
-        _semaphore.on_permit_blocked();
+    void on_permit_awaits() {
+        _semaphore.on_permit_awaits();
         _marked_as_blocked = true;
     }
-    void on_permit_unblocked() {
-        _semaphore.on_permit_unblocked();
+    void on_permit_not_awaits() {
+        _semaphore.on_permit_not_awaits();
         _marked_as_blocked = false;
     }
     void on_permit_active() {
         if (_used_branches) {
             _state = reader_permit::state::active_need_cpu;
-            on_permit_used();
+            on_permit_need_cpu();
             if (_blocked_branches) {
                 _state = reader_permit::state::active_await;
-                on_permit_blocked();
+                on_permit_awaits();
             }
         } else {
             _state = reader_permit::state::active;
@@ -188,10 +188,10 @@ private:
     void on_permit_inactive(reader_permit::state st) {
         _state = st;
         if (_marked_as_blocked) {
-            on_permit_unblocked();
+            on_permit_not_awaits();
         }
         if (_marked_as_used) {
-            on_permit_unused();
+            on_permit_not_need_cpu();
         }
     }
 
@@ -256,7 +256,7 @@ public:
                         _schema ? _schema->cf_name() : "*",
                         _op_name_view,
                         _used_branches));
-            _semaphore.on_permit_unused();
+            _semaphore.on_permit_not_need_cpu();
         }
 
         if (_blocked_branches) {
@@ -265,7 +265,7 @@ public:
                         _schema ? _schema->cf_name() : "*",
                         _op_name_view,
                         _blocked_branches));
-            _semaphore.on_permit_unblocked();
+            _semaphore.on_permit_not_awaits();
         }
 
         // Should probably make a scene here, but its not worth it.
@@ -384,19 +384,19 @@ public:
                 _op_name_view);
     }
 
-    void mark_used() noexcept {
+    void mark_need_cpu() noexcept {
         ++_used_branches;
         if (!_marked_as_used && _state == reader_permit::state::active) {
             _state = reader_permit::state::active_need_cpu;
-            on_permit_used();
+            on_permit_need_cpu();
             if (_blocked_branches && !_marked_as_blocked) {
                 _state = reader_permit::state::active_await;
-                on_permit_blocked();
+                on_permit_awaits();
             }
         }
     }
 
-    void mark_unused() noexcept {
+    void mark_not_need_cpu() noexcept {
         assert(_used_branches);
         --_used_branches;
         if (_marked_as_used && !_used_branches) {
@@ -404,27 +404,27 @@ public:
             // destroyed out-of-order. Force an unblock here so that we maintain
             // used >= blocked.
             if (_marked_as_blocked) {
-                on_permit_unblocked();
+                on_permit_not_awaits();
             }
             _state = reader_permit::state::active;
-            on_permit_unused();
+            on_permit_not_need_cpu();
         }
     }
 
-    void mark_blocked() noexcept {
+    void mark_awaits() noexcept {
         ++_blocked_branches;
         if (_blocked_branches == 1 && _state == reader_permit::state::active_need_cpu) {
             _state = reader_permit::state::active_await;
-            on_permit_blocked();
+            on_permit_awaits();
         }
     }
 
-    void mark_unblocked() noexcept {
+    void mark_not_awaits() noexcept {
         assert(_blocked_branches);
         --_blocked_branches;
         if (_marked_as_blocked && !_blocked_branches) {
             _state = reader_permit::state::active_need_cpu;
-            on_permit_unblocked();
+            on_permit_not_awaits();
         }
     }
 
@@ -576,20 +576,20 @@ sstring reader_permit::description() const {
     return _impl->description();
 }
 
-void reader_permit::mark_used() noexcept {
-    _impl->mark_used();
+void reader_permit::mark_need_cpu() noexcept {
+    _impl->mark_need_cpu();
 }
 
-void reader_permit::mark_unused() noexcept {
-    _impl->mark_unused();
+void reader_permit::mark_not_need_cpu() noexcept {
+    _impl->mark_not_need_cpu();
 }
 
-void reader_permit::mark_blocked() noexcept {
-    _impl->mark_blocked();
+void reader_permit::mark_awaits() noexcept {
+    _impl->mark_awaits();
 }
 
-void reader_permit::mark_unblocked() noexcept {
-    _impl->mark_unblocked();
+void reader_permit::mark_not_awaits() noexcept {
+    _impl->mark_not_awaits();
 }
 
 db::timeout_clock::time_point reader_permit::timeout() const noexcept {
@@ -1161,7 +1161,7 @@ bool reader_concurrency_semaphore::has_available_units(const resources& r) const
     return (_resources.non_zero() && _resources.count >= r.count && _resources.memory >= r.memory) || _resources.count == _initial_resources.count;
 }
 
-bool reader_concurrency_semaphore::all_used_permits_are_stalled() const {
+bool reader_concurrency_semaphore::all_need_cpu_permits_are_awaiting() const {
     return _stats.need_cpu_permits == _stats.awaits_permits;
 }
 
@@ -1245,7 +1245,7 @@ reader_concurrency_semaphore::can_admit_read(const reader_permit::impl& permit) 
         return {can_admit::no, reason::ready_list};
     }
 
-    if (!all_used_permits_are_stalled()) {
+    if (!all_need_cpu_permits_are_awaiting()) {
         return {can_admit::no, reason::used_permits};
     }
 
@@ -1413,24 +1413,24 @@ void reader_concurrency_semaphore::on_permit_destroyed(reader_permit::impl& perm
     }
 }
 
-void reader_concurrency_semaphore::on_permit_used() noexcept {
+void reader_concurrency_semaphore::on_permit_need_cpu() noexcept {
     ++_stats.need_cpu_permits;
 }
 
-void reader_concurrency_semaphore::on_permit_unused() noexcept {
+void reader_concurrency_semaphore::on_permit_not_need_cpu() noexcept {
     assert(_stats.need_cpu_permits);
     --_stats.need_cpu_permits;
     assert(_stats.need_cpu_permits >= _stats.awaits_permits);
     maybe_admit_waiters();
 }
 
-void reader_concurrency_semaphore::on_permit_blocked() noexcept {
+void reader_concurrency_semaphore::on_permit_awaits() noexcept {
     ++_stats.awaits_permits;
     assert(_stats.need_cpu_permits >= _stats.awaits_permits);
     maybe_admit_waiters();
 }
 
-void reader_concurrency_semaphore::on_permit_unblocked() noexcept {
+void reader_concurrency_semaphore::on_permit_not_awaits() noexcept {
     assert(_stats.awaits_permits);
     --_stats.awaits_permits;
 }
