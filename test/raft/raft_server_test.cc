@@ -57,7 +57,7 @@ SEASTAR_THREAD_TEST_CASE(test_release_memory_if_add_entry_throws) {
 
     utils::get_local_injector().enable("fsm::add_entry/test-failure", true);
     auto check_error = [](const std::runtime_error& e) {
-        return e.what() == sstring("fsm::add_entry/test-failure");
+        return sstring(e.what()) == sstring("fsm::add_entry/test-failure");
     };
     BOOST_CHECK_EXCEPTION(cluster.add_entries(1, 0).get0(), std::runtime_error, check_error);
 
