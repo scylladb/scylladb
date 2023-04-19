@@ -494,7 +494,8 @@ future<file> s3_storage::open_component(const sstable& sst, component_type type,
 future<data_sink> s3_storage::make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) {
     assert(type == component_type::Data || type == component_type::Index);
     co_await ensure_remote_prefix(sst);
-    co_return _client->make_upload_sink(make_s3_object_name(sst, type));
+    // FIXME: if we have file size upper bound upfront, it's better to use make_upload_sink() instead
+    co_return _client->make_upload_jumbo_sink(make_s3_object_name(sst, type));
 }
 
 future<data_sink> s3_storage::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
