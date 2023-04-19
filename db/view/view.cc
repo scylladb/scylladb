@@ -1439,6 +1439,7 @@ future<stop_iteration> view_update_builder::on_results() {
 }
 
 view_update_builder make_view_update_builder(
+        data_dictionary::database db,
         const replica::table& base_table,
         const schema_ptr& base,
         std::vector<view_and_base>&& views_to_update,
@@ -1454,7 +1455,7 @@ view_update_builder make_view_update_builder(
         bool is_index = base_table.get_index_manager().is_index(v.view);
         return view_updates(std::move(v), is_index);
     }));
-    return view_update_builder(base_table, base, std::move(vs), std::move(updates), std::move(existings), now);
+    return view_update_builder(std::move(db), base_table, base, std::move(vs), std::move(updates), std::move(existings), now);
 }
 
 future<query::clustering_row_ranges> calculate_affected_clustering_ranges(const schema& base,

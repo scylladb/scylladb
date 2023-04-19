@@ -2014,6 +2014,7 @@ future<> table::generate_and_propagate_view_updates(shared_ptr<db::view::view_up
     auto base_token = m.token();
     auto m_schema = m.schema();
     db::view::view_update_builder builder = db::view::make_view_update_builder(
+            gen->get_db().as_data_dictionary(),
             *this,
             base,
             std::move(views),
@@ -2151,6 +2152,7 @@ future<> table::populate_views(
         gc_clock::time_point now) {
     auto schema = reader.schema();
     db::view::view_update_builder builder = db::view::make_view_update_builder(
+            gen->get_db().as_data_dictionary(),
             *this,
             schema,
             std::move(views),
