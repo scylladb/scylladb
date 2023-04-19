@@ -346,6 +346,7 @@ static bool update_requires_read_before_write(data_dictionary::database db, cons
 // Checks if the result matches the provided view filter.
 // It's currently assumed that the result consists of just a single row.
 class view_filter_checking_visitor {
+    data_dictionary::database _db;
     const schema& _base;
     const view_info& _view;
     ::shared_ptr<cql3::selection::selection> _selection;
@@ -353,8 +354,9 @@ class view_filter_checking_visitor {
 
     bool _matches_view_filter = true;
 public:
-    view_filter_checking_visitor(const schema& base, const view_info& view)
-        : _base(base)
+    view_filter_checking_visitor(data_dictionary::database db, const schema& base, const view_info& view)
+        : _db(std::move(db))
+        , _base(base)
         , _view(view)
         , _selection(cql3::selection::selection::for_columns(_base.shared_from_this(),
             boost::copy_range<std::vector<const column_definition*>>(
@@ -461,7 +463,7 @@ bool matches_view_filter(data_dictionary::database db, const schema& base, const
     builder.consume(clustering_row(base, update.as_clustering_row(base)), row_tombstone{}, update.is_live(base, tombstone(), now));
     builder.consume_end_of_partition();
     auto result = builder.consume_end_of_stream();
-    view_filter_checking_visitor visitor(base, view);
+    view_filter_checking_visitor visitor(db, base, view);
     query::result_view::consume(result, slice, visitor);
 
     return clustering_prefix_matches(db, base, view, key, *update.key())
