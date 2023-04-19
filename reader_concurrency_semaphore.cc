@@ -251,7 +251,7 @@ public:
         }
 
         if (_need_cpu_branches) {
-            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {}.{}:{} destroyed with {} used branches",
+            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {}.{}:{} destroyed with {} need_cpu branches",
                         _schema ? _schema->ks_name() : "*",
                         _schema ? _schema->cf_name() : "*",
                         _op_name_view,
@@ -260,7 +260,7 @@ public:
         }
 
         if (_awaits_branches) {
-            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {}.{}:{} destroyed with {} blocked branches",
+            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {}.{}:{} destroyed with {} awaits branches",
                         _schema ? _schema->ks_name() : "*",
                         _schema ? _schema->cf_name() : "*",
                         _op_name_view,
@@ -400,9 +400,9 @@ public:
         assert(_need_cpu_branches);
         --_need_cpu_branches;
         if (_marked_as_need_cpu && !_need_cpu_branches) {
-            // When an exception is thrown, blocked and used guards might be
-            // destroyed out-of-order. Force an unblock here so that we maintain
-            // used >= blocked.
+            // When an exception is thrown, need_cpu and awaits guards might be
+            // destroyed out-of-order. Force the state out of awaits state here
+            // so that we maintain awaits >= need_cpu.
             if (_marked_as_awaits) {
                 on_permit_not_awaits();
             }
