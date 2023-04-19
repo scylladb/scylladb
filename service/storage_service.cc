@@ -27,7 +27,6 @@
 #include "service/raft/raft_group0.hh"
 #include "utils/to_string.hh"
 #include "gms/gossiper.hh"
-#include "gms/failure_detector.hh"
 #include "gms/feature_service.hh"
 #include <seastar/core/thread.hh>
 #include <sstream>

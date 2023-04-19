@@ -22,7 +22,6 @@
 #include "query_result_merger.hh"
 #include <seastar/core/do_with.hh>
 #include "message/messaging_service.hh"
-#include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include <seastar/core/future-util.hh>
 #include "db/read_repair_decision.hh"

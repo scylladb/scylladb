@@ -12,7 +12,6 @@
 
 #include "message/messaging_service.hh"
 #include <seastar/core/distributed.hh>
-#include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "streaming/prepare_message.hh"
 #include "gms/gossip_digest_syn.hh"
