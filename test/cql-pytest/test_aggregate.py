@@ -7,12 +7,13 @@
 #############################################################################
 
 import pytest
+import math
 from util import new_test_table, unique_key_int, project
 from cassandra.util import Date
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
-    with new_test_table(cql, test_keyspace, "p int, c int, v int, PRIMARY KEY (p, c)") as table:
+    with new_test_table(cql, test_keyspace, "p int, c int, v int, d double, PRIMARY KEY (p, c)") as table:
         yield table
 
 # When there is no row matching the selection, the count should be 0.
@@ -21,10 +22,11 @@ def test_count_empty_eq(cql, table1):
     p = unique_key_int()
     assert [(0,)] == list(cql.execute(f"select count(*) from {table1} where p = {p}"))
     # The aggregation "0" for no results is true for count(), but not all
-    # aggregators - min() returns null for no results, while sum() returns
-    # 0 for no results (see issue #13027):
+    # aggregators - min() returns null for no results, while sum() and
+    # avg() return 0 for no results (see discussion in issue #13027):
     assert [(None,)] == list(cql.execute(f"select min(v) from {table1} where p = {p}"))
     assert [(0,)] == list(cql.execute(f"select sum(v) from {table1} where p = {p}"))
+    assert [(0,)] == list(cql.execute(f"select avg(v) from {table1} where p = {p}"))
 
 # Above in test_count_empty_eq() we tested that aggregates return some value -
 # sometimes 0 and sometimes null - when aggregating no data. If we select
@@ -125,3 +127,21 @@ def test_timeuuid(cql, test_keyspace):
                        cql.execute(f'select todate(min(b)) from {table} where a = 0')) == [Date('2020-12-01')]
         assert project('system_todate_system_max_b',
                        cql.execute(f'select todate(max(b)) from {table} where a = 0')) == [Date('2038-09-06')]
+
+# Check floating-point aggregations with non-finite results - inf and nan.
+# Reproduces issue #13551: sum of +inf and -inf produced an error instead
+# of a NaN as in Cassandra (and in older Scylla).
+def test_aggregation_inf_nan(cql, table1):
+    p = unique_key_int()
+    # Add a single infinity value, see we can read it back as infinity,
+    # and its sum() is also infinity of course.
+    cql.execute(f"insert into {table1} (p, c, d) values ({p}, 1, infinity)")
+    assert [(math.inf,)] == list(cql.execute(f"select d from {table1} where p = {p} and c = 1"))
+    assert [(math.inf,)] == list(cql.execute(f"select sum(d) from {table1} where p = {p}"))
+    # Add a second value, a negative infinity. See we can read it back, and
+    # now the sum of +Inf and -Inf should be a NaN.
+    # Note that we have to use isnan() to check that the result is a NaN,
+    # because equality check doesn't work on NaN:
+    cql.execute(f"insert into {table1} (p, c, d) values ({p}, 2, -infinity)")
+    assert [(-math.inf,)] == list(cql.execute(f"select d from {table1} where p = {p} and c = 2"))
+    assert math.isnan(list(cql.execute(f"select sum(d) from {table1} where p = {p}"))[0][0])
