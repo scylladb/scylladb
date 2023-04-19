@@ -31,8 +31,8 @@ public:
                     , _schema(s) {
     }
 
-    bytes_opt execute(const std::vector<bytes_opt>& parameters) override {
-        if (std::any_of(parameters.cbegin(), parameters.cend(), [](const auto& param){ return !param; })) {
+    bytes_opt execute(std::span<const bytes_opt> parameters) override {
+        if (std::any_of(parameters.begin(), parameters.end(), [](const auto& param){ return !param; })) {
             return std::nullopt;
         }
         auto key = partition_key::from_optional_exploded(*_schema, parameters);

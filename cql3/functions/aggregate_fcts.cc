@@ -39,20 +39,20 @@ class internal_scalar_function : public scalar_function {
     function_name _name;
     data_type _return_type;
     std::vector<data_type> _arg_types;
-    noncopyable_function<bytes_opt (const std::vector<bytes_opt>& parameters)> _func;
+    noncopyable_function<bytes_opt (std::span<const bytes_opt> parameters)> _func;
 public:
     internal_scalar_function(
             sstring name,
             data_type return_type,
             std::vector<data_type> arg_types,
-            noncopyable_function<bytes_opt (const std::vector<bytes_opt>& parameters)> func)
+            noncopyable_function<bytes_opt (std::span<const bytes_opt> parameters)> func)
             : _name(function_name::native_function(std::move(name)))
             , _return_type(std::move(return_type))
             , _arg_types(std::move(arg_types))
             , _func(std::move(func)) {
     }
 
-    virtual bytes_opt execute(const std::vector<bytes_opt>& parameters) override {
+    virtual bytes_opt execute(std::span<const bytes_opt> parameters) override {
         return _func(parameters);
     }
 
@@ -94,23 +94,23 @@ public:
 };
 
 // Called if any of the inputs is NULL
-using null_handler = bytes_opt (*)(const std::vector<bytes_opt>&);
+using null_handler = bytes_opt (*)(std::span<const bytes_opt>);
 
 bytes_opt
-return_accumulator_on_null(const std::vector<bytes_opt>& args) {
+return_accumulator_on_null(std::span<const bytes_opt> args) {
     return args[0];
 }
 
 bytes_opt
-return_any_nonnull(const std::vector<bytes_opt>& args) {
+return_any_nonnull(std::span<const bytes_opt> args) {
     auto i = std::ranges::find_if(args, std::mem_fn(&bytes_opt::has_value));
     return i != args.end() ? *i : bytes_opt();
 }
 
 template <typename Ret, typename... Args>
-noncopyable_function<bytes_opt (const std::vector<bytes_opt>&)>
+noncopyable_function<bytes_opt (std::span<const bytes_opt>)>
 wrap_function_autonull(null_handler nullhandler, Ret (*func)(Args...)) {
-    return [nullhandler, func] (const std::vector<bytes_opt>& args) -> bytes_opt {
+    return [nullhandler, func] (std::span<const bytes_opt> args) -> bytes_opt {
         if (!std::all_of(args.begin(), args.end(), std::mem_fn(&bytes_opt::has_value))) {
             return nullhandler(args);
         }
@@ -209,7 +209,7 @@ make_avg_function() {
                     "avg_step",
                     accumulator_tuple_type,
                     std::vector<data_type>({accumulator_tuple_type, data_type_for<Type>()}),
-                    [accumulator_tuple_type] (const std::vector<bytes_opt>& args) -> bytes_opt {
+                    [accumulator_tuple_type] (std::span<const bytes_opt> args) -> bytes_opt {
                         if (!args[0]) {
                             return std::nullopt;
                         }
@@ -231,7 +231,7 @@ make_avg_function() {
                     "avg_finalizer",
                     data_type_for<Type>(),
                     std::vector<data_type>({accumulator_tuple_type}),
-                    [accumulator_tuple_type] (const std::vector<bytes_opt>& args) -> bytes_opt {
+                    [accumulator_tuple_type] (std::span<const bytes_opt> args) -> bytes_opt {
                         data_value acc_value = accumulator_tuple_type->deserialize(*args[0]);
                         std::vector<data_value> acc = value_cast<tuple_type_impl::native_type>(std::move(acc_value));
                         auto sum = value_cast<sum_type>(acc[0]);
@@ -243,7 +243,7 @@ make_avg_function() {
                     "avg_reducer",
                     accumulator_tuple_type,
                     std::vector<data_type>({accumulator_tuple_type, accumulator_tuple_type}),
-                    [accumulator_tuple_type] (const std::vector<bytes_opt>& args) -> bytes_opt {
+                    [accumulator_tuple_type] (std::span<const bytes_opt> args) -> bytes_opt {
                         data_value acc1_value = accumulator_tuple_type->deserialize(*args[0]);
                         std::vector<data_value> acc1 = value_cast<tuple_type_impl::native_type>(std::move(acc1_value));
                         auto sum1 = value_cast<sum_type>(acc1[0]);
@@ -303,7 +303,7 @@ static shared_ptr<aggregate_function> make_count_function() {
                     "count_step",
                     long_type,
                     std::vector<data_type>({long_type, data_type_for<Type>()}),
-                    [] (const std::vector<bytes_opt>& args) {
+                    [] (std::span<const bytes_opt> args) {
                         if (!args[1]) {
                             return args[0];
                         }
@@ -403,7 +403,7 @@ aggregate_fcts::make_count_rows_function() {
 shared_ptr<aggregate_function>
 aggregate_fcts::make_max_function(data_type io_type) {
     io_type = io_type->without_reversed().shared_from_this();
-    auto max = ::make_shared<internal_scalar_function>("max_step", io_type, std::vector({io_type, io_type}), [io_type] (const std::vector<bytes_opt>& args) -> bytes_opt {
+    auto max = ::make_shared<internal_scalar_function>("max_step", io_type, std::vector({io_type, io_type}), [io_type] (std::span<const bytes_opt> args) -> bytes_opt {
         if (!args[0]) {
             return args[1];
         }
@@ -420,7 +420,7 @@ aggregate_fcts::make_max_function(data_type io_type) {
             .argument_types = {io_type},
             .initial_state = std::nullopt,
             .aggregation_function = max,
-            .state_to_result_function = ::make_shared<internal_scalar_function>("max_finalizer", io_type, std::vector({io_type}), [] (const std::vector<bytes_opt>& args) {
+            .state_to_result_function = ::make_shared<internal_scalar_function>("max_finalizer", io_type, std::vector({io_type}), [] (std::span<const bytes_opt> args) {
                 return args[0];
             }),
             .state_reduction_function = max,
@@ -431,7 +431,7 @@ aggregate_fcts::make_max_function(data_type io_type) {
 shared_ptr<aggregate_function>
 aggregate_fcts::make_min_function(data_type io_type) {
     io_type = io_type->without_reversed().shared_from_this();
-    auto min = ::make_shared<internal_scalar_function>("min_step", io_type, std::vector({io_type, io_type}), [io_type] (const std::vector<bytes_opt>& args) -> bytes_opt {
+    auto min = ::make_shared<internal_scalar_function>("min_step", io_type, std::vector({io_type, io_type}), [io_type] (std::span<const bytes_opt> args) -> bytes_opt {
         if (!args[0]) {
             return args[1];
         }
@@ -448,7 +448,7 @@ aggregate_fcts::make_min_function(data_type io_type) {
             .argument_types = {io_type},
             .initial_state = std::nullopt,
             .aggregation_function = min,
-            .state_to_result_function = ::make_shared<internal_scalar_function>("min_finalizer", io_type, std::vector({io_type}), [] (const std::vector<bytes_opt>& args) {
+            .state_to_result_function = ::make_shared<internal_scalar_function>("min_finalizer", io_type, std::vector({io_type}), [] (std::span<const bytes_opt> args) {
                 return args[0];
             }),
             .state_reduction_function = min,

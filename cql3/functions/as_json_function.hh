@@ -46,7 +46,7 @@ public:
 
     virtual bool requires_thread() const override;
 
-    virtual bytes_opt execute(const std::vector<bytes_opt>& parameters) override {
+    virtual bytes_opt execute(std::span<const bytes_opt> parameters) override {
         bytes_ostream encoded_row;
         encoded_row.write("{", 1);
         for (size_t i = 0; i < _selector_names.size(); ++i) {

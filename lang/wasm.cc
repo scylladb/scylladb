@@ -250,7 +250,7 @@ seastar::future<> precompile(alien_thread_runner& alien_runner, context& ctx, co
         co_await coroutine::return_exception_ptr(std::move(ex));
     }
 }
-seastar::future<bytes_opt> run_script(context& ctx, wasmtime::Store& store, wasmtime::Instance& instance, wasmtime::Func& func, const std::vector<data_type>& arg_types, const std::vector<bytes_opt>& params, data_type return_type, bool allow_null_input) {
+seastar::future<bytes_opt> run_script(context& ctx, wasmtime::Store& store, wasmtime::Instance& instance, wasmtime::Func& func, const std::vector<data_type>& arg_types, std::span<const bytes_opt> params, data_type return_type, bool allow_null_input) {
     wasm_logger.debug("Running function {}", ctx.function_name);
 
     rust::Box<wasmtime::ValVec> argv = wasmtime::get_val_vec();
@@ -308,7 +308,7 @@ seastar::future<bytes_opt> run_script(context& ctx, wasmtime::Store& store, wasm
     }
 }
 
-seastar::future<bytes_opt> run_script(const db::functions::function_name& name, context& ctx, const std::vector<data_type>& arg_types, const std::vector<bytes_opt>& params, data_type return_type, bool allow_null_input) {
+seastar::future<bytes_opt> run_script(const db::functions::function_name& name, context& ctx, const std::vector<data_type>& arg_types, std::span<const bytes_opt> params, data_type return_type, bool allow_null_input) {
     wasm::instance_cache::value_type func_inst;
     std::exception_ptr ex;
     bytes_opt ret;

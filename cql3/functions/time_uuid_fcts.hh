@@ -24,7 +24,7 @@ inline
 shared_ptr<function>
 make_now_fct() {
     return make_native_scalar_function<false>("now", timeuuid_type, {},
-            [] (const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (std::span<const bytes_opt> values) -> bytes_opt {
         return {to_bytes(utils::UUID_gen::get_time_UUID())};
     });
 }
@@ -42,7 +42,7 @@ inline
 shared_ptr<function>
 make_min_timeuuid_fct() {
     return make_native_scalar_function<true>("mintimeuuid", timeuuid_type, { timestamp_type },
-            [] (const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (std::span<const bytes_opt> values) -> bytes_opt {
         auto& bb = values[0];
         if (!bb) {
             return {};
@@ -60,7 +60,7 @@ inline
 shared_ptr<function>
 make_max_timeuuid_fct() {
     return make_native_scalar_function<true>("maxtimeuuid", timeuuid_type, { timestamp_type },
-            [] (const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (std::span<const bytes_opt> values) -> bytes_opt {
         auto& bb = values[0];
         if (!bb) {
             return {};
@@ -89,7 +89,7 @@ inline
 shared_ptr<function>
 make_date_of_fct() {
     return make_native_scalar_function<true>("dateof", timestamp_type, { timeuuid_type },
-            [] (const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (std::span<const bytes_opt> values) -> bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
@@ -104,7 +104,7 @@ inline
 shared_ptr<function>
 make_unix_timestamp_of_fct() {
     return make_native_scalar_function<true>("unixtimestampof", long_type, { timeuuid_type },
-            [] (const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (std::span<const bytes_opt> values) -> bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
@@ -117,7 +117,7 @@ make_unix_timestamp_of_fct() {
 inline shared_ptr<function>
 make_currenttimestamp_fct() {
     return make_native_scalar_function<false>("currenttimestamp", timestamp_type, {},
-            [] (const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (std::span<const bytes_opt> values) -> bytes_opt {
         return {timestamp_type->decompose(db_clock::now())};
     });
 }
@@ -125,7 +125,7 @@ make_currenttimestamp_fct() {
 inline shared_ptr<function>
 make_currenttime_fct() {
     return make_native_scalar_function<false>("currenttime", time_type, {},
-            [] (const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (std::span<const bytes_opt> values) -> bytes_opt {
         constexpr int64_t milliseconds_in_day = 3600 * 24 * 1000;
         int64_t milliseconds_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(db_clock::now().time_since_epoch()).count();
         int64_t nanoseconds_today = (milliseconds_since_epoch % milliseconds_in_day) * 1000 * 1000;
@@ -136,7 +136,7 @@ make_currenttime_fct() {
 inline shared_ptr<function>
 make_currentdate_fct() {
     return make_native_scalar_function<false>("currentdate", simple_date_type, {},
-            [] (const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (std::span<const bytes_opt> values) -> bytes_opt {
         auto to_simple_date = get_castas_fctn(simple_date_type, timestamp_type);
         return {simple_date_type->decompose(to_simple_date(db_clock::now()))};
     });
@@ -146,7 +146,7 @@ inline
 shared_ptr<function>
 make_currenttimeuuid_fct() {
     return make_native_scalar_function<false>("currenttimeuuid", timeuuid_type, {},
-            [] (const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (std::span<const bytes_opt> values) -> bytes_opt {
         return {timeuuid_type->decompose(timeuuid_native_type{utils::UUID_gen::get_time_UUID()})};
     });
 }
@@ -155,7 +155,7 @@ inline
 shared_ptr<function>
 make_timeuuidtodate_fct() {
     return make_native_scalar_function<true>("todate", simple_date_type, { timeuuid_type },
-            [] (const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (std::span<const bytes_opt> values) -> bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
@@ -171,7 +171,7 @@ inline
 shared_ptr<function>
 make_timestamptodate_fct() {
     return make_native_scalar_function<true>("todate", simple_date_type, { timestamp_type },
-            [] (const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (std::span<const bytes_opt> values) -> bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
@@ -190,7 +190,7 @@ inline
 shared_ptr<function>
 make_timeuuidtotimestamp_fct() {
     return make_native_scalar_function<true>("totimestamp", timestamp_type, { timeuuid_type },
-            [] (const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (std::span<const bytes_opt> values) -> bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
@@ -205,7 +205,7 @@ inline
 shared_ptr<function>
 make_datetotimestamp_fct() {
     return make_native_scalar_function<true>("totimestamp", timestamp_type, { simple_date_type },
-            [] (const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (std::span<const bytes_opt> values) -> bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
@@ -224,7 +224,7 @@ inline
 shared_ptr<function>
 make_timeuuidtounixtimestamp_fct() {
     return make_native_scalar_function<true>("tounixtimestamp", long_type, { timeuuid_type },
-            [] (const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (std::span<const bytes_opt> values) -> bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
@@ -242,7 +242,7 @@ inline
 shared_ptr<function>
 make_timestamptounixtimestamp_fct() {
     return make_native_scalar_function<true>("tounixtimestamp", long_type, { timestamp_type },
-            [] (const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (std::span<const bytes_opt> values) -> bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
@@ -260,7 +260,7 @@ inline
 shared_ptr<function>
 make_datetounixtimestamp_fct() {
     return make_native_scalar_function<true>("tounixtimestamp", long_type, { simple_date_type },
-            [] (const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (std::span<const bytes_opt> values) -> bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {

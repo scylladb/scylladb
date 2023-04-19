@@ -59,7 +59,7 @@ public:
     virtual bool is_native() const override;
     virtual bool is_aggregate() const override;
     virtual bool requires_thread() const override;
-    virtual bytes_opt execute(const std::vector<bytes_opt>& parameters) override;
+    virtual bytes_opt execute(std::span<const bytes_opt> parameters) override;
 
     virtual sstring keypace_name() const override { return name().keyspace; }
     virtual sstring element_name() const override { return name().name; }

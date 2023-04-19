@@ -2661,7 +2661,7 @@ convert_map_back_to_listlike(expression e) {
             return "NONE";
         }
 
-        virtual bytes_opt execute(const std::vector<bytes_opt>& parameters) override {
+        virtual bytes_opt execute(std::span<const bytes_opt> parameters) override {
             auto& p = parameters[0];
             if (!p) {
                 return std::nullopt;

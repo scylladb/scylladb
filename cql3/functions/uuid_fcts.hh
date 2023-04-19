@@ -22,7 +22,7 @@ inline
 shared_ptr<function>
 make_uuid_fct() {
     return make_native_scalar_function<false>("uuid", uuid_type, {},
-            [] (const std::vector<bytes_opt>& parameters) -> bytes_opt {
+            [] (std::span<const bytes_opt> parameters) -> bytes_opt {
         return {uuid_type->decompose(utils::make_random_uuid())};
     });
 }
