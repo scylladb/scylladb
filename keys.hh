@@ -20,6 +20,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/iterator_range_core.hpp>
 #include <compare>
+#include <span>
 
 //
 // This header defines type system for primary key holders.
@@ -200,10 +201,10 @@ public:
     }
 
     // We don't allow optional values, but provide this method as an efficient adaptor
-    static TopLevel from_optional_exploded(const schema& s, const std::vector<bytes_opt>& v) {
+    static TopLevel from_optional_exploded(const schema& s, std::span<const bytes_opt> v) {
         return TopLevel::from_bytes(get_compound_type(s)->serialize_optionals(v));
     }
-    static TopLevel from_optional_exploded(const schema& s, const std::vector<managed_bytes_opt>& v) {
+    static TopLevel from_optional_exploded(const schema& s, std::span<const managed_bytes_opt> v) {
         return TopLevel::from_bytes(get_compound_type(s)->serialize_optionals(v));
     }
 

@@ -12,6 +12,7 @@
 #include <iosfwd>
 #include <algorithm>
 #include <vector>
+#include <span>
 #include <boost/range/iterator_range.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include "utils/serialization.hh"
@@ -113,16 +114,16 @@ public:
     static managed_bytes serialize_value(std::initializer_list<T> values) {
         return serialize_value(boost::make_iterator_range(values.begin(), values.end()));
     }
-    managed_bytes serialize_optionals(const std::vector<bytes_opt>& values) const {
-        return serialize_value(values | boost::adaptors::transformed([] (const bytes_opt& bo) -> bytes_view {
+    managed_bytes serialize_optionals(std::span<const bytes_opt> values) const {
+        return serialize_value(boost::make_iterator_range(values.begin(), values.end()) | boost::adaptors::transformed([] (const bytes_opt& bo) -> bytes_view {
             if (!bo) {
                 throw std::logic_error("attempted to create key component from empty optional");
             }
             return *bo;
         }));
     }
-    managed_bytes serialize_optionals(const std::vector<managed_bytes_opt>& values) const {
-        return serialize_value(values | boost::adaptors::transformed([] (const managed_bytes_opt& bo) -> managed_bytes_view {
+    managed_bytes serialize_optionals(std::span<const managed_bytes_opt> values) const {
+        return serialize_value(boost::make_iterator_range(values.begin(), values.end()) | boost::adaptors::transformed([] (const managed_bytes_opt& bo) -> managed_bytes_view {
             if (!bo) {
                 throw std::logic_error("attempted to create key component from empty optional");
             }
