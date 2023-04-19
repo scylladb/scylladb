@@ -51,6 +51,8 @@ In this case, a TTL of 30 seconds is set for each column.
 
 When you set a TTL with an INSERT operation, the TTL will be applied to each individual column. If you UPDATE a column later without specifying a TTL, the column's TTL will be updated to either 0 (no expiry) or the table-level TTL. If a column is updated without specifying a TTL, after the TTL that was set during the INSERT operation has elapsed, all columns except the updated one will be expired. However, the row will still be available due to the presence of the unexpired column.
 
+In the following example, the INSERT command sets TTL to 30 seconds on each column. Next, the UPDATE command is used - without specifying a TTL.
+
 .. code-block:: cql
 
         INSERT INTO heartrate(pet_chip_id, name, heart_rate) VALUES (c63e71f0-936e-11ea-bb37-0242ac130002, 'Rocky', 87) USING TTL 30;
