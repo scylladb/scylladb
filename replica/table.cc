@@ -1976,7 +1976,7 @@ const std::vector<view_ptr>& table::views() const {
     return _views;
 }
 
-std::vector<view_ptr> table::affected_views(const schema_ptr& base, const mutation& update) const {
+std::vector<view_ptr> table::affected_views(shared_ptr<db::view::view_update_generator> gen, const schema_ptr& base, const mutation& update) const {
     //FIXME: Avoid allocating a vector here; consider returning the boost iterator.
     return boost::copy_range<std::vector<view_ptr>>(_views | boost::adaptors::filtered([&] (auto&& view) {
         return db::view::partition_key_matches(*base, *view->view_info(), update.decorated_key());
@@ -2634,7 +2634,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     utils::get_local_injector().inject("table_push_view_replica_updates_stale_time_point", [&now] {
         now -= 10s;
     });
-    auto views = db::view::with_base_info_snapshot(affected_views(base, m));
+    auto views = db::view::with_base_info_snapshot(affected_views(gen, base, m));
     if (views.empty()) {
         co_return row_locker::lock_holder();
     }
