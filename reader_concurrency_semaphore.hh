@@ -100,8 +100,8 @@ public:
         uint64_t reads_admitted_immediately = 0;
         // Total number of reads enqueued because ready_list wasn't empty
         uint64_t reads_queued_because_ready_list = 0;
-        // Total number of reads enqueued because there are used but unblocked permits
-        uint64_t reads_queued_because_used_permits = 0;
+        // Total number of reads enqueued because there are permits who need CPU to make progress
+        uint64_t reads_queued_because_need_cpu_permits = 0;
         // Total number of reads enqueued because there weren't enough memory resources
         uint64_t reads_queued_because_memory_resources = 0;
         // Total number of reads enqueued because there weren't enough count resources
@@ -112,10 +112,10 @@ public:
         uint64_t total_permits = 0;
         // Current number of permits.
         uint64_t current_permits = 0;
-        // Current number of used permits.
-        uint64_t used_permits = 0;
-        // Current number of blocked permits.
-        uint64_t blocked_permits = 0;
+        // Current number permits needing CPU to make progress.
+        uint64_t need_cpu_permits = 0;
+        // Current number of permits awaiting I/O or an operation running on a remote shard.
+        uint64_t awaits_permits = 0;
         // Current number of reads reading from the disk.
         uint64_t disk_reads = 0;
         // The number of sstables read currently.

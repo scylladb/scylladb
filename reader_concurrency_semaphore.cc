@@ -771,14 +771,14 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
             "reads_enqueued_for_memory: {}\n"
             "reads_admitted_immediately: {}\n"
             "reads_queued_because_ready_list: {}\n"
-            "reads_queued_because_used_permits: {}\n"
+            "reads_queued_because_need_cpu_permits: {}\n"
             "reads_queued_because_memory_resources: {}\n"
             "reads_queued_because_count_resources: {}\n"
             "reads_queued_with_eviction: {}\n"
             "total_permits: {}\n"
             "current_permits: {}\n"
-            "used_permits: {}\n"
-            "blocked_permits: {}\n"
+            "need_cpu_permits: {}\n"
+            "awaits_permits: {}\n"
             "disk_reads: {}\n"
             "sstables_read: {}",
             stats.permit_based_evictions,
@@ -793,14 +793,14 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
             stats.reads_enqueued_for_memory,
             stats.reads_admitted_immediately,
             stats.reads_queued_because_ready_list,
-            stats.reads_queued_because_used_permits,
+            stats.reads_queued_because_need_cpu_permits,
             stats.reads_queued_because_memory_resources,
             stats.reads_queued_because_count_resources,
             stats.reads_queued_with_eviction,
             stats.total_permits,
             stats.current_permits,
-            stats.used_permits,
-            stats.blocked_permits,
+            stats.need_cpu_permits,
+            stats.awaits_permits,
             stats.disk_reads,
             stats.sstables_read);
 }
@@ -1162,7 +1162,7 @@ bool reader_concurrency_semaphore::has_available_units(const resources& r) const
 }
 
 bool reader_concurrency_semaphore::all_used_permits_are_stalled() const {
-    return _stats.used_permits == _stats.blocked_permits;
+    return _stats.need_cpu_permits == _stats.awaits_permits;
 }
 
 std::exception_ptr reader_concurrency_semaphore::check_queue_size(std::string_view queue_name) {
@@ -1280,7 +1280,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
     static uint64_t stats::*stats_table[] = {
         &stats::reads_admitted_immediately,
         &stats::reads_queued_because_ready_list,
-        &stats::reads_queued_because_used_permits,
+        &stats::reads_queued_because_need_cpu_permits,
         &stats::reads_queued_because_memory_resources,
         &stats::reads_queued_because_count_resources
     };
@@ -1288,7 +1288,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
     static const char* result_as_string[] = {
         "admitted immediately",
         "queued because of non-empty ready list",
-        "queued because of used permits",
+        "queued because of need_cpu permits",
         "queued because of memory resources",
         "queued because of count resources"
     };
@@ -1414,25 +1414,25 @@ void reader_concurrency_semaphore::on_permit_destroyed(reader_permit::impl& perm
 }
 
 void reader_concurrency_semaphore::on_permit_used() noexcept {
-    ++_stats.used_permits;
+    ++_stats.need_cpu_permits;
 }
 
 void reader_concurrency_semaphore::on_permit_unused() noexcept {
-    assert(_stats.used_permits);
-    --_stats.used_permits;
-    assert(_stats.used_permits >= _stats.blocked_permits);
+    assert(_stats.need_cpu_permits);
+    --_stats.need_cpu_permits;
+    assert(_stats.need_cpu_permits >= _stats.awaits_permits);
     maybe_admit_waiters();
 }
 
 void reader_concurrency_semaphore::on_permit_blocked() noexcept {
-    ++_stats.blocked_permits;
-    assert(_stats.used_permits >= _stats.blocked_permits);
+    ++_stats.awaits_permits;
+    assert(_stats.need_cpu_permits >= _stats.awaits_permits);
     maybe_admit_waiters();
 }
 
 void reader_concurrency_semaphore::on_permit_unblocked() noexcept {
-    assert(_stats.blocked_permits);
-    --_stats.blocked_permits;
+    assert(_stats.awaits_permits);
+    --_stats.awaits_permits;
 }
 
 future<reader_permit> reader_concurrency_semaphore::obtain_permit(const schema* const schema, const char* const op_name, size_t memory,

@@ -863,8 +863,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_used_blocked) {
     auto stop_sem = deferred_stop(semaphore);
 
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 0);
-    BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 0);
-    BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().need_cpu_permits, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().awaits_permits, 0);
 
     auto permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get0();
 
@@ -880,31 +880,31 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_used_blocked) {
                 used.emplace_back(permit);
 
                 BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 1);
-                BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 1);
-                BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 0);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().need_cpu_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().awaits_permits, 0);
                 break;
             case 1:
                 used.emplace_back(permit);
                 blocked.emplace_back(permit);
 
                 BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 1);
-                BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 1);
-                BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().need_cpu_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().awaits_permits, 1);
                 break;
             case 2:
                 blocked.emplace_back(permit);
 
                 BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 1);
-                BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 0);
-                BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 0);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().need_cpu_permits, 0);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().awaits_permits, 0);
                 break;
             case 3:
                 blocked.emplace_back(permit);
                 used.emplace_back(permit);
 
                 BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 1);
-                BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 1);
-                BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().need_cpu_permits, 1);
+                BOOST_REQUIRE_EQUAL(semaphore.get_stats().awaits_permits, 1);
                 break;
             default:
                 count = tests::random::get_int<unsigned>(3, 100);
@@ -924,12 +924,12 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_used_blocked) {
             if (pop_used) {
                 used.pop_back();
                 if (used.empty()) {
-                    BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 0);
+                    BOOST_REQUIRE_EQUAL(semaphore.get_stats().need_cpu_permits, 0);
                 }
             } else {
                 blocked.pop_back();
                 if (blocked.empty()) {
-                    BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 0);
+                    BOOST_REQUIRE_EQUAL(semaphore.get_stats().awaits_permits, 0);
                 }
             }
         }
@@ -1023,8 +1023,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_
     auto p3_fut = semaphore.obtain_permit(&s, get_name(), 1024, db::no_timeout, {});
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 2); // (waiters includes _ready_list entries)
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_admission, 1);
-    BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 0); // permit looses used status while waiting for execution
-    BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().need_cpu_permits, 0); // permit looses used status while waiting for execution
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().awaits_permits, 0);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().inactive_reads, 1);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().permit_based_evictions, 0);
     BOOST_REQUIRE_EQUAL(semaphore.available_resources().count, 0);
@@ -1033,8 +1033,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_
     // Start the read emptying the ready list, this should not be enough to admit p3
     rd2.wait_read_started().get();
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
-    BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 1);
-    BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().need_cpu_permits, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().awaits_permits, 0);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().inactive_reads, 1);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().permit_based_evictions, 0);
     BOOST_REQUIRE_EQUAL(semaphore.available_resources().count, 0);
@@ -1043,8 +1043,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_
     // Marking p2 as blocked should now allow p3 to be admitted by evicting p1
     rd2.mark_as_blocked();
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 0);
-    BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, 1);
-    BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().need_cpu_permits, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().awaits_permits, 1);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().inactive_reads, 0);
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().permit_based_evictions, 1);
     BOOST_REQUIRE_EQUAL(semaphore.available_resources().count, 0);
@@ -1502,14 +1502,14 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_request_memory_preser
         testlog.info("do_check() {}:{}", sl.file_name(), sl.line());
 
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 2);
-        BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, used);
-        BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, blocked);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().need_cpu_permits, used);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().awaits_permits, blocked);
 
         auto units1 = permit.request_memory(1024).get();
 
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 2);
-        BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, used);
-        BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, blocked);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().need_cpu_permits, used);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().awaits_permits, blocked);
 
         auto sponge_units = sponge_permit.request_memory(8 * 1024).get();
 
@@ -1523,8 +1523,8 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_request_memory_preser
         auto units2 = units2_fut.get();
 
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 2);
-        BOOST_REQUIRE_EQUAL(semaphore.get_stats().used_permits, used);
-        BOOST_REQUIRE_EQUAL(semaphore.get_stats().blocked_permits, blocked);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().need_cpu_permits, used);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().awaits_permits, blocked);
     };
 
     // unused
@@ -1723,7 +1723,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_no_unnecessary_evicti
 
         auto permit4_fut = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {});
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
-        BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_queued_because_used_permits, 1);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_queued_because_need_cpu_permits, 1);
 
         // First check the register path.
         auto handle = semaphore.register_inactive_read(make_empty_flat_reader_v2(s, permit3));
