@@ -37,14 +37,14 @@ public:
     virtual sstring element_type() const override { return "aggregate"; }
     virtual std::ostream& describe(std::ostream& os) const override;
 
-    const scalar_function& sfunc() const {
-        return *_sfunc;
+    seastar::shared_ptr<scalar_function> sfunc() const {
+        return _sfunc;
     }
-    const scalar_function& reducefunc() const {
-        return *_reducefunc;
+    seastar::shared_ptr<scalar_function> reducefunc() const {
+        return _reducefunc;
     }
-    const scalar_function& finalfunc() const {
-        return *_finalfunc;
+    seastar::shared_ptr<scalar_function> finalfunc() const {
+        return _finalfunc;
     }
     const bytes_opt& initcond() const {
         return _initcond;
