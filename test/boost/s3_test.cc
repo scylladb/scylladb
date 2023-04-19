@@ -111,7 +111,7 @@ void do_test_client_multipart_upload(bool with_copy_upload) {
     );
     auto close = seastar::deferred_close(out);
 
-    static constexpr unsigned chunk_size = 1024;
+    static constexpr unsigned chunk_size = 1000;
     auto rnd = tests::random::get_bytes(chunk_size);
     uint64_t object_size = 0;
     for (unsigned ch = 0; ch < 128 * 1024; ch++) {
