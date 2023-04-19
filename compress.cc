@@ -34,6 +34,16 @@ public:
     size_t compress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress_max_size(size_t input_len) const override;
+
+    // Note: lz4 compressor does _not_ implement the scatterered
+    // compress/decompress API:s. This is on purpose, not just me
+    // being lazy. The reason why is that lz4 does not have an API
+    // to do incremental comp/decomp. The closest we get is block-incremental,
+    // but this requires symmetric comp/decomp (i.e. must store compressed
+    // bounds per block in a "stream"), or using "frame" API (lzframe).
+    // Neither of these would create an end result that is the same
+    // as the above, non-scattered, API calls. So for lz4 we just use
+    // the linearized fallback. Or in other words: don't use lz4 for this.
 };
 
 class snappy_processor: public compressor {
