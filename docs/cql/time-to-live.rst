@@ -61,7 +61,7 @@ When you set a TTL with an INSERT operation, the TTL will be applied to each ind
         // Run the following select command 30sec after INSERT
         SELECT * FROM heartrate WHERE pet_chip_id = c63e71f0-936e-11ea-bb37-0242ac130002;
 
-After waiting for 30 seconds and running the SELECT command, you will receive null values for all fields except for the heart_rate field. To expire the entire row after the initial TTL that was set during the INSERT operation, make sure to update the column with the appropriate TTL value.
+After waiting 30 seconds and running the SELECT command, you will receive null values for all fields except for the heart_rate field. To expire the entire row after the initial TTL that was set during the INSERT operation, make sure to update the column with the appropriate TTL value.
 
   
 TTL for a Table
