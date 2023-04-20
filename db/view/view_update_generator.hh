@@ -72,6 +72,8 @@ public:
     future<> stop();
     future<> register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<replica::table> table);
 
+    replica::database& get_db() noexcept { return _db; }
+
     future<> mutate_MV(
             dht::token base_token,
             utils::chunked_vector<frozen_mutation_and_schema> view_updates,
