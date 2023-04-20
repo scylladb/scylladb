@@ -2094,16 +2094,15 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
 
 future<std::unordered_map<sstring, sstring>>
 view_builder::view_build_statuses(sstring keyspace, sstring view_name) const {
-    return _sys_dist_ks.view_status(std::move(keyspace), std::move(view_name)).then([] (std::unordered_map<locator::host_id, sstring> status) {
-        std::unordered_map<sstring, sstring> status_map;
-        const auto& topo = service::get_local_storage_proxy().get_token_metadata_ptr()->get_topology();
-        topo.for_each_node([&] (const locator::node *node) {
-            auto it = status.find(node->host_id());
-            auto s = it != status.end() ? std::move(it->second) : "UNKNOWN";
-            status_map.emplace(node->endpoint().to_sstring(), std::move(s));
-        });
-        return status_map;
+    std::unordered_map<locator::host_id, sstring> status = co_await _sys_dist_ks.view_status(std::move(keyspace), std::move(view_name));
+    std::unordered_map<sstring, sstring> status_map;
+    const auto& topo = _db.get_token_metadata().get_topology();
+    topo.for_each_node([&] (const locator::node *node) {
+        auto it = status.find(node->host_id());
+        auto s = it != status.end() ? std::move(it->second) : "UNKNOWN";
+        status_map.emplace(node->endpoint().to_sstring(), std::move(s));
     });
+    co_return status_map;
 }
 
 future<> view_builder::add_new_view(view_ptr view, build_step& step) {

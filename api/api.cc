@@ -194,6 +194,10 @@ future<> set_server_storage_proxy(http_context& ctx, sharded<service::storage_se
                 });
 }
 
+future<> unset_server_storage_proxy(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_storage_proxy(ctx, r); });
+}
+
 future<> set_server_stream_manager(http_context& ctx, sharded<streaming::stream_manager>& sm) {
     return register_api(ctx, "stream_manager",
                 "The stream manager API", [&sm] (http_context& ctx, routes& r) {

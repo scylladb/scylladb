@@ -191,36 +191,36 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
         return make_ready_future<json::json_return_type>(0);
     });
 
-    sp::get_hinted_handoff_enabled.set(r, [](std::unique_ptr<http::request> req)  {
-        const auto& filter = service::get_storage_proxy().local().get_hints_host_filter();
+    sp::get_hinted_handoff_enabled.set(r, [&ctx](std::unique_ptr<http::request> req)  {
+        const auto& filter = ctx.sp.local().get_hints_host_filter();
         return make_ready_future<json::json_return_type>(!filter.is_disabled_for_all());
     });
 
-    sp::set_hinted_handoff_enabled.set(r, [](std::unique_ptr<http::request> req)  {
+    sp::set_hinted_handoff_enabled.set(r, [&ctx](std::unique_ptr<http::request> req)  {
         auto enable = req->get_query_param("enable");
         auto filter = (enable == "true" || enable == "1")
                 ? db::hints::host_filter(db::hints::host_filter::enabled_for_all_tag {})
                 : db::hints::host_filter(db::hints::host_filter::disabled_for_all_tag {});
-        return service::get_storage_proxy().invoke_on_all([filter = std::move(filter)] (service::storage_proxy& sp) {
+        return ctx.sp.invoke_on_all([filter = std::move(filter)] (service::storage_proxy& sp) {
             return sp.change_hints_host_filter(filter);
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
 
-    sp::get_hinted_handoff_enabled_by_dc.set(r, [](std::unique_ptr<http::request> req)  {
+    sp::get_hinted_handoff_enabled_by_dc.set(r, [&ctx](std::unique_ptr<http::request> req)  {
         std::vector<sstring> res;
-        const auto& filter = service::get_storage_proxy().local().get_hints_host_filter();
+        const auto& filter = ctx.sp.local().get_hints_host_filter();
         const auto& dcs = filter.get_dcs();
         res.reserve(res.size());
         std::copy(dcs.begin(), dcs.end(), std::back_inserter(res));
         return make_ready_future<json::json_return_type>(res);
     });
 
-    sp::set_hinted_handoff_enabled_by_dc_list.set(r, [](std::unique_ptr<http::request> req)  {
+    sp::set_hinted_handoff_enabled_by_dc_list.set(r, [&ctx](std::unique_ptr<http::request> req)  {
         auto dcs = req->get_query_param("dcs");
         auto filter = db::hints::host_filter::parse_from_dc_list(std::move(dcs));
-        return service::get_storage_proxy().invoke_on_all([filter = std::move(filter)] (service::storage_proxy& sp) {
+        return ctx.sp.invoke_on_all([filter = std::move(filter)] (service::storage_proxy& sp) {
             return sp.change_hints_host_filter(filter);
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
@@ -516,6 +516,75 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
     sp::get_range_latency.set(r, [&ctx](std::unique_ptr<http::request> req) {
         return total_latency(ctx, &service::storage_proxy_stats::stats::range);
     });
+}
+
+void unset_storage_proxy(http_context& ctx, routes& r) {
+    sp::get_total_hints.unset(r);
+    sp::get_hinted_handoff_enabled.unset(r);
+    sp::set_hinted_handoff_enabled.unset(r);
+    sp::get_hinted_handoff_enabled_by_dc.unset(r);
+    sp::set_hinted_handoff_enabled_by_dc_list.unset(r);
+    sp::get_max_hint_window.unset(r);
+    sp::set_max_hint_window.unset(r);
+    sp::get_max_hints_in_progress.unset(r);
+    sp::set_max_hints_in_progress.unset(r);
+    sp::get_hints_in_progress.unset(r);
+    sp::get_rpc_timeout.unset(r);
+    sp::set_rpc_timeout.unset(r);
+    sp::get_read_rpc_timeout.unset(r);
+    sp::set_read_rpc_timeout.unset(r);
+    sp::get_write_rpc_timeout.unset(r);
+    sp::set_write_rpc_timeout.unset(r);
+    sp::get_counter_write_rpc_timeout.unset(r);
+    sp::set_counter_write_rpc_timeout.unset(r);
+    sp::get_cas_contention_timeout.unset(r);
+    sp::set_cas_contention_timeout.unset(r);
+    sp::get_range_rpc_timeout.unset(r);
+    sp::set_range_rpc_timeout.unset(r);
+    sp::get_truncate_rpc_timeout.unset(r);
+    sp::set_truncate_rpc_timeout.unset(r);
+    sp::reload_trigger_classes.unset(r);
+    sp::get_read_repair_attempted.unset(r);
+    sp::get_read_repair_repaired_blocking.unset(r);
+    sp::get_read_repair_repaired_background.unset(r);
+    sp::get_schema_versions.unset(r);
+    sp::get_cas_read_timeouts.unset(r);
+    sp::get_cas_read_unavailables.unset(r);
+    sp::get_cas_write_timeouts.unset(r);
+    sp::get_cas_write_unavailables.unset(r);
+    sp::get_cas_write_metrics_unfinished_commit.unset(r);
+    sp::get_cas_write_metrics_contention.unset(r);
+    sp::get_cas_write_metrics_condition_not_met.unset(r);
+    sp::get_cas_write_metrics_failed_read_round_optimization.unset(r);
+    sp::get_cas_read_metrics_unfinished_commit.unset(r);
+    sp::get_cas_read_metrics_contention.unset(r);
+    sp::get_read_metrics_timeouts.unset(r);
+    sp::get_read_metrics_unavailables.unset(r);
+    sp::get_range_metrics_timeouts.unset(r);
+    sp::get_range_metrics_unavailables.unset(r);
+    sp::get_write_metrics_timeouts.unset(r);
+    sp::get_write_metrics_unavailables.unset(r);
+    sp::get_read_metrics_timeouts_rates.unset(r);
+    sp::get_read_metrics_unavailables_rates.unset(r);
+    sp::get_range_metrics_timeouts_rates.unset(r);
+    sp::get_range_metrics_unavailables_rates.unset(r);
+    sp::get_write_metrics_timeouts_rates.unset(r);
+    sp::get_write_metrics_unavailables_rates.unset(r);
+    sp::get_range_metrics_latency_histogram_depricated.unset(r);
+    sp::get_write_metrics_latency_histogram_depricated.unset(r);
+    sp::get_read_metrics_latency_histogram_depricated.unset(r);
+    sp::get_range_metrics_latency_histogram.unset(r);
+    sp::get_write_metrics_latency_histogram.unset(r);
+    sp::get_cas_write_metrics_latency_histogram.unset(r);
+    sp::get_cas_read_metrics_latency_histogram.unset(r);
+    sp::get_view_write_metrics_latency_histogram.unset(r);
+    sp::get_read_metrics_latency_histogram.unset(r);
+    sp::get_read_estimated_histogram.unset(r);
+    sp::get_read_latency.unset(r);
+    sp::get_write_estimated_histogram.unset(r);
+    sp::get_write_latency.unset(r);
+    sp::get_range_estimated_histogram.unset(r);
+    sp::get_range_latency.unset(r);
 }
 
 }

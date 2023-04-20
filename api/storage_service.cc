@@ -1023,12 +1023,11 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         return make_ready_future<json::json_return_type>(res);
     });
 
-    ss::reset_local_schema.set(r, [&sys_ks](std::unique_ptr<http::request> req) {
+    ss::reset_local_schema.set(r, [&ctx, &sys_ks](std::unique_ptr<http::request> req) {
         // FIXME: We should truncate schema tables if more than one node in the cluster.
-        auto& sp = service::get_storage_proxy();
-        auto& fs = sp.local().features();
+        auto& fs = ctx.sp.local().features();
         apilog.info("reset_local_schema");
-        return db::schema_tables::recalculate_schema_version(sys_ks, sp, fs).then([] {
+        return db::schema_tables::recalculate_schema_version(sys_ks, ctx.sp, fs).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
