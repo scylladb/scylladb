@@ -388,7 +388,13 @@ public:
         if (_pos != _beg_pos && addr.offset != 0) {
             throw std::runtime_error("compressed reader out of sync");
         }
+        if (!addr.chunk_len) {
+            throw sstables::malformed_sstable_exception(format("compressed chunk_len must be greater than zero, chunk_start={}", addr.chunk_start));
+        }
         return _input_stream->read_exactly(addr.chunk_len).then([this, addr](temporary_buffer<char> buf) {
+            if (buf.size() != addr.chunk_len) {
+                throw sstables::malformed_sstable_exception(format("compressed reader hit premature end-of-file at file offset {}, expected chunk_len={}, actual={}", _underlying_pos, addr.chunk_len, buf.size()));
+            }
             return _permit.request_memory(_compression_metadata->uncompressed_chunk_length()).then(
                     [this, addr, buf = std::move(buf)] (reader_permit::resource_units res_units) mutable {
                 // The last 4 bytes of the chunk are the adler32/crc32 checksum
