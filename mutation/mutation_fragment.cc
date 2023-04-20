@@ -105,7 +105,7 @@ mutation_fragment::mutation_fragment(const schema& s, reader_permit permit, part
 
 void mutation_fragment::reset_memory(const schema& s, std::optional<reader_resources> res) {
     try {
-        _data->_memory.reset(res ? *res : reader_resources::with_memory(calculate_memory_usage(s)));
+        _data->_memory.reset_to(res ? *res : reader_resources::with_memory(calculate_memory_usage(s)));
     } catch (...) {
         destroy_data();
         throw;
@@ -191,7 +191,7 @@ void mutation_fragment_v2::destroy_data() noexcept
 
 void mutation_fragment_v2::reset_memory(const schema& s, std::optional<reader_resources> res) {
     try {
-        _data->_memory.reset(res ? *res : reader_resources::with_memory(calculate_memory_usage(s)));
+        _data->_memory.reset_to(res ? *res : reader_resources::with_memory(calculate_memory_usage(s)));
     } catch (...) {
         destroy_data();
         throw;

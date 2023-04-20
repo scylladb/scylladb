@@ -201,7 +201,8 @@ public:
     resource_units& operator=(const resource_units&) = delete;
     resource_units& operator=(resource_units&&) noexcept;
     void add(resource_units&& o);
-    void reset(reader_resources res = {});
+    void reset_to(reader_resources res);
+    void reset_to_zero() noexcept;
     reader_permit permit() const { return _permit; }
     reader_resources resources() const { return _resources; }
 };

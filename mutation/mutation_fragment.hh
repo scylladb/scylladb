@@ -418,7 +418,7 @@ public:
     template<typename Consumer>
     requires MutationFragmentConsumer<Consumer, decltype(std::declval<Consumer>().consume(std::declval<range_tombstone>()))>
     decltype(auto) consume(Consumer& consumer) && {
-        _data->_memory.reset();
+        _data->_memory.reset_to_zero();
         switch (_kind) {
         case kind::static_row:
             return consumer.consume(std::move(_data->_static_row));

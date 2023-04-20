@@ -86,16 +86,14 @@ reader_permit::resource_units::resource_units(resource_units&& o) noexcept
 }
 
 reader_permit::resource_units::~resource_units() {
-    if (_resources.non_zero()) {
-        reset();
-    }
+    reset_to_zero();
 }
 
 reader_permit::resource_units& reader_permit::resource_units::operator=(resource_units&& o) noexcept {
     if (&o == this) {
         return *this;
     }
-    reset();
+    reset_to_zero();
     _permit = std::move(o._permit);
     _resources = std::exchange(o._resources, {});
     return *this;
@@ -106,7 +104,7 @@ void reader_permit::resource_units::add(resource_units&& o) {
     _resources += std::exchange(o._resources, {});
 }
 
-void reader_permit::resource_units::reset(reader_resources res) {
+void reader_permit::resource_units::reset_to(reader_resources res) {
     if (res.non_zero()) {
         _permit.consume(res);
     }
@@ -114,6 +112,13 @@ void reader_permit::resource_units::reset(reader_resources res) {
         _permit.signal(_resources);
     }
     _resources = res;
+}
+
+void reader_permit::resource_units::reset_to_zero() noexcept {
+    if (_resources.non_zero()) {
+        _permit.signal(_resources);
+        _resources = {};
+    }
 }
 
 class reader_permit::impl
