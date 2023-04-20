@@ -110,9 +110,13 @@ void mutation_partition_v2::ensure_last_dummy(const schema& s) {
     }
 }
 
-std::ostream& operator<<(std::ostream& out, const apply_resume& res) {
-    return out << "{" << int(res._stage) << ", " << res._pos << "}";
-}
+template <>
+struct fmt::formatter<apply_resume> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const apply_resume& res, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{{{}, {}}}", int(res._stage), res._pos);
+    }
+};
 
 stop_iteration mutation_partition_v2::apply_monotonically(const schema& s, mutation_partition_v2&& p, cache_tracker* tracker,
         mutation_application_stats& app_stats, is_preemptible preemptible, apply_resume& res, is_evictable evictable) {
