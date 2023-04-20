@@ -1318,6 +1318,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_snitch(ctx).get();
             });
             api::set_server_storage_proxy(ctx, ss).get();
+            auto stop_sp_api = defer_verbose_shutdown("storage proxy API", [&ctx] {
+                api::unset_server_storage_proxy(ctx).get();
+            });
             api::set_server_load_sstable(ctx, sys_ks).get();
             auto stop_cf_api = defer_verbose_shutdown("column family API", [&ctx] {
                 api::unset_server_load_sstable(ctx).get();

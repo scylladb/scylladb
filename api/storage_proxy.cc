@@ -518,4 +518,73 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_se
     });
 }
 
+void unset_storage_proxy(http_context& ctx, routes& r) {
+    sp::get_total_hints.unset(r);
+    sp::get_hinted_handoff_enabled.unset(r);
+    sp::set_hinted_handoff_enabled.unset(r);
+    sp::get_hinted_handoff_enabled_by_dc.unset(r);
+    sp::set_hinted_handoff_enabled_by_dc_list.unset(r);
+    sp::get_max_hint_window.unset(r);
+    sp::set_max_hint_window.unset(r);
+    sp::get_max_hints_in_progress.unset(r);
+    sp::set_max_hints_in_progress.unset(r);
+    sp::get_hints_in_progress.unset(r);
+    sp::get_rpc_timeout.unset(r);
+    sp::set_rpc_timeout.unset(r);
+    sp::get_read_rpc_timeout.unset(r);
+    sp::set_read_rpc_timeout.unset(r);
+    sp::get_write_rpc_timeout.unset(r);
+    sp::set_write_rpc_timeout.unset(r);
+    sp::get_counter_write_rpc_timeout.unset(r);
+    sp::set_counter_write_rpc_timeout.unset(r);
+    sp::get_cas_contention_timeout.unset(r);
+    sp::set_cas_contention_timeout.unset(r);
+    sp::get_range_rpc_timeout.unset(r);
+    sp::set_range_rpc_timeout.unset(r);
+    sp::get_truncate_rpc_timeout.unset(r);
+    sp::set_truncate_rpc_timeout.unset(r);
+    sp::reload_trigger_classes.unset(r);
+    sp::get_read_repair_attempted.unset(r);
+    sp::get_read_repair_repaired_blocking.unset(r);
+    sp::get_read_repair_repaired_background.unset(r);
+    sp::get_schema_versions.unset(r);
+    sp::get_cas_read_timeouts.unset(r);
+    sp::get_cas_read_unavailables.unset(r);
+    sp::get_cas_write_timeouts.unset(r);
+    sp::get_cas_write_unavailables.unset(r);
+    sp::get_cas_write_metrics_unfinished_commit.unset(r);
+    sp::get_cas_write_metrics_contention.unset(r);
+    sp::get_cas_write_metrics_condition_not_met.unset(r);
+    sp::get_cas_write_metrics_failed_read_round_optimization.unset(r);
+    sp::get_cas_read_metrics_unfinished_commit.unset(r);
+    sp::get_cas_read_metrics_contention.unset(r);
+    sp::get_read_metrics_timeouts.unset(r);
+    sp::get_read_metrics_unavailables.unset(r);
+    sp::get_range_metrics_timeouts.unset(r);
+    sp::get_range_metrics_unavailables.unset(r);
+    sp::get_write_metrics_timeouts.unset(r);
+    sp::get_write_metrics_unavailables.unset(r);
+    sp::get_read_metrics_timeouts_rates.unset(r);
+    sp::get_read_metrics_unavailables_rates.unset(r);
+    sp::get_range_metrics_timeouts_rates.unset(r);
+    sp::get_range_metrics_unavailables_rates.unset(r);
+    sp::get_write_metrics_timeouts_rates.unset(r);
+    sp::get_write_metrics_unavailables_rates.unset(r);
+    sp::get_range_metrics_latency_histogram_depricated.unset(r);
+    sp::get_write_metrics_latency_histogram_depricated.unset(r);
+    sp::get_read_metrics_latency_histogram_depricated.unset(r);
+    sp::get_range_metrics_latency_histogram.unset(r);
+    sp::get_write_metrics_latency_histogram.unset(r);
+    sp::get_cas_write_metrics_latency_histogram.unset(r);
+    sp::get_cas_read_metrics_latency_histogram.unset(r);
+    sp::get_view_write_metrics_latency_histogram.unset(r);
+    sp::get_read_metrics_latency_histogram.unset(r);
+    sp::get_read_estimated_histogram.unset(r);
+    sp::get_read_latency.unset(r);
+    sp::get_write_estimated_histogram.unset(r);
+    sp::get_write_latency.unset(r);
+    sp::get_range_estimated_histogram.unset(r);
+    sp::get_range_latency.unset(r);
+}
+
 }
