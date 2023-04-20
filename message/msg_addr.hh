@@ -19,7 +19,13 @@ struct msg_addr {
     uint32_t cpu_id;
     locator::host_id host_id;
 
-    msg_addr(gms::inet_address ip, uint32_t cpu = 0, locator::host_id host_id = locator::host_id::create_null_id()) noexcept
+    explicit msg_addr(gms::inet_address ip) noexcept
+        : addr(ip)
+        , cpu_id(0)
+        , host_id(locator::host_id::create_null_id())
+    {}
+
+    msg_addr(gms::inet_address ip, uint32_t cpu, locator::host_id host_id = locator::host_id::create_null_id()) noexcept
         : addr(ip)
         , cpu_id(cpu)
         , host_id(host_id)
