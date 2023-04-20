@@ -45,6 +45,7 @@
 #include "readers/combined.hh"
 
 #include <boost/range/algorithm/sort.hpp>
+#include <fmt/ranges.h>
 
 using namespace sstables;
 

@@ -3483,26 +3483,6 @@ std::ostream& operator<<(std::ostream& out, const deletion_time& dt) {
     return out << "{timestamp=" << dt.marked_for_delete_at << ", deletion_time=" << dt.marked_for_delete_at << "}";
 }
 
-std::ostream& operator<<(std::ostream& out, const sstables::component_type& comp_type) {
-    using ct = sstables::component_type;
-    switch (comp_type) {
-    case ct::Index: out << "Index"; break;
-    case ct::CompressionInfo: out << "CompressionInfo"; break;
-    case ct::Data: out << "Data"; break;
-    case ct::TOC: out << "TOC"; break;
-    case ct::Summary: out << "Summary"; break;
-    case ct::Digest: out << "Digest"; break;
-    case ct::CRC: out << "CRC"; break;
-    case ct::Filter: out << "Filter"; break;
-    case ct::Statistics: out << "Statistics"; break;
-    case ct::TemporaryTOC: out << "TemporaryTOC"; break;
-    case ct::TemporaryStatistics: out << "TemporaryStatistics"; break;
-    case ct::Scylla: out << "Scylla"; break;
-    case ct::Unknown: out << "Unknown"; break;
-    }
-    return out;
-}
-
 std::optional<large_data_stats_entry> sstable::get_large_data_stat(large_data_type t) const noexcept {
     if (_large_data_stats) {
         auto it = _large_data_stats->map.find(t);
