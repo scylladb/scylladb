@@ -8,12 +8,13 @@
 
 import pytest
 import math
+from decimal import Decimal
 from util import new_test_table, unique_key_int, project
 from cassandra.util import Date
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
-    with new_test_table(cql, test_keyspace, "p int, c int, v int, d double, PRIMARY KEY (p, c)") as table:
+    with new_test_table(cql, test_keyspace, "p int, c int, v int, d double, dc decimal, PRIMARY KEY (p, c)") as table:
         yield table
 
 # When there is no row matching the selection, the count should be 0.
@@ -145,3 +146,59 @@ def test_aggregation_inf_nan(cql, table1):
     cql.execute(f"insert into {table1} (p, c, d) values ({p}, 2, -infinity)")
     assert [(-math.inf,)] == list(cql.execute(f"select d from {table1} where p = {p} and c = 2"))
     assert math.isnan(list(cql.execute(f"select sum(d) from {table1} where p = {p}"))[0][0])
+
+# When averaging "decimal" (arbitrary-precision floating point) values,
+# which precision should the output use? The average of 0, 0, 1 is
+# 0.3333333333..., but with how many threes?
+# The correct answer isn't clear. As explained in #13601 and CASSANDRA-18470,
+# both Scylla and Cassandra took the number of significant digits in the
+# average from the number of significant digits in the sum. So for example,
+# the average of 1 and 2 is 2 (in Scylla, or 1 in Cassandra), but the average
+# of 1.0 and 2.0 is 1.5. Similarly the average of 1.1 and 1.2 is 1.2 (or 1.1),
+# not 1.15. This is surprising.
+#
+# Given that there is no way for the user to configure the desired precision,
+# I don't know what would be a "correct" solution. I just feel that the
+# scenarios tested in this test - averaging 1 and 2 or 1.1 and 1.2 -
+# don't do something that any reasonable user might expect, and will need
+# to be fixed.
+@pytest.mark.xfail(reason="issue #13601")
+def test_avg_decimal(cql, table1, cassandra_bug):
+    p = unique_key_int()
+    cql.execute(f"insert into {table1} (p, c, dc) values ({p}, 1, 1.0)")
+    cql.execute(f"insert into {table1} (p, c, dc) values ({p}, 2, 2.0)")
+    assert [(Decimal('1.5'),)] == list(cql.execute(f"select avg(dc) from {table1} where p = {p}"))
+    p = unique_key_int()
+    cql.execute(f"insert into {table1} (p, c, dc) values ({p}, 1, 1)")
+    cql.execute(f"insert into {table1} (p, c, dc) values ({p}, 2, 2.0)")
+    assert [(Decimal('1.5'),)] == list(cql.execute(f"select avg(dc) from {table1} where p = {p}"))
+    p = unique_key_int()
+    cql.execute(f"insert into {table1} (p, c, dc) values ({p}, 1, 1.0)")
+    cql.execute(f"insert into {table1} (p, c, dc) values ({p}, 2, 2)")
+    assert [(Decimal('1.5'),)] == list(cql.execute(f"select avg(dc) from {table1} where p = {p}"))
+    p = unique_key_int()
+    cql.execute(f"insert into {table1} (p, c, dc) values ({p}, 1, 1)")
+    cql.execute(f"insert into {table1} (p, c, dc) values ({p}, 2, 2)")
+    # Reproduces #13601: the average of 1 and 2 was rounded up to the
+    # integer 2 instead of returning 1.5:
+    assert [(Decimal('1.5'),)] == list(cql.execute(f"select avg(dc) from {table1} where p = {p}"))
+    # Similarly, average of 1.1 and 1.2 was rounded up to 1.2 instead of
+    # returning 1.15.
+    p = unique_key_int()
+    cql.execute(f"insert into {table1} (p, c, dc) values ({p}, 1, 1.1)")
+    cql.execute(f"insert into {table1} (p, c, dc) values ({p}, 2, 1.2)")
+    assert [(Decimal('1.15'),)] == list(cql.execute(f"select avg(dc) from {table1} where p = {p}"))
+
+# Another test for average of "decimal" values: the average of 1, 2, 2, 3.
+# In this case the average is an integer, 2, but Cassandra doesn't even
+# get this right (see CASSANDRA-18470) because instead of of keeping the
+# integer sum and count separately, it tries to update the average and does
+# it in a too-low precision. Scylla passes this test correctly.
+def test_avg_decimal_2(cql, table1, cassandra_bug):
+    p = unique_key_int()
+    cql.execute(f"insert into {table1} (p, c, dc) values ({p}, 1, 1)")
+    cql.execute(f"insert into {table1} (p, c, dc) values ({p}, 2, 2)")
+    cql.execute(f"insert into {table1} (p, c, dc) values ({p}, 3, 2)")
+    cql.execute(f"insert into {table1} (p, c, dc) values ({p}, 4, 3)")
+    # Reproduces CASSANDRA-18470:
+    assert [(Decimal('2'),)] == list(cql.execute(f"select avg(dc) from {table1} where p = {p}"))
