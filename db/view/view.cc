@@ -79,7 +79,7 @@ view_info::view_info(const schema& schema, const raw_view_info& raw_view_info)
         , _has_computed_column_depending_on_base_non_primary_key(false)
 { }
 
-cql3::statements::select_statement& view_info::select_statement() const {
+cql3::statements::select_statement& view_info::select_statement(data_dictionary::database db) const {
     if (!_select_statement) {
         std::unique_ptr<cql3::statements::raw::select_statement> raw;
         // FIXME(sarna): legacy code, should be removed after "computed_columns" feature is guaranteed
@@ -111,7 +111,7 @@ cql3::statements::select_statement& view_info::select_statement() const {
 
 const query::partition_slice& view_info::partition_slice(data_dictionary::database db) const {
     if (!_partition_slice) {
-        _partition_slice = select_statement().make_partition_slice(cql3::query_options({ }));
+        _partition_slice = select_statement(db).make_partition_slice(cql3::query_options({ }));
     }
     return *_partition_slice;
 }
@@ -274,7 +274,7 @@ void stats::register_stats() {
 }
 
 bool partition_key_matches(data_dictionary::database db, const schema& base, const view_info& view, const dht::decorated_key& key) {
-    const cql3::expr::expression& pk_restrictions = view.select_statement().get_restrictions()->get_partition_key_restrictions();
+    const cql3::expr::expression& pk_restrictions = view.select_statement(db).get_restrictions()->get_partition_key_restrictions();
     std::vector<bytes> exploded_pk = key.key().explode();
     std::vector<bytes> exploded_ck;
     std::vector<const column_definition*> pk_columns;
@@ -299,7 +299,7 @@ bool partition_key_matches(data_dictionary::database db, const schema& base, con
 }
 
 bool clustering_prefix_matches(data_dictionary::database db, const schema& base, const view_info& view, const partition_key& key, const clustering_key_prefix& ck) {
-    const cql3::expr::expression& r = view.select_statement().get_restrictions()->get_clustering_columns_restrictions();
+    const cql3::expr::expression& r = view.select_statement(db).get_restrictions()->get_clustering_columns_restrictions();
     std::vector<bytes> exploded_pk = key.explode();
     std::vector<bytes> exploded_ck = ck.explode();
     std::vector<const column_definition*> ck_columns;
@@ -384,7 +384,7 @@ public:
     bool check_if_matches(const clustering_key& key, const query::result_row_view& static_row, const query::result_row_view& row) const {
         std::vector<bytes> ck = key.explode();
         return boost::algorithm::all_of(
-            _view.select_statement().get_restrictions()->get_non_pk_restriction() | boost::adaptors::map_values,
+            _view.select_statement(_db).get_restrictions()->get_non_pk_restriction() | boost::adaptors::map_values,
             [&] (auto&& r) {
                 // FIXME: move outside all_of(). However, crashes.
                 auto static_and_regular_columns = cql3::expr::get_non_pk_values(*_selection, static_row, &row);
@@ -1472,7 +1472,7 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_d
     if (mp.partition_tombstone() || !mp.row_tombstones().empty()) {
         for (auto&& v : views) {
             // FIXME: #2371
-            if (v.view->view_info()->select_statement().get_restrictions()->has_unrestricted_clustering_columns()) {
+            if (v.view->view_info()->select_statement(db).get_restrictions()->has_unrestricted_clustering_columns()) {
                 view_row_ranges.push_back(nonwrapping_range<clustering_key_prefix_view>::make_open_ended_both_sides());
                 break;
             }
