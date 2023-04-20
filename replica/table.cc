@@ -1983,12 +1983,12 @@ std::vector<view_ptr> table::affected_views(const schema_ptr& base, const mutati
     }));
 }
 
-static size_t memory_usage_of(const utils::chunked_vector<frozen_mutation_and_schema>& ms) {
-    // Overhead of sending a view mutation.
-    constexpr size_t base_overhead_bytes = 65536;
+static size_t view_semaphore_units_needed_for(const utils::chunked_vector<frozen_mutation_and_schema>& ms) {
+    // A minimal amount of units needed to send a view update.
+    constexpr size_t view_update_base_units = 65536;
     return boost::accumulate(ms | boost::adaptors::transformed([] (const frozen_mutation_and_schema& m) {
         return m.fm.representation().size();
-    }), size_t{base_overhead_bytes * ms.size()});
+    }), size_t{view_update_base_units * ms.size()});
 }
 
 /**
@@ -2037,7 +2037,8 @@ future<> table::generate_and_propagate_view_updates(shared_ptr<db::view::view_up
         tracing::trace(tr_state, "Generated {} view update mutations", updates->size());
         semaphore_units<seastar::default_timeout_exception_factory, seastar::lowres_clock> units;
         try {
-            units = co_await seastar::get_units(*_config.view_update_concurrency_semaphore, memory_usage_of(*updates), timeout);
+            size_t needed_units = view_semaphore_units_needed_for(*updates);
+            units = co_await seastar::get_units(*_config.view_update_concurrency_semaphore, needed_units, timeout);
         } catch (...) {
             err = std::current_exception();
             break;
@@ -2172,7 +2173,7 @@ future<> table::populate_views(
             if (!updates) {
                 break;
             }
-            size_t update_size = memory_usage_of(*updates);
+            size_t update_size = view_semaphore_units_needed_for(*updates);
             size_t units_to_wait_for = std::min(_config.view_update_concurrency_semaphore_limit, update_size);
             auto units = co_await seastar::get_units(*_config.view_update_concurrency_semaphore, units_to_wait_for);
             units.adopt(seastar::consume_units(*_config.view_update_concurrency_semaphore, update_size - units_to_wait_for));
