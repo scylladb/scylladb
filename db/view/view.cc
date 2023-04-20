@@ -876,7 +876,7 @@ static void add_cells_to_view(const schema& base, const schema& view, column_kin
  * Creates a view entry corresponding to the provided base row.
  * This method checks that the base row does match the view filter before applying anything.
  */
-void view_updates::create_entry(const partition_key& base_key, const clustering_or_static_row& update, gc_clock::time_point now) {
+void view_updates::create_entry(data_dictionary::database db, const partition_key& base_key, const clustering_or_static_row& update, gc_clock::time_point now) {
     if (!matches_view_filter(*_base, _view_info, base_key, update, now)) {
         return;
     }
@@ -900,7 +900,7 @@ void view_updates::create_entry(const partition_key& base_key, const clustering_
  * Deletes the view entry corresponding to the provided base row.
  * This method checks that the base row does match the view filter before bothering.
  */
-void view_updates::delete_old_entry(const partition_key& base_key, const clustering_or_static_row& existing, const clustering_or_static_row& update, gc_clock::time_point now) {
+void view_updates::delete_old_entry(data_dictionary::database db, const partition_key& base_key, const clustering_or_static_row& existing, const clustering_or_static_row& update, gc_clock::time_point now) {
     // Before deleting an old entry, make sure it was matching the view filter
     // (otherwise there is nothing to delete)
     if (matches_view_filter(*_base, _view_info, base_key, existing, now)) {
@@ -1020,11 +1020,11 @@ bool view_updates::can_skip_view_updates(const clustering_or_static_row& update,
  * This method checks that the base row (before and after) matches the view filter before
  * applying anything.
  */
-void view_updates::update_entry(const partition_key& base_key, const clustering_or_static_row& update, const clustering_or_static_row& existing, gc_clock::time_point now) {
+void view_updates::update_entry(data_dictionary::database db, const partition_key& base_key, const clustering_or_static_row& update, const clustering_or_static_row& existing, gc_clock::time_point now) {
     // While we know update and existing correspond to the same view entry,
     // they may not match the view filter.
     if (!matches_view_filter(*_base, _view_info, base_key, existing, now)) {
-        create_entry(base_key, update, now);
+        create_entry(db, base_key, update, now);
         return;
     }
     if (!matches_view_filter(*_base, _view_info, base_key, update, now)) {
@@ -1076,6 +1076,7 @@ void view_updates::update_entry_for_computed_column(
 }
 
 void view_updates::generate_update(
+        data_dictionary::database db,
         const partition_key& base_key,
         const clustering_or_static_row& update,
         const std::optional<clustering_or_static_row>& existing,
@@ -1105,12 +1106,12 @@ void view_updates::generate_update(
         // The view key is necessarily the same pre and post update.
         if (existing && existing->is_live(*_base)) {
             if (update.is_live(*_base)) {
-                update_entry(base_key, update, *existing, now);
+                update_entry(db, base_key, update, *existing, now);
             } else {
-                delete_old_entry(base_key, *existing, update, now);
+                delete_old_entry(db, base_key, *existing, update, now);
             }
         } else if (update.is_live(*_base)) {
-            create_entry(base_key, update, now);
+            create_entry(db, base_key, update, now);
         }
         return;
     }
@@ -1168,21 +1169,21 @@ void view_updates::generate_update(
     if (has_old_row) {
         if (has_new_row) {
             if (same_row) {
-                update_entry(base_key, update, *existing, now);
+                update_entry(db, base_key, update, *existing, now);
             } else {
                 // This code doesn't work if the old and new view row have the
                 // same key, because if they do we get both data and tombstone
                 // for the same timestamp (now) and the tombstone wins. This
                 // is why we need the "same_row" case above - it's not just a
                 // performance optimization.
-                delete_old_entry(base_key, *existing, update, now);
-                create_entry(base_key, update, now);
+                delete_old_entry(db, base_key, *existing, update, now);
+                create_entry(db, base_key, update, now);
             }
         } else {
-            delete_old_entry(base_key, *existing, update, now);
+            delete_old_entry(db, base_key, *existing, update, now);
         }
     } else if (has_new_row) {
-        create_entry(base_key, update, now);
+        create_entry(db, base_key, update, now);
     }
 }
 
@@ -1277,7 +1278,7 @@ void view_update_builder::generate_update(clustering_row&& update, std::optional
             ? std::make_optional<clustering_or_static_row>(std::move(*existing))
             : std::optional<clustering_or_static_row>();
     for (auto&& v : _view_updates) {
-        v.generate_update(_key, update_row, existing_row, _now);
+        v.generate_update(_db, _key, update_row, existing_row, _now);
     }
 }
 
@@ -1304,7 +1305,7 @@ void view_update_builder::generate_update(static_row&& update, const tombstone& 
             ? std::make_optional<clustering_or_static_row>(std::move(*existing))
             : std::optional<clustering_or_static_row>();
     for (auto&& v : _view_updates) {
-        v.generate_update(_key, update_row, existing_row, _now);
+        v.generate_update(_db, _key, update_row, existing_row, _now);
     }
 }
 
