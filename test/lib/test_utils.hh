@@ -47,4 +47,12 @@ void require_equal(const LHS& lhs, const RHS& rhs, std::source_location sl = std
 
 void fail(std::string_view msg, std::source_location sl = std::source_location::current());
 
+inline std::string getenv_safe(std::string_view name) {
+    auto v = ::getenv(name.data());
+    if (!v) {
+        throw std::logic_error(fmt::format("Environment variable {} not set", name));
+    }
+    return std::string(v);
+}
+
 }

@@ -12,20 +12,22 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
+#include <seastar/util/closeable.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/test_utils.hh"
 #include "utils/s3/client.hh"
 
 /*
  * Tests below expect minio server to be running on localhost
- * with the bucket named "testbucket" created with unrestricted
- * anonymous read-write access
+ * with the bucket named env['S3_PUBLIC_BUCKET_FOR_TEST'] created with
+ * unrestricted anonymous read-write access
  */
 
 SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
-    const ipv4_addr s3_server(::getenv("MINIO_SERVER_ADDRESS"), 9000);
-    const sstring name(fmt::format("/testbucket/testobject-{}", ::getpid()));
+    const ipv4_addr s3_server(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), 9000);
+    const sstring name(fmt::format("/{}/testobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
     auto cln = s3::client::make(s3_server);
@@ -57,14 +59,15 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload) {
-    const ipv4_addr s3_server(::getenv("MINIO_SERVER_ADDRESS"), 9000);
-    const sstring name(fmt::format("/testbucket/testlargeobject-{}", ::getpid()));
+    const ipv4_addr s3_server(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), 9000);
+    const sstring name(fmt::format("/{}/testlargeobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
     auto cln = s3::client::make(s3_server);
 
     testlog.info("Upload object\n");
     auto out = output_stream<char>(cln->make_upload_sink(name));
+    auto close = seastar::deferred_close(out);
 
     static constexpr unsigned chunk_size = 1024;
     auto rnd = tests::random::get_bytes(chunk_size);
@@ -78,7 +81,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload) {
     out.flush().get();
 
     testlog.info("Closing\n");
-    out.close().get();
+    close.close_now();
 
     testlog.info("Checking file size\n");
     size_t sz = cln->get_object_size(name).get0();
@@ -107,8 +110,8 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
-    const ipv4_addr s3_server(::getenv("MINIO_SERVER_ADDRESS"), 9000);
-    const sstring name(fmt::format("/testbucket/testroobject-{}", ::getpid()));
+    const ipv4_addr s3_server(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), 9000);
+    const sstring name(fmt::format("/{}/testroobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
     auto cln = s3::client::make(s3_server);
