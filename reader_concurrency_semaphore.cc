@@ -105,6 +105,15 @@ void reader_permit::resource_units::add(resource_units&& o) {
 }
 
 void reader_permit::resource_units::reset_to(reader_resources res) {
+    if (res == _resources) {
+        return;
+    }
+    if (res.count < _resources.count && res.memory < _resources.memory) {
+        _permit.signal(reader_resources{_resources.count - res.count, _resources.memory - res.memory});
+        _resources = res;
+        return;
+    }
+
     if (res.non_zero()) {
         _permit.consume(res);
     }
