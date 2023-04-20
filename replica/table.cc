@@ -1976,10 +1976,10 @@ const std::vector<view_ptr>& table::views() const {
     return _views;
 }
 
-std::vector<view_ptr> table::affected_views(const schema_ptr& base, const mutation& update) const {
+std::vector<view_ptr> table::affected_views(shared_ptr<db::view::view_update_generator> gen, const schema_ptr& base, const mutation& update) const {
     //FIXME: Avoid allocating a vector here; consider returning the boost iterator.
     return boost::copy_range<std::vector<view_ptr>>(_views | boost::adaptors::filtered([&] (auto&& view) {
-        return db::view::partition_key_matches(*base, *view->view_info(), update.decorated_key());
+        return db::view::partition_key_matches(gen->get_db().as_data_dictionary(), *base, *view->view_info(), update.decorated_key());
     }));
 }
 
@@ -2014,6 +2014,7 @@ future<> table::generate_and_propagate_view_updates(shared_ptr<db::view::view_up
     auto base_token = m.token();
     auto m_schema = m.schema();
     db::view::view_update_builder builder = db::view::make_view_update_builder(
+            gen->get_db().as_data_dictionary(),
             *this,
             base,
             std::move(views),
@@ -2151,6 +2152,7 @@ future<> table::populate_views(
         gc_clock::time_point now) {
     auto schema = reader.schema();
     db::view::view_update_builder builder = db::view::make_view_update_builder(
+            gen->get_db().as_data_dictionary(),
             *this,
             schema,
             std::move(views),
@@ -2634,11 +2636,11 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     utils::get_local_injector().inject("table_push_view_replica_updates_stale_time_point", [&now] {
         now -= 10s;
     });
-    auto views = db::view::with_base_info_snapshot(affected_views(base, m));
+    auto views = db::view::with_base_info_snapshot(affected_views(gen, base, m));
     if (views.empty()) {
         co_return row_locker::lock_holder();
     }
-    auto cr_ranges = co_await db::view::calculate_affected_clustering_ranges(*base, m.decorated_key(), m.partition(), views);
+    auto cr_ranges = co_await db::view::calculate_affected_clustering_ranges(gen->get_db().as_data_dictionary(), *base, m.decorated_key(), m.partition(), views);
     const bool need_regular = !cr_ranges.empty();
     const bool need_static = db::view::needs_static_row(m.partition(), views);
     if (!need_regular && !need_static) {
