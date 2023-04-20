@@ -9,7 +9,8 @@
 #pragma once
 
 #include <cstdint>
-#include <ostream>
+#include <string_view>
+#include <fmt/format.h>
 
 namespace streaming {
 
@@ -23,6 +24,29 @@ enum class stream_reason : uint8_t {
     replace,
 };
 
-std::ostream& operator<<(std::ostream& out, stream_reason r);
-
 }
+
+template <>
+struct fmt::formatter<streaming::stream_reason> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const streaming::stream_reason& r, FormatContext& ctx) const {
+        using enum streaming::stream_reason;
+        switch (r) {
+        case unspecified:
+            return formatter<std::string_view>::format("unspecified", ctx);
+        case bootstrap:
+            return formatter<std::string_view>::format("bootstrap", ctx);
+        case decommission:
+            return formatter<std::string_view>::format("decommission", ctx);
+        case removenode:
+            return formatter<std::string_view>::format("removenode", ctx);
+        case rebuild:
+            return formatter<std::string_view>::format("rebuild", ctx);
+        case repair:
+            return formatter<std::string_view>::format("repair", ctx);
+        case replace:
+            return formatter<std::string_view>::format("replace", ctx);
+        }
+        std::abort();
+    }
+};
