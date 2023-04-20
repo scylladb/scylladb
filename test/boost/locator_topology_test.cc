@@ -66,6 +66,33 @@ SEASTAR_THREAD_TEST_CASE(test_add_node) {
     topo.clear_gently().get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_moving) {
+    auto id1 = host_id::create_random_id();
+    auto ep1 = gms::inet_address("127.0.0.1");
+
+    utils::fb_utilities::set_broadcast_address(ep1);
+    topology::config cfg = {
+        .this_host_id = id1,
+        .this_endpoint = ep1,
+        .local_dc_rack = endpoint_dc_rack::default_location,
+    };
+
+    auto topo = topology(cfg);
+
+    topo.add_node(id1, ep1, endpoint_dc_rack::default_location, node::state::normal);
+
+    BOOST_REQUIRE(topo.this_node()->topology() == &topo);
+
+    topology topo2(std::move(topo));
+    BOOST_REQUIRE(topo2.this_node()->topology() == &topo2);
+    BOOST_REQUIRE(!topo.this_node());
+    BOOST_REQUIRE(topo2.get_config() == cfg);
+
+    topo = std::move(topo2);
+    BOOST_REQUIRE(topo.this_node()->topology() == &topo);
+    BOOST_REQUIRE(!topo2.this_node());
+    BOOST_REQUIRE(topo.get_config() == cfg);
+}
 
 SEASTAR_THREAD_TEST_CASE(test_update_node) {
     auto id1 = host_id::create_random_id();

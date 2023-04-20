@@ -99,6 +99,14 @@ topology::topology(topology&& o) noexcept
     }
 }
 
+topology& topology::operator=(topology&& o) noexcept {
+    if (this != &o) {
+        this->~topology();
+        new (this) topology(std::move(o));
+    }
+    return *this;
+}
+
 future<topology> topology::clone_gently() const {
     topology ret(_cfg);
     tlogger.debug("topology[{}]: clone_gently to {} from shard {}", fmt::ptr(this), fmt::ptr(&ret), _shard);

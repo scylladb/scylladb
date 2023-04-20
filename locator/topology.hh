@@ -111,11 +111,13 @@ public:
         inet_address this_endpoint;
         endpoint_dc_rack local_dc_rack;
         bool disable_proximity_sorting = false;
+
+        bool operator==(const config&) const = default;
     };
     topology(config cfg);
     topology(topology&&) noexcept;
 
-    topology& operator=(topology&&) = default;
+    topology& operator=(topology&&) noexcept;
 
     future<topology> clone_gently() const;
     future<> clear_gently() noexcept;
