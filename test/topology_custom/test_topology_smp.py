@@ -10,18 +10,18 @@ import logging
 import time
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
+from test.pylib.util import unique_name
 from test.topology.util import wait_for_token_ring_and_group0_consistency
 import pytest
+from pytest import FixtureRequest
 
 logger = logging.getLogger(__name__)
 
 
 # Checks basic functionality on the cluster with different values of the --smp parameter on the nodes.
 @pytest.mark.asyncio
-async def test_nodes_with_different_smp(manager: ManagerClient, random_tables: RandomTables) -> None:
+async def test_nodes_with_different_smp(request: FixtureRequest, manager: ManagerClient) -> None:
     # In this test it's more convenient to start with a fresh cluster.
-    # We don't need the default nodes,
-    # but there is currently no way to express this in the test infrastructure
 
     # When the node starts it tries to communicate with others
     # by sending group0_peer_exchange message to them.
@@ -39,15 +39,6 @@ async def test_nodes_with_different_smp(manager: ManagerClient, random_tables: R
     # In the general case, we cannot assume that this same shard guarantee holds.
     logger.info(f'Adding --smp=3 server')
     await manager.server_add(cmdline=['--smp', '3'])
-
-    # Remove the original 3 servers, the problem is easier to reproduce with --smp values
-    # that we pick, not the (currently) default --smp=2 coming from the suite.
-    logger.info(f'Decommissioning old servers')
-    servers = await manager.running_servers()
-    for s in servers[:-1]:
-        await manager.decommission_node(s.server_id)
-        await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
-
     logger.info(f'Adding --smp=4 server')
     await manager.server_add(cmdline=['--smp', '4'])
     logger.info(f'Adding --smp=5 server')
@@ -56,5 +47,6 @@ async def test_nodes_with_different_smp(manager: ManagerClient, random_tables: R
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
     logger.info(f'Creating new tables')
-    await random_tables.add_tables(ntables=4, ncolumns=5)
-    await random_tables.verify_schema()
+    tables = RandomTables(request.node.name, manager, unique_name(), 3)
+    await tables.add_tables(ntables=4, ncolumns=5)
+    await tables.verify_schema()
