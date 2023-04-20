@@ -109,7 +109,7 @@ cql3::statements::select_statement& view_info::select_statement() const {
     return *_select_statement;
 }
 
-const query::partition_slice& view_info::partition_slice() const {
+const query::partition_slice& view_info::partition_slice(data_dictionary::database db) const {
     if (!_partition_slice) {
         _partition_slice = select_statement().make_partition_slice(cql3::query_options({ }));
     }
@@ -1476,7 +1476,7 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_d
                 view_row_ranges.push_back(nonwrapping_range<clustering_key_prefix_view>::make_open_ended_both_sides());
                 break;
             }
-            for (auto&& r : v.view->view_info()->partition_slice().default_row_ranges()) {
+            for (auto&& r : v.view->view_info()->partition_slice(db).default_row_ranges()) {
                 view_row_ranges.push_back(r.transform(std::mem_fn(&clustering_key_prefix::view)));
                 co_await coroutine::maybe_yield();
             }
