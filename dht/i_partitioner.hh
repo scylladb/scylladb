@@ -602,8 +602,6 @@ struct token_comparator {
     std::strong_ordering operator()(const token& t1, const token& t2) const;
 };
 
-std::ostream& operator<<(std::ostream& out, const token& t);
-
 std::ostream& operator<<(std::ostream& out, const decorated_key& t);
 
 std::ostream& operator<<(std::ostream& out, const i_partitioner& p);
