@@ -86,7 +86,7 @@ struct topology {
     std::unordered_map<raft::server_id, request_param> req_param;
 
     // Find only nodes in non 'left' state
-    const std::pair<const raft::server_id, replica_state>* find(raft::server_id id);
+    const std::pair<const raft::server_id, replica_state>* find(raft::server_id id) const;
     // Return true if node exists in any state including 'left' one
     bool contains(raft::server_id id);
 };
