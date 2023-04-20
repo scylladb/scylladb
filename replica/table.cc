@@ -1979,7 +1979,7 @@ const std::vector<view_ptr>& table::views() const {
 std::vector<view_ptr> table::affected_views(shared_ptr<db::view::view_update_generator> gen, const schema_ptr& base, const mutation& update) const {
     //FIXME: Avoid allocating a vector here; consider returning the boost iterator.
     return boost::copy_range<std::vector<view_ptr>>(_views | boost::adaptors::filtered([&] (auto&& view) {
-        return db::view::partition_key_matches(*base, *view->view_info(), update.decorated_key());
+        return db::view::partition_key_matches(gen->get_db().as_data_dictionary(), *base, *view->view_info(), update.decorated_key());
     }));
 }
 
@@ -2640,7 +2640,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     if (views.empty()) {
         co_return row_locker::lock_holder();
     }
-    auto cr_ranges = co_await db::view::calculate_affected_clustering_ranges(*base, m.decorated_key(), m.partition(), views);
+    auto cr_ranges = co_await db::view::calculate_affected_clustering_ranges(gen->get_db().as_data_dictionary(), *base, m.decorated_key(), m.partition(), views);
     const bool need_regular = !cr_ranges.empty();
     const bool need_static = db::view::needs_static_row(m.partition(), views);
     if (!need_regular && !need_static) {

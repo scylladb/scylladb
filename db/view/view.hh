@@ -125,7 +125,7 @@ public:
  * @return false if we can guarantee that inserting an update for specified key
  * won't affect the view in any way, true otherwise.
  */
-bool partition_key_matches(const schema& base, const view_info& view, const dht::decorated_key& key);
+bool partition_key_matches(data_dictionary::database, const schema& base, const view_info& view, const dht::decorated_key& key);
 
 /**
  * Whether the view might be affected by the provided update.
@@ -140,7 +140,7 @@ bool partition_key_matches(const schema& base, const view_info& view, const dht:
  * @return false if we can guarantee that inserting update for key
  * won't affect the view in any way, true otherwise.
  */
-bool may_be_affected_by(const schema& base, const view_info& view, const dht::decorated_key& key, const rows_entry& update);
+bool may_be_affected_by(data_dictionary::database, const schema& base, const view_info& view, const dht::decorated_key& key, const rows_entry& update);
 
 /**
  * Whether a given base row matches the view filter (and thus if the view should have a corresponding entry).
@@ -159,9 +159,9 @@ bool may_be_affected_by(const schema& base, const view_info& view, const dht::de
  * @param now the current time in seconds (to decide what is live and what isn't).
  * @return whether the base row matches the view filter.
  */
-bool matches_view_filter(const schema& base, const view_info& view, const partition_key& key, const clustering_or_static_row& update, gc_clock::time_point now);
+bool matches_view_filter(data_dictionary::database, const schema& base, const view_info& view, const partition_key& key, const clustering_or_static_row& update, gc_clock::time_point now);
 
-bool clustering_prefix_matches(const schema& base, const partition_key& key, const clustering_key_prefix& ck);
+bool clustering_prefix_matches(data_dictionary::database, const schema& base, const partition_key& key, const clustering_key_prefix& ck);
 
 /*
  * When a base-table update modifies a value in a materialized view's key
@@ -310,6 +310,7 @@ view_update_builder make_view_update_builder(
         gc_clock::time_point now);
 
 future<query::clustering_row_ranges> calculate_affected_clustering_ranges(
+        data_dictionary::database db,
         const schema& base,
         const dht::decorated_key& key,
         const mutation_partition& mp,
