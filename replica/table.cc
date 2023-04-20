@@ -2627,15 +2627,11 @@ future<row_locker::lock_holder> table::push_view_replica_updates(shared_ptr<db::
 
 future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<db::view::view_update_generator> gen, schema_ptr s, mutation m, db::timeout_clock::time_point timeout, mutation_source source,
         tracing::trace_state_ptr tr_state, reader_concurrency_semaphore& sem, const io_priority_class& io_priority, query::partition_slice::option_set custom_opts) const {
-    if (!_config.view_update_concurrency_semaphore->current()) {
-        // We don't have resources to generate view updates for this write. If we reached this point, we failed to
-        // throttle the client. The memory queue is already full, waiting on the semaphore would cause this node to
-        // run out of memory, and generating hints would ultimately result in the disk queue being full too. We don't
-        // drop the base write, which could create inconsistencies between base replicas. So we dolefully continue,
-        // and note the fact we dropped a view update.
-        ++_config.cf_stats->dropped_view_updates;
-        co_return row_locker::lock_holder();
-    }
+    // Make sure that we have some resources available to generate the view update.
+    // If the database has been overwhelemed to the point where getting a few units timeouts,
+    // then it just can't handle the write at this moment. In such situation the query should timeout.
+    auto view_update_permit_units = co_await seastar::get_units(*_config.view_update_concurrency_semaphore, 1024, timeout);
+
     schema_ptr base = schema();
     m.upgrade(base);
     gc_clock::time_point now = gc_clock::now();
