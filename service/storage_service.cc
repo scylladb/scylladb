@@ -5016,7 +5016,7 @@ bool storage_service::is_repair_based_node_ops_enabled(streaming::stream_reason 
         }
     }
     bool global_enabled = _db.local().get_config().enable_repair_based_node_ops();
-    slogger.info("enable_repair_based_node_ops={}, allowed_repair_based_node_ops={}", global_enabled, enabled_set);
+    slogger.info("enable_repair_based_node_ops={}, allowed_repair_based_node_ops={{{}}}", global_enabled, fmt::join(enabled_set, " ,"));
     return global_enabled && enabled_set.contains(reason);
 }
 

@@ -7,7 +7,6 @@ target_sources(streaming
     stream_coordinator.cc
     stream_manager.cc
     stream_plan.cc
-    stream_reason.cc
     stream_receive_task.cc
     stream_request.cc
     stream_result_future.cc
