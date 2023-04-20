@@ -52,13 +52,7 @@ std::strong_ordering tri_compare(const token& t1, const token& t2) {
 }
 
 std::ostream& operator<<(std::ostream& out, const token& t) {
-    if (t._kind == token::kind::after_all_keys) {
-        out << "maximum token";
-    } else if (t._kind == token::kind::before_all_keys) {
-        out << "minimum token";
-    } else {
-        out << t.to_sstring();
-    }
+    fmt::print(out, "{}", t);
     return out;
 }
 

@@ -223,3 +223,17 @@ token bias(uint64_t n);
 size_t compaction_group_of(unsigned most_significant_bits, const token& t);
 
 } // namespace dht
+
+template <>
+struct fmt::formatter<dht::token> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const dht::token& t, FormatContext& ctx) const {
+        if (t.is_maximum()) {
+            return fmt::format_to(ctx.out(), "maximum token");
+        } else if (t.is_minimum()) {
+            return fmt::format_to(ctx.out(), "minimum token");
+        } else {
+            return fmt::format_to(ctx.out(), "{}", dht::token::to_int64(t));
+        }
+    }
+};
