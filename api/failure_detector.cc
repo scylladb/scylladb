@@ -8,7 +8,6 @@
 
 #include "failure_detector.hh"
 #include "api/api-doc/failure_detector.json.hh"
-#include "gms/failure_detector.hh"
 #include "gms/application_state.hh"
 #include "gms/gossiper.hh"
 
@@ -81,15 +80,9 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
     });
 
     fd::get_endpoint_phi_values.set(r, [](std::unique_ptr<request> req) {
-        std::map<gms::inet_address, gms::arrival_window> map;
+        // We no longer have a phi failure detector,
+        // just returning the empty value is good enough.
         std::vector<fd::endpoint_phi_value> res;
-        auto now = gms::arrival_window::clk::now();
-        for (auto& p : map) {
-            fd::endpoint_phi_value val;
-            val.endpoint = p.first.to_sstring();
-            val.phi = p.second.phi(now);
-            res.emplace_back(std::move(val));
-        }
         return make_ready_future<json::json_return_type>(res);
     });
 }
