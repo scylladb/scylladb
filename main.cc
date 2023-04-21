@@ -437,6 +437,7 @@ sharded<streaming::stream_manager> *the_stream_manager;
 sharded<gms::feature_service> *the_feature_service;
 sharded<gms::gossiper> *the_gossiper;
 sharded<locator::snitch_ptr> *the_snitch;
+sharded<service::storage_proxy> *the_storage_proxy;
 }
 
 static int scylla_main(int ac, char** av) {
@@ -516,7 +517,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     distributed<replica::database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
     service::load_meter load_meter;
-    auto& proxy = service::get_storage_proxy();
+    sharded<service::storage_proxy> proxy;
     sharded<service::storage_service> ss;
     sharded<service::migration_manager> mm;
     sharded<tasks::task_manager> task_manager;
@@ -1078,6 +1079,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
             }).get();
 
+            debug::the_storage_proxy = &proxy;
             supervisor::notify("starting storage proxy");
             service::storage_proxy::config spcfg {
                 .hints_directory_initializer = hints_dir_initializer,

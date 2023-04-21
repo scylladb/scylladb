@@ -552,7 +552,7 @@ public:
             distributed<service::migration_manager> mm;
             sharded<service::storage_service> ss;
             distributed<db::batchlog_manager> bm;
-            distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
+            sharded<service::storage_proxy> proxy;
 
             auto notify_set = init_configurables
                 ? configurable::init_all(*cfg, init_configurables->extensions, service_set(
