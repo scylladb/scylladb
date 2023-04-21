@@ -79,7 +79,7 @@ aggregate_function::is_aggregate() const {
 
 void
 aggregate_function::print(std::ostream& os) const {
-    os << name();
+    fmt::print(os, "{}", name());
 }
 
 sstring

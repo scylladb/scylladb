@@ -204,7 +204,7 @@ std::optional<function_name> functions::used_by_user_function(const ut_name& use
 lw_shared_ptr<column_specification>
 functions::make_arg_spec(const sstring& receiver_ks, const sstring& receiver_cf,
         const function& fun, size_t i) {
-    auto&& name = boost::lexical_cast<std::string>(fun.name());
+    auto&& name = fmt::to_string(fun.name());
     std::transform(name.begin(), name.end(), name.begin(), ::tolower);
     return make_lw_shared<column_specification>(receiver_ks,
                                    receiver_cf,

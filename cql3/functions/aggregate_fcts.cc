@@ -85,7 +85,7 @@ public:
     }
 
     virtual void print(std::ostream& os) const override {
-        os << _name;
+        fmt::print(os, "{}", _name);
     }
 
     virtual sstring column_name(const std::vector<sstring>& column_names) const override {

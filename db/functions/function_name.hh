@@ -48,19 +48,20 @@ public:
     }
 };
 
-inline
-std::ostream& operator<<(std::ostream& os, const function_name& fn) {
-    if (!fn.keyspace.empty()) {
-        os << fn.keyspace << ".";
+}
+}
+
+template <>
+struct fmt::formatter<db::functions::function_name> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const db::functions::function_name& fn, FormatContext& ctx) const {
+        auto out = ctx.out();
+        if (fn.has_keyspace()) {
+            out = fmt::format_to(out, "{}.", fn.keyspace);
+        }
+        return fmt::format_to(out, "{}", fn.name);
     }
-    return os << fn.name;
-}
-
-}
-}
-
-
-
+};
 
 namespace std {
 
