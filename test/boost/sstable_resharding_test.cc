@@ -84,6 +84,11 @@ void run_sstable_resharding_test(sstables::test_env& env) {
     sstables::test(sst).set_shards(boost::copy_range<std::vector<unsigned>>(boost::irange(0u, smp::count)));
 
     auto filter_size = [&env] (shared_sstable sst) -> uint64_t {
+        if (!env.get_storage_options().is_local_type()) {
+            // FIXME -- use s3::client::get_object_stats() when it appears
+            return 0;
+        }
+
         auto filter_fname = sstables::test(sst).filename(component_type::Filter);
         return file_size(filter_fname).get0();
     };
@@ -103,6 +108,8 @@ void run_sstable_resharding_test(sstables::test_env& env) {
     };
     auto cdata = compaction_manager::create_compaction_data();
     auto res = sstables::compact_sstables(std::move(descriptor), cdata, cf.as_table_state()).get0();
+    sst->destroy().get();
+
     auto new_sstables = std::move(res.new_sstables);
     BOOST_REQUIRE(new_sstables.size() == smp::count);
 
@@ -124,6 +131,7 @@ void run_sstable_resharding_test(sstables::test_env& env) {
             rd.produces(muts[shard][k]);
         }
         rd.produces_end_of_stream();
+        new_sst->destroy().get();
     }
     BOOST_REQUIRE_CLOSE_FRACTION(float(bloom_filter_size_before), float(bloom_filter_size_after), 0.1);
   }
@@ -133,6 +141,12 @@ SEASTAR_TEST_CASE(sstable_resharding_test) {
     return sstables::test_env::do_with_async([] (auto& env) {
         run_sstable_resharding_test(env);
     });
+}
+
+SEASTAR_TEST_CASE(sstable_resharding_over_s3_test) {
+    return sstables::test_env::do_with_async([] (auto& env) {
+        run_sstable_resharding_test(env);
+    }, test_env_config{ .storage = make_test_object_storage_options() });
 }
 
 SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
