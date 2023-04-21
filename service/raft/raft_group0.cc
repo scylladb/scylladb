@@ -134,8 +134,9 @@ raft_group0::raft_group0(seastar::abort_source& abort_source,
         gms::feature_service& feat,
         db::system_keyspace& sys_ks,
         raft_group0_client& client,
-        storage_service& ss)
-    : _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs), _qp(qp), _mm(mm), _feat(feat), _sys_ks(sys_ks), _client(client), _ss(ss)
+        storage_service& ss,
+        cdc::generation_service& cdc_gen_svc)
+    : _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs), _qp(qp), _mm(mm), _feat(feat), _sys_ks(sys_ks), _client(client), _ss(ss), _cdc_gen_svc(cdc_gen_svc)
     , _status_for_monitoring(_raft_gr.is_enabled() ? status_for_monitoring::normal : status_for_monitoring::disabled)
 {
     register_metrics();
@@ -195,7 +196,7 @@ const raft::server_id& raft_group0::load_my_id() {
 }
 
 raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, raft::server_id my_id) {
-    auto state_machine = std::make_unique<group0_state_machine>(_client, _mm, _qp.proxy(), _ss);
+    auto state_machine = std::make_unique<group0_state_machine>(_client, _mm, _qp.proxy(), _ss, _cdc_gen_svc);
     auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.address_map(), gid, my_id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;

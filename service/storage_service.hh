@@ -762,13 +762,13 @@ private:
     future<> _raft_state_monitor = make_ready_future<>();
     // This fibers monitors raft state and start/stops the topology change
     // coordinator fiber
-    future<> raft_state_monitor_fiber(raft::server&, sharded<db::system_distributed_keyspace>& sys_dist_ks);
+    future<> raft_state_monitor_fiber(raft::server&, cdc::generation_service&, sharded<db::system_distributed_keyspace>& sys_dist_ks);
 
      // State machine that is responsible for topology change
     topology_state_machine _topology_state_machine;
 
     future<> _topology_change_coordinator = make_ready_future<>();
-    future<> topology_change_coordinator_fiber(raft::server&, raft::term_t, sharded<db::system_distributed_keyspace>&, abort_source&);
+    future<> topology_change_coordinator_fiber(raft::server&, raft::term_t, cdc::generation_service&, sharded<db::system_distributed_keyspace>&, abort_source&);
 
     // Those futures hold results of streaming for various operations
     std::optional<shared_future<>> _bootstrap_result;
@@ -786,10 +786,13 @@ private:
     future<> update_topology_with_local_metadata(raft::server&);
 
     // This is called on all nodes for each new command received through raft
-    future<> topology_transition(storage_proxy& proxy, gms::inet_address, std::vector<canonical_mutation>);
+    // raft_group0_client::_read_apply_mutex must be held
+    future<> topology_transition(storage_proxy& proxy, cdc::generation_service&, gms::inet_address, std::vector<canonical_mutation>);
     // load topology state machine snapshot into memory
-    future<> topology_state_load();
+    // raft_group0_client::_read_apply_mutex must be held
+    future<> topology_state_load(cdc::generation_service&);
     // Applies received raft snapshot to local state machine persistent storage
+    // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_topology_snapshot snp);
 };
 

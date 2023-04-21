@@ -67,6 +67,7 @@
 #include "service/topology_state_machine.hh"
 #include "sstables/open_info.hh"
 #include "sstables/generation_type.hh"
+#include "cdc/generation.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -83,6 +84,7 @@ namespace {
             system_keyspace::DISCOVERY,
             system_keyspace::BROADCAST_KV_STORE,
             system_keyspace::TOPOLOGY,
+            system_keyspace::CDC_GENERATIONS_V3,
         };
         if (ks_name == system_keyspace::NAME && system_ks_null_shard_tables.contains(cf_name)) {
             props.use_null_sharder = true;
@@ -98,6 +100,7 @@ namespace {
             system_keyspace::DISCOVERY,
             system_keyspace::BROADCAST_KV_STORE,
             system_keyspace::TOPOLOGY,
+            system_keyspace::CDC_GENERATIONS_V3,
         };
         if (ks_name == system_keyspace::NAME && extra_durable_tables.contains(cf_name)) {
             props.wait_for_sync_to_commitlog = true;
@@ -250,8 +253,50 @@ schema_ptr system_keyspace::topology() {
             .with_column("num_tokens", int32_type)
             .with_column("shard_count", int32_type)
             .with_column("ignore_msb", int32_type)
+            .with_column("new_cdc_generation_data_uuid", uuid_type)
+            .with_column("current_cdc_generation_uuid", uuid_type, column_kind::static_column)
+            .with_column("current_cdc_generation_timestamp", timestamp_type, column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_version(generate_schema_version(id))
+            .build();
+    }();
+    return schema;
+}
+
+extern thread_local data_type cdc_streams_set_type;
+
+/* An internal table used by nodes to store CDC generation data.
+ * Written to by Raft Group 0. */
+schema_ptr system_keyspace::cdc_generations_v3() {
+    thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, CDC_GENERATIONS_V3);
+        return schema_builder(NAME, CDC_GENERATIONS_V3, {id})
+            /* The unique identifier of this generation. */
+            .with_column("id", uuid_type, column_kind::partition_key)
+            /* The generation describes a mapping from all tokens in the token ring to a set of stream IDs.
+             * This mapping is built from a bunch of smaller mappings, each describing how tokens in a
+             * subrange of the token ring are mapped to stream IDs; these subranges together cover the entire
+             * token ring.  Each such range-local mapping is represented by a row of this table. The
+             * clustering key of the row is the end of the range being described by this row. The start of
+             * this range is the range_end of the previous row (in the clustering order, which is the integer
+             * order) or of the last row of this partition if this is the first the first row. */
+            .with_column("range_end", long_type, column_kind::clustering_key)
+            /* The set of streams mapped to in this range.  The number of streams mapped to a single range in
+             * a CDC generation is bounded from above by the number of shards on the owner of that range in
+             * the token ring. In other words, the number of elements of this set is bounded by the maximum
+             * of the number of shards over all nodes. The serialized size is obtained by counting about 20B
+             * for each stream. For example, if all nodes in the cluster have at most 128 shards, the
+             * serialized size of this set will be bounded by ~2.5 KB. */
+            .with_column("streams", cdc_streams_set_type)
+            /* The value of the `ignore_msb` sharding parameter of the node which was the owner of this token
+             * range when the generation was first created. Together with the set of streams above it fully
+             * describes the mapping for this particular range. */
+            .with_column("ignore_msb", byte_type)
+            /* Column used for sanity checking. For a given generation it's equal to the number of ranges in
+             * this generation; thus, after the generation is fully inserted, it must be equal to the number
+             * of rows in the partition. */
+            .with_column("num_ranges", int32_type, column_kind::static_column)
+            .with_version(system_keyspace::generate_schema_version(id))
             .build();
     }();
     return schema;
@@ -2838,7 +2883,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
         r.insert(r.end(), {raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery()});
 
         if (cfg.check_experimental(db::experimental_features_t::feature::RAFT)) {
-            r.insert(r.end(), {topology()});
+            r.insert(r.end(), {topology(), cdc_generations_v3()});
         }
 
         if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
@@ -2955,6 +3000,18 @@ system_keyspace::query_mutations(distributed<service::storage_proxy>& proxy, con
     auto slice = partition_slice_builder(*schema).build();
     auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.local().get_max_result_size(slice), query::tombstone_limit::max);
     return proxy.local().query_mutations_locally(std::move(schema), std::move(cmd), query::full_partition_range, db::no_timeout)
+            .then([] (rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> rr_ht) { return std::get<0>(std::move(rr_ht)); });
+}
+
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+system_keyspace::query_mutations(distributed<service::storage_proxy>& proxy, const sstring& ks_name, const sstring& cf_name, const dht::partition_range& partition_range, query::clustering_range row_range) {
+    auto& db = proxy.local().get_db().local();
+    auto schema = db.find_schema(ks_name, cf_name);
+    auto slice = partition_slice_builder(*schema)
+        .with_range(std::move(row_range))
+        .build();
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.local().get_max_result_size(slice), query::tombstone_limit::max);
+    return proxy.local().query_mutations_locally(std::move(schema), std::move(cmd), partition_range, db::no_timeout)
             .then([] (rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> rr_ht) { return std::get<0>(std::move(rr_ht)); });
 }
 
@@ -3475,19 +3532,36 @@ future<service::topology> system_keyspace::load_topology_state() {
 
         service::node_state nstate = service::node_state_from_string(row.get_as<sstring>("node_state"));
 
-        std::optional<service::ring_slice::replication_state> tstate;
+        std::optional<service::ring_slice> ring_slice;
         if (row.has("replication_state")) {
-            tstate = service::replication_state_from_string(row.get_as<sstring>("replication_state"));
-        }
+            auto repl_state = service::replication_state_from_string(row.get_as<sstring>("replication_state"));
 
-        std::unordered_set<dht::token> t;
+            std::unordered_set<dht::token> tokens;
+            if (row.has("tokens")) {
+                auto blob = row.get_blob("tokens");
+                auto cdef = topology()->get_column_definition("tokens");
+                auto deserialized = cdef->type->deserialize(blob);
+                auto ts = value_cast<set_type_impl::native_type>(deserialized);
+                tokens = decode_tokens(ts);
+            }
 
-        if (row.has("tokens")) {
-            auto blob = row.get_blob("tokens");
-            auto cdef = topology()->get_column_definition("tokens");
-            auto deserialized = cdef->type->deserialize(blob);
-            auto tokens = value_cast<set_type_impl::native_type>(deserialized);
-            t = decode_tokens(tokens);
+            if (tokens.empty()) {
+                on_fatal_internal_error(slogger, format(
+                    "load_topology_state: node {} has replication state ({}) but missing tokens",
+                    host_id, repl_state));
+            }
+
+            if (!row.has("new_cdc_generation_data_uuid")) {
+                on_fatal_internal_error(slogger, format(
+                    "load_topology_state: node {} has replication state ({}) but missing CDC generation data UUID",
+                    host_id, repl_state));
+            }
+
+            ring_slice = service::ring_slice {
+                .state = repl_state,
+                .tokens = std::move(tokens),
+                .new_cdc_generation_data_uuid = row.get_as<utils::UUID>("new_cdc_generation_data_uuid"),
+            };
         }
 
         std::optional<raft::server_id> replaced_id;
@@ -3545,27 +3619,111 @@ future<service::topology> system_keyspace::load_topology_state() {
             }
         }
 
-        if (!tstate && t.size() != 0) {
-            on_fatal_internal_error(slogger, "There cannot be tokens without the replication state");
-        }
         std::unordered_map<raft::server_id, service::replica_state>* map = nullptr;
         if (nstate == service::node_state::normal) {
             map = &ret.normal_nodes;
+            if (!ring_slice) {
+                on_fatal_internal_error(slogger, format(
+                    "load_topology_state: node {} in normal state but missing ring slice", host_id));
+            }
         } else if (nstate == service::node_state::left) {
             ret.left_nodes.emplace(host_id);
         } else if (nstate == service::node_state::none) {
             map = &ret.new_nodes;
         } else {
             map = &ret.transition_nodes;
+            if (!ring_slice) {
+                on_fatal_internal_error(slogger, format(
+                    "load_topology_state: node {} in transitioning state but missing ring slice", host_id));
+            }
         }
         if (map) {
-            map->emplace(host_id, service::replica_state{nstate, std::move(datacenter), std::move(rack), std::move(release_version),
-                tstate ? std::optional<service::ring_slice>(service::ring_slice{*tstate, std::move(t)}) : std::nullopt,
-                shard_count, ignore_msb});
+            map->emplace(host_id, service::replica_state{
+                nstate, std::move(datacenter), std::move(rack), std::move(release_version),
+                ring_slice, shard_count, ignore_msb});
+        }
+    }
+
+    {
+        // Here we access static columns, any row will do.
+        auto& some_row = *rs->begin();
+        if (some_row.has("current_cdc_generation_uuid")) {
+            auto gen_uuid = some_row.get_as<utils::UUID>("current_cdc_generation_uuid");
+            if (!some_row.has("current_cdc_generation_timestamp")) {
+                on_internal_error(slogger, format(
+                    "load_topology_state: current CDC generation UUID ({}) present, but timestamp missing", gen_uuid));
+            }
+            auto gen_ts = some_row.get_as<db_clock::time_point>("current_cdc_generation_timestamp");
+            ret.current_cdc_generation_id = cdc::generation_id_v2 {
+                .ts = gen_ts,
+                .id = gen_uuid
+            };
+
+            // Sanity check for CDC generation data consistency.
+            {
+                auto gen_rows = co_await qctx->execute_cql(
+                    format("SELECT count(range_end) as cnt, num_ranges FROM system.{} WHERE id = ?",
+                           CDC_GENERATIONS_V3),
+                    gen_uuid);
+                assert(gen_rows);
+                if (gen_rows->empty()) {
+                    on_internal_error(slogger, format(
+                        "load_topology_state: current CDC generation UUID ({}) present, but data missing", gen_uuid));
+                }
+                auto& row = gen_rows->one();
+                auto counted_ranges = row.get_as<int64_t>("cnt");
+                auto num_ranges = row.get_as<int32_t>("num_ranges");
+                if (counted_ranges != num_ranges) {
+                    on_internal_error(slogger, format(
+                        "load_topology_state: inconsistency in CDC generation data (UUID {}):"
+                        " counted {} ranges, should be {}", gen_uuid, counted_ranges, num_ranges));
+                }
+            }
+        } else {
+            if (!ret.normal_nodes.empty()) {
+                on_internal_error(slogger,
+                    "load_topology_state: normal nodes present but no current CDC generation ID");
+            }
         }
     }
 
     co_return ret;
+}
+
+future<cdc::topology_description>
+system_keyspace::read_cdc_generation(utils::UUID id) {
+    std::vector<cdc::token_range_description> entries;
+    auto num_ranges = 0;
+    co_await _qp.local().query_internal(
+            format("SELECT range_end, streams, ignore_msb, num_ranges FROM {}.{} WHERE id = ?",
+                   NAME, CDC_GENERATIONS_V3),
+            db::consistency_level::ONE,
+            { id },
+            1000, // for ~1KB rows, ~1MB page size
+            [&] (const cql3::untyped_result_set_row& row) {
+        std::vector<cdc::stream_id> streams;
+        row.get_list_data<bytes>("streams", std::back_inserter(streams));
+        entries.push_back(cdc::token_range_description{
+            dht::token::from_int64(row.get_as<int64_t>("range_end")),
+            std::move(streams),
+            uint8_t(row.get_as<int8_t>("ignore_msb"))});
+        num_ranges = row.get_as<int32_t>("num_ranges");
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    });
+
+    if (entries.empty()) {
+        // The data must be present by precondition.
+        on_internal_error(slogger, format(
+            "read_cdc_generation: data for CDC generation {} not present", id));
+    }
+
+    if (entries.size() != num_ranges) {
+        throw std::runtime_error(format(
+            "read_cdc_generation: wrong number of rows. The `num_ranges` column claimed {} rows,"
+            " but reading the partition returned {}.", num_ranges, entries.size()));
+    }
+
+    co_return cdc::topology_description{std::move(entries)};
 }
 
 future<> system_keyspace::sstables_registry_create_entry(sstring location, utils::UUID uuid, sstring status, sstables::entry_descriptor desc) {

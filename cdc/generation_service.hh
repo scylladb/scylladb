@@ -132,33 +132,54 @@ public:
      * so that other nodes learn about the generation before their clocks cross the generation's timestamp
      * (not guaranteed in the current implementation, but expected to be the common case;
      *  we assume that `ring_delay` is enough for other nodes to learn about the new generation).
+     *
+     * Legacy: used for gossiper-based topology changes.
      */
-    future<cdc::generation_id> make_new_generation(const std::unordered_set<dht::token>& bootstrap_tokens, bool add_delay);
+    future<cdc::generation_id> legacy_make_new_generation(
+        const std::unordered_set<dht::token>& bootstrap_tokens, bool add_delay);
+
+    /* Retrieve the CDC generation with the given ID from local tables
+     * and start using it for CDC log writes if it's not obsolete.
+     * Precondition: the generation was committed using group 0 and locally applied.
+     */
+    future<> handle_cdc_generation(cdc::generation_id_v2);
 
 private:
     /* Retrieve the CDC generation which starts at the given timestamp (from a distributed table created for this purpose)
      * and start using it for CDC log writes if it's not obsolete.
+     *
+     * Legacy: used for gossiper-based topology changes.
      */
-    future<> handle_cdc_generation(std::optional<cdc::generation_id>);
+    future<> legacy_handle_cdc_generation(std::optional<cdc::generation_id>);
 
-    /* If `handle_cdc_generation` fails, it schedules an asynchronous retry in the background
-     * using `async_handle_cdc_generation`.
+    /* If `legacy_handle_cdc_generation` fails, it schedules an asynchronous retry in the background
+     * using `legacy_async_handle_cdc_generation`.
+     *
+     * Legacy: used for gossiper-based topology changes.
      */
-    void async_handle_cdc_generation(cdc::generation_id);
+    void legacy_async_handle_cdc_generation(cdc::generation_id);
 
-    /* Wrapper around `do_handle_cdc_generation` which intercepts timeout/unavailability exceptions.
-     * Returns: do_handle_cdc_generation(ts). */
-    future<bool> do_handle_cdc_generation_intercept_nonfatal_errors(cdc::generation_id);
+    /* Wrapper around `legacy_do_handle_cdc_generation` which intercepts timeout/unavailability exceptions.
+     * Returns: legacy_do_handle_cdc_generation(ts).
+     *
+     * Legacy: used for gossiper-based topology changes.
+     */
+    future<bool> legacy_do_handle_cdc_generation_intercept_nonfatal_errors(cdc::generation_id);
 
     /* Returns `true` iff we started using the generation (it was not obsolete or already known),
-     * which means that this node might write some CDC log entries using streams from this generation. */
-    future<bool> do_handle_cdc_generation(cdc::generation_id);
+     * which means that this node might write some CDC log entries using streams from this generation.
+     *
+     * Legacy: used for gossiper-based topology changes.
+     */
+    future<bool> legacy_do_handle_cdc_generation(cdc::generation_id);
 
     /* Scan CDC generation timestamps gossiped by other nodes and retrieve the latest one.
      * This function should be called once at the end of the node startup procedure
      * (after the node is started and running normally, it will retrieve generations on gossip events instead).
+     *
+     * Legacy: used for gossiper-based topology changes.
      */
-    future<> scan_cdc_generations();
+    future<> legacy_scan_cdc_generations();
 
     /* generation_service code might be racing with system_distributed_keyspace deinitialization
      * (the deinitialization order is broken).

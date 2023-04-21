@@ -283,7 +283,7 @@ future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds dela
     slogger.info("Checking bootstrapping/leaving nodes: ok");
 }
 
-future<> storage_service::topology_state_load() {
+future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_svc) {
 #ifdef SEASTAR_DEBUG
     static bool running = false;
     assert(!running); // The function is not re-entrant
@@ -370,8 +370,16 @@ future<> storage_service::topology_state_load() {
                     co_await _sys_ks.local().update_peer_info(ip, "host_id", id.uuid());
                 }
                 tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack});
-                tmptr->add_bootstrap_tokens(rs.ring.value().tokens, ip);
-                co_await update_pending_ranges(tmptr, format("bootstrapping node {}/{}", id, ip));
+                if (_topology_state_machine._topology.normal_nodes.empty()) {
+                    // This is the first node in the cluster. Insert the tokens as normal to the token ring early
+                    // so we can perform writes to regular 'distributed' tables during the bootstrap procedure
+                    // (such as the CDC generation write).
+                    // It doesn't break anything to set the tokens to normal early in this single-node case.
+                    co_await tmptr->update_normal_tokens(rs.ring.value().tokens, ip);
+                } else {
+                    tmptr->add_bootstrap_tokens(rs.ring.value().tokens, ip);
+                    co_await update_pending_ranges(tmptr, format("bootstrapping node {}/{}", id, ip));
+                }
                 break;
             case node_state::decommissioning:
             case node_state::removing:
@@ -404,9 +412,14 @@ future<> storage_service::topology_state_load() {
             }
         }
     }));
+
+    if (auto gen_id = _topology_state_machine._topology.current_cdc_generation_id) {
+        slogger.debug("topology_state_load: current CDC generation ID: {}", *gen_id);
+        co_await cdc_gen_svc.handle_cdc_generation(*gen_id);
+    }
 }
 
-future<> storage_service::topology_transition(storage_proxy& proxy, gms::inet_address from, std::vector<canonical_mutation> cms) {
+future<> storage_service::topology_transition(storage_proxy& proxy, cdc::generation_service& cdc_gen_svc, gms::inet_address from, std::vector<canonical_mutation> cms) {
     assert(this_shard_id() == 0);
     // write new state into persistent storage
     std::vector<mutation> mutations;
@@ -423,18 +436,24 @@ future<> storage_service::topology_transition(storage_proxy& proxy, gms::inet_ad
 
     co_await proxy.mutate_locally(std::move(mutations), tracing::trace_state_ptr());
 
-    co_await topology_state_load(); // reload new state
+    co_await topology_state_load(cdc_gen_svc); // reload new state
 
     _topology_state_machine.event.signal();
 }
 
 future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
-   auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
    std::vector<mutation> muts;
-   muts.reserve(snp.mutations.size());
-   boost::transform(snp.mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
-       return m.to_mutation(s);
-   });
+   muts.reserve(snp.topology_mutations.size() + (snp.cdc_generation_mutation ? 1 : 0));
+   {
+       auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+       boost::transform(snp.topology_mutations, std::back_inserter(muts), [s] (const canonical_mutation& m) {
+           return m.to_mutation(s);
+       });
+   }
+   if (snp.cdc_generation_mutation) {
+       auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
+       muts.push_back(snp.cdc_generation_mutation->to_mutation(s));
+   }
    co_await _db.local().apply(freeze(muts), db::no_timeout);
 }
 
@@ -453,6 +472,8 @@ public:
     topology_mutation_builder& set(const char* cell, const raft::server_id& value);
     topology_mutation_builder& set(const char* cell, const std::unordered_set<dht::token>& value);
     topology_mutation_builder& set(const char* cell, const uint32_t& value);
+    topology_mutation_builder& set(const char* cell, const utils::UUID& value);
+    topology_mutation_builder& set_current_cdc_generation_id(const cdc::generation_id_v2&);
     topology_mutation_builder& del(const char* cell);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };
@@ -483,6 +504,14 @@ topology_mutation_builder& topology_mutation_builder::set(const char* cell, cons
     auto cdef = _s->get_column_definition(cell);
     assert(cdef);
     _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _ts, cdef->type->decompose(int32_t(value))));
+    return *this;
+}
+
+topology_mutation_builder& topology_mutation_builder::set(
+        const char* cell, const utils::UUID& value) {
+    auto cdef = _s->get_column_definition(cell);
+    assert(cdef);
+    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _ts, cdef->type->decompose(value)));
     return *this;
 }
 
@@ -519,7 +548,14 @@ topology_mutation_builder& topology_mutation_builder::set(const char* cell, cons
     return *this;
 }
 
-future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, raft::term_t term, sharded<db::system_distributed_keyspace>& sys_dist_ks, abort_source& as) {
+topology_mutation_builder& topology_mutation_builder::set_current_cdc_generation_id(
+        const cdc::generation_id_v2& value) {
+    _m.set_static_cell("current_cdc_generation_timestamp", value.ts, _ts);
+    _m.set_static_cell("current_cdc_generation_uuid", value.id, _ts);
+    return *this;
+}
+
+future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, raft::term_t term, cdc::generation_service& cdc_gen_svc, sharded<db::system_distributed_keyspace>& sys_dist_ks, abort_source& as) {
     slogger.info("raft topology: start topology coordinator fiber");
 
     auto abort = as.subscribe([this] () noexcept {
@@ -641,12 +677,83 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
 
         bool res;
         switch (node.rs->ring.value().state) {
+            case ring_slice::replication_state::commit_cdc_generation: {
+                // make sure all nodes know about new topology and have the new CDC generation data
+                // (we require all nodes to be alive for topo change for now)
+                std::tie(node, res) = co_await exec_global_command(std::move(node), raft_topology_cmd{raft_topology_cmd::command::barrier}, false, replaced_node);
+                if (!res) {
+                    break;
+                }
+
+                // We don't need to add delay to the generation timestamp if this is the first generation.
+                bool add_ts_delay = bool(node.topology->current_cdc_generation_id);
+
+                // Begin the race.
+                // See the large FIXME below.
+                auto cdc_gen_ts = cdc::new_generation_timestamp(add_ts_delay, get_ring_delay());
+                auto cdc_gen_uuid = node.rs->ring.value().new_cdc_generation_data_uuid;
+                cdc::generation_id_v2 cdc_gen_id {
+                    .ts = cdc_gen_ts,
+                    .id = cdc_gen_uuid,
+                };
+
+                {
+                    // Sanity check.
+                    // This could happen if the topology coordinator's clock is broken.
+                    auto curr_gen_id = node.topology->current_cdc_generation_id;
+                    if (curr_gen_id && curr_gen_id->ts >= cdc_gen_ts) {
+                        on_internal_error(slogger, format(
+                            "raft topology: new CDC generation has smaller timestamp than the previous one."
+                            " Old generation ID: {}, new generation ID: {}", *curr_gen_id, cdc_gen_id));
+                    }
+                }
+
+                // Tell all nodes to start using the new CDC generation by updating the topology
+                // with the generation's ID and timestamp.
+                // At the same time move the topology change procedure to the next step.
+                //
+                // FIXME: as in previous implementation with gossiper and ring_delay, this assumes that all nodes
+                // will learn about the new CDC generation before their clocks reach the generation's timestamp.
+                // With this group 0 based implementation, it means that the command must be committed,
+                // replicated and applied on all nodes before their clocks reach the generation's timestamp
+                // (i.e. within 2 * ring_delay = 60 seconds by default if clocks are synchronized). If this
+                // doesn't hold some coordinators might use the wrong CDC streams for some time and CDC stream
+                // readers will miss some data. It's likely that Raft replication doesn't converge as quickly
+                // as gossiping does.
+                //
+                // We could use a two-phase algorithm instead: first tell all nodes to prepare for using
+                // the new generation, then tell all nodes to commit. If some nodes don't manage to prepare
+                // in time, we abort the generation switch. If all nodes prepare, we commit. If a node prepares
+                // but doesn't receive a commit in time, it stops coordinating CDC-enabled writes until it
+                // receives a commit or abort. This solution does not have a safety problem like the one
+                // above, but it has an availability problem when nodes get disconnected from group 0 majority
+                // in the middle of a CDC generation switch (when they are prepared to switch but not
+                // committed) - they won't coordinate CDC-enabled writes until they reconnect to the
+                // majority and commit.
+                topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
+                builder.set("replication_state", ring_slice::replication_state::write_both_read_old)
+                       .set_current_cdc_generation_id(cdc_gen_id);
+                auto str = fmt::format("{}: committed new CDC generation, ID: {}", node.rs->state, cdc_gen_id);
+                co_await update_replica_state(std::move(node), {builder.build()}, std::move(str));
+            }
+                break;
             case ring_slice::ring_slice::replication_state::write_both_read_old: {
                 // make sure all nodes know about new topology (we require all nodes to be alive for topo change for now)
                 std::tie(node, res) = co_await exec_global_command(std::move(node), raft_topology_cmd{raft_topology_cmd::command::barrier}, false, replaced_node);
                 if (!res) {
                     break;
                 }
+
+                // If a node is bootstrapping, we just committed a new CDC generation in the commit_cdc_generation step.
+                // Publish it to the user-facing distributed CDC description tables.
+                if (node.rs->state == node_state::bootstrapping) {
+                    auto curr_gen_id = node.topology->current_cdc_generation_id.value();
+                    auto gen_data = co_await _sys_ks.local().read_cdc_generation(curr_gen_id.id);
+
+                    co_await sys_dist_ks.local().create_cdc_desc(
+                        curr_gen_id.ts, gen_data, { get_token_metadata().count_normal_token_owners() });
+                }
+
                 raft_topology_cmd cmd{raft_topology_cmd::command::stream_ranges};
                 if (node.rs->state == node_state::removing) {
                     // tell all nodes to stream data of the removed node to new range owners
@@ -742,12 +849,70 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                         auto tmptr = get_token_metadata_ptr();
                         auto bootstrap_tokens = boot_strapper::get_random_bootstrap_tokens(tmptr, num_tokens, dht::check_token_endpoint::yes);
 
-                        // Write choosen tokens through raft.
+                        auto get_sharding_info = [&] (dht::token end) -> std::pair<size_t, uint8_t> {
+                            if (bootstrap_tokens.contains(end)) {
+                                return {node.rs->shard_count, node.rs->ignore_msb};
+                            } else {
+                                // FIXME: token metadata should directly return host ID for given token. See #12279
+                                auto ep = tmptr->get_endpoint(end);
+                                if (!ep) {
+                                    // get_sharding_info is only called for bootstrap tokens
+                                    // or for tokens present in token_metadata
+                                    on_internal_error(slogger, format(
+                                        "raft topology: make_new_cdc_generation_data: get_sharding_info:"
+                                        " can't find endpoint for token {}", end));
+                                }
+
+                                auto id = tmptr->get_host_id_if_known(*ep);
+                                if (!id) {
+                                    on_internal_error(slogger, format(
+                                        "raft topology: make_new_cdc_generation_data: get_sharding_info:"
+                                        " can't find host ID for endpoint {}, owner of token {}", *ep, end));
+                                }
+
+                                auto ptr = node.topology->find(raft::server_id{id->uuid()});
+                                if (!ptr) {
+                                    on_internal_error(slogger, format(
+                                        "raft topology: make_new_cdc_generation_data: get_sharding_info:"
+                                        " couldn't find node {} in topology, owner of token {}", *id, end));
+                                }
+
+                                auto& rs = ptr->second;
+                                return {rs.shard_count, rs.ignore_msb};
+                            }
+                        };
+
+                        auto [gen_uuid, gen_desc] = cdc::make_new_generation_data(
+                            bootstrap_tokens, get_sharding_info, tmptr);
+                        auto gen_table_schema = _db.local().find_schema(
+                            db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
+
+                        // FIXME: the CDC generation data can be large and not fit in a single command
+                        // (for large clusters, it will introduce reactor stalls and go over commitlog entry
+                        // size limit). We need to split it into multiple mutations by smartly picking
+                        // a `mutation_size_threshold` and sending each mutation as a separate group 0 command.
+                        // We also don't want to serialize the commands - there may be many of them,
+                        // and we don't want to wait for a network round-trip to a quorum between each command.
+                        // So we need to introduce a mechanism for group 0 to send a sequence of commands
+                        // that can be committed concurrently. Also we need to be careful with memory consumption
+                        // with many large mutations.
+                        // See `system_distributed_keyspace::insert_cdc_generation` for inspiration how it
+                        // was done when the mutations were stored in a regular distributed table.
+                        const size_t mutation_size_threshold = 2'000'000;
+                        auto gen_mutations = co_await cdc::get_cdc_generation_mutations(
+                            gen_table_schema, gen_uuid, gen_desc, mutation_size_threshold, node.guard.write_timestamp());
+                        std::vector<canonical_mutation> updates{gen_mutations.begin(), gen_mutations.end()};
+
+                        // Write chosen tokens and CDC generation data through raft.
                         builder.set("node_state", node_state::bootstrapping)
                                 .del("topology_request")
                                 .set("tokens", bootstrap_tokens)
-                                .set("replication_state", ring_slice::replication_state::write_both_read_old);
-                        co_await update_replica_state(std::move(node), {builder.build()}, "bootstrap: assign tokens");
+                                .set("replication_state", ring_slice::replication_state::commit_cdc_generation)
+                                .set("new_cdc_generation_data_uuid", gen_uuid);
+                        updates.push_back(builder.build());
+                        auto reason = format(
+                            "bootstrap: assign tokens and insert CDC generation data (UUID: {})", gen_uuid);
+                        co_await update_replica_state(std::move(node), {std::move(updates)}, reason);
                         break;
                         }
                     case topology_request::leave:
@@ -903,7 +1068,7 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
     }
 }
 
-future<> storage_service::raft_state_monitor_fiber(raft::server& raft, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
+future<> storage_service::raft_state_monitor_fiber(raft::server& raft, cdc::generation_service& cdc_gen_svc, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
     std::optional<abort_source> as;
     try {
         while (!_abort_source.abort_requested()) {
@@ -920,7 +1085,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, sharded<d
             // We are the leader now but that can change any time!
             as.emplace();
             // start topology change coordinator in the background
-            _topology_change_coordinator = topology_change_coordinator_fiber(raft, raft.get_current_term(), sys_dist_ks, *as);
+            _topology_change_coordinator = topology_change_coordinator_fiber(raft, raft.get_current_term(), cdc_gen_svc, sys_dist_ks, *as);
         }
     } catch (...) {
         slogger.info("raft_state_monitor_fiber aborted with {}", std::current_exception());
@@ -1277,7 +1442,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         slogger.info("topology changes are using raft");
 
         // start topology coordinator fiber
-        _raft_state_monitor = raft_state_monitor_fiber(*raft_server, sys_dist_ks);
+        _raft_state_monitor = raft_state_monitor_fiber(*raft_server, cdc_gen_service, sys_dist_ks);
 
         // Need to start system_distributed_keyspace before bootstrap because bootstraping
         // process may access those tables.
@@ -1441,7 +1606,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
                 && (!_sys_ks.local().bootstrap_complete()
                     || cdc::should_propose_first_generation(get_broadcast_address(), _gossiper))) {
             try {
-                cdc_gen_id = co_await cdc_gen_service.make_new_generation(bootstrap_tokens, !is_first_node());
+                cdc_gen_id = co_await cdc_gen_service.legacy_make_new_generation(bootstrap_tokens, !is_first_node());
             } catch (...) {
                 cdc_log.warn(
                     "Could not create a new CDC generation: {}. This may make it impossible to use CDC or cause performance problems."
@@ -1592,7 +1757,7 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
             // We don't do any other generation switches (unless we crash before complecting bootstrap).
             assert(!cdc_gen_id);
 
-            cdc_gen_id = cdc_gen_service.make_new_generation(bootstrap_tokens, !is_first_node()).get0();
+            cdc_gen_id = cdc_gen_service.legacy_make_new_generation(bootstrap_tokens, !is_first_node()).get0();
 
             if (!bootstrap_rbno) {
                 // When is_repair_based_node_ops_enabled is true, the bootstrap node
@@ -4662,14 +4827,57 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
             if (!ss._raft_topology_change_enabled) {
                co_return raft_topology_snapshot{};
             }
-            auto rs = co_await db::system_keyspace::query_mutations(proxy, db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
-            auto s = ss._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
-            std::vector<canonical_mutation> results;
-            results.reserve(rs->partitions().size());
-            boost::range::transform(rs->partitions(), std::back_inserter(results), [s] (const partition& p) {
-                return canonical_mutation{p.mut().unfreeze(s)};
-            });
-            co_return raft_topology_snapshot{std::move(results)};
+
+            std::vector<canonical_mutation> topology_mutations;
+            std::optional<cdc::generation_id_v2> curr_cdc_gen_id;
+            {
+                // FIXME: make it an rwlock, here we only need to lock for reads,
+                // might be useful if multiple nodes are trying to pull concurrently.
+                auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
+                auto rs = co_await db::system_keyspace::query_mutations(
+                    proxy, db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+                auto s = ss._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+                topology_mutations.reserve(rs->partitions().size());
+                boost::range::transform(
+                        rs->partitions(), std::back_inserter(topology_mutations), [s] (const partition& p) {
+                    return canonical_mutation{p.mut().unfreeze(s)};
+                });
+
+                curr_cdc_gen_id = ss._topology_state_machine._topology.current_cdc_generation_id;
+            }
+
+            std::optional<canonical_mutation> cdc_generation_mutation;
+            if (curr_cdc_gen_id) {
+                // We don't need to fetch this data under group0 apply mutex, it's immutable.
+                // We only need to include the current CDC generation data in the snapshot,
+                // because nodes only load whatever `current_cdc_generation_id` points to in topology.
+                //
+                // FIXME: when we bootstrap nodes in quick succession, the timestamp of the newest CDC generation
+                // may be for some time larger than the clocks of our nodes. The last bootstrapped node
+                // will only receive the newest CDC generation and not earlier ones, so it will only be able
+                // to coordinate writes to CDC-enabled tables after its clock advances to reach the newest
+                // generation's timestamp. In other words, it may not be able to coordinate writes for some
+                // time after bootstrapping and drivers connecting to it will receive errors.
+                // To fix that, we could store in topology a small history of recent CDC generation IDs
+                // (garbage-collected with time) instead of just the last one, and load all of them.
+                // Alternatively, a node would wait for some time before switching to normal state.
+                auto s = ss._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
+                auto key = dht::decorate_key(*s, partition_key::from_singular(*s, curr_cdc_gen_id->id));
+                auto partition_range = dht::partition_range::make_singular(key);
+                auto rs = co_await db::system_keyspace::query_mutations(
+                    proxy, db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3, partition_range);
+                if (rs->partitions().size() != 1) {
+                    on_internal_error(slogger, format(
+                        "pull_raft_topology_snapshot: expected a single partition in CDC generation query,"
+                        ", got {} (generation ID: {})", rs->partitions().size(), *curr_cdc_gen_id));
+                }
+                cdc_generation_mutation.emplace(rs->partitions().begin()->mut().unfreeze(s));
+            }
+
+            co_return raft_topology_snapshot{
+                .topology_mutations = std::move(topology_mutations),
+                .cdc_generation_mutation = std::move(cdc_generation_mutation),
+            };
         });
     });
 }

@@ -64,7 +64,6 @@ public:
 
 // Singleton that exists only on shard zero. Used to post commands to group zero
 class raft_group0_client {
-    friend class group0_state_machine;
     service::raft_group_registry& _raft_gr;
     db::system_keyspace& _sys_ks;
 
@@ -165,6 +164,8 @@ public:
 
     // Wait until group 0 upgrade enters the `use_post_raft_procedures` state.
     future<> wait_until_group0_upgraded(abort_source&);
+
+    future<semaphore_units<>> hold_read_apply_mutex();
 
     db::system_keyspace& sys_ks();
 

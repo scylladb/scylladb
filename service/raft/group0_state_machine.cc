@@ -67,7 +67,7 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
                 cmd.prev_state_id, cmd.new_state_id, cmd.creator_addr, cmd.creator_id);
         slogger.trace("cmd.history_append: {}", cmd.history_append);
 
-        auto read_apply_mutex_holder = co_await get_units(_client._read_apply_mutex, 1);
+        auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex();
 
         if (cmd.prev_state_id) {
             auto last_group0_state_id = co_await db::system_keyspace::get_last_group0_state_id();
@@ -107,7 +107,7 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
             _client.set_query_result(cmd.new_state_id, std::move(result));
         },
         [&] (topology_change& chng) -> future<> {
-           return _ss.topology_transition(_sp, cmd.creator_addr, std::move(chng.mutations));
+           return _ss.topology_transition(_sp, _cdc_gen_svc, cmd.creator_addr, std::move(chng.mutations));
         }
         ), cmd.change);
 
@@ -126,8 +126,9 @@ void group0_state_machine::drop_snapshot(raft::snapshot_id id) {
 future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
     // topology_state_load applies persisted state machine state into
     // memory and thus needs to be protected with apply mutex
-    auto read_apply_mutex_holder = co_await get_units(_client._read_apply_mutex, 1);
-    co_await _ss.topology_state_load();
+    auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex();
+    co_await _ss.topology_state_load(_cdc_gen_svc);
+    _ss._topology_state_machine.event.signal();
 }
 
 future<> group0_state_machine::transfer_snapshot(gms::inet_address from, raft::snapshot_descriptor snp) {
@@ -151,11 +152,11 @@ future<> group0_state_machine::transfer_snapshot(gms::inet_address from, raft::s
 
     // TODO ensure atomicity of snapshot application in presence of crashes (see TODO in `apply`)
 
-    auto read_apply_mutex_holder = co_await get_units(_client._read_apply_mutex, 1);
+    auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex();
 
     co_await _mm.merge_schema_from(addr, std::move(*cm));
 
-    if (!topology_snp.mutations.empty()) {
+    if (!topology_snp.topology_mutations.empty()) {
         co_await _ss.merge_topology_snapshot(std::move(topology_snp));
     }
 

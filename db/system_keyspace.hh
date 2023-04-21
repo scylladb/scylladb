@@ -68,6 +68,10 @@ namespace gms {
     class gossiper;
 }
 
+namespace cdc {
+    class topology_description;
+}
+
 bool is_system_keyspace(std::string_view ks_name);
 
 namespace db {
@@ -151,6 +155,7 @@ public:
     static constexpr auto BROADCAST_KV_STORE = "broadcast_kv_store";
     static constexpr auto TOPOLOGY = "topology";
     static constexpr auto SSTABLES_REGISTRY = "sstables";
+    static constexpr auto CDC_GENERATIONS_V3 = "cdc_generations_v3";
 
     struct v3 {
         static constexpr auto BATCHES = "batches";
@@ -233,6 +238,7 @@ public:
     static schema_ptr broadcast_kv_store();
     static schema_ptr topology();
     static schema_ptr sstables_registry();
+    static schema_ptr cdc_generations_v3();
 
     static table_schema_version generate_schema_version(table_id table_id, uint16_t offset = 0);
 
@@ -275,6 +281,13 @@ public:
     static query_mutations(distributed<service::storage_proxy>& proxy,
                     const sstring& ks_name,
                     const sstring& cf_name);
+
+    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+    static query_mutations(distributed<service::storage_proxy>& proxy,
+                    const sstring& ks_name,
+                    const sstring& cf_name,
+                    const dht::partition_range& partition_range,
+                    query::clustering_range row_ranges = query::clustering_range::make_open_ended_both_sides());
 
     // Returns all data from given system table.
     // Intended to be used by code which is not performance critical.
@@ -442,6 +455,10 @@ public:
     static future<bool> group0_history_contains(utils::UUID state_id);
 
     static future<service::topology> load_topology_state();
+
+    // Read CDC generation data with the given UUID as key.
+    // Precondition: the data is known to be present in the table (because it was committed earlier through group 0).
+    future<cdc::topology_description> read_cdc_generation(utils::UUID id);
 
     // The mutation appends the given state ID to the group 0 history table, with the given description if non-empty.
     //
