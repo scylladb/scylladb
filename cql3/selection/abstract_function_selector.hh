@@ -13,6 +13,7 @@
 #include "cql3/functions/function.hh"
 #include "cql3/functions/function_name.hh"
 #include "cql3/functions/user_aggregate.hh"
+#include "utils/small_vector.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
 namespace cql3 {
@@ -28,7 +29,7 @@ protected:
      * The list used to pass the function arguments is recycled to avoid the cost of instantiating a new list
      * with each function call.
      */
-    std::vector<bytes_opt> _args;
+    utils::small_vector<bytes_opt, 4> _args;
     std::vector<shared_ptr<selector>> _arg_selectors;
     const bool _requires_thread;
 

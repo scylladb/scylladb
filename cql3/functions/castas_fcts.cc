@@ -35,7 +35,7 @@ public:
     virtual void print(std::ostream& os) const override {
         os << "cast(" << _arg_types[0]->name() << " as " << _return_type->name() << ")";
     }
-    virtual bytes_opt execute(const std::vector<bytes_opt>& parameters) override {
+    virtual bytes_opt execute(std::span<const bytes_opt> parameters) override {
         auto from_type = arg_types()[0];
         auto to_type = return_type();
 

@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <span>
 #include "types/types.hh"
 #include <seastar/core/future.hh>
 #include "db/functions/function_name.hh"
@@ -56,6 +57,6 @@ struct context {
 
 seastar::future<> precompile(alien_thread_runner& alien_runner, context& ctx, const std::vector<sstring>& arg_names, std::string script);
 
-seastar::future<bytes_opt> run_script(const db::functions::function_name& name, context& ctx, const std::vector<data_type>& arg_types, const std::vector<bytes_opt>& params, data_type return_type, bool allow_null_input);
+seastar::future<bytes_opt> run_script(const db::functions::function_name& name, context& ctx, const std::vector<data_type>& arg_types, std::span<const bytes_opt> params, data_type return_type, bool allow_null_input);
 
 }

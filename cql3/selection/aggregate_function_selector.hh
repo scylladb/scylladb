@@ -39,7 +39,7 @@ public:
 
     virtual bytes_opt get_output() override {
         return _aggregate.state_to_result_function
-                ? _aggregate.state_to_result_function->execute({std::move(_accumulator)})
+                ? _aggregate.state_to_result_function->execute(std::span(&_accumulator, 1))
                 : std::move(_accumulator);
     }
 

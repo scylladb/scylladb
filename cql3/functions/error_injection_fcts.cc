@@ -40,7 +40,7 @@ public:
         return Pure;
     }
 
-    bytes_opt execute(const std::vector<bytes_opt>& parameters) override {
+    bytes_opt execute(std::span<const bytes_opt> parameters) override {
         return _func(parameters);
     }
 };
@@ -61,7 +61,7 @@ make_failure_injection_function(sstring name,
 
 shared_ptr<function> make_enable_injection_function() {
     return make_failure_injection_function<false>("enable_injection", empty_type, { ascii_type, ascii_type },
-            [] (const std::vector<bytes_opt>& parameters) {
+            [] (std::span<const bytes_opt> parameters) {
         sstring injection_name = ascii_type->get_string(parameters[0].value());
         const bool one_shot = ascii_type->get_string(parameters[1].value()) == "true";
         smp::invoke_on_all([injection_name, one_shot] () mutable {
@@ -73,7 +73,7 @@ shared_ptr<function> make_enable_injection_function() {
 
 shared_ptr<function> make_disable_injection_function() {
     return make_failure_injection_function<false>("disable_injection", empty_type, { ascii_type },
-            [] (const std::vector<bytes_opt>& parameters) {
+            [] (std::span<const bytes_opt> parameters) {
         sstring injection_name = ascii_type->get_string(parameters[0].value());
         smp::invoke_on_all([injection_name] () mutable {
             utils::get_local_injector().disable(injection_name);
@@ -85,7 +85,7 @@ shared_ptr<function> make_disable_injection_function() {
 shared_ptr<function> make_enabled_injections_function() {
     const auto list_type_inst = list_type_impl::get_instance(ascii_type, false);
     return make_failure_injection_function<true>("enabled_injections", list_type_inst, {},
-        [list_type_inst] (const std::vector<bytes_opt>&) -> bytes {
+        [list_type_inst] (std::span<const bytes_opt>) -> bytes {
             return seastar::map_reduce(smp::all_cpus(), [] (unsigned) {
                 return make_ready_future<std::vector<sstring>>(utils::get_local_injector().enabled_injections());
             }, std::vector<data_value>(),

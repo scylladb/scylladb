@@ -1322,7 +1322,7 @@ public:
         return "LIKE";
     }
 
-    virtual bytes_opt execute(const std::vector<bytes_opt>& parameters) override {
+    virtual bytes_opt execute(std::span<const bytes_opt> parameters) override {
         auto& str_opt = parameters[0];
         if (!str_opt) {
             return std::nullopt;

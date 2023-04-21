@@ -12,7 +12,7 @@
 
 #include "bytes.hh"
 #include "function.hh"
-#include <vector>
+#include <span>
 
 namespace db::functions {
 
@@ -25,7 +25,7 @@ public:
      * @return the result of applying this function to the parameter
      * @throws InvalidRequestException if this function cannot not be applied to the parameter
      */
-    virtual bytes_opt execute(const std::vector<bytes_opt>& parameters) = 0;
+    virtual bytes_opt execute(std::span<const bytes_opt> parameters) = 0;
 };
 
 
