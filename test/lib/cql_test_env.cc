@@ -130,6 +130,7 @@ public:
     static std::atomic<bool> active;
 private:
     sharded<replica::database>& _db;
+    sharded<service::storage_proxy>& _proxy;
     sharded<cql3::query_processor>& _qp;
     sharded<auth::service>& _auth_service;
     sharded<db::view::view_builder>& _view_builder;
@@ -184,6 +185,7 @@ private:
 public:
     single_node_cql_env(
             sharded<replica::database>& db,
+            sharded<service::storage_proxy>& proxy,
             sharded<cql3::query_processor>& qp,
             sharded<auth::service>& auth_service,
             sharded<db::view::view_builder>& view_builder,
@@ -197,6 +199,7 @@ public:
             sharded<service::raft_group_registry>& group0_registry,
             sharded<db::system_keyspace>& sys_ks)
             : _db(db)
+            , _proxy(proxy)
             , _qp(qp)
             , _auth_service(auth_service)
             , _view_builder(view_builder)
@@ -434,6 +437,10 @@ public:
 
     virtual sharded<db::system_keyspace>& get_system_keyspace() override {
         return _sys_ks;
+    }
+
+    virtual sharded<service::storage_proxy>& get_storage_proxy() override {
+        return _proxy;
     }
 
     virtual future<> refresh_client_state() override {
@@ -951,7 +958,7 @@ public:
 
             notify_set.notify_all(configurable::system_state::started).get();
 
-            single_node_cql_env env(db, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, group0_client, raft_gr, sys_ks);
+            single_node_cql_env env(db, proxy, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, group0_client, raft_gr, sys_ks);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 
