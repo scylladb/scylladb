@@ -83,7 +83,7 @@ The same query can be done to one node, as the Index and Base table partitions a
 LSI flow:
 
 * The user provides query details to the coordinator node (1)
-* An indexing subquery (2) is used  to fetch all matching base keys from the underlyingy materialized view.
+* An indexing subquery (2) is used  to fetch all matching base keys from the underlying materialized view.
 * The coordinator uses the resulting base key set to request appropriate rows from the base table (3), located in the **same node** as the Index
 
 Both the base table and the underlying materialized view have the same partition keys for corresponding rows. That means that their data resides on the same node and can thus be executed locally, without having to contact another node. When using a **token aware policy**, the entire query will be done with zero inter-node communication.
