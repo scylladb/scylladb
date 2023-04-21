@@ -67,14 +67,14 @@ struct replica_state {
 };
 
 struct topology {
-    enum class replication_state: uint8_t {
+    enum class transition_state: uint8_t {
         normal,
         commit_cdc_generation,
         write_both_read_old,
         write_both_read_new,
     };
 
-    replication_state rstate{replication_state::normal};
+    transition_state tstate{transition_state::normal};
 
     // Nodes that are normal members of the ring
     std::unordered_map<raft::server_id, replica_state> normal_nodes;
@@ -139,8 +139,8 @@ struct raft_topology_cmd_result {
     command_status status = command_status::fail;
 };
 
-std::ostream& operator<<(std::ostream& os, topology::replication_state s);
-topology::replication_state replication_state_from_string(const sstring& s);
+std::ostream& operator<<(std::ostream& os, topology::transition_state s);
+topology::transition_state transition_state_from_string(const sstring& s);
 std::ostream& operator<<(std::ostream& os, node_state s);
 node_state node_state_from_string(const sstring& s);
 std::ostream& operator<<(std::ostream& os, const topology_request& req);

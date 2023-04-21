@@ -36,28 +36,28 @@ bool topology::contains(raft::server_id id) {
            left_nodes.contains(id);
 }
 
-static std::unordered_map<topology::replication_state, sstring> replication_state_to_name_map = {
-    {topology::replication_state::commit_cdc_generation, "commit cdc generation"},
-    {topology::replication_state::write_both_read_old, "write both read old"},
-    {topology::replication_state::write_both_read_new, "write both read new"},
-    {topology::replication_state::normal, "normal"},
+static std::unordered_map<topology::transition_state, sstring> transition_state_to_name_map = {
+    {topology::transition_state::commit_cdc_generation, "commit cdc generation"},
+    {topology::transition_state::write_both_read_old, "write both read old"},
+    {topology::transition_state::write_both_read_new, "write both read new"},
+    {topology::transition_state::normal, "normal"},
 };
 
-std::ostream& operator<<(std::ostream& os, topology::replication_state s) {
-    auto it = replication_state_to_name_map.find(s);
-    if (it == replication_state_to_name_map.end()) {
-        on_internal_error(tsmlogger, "cannot print replication_state");
+std::ostream& operator<<(std::ostream& os, topology::transition_state s) {
+    auto it = transition_state_to_name_map.find(s);
+    if (it == transition_state_to_name_map.end()) {
+        on_internal_error(tsmlogger, "cannot print transition_state");
     }
     return os << it->second;
 }
 
-topology::replication_state replication_state_from_string(const sstring& s) {
-    for (auto&& e : replication_state_to_name_map) {
+topology::transition_state transition_state_from_string(const sstring& s) {
+    for (auto&& e : transition_state_to_name_map) {
         if (e.second == s) {
             return e.first;
         }
     }
-    on_internal_error(tsmlogger, format("cannot map name {} to replication_state", s));
+    on_internal_error(tsmlogger, format("cannot map name {} to transition_state", s));
 }
 
 static std::unordered_map<node_state, sstring> node_state_to_name_map = {

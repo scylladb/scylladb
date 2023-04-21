@@ -253,7 +253,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("shard_count", int32_type)
             .with_column("ignore_msb", int32_type)
             .with_column("new_cdc_generation_data_uuid", uuid_type)
-            .with_column("replication_state", utf8_type, column_kind::static_column)
+            .with_column("transition_state", utf8_type, column_kind::static_column)
             .with_column("current_cdc_generation_uuid", uuid_type, column_kind::static_column)
             .with_column("current_cdc_generation_timestamp", timestamp_type, column_kind::static_column)
             .set_comment("Current state of topology change machine")
@@ -3637,11 +3637,11 @@ future<service::topology> system_keyspace::load_topology_state() {
         // Here we access static columns, any row will do.
         auto& some_row = *rs->begin();
 
-        if (some_row.has("replication_state")) {
-            ret.rstate = service::replication_state_from_string(some_row.get_as<sstring>("replication_state"));
+        if (some_row.has("transition_state")) {
+            ret.tstate = service::transition_state_from_string(some_row.get_as<sstring>("transition_state"));
         }
 
-        if (ret.rstate == service::topology::replication_state::normal
+        if (ret.tstate == service::topology::transition_state::normal
                 && !ret.transition_nodes.empty()) {
             on_internal_error(slogger, format(
                 "load_topology_state: replication state is normal but transition nodes are present"));
