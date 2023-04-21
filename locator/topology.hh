@@ -25,8 +25,14 @@
 using namespace seastar;
 
 namespace locator {
-
 class topology;
+}
+
+namespace std {
+std::ostream& operator<<(std::ostream& out, const locator::topology&);
+}
+
+namespace locator {
 
 class node;
 using node_holder = std::unique_ptr<node>;
@@ -105,18 +111,22 @@ public:
         inet_address this_endpoint;
         endpoint_dc_rack local_dc_rack;
         bool disable_proximity_sorting = false;
+
+        bool operator==(const config&) const = default;
     };
     topology(config cfg);
     topology(topology&&) noexcept;
 
-    topology& operator=(topology&&) = default;
+    topology& operator=(topology&&) noexcept;
 
     future<topology> clone_gently() const;
     future<> clear_gently() noexcept;
 
 public:
+    const config& get_config() const noexcept { return _cfg; }
+
     const node* this_node() const noexcept {
-        return _nodes.size() ? _nodes.front().get() : nullptr;
+        return _this_node;
     }
 
     // Adds a node with given host_id, endpoint, and DC/rack.
@@ -192,7 +202,7 @@ public:
 
     // Get dc/rack location of this node
     const endpoint_dc_rack& get_location() const noexcept {
-        return this_node()->dc_rack();
+        return _this_node ? _this_node->dc_rack() : _cfg.local_dc_rack;
     }
     // Get dc/rack location of a node identified by host_id
     // The specified node must exist.
@@ -253,9 +263,7 @@ public:
     void for_each_node(std::function<void(const node*)> func) const;
 
 private:
-    // default constructor for cloning purposes
-    topology() noexcept;
-
+    bool is_configured_this_node(const node&) const;
     const node* add_node(node_holder node);
     void remove_node(const node* node);
 
@@ -281,6 +289,8 @@ private:
     std::weak_ordering compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
 
     unsigned _shard;
+    config _cfg;
+    const node* _this_node = nullptr;
     std::vector<node_holder> _nodes;
     std::unordered_map<host_id, const node*> _nodes_by_host_id;
     std::unordered_map<inet_address, const node*> _nodes_by_endpoint;
@@ -313,6 +323,8 @@ private:
     friend class token_metadata_impl;
 public:
     void test_compare_endpoints(const inet_address& address, const inet_address& a1, const inet_address& a2) const;
+
+    friend std::ostream& std::operator<<(std::ostream& out, const topology&);
 };
 
 } // namespace locator

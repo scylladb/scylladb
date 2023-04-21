@@ -55,6 +55,7 @@ std::string node::to_string(node::state s) {
 }
 
 future<> topology::clear_gently() noexcept {
+    _this_node = nullptr;
     co_await utils::clear_gently(_dc_endpoints);
     co_await utils::clear_gently(_dc_racks);
     _datacenters.clear();
@@ -65,25 +66,19 @@ future<> topology::clear_gently() noexcept {
     co_await utils::clear_gently(_nodes);
 }
 
-topology::topology() noexcept
-        : _shard(this_shard_id())
-{
-    tlogger.trace("topology[{}]: default-constructed", fmt::ptr(this));
-}
-
 topology::topology(config cfg)
         : _shard(this_shard_id())
+        , _cfg(cfg)
         , _sort_by_proximity(!cfg.disable_proximity_sorting)
 {
     tlogger.trace("topology[{}]: constructing using config: host_id={} endpoint={} dc={} rack={}", fmt::ptr(this),
             cfg.this_host_id, cfg.this_endpoint, cfg.local_dc_rack.dc, cfg.local_dc_rack.rack);
-    if (cfg.this_host_id || cfg.this_endpoint != inet_address{}) {
-        add_node(node::make(this, cfg.this_host_id, cfg.this_endpoint, cfg.local_dc_rack, node::state::joining, node::this_node::yes));
-    }
 }
 
 topology::topology(topology&& o) noexcept
     : _shard(o._shard)
+    , _cfg(std::move(o._cfg))
+    , _this_node(std::exchange(o._this_node, nullptr))
     , _nodes(std::move(o._nodes))
     , _nodes_by_host_id(std::move(o._nodes_by_host_id))
     , _nodes_by_endpoint(std::move(o._nodes_by_endpoint))
@@ -104,8 +99,16 @@ topology::topology(topology&& o) noexcept
     }
 }
 
+topology& topology::operator=(topology&& o) noexcept {
+    if (this != &o) {
+        this->~topology();
+        new (this) topology(std::move(o));
+    }
+    return *this;
+}
+
 future<topology> topology::clone_gently() const {
-    topology ret;
+    topology ret(_cfg);
     tlogger.debug("topology[{}]: clone_gently to {} from shard {}", fmt::ptr(this), fmt::ptr(&ret), _shard);
     for (const auto& nptr : _nodes) {
         if (nptr) {
@@ -129,12 +132,16 @@ const node* topology::add_node(host_id id, const inet_address& ep, const endpoin
     if (dr.dc.empty() || dr.rack.empty()) {
         on_internal_error(tlogger, "Node must have valid dc and rack");
     }
-    // OK to add a different node with the same ip address.
-    if (utils::fb_utilities::is_me(ep) && this_node() && this_node()->host_id() == id) {
-        on_internal_error(tlogger, format("topology[{}]: local node already set: host_id={} endpoint={} dc={} rack={}: currently mapped to {}", fmt::ptr(this),
-                id, ep, dr.dc, dr.rack, debug_format(this_node())));
-    }
     return add_node(node::make(this, id, ep, dr, state));
+}
+
+bool topology::is_configured_this_node(const node& n) const {
+    if (_cfg.this_host_id) { // Selection by host_id
+        return _cfg.this_host_id == n.host_id();
+    } else if (_cfg.this_endpoint != inet_address()) { // Selection by endpoint
+        return _cfg.this_endpoint == n.endpoint();;
+    }
+    return false; // No selection;
 }
 
 const node* topology::add_node(node_holder nptr) {
@@ -147,10 +154,6 @@ const node* topology::add_node(node_holder nptr) {
         nptr->set_topology(this);
     }
 
-    if (node->is_this_node() && this_node()) {
-        on_internal_error(tlogger, format("topology[{}]: {}: local node already mapped to {}", fmt::ptr(this), debug_format(node), debug_format(this_node())));
-    }
-
     if (node->idx() > 0) {
         on_internal_error(tlogger, format("topology[{}]: {}: has assigned idx", fmt::ptr(this), debug_format(node)));
     }
@@ -159,9 +162,20 @@ const node* topology::add_node(node_holder nptr) {
     nptr->set_idx(_nodes.size());
     _nodes.emplace_back(std::move(nptr));
 
-    tlogger.debug("topology[{}]: add_node: {}, at {}", fmt::ptr(this), debug_format(node), current_backtrace());
-
     try {
+        if (is_configured_this_node(*node)) {
+            if (_this_node) {
+                on_internal_error(tlogger, format("topology[{}]: {}: local node already mapped to {}", fmt::ptr(this), debug_format(node), debug_format(this_node())));
+            }
+            locator::node& n = *_nodes.back();
+            n._is_this_node = node::this_node::yes;
+            if (n._dc_rack == endpoint_dc_rack::default_location) {
+                n._dc_rack = _cfg.local_dc_rack;
+            }
+        }
+
+        tlogger.debug("topology[{}]: add_node: {}, at {}", fmt::ptr(this), debug_format(node), current_backtrace());
+
         index_node(node);
     } catch (...) {
         pop_node(make_mutable(node));
@@ -186,7 +200,7 @@ const node* topology::update_node(node* node, std::optional<host_id> opt_id, std
                 on_internal_error(tlogger, format("Updating node host_id to null is disallowed: {}: new host_id={}", debug_format(node), *opt_id));
             }
             if (node->is_this_node() && node->host_id()) {
-                on_internal_error(tlogger, format("This node host_id is alredy set: {}: new host_id={}", debug_format(node), *opt_id));
+                on_internal_error(tlogger, format("This node host_id is already set: {}: new host_id={}", debug_format(node), *opt_id));
             }
             if (_nodes_by_host_id.contains(*opt_id)) {
                 on_internal_error(tlogger, format("Cannot update node host_id: {}: new host_id already exists: {}", debug_format(node), debug_format(_nodes_by_host_id[*opt_id])));
@@ -261,12 +275,7 @@ bool topology::remove_node(host_id id) {
 }
 
 void topology::remove_node(const node* node) {
-    // never delete this node
-    if (node->is_this_node()) {
-        unindex_node(node);
-    } else {
-        pop_node(node);
-    }
+    pop_node(node);
 }
 
 void topology::index_node(const node* node) {
@@ -311,6 +320,10 @@ void topology::index_node(const node* node) {
     _dc_endpoints[dc].insert(endpoint);
     _dc_racks[dc][rack].insert(endpoint);
     _datacenters.insert(dc);
+
+    if (node->is_this_node()) {
+        _this_node = node;
+    }
 }
 
 void topology::unindex_node(const node* node) {
@@ -351,17 +364,15 @@ void topology::unindex_node(const node* node) {
     if (ep_it != _nodes_by_endpoint.end() && ep_it->second == node) {
         _nodes_by_endpoint.erase(ep_it);
     }
+    if (_this_node == node) {
+        _this_node = nullptr;
+    }
 }
 
 node_holder topology::pop_node(const node* node) {
     tlogger.trace("topology[{}]: pop_node: {}, at {}", fmt::ptr(this), debug_format(node), current_backtrace());
 
     unindex_node(node);
-
-    // this node?
-    if (node->idx() == 0) {
-        on_internal_error(tlogger, format("topology[{}]: {}: cannot pop this_node", fmt::ptr(this), debug_format(node)));
-    }
 
     auto nh = std::exchange(_nodes[node->idx()], {});
 
@@ -447,11 +458,15 @@ bool topology::has_endpoint(inet_address ep) const
 }
 
 const endpoint_dc_rack& topology::get_location(const inet_address& ep) const {
-    if (ep == utils::fb_utilities::get_broadcast_address()) {
-        return get_location();
-    }
     if (auto node = find_node(ep)) {
         return node->dc_rack();
+    }
+    // We should do the following check after lookup in nodes.
+    // In tests, there may be no config for local node, so fall back to get_location()
+    // only if no mapping is found. Otherwise, get_location() will return empty location
+    // from config or random node, neither of which is correct.
+    if (ep == _cfg.this_endpoint) {
+        return get_location();
     }
     // FIXME -- this shouldn't happen. After topology is stable and is
     // correctly populated with endpoints, this should be replaced with
@@ -501,6 +516,18 @@ void topology::for_each_node(std::function<void(const node*)> func) const {
 } // namespace locator
 
 namespace std {
+
+std::ostream& operator<<(std::ostream& out, const locator::topology& t) {
+    out << "{this_host_id: " << t._cfg.this_host_id
+        << ", this_endpoint: " << t._cfg.this_endpoint
+        << ", dc: " << t._cfg.local_dc_rack.dc
+        << ", rack: " << t._cfg.local_dc_rack.rack
+        << ", nodes:\n";
+    for (auto&& node : t._nodes) {
+        out << "  " << locator::topology::debug_format(&*node) << "\n";
+    }
+    return out << "}";
+}
 
 std::ostream& operator<<(std::ostream& out, const locator::node& node) {
     fmt::print(out, "{}", node);

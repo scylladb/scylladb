@@ -46,11 +46,10 @@ SEASTAR_THREAD_TEST_CASE(test_add_node) {
     });
 
     std::unordered_set<const locator::node*> nodes;
-    nodes.insert(topo.this_node());
 
     nodes.insert(topo.add_node(id2, ep2, endpoint_dc_rack::default_location, node::state::normal));
+    nodes.insert(topo.add_node(id1, ep1, endpoint_dc_rack::default_location, node::state::normal));
 
-    BOOST_REQUIRE_THROW(topo.add_node(id1, ep1, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
     BOOST_REQUIRE_THROW(topo.add_node(id1, ep2, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
     BOOST_REQUIRE_THROW(topo.add_node(id2, ep1, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
     BOOST_REQUIRE_THROW(topo.add_node(id2, ep2, endpoint_dc_rack::default_location, node::state::normal), std::runtime_error);
@@ -67,6 +66,33 @@ SEASTAR_THREAD_TEST_CASE(test_add_node) {
     topo.clear_gently().get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_moving) {
+    auto id1 = host_id::create_random_id();
+    auto ep1 = gms::inet_address("127.0.0.1");
+
+    utils::fb_utilities::set_broadcast_address(ep1);
+    topology::config cfg = {
+        .this_host_id = id1,
+        .this_endpoint = ep1,
+        .local_dc_rack = endpoint_dc_rack::default_location,
+    };
+
+    auto topo = topology(cfg);
+
+    topo.add_node(id1, ep1, endpoint_dc_rack::default_location, node::state::normal);
+
+    BOOST_REQUIRE(topo.this_node()->topology() == &topo);
+
+    topology topo2(std::move(topo));
+    BOOST_REQUIRE(topo2.this_node()->topology() == &topo2);
+    BOOST_REQUIRE(!topo.this_node());
+    BOOST_REQUIRE(topo2.get_config() == cfg);
+
+    topo = std::move(topo2);
+    BOOST_REQUIRE(topo.this_node()->topology() == &topo);
+    BOOST_REQUIRE(!topo2.this_node());
+    BOOST_REQUIRE(topo.get_config() == cfg);
+}
 
 SEASTAR_THREAD_TEST_CASE(test_update_node) {
     auto id1 = host_id::create_random_id();
@@ -88,6 +114,8 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
     auto reset_on_internal_abort = seastar::defer([] {
         set_abort_on_internal_error(true);
     });
+
+    topo.add_or_update_endpoint(ep1, endpoint_dc_rack::default_location, node::state::normal);
 
     auto node = topo.this_node();
     auto mutable_node = const_cast<locator::node*>(node);
