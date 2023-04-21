@@ -289,7 +289,7 @@ public:
      * <b>Warning:</b> this method should only be used for querying as this
      * doesn't at all guarantee the uniqueness of the resulting UUID.
      */
-    static UUID min_time_UUID(milliseconds timestamp = milliseconds{0})
+    static UUID min_time_UUID(decimicroseconds timestamp = decimicroseconds{0})
     {
         auto uuid = UUID(create_time(from_unix_timestamp(timestamp)), MIN_CLOCK_SEQ_AND_NODE);
         assert(uuid.is_timestamp());
