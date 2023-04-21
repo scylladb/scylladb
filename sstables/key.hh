@@ -50,7 +50,7 @@ public:
     std::strong_ordering tri_compare(const schema& s, partition_key_view other) const {
         return with_linearized([&] (bytes_view v) {
             auto lf = other.legacy_form(s);
-            return lexicographical_tri_compare(
+            return std::lexicographical_compare_three_way(
                     v.begin(), v.end(), lf.begin(), lf.end(),
                     [](uint8_t b1, uint8_t b2) { return  b1 <=> b2; });
         });
