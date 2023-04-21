@@ -36,14 +36,14 @@ bool topology::contains(raft::server_id id) {
            left_nodes.contains(id);
 }
 
-static std::unordered_map<ring_slice::replication_state, sstring> replication_state_to_name_map = {
-    {ring_slice::replication_state::commit_cdc_generation, "commit cdc generation"},
-    {ring_slice::replication_state::write_both_read_old, "write both read old"},
-    {ring_slice::replication_state::write_both_read_new, "write both read new"},
-    {ring_slice::replication_state::owner, "owner"},
+static std::unordered_map<topology::replication_state, sstring> replication_state_to_name_map = {
+    {topology::replication_state::commit_cdc_generation, "commit cdc generation"},
+    {topology::replication_state::write_both_read_old, "write both read old"},
+    {topology::replication_state::write_both_read_new, "write both read new"},
+    {topology::replication_state::normal, "normal"},
 };
 
-std::ostream& operator<<(std::ostream& os, ring_slice::replication_state s) {
+std::ostream& operator<<(std::ostream& os, topology::replication_state s) {
     auto it = replication_state_to_name_map.find(s);
     if (it == replication_state_to_name_map.end()) {
         on_internal_error(tsmlogger, "cannot print replication_state");
@@ -51,7 +51,7 @@ std::ostream& operator<<(std::ostream& os, ring_slice::replication_state s) {
     return os << it->second;
 }
 
-ring_slice::replication_state replication_state_from_string(const sstring& s) {
+topology::replication_state replication_state_from_string(const sstring& s) {
     for (auto&& e : replication_state_to_name_map) {
         if (e.second == s) {
             return e.first;

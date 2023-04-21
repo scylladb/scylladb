@@ -327,13 +327,11 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
         co_await tmptr->clear_gently(); // drop previous state
 
         auto add_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
-            assert (rs.ring.value().state == ring_slice::ring_slice::replication_state::owner);
-
             locator::host_id host_id{id.uuid()};
             auto ip = co_await id2ip(id);
 
             slogger.trace("raft topology: loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={}",
-                          id, ip, rs.state, rs.datacenter, rs.rack, rs.ring.value().state, rs.ring.value().tokens);
+                          id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.rstate, rs.ring.value().tokens);
             // Save tokens, not needed for raft topology management, but needed by legacy
             // Also ip -> id mapping is needed for address map recreation on reboot
             if (!utils::fb_utilities::is_me(ip)) {
@@ -360,7 +358,7 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
             auto ip = co_await id2ip(id);
 
             slogger.trace("raft topology: loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={}",
-                          id, ip, rs.state, rs.datacenter, rs.rack, rs.ring->state, rs.ring->tokens);
+                          id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.rstate, rs.ring->tokens);
 
             switch (rs.state) {
             case node_state::bootstrapping:
@@ -473,6 +471,7 @@ public:
     topology_mutation_builder& set(const char* cell, const std::unordered_set<dht::token>& value);
     topology_mutation_builder& set(const char* cell, const uint32_t& value);
     topology_mutation_builder& set(const char* cell, const utils::UUID& value);
+    topology_mutation_builder& set_replication_state(topology::replication_state);
     topology_mutation_builder& set_current_cdc_generation_id(const cdc::generation_id_v2&);
     topology_mutation_builder& del(const char* cell);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
@@ -545,6 +544,11 @@ topology_mutation_builder& topology_mutation_builder::set(const char* cell, cons
     } else {
         del(cell);
     }
+    return *this;
+}
+
+topology_mutation_builder& topology_mutation_builder::set_replication_state(topology::replication_state value) {
+    _m.set_static_cell("replication_state", fmt::format("{}", value), _ts);
     return *this;
 }
 
@@ -676,8 +680,8 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
         }
 
         bool res;
-        switch (node.rs->ring.value().state) {
-            case ring_slice::replication_state::commit_cdc_generation: {
+        switch (node.topology->rstate) {
+            case topology::replication_state::commit_cdc_generation: {
                 // make sure all nodes know about new topology and have the new CDC generation data
                 // (we require all nodes to be alive for topo change for now)
                 std::tie(node, res) = co_await exec_global_command(std::move(node), raft_topology_cmd{raft_topology_cmd::command::barrier}, false, replaced_node);
@@ -737,13 +741,13 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                 // committed) - they won't coordinate CDC-enabled writes until they reconnect to the
                 // majority and commit.
                 topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
-                builder.set("replication_state", ring_slice::replication_state::write_both_read_old)
+                builder.set_replication_state(topology::replication_state::write_both_read_old)
                        .set_current_cdc_generation_id(cdc_gen_id);
                 auto str = fmt::format("{}: committed new CDC generation, ID: {}", node.rs->state, cdc_gen_id);
                 co_await update_replica_state(std::move(node), {builder.build()}, std::move(str));
             }
                 break;
-            case ring_slice::ring_slice::replication_state::write_both_read_old: {
+            case topology::replication_state::write_both_read_old: {
                 // make sure all nodes know about new topology (we require all nodes to be alive for topo change for now)
                 std::tie(node, res) = co_await exec_global_command(std::move(node), raft_topology_cmd{raft_topology_cmd::command::barrier}, false, replaced_node);
                 if (!res) {
@@ -779,14 +783,14 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                         break;
                     }
                 }
-                // Streaming completed. We can now move tokens state to ring_slice::ring_slice::replication_state::write_both_read_new
+                // Streaming completed. We can now move tokens state to topology::replication_state::write_both_read_new
                 topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
-                builder.set("replication_state", ring_slice::replication_state::write_both_read_new);
+                builder.set_replication_state(topology::replication_state::write_both_read_new);
                 auto str = fmt::format("{}: streaming completed for node {}", node.rs->state, node.id);
                 co_await update_replica_state(std::move(node), {builder.build()}, std::move(str));
             }
                 break;
-            case ring_slice::replication_state::write_both_read_new:
+            case topology::replication_state::write_both_read_new:
                 // In this state writes goes to old and new replicas but reads start to be done from new replicas
                 // Before we stop writing to old replicas we need to wait for all previous reads to complete
                 std::tie(node, res) = co_await exec_global_command(std::move(node), raft_topology_cmd{raft_topology_cmd::command::fence_old_reads}, true, replaced_node);
@@ -796,7 +800,7 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                 switch(node.rs->state) {
                 case node_state::bootstrapping: {
                     topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
-                    builder.set("replication_state", ring_slice::replication_state::owner)
+                    builder.set_replication_state(topology::replication_state::normal)
                            .set("node_state", node_state::normal);
                     co_await update_replica_state(std::move(node), {builder.build()}, "bootstrap: read fence completed");
                     }
@@ -804,9 +808,9 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                 case node_state::decommissioning:
                 case node_state::removing: {
                     topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
-                    builder.del("replication_state")
-                           .del("tokens")
-                           .set("node_state", node_state::left);
+                    builder.del("tokens")
+                           .set("node_state", node_state::left)
+                           .set_replication_state(topology::replication_state::normal);
                     auto str = fmt::format("{}: read fence completed", node.rs->state);
                     co_await update_replica_state(std::move(node), {builder.build()}, std::move(str));
                     }
@@ -814,13 +818,12 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                 case node_state::replacing: {
                     topology_mutation_builder builder1(node.guard.write_timestamp(), node.id);
                     // Move new node to 'normal'
-                    builder1.set("replication_state", ring_slice::replication_state::owner)
+                    builder1.set_replication_state(topology::replication_state::normal)
                             .set("node_state", node_state::normal);
 
                     // Move old node to 'left'
                     topology_mutation_builder builder2(node.guard.write_timestamp(), replaced_node);
-                    builder2.del("replication_state")
-                            .del("tokens")
+                    builder2.del("tokens")
                             .set("node_state", node_state::left);
                     co_await update_replica_state(std::move(node), {builder1.build(), builder2.build()}, "replace: read fence completed");
                     }
@@ -828,11 +831,11 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                 default:
                     on_fatal_internal_error(slogger, format("Ring state on node {} is write_both_read_new while the node is in state {}", node.id, node.rs->state));
                 }
-                // Reads are fenced. We can now move tokens state to ring_slice::replication_state::owner and node to normal
+                // Reads are fenced. We can now move tokens state to topology::replication_state::normal and node to normal
                 break;
-            case ring_slice::replication_state::owner:
+            case topology::replication_state::normal:
                 // should not get here
-                on_fatal_internal_error(slogger, format("Tried to handle ring state transition on node {} while in 'owner' state", node.id));
+                on_fatal_internal_error(slogger, format("Tried to handle ring state transition on node {} while in 'normal' state", node.id));
                 break;
         }
     };
@@ -913,7 +916,7 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                         builder.set("node_state", node_state::bootstrapping)
                                 .del("topology_request")
                                 .set("tokens", bootstrap_tokens)
-                                .set("replication_state", ring_slice::replication_state::commit_cdc_generation)
+                                .set_replication_state(topology::replication_state::commit_cdc_generation)
                                 .set("new_cdc_generation_data_uuid", gen_uuid);
                         updates.push_back(builder.build());
                         auto reason = format(
@@ -927,7 +930,7 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                         // meaning that reads will go to the replica being decommissioned but writes will go to new owner as well
                         builder.set("node_state", node_state::decommissioning)
                                 .del("topology_request")
-                                .set("replication_state", ring_slice::replication_state::write_both_read_old);
+                                .set_replication_state(topology::replication_state::write_both_read_old);
                         co_await update_replica_state(std::move(node), {builder.build()}, "start decommission");
                         break;
                     case topology_request::remove:
@@ -936,7 +939,7 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                         // meaning that reads will go to the replica being removed (it is dead though) but writes will go to new owner as well
                         builder.set("node_state", node_state::removing)
                                 .del("topology_request")
-                                .set("replication_state", ring_slice::replication_state::write_both_read_old);
+                                .set_replication_state(topology::replication_state::write_both_read_old);
                         co_await update_replica_state(std::move(node), {builder.build()}, "start removenode");
                         break;
                     case topology_request::replace: {
@@ -950,7 +953,7 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                         builder.set("node_state", node_state::replacing)
                                 .del("topology_request")
                                 .set("tokens", it->second.ring->tokens)
-                                .set("replication_state", ring_slice::replication_state::write_both_read_old);
+                                .set_replication_state(topology::replication_state::write_both_read_old);
                         co_await update_replica_state(std::move(node), {builder.build()}, "start replace");
                         break;
                         }
@@ -4653,10 +4656,10 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                 break;
                 case raft_topology_cmd::command::stream_ranges: {
                     const auto& rs = _topology_state_machine._topology.find(raft_server.id())->second;
+                    auto replication_state = _topology_state_machine._topology.rstate;
                     if (!rs.ring ||
-                        (rs.ring->state != ring_slice::replication_state::write_both_read_old && rs.state != node_state::normal && rs.state != node_state::rebuilding)) {
-                        slogger.warn("raft topology: got stream_ranges request while my tokens state is {} and node state is {}",
-                                    rs.ring ? fmt::format("{}", rs.ring->state) : "'missing ring'", rs.state);
+                        (replication_state != topology::replication_state::write_both_read_old && rs.state != node_state::normal && rs.state != node_state::rebuilding)) {
+                        slogger.warn("raft topology: got stream_ranges request while my tokens state is {} and node state is {}", replication_state, rs.state);
                         break;
                     }
                     switch(rs.state) {
