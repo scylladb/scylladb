@@ -180,7 +180,24 @@ tasks::is_internal shard_offstrategy_keyspace_compaction_task_impl::is_internal(
 }
 
 future<> shard_offstrategy_keyspace_compaction_task_impl::run() {
-    co_await run_on_existing_tables("perform_keyspace_offstrategy_compaction", _db, _status.keyspace, _table_infos, [this] (replica::table& t) -> future<> {
+    seastar::condition_variable cv;
+    tasks::task_manager::task_ptr current_task;
+    tasks::task_info parent_info{_status.id, _status.shard};
+    std::vector<table_tasks_info> table_tasks;
+    for (auto& ti : _table_infos) {
+        table_tasks.emplace_back(co_await _module->make_and_start_task<table_offstrategy_keyspace_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task, _needed), ti);
+    }
+
+    co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, false);
+}
+
+tasks::is_internal table_offstrategy_keyspace_compaction_task_impl::is_internal() const noexcept {
+    return tasks::is_internal::yes;
+}
+
+future<> table_offstrategy_keyspace_compaction_task_impl::run() {
+    co_await wait_for_your_turn(_cv, _current_task, _status.id);
+    co_await run_on_table("perform_keyspace_offstrategy_compaction", _db, _status.keyspace, _ti, [this] (replica::table& t) -> future<> {
         _needed |= co_await t.perform_offstrategy_compaction();
     });
 }
