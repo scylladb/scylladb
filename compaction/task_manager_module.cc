@@ -7,6 +7,7 @@
  */
 
 #include "compaction/task_manager_module.hh"
+#include "compaction/compaction_manager.hh"
 #include "replica/database.hh"
 
 namespace compaction {

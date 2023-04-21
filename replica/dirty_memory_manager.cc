@@ -6,6 +6,7 @@
 #include "database.hh" // for memtable_list
 #include <seastar/core/metrics_api.hh>
 #include <seastar/util/later.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include "seastarx.hh"

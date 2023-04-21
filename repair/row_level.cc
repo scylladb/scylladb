@@ -55,6 +55,7 @@
 #include "repair/decorated_key_with_hash.hh"
 #include "repair/row.hh"
 #include "repair/writer.hh"
+#include "compaction/compaction_manager.hh"
 #include "utils/xx_hasher.hh"
 
 extern logging::logger rlogger;

@@ -17,6 +17,7 @@
 #include "db/system_keyspace.hh"
 #include "db/data_listeners.hh"
 #include "storage_service.hh"
+#include "compaction/compaction_manager.hh"
 #include "unimplemented.hh"
 
 extern logging::logger apilog;

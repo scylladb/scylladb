@@ -64,7 +64,6 @@
 #include "db/operation_type.hh"
 #include "utils/serialized_action.hh"
 #include "compaction/compaction_fwd.hh"
-#include "compaction/compaction_manager.hh"
 #include "utils/disk-error-handler.hh"
 #include "rust/wasmtime_bindings.hh"
 
@@ -1672,13 +1671,7 @@ private:
 
     static future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> get_table_on_all_shards(sharded<database>& db, table_id uuid);
 
-    struct table_truncate_state {
-        gate::holder holder;
-        db_clock::time_point low_mark_at;
-        db::replay_position low_mark;
-        std::vector<compaction_manager::compaction_reenabler> cres;
-        bool did_flush;
-    };
+    struct table_truncate_state;
 
     static future<> truncate_table_on_all_shards(sharded<database>& db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
     future<> truncate(column_family& cf, const table_truncate_state&, db_clock::time_point truncated_at);
