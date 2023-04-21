@@ -46,9 +46,7 @@ static future<> assert_sstable_computes_correct_owners(test_env& env, const ssta
 }
 
 // Must be called in a seastar thread.
-void run_sstable_resharding_test() {
-    test_env env;
-    auto close_env = defer([&] { env.stop().get(); });
+void run_sstable_resharding_test(sstables::test_env& env) {
   for (const auto version : writable_sstable_versions) {
     auto s = get_schema();
     auto cf = env.make_table_for_tests(s);
@@ -129,8 +127,8 @@ void run_sstable_resharding_test() {
 }
 
 SEASTAR_TEST_CASE(sstable_resharding_test) {
-    return seastar::async([] {
-        run_sstable_resharding_test();
+    return sstables::test_env::do_with_async([] (auto& env) {
+        run_sstable_resharding_test(env);
     });
 }
 
