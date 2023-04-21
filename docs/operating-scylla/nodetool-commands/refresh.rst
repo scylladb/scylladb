@@ -22,22 +22,4 @@ For example:
 ``nodetool refresh nba player_stats``
 
 
-Load and Stream
----------------
-
-.. versionadded:: 4.6
-
-.. code::
-
-   nodetool refresh <my_keyspace> <my_table> [--load-and-stream | -las]
-
-The Load and Stream feature extends nodetool refresh. The new ``-las`` option loads arbitrary sstables that do not belong to a node into the cluster. It loads the sstables from the disk and calculates the data's owning nodes, and streams automatically.
-For example, say the old cluster has 6 nodes and the new cluster has 3 nodes. We can copy the sstables from the old cluster to any of the new nodes and trigger the load and stream process.
-
-Load and Stream make restores and migrations much easier:
-
-* You can place sstable from every node to every node
-* No need to run nodetool cleanup to remove unused data
-
-
 .. include:: nodetool-index.rst
