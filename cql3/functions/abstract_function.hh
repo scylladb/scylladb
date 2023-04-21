@@ -72,9 +72,8 @@ public:
 inline
 void
 abstract_function::print(std::ostream& os) const {
-    os << _name << " : (";
-    os << _arg_types;
-    os << ") -> " << _return_type->as_cql3_type().to_string();
+    fmt::print(os, "{} : ({}) -> {}",
+               _name, _arg_types, _return_type->as_cql3_type().to_string());
 }
 
 }
