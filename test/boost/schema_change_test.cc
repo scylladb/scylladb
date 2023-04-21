@@ -772,7 +772,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
             // with highest timestamp will win and be sent to other nodes.
             // Thus, system_distributed.* tables are officially not taken into account,
             // which makes it less likely that this test case would need to be needlessly regenerated.
-            auto actual = calculate_schema_digest(service::get_storage_proxy(), sf, std::not_fn(&is_internal_keyspace)).get0();
+            auto actual = calculate_schema_digest(e.get_storage_proxy(), sf, std::not_fn(&is_internal_keyspace)).get0();
             if (regenerate) {
                 std::cout << format("        utils::UUID(\"{}\"),", actual) << "\n";
             } else {
