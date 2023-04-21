@@ -732,62 +732,30 @@ bool query_processor::has_more_results(::shared_ptr<cql3::internal_query_state> 
 future<> query_processor::for_each_cql_result(
         ::shared_ptr<cql3::internal_query_state> state,
         std::function<stop_iteration(const cql3::untyped_result_set::row&)>&& f) {
-    return do_with(seastar::shared_ptr<bool>(), [f, this, state](auto& is_done) mutable {
-        is_done = seastar::make_shared<bool>(false);
-
-        auto stop_when = [is_done]() {
-            return *is_done;
-        };
-        auto do_resuls = [is_done, state, f, this]() mutable {
-            return this->execute_paged_internal(
-                    state).then([is_done, state, f, this](::shared_ptr<cql3::untyped_result_set> msg) mutable {
-                if (msg->empty()) {
-                    *is_done = true;
-                } else {
-                    if (!this->has_more_results(state)) {
-                        *is_done = true;
-                    }
-                    for (auto& row : *msg) {
-                        if (f(row) == stop_iteration::yes) {
-                            *is_done = true;
-                            break;
-                        }
-                    }
-                }
-            });
-        };
-        return do_until(stop_when, do_resuls);
-    });
+    do {
+        auto msg = co_await execute_paged_internal(state);
+        if (msg->empty()) {
+            co_return;
+        }
+        for (auto& row : *msg) {
+            if (f(row) == stop_iteration::yes) {
+                co_return;
+            }
+        }
+    } while (has_more_results(state));
 }
 
 future<> query_processor::for_each_cql_result(
         ::shared_ptr<cql3::internal_query_state> state,
          noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set::row&)>&& f) {
-    // repeat can move the lambda's capture, so we need to hold f and it so the internal loop
-    // will be able to use it.
-    return do_with(noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set::row&)>(std::move(f)),
-            untyped_result_set::rows_type::const_iterator(),
-            [state, this](noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set::row&)>& f,
-                    untyped_result_set::rows_type::const_iterator& it) mutable {
-        return repeat([state, &f, &it, this]() mutable {
-            return this->execute_paged_internal(state).then([state, &f, &it, this](::shared_ptr<cql3::untyped_result_set> msg) mutable {
-                it = msg->begin();
-                return repeat_until_value([&it, &f, msg, state, this]() mutable {
-                    if (it == msg->end()) {
-                        return make_ready_future<std::optional<stop_iteration>>(std::optional<stop_iteration>(!this->has_more_results(state)));
-                    }
-
-                    return f(*it).then([&it, msg](stop_iteration i) {
-                        if (i == stop_iteration::yes) {
-                            return std::optional<stop_iteration>(i);
-                        }
-                        ++it;
-                        return std::optional<stop_iteration>();
-                    });
-                });
-            });
-        });
-    });
+    do {
+        auto msg = co_await execute_paged_internal(state);
+        for (auto& row : *msg) {
+            if ((co_await f(row)) == stop_iteration::yes) {
+                co_return;
+            }
+        }
+    } while (has_more_results(state));
 }
 
 future<::shared_ptr<untyped_result_set>>
