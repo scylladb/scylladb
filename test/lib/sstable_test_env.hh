@@ -221,11 +221,11 @@ public:
     }
 
     table_for_tests make_table_for_tests(schema_ptr s, sstring dir) {
-        return table_for_tests(manager(), s, std::move(dir));
+        return table_for_tests(manager(), s, std::move(dir), _impl->storage);
     }
 
     table_for_tests make_table_for_tests(schema_ptr s = nullptr) {
-        return table_for_tests(manager(), s, tempdir().path().native());
+        return table_for_tests(manager(), s, tempdir().path().native(), _impl->storage);
     }
 };
 
