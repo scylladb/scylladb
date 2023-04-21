@@ -114,7 +114,7 @@ std::strong_ordering timeuuid_legacy_tri_compare(bytes_view o1, bytes_view o2) {
                             compare_pos(2, 0xff,
                                 compare_pos(3, 0xff, std::strong_ordering::equal))))))));
     if (res == 0) {
-        res = lexicographical_tri_compare(o1.begin(), o1.end(), o2.begin(), o2.end(),
+        res = std::lexicographical_compare_three_way(o1.begin(), o1.end(), o2.begin(), o2.end(),
             [] (const int8_t& a, const int8_t& b) { return a <=> b; });
     }
     return res;

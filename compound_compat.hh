@@ -153,7 +153,7 @@ public:
             if (_type.is_singular()) {
                 return compare_unsigned(*_type.begin(k1), *_type.begin(k2));
             }
-            return lexicographical_tri_compare(
+            return std::lexicographical_compare_three_way(
                 _type.begin(k1), _type.end(k1),
                 _type.begin(k2), _type.end(k2),
                 [] (const managed_bytes_view& c1, const managed_bytes_view& c2) -> std::strong_ordering {

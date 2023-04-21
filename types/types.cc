@@ -2296,7 +2296,7 @@ struct compare_visitor {
     std::strong_ordering operator()(const listlike_collection_type_impl& l) {
         using llpdi = listlike_partial_deserializing_iterator;
         return with_empty_checks([&] {
-            return lexicographical_tri_compare(llpdi::begin(v1), llpdi::end(v1), llpdi::begin(v2),
+            return std::lexicographical_compare_three_way(llpdi::begin(v1), llpdi::end(v1), llpdi::begin(v2),
                     llpdi::end(v2),
                     [&] (const managed_bytes_view_opt& o1, const managed_bytes_view_opt& o2) {
                         if (!o1.has_value() || !o2.has_value()) {

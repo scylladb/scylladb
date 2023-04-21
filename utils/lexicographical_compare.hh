@@ -89,36 +89,6 @@ std::strong_ordering lexicographical_tri_compare(TypesIterator types_first, Type
     }
 }
 
-// Trichotomic version of std::lexicographical_compare()
-template <typename InputIt1, typename InputIt2, typename Compare>
-requires requires (InputIt1 i1, InputIt2 i2, Compare c) {
-    { c(*i1, *i2) } -> std::same_as<std::strong_ordering>;
-}
-std::strong_ordering lexicographical_tri_compare(InputIt1 first1, InputIt1 last1,
-        InputIt2 first2, InputIt2 last2,
-        Compare comp,
-        lexicographical_relation relation1 = lexicographical_relation::before_all_strictly_prefixed,
-        lexicographical_relation relation2 = lexicographical_relation::before_all_strictly_prefixed) {
-    while (first1 != last1 && first2 != last2) {
-        auto c = comp(*first1, *first2);
-        if (c != 0) {
-            return c;
-        }
-        ++first1;
-        ++first2;
-    }
-    bool e1 = first1 == last1;
-    bool e2 = first2 == last2;
-    if (e1 == e2) {
-        return static_cast<int>(relation1) <=> static_cast<int>(relation2);
-    }
-    if (e2) {
-        return relation2 == lexicographical_relation::after_all_prefixed ? std::strong_ordering::less : std::strong_ordering::greater;
-    } else {
-        return relation1 == lexicographical_relation::after_all_prefixed ? std::strong_ordering::greater : std::strong_ordering::less;
-    }
-}
-
 // A trichotomic comparator for prefix equality total ordering.
 // In this ordering, two sequences are equal iff any of them is a prefix
 // of the another. Otherwise, lexicographical ordering determines the order.
