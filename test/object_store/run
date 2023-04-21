@@ -41,7 +41,7 @@ conn.execute("INSERT INTO test_ks.test_cf ( name, value ) VALUES ('1', 'one');")
 conn.execute("INSERT INTO test_ks.test_cf ( name, value ) VALUES ('2', 'two');")
 res = conn.execute("SELECT * FROM test_ks.test_cf;")
 
-r = requests.post(f'http://{ip}:10000/storage_service/keyspace_flush/test_ks')
+r = requests.post(f'http://{ip}:10000/storage_service/keyspace_flush/test_ks', timeout=60)
 if r.status_code != 200:
     print(f'Error flushing keyspace: {r}')
     success = False
