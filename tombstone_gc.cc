@@ -17,6 +17,7 @@
 #include "exceptions/exceptions.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "replica/database.hh"
+#include "compaction/compaction_manager.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "gms/feature_service.hh"
 

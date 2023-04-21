@@ -37,6 +37,7 @@
 #include "db/data_listeners.hh"
 #include "multishard_mutation_query.hh"
 #include "transport/messages/result_message.hh"
+#include "compaction/compaction_manager.hh"
 #include "db/snapshot-ctl.hh"
 
 using namespace std::chrono_literals;

@@ -2330,6 +2330,14 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
     co_return co_await truncate_table_on_all_shards(sharded_db, table_shards, truncated_at_opt, with_snapshot, std::move(snapshot_name_opt));
 }
 
+struct database::table_truncate_state {
+    gate::holder holder;
+    db_clock::time_point low_mark_at;
+    db::replay_position low_mark;
+    std::vector<compaction_manager::compaction_reenabler> cres;
+    bool did_flush;
+};
+
 future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>& table_shards, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
     auto& cf = *table_shards[this_shard_id()];
     auto s = cf.schema();
