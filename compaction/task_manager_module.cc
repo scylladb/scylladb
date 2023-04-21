@@ -106,15 +106,24 @@ tasks::is_internal shard_major_keyspace_compaction_task_impl::is_internal() cons
 }
 
 future<> shard_major_keyspace_compaction_task_impl::run() {
-    // Major compact smaller tables first, to increase chances of success if low on space.
-    std::ranges::sort(_local_tables, std::less<>(), [&] (const table_info& ti) {
-        try {
-            return _db.find_column_family(ti.id).get_stats().live_disk_space_used;
-        } catch (const replica::no_such_column_family& e) {
-            return int64_t(-1);
-        }
-    });
-    co_await run_on_existing_tables("force_keyspace_compaction", _db, _status.keyspace, _local_tables, [] (replica::table& t) {
+    seastar::condition_variable cv;
+    tasks::task_manager::task_ptr current_task;
+    tasks::task_info parent_info{_status.id, _status.shard};
+    std::vector<table_tasks_info> table_tasks;
+    for (auto& ti : _local_tables) {
+        table_tasks.emplace_back(co_await _module->make_and_start_task<table_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task), ti);
+    }
+
+    co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, true);
+}
+
+tasks::is_internal table_major_keyspace_compaction_task_impl::is_internal() const noexcept {
+    return tasks::is_internal::yes;
+}
+
+future<> table_major_keyspace_compaction_task_impl::run() {
+    co_await wait_for_your_turn(_cv, _current_task, _status.id);
+    co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [] (replica::table& t) {
         return t.compact_all_sstables();
     });
 }

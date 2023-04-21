@@ -92,6 +92,34 @@ protected:
     virtual future<> run() override;
 };
 
+class table_major_keyspace_compaction_task_impl : public major_compaction_task_impl {
+private:
+    replica::database& _db;
+    table_info _ti;
+    seastar::condition_variable& _cv;
+    tasks::task_manager::task_ptr& _current_task;
+public:
+    table_major_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
+            std::string keyspace,
+            std::string table,
+            tasks::task_id parent_id,
+            replica::database& db,
+            table_info ti,
+            seastar::condition_variable& cv,
+            tasks::task_manager::task_ptr& current_task) noexcept
+        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), std::move(table), "", parent_id)
+        , _db(db)
+        , _ti(std::move(ti))
+        , _cv(cv)
+        , _current_task(current_task)
+    {}
+
+    virtual tasks::is_internal is_internal() const noexcept override;
+protected:
+    virtual future<> run() override;
+};
+
+
 class cleanup_compaction_task_impl : public compaction_task_impl {
 public:
     cleanup_compaction_task_impl(tasks::task_manager::module_ptr module,
