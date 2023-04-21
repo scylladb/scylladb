@@ -19,7 +19,6 @@
 #include "utils/atomic_vector.hh"
 #include "utils/UUID.hh"
 #include "utils/fb_utilities.hh"
-#include "gms/failure_detector.hh"
 #include "gms/versioned_value.hh"
 #include "gms/application_state.hh"
 #include "gms/endpoint_state.hh"
@@ -30,7 +29,6 @@
 #include "utils/updateable_value.hh"
 #include "utils/in.hh"
 #include "message/messaging_service_fwd.hh"
-#include "direct_failure_detector/failure_detector.hh"
 #include <optional>
 #include <algorithm>
 #include <chrono>
