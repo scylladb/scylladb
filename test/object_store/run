@@ -22,7 +22,6 @@ test_tempdir = run.pid_to_dir(os.getpid())
 os.mkdir(test_tempdir)
 
 def get_tempdir(pid):
-    global test_tempdir
     return test_tempdir
 
 print(f'Start scylla (dir={test_tempdir}')
