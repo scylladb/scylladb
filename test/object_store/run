@@ -6,8 +6,6 @@ import run
 
 import os
 import requests
-import time
-import cassandra.cluster
 
 print('Scylla is: ' + run.find_scylla() + '.')
 success = True
