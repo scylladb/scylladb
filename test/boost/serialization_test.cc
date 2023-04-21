@@ -193,7 +193,7 @@ BOOST_AUTO_TEST_CASE(inet_address) {
         for (sstring s : { "2001:6b0:8:2::232", "2a05:d018:223:f00:97af:f4d9:eac2:6a0f", "fe80::8898:3e04:215b:2cd6" }) {
             gms::inet_address ip(s);
             BOOST_CHECK(ip.addr().is_ipv6());
-            auto s2 = boost::lexical_cast<std::string>(ip);
+            auto s2 = fmt::to_string(ip);
             gms::inet_address ip2(s);
             BOOST_CHECK_EQUAL(ip2, ip);
         }

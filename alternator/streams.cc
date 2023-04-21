@@ -827,7 +827,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     }
 
     if (!schema || !base || !is_alternator_keyspace(schema->ks_name())) {
-        throw api_error::resource_not_found(boost::lexical_cast<std::string>(iter.table));
+        throw api_error::resource_not_found(fmt::to_string(iter.table));
     }
 
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());

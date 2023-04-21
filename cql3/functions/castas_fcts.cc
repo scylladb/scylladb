@@ -109,7 +109,7 @@ static data_value castas_fctn_from_integer_to_decimal(data_value from) {
 template<typename FromType>
 static data_value castas_fctn_from_float_to_decimal(data_value from) {
     auto val_from = value_cast<FromType>(from);
-    return big_decimal(boost::lexical_cast<std::string>(val_from));
+    return big_decimal(fmt::to_string(val_from));
 }
 
 template<typename FromType>

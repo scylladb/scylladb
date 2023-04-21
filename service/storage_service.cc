@@ -1655,7 +1655,7 @@ storage_service::get_rpc_address(const inet_address& endpoint) const {
             return v->value;
         }
     }
-    return boost::lexical_cast<std::string>(endpoint);
+    return fmt::to_string(endpoint);
 }
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>

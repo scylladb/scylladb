@@ -65,7 +65,7 @@ template <typename MAP>
 std::vector<sstring> map_keys(const MAP& map) {
     std::vector<sstring> res;
     for (const auto& i : map) {
-        res.push_back(boost::lexical_cast<std::string>(i.first));
+        res.push_back(fmt::to_string(i.first));
     }
     return res;
 }

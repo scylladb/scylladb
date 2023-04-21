@@ -1471,7 +1471,7 @@ sstring gossiper::get_rpc_address(const inet_address& endpoint) const {
             return v->value;
         }
     }
-    return boost::lexical_cast<std::string>(endpoint);
+    return fmt::to_string(endpoint);
 }
 
 void gossiper::update_timestamp_for_nodes(const std::map<inet_address, endpoint_state>& map) {
