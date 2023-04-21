@@ -3347,11 +3347,11 @@ mutation system_keyspace::make_group0_history_state_id_mutation(
         using namespace std::chrono;
         assert(*gc_older_than >= gc_clock::duration{0});
 
-        auto ts_millis = duration_cast<milliseconds>(microseconds{ts});
-        auto gc_older_than_millis = duration_cast<milliseconds>(*gc_older_than);
-        assert(gc_older_than_millis < ts_millis);
+        auto ts_micros = microseconds{ts};
+        auto gc_older_than_micros = duration_cast<microseconds>(*gc_older_than);
+        assert(gc_older_than_micros < ts_micros);
 
-        auto tomb_upper_bound = utils::UUID_gen::min_time_UUID(ts_millis - gc_older_than_millis);
+        auto tomb_upper_bound = utils::UUID_gen::min_time_UUID(ts_micros - gc_older_than_micros);
         // We want to delete all entries with IDs smaller than `tomb_upper_bound`
         // but the deleted range is of the form (x, +inf) since the schema is reversed.
         auto range = query::clustering_range::make_starting_with({
