@@ -765,7 +765,7 @@ public:
                 std::vector<EndpointDetails> eds;
                 std::transform(tr._endpoint_details.begin(), tr._endpoint_details.end(), std::back_inserter(eds), [](auto&& ed) {
                     EndpointDetails detail;
-                    detail.__set_host(boost::lexical_cast<std::string>(ed._host));
+                    detail.__set_host(fmt::to_string(ed._host));
                     detail.__set_datacenter(ed._datacenter);
                     detail.__set_rack(ed._rack);
                     return detail;
