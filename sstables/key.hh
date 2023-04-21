@@ -39,8 +39,7 @@ public:
         return partition_key::from_exploded_view(explode(s));
     }
 
-    bool operator==(const key_view& k) const { return k._bytes == _bytes; }
-    bool operator!=(const key_view& k) const { return !(k == *this); }
+    bool operator==(const key_view& k) const = default;
 
     bool empty() const { return _bytes.empty(); }
 
