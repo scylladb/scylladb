@@ -39,6 +39,7 @@
 #include "readers/from_mutations_v2.hh"
 #include "readers/delegating_v2.hh"
 #include "readers/empty_v2.hh"
+#include "seastar/testing/thread_test_case.hh"
 
 using namespace std::chrono_literals;
 
@@ -2369,6 +2370,65 @@ SEASTAR_TEST_CASE(test_tombstone_and_row_with_small_buffer) {
             .produces_row_with_key(s.make_ckey(1))
             .produces_range_tombstone_change(end_change(rt1));
     });
+}
+
+// Reproducer for https://github.com/scylladb/scylladb/issues/12462
+SEASTAR_THREAD_TEST_CASE(test_range_tombstone_adjacent_to_slice_is_closed) {
+    simple_schema s;
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    cache_tracker tracker;
+    memtable_snapshot_source underlying(s.schema());
+
+    auto pk = s.make_pkey(0);
+    auto pr = dht::partition_range::make_singular(pk);
+
+    mutation m1(s.schema(), pk);
+    auto rt0 = s.make_range_tombstone(*position_range_to_clustering_range(position_range(
+            position_in_partition::before_key(s.make_ckey(1)),
+            position_in_partition::before_key(s.make_ckey(3))), *s.schema()));
+    m1.partition().apply_delete(*s.schema(), rt0);
+    s.add_row(m1, s.make_ckey(0), "v1");
+
+    underlying.apply(m1);
+
+    row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+    populate_range(cache);
+
+    // Create a reader to pin the MVCC version
+    auto rd0 = cache.make_reader(s.schema(), semaphore.make_permit(), pr);
+    auto close_rd0 = deferred_close(rd0);
+    rd0.set_max_buffer_size(1);
+    rd0.fill_buffer().get();
+
+    mutation m2(s.schema(), pk);
+    auto rt1 = s.make_range_tombstone(*position_range_to_clustering_range(position_range(
+            position_in_partition::before_key(s.make_ckey(1)),
+            position_in_partition::before_key(s.make_ckey(2))), *s.schema()));
+    m2.partition().apply_delete(*s.schema(), rt1);
+    apply(cache, underlying, m2);
+
+    // State of cache:
+    //  v2: ROW(0), RT(before(1), before(2))@t1
+    //  v1: RT(before(1), before(3))@t0
+
+    // range_tombstone_change_generator will work with the stream: RT(1, before(2))@t1, RT(before(2), before(3))@t0
+    // It's important that there is an RT which starts exactly at the slice upper bound to trigger
+    // the problem, and the RT will be in the stream only because it is a residual from RT(before(1), before(3)),
+    // which overlaps with the slice in the older version. That's why we need two MVCC versions.
+
+    auto slice = partition_slice_builder(*s.schema())
+        .with_range(*position_range_to_clustering_range(position_range(
+                position_in_partition::before_key(s.make_ckey(0)),
+                position_in_partition::before_key(s.make_ckey(2))), *s.schema()))
+        .build();
+
+    assert_that(cache.make_reader(s.schema(), semaphore.make_permit(), pr, slice))
+        .produces_partition_start(pk)
+        .produces_row_with_key(s.make_ckey(0))
+        .produces_range_tombstone_change(start_change(rt1))
+        .produces_range_tombstone_change(end_change(rt1))
+        .produces_partition_end()
+        .produces_end_of_stream();
 }
 
 //
