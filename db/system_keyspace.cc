@@ -3736,33 +3736,33 @@ system_keyspace::read_cdc_generation(utils::UUID id) {
 
 future<> system_keyspace::sstables_registry_create_entry(sstring location, utils::UUID uuid, sstring status, sstables::entry_descriptor desc) {
     static const auto req = format("INSERT INTO system.{} (location, generation, uuid, status, version, format) VALUES (?, ?, ?, ?, ?, ?)", SSTABLES_REGISTRY);
-    slogger.trace("Inserting {}.{}:{} into {}", location, desc.generation.value(), uuid, SSTABLES_REGISTRY);
+    slogger.trace("Inserting {}.{}:{} into {}", location, desc.generation, uuid, SSTABLES_REGISTRY);
     co_await execute_cql(req, location, desc.generation.value(), uuid, status, fmt::to_string(desc.version), fmt::to_string(desc.format)).discard_result();
 }
 
 future<utils::UUID> system_keyspace::sstables_registry_lookup_entry(sstring location, sstables::generation_type gen) {
     static const auto req = format("SELECT uuid FROM system.{} WHERE location = ? AND generation = ?", SSTABLES_REGISTRY);
-    slogger.trace("Looking up {}.{} in {}", location, gen.value(), SSTABLES_REGISTRY);
+    slogger.trace("Looking up {}.{} in {}", location, gen, SSTABLES_REGISTRY);
     auto msg = co_await execute_cql(req, location, gen.value());
     if (msg->empty() || !msg->one().has("uuid")) {
-        slogger.trace("ERROR: Cannot find {}.{} in {}", location, gen.value(), SSTABLES_REGISTRY);
+        slogger.trace("ERROR: Cannot find {}.{} in {}", location, gen, SSTABLES_REGISTRY);
         co_await coroutine::return_exception(std::runtime_error("No entry in sstables registry"));
     }
 
     auto uuid = msg->one().get_as<utils::UUID>("uuid");
-    slogger.trace("Found {}.{}:{} in {}", location, gen.value(), uuid, SSTABLES_REGISTRY);
+    slogger.trace("Found {}.{}:{} in {}", location, gen, uuid, SSTABLES_REGISTRY);
     co_return uuid;
 }
 
 future<> system_keyspace::sstables_registry_update_entry_status(sstring location, sstables::generation_type gen, sstring status) {
     static const auto req = format("UPDATE system.{} SET status = ? WHERE location = ? AND generation = ?", SSTABLES_REGISTRY);
-    slogger.trace("Updating {}.{} -> {} in {}", location, gen.value(), status, SSTABLES_REGISTRY);
+    slogger.trace("Updating {}.{} -> {} in {}", location, gen, status, SSTABLES_REGISTRY);
     co_await execute_cql(req, status, location, gen.value()).discard_result();
 }
 
 future<> system_keyspace::sstables_registry_delete_entry(sstring location, sstables::generation_type gen) {
     static const auto req = format("DELETE FROM system.{} WHERE location = ? AND generation = ?", SSTABLES_REGISTRY);
-    slogger.trace("Removing {}.{} from {}", location, gen.value(), SSTABLES_REGISTRY);
+    slogger.trace("Removing {}.{} from {}", location, gen, SSTABLES_REGISTRY);
     co_await execute_cql(req, location, gen.value()).discard_result();
 }
 
