@@ -17,6 +17,7 @@
 #include <boost/range/adaptors.hpp>
 #include <seastar/core/smp.hh>
 #include <seastar/core/sstring.hh>
+#include "types/types.hh"
 
 namespace sstables {
 
@@ -32,6 +33,10 @@ public:
 
     explicit constexpr generation_type(int_t value) noexcept: _value(value) {}
     constexpr int_t value() const noexcept { return _value; }
+
+    explicit operator data_value() const noexcept {
+        return data_value(_value);
+    }
 
     constexpr bool operator==(const generation_type& other) const noexcept { return _value == other._value; }
     constexpr std::strong_ordering operator<=>(const generation_type& other) const noexcept { return _value <=> other._value; }
