@@ -60,6 +60,7 @@ concept HasClearGentlyMethod = requires (T x) {
 
 template <typename T>
 concept SmartPointer = requires (T x) {
+    { x.get() } -> std::same_as<typename T::element_type*>;
     { *x } -> std::same_as<typename T::element_type&>;
 };
 
@@ -177,7 +178,11 @@ future<> clear_gently(T& o) noexcept {
 
 template <SmartPointer T>
 future<> clear_gently(T& o) noexcept {
-    return internal::clear_gently(*o);
+    if (auto p = o.get()) {
+        return internal::clear_gently(*p);
+    } else {
+        return make_ready_future<>();
+    }
 }
 
 template <typename T, std::size_t N>
