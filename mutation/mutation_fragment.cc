@@ -444,7 +444,8 @@ bool mutation_fragment_v2::relevant_for_range(const schema& s, position_in_parti
 }
 
 std::ostream& operator<<(std::ostream& out, const range_tombstone_stream& rtl) {
-    return out << rtl._list;
+    fmt::print(out, "{}", rtl._list);
+    return out;
 }
 
 std::ostream& operator<<(std::ostream& out, const clustering_interval_set& set) {

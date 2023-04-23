@@ -424,16 +424,6 @@ void range_tombstone_list::update_undo_op::undo(const schema& s, range_tombstone
     *it = std::move(_old_rt);
 }
 
-std::ostream& operator<<(std::ostream& out, const range_tombstone_list& list) {
-    fmt::print(out, "{{{}}}", fmt::join(list, ", "));
-    return out;
-}
-
-std::ostream& operator<<(std::ostream& out, const range_tombstone_entry& rt) {
-    fmt::print(out, "{}", rt._tombstone);
-    return out;
-}
-
 bool range_tombstone_list::equal(const schema& s, const range_tombstone_list& other) const {
     return boost::equal(_tombstones, other._tombstones, [&s] (auto&& rt1, auto&& rt2) {
         return rt1.tombstone().equal(s, rt2.tombstone());

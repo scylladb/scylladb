@@ -28,6 +28,11 @@ static thread_local schema_ptr s = schema_builder("ks", "cf")
 
 static auto gc_now = gc_clock::now();
 
+static std::ostream& operator<<(std::ostream& out, const range_tombstone_entry& entry) {
+    fmt::print(out, "{}", entry);
+    return out;
+}
+
 static clustering_key_prefix key(std::vector<int32_t> components) {
     std::vector<bytes> exploded;
     std::transform(components.begin(), components.end(), std::back_inserter(exploded), [](auto&& c) {
