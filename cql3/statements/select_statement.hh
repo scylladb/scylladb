@@ -135,7 +135,7 @@ public:
 
     const sstring& column_family() const;
 
-    query::partition_slice make_partition_slice(const query_options& options) const;
+    query::partition_slice make_partition_slice(const query_options& options, bool native_reverse_query_supported = false) const;
 
     const ::shared_ptr<const restrictions::statement_restrictions> get_restrictions() const;
 

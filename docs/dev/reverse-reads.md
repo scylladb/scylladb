@@ -91,7 +91,10 @@ process the reverse stream as normal.
 ### Request
 
 The `query::partition_slice::options::reversed` flag is set as in the
-legacy format. Clustering ranges in both
+legacy format, and the `query::partition_slice::options::native_reversed` flag
+is set on top of it.
+
+Clustering ranges in both
 `query::partition_slice::_row_ranges` and
 `query::specific_ranges::_ranges`
 (`query::partition_slice::_specific_ranges`) are fully-reversed: they
@@ -120,3 +123,7 @@ partition that was used in the legacy format example, the native reverse
 version would look like this:
 
     ps{pk1}, sr{}, cr{ck5}, cr{ck4}, rt{(ck4, ck2]}, cr{ck3}, cr{ck2}, ck{ck1}, pe{}
+
+And with range_tombstone_change:
+
+    ps{pk1}, sr{}, cr{ck5}, cr{ck4}, rtc{after(ck4), t}, cr{ck3}, cr{ck2}, rtc{after(ck2), 0}, ck{ck1}, pe{}

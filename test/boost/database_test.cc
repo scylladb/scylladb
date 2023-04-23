@@ -290,8 +290,12 @@ SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_sourc
     test_database(run_mutation_source_tests_plain);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_reverse) {
-    test_database(run_mutation_source_tests_reverse);
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_legacy_reversed) {
+    test_database(run_mutation_source_tests_legacy_reversed);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_native_reversed) {
+    test_database(run_mutation_source_tests_native_reversed);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {

@@ -2198,7 +2198,7 @@ query::max_result_size storage_proxy::get_max_result_size(const query::partition
     // FIXME: Remove the code below once SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT
     //        cluster feature is released for more than 2 years and can be
     //        retired.
-    if (!slice.options.contains<query::partition_slice::option::allow_short_read>() || slice.options.contains<query::partition_slice::option::reversed>()) {
+    if (!slice.options.contains<query::partition_slice::option::allow_short_read>() || slice.is_reversed()) {
         return _db.local().get_unlimited_query_max_result_size();
     } else {
         return query::max_result_size(query::result_memory_limiter::maximum_result_size);
@@ -2734,6 +2734,8 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& 
     slogger.trace("hinted DCs: {}", cfg.hinted_handoff_enabled.to_configuration_string());
     _hints_manager.register_metrics("hints_manager");
     _hints_for_views_manager.register_metrics("hints_for_views_manager");
+
+    _enable_native_reversed_queries = _db.local().get_config().enable_native_reversed_queries;
 }
 
 struct storage_proxy::remote& storage_proxy::remote() {
@@ -4336,7 +4338,7 @@ private:
         // and clustering keys of the last row that is going to be returned to the client and check if
         // it is in range of rows returned by each replicas that returned as many rows as they were
         // asked for (if a replica returned less rows it means it returned everything it has).
-        auto is_reversed = cmd.slice.options.contains(query::partition_slice::option::reversed);
+        auto is_reversed = cmd.slice.is_reversed();
 
         auto rows_left = original_row_limit;
         auto partitions_left = original_partition_limit;
@@ -6277,6 +6279,10 @@ locator::token_metadata_ptr storage_proxy::get_token_metadata_ptr() const noexce
 
 future<std::vector<dht::token_range_endpoints>> storage_proxy::describe_ring(const sstring& keyspace, bool include_only_local_dc) const {
     return locator::describe_ring(_db.local(), _remote->gossiper(), keyspace, include_only_local_dc);
+}
+
+bool storage_proxy::enable_native_reversed_queries() const noexcept {
+    return features().native_reverse_queries && _enable_native_reversed_queries;
 }
 
 }

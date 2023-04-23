@@ -171,6 +171,10 @@ public:
         // directly, bypassing the intermediate reconcilable_result format used
         // in pre 4.5 range scans.
         range_scan_data_variant,
+        // native_reversed should be set on top of the `reversed` option
+        // to indicate that the query results are to be returned in native reverse order.
+        // the schema version sent over the wire indicates the native schema.
+        native_reversed,
     };
     using option_set = enum_set<super_enum<option,
         option::send_clustering_key,
@@ -185,7 +189,8 @@ public:
         option::with_digest,
         option::bypass_cache,
         option::always_return_static_content,
-        option::range_scan_data_variant>>;
+        option::range_scan_data_variant,
+        option::native_reversed>>;
     clustering_row_ranges _row_ranges;
 public:
     column_id_vector static_columns; // TODO: consider using bitmap
@@ -248,6 +253,16 @@ public:
     [[nodiscard]]
     bool is_reversed() const {
         return options.contains<query::partition_slice::option::reversed>();
+    }
+
+    [[nodiscard]]
+    bool is_native_reversed() const noexcept {
+        return is_reversed() && options.contains<query::partition_slice::option::native_reversed>();
+    }
+
+    [[nodiscard]]
+    bool is_legacy_reversed() const noexcept {
+        return is_reversed() && !options.contains<query::partition_slice::option::native_reversed>();
     }
 
     friend std::ostream& operator<<(std::ostream& out, const partition_slice& ps);

@@ -3805,8 +3805,8 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_in_memory) {
 }
 
 
-static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
-  return sstables::test_env::do_with_async([reversed] (sstables::test_env& env) {
+static future<> do_test_clustering_order_merger_sstable_set(bool reversed, bool native_reversed = false) {
+  return sstables::test_env::do_with_async([reversed, native_reversed] (sstables::test_env& env) {
     auto pkeys = tests::generate_partition_keys(2, clustering_order_merger_test_generator::make_schema());
     clustering_order_merger_test_generator g(pkeys[0]);
     auto query_schema = g._s;
@@ -3816,6 +3816,9 @@ static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
     if (reversed) {
         table_schema = table_schema->make_reversed();
         query_slice.options.set(query::partition_slice::option::reversed);
+        if (native_reversed) {
+            query_slice.options.set(query::partition_slice::option::native_reversed);
+        }
         query_slice = query::native_reverse_slice_to_legacy_reverse_slice(*table_schema, std::move(query_slice));
     }
 
@@ -3899,8 +3902,12 @@ SEASTAR_TEST_CASE(test_clustering_order_merger_sstable_set) {
     return do_test_clustering_order_merger_sstable_set(false);
 }
 
-SEASTAR_TEST_CASE(test_clustering_order_merger_sstable_set_reversed) {
+SEASTAR_TEST_CASE(test_clustering_order_merger_sstable_set_legacy_reversed) {
     return do_test_clustering_order_merger_sstable_set(true);
+}
+
+SEASTAR_TEST_CASE(test_clustering_order_merger_sstable_set_native_reversed) {
+    return do_test_clustering_order_merger_sstable_set(true, true);
 }
 
 SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
@@ -4097,7 +4104,7 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) {
-            auto reversed = slice.options.contains(query::partition_slice::option::reversed);
+            auto reversed = slice.is_reversed();
             std::map<dht::decorated_key, flat_mutation_reader_v2, dht::decorated_key::less_comparator>
                 good_readers{dht::decorated_key::less_comparator(s)};
             for (auto& [k, ms]: good) {
