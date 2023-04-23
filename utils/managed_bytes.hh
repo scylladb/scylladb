@@ -436,7 +436,7 @@ public:
     bytes linearize() const {
         return linearized(*this);
     }
-    bool is_linearized() {
+    bool is_linearized() const {
         return _current_fragment.size() == _size;
     }
 
