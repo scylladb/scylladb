@@ -30,17 +30,17 @@ size_t cql3::untyped_result_set_row::index(const std::string_view& name) const {
 bool cql3::untyped_result_set_row::has(std::string_view name) const {
     auto i = index(name);
     if (i < _data.size()) {
-        return !std::holds_alternative<std::monostate>(_data.at(i));
+        return _data.at(i).has_value();
     }
     return false;
 }
 
 cql3::untyped_result_set_row::view_type cql3::untyped_result_set_row::get_view(std::string_view name) const {
-    return std::visit(make_visitor(
-        [](std::monostate) -> view_type { throw std::bad_variant_access(); },
-        [](const view_type& v) -> view_type { return v; },
-        [](const bytes& b) -> view_type { return view_type(b); }
-    ), _data.at(index(name)));
+    auto& data = _data.at(index(name));
+    if (!data) {
+        throw std::bad_variant_access();
+    }
+    return *data;
 }
 
 const std::vector<lw_shared_ptr<cql3::column_specification>>& cql3::untyped_result_set_row::get_columns() const {
@@ -76,10 +76,10 @@ struct cql3::untyped_result_set::visitor {
     }
     void accept_value(std::optional<query::result_bytes_view>&& v) {
         if (v) {
-            tmp.emplace_back(std::move(*v));
+            tmp.emplace_back(v->linearize());
         } else {
-            tmp.emplace_back(std::monostate{});
-        } 
+            tmp.emplace_back(std::nullopt);
+        }
     }
     // somewhat weird dispatch, but when visiting directly via
     // result_generator, pk:s will be temporary - and sent 
