@@ -89,6 +89,24 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_non_trivial_unique_ptr) {
     utils::clear_gently(p).get();
     BOOST_CHECK(p);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+
+    cleared_gently = 0;
+    p.reset();
+    utils::clear_gently(p).get();
+    BOOST_CHECK(!p);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 0);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_clear_gently_vector_of_unique_ptrs) {
+    int cleared_gently = 0;
+    std::vector<std::unique_ptr<clear_gently_tracker<int>>> v;
+    v.emplace_back(std::make_unique<clear_gently_tracker<int>>(0, [&cleared_gently] (int) {
+        cleared_gently++;
+    }));
+    v.emplace_back(nullptr);
+
+    utils::clear_gently(v).get();
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_ptr) {
