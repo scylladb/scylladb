@@ -49,7 +49,7 @@ public:
      * @return the selector output
      * @throws InvalidRequestException if a problem occurs while computing the output value
      */
-    virtual bytes_opt get_output() = 0;
+    virtual managed_bytes_opt get_output() = 0;
 
     /**
      * Returns the <code>selector</code> output type.

@@ -362,6 +362,9 @@ public:
     data_value deserialize(bytes_view v) const {
         return deserialize_impl(single_fragmented_view(v));
     }
+    data_value deserialize(const managed_bytes& v) const {
+        return deserialize(managed_bytes_view(v));
+    }
     template <FragmentedView View> data_value deserialize_value(View v) const {
         return deserialize(v);
     }

@@ -21,7 +21,7 @@ class writetime_or_ttl_selector : public selector {
     sstring _column_name;
     int _idx;
     bool _is_writetime;
-    bytes_opt _current;
+    managed_bytes_opt _current;
 public:
     static shared_ptr<selector::factory> new_factory(sstring column_name, int idx, bool is_writetime) {
         class wtots_factory : public selector::factory {
@@ -60,25 +60,27 @@ public:
         if (_is_writetime) {
             int64_t ts = rs.timestamp_of(_idx);
             if (ts != api::missing_timestamp) {
-                _current = bytes(bytes::initialized_later(), 8);
-                auto i = _current->begin();
+                auto tmp = bytes(bytes::initialized_later(), 8);
+                auto i = tmp.begin();
                 serialize_int64(i, ts);
+                _current = managed_bytes(tmp);
             } else {
                 _current = std::nullopt;
             }
         } else {
             int ttl = rs.ttl_of(_idx);
             if (ttl > 0) {
-                _current = bytes(bytes::initialized_later(), 4);
-                auto i = _current->begin();
+                auto tmp = bytes(bytes::initialized_later(), 4);
+                auto i = tmp.begin();
                 serialize_int32(i, ttl);
+                _current = managed_bytes(tmp);
             } else {
                 _current = std::nullopt;
             }
         }
     }
 
-    virtual bytes_opt get_output() override {
+    virtual managed_bytes_opt get_output() override {
         return _current;
     }
 

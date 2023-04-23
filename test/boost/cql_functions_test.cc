@@ -62,7 +62,7 @@ SEASTAR_TEST_CASE(test_functions) {
                     BOOST_REQUIRE_EQUAL(rs.rows().size(), 3);
                     for (auto&& rw : rs.rows()) {
                         BOOST_REQUIRE_EQUAL(rw.size(), 1);
-                        res.push_back(rw[0]);
+                        res.push_back(to_bytes_opt(rw[0]));
                     }
                 }
                 virtual void visit(const result_message::bounce_to_shard& rows) override { throw "bad"; }

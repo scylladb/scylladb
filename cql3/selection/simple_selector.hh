@@ -49,7 +49,7 @@ private:
     const sstring _column_name;
     const uint32_t _idx;
     data_type _type;
-    bytes_opt _current;
+    managed_bytes_opt _current;
     bool _first; ///< Whether the next row we receive is the first in its group.
 public:
     static ::shared_ptr<factory> new_factory(const sstring& column_name, uint32_t idx, data_type type) {
@@ -74,7 +74,7 @@ public:
         }
     }
 
-    virtual bytes_opt get_output() override {
+    virtual managed_bytes_opt get_output() override {
         return std::move(_current);
     }
 

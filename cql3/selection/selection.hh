@@ -52,7 +52,7 @@ public:
     */
     virtual void add_input_row(result_set_builder& rs) = 0;
 
-    virtual std::vector<bytes_opt> get_output_row() = 0;
+    virtual std::vector<managed_bytes_opt> get_output_row() = 0;
 
     virtual void reset() = 0;
 };
@@ -189,10 +189,10 @@ private:
     std::unique_ptr<result_set> _result_set;
     std::unique_ptr<selectors> _selectors;
     const std::vector<size_t> _group_by_cell_indices; ///< Indices in \c current of cells holding GROUP BY values.
-    std::vector<bytes_opt> _last_group; ///< Previous row's group: all of GROUP BY column values.
+    std::vector<managed_bytes_opt> _last_group; ///< Previous row's group: all of GROUP BY column values.
     bool _group_began; ///< Whether a group began being formed.
 public:
-    std::optional<std::vector<bytes_opt>> current;
+    std::optional<std::vector<managed_bytes_opt>> current;
 private:
     std::vector<api::timestamp_type> _timestamps;
     std::vector<int32_t> _ttls;

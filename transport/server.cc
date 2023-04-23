@@ -1498,7 +1498,7 @@ public:
             void start_row() {
                 _row_count++;
             }
-            void accept_value(std::optional<query::result_bytes_view> cell) {
+            void accept_value(std::optional<managed_bytes_view> cell) {
                 _response.write_value(cell);
             }
             void end_row() { }
@@ -1780,7 +1780,7 @@ void cql_server::response::write_value(bytes_opt value)
     _body.write(*value);
 }
 
-void cql_server::response::write_value(std::optional<query::result_bytes_view> value)
+void cql_server::response::write_value(std::optional<managed_bytes_view> value)
 {
     if (!value) {
         write_int(-1);
@@ -1788,10 +1788,10 @@ void cql_server::response::write_value(std::optional<query::result_bytes_view> v
     }
 
     write_int(value->size_bytes());
-    using boost::range::for_each;
-    for_each(*value, [&] (bytes_view fragment) {
-        _body.write(fragment);
-    });
+    while (!value->empty()) {
+        _body.write(value->current_fragment());
+        value->remove_current();
+    }
 }
 
 class type_codec {

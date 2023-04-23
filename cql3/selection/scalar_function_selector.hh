@@ -38,14 +38,14 @@ public:
     virtual void reset() override {
     }
 
-    virtual bytes_opt get_output() override {
+    virtual managed_bytes_opt get_output() override {
         size_t m = _arg_selectors.size();
         for (size_t i = 0; i < m; ++i) {
             auto&& s = _arg_selectors[i];
-            _args[i] = s->get_output();
+            _args[i] = to_bytes_opt(s->get_output());
             s->reset();
         }
-        return fun()->execute(_args);
+        return to_managed_bytes_opt(fun()->execute(_args));
     }
 
     virtual bool requires_thread() const override;

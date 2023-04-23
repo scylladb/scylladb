@@ -122,7 +122,7 @@ public:
 protected:
     class simple_selectors : public selectors {
     private:
-        std::vector<bytes_opt> _current;
+        std::vector<managed_bytes_opt> _current;
         bool _first = true; ///< Whether the next row we receive is the first in its group.
     public:
         virtual void reset() override {
@@ -132,7 +132,7 @@ protected:
 
         virtual bool requires_thread() const override { return false; }
 
-        virtual std::vector<bytes_opt> get_output_row() override {
+        virtual std::vector<managed_bytes_opt> get_output_row() override {
             return std::move(_current);
         }
 
@@ -234,8 +234,8 @@ protected:
             return _factories->does_aggregation();
         }
 
-        virtual std::vector<bytes_opt> get_output_row() override {
-            std::vector<bytes_opt> output_row;
+        virtual std::vector<managed_bytes_opt> get_output_row() override {
+            std::vector<managed_bytes_opt> output_row;
             output_row.reserve(_selectors.size());
             for (auto&& s : _selectors) {
                 output_row.emplace_back(s->get_output());

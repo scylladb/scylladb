@@ -62,12 +62,12 @@ public:
         _selected->add_input(rs);
     }
 
-    virtual bytes_opt get_output() override {
+    virtual managed_bytes_opt get_output() override {
         auto&& value = _selected->get_output();
         if (!value) {
             return std::nullopt;
         }
-        return get_nth_tuple_element(single_fragmented_view(*value), _field);
+        return get_nth_tuple_element(managed_bytes_view(*value), _field);
     }
 
     virtual data_type get_type() const override {

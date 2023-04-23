@@ -180,6 +180,16 @@ std::string bytes_to_string(query::result_bytes_view v) {
     return str;
 }
 
+std::string bytes_to_string(managed_bytes_view v) {
+    std::string str;
+    str.reserve(v.size_bytes());
+    for (auto fragment : fragment_range(v)) {
+        auto view = std::string_view(reinterpret_cast<const char*>(fragment.data()), fragment.size());
+        str.insert(str.end(), view.begin(), view.end());
+    }
+    return str;
+}
+
 namespace thrift {
 template<typename T>
 concept Aggregator =
@@ -1210,7 +1220,7 @@ private:
                 _column_id = 0;
                 _columns.reserve(_metadata.column_count());
             }
-            void accept_value(std::optional<query::result_bytes_view> cell) {
+            void accept_value(managed_bytes_view_opt cell) {
                 auto& col = _metadata.get_names()[_column_id++];
 
                 Column& c = _columns.emplace_back();

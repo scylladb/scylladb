@@ -74,7 +74,7 @@ public:
     void write_string_map(std::map<sstring, sstring> string_map);
     void write_string_multimap(std::multimap<sstring, sstring> string_map);
     void write_value(bytes_opt value);
-    void write_value(std::optional<query::result_bytes_view> value);
+    void write_value(std::optional<managed_bytes_view> value);
     void write(const cql3::metadata& m, bool skip = false);
     void write(const cql3::prepared_metadata& m, uint8_t version);
 

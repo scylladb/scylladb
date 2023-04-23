@@ -74,7 +74,7 @@ struct cql3::untyped_result_set::visitor {
     void start_row() {
         tmp.reserve(index.size());
     }
-    void accept_value(std::optional<query::result_bytes_view>&& v) {
+    void accept_value(managed_bytes_view_opt&& v) {
         if (v) {
             tmp.emplace_back(v->linearize());
         } else {

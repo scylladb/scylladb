@@ -2300,14 +2300,14 @@ static std::optional<attrs_to_get> calculate_attrs_to_get(const rjson::value& re
  * as before.
  */ 
 void executor::describe_single_item(const cql3::selection::selection& selection,
-    const std::vector<bytes_opt>& result_row,
+    const std::vector<managed_bytes_opt>& result_row,
     const std::optional<attrs_to_get>& attrs_to_get,
     rjson::value& item,
     bool include_all_embedded_attributes) 
 {
     const auto& columns = selection.get_columns();
     auto column_it = columns.begin();
-    for (const bytes_opt& cell : result_row) {
+    for (const managed_bytes_opt& cell : result_row) {
         std::string column_name = (*column_it)->name_as_text();
         if (cell && column_name != executor::ATTRS_COLUMN_NAME) {
             if (!attrs_to_get || attrs_to_get->contains(column_name)) {
@@ -2315,7 +2315,9 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
                 // so add() makes sense
                 rjson::add_with_string_name(item, column_name, rjson::empty_object());
                 rjson::value& field = item[column_name.c_str()];
-                rjson::add_with_string_name(field, type_to_string((*column_it)->type), json_key_column_value(*cell, **column_it));
+                cell->with_linearized([&] (bytes_view linearized_cell) {
+                    rjson::add_with_string_name(field, type_to_string((*column_it)->type), json_key_column_value(linearized_cell, **column_it));
+                });
             }
         } else if (cell) {
             auto deserialized = attrs_type()->deserialize(*cell);
@@ -3498,7 +3500,7 @@ public:
         _column_it = _columns.begin();
     }
 
-    void accept_value(const std::optional<query::result_bytes_view>& result_bytes_view) {
+    void accept_value(managed_bytes_view_opt result_bytes_view) {
         if (!result_bytes_view) {
             ++_column_it;
             return;
