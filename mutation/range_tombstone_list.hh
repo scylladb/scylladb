@@ -68,8 +68,6 @@ public:
         return sizeof(range_tombstone_entry) + _tombstone.external_memory_usage(s);
     }
 
-    friend std::ostream& operator<<(std::ostream& out, const range_tombstone_entry& rt);
-
 private:
     void update_node(bi::set_member_hook<bi::link_mode<bi::auto_unlink>>& other_link) noexcept {
         if (other_link.is_linked()) {
@@ -77,6 +75,14 @@ private:
             container_type::node_algorithms::replace_node(other_link.this_ptr(), _link.this_ptr());
             container_type::node_algorithms::init(other_link.this_ptr());
         }
+    }
+};
+
+template <>
+struct fmt::formatter<range_tombstone_entry> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const range_tombstone_entry& rt, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", rt.tombstone());
     }
 };
 
@@ -272,7 +278,6 @@ public:
     // See reversibly_mergeable.hh
     reverter apply_reversibly(const schema& s, range_tombstone_list& rt_list);
 
-    friend std::ostream& operator<<(std::ostream& out, const range_tombstone_list&);
     bool equal(const schema&, const range_tombstone_list&) const;
     size_t external_memory_usage(const schema& s) const noexcept {
         size_t result = 0;
@@ -293,4 +298,12 @@ private:
                      reverter& rev);
 
     range_tombstones_type::iterator find(const schema& s, const range_tombstone_entry& rt);
+};
+
+template <>
+struct fmt::formatter<range_tombstone_list> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const range_tombstone_list& list, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{{{}}}", fmt::join(list, ", "));
+    }
 };
