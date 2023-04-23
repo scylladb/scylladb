@@ -161,13 +161,14 @@ collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir, sharded<r
     auto coordinator = this_shard_id();
     // We will first move all of the foreign open info to temporary storage so that we can sort
     // them. We want to distribute bigger sstables first.
+    const auto* sorted_owned_ranges_ptr = owned_ranges_ptr.get();
     co_await dir.invoke_on_all([&] (sstables::sstable_directory& d) -> future<> {
         auto shared_sstables = d.retrieve_shared_sstables();
         sstables::sstable_directory::sstable_open_info_vector need_cleanup;
-        if (owned_ranges_ptr) {
+        if (sorted_owned_ranges_ptr) {
             auto& table = db.local().find_column_family(ks_name, table_name);
             co_await d.do_for_each_sstable([&] (sstables::shared_sstable sst) -> future<> {
-                if (table.update_sstable_cleanup_state(sst, owned_ranges_ptr)) {
+                if (table.update_sstable_cleanup_state(sst, *sorted_owned_ranges_ptr)) {
                     need_cleanup.push_back(co_await sst->get_open_info());
                 }
             });
@@ -245,7 +246,7 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
     co_await coroutine::parallel_for_each(shared_info, [&] (sstables::foreign_sstable_open_info& info) -> future<> {
         auto sst = co_await dir.load_foreign_sstable(info);
         if (owned_ranges_ptr) {
-            table.update_sstable_cleanup_state(sst, owned_ranges_ptr);
+            table.update_sstable_cleanup_state(sst, *owned_ranges_ptr);
         }
         // Last bucket gets leftover SSTables
         if ((buckets.back().size() >= sstables_per_job) && (buckets.size() < num_jobs)) {
