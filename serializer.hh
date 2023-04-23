@@ -45,6 +45,12 @@ class buffer_view {
 public:
     using fragment_type = bytes_view;
 
+    struct implementation {
+        bytes_view current;
+        FragmentIterator next;
+        size_t size;
+    };
+
     class iterator {
         bytes_view _current;
         size_t _left = 0;
@@ -176,6 +182,14 @@ public:
             bv = _first;
         }
         return fn(bv);
+    }
+
+    implementation extract_implementation() const {
+        return implementation {
+            .current = _first,
+            .next = _next,
+            .size = _total_size,
+        };
     }
 };
 static_assert(FragmentedView<buffer_view<bytes_ostream::fragment_iterator>>);

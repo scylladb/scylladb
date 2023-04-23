@@ -374,6 +374,12 @@ private:
     fragment_type _current_fragment = {};
     blob_storage* _next_fragments = nullptr;
     size_t _size = 0;
+private:
+    managed_bytes_basic_view(fragment_type current_fragment, blob_storage* next_fragments, size_t size)
+        : _current_fragment(current_fragment)
+        , _next_fragments(next_fragments)
+        , _size(size) {
+    }
 public:
     managed_bytes_basic_view() = default;
     managed_bytes_basic_view(const managed_bytes_basic_view&) = default;
@@ -465,6 +471,8 @@ public:
         });
         return func(bv);
     }
+
+    friend managed_bytes_basic_view<mutable_view::no> build_managed_bytes_view_from_internals(bytes_view current_fragment, blob_storage* next_fragment, size_t size);
 };
 static_assert(FragmentedView<managed_bytes_view>);
 static_assert(FragmentedMutableView<managed_bytes_mutable_view>);
@@ -495,6 +503,12 @@ template<FragmentedView View>
 inline managed_bytes::managed_bytes(View v) : managed_bytes(initialized_later(), v.size_bytes()) {
     managed_bytes_mutable_view self(*this);
     write_fragmented(self, v);
+}
+
+inline
+managed_bytes_view
+build_managed_bytes_view_from_internals(bytes_view current_fragment, blob_storage* next_fragment, size_t size) {
+    return managed_bytes_view(current_fragment, next_fragment, size);
 }
 
 template<>

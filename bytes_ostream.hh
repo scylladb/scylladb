@@ -53,6 +53,10 @@ public:
         using difference_type = std::ptrdiff_t;
         using pointer = bytes_view*;
         using reference = bytes_view&;
+
+        struct implementation {
+            blob_storage* current_chunk;
+        };
     private:
         chunk* _current = nullptr;
     public:
@@ -76,6 +80,11 @@ public:
             return tmp;
         }
         bool operator==(const fragment_iterator&) const = default;
+        implementation extract_implementation() const {
+            return implementation {
+                .current_chunk = _current,
+            };
+        }
     };
     using const_iterator = fragment_iterator;
 
