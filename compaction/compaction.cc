@@ -634,11 +634,6 @@ protected:
 
     flat_mutation_reader_v2::filter make_partition_filter() const {
         return [this] (const dht::decorated_key& dk) {
-#ifdef SEASTAR_DEBUG
-            // sstables should never be shared with other shards at this point.
-            assert(dht::shard_of(*_schema, dk.token()) == this_shard_id());
-#endif
-
             if (!_owned_ranges_checker->belongs_to_current_node(dk.token())) {
                 log_trace("Token {} does not belong to this node, skipping", dk.token());
                 return false;
