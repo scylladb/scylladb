@@ -215,9 +215,15 @@ distribute_reshard_jobs(sstables::sstable_directory::sstable_info_vector source)
     });
 
     for (auto& info : source) {
-        auto shard_it = boost::min_element(destinations, std::mem_fn(&reshard_shard_descriptor::total_size_smaller));
-        shard_it->uncompressed_data_size += info.uncompressed_data_size;
-        shard_it->info_vec.push_back(std::move(info));
+        // Choose the stable shard owner with the smallest amount of accumulated work.
+        // Note that for sstables that need cleanup via resharding, owners may contain
+        // a single shard.
+        auto shard_it = boost::min_element(info.owners, [&] (const shard_id& lhs, const shard_id& rhs) {
+            return destinations[lhs].total_size_smaller(destinations[rhs]);
+        });
+        auto& dest = destinations[*shard_it];
+        dest.uncompressed_data_size += info.uncompressed_data_size;
+        dest.info_vec.push_back(std::move(info));
         co_await coroutine::maybe_yield();
     }
 
