@@ -479,6 +479,18 @@ inline bytes to_bytes(managed_bytes_view v) {
     return linearized(v);
 }
 
+/// Converts a possibly fragmented managed_bytes_opt to a
+/// linear bytes_opt.
+///
+/// \note copies data
+bytes_opt to_bytes_opt(const managed_bytes_opt&);
+
+/// Converts a linear bytes_opt to a possibly fragmented
+/// managed_bytes_opt.
+///
+/// \note copies data
+managed_bytes_opt to_managed_bytes_opt(const bytes_opt&);
+
 template<FragmentedView View>
 inline managed_bytes::managed_bytes(View v) : managed_bytes(initialized_later(), v.size_bytes()) {
     managed_bytes_mutable_view self(*this);
