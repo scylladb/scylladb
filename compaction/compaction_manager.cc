@@ -1552,15 +1552,20 @@ bool needs_cleanup(const sstables::shared_sstable& sst,
     return true;
 }
 
-bool compaction_manager::update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, owned_ranges_ptr owned_ranges_ptr) {
+bool compaction_manager::update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges) {
     auto& cs = get_compaction_state(&t);
-    if (owned_ranges_ptr && needs_cleanup(sst, *owned_ranges_ptr)) {
+    if (needs_cleanup(sst, sorted_owned_ranges)) {
         cs.sstables_requiring_cleanup.insert(sst);
         return true;
     } else {
         cs.sstables_requiring_cleanup.erase(sst);
         return false;
     }
+}
+
+bool compaction_manager::erase_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst) {
+    auto& cs = get_compaction_state(&t);
+    return cs.sstables_requiring_cleanup.erase(sst);
 }
 
 bool compaction_manager::requires_cleanup(table_state& t, const sstables::shared_sstable& sst) const {
@@ -1588,7 +1593,7 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
         return seastar::async([this, &t, sorted_owned_ranges = std::move(sorted_owned_ranges)] {
             auto update_sstables_cleanup_state = [&] (const sstables::sstable_set& set) {
                 set.for_each_sstable([&] (const sstables::shared_sstable& sst) {
-                    update_sstable_cleanup_state(t, sst, sorted_owned_ranges);
+                    update_sstable_cleanup_state(t, sst, *sorted_owned_ranges);
                     seastar::thread::maybe_yield();
                 });
             };

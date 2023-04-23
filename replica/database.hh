@@ -1109,7 +1109,11 @@ public:
     future<> parallel_foreach_table_state(std::function<future<>(compaction::table_state&)> action);
 
     // Add sst to or remove it from the sstables_requiring_cleanup set.
-    bool update_sstable_cleanup_state(const sstables::shared_sstable& sst, compaction::owned_ranges_ptr owned_ranges_ptr);
+    bool update_sstable_cleanup_state(const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges);
+
+    // Uncoditionally erase sst from `sstables_requiring_cleanup`
+    // Returns true iff sst was found and erased.
+    bool erase_sstable_cleanup_state(const sstables::shared_sstable& sst);
 
     // Returns true if the sstable requries cleanup.
     bool requires_cleanup(const sstables::shared_sstable& sst) const;

@@ -1809,7 +1809,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
             remove_sstable_from_backlog_tracker(r.cg.get_backlog_tracker(), r.sst);
         }
         co_await sstables::sstable_directory::delete_atomically({r.sst});
-        update_sstable_cleanup_state(r.sst, {});
+        erase_sstable_cleanup_state(r.sst);
     });
     co_return p->rp;
 }
@@ -2720,10 +2720,16 @@ table::as_data_dictionary() const {
     return _impl.wrap(*this);
 }
 
-bool table::update_sstable_cleanup_state(const sstables::shared_sstable& sst, compaction::owned_ranges_ptr owned_ranges_ptr) {
+bool table::update_sstable_cleanup_state(const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges) {
     // FIXME: it's possible that the sstable belongs to multiple compaction_groups
     auto& cg = compaction_group_for_sstable(sst);
-    return get_compaction_manager().update_sstable_cleanup_state(cg.as_table_state(), sst, std::move(owned_ranges_ptr));
+    return get_compaction_manager().update_sstable_cleanup_state(cg.as_table_state(), sst, sorted_owned_ranges);
+}
+
+bool table::erase_sstable_cleanup_state(const sstables::shared_sstable& sst) {
+    // FIXME: it's possible that the sstable belongs to multiple compaction_groups
+    auto& cg = compaction_group_for_sstable(sst);
+    return get_compaction_manager().erase_sstable_cleanup_state(cg.as_table_state(), sst);
 }
 
 bool table::requires_cleanup(const sstables::shared_sstable& sst) const {

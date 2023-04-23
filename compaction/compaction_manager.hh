@@ -537,7 +537,11 @@ public:
     };
 
     // Add sst to or remove it from the respective compaction_state.sstables_requiring_cleanup set.
-    bool update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, owned_ranges_ptr owned_ranges_ptr);
+    bool update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges);
+
+    // Uncoditionally erase sst from `sstables_requiring_cleanup`
+    // Returns true iff sst was found and erased.
+    bool erase_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst);
 
     // checks if the sstable is in the respective compaction_state.sstables_requiring_cleanup set.
     bool requires_cleanup(table_state& t, const sstables::shared_sstable& sst) const;

@@ -424,7 +424,7 @@ sstable_directory::reshard(sstable_info_vector shared_info, compaction_manager& 
             auto sst = _manager.make_sstable(_schema, _sstable_dir.native(), info.generation, info.version, info.format, gc_clock::now(), _error_handler_gen);
             return sst->load(std::move(info)).then([this, &buckets, sstables_per_job, num_jobs, sst = std::move(sst), &table, owned_ranges_ptr] () mutable {
                 if (owned_ranges_ptr) {
-                    table.update_sstable_cleanup_state(sst, owned_ranges_ptr);
+                    table.update_sstable_cleanup_state(sst, *owned_ranges_ptr);
                 }
                 // Last bucket gets leftover SSTables
                 if ((buckets.back().size() >= sstables_per_job) && (buckets.size() < num_jobs)) {
