@@ -41,12 +41,12 @@ class metadata;
 
 class untyped_result_set_row {
 public:
-    using view_type = bytes_view;
+    using view_type = managed_bytes_view;
     using opt_view_type = std::optional<view_type>;
 private:
     friend class untyped_result_set;
     using index_map = std::unordered_map<std::string_view, size_t>;
-    using data_views = std::vector<bytes_opt>;
+    using data_views = std::vector<managed_bytes_opt>;
 
     const index_map& _name_to_index;
     const cql3::metadata& _metadata;
