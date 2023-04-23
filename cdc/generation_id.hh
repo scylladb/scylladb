@@ -17,17 +17,18 @@ namespace cdc {
 
 struct generation_id_v1 {
     db_clock::time_point ts;
+    bool operator==(const generation_id_v1&) const = default;
 };
 
 struct generation_id_v2 {
     db_clock::time_point ts;
     utils::UUID id;
+    bool operator==(const generation_id_v2&) const = default;
 };
 
 using generation_id = std::variant<generation_id_v1, generation_id_v2>;
 
 std::ostream& operator<<(std::ostream&, const generation_id&);
-bool operator==(const generation_id&, const generation_id&);
 db_clock::time_point get_ts(const generation_id&);
 
 } // namespace cdc
