@@ -133,6 +133,12 @@ template <Container T>
 requires (!StringLike<T> && !Sequence<T> && !MapLike<T>)
 future<> clear_gently(T& c) noexcept;
 
+template <typename T>
+future<> clear_gently(std::optional<T>& opt) noexcept;
+
+template <typename T>
+future<> clear_gently(seastar::optimized_optional<T>& opt) noexcept;
+
 namespace internal {
 
 template <typename T>
@@ -235,6 +241,24 @@ future<> clear_gently(T& c) noexcept {
             c.erase(it);
         });
     });
+}
+
+template <typename T>
+future<> clear_gently(std::optional<T>& opt) noexcept {
+    if (opt) {
+        return utils::clear_gently(*opt);
+    } else {
+        return make_ready_future<>();
+    }
+}
+
+template <typename T>
+future<> clear_gently(seastar::optimized_optional<T>& opt) noexcept {
+    if (opt) {
+        return utils::clear_gently(*opt);
+    } else {
+        return make_ready_future<>();
+    }
 }
 
 }
