@@ -1036,15 +1036,6 @@ std::ostream& operator<<(std::ostream& os, const generation_id& gen_id) {
     return os;
 }
 
-bool operator==(const generation_id& a, const generation_id& b) {
-    return std::visit(make_visitor(
-    [] (const generation_id_v1& a, const generation_id_v1& b) { return a.ts == b.ts; },
-    [] (const generation_id_v2& a, const generation_id_v2& b) { return a.ts == b.ts && a.id == b.id; },
-    [] (const generation_id_v1& a, const generation_id_v2& b) { return false; },
-    [] (const generation_id_v2& a, const generation_id_v1& b) { return false; }
-    ), a, b);
-}
-
 db_clock::time_point get_ts(const generation_id& gen_id) {
     return std::visit(make_visitor(
     [] (const generation_id_v1& id) { return id.ts; },
