@@ -451,6 +451,20 @@ public:
         , _next_fragments(other._next_fragments)
         , _size(other._size)
     {}
+
+    template <std::invocable<bytes_view> Func>
+    std::invoke_result_t<Func, bytes_view> with_linearized(Func&& func) const {
+        bytes b;
+        auto bv = std::invoke([&] () -> bytes_view {
+            if (is_linearized()) {
+                return _current_fragment;
+            } else {
+                b = linearize();
+                return b;
+            }
+        });
+        return func(bv);
+    }
 };
 static_assert(FragmentedView<managed_bytes_view>);
 static_assert(FragmentedMutableView<managed_bytes_mutable_view>);
