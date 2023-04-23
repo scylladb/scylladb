@@ -1108,10 +1108,7 @@ bool operator==(const generation_id& a, const generation_id& b) {
 }
 
 db_clock::time_point get_ts(const generation_id& gen_id) {
-    return std::visit(make_visitor(
-    [] (const generation_id_v1& id) { return id.ts; },
-    [] (const generation_id_v2& id) { return id.ts; }
-    ), gen_id);
+    return std::visit([] (auto& id) { return id.ts; }, gen_id);
 }
 
 } // namespace cdc
