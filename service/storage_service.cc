@@ -692,6 +692,12 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                 // See the large FIXME below.
                 auto cdc_gen_ts = cdc::new_generation_timestamp(add_ts_delay, get_ring_delay());
                 auto cdc_gen_uuid = node.rs->ring.value().new_cdc_generation_data_uuid;
+                if (!cdc_gen_uuid) {
+                    on_internal_error(slogger, format(
+                        "raft topology: new CDC generation data UUID missing in `commit_cdc_generation` state"
+                        ", transitioning node: {}", node.id));
+                }
+
                 cdc::generation_id_v2 cdc_gen_id {
                     .ts = cdc_gen_ts,
                     .id = cdc_gen_uuid,
