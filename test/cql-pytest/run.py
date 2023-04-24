@@ -352,7 +352,7 @@ def wait_for_services(pid, checkers):
         # to first get rid of the zombie (if it exists) with waitpid, and
         # then check if the process still exists, with kill.
         try:
-            os.waitpid(pid, os.P_NOWAIT)
+            os.waitpid(pid, os.WNOHANG)
             os.kill(pid, 0)
         except (ProcessLookupError, ChildProcessError):
             # Scylla is dead, we cannot recover
@@ -370,7 +370,7 @@ def wait_for_services(pid, checkers):
         print(f'Boot failed after {duration}.')
         # Run the checkers again, not catching NotYetUp, to show exception
         # traces of which of the checks failed and how.
-        os.waitpid(pid, os.P_NOWAIT)
+        os.waitpid(pid, os.WNOHANG)
         os.kill(pid, 0)
         for checker in checkers:
             checker()
