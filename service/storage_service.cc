@@ -637,10 +637,7 @@ class topology_coordinator {
         }
     }
 
-    future<std::optional<node_to_work_on>> get_node_to_work_on() {
-        auto guard = co_await _group0.client().start_operation(&_as);
-        co_await cleanup_group0_config_if_needed();
-
+    std::optional<node_to_work_on> get_node_to_work_on_opt(group0_guard guard) {
         auto& topo = _topo_sm._topology;
         const std::pair<const raft::server_id, replica_state>* e = nullptr;
 
@@ -659,7 +656,7 @@ class topology_coordinator {
         }
 
         if (!e) {
-            co_return std::nullopt;
+            return std::nullopt;
         }
 
         std::optional<request_param> req_param;
@@ -667,8 +664,18 @@ class topology_coordinator {
         if (rit != topo.req_param.end()) {
             req_param = rit->second;
         }
-        co_return node_to_work_on{std::move(guard), &topo, e->first, &e->second, std::move(req), std::move(req_param)};
+        return node_to_work_on{std::move(guard), &topo, e->first, &e->second, std::move(req), std::move(req_param)};
     };
+
+    node_to_work_on get_node_to_work_on(group0_guard guard) {
+        auto node_opt = get_node_to_work_on_opt(std::move(guard));
+        if (!node_opt) {
+            on_internal_error(slogger, format(
+                "raft topology: could not find node to work on"
+                " even though the state requires it (state: {})", _topo_sm._topology.tstate));
+        }
+        return std::move(*node_opt);
+     };
 
     void release_node(std::optional<node_to_work_on> node) {
         // Leaving the scope destroys the object and releases the guard.
@@ -773,10 +780,15 @@ class topology_coordinator {
         co_return std::make_pair(co_await retake_node(id), res);
     };
 
-    future<> handle_ring_transition(node_to_work_on&& node) {
+    // Returns `true` iff there was work to do.
+    future<bool> handle_topology_transition(group0_guard guard) {
+        bool had_work = false;
         bool exec_command_res;
-        switch (node.topology->tstate) {
+        switch (_topo_sm._topology.tstate) {
             case topology::transition_state::commit_cdc_generation: {
+                had_work = true;
+                auto node = get_node_to_work_on(std::move(guard));
+
                 // make sure all nodes know about new topology and have the new CDC generation data
                 // (we require all nodes to be alive for topo change for now)
                 std::tie(node, exec_command_res) = co_await exec_global_command(
@@ -844,6 +856,9 @@ class topology_coordinator {
             }
                 break;
             case topology::transition_state::write_both_read_old: {
+                had_work = true;
+                auto node = get_node_to_work_on(std::move(guard));
+
                 // make sure all nodes know about new topology (we require all nodes to be alive for topo change for now)
                 std::tie(node, exec_command_res) = co_await exec_global_command(
                         std::move(node), raft_topology_cmd{raft_topology_cmd::command::barrier}, false);
@@ -888,7 +903,10 @@ class topology_coordinator {
                 co_await update_replica_state(std::move(node), {builder.build()}, std::move(str));
             }
                 break;
-            case topology::transition_state::write_both_read_new:
+            case topology::transition_state::write_both_read_new: {
+                had_work = true;
+                auto node = get_node_to_work_on(std::move(guard));
+
                 // In this state writes goes to old and new replicas but reads start to be done from new replicas
                 // Before we stop writing to old replicas we need to wait for all previous reads to complete
                 std::tie(node, exec_command_res) = co_await exec_global_command(
@@ -934,15 +952,24 @@ class topology_coordinator {
                             node.id, node.rs->state));
                 }
                 // Reads are fenced. We can now move tokens state to topology::transition_state::normal and node to normal
+            }
                 break;
-            case topology::transition_state::normal:
-                // should not get here
-                on_fatal_internal_error(slogger, format(
-                        "Tried to handle ring state transition on node {} while in 'normal' state", node.id));
+            case topology::transition_state::normal: {
+                auto node_opt = get_node_to_work_on_opt(std::move(guard));
+                if (!node_opt) {
+                    break;
+                }
+                had_work = true;
+                co_await handle_node_transition(std::move(*node_opt));
+            }
                 break;
         }
+        co_return had_work;
     };
 
+    // Called when there is no ongoing topology transition.
+    // Used to start new topology transitions using node requests or perform node operations
+    // that don't change the topology (like rebuild).
     future<> handle_node_transition(node_to_work_on&& node) {
         slogger.info("raft topology: coordinator fiber found a node to work on id={} state={}", node.id, node.rs->state);
 
@@ -1074,12 +1101,6 @@ class topology_coordinator {
                 }
                 break;
             }
-            case node_state::bootstrapping:
-            case node_state::decommissioning:
-            case node_state::removing:
-            case node_state::replacing:
-                co_await handle_ring_transition(std::move(node));
-                break;
             case node_state::rebuilding: {
                 node = co_await exec_direct_command(
                         std::move(node), raft_topology_cmd{raft_topology_cmd::command::stream_ranges});
@@ -1089,6 +1110,14 @@ class topology_coordinator {
                 co_await update_replica_state(std::move(node), {builder.build()}, "rebuilding completed");
             }
                 break;
+            case node_state::bootstrapping:
+            case node_state::decommissioning:
+            case node_state::removing:
+            case node_state::replacing:
+                // Should not get here
+                on_fatal_internal_error(slogger, format(
+                    "Found node {} in state {} but there is no ongoing topology transition",
+                    node.id, node.rs->state));
             case node_state::left:
                 // Should not get here
                 on_fatal_internal_error(slogger, format(
@@ -1133,15 +1162,15 @@ future<> topology_coordinator::run() {
                 wait_for_event = false;
             }
 
-            auto node = co_await get_node_to_work_on();
+            auto guard = co_await _group0.client().start_operation(&_as);
+            co_await cleanup_group0_config_if_needed();
 
-            if (!node) {
-                // No nodes to work on. Wait for topology change event.
+            bool had_work = co_await handle_topology_transition(std::move(guard));
+            if (!had_work) {
+                // Nothing to work on. Wait for topology change event.
                 wait_for_event = true;
                 continue;
             }
-
-            co_await handle_node_transition(std::move(*node));
         } catch (raft::request_aborted&) {
             slogger.debug("raft topology: topology change coordinator fiber aborted");
         } catch (group0_concurrent_modification&) {
