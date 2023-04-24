@@ -444,7 +444,7 @@ public:
 
     virtual future<struct stat> stat(void) override {
         auto size = co_await _client->get_object_size(_object_name);
-        struct stat ret;
+        struct stat ret {};
         ret.st_nlink = 1;
         ret.st_mode = S_IFREG | S_IRUSR | S_IRGRP | S_IROTH;
         ret.st_size = size;
