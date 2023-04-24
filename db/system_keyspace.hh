@@ -321,7 +321,7 @@ public:
     future<> update_compaction_history(utils::UUID uuid, sstring ksname, sstring cfname, int64_t compacted_at, int64_t bytes_in, int64_t bytes_out,
                                        std::unordered_map<int32_t, int64_t> rows_merged);
     using compaction_history_consumer = noncopyable_function<future<>(const compaction_history_entry&)>;
-    future<> get_compaction_history(compaction_history_consumer&& f);
+    future<> get_compaction_history(compaction_history_consumer f);
 
     struct repair_history_entry {
         tasks::task_id id;
