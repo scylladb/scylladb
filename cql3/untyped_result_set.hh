@@ -150,6 +150,8 @@ public:
 
 class result_set;
 
+/// A tabular result. Unlike result_set, untyped_result_set is optimized for safety
+/// and convenience, not performance.
 class untyped_result_set {
 public:
     using row = untyped_result_set_row;
