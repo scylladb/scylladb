@@ -36,6 +36,7 @@ async def test_cassandra_issue_10250(random_tables, fails_without_consistent_clu
         tables_i.append(await tables.add_table(columns=[Column(name="id", ctype=UUIDType),
                                                *[Column(name=f"c{i}", ctype=IntType) for i in range(1, 8)]],
                                                pks=1, name=f"index_me_{n}"))
+    logger.debug("Created initial tables")
 
     # Create a bunch of futures to run in parallel (in aws list)
     #   - alter a table in the _a list by adding a column
@@ -57,6 +58,7 @@ async def test_cassandra_issue_10250(random_tables, fails_without_consistent_clu
 
     # Run everything in parallel
     await asyncio.gather(*aws)
+    logger.debug("Done running concurrent schema changes")
     # Sleep to settle; original Cassandra issue repro sleeps 20 seconds
     await asyncio.sleep(1)
     logger.debug("verifing schema status")
