@@ -20,7 +20,7 @@ updateable_timeout_config::updateable_timeout_config(const db::config& cfg)
     , write_timeout_in_ms(cfg.write_request_timeout_in_ms)
     , range_read_timeout_in_ms(cfg.range_request_timeout_in_ms)
     , counter_write_timeout_in_ms(cfg.counter_write_request_timeout_in_ms)
-    , truncate_timeout_in_ms(cfg.counter_write_request_timeout_in_ms)
+    , truncate_timeout_in_ms(cfg.truncate_request_timeout_in_ms)
     , cas_timeout_in_ms(cfg.cas_contention_timeout_in_ms)
     , other_timeout_in_ms(cfg.request_timeout_in_ms)
 {}
@@ -33,6 +33,6 @@ timeout_config updateable_timeout_config::current_values() const {
         std::chrono::milliseconds(counter_write_timeout_in_ms),
         std::chrono::milliseconds(truncate_timeout_in_ms),
         std::chrono::milliseconds(cas_timeout_in_ms),
-        std::chrono::milliseconds(cas_timeout_in_ms),
+        std::chrono::milliseconds(other_timeout_in_ms),
     };
 }
