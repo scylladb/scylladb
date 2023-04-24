@@ -770,9 +770,8 @@ struct fmt::formatter<partition_key> : fmt::formatter<std::string_view> {
 
 namespace detail {
 
-enum class do_validate_utf8 { no, yes };
 template <typename WithSchemaWrapper, typename FormatContext>
-auto format_pk(const WithSchemaWrapper& pk, FormatContext& ctx, do_validate_utf8 validate_utf8) {
+auto format_pk(const WithSchemaWrapper& pk, FormatContext& ctx) {
     const auto& [schema, key] = pk;
     const auto& types = key.get_compound_type(schema)->types();
     const auto components = key.components(schema);
@@ -783,11 +782,10 @@ auto format_pk(const WithSchemaWrapper& pk, FormatContext& ctx, do_validate_utf8
                                                                      components.begin())),
                           boost::make_zip_iterator(boost::make_tuple(types.end(),
                                                                      components.end()))) |
-                      boost::adaptors::transformed([validate_utf8](const auto& type_and_component) {
+                      boost::adaptors::transformed([](const auto& type_and_component) {
                           auto& [type, component] = type_and_component;
                           auto key = type->to_string(to_bytes(component));
-                          if (validate_utf8 == do_validate_utf8::yes &&
-                              !utils::utf8::validate((const uint8_t *) key.data(), key.size())) {
+                          if (!utils::utf8::validate((const uint8_t *) key.data(), key.size())) {
                               return sstring("<non-utf8-key>");
                           }
                           return key;
@@ -801,7 +799,7 @@ template <>
 struct fmt::formatter<partition_key::with_schema_wrapper> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const partition_key::with_schema_wrapper& pk, FormatContext& ctx) const {
-        return ::detail::format_pk(pk, ctx, ::detail::do_validate_utf8::yes);
+        return ::detail::format_pk(pk, ctx);
     }
 };
 
@@ -927,7 +925,7 @@ template <>
 struct fmt::formatter<clustering_key_prefix::with_schema_wrapper> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const clustering_key_prefix::with_schema_wrapper& pk, FormatContext& ctx) const {
-        return ::detail::format_pk(pk, ctx, ::detail::do_validate_utf8::no);
+        return ::detail::format_pk(pk, ctx);
     }
 };
 
