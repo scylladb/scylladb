@@ -248,7 +248,6 @@ public:
     enum class mode { NONE, STARTING, JOINING, BOOTSTRAP, NORMAL, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED };
 private:
     mode _operation_mode = mode::NONE;
-    friend std::ostream& operator<<(std::ostream& os, const mode& mode);
     /* Used for tracking drain progress */
 
     endpoint_lifecycle_notifier& _lifecycle_notifier;
@@ -797,3 +796,25 @@ private:
 };
 
 }
+
+template <>
+struct fmt::formatter<service::storage_service::mode> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(service::storage_service::mode mode, FormatContext& ctx) const {
+        std::string_view name;
+        using enum service::storage_service::mode;
+        switch (mode) {
+        case NONE:           name = "STARTING"; break;
+        case STARTING:       name = "STARTING"; break;
+        case NORMAL:         name = "NORMAL"; break;
+        case JOINING:        name = "JOINING"; break;
+        case BOOTSTRAP:      name = "BOOTSTRAP"; break;
+        case LEAVING:        name = "LEAVING"; break;
+        case DECOMMISSIONED: name = "DECOMMISSIONED"; break;
+        case MOVING:         name = "MOVING"; break;
+        case DRAINING:       name = "DRAINING"; break;
+        case DRAINED:        name = "DRAINED"; break;
+        }
+        return fmt::format_to(ctx.out(), "{}", name);
+    }
+};
