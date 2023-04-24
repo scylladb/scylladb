@@ -609,11 +609,9 @@ class topology_coordinator {
 
     struct term_changed_error {};
 
-    future<std::optional<node_to_work_on>> get_node_to_work_on() {
-        auto guard = co_await _group0.client().start_operation(&_as);
+    future<> cleanup_group0_config_if_needed() {
         auto& topo = _topo_sm._topology;
         auto rconf = _group0.group0_server().get_configuration();
-
         if (rconf.current.size() > topo.normal_nodes.size() + topo.new_nodes.size() + topo.transition_nodes.size()) {
             // Raft config is larger than the sum of all nodes not in 'left' state.
             // Find nodes that 'left' but still in the config and remove them
@@ -637,7 +635,13 @@ class topology_coordinator {
                              " in non left state but no nodes in left state were found");
             }
         }
+    }
 
+    future<std::optional<node_to_work_on>> get_node_to_work_on() {
+        auto guard = co_await _group0.client().start_operation(&_as);
+        co_await cleanup_group0_config_if_needed();
+
+        auto& topo = _topo_sm._topology;
         const std::pair<const raft::server_id, replica_state>* e = nullptr;
 
         std::optional<topology_request> req;
