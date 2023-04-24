@@ -2841,24 +2841,6 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
     });
 }
 
-static const std::map<storage_service::mode, sstring> mode_names = {
-    {storage_service::mode::NONE,           "STARTING"},
-    {storage_service::mode::STARTING,       "STARTING"},
-    {storage_service::mode::NORMAL,         "NORMAL"},
-    {storage_service::mode::JOINING,        "JOINING"},
-    {storage_service::mode::BOOTSTRAP,      "BOOTSTRAP"},
-    {storage_service::mode::LEAVING,        "LEAVING"},
-    {storage_service::mode::DECOMMISSIONED, "DECOMMISSIONED"},
-    {storage_service::mode::MOVING,         "MOVING"},
-    {storage_service::mode::DRAINING,       "DRAINING"},
-    {storage_service::mode::DRAINED,        "DRAINED"},
-};
-
-std::ostream& operator<<(std::ostream& os, const storage_service::mode& m) {
-    os << mode_names.at(m);
-    return os;
-}
-
 void storage_service::set_mode(mode m) {
     if (m != _operation_mode) {
         slogger.info("entering {} mode", m);
