@@ -45,6 +45,7 @@
 #include "cell_locking.hh"
 #include "test/lib/simple_schema.hh"
 #include "replica/memtable-sstable.hh"
+#include "replica/compaction_group.hh"
 #include "test/lib/index_reader_assertions.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/make_random_string.hh"
@@ -4285,8 +4286,9 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
     });
 }
 
-SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
-    return test_env::do_with_async([] (test_env& env) {
+static future<>
+sstable_set_incremental_selector_test(std::function<sstables::sstable_set(schema_ptr, std::vector<lw_shared_ptr<sstable_set>>)> make_sstable_set) {
+    return test_env::do_with_async([make_sstable_set = std::move(make_sstable_set)] (test_env& env) {
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
                                     {{"p1", utf8_type}}, {}, {}, {}, utf8_type);
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
@@ -4325,7 +4327,7 @@ SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
             ssts.push_back(new_sstable(set2, 4, 4, 1));
             ssts.push_back(new_sstable(set1, 4, 5, 1));
 
-            sstable_set compound = sstables::make_compound_sstable_set(s, { set1, set2 });
+            sstable_set compound = make_sstable_set(s, { set1, set2 });
             sstable_set::incremental_selector sel = compound.make_incremental_selector();
             check(sel, 0, std::unordered_set<shared_sstable>{ssts[0], ssts[1]});
             check(sel, 1, std::unordered_set<shared_sstable>{ssts[0], ssts[1]});
@@ -4348,7 +4350,7 @@ SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
             ssts.push_back(new_sstable(set1, 4, 4, 1));
             ssts.push_back(new_sstable(set2, 4, 5, 1));
 
-            sstable_set compound = sstables::make_compound_sstable_set(s, { set1, set2 });
+            sstable_set compound = make_sstable_set(s, { set1, set2 });
             sstable_set::incremental_selector sel = compound.make_incremental_selector();
             check(sel, 0, std::unordered_set<shared_sstable>{ssts[0], ssts[1], ssts[2]});
             check(sel, 1, std::unordered_set<shared_sstable>{ssts[0], ssts[1], ssts[2]});
@@ -4377,7 +4379,7 @@ SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
                 new_sstable(set2, 3, 3, 1);
                 new_sstable(set2, 4, 4, 1);
 
-                sstable_set compound = sstables::make_compound_sstable_set(s, { set1, set2 });
+                sstable_set compound = make_sstable_set(s, { set1, set2 });
                 sstable_set::incremental_selector sel = compound.make_incremental_selector();
 
                 dht::ring_position_view pos = dht::ring_position_view::min();
@@ -4394,6 +4396,24 @@ SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
             incremental_selection_test(strategy_param::ICS);
             incremental_selection_test(strategy_param::LCS);
         }
+    });
+}
+
+SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
+    return sstable_set_incremental_selector_test([] (schema_ptr s, std::vector<lw_shared_ptr<sstable_set>> sets) {
+        return sstables::make_compound_sstable_set(std::move(s), std::move(sets));
+    });
+}
+
+SEASTAR_TEST_CASE(compaction_group_sstable_set_incremental_selector_test) {
+    return sstable_set_incremental_selector_test([] (schema_ptr s, std::vector<lw_shared_ptr<sstable_set>> sets) {
+        auto compound_set = make_lw_shared(sstables::make_compound_sstable_set(s, std::move(sets)));
+
+        using sstable_set_t = std::pair<const dht::token_range, lw_shared_ptr<sstables::sstable_set>>;
+        sstable_set_t cg_set = std::make_pair(dht::token_range::make_open_ended_both_sides(), std::move(compound_set));
+
+        return sstables::sstable_set(std::make_unique<replica::compaction_group::sstable_set>(s,
+                std::vector<sstable_set_t>{ std::move(cg_set) }), s);
     });
 }
 

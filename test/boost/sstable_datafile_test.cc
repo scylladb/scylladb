@@ -38,6 +38,7 @@
 #include "cell_locking.hh"
 #include "test/lib/simple_schema.hh"
 #include "replica/memtable-sstable.hh"
+#include "replica/compaction_group.hh"
 #include "test/lib/index_reader_assertions.hh"
 #include "test/lib/flat_mutation_reader_assertions.hh"
 #include "test/lib/make_random_string.hh"
@@ -2797,15 +2798,15 @@ SEASTAR_TEST_CASE(test_sstable_origin) {
     });
 }
 
-SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
-    return test_env::do_with([] (test_env& env) {
+static future<> generic_sstable_set_basic_test(std::function<sstables::sstable_set(schema_ptr, std::vector<lw_shared_ptr<sstable_set>>)> make_sstable_set) {
+    return test_env::do_with([make_sstable_set = std::move(make_sstable_set)] (test_env& env) {
         auto s = make_shared_schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {}, {}, {}, utf8_type);
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
 
         lw_shared_ptr<sstables::sstable_set> set1 = make_lw_shared(cs.make_sstable_set(s));
         lw_shared_ptr<sstables::sstable_set> set2 = make_lw_shared(cs.make_sstable_set(s));
-        lw_shared_ptr<sstables::sstable_set> compound = make_lw_shared(sstables::make_compound_sstable_set(s, {set1, set2}));
+        lw_shared_ptr<sstables::sstable_set> compound = make_lw_shared(make_sstable_set(s, {set1, set2}));
 
         const auto keys = tests::generate_partition_keys(2, s);
         set1->insert(sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key(), 0));
@@ -2829,7 +2830,7 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
         }
 
         set2 = make_lw_shared(cs.make_sstable_set(s));
-        compound = make_lw_shared(sstables::make_compound_sstable_set(s, {set1, set2}));
+        compound = make_lw_shared(make_sstable_set(s, {set1, set2}));
         {
             unsigned found = 0;
             for (auto sstables = compound->all(); [[maybe_unused]] auto& sst : *sstables) {
@@ -2841,6 +2842,24 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
         }
 
         return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
+    return generic_sstable_set_basic_test([] (schema_ptr s, std::vector<lw_shared_ptr<sstable_set>> sets) {
+        return sstables::make_compound_sstable_set(std::move(s), std::move(sets));
+    });
+}
+
+SEASTAR_TEST_CASE(compaction_group_sstable_set_basic_test) {
+    return generic_sstable_set_basic_test([] (schema_ptr s, std::vector<lw_shared_ptr<sstable_set>> sets) {
+        auto compound_set = make_lw_shared(sstables::make_compound_sstable_set(s, std::move(sets)));
+
+        using sstable_set_t = std::pair<const dht::token_range, lw_shared_ptr<sstables::sstable_set>>;
+        sstable_set_t cg_set = std::make_pair(dht::token_range::make_open_ended_both_sides(), std::move(compound_set));
+
+        return sstables::sstable_set(std::make_unique<replica::compaction_group::sstable_set>(s,
+                std::vector<sstable_set_t>{ std::move(cg_set) }), s);
     });
 }
 
