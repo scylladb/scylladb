@@ -321,6 +321,8 @@ def wait_for_index(cql, table, index):
 def user_type(*args):
     return collections.namedtuple('user_type', args[::2])(*args[1::2])
 
+userType = user_type
+
 # a row(...) used in assertRows can simply be a list
 def row(*args):
     return list(args)
