@@ -30,7 +30,8 @@ struct repair_sync_boundary {
         }
     };
     friend std::ostream& operator<<(std::ostream& os, const repair_sync_boundary& x) {
-        return os << "{ " << x.pk << "," <<  x.position << " }";
+        fmt::print(os, "{{ {}, {}}}", x.pk, x.position);
+        return os;
     }
 };
 

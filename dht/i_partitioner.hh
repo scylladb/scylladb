@@ -599,8 +599,6 @@ struct token_comparator {
     std::strong_ordering operator()(const token& t1, const token& t2) const;
 };
 
-std::ostream& operator<<(std::ostream& out, const decorated_key& t);
-
 std::ostream& operator<<(std::ostream& out, const i_partitioner& p);
 
 class partition_ranges_view {
@@ -687,3 +685,11 @@ struct hash<dht::decorated_key> {
 
 
 }
+
+template <>
+struct fmt::formatter<dht::decorated_key> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const dht::decorated_key& dk, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{{key: {}, token: {}}}", dk._key, dk._token);
+    }
+};

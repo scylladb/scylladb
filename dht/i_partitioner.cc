@@ -58,11 +58,6 @@ sharder::next_shard(const token& t) const {
     return shard_and_token{next_shard, next_token};
 }
 
-std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {
-    fmt::print(out, "{{key: {}, token: {}}}", dk._key, dk._token);
-    return out;
-}
-
 std::ostream& operator<<(std::ostream& out, partition_ranges_view v) {
     out << "{";
 
