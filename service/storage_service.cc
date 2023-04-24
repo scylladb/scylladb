@@ -712,6 +712,13 @@ class topology_coordinator {
         }
     };
 
+    raft::server_id parse_replaced_node(const node_to_work_on& node) {
+        if (node.rs->state == node_state::replacing) {
+            return std::get<raft::server_id>(node.req_param.value());
+        }
+        return {};
+    }
+
     future<> exec_direct_command_helper(raft::server_id id, const raft_topology_cmd& cmd) {
         auto ip = _address_map.find(id);
         if (!ip) {
@@ -753,9 +760,10 @@ class topology_coordinator {
     };
 
     future<std::pair<node_to_work_on, bool>> exec_global_command(
-            node_to_work_on&& node, const raft_topology_cmd& cmd, bool include_local, raft::server_id exclude_node) {
+            node_to_work_on&& node, const raft_topology_cmd& cmd, bool include_local) {
         auto my_id = _raft.id();
         auto id = node.id;
+        auto exclude_node = parse_replaced_node(node);
         auto nodes = node.topology->normal_nodes | boost::adaptors::filtered(
                 [my_id, include_local, exclude_node] (const std::pair<const raft::server_id, replica_state>& n)  {
                     return (include_local || n.first != my_id) && n.first != exclude_node;
@@ -766,19 +774,13 @@ class topology_coordinator {
     };
 
     future<> handle_ring_transition(node_to_work_on&& node) {
-        raft::server_id replaced_node;
-
-        if (node.rs->state == node_state::replacing) {
-            replaced_node = std::get<raft::server_id>(node.req_param.value());
-        }
-
         bool res;
         switch (node.topology->tstate) {
             case topology::transition_state::commit_cdc_generation: {
                 // make sure all nodes know about new topology and have the new CDC generation data
                 // (we require all nodes to be alive for topo change for now)
                 std::tie(node, res) = co_await exec_global_command(
-                        std::move(node), raft_topology_cmd{raft_topology_cmd::command::barrier}, false, replaced_node);
+                        std::move(node), raft_topology_cmd{raft_topology_cmd::command::barrier}, false);
                 if (!res) {
                     break;
                 }
@@ -844,7 +846,7 @@ class topology_coordinator {
             case topology::transition_state::write_both_read_old: {
                 // make sure all nodes know about new topology (we require all nodes to be alive for topo change for now)
                 std::tie(node, res) = co_await exec_global_command(
-                        std::move(node), raft_topology_cmd{raft_topology_cmd::command::barrier}, false, replaced_node);
+                        std::move(node), raft_topology_cmd{raft_topology_cmd::command::barrier}, false);
                 if (!res) {
                     break;
                 }
@@ -862,7 +864,7 @@ class topology_coordinator {
                 raft_topology_cmd cmd{raft_topology_cmd::command::stream_ranges};
                 if (node.rs->state == node_state::removing) {
                     // tell all nodes to stream data of the removed node to new range owners
-                    std::tie(node, res) = co_await exec_global_command(std::move(node), cmd, true, replaced_node);
+                    std::tie(node, res) = co_await exec_global_command(std::move(node), cmd, true);
                     if (!res) {
                         slogger.error("raft topology: send_raft_topology_cmd(stream_ranges) failed during removenode");
                         break;
@@ -890,8 +892,7 @@ class topology_coordinator {
                 // In this state writes goes to old and new replicas but reads start to be done from new replicas
                 // Before we stop writing to old replicas we need to wait for all previous reads to complete
                 std::tie(node, res) = co_await exec_global_command(
-                        std::move(node), raft_topology_cmd{raft_topology_cmd::command::fence_old_reads},
-                        true, replaced_node);
+                        std::move(node), raft_topology_cmd{raft_topology_cmd::command::fence_old_reads}, true);
                 if (!res) {
                     break;
                 }
@@ -920,7 +921,7 @@ class topology_coordinator {
                             .set("node_state", node_state::normal);
 
                     // Move old node to 'left'
-                    topology_mutation_builder builder2(node.guard.write_timestamp(), replaced_node);
+                    topology_mutation_builder builder2(node.guard.write_timestamp(), parse_replaced_node(node));
                     builder2.del("tokens")
                             .set("node_state", node_state::left);
                     co_await update_replica_state(std::move(node), {builder1.build(), builder2.build()},
