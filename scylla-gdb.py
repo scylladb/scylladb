@@ -1993,7 +1993,10 @@ class scylla_memory(gdb.Command):
 
     @staticmethod
     def print_coordinator_stats():
-        sp = sharded(gdb.parse_and_eval('service::_the_storage_proxy')).local()
+        try:
+            sp = sharded(gdb.parse_and_eval('debug::the_storage_proxy')).local()
+        except gdb.error:
+            sp = sharded(gdb.parse_and_eval('service::_the_storage_proxy')).local()
         if not sp:
             return
         global_sp_stats, per_sg_sp_stats = scylla_memory.summarize_storage_proxy_coordinator_stats(sp)

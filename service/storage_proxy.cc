@@ -804,8 +804,6 @@ private:
     }
 };
 
-distributed<service::storage_proxy> _the_storage_proxy;
-
 using namespace exceptions;
 using fbu = utils::fb_utilities;
 

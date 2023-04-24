@@ -688,18 +688,4 @@ public:
     friend class cas_mutation;
 };
 
-extern distributed<storage_proxy> _the_storage_proxy;
-
-// DEPRECATED, DON'T USE!
-// Pass references to services through constructor/function parameters. Don't use globals.
-inline distributed<storage_proxy>& get_storage_proxy() {
-    return _the_storage_proxy;
-}
-
-// DEPRECATED, DON'T USE!
-// Pass references to services through constructor/function parameters. Don't use globals.
-inline storage_proxy& get_local_storage_proxy() {
-    return _the_storage_proxy.local();
-}
-
 }
