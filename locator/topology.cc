@@ -174,7 +174,9 @@ const node* topology::add_node(node_holder nptr) {
             }
         }
 
-        tlogger.debug("topology[{}]: add_node: {}, at {}", fmt::ptr(this), debug_format(node), current_backtrace());
+        if (tlogger.is_enabled(log_level::debug)) {
+            tlogger.debug("topology[{}]: add_node: {}, at {}", fmt::ptr(this), debug_format(node), current_backtrace());
+        }
 
         index_node(node);
     } catch (...) {
@@ -185,13 +187,15 @@ const node* topology::add_node(node_holder nptr) {
 }
 
 const node* topology::update_node(node* node, std::optional<host_id> opt_id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st) {
-    tlogger.debug("topology[{}]: update_node: {}: to: host_id={} endpoint={} dc={} rack={} state={}, at {}", fmt::ptr(this), debug_format(node),
+    if (tlogger.is_enabled(log_level::debug)) {
+        tlogger.debug("topology[{}]: update_node: {}: to: host_id={} endpoint={} dc={} rack={} state={}, at {}", fmt::ptr(this), debug_format(node),
             opt_id ? format("{}", *opt_id) : "unchanged",
             opt_ep ? format("{}", *opt_ep) : "unchanged",
             opt_dr ? format("{}", opt_dr->dc) : "unchanged",
             opt_dr ? format("{}", opt_dr->rack) : "unchanged",
             opt_st ? format("{}", *opt_st) : "unchanged",
             current_backtrace());
+    }
 
     bool changed = false;
     if (opt_id) {
@@ -279,7 +283,9 @@ void topology::remove_node(const node* node) {
 }
 
 void topology::index_node(const node* node) {
-    tlogger.trace("topology[{}]: index_node: {}, at {}", fmt::ptr(this), debug_format(node), current_backtrace());
+    if (tlogger.is_enabled(log_level::trace)) {
+        tlogger.trace("topology[{}]: index_node: {}, at {}", fmt::ptr(this), debug_format(node), current_backtrace());
+    }
 
     if (node->idx() < 0) {
         on_internal_error(tlogger, format("topology[{}]: {}: must already have a valid idx", fmt::ptr(this), debug_format(node)));
@@ -327,7 +333,9 @@ void topology::index_node(const node* node) {
 }
 
 void topology::unindex_node(const node* node) {
-    tlogger.trace("topology[{}]: unindex_node: {}, at {}", fmt::ptr(this), debug_format(node), current_backtrace());
+    if (tlogger.is_enabled(log_level::trace)) {
+        tlogger.trace("topology[{}]: unindex_node: {}, at {}", fmt::ptr(this), debug_format(node), current_backtrace());
+    }
 
     const auto& dc = node->dc_rack().dc;
     const auto& rack = node->dc_rack().rack;
@@ -370,7 +378,9 @@ void topology::unindex_node(const node* node) {
 }
 
 node_holder topology::pop_node(const node* node) {
-    tlogger.trace("topology[{}]: pop_node: {}, at {}", fmt::ptr(this), debug_format(node), current_backtrace());
+    if (tlogger.is_enabled(log_level::trace)) {
+        tlogger.trace("topology[{}]: pop_node: {}, at {}", fmt::ptr(this), debug_format(node), current_backtrace());
+    }
 
     unindex_node(node);
 
@@ -416,9 +426,11 @@ const node* topology::find_node(node::idx_type idx) const noexcept {
 
 const node* topology::add_or_update_endpoint(inet_address ep, std::optional<host_id> opt_id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st)
 {
-    tlogger.trace("topology[{}]: add_or_update_endpoint: ep={} host_id={} dc={} rack={} state={}, at {}", fmt::ptr(this),
+    if (tlogger.is_enabled(log_level::trace)) {
+        tlogger.trace("topology[{}]: add_or_update_endpoint: ep={} host_id={} dc={} rack={} state={}, at {}", fmt::ptr(this),
             ep, opt_id.value_or(host_id::create_null_id()), opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none),
             current_backtrace());
+    }
     auto n = find_node(ep);
     if (n) {
         return update_node(make_mutable(n), opt_id, std::nullopt, std::move(opt_dr), std::move(opt_st));
