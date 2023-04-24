@@ -3,8 +3,8 @@ target_sources(gms
   PRIVATE
     application_state.cc
     endpoint_state.cc
-    failure_detector.cc
     feature_service.cc
+    generation-number.cc
     gossip_digest_ack2.cc
     gossip_digest_ack.cc
     gossip_digest_syn.cc
