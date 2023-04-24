@@ -294,6 +294,8 @@ public:
      * page_size - maximum page size
      * f - a function to be run on each row of the query result,
      *     if the function returns stop_iteration::yes the iteration will stop
+     *
+     * \note This function is optimized for convenience, not performance.
      */
     future<> query_internal(
             const sstring& query_string,
@@ -310,6 +312,8 @@ public:
      * query_string - the cql string, can contain placeholders
      * f - a function to be run on each row of the query result,
      *     if the function returns stop_iteration::yes the iteration will stop
+     *
+     * \note This function is optimized for convenience, not performance.
      */
     future<> query_internal(
             const sstring& query_string,
@@ -324,6 +328,8 @@ public:
     // and schema changes will not be announced to other nodes.
     // Because of that, changing global schema state (e.g. modifying non-local tables,
     // creating namespaces, etc) is explicitly forbidden via this interface.
+    //
+    // note: optimized for convenience, not performance.
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
             db::consistency_level,
@@ -429,11 +435,15 @@ private:
 
     /*!
      * \brief run a query using paging
+     *
+     * \note Optimized for convenience, not performance.
      */
     future<::shared_ptr<untyped_result_set>> execute_paged_internal(::shared_ptr<internal_query_state> state);
 
     /*!
      * \brief iterate over all results using paging, accept a function that returns a future
+     *
+     * \note Optimized for convenience, not performance.
      */
     future<> for_each_cql_result(
             ::shared_ptr<cql3::internal_query_state> state,
