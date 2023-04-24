@@ -10,8 +10,6 @@
 
 #include "auth/authenticated_user.hh"
 
-#include <iostream>
-
 namespace auth {
 
 authenticated_user::authenticated_user(std::string_view name)
