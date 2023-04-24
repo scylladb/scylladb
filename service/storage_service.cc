@@ -774,14 +774,14 @@ class topology_coordinator {
     };
 
     future<> handle_ring_transition(node_to_work_on&& node) {
-        bool res;
+        bool exec_command_res;
         switch (node.topology->tstate) {
             case topology::transition_state::commit_cdc_generation: {
                 // make sure all nodes know about new topology and have the new CDC generation data
                 // (we require all nodes to be alive for topo change for now)
-                std::tie(node, res) = co_await exec_global_command(
+                std::tie(node, exec_command_res) = co_await exec_global_command(
                         std::move(node), raft_topology_cmd{raft_topology_cmd::command::barrier}, false);
-                if (!res) {
+                if (!exec_command_res) {
                     break;
                 }
 
@@ -845,9 +845,9 @@ class topology_coordinator {
                 break;
             case topology::transition_state::write_both_read_old: {
                 // make sure all nodes know about new topology (we require all nodes to be alive for topo change for now)
-                std::tie(node, res) = co_await exec_global_command(
+                std::tie(node, exec_command_res) = co_await exec_global_command(
                         std::move(node), raft_topology_cmd{raft_topology_cmd::command::barrier}, false);
-                if (!res) {
+                if (!exec_command_res) {
                     break;
                 }
 
@@ -864,8 +864,8 @@ class topology_coordinator {
                 raft_topology_cmd cmd{raft_topology_cmd::command::stream_ranges};
                 if (node.rs->state == node_state::removing) {
                     // tell all nodes to stream data of the removed node to new range owners
-                    std::tie(node, res) = co_await exec_global_command(std::move(node), cmd, true);
-                    if (!res) {
+                    std::tie(node, exec_command_res) = co_await exec_global_command(std::move(node), cmd, true);
+                    if (!exec_command_res) {
                         slogger.error("raft topology: send_raft_topology_cmd(stream_ranges) failed during removenode");
                         break;
                     }
@@ -891,9 +891,9 @@ class topology_coordinator {
             case topology::transition_state::write_both_read_new:
                 // In this state writes goes to old and new replicas but reads start to be done from new replicas
                 // Before we stop writing to old replicas we need to wait for all previous reads to complete
-                std::tie(node, res) = co_await exec_global_command(
+                std::tie(node, exec_command_res) = co_await exec_global_command(
                         std::move(node), raft_topology_cmd{raft_topology_cmd::command::fence_old_reads}, true);
-                if (!res) {
+                if (!exec_command_res) {
                     break;
                 }
                 switch(node.rs->state) {
