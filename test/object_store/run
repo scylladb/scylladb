@@ -4,8 +4,10 @@ import sys
 sys.path.insert(1, sys.path[0] + '/../cql-pytest')
 import run
 
+import atexit
 import os
 import requests
+import shutil
 
 print('Scylla is: ' + run.find_scylla() + '.')
 success = True
@@ -24,8 +26,16 @@ os.mkdir(test_tempdir)
 def get_tempdir(pid):
     return test_tempdir
 
+def teardown(pid):
+    print('Kill scylla')
+    sys.stdout.flush()
+    log = run.abort_run_with_dir(pid, test_tempdir)
+    shutil.copyfileobj(log, sys.stdout.buffer)
+
 print(f'Start scylla (dir={test_tempdir}')
 pid = run.run_with_generated_dir(cmd, get_tempdir)
+atexit.register(lambda: teardown(pid))
+
 ip = run.pid_to_ip(pid)
 run.wait_for_services(pid, [ lambda: check_cql(ip) ])
 s3_server_address = os.environ['S3_SERVER_ADDRESS_FOR_TEST']
@@ -81,8 +91,5 @@ for row in res:
     success = False
 
 cluster.shutdown()
-
-print('Kill scylla')
-run.abort_run_with_dir(pid, test_tempdir)
 
 sys.exit(0 if success else 1)
