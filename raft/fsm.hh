@@ -47,7 +47,7 @@ struct fsm_output {
         return !term_and_vote &&
             log_entries.size() == 0 && messages.size() == 0 &&
             committed.size() == 0 && !snp && snps_to_drop.empty() &&
-            !configuration;
+            !configuration && !max_read_id_with_quorum;
     }
 };
 
@@ -654,4 +654,3 @@ void fsm::step(server_id from, Message&& msg) {
 }
 
 } // namespace raft
-
