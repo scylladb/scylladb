@@ -172,6 +172,7 @@ public:
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
+    virtual future<> destroy(const sstable& sst) override { return make_ready_future<>(); }
 
     virtual sstring prefix() const override { return dir; }
 };
@@ -3313,6 +3314,9 @@ public:
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
+    virtual future<> destroy(const sstable& sst) override {
+        return _client->close();
+    }
 
     virtual sstring prefix() const override { return _location; }
 };
@@ -3450,6 +3454,7 @@ future<> sstable::destroy() {
     if (_cached_index_file) {
         co_await _cached_index_file->evict_gently();
     }
+    co_await _storage->destroy(*this);
 
     if (ex) {
         co_await coroutine::return_exception_ptr(std::move(ex));
