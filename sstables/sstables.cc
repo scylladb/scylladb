@@ -3439,15 +3439,21 @@ void sstable::unused() {
 }
 
 future<> sstable::destroy() {
-    return close_files().finally([this] {
-        return _index_cache->evict_gently().then([this] {
-            if (_cached_index_file) {
-                return _cached_index_file->evict_gently();
-            } else {
-                return make_ready_future<>();
-            }
-        });
-    });
+    std::exception_ptr ex;
+    try {
+        co_await close_files();
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await _index_cache->evict_gently();
+    if (_cached_index_file) {
+        co_await _cached_index_file->evict_gently();
+    }
+
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
 }
 
 future<file_writer> file_writer::make(file f, file_output_stream_options options, sstring filename) noexcept {
