@@ -54,7 +54,7 @@ increase availability. Rather than providing strong consistency, they provide `e
 
 In ScyllaDB (and Apache Cassandra), consistency is tunable - for a given query, the client can specify a `Consistency Level <https://university.scylladb.com/courses/scylla-essentials-overview/lessons/architecture/topic/consistency-level-cl/>`_.
 A Consistency Level is the number of replicas required to respond to a request for the request to be considered successful.  The possibility to
-specify a Consistency Level per query is known as `Tunable Consistency <https://docs.scylladb.com/stable/glossary.html#term-Tunable-Consistency>`_. 
+specify a Consistency Level per query is known as :term:`Tunable Consistency`. 
 
 A database using the ACID model expects a unit of work to be atomic. It is all-or-nothing. While that unit of work is being done, the records or 
 tables affected may be locked. 

@@ -162,6 +162,5 @@
   ScyllaDB University <https://university.scylladb.com/>
   faq
   Contribute to ScyllaDB <contribute>
-  glossary
   alternator/alternator
 
