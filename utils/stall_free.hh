@@ -60,6 +60,7 @@ concept HasClearGentlyMethod = requires (T x) {
 
 template <typename T>
 concept SmartPointer = requires (T x) {
+    { x.get() } -> std::same_as<typename T::element_type*>;
     { *x } -> std::same_as<typename T::element_type&>;
 };
 
@@ -132,6 +133,12 @@ template <Container T>
 requires (!StringLike<T> && !Sequence<T> && !MapLike<T>)
 future<> clear_gently(T& c) noexcept;
 
+template <typename T>
+future<> clear_gently(std::optional<T>& opt) noexcept;
+
+template <typename T>
+future<> clear_gently(seastar::optimized_optional<T>& opt) noexcept;
+
 namespace internal {
 
 template <typename T>
@@ -177,7 +184,11 @@ future<> clear_gently(T& o) noexcept {
 
 template <SmartPointer T>
 future<> clear_gently(T& o) noexcept {
-    return internal::clear_gently(*o);
+    if (auto p = o.get()) {
+        return internal::clear_gently(*p);
+    } else {
+        return make_ready_future<>();
+    }
 }
 
 template <typename T, std::size_t N>
@@ -230,6 +241,24 @@ future<> clear_gently(T& c) noexcept {
             c.erase(it);
         });
     });
+}
+
+template <typename T>
+future<> clear_gently(std::optional<T>& opt) noexcept {
+    if (opt) {
+        return utils::clear_gently(*opt);
+    } else {
+        return make_ready_future<>();
+    }
+}
+
+template <typename T>
+future<> clear_gently(seastar::optimized_optional<T>& opt) noexcept {
+    if (opt) {
+        return utils::clear_gently(*opt);
+    } else {
+        return make_ready_future<>();
+    }
 }
 
 }
