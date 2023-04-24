@@ -6,7 +6,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <iterator>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/smp.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/closeable.hh>
@@ -431,11 +433,6 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
     co_return new_sstables.size();
 }
 
-sstables::shared_sstable make_sstable(replica::table& table, fs::path dir, sstables::generation_type generation_value) {
-    auto& sstm = table.get_sstables_manager();
-    return sstm.make_sstable(table.schema(), table.get_storage_options(), dir.native(), generation_value, sstm.get_highest_supported_format(), sstables::sstable_format_types::big, gc_clock::now(), &error_handler_gen_for_upload_dir);
-}
-
 future<>
 distributed_loader::process_upload_dir(distributed<replica::database>& db, distributed<db::system_distributed_keyspace>& sys_dist_ks,
         distributed<db::view::view_update_generator>& view_update_generator, sstring ks, sstring cf) {
@@ -455,7 +452,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
             &error_handler_gen_for_upload_dir
         ).get();
 
-        auto stop = deferred_stop(directory);
+        auto stop_directory = deferred_stop(directory);
 
         lock_table(directory, db, ks, cf).get();
         sstables::sstable_directory::process_flags flags {
@@ -465,22 +462,19 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         };
         process_sstable_dir(directory, flags).get();
 
-        auto generation = highest_generation_seen(directory).get0();
-        auto shard_generation_base = generation.value_or(replica::table::make_new_generation()).value() / smp::count + 1;
+        sharded<sstables::sstable_generation_generator> sharded_gen;
+        auto highest_generation = highest_generation_seen(directory).get0().value_or(
+            sstables::generation_type{0});
+        sharded_gen.start(highest_generation.value()).get();
+        auto stop_generator = deferred_stop(sharded_gen);
 
-        // We still want to do our best to keep the generation numbers shard-friendly.
-        // Each destination shard will manage its own generation counter.
-        std::vector<std::atomic<sstables::generation_type::int_t>> shard_gen(smp::count);
-        for (shard_id s = 0; s < smp::count; ++s) {
-            shard_gen[s].store(shard_generation_base * smp::count + s, std::memory_order_relaxed);
-        }
-
-        // we need generation calculated by instance of cf at requested shard
-        auto new_generation_for_shard = [&] (shard_id shard) {
-            auto gen = shard_gen[shard].fetch_add(smp::count, std::memory_order_relaxed);
-            return sstables::generation_type(gen);
+        auto make_sstable = [&] (shard_id shard) {
+            auto& sstm = global_table->get_sstables_manager();
+            auto generation = sharded_gen.invoke_on(shard, [] (auto& gen) { return gen(); }).get();
+            return sstm.make_sstable(global_table->schema(), global_table->get_storage_options(),
+                                     upload.native(), generation, sstm.get_highest_supported_format(),
+                                     sstables::sstable_format_types::big, gc_clock::now(), &error_handler_gen_for_upload_dir);
         };
-
         // Pass owned_ranges_ptr to reshard to piggy-back cleanup on the resharding compaction.
         // Note that needs_cleanup() is inaccurate and may return false positives,
         // maybe triggerring resharding+cleanup unnecessarily for some sstables.
@@ -492,13 +486,12 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         // - split the keyspace local ranges per compaction_group as done in table::perform_cleanup_compaction
         //   so that cleanup can be considered per compaction group
         auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.local().get_keyspace_local_ranges(ks));
-        reshard(directory, db, ks, cf, [&] (shard_id shard) mutable {
-            return make_sstable(*global_table, upload, new_generation_for_shard(shard));
-        }, service::get_local_streaming_priority(), owned_ranges_ptr).get();
-
-        reshape(directory, db, sstables::reshape_mode::strict, ks, cf, [&] (shard_id shard) {
-            return make_sstable(*global_table, upload, new_generation_for_shard(shard));
-        }, [] (const sstables::shared_sstable&) { return true; }, service::get_local_streaming_priority()).get();
+        reshard(directory, db, ks, cf, make_sstable,
+                service::get_local_streaming_priority(),
+                owned_ranges_ptr).get();
+        reshape(directory, db, sstables::reshape_mode::strict, ks, cf, make_sstable,
+                [] (const sstables::shared_sstable&) { return true; },
+                service::get_local_streaming_priority()).get();
 
         // Move to staging directory to avoid clashes with future uploads. Unique generation number ensures no collisions.
         const bool use_view_update_path = db::view::check_needs_view_update_path(sys_dist_ks.local(), db.local().get_token_metadata(), *global_table, streaming::stream_reason::repair).get0();

@@ -431,7 +431,7 @@ private:
     // generation number in the table so that newly created sstables
     // will use numeric generation numbers larger than this one.
     // Initialized when the table is populated via update_sstables_known_generation.
-    std::optional<sstables::generation_type> _sstable_generation = {};
+    std::optional<sstables::sstable_generation_generator> _sstable_generation_generator;
 
     db::replay_position _highest_rp;
     db::replay_position _flush_rp;
@@ -532,7 +532,6 @@ public:
                        const std::vector<sstables::shared_sstable>& old_sstables);
     };
 
-    static sstables::generation_type make_new_generation(std::optional<sstables::generation_type> prev = std::nullopt);
 private:
     using compaction_group_ptr = std::unique_ptr<compaction_group>;
     std::vector<std::unique_ptr<compaction_group>> make_compaction_groups();
@@ -649,7 +648,7 @@ public:
     }
 
     bool is_ready_for_writes() const {
-        return _sstable_generation.has_value();
+        return _sstable_generation_generator.has_value();
     }
 
     // Creates a mutation reader which covers all data sources for this column family.
