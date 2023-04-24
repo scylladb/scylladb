@@ -1066,9 +1066,11 @@ future<> messaging_service::unregister_gossip_echo() {
     return unregister_handler(netw::messaging_verb::GOSSIP_ECHO);
 }
 future<> messaging_service::send_gossip_echo(msg_addr id, int64_t generation_number, std::chrono::milliseconds timeout) {
+    gms::debug_validate_gossip_generation(generation_number);
     return send_message_timeout<void>(this, messaging_verb::GOSSIP_ECHO, std::move(id), timeout, generation_number);
 }
 future<> messaging_service::send_gossip_echo(msg_addr id, int64_t generation_number, abort_source& as) {
+    gms::debug_validate_gossip_generation(generation_number);
     return send_message_cancellable<void>(this, messaging_verb::GOSSIP_ECHO, std::move(id), as, generation_number);
 }
 
@@ -1079,6 +1081,7 @@ future<> messaging_service::unregister_gossip_shutdown() {
     return unregister_handler(netw::messaging_verb::GOSSIP_SHUTDOWN);
 }
 future<> messaging_service::send_gossip_shutdown(msg_addr id, inet_address from, int64_t generation_number) {
+    gms::debug_validate_gossip_generation(generation_number);
     return send_message_oneway(this, messaging_verb::GOSSIP_SHUTDOWN, std::move(id), std::move(from), generation_number);
 }
 

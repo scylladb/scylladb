@@ -617,7 +617,7 @@ void raft_group0::load_initial_raft_address_map() {
         if (value == nullptr) {
             continue;
         }
-        auto server_id = utils::UUID(value->value);
+        auto server_id = utils::UUID(value->value());
         if (server_id == utils::UUID{}) {
             upgrade_log.error("empty Host ID for host {} ", ip_addr);
             continue;

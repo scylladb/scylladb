@@ -43,7 +43,7 @@ public:
     }
 
     endpoint_state() noexcept
-        : _heart_beat_state(0)
+        : _heart_beat_state()
         , _update_timestamp(clk::now())
         , _is_alive(true) {
         update_is_normal();
@@ -140,7 +140,7 @@ public:
         if (!app_state) {
             return empty;
         }
-        const auto& value = app_state->value;
+        const auto& value = app_state->value();
         if (value.empty()) {
             return empty;
         }

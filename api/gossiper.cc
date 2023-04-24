@@ -34,15 +34,15 @@ void set_gossiper(http_context& ctx, routes& r, gms::gossiper& g) {
 
     httpd::gossiper_json::get_current_generation_number.set(r, [&g] (std::unique_ptr<http::request> req) {
         gms::inet_address ep(req->param["addr"]);
-        return g.get_current_generation_number(ep).then([] (int res) {
-            return make_ready_future<json::json_return_type>(res);
+        return g.get_current_generation_number(ep).then([] (gms::generation_type res) {
+            return make_ready_future<json::json_return_type>(res.value());
         });
     });
 
     httpd::gossiper_json::get_current_heart_beat_version.set(r, [&g] (std::unique_ptr<http::request> req) {
         gms::inet_address ep(req->param["addr"]);
-        return g.get_current_heart_beat_version(ep).then([] (int res) {
-            return make_ready_future<json::json_return_type>(res);
+        return g.get_current_heart_beat_version(ep).then([] (gms::version_type res) {
+            return make_ready_future<json::json_return_type>(res.value());
         });
     });
 

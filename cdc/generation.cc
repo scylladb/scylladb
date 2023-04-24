@@ -35,12 +35,12 @@ extern logging::logger cdc_log;
 
 static int get_shard_count(const gms::inet_address& endpoint, const gms::gossiper& g) {
     auto ep_state = g.get_application_state_ptr(endpoint, gms::application_state::SHARD_COUNT);
-    return ep_state ? std::stoi(ep_state->value) : -1;
+    return ep_state ? std::stoi(ep_state->value()) : -1;
 }
 
 static unsigned get_sharding_ignore_msb(const gms::inet_address& endpoint, const gms::gossiper& g) {
     auto ep_state = g.get_application_state_ptr(endpoint, gms::application_state::IGNORE_MSB_BITS);
-    return ep_state ? std::stoi(ep_state->value) : 0;
+    return ep_state ? std::stoi(ep_state->value()) : 0;
 }
 
 namespace db {
@@ -775,7 +775,7 @@ future<> generation_service::on_change(gms::inet_address ep, gms::application_st
         return make_ready_future();
     }
 
-    auto gen_id = gms::versioned_value::cdc_generation_id_from_string(v.value);
+    auto gen_id = gms::versioned_value::cdc_generation_id_from_string(v.value());
     cdc_log.debug("Endpoint: {}, CDC generation ID change: {}", ep, gen_id);
 
     return legacy_handle_cdc_generation(gen_id);

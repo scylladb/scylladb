@@ -14,9 +14,9 @@ namespace gms {
 namespace version_generator {
 // In the original Cassandra code, version was an AtomicInteger.
 // For us, we run the gossiper on a single CPU, and don't need to use atomics.
-static int version = 0;
+static version_type version;
 
-int get_next_version() noexcept
+version_type get_next_version() noexcept
 {
     return ++version;
 }

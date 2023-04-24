@@ -700,7 +700,7 @@ scylla_core = (['message/messaging_service.cc',
                 'utils/limiting_data_source.cc',
                 'utils/updateable_value.cc',
                 'utils/directories.cc',
-                'utils/generation-number.cc',
+                'gms/generation-number.cc',
                 'utils/rjson.cc',
                 'utils/human_readable.cc',
                 'utils/histogram_metrics_helper.cc',
@@ -1155,6 +1155,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/position_in_partition.idl.hh',
         'idl/experimental/broadcast_tables_lang.idl.hh',
         'idl/storage_service.idl.hh',
+        'idl/utils.idl.hh',
         ]
 
 headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])

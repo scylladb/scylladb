@@ -7,6 +7,7 @@
  */
 
 #include "gms/inet_address_serializer.hh"
+#include "gms/version_generator.hh"
 
 namespace gms {
 enum class application_state:int {
@@ -28,13 +29,13 @@ enum class application_state:int {
 };
 
 class versioned_value {
-    sstring value;
-    int version;
+    sstring value();
+    gms::version_type version();
 };
 
 class heart_beat_state {
-    int32_t get_generation();
-    int32_t get_heart_beat_version();
+    gms::generation_type get_generation();
+    gms::version_type get_heart_beat_version();
 };
 
 class endpoint_state {
@@ -44,8 +45,8 @@ class endpoint_state {
 
 class gossip_digest {
     gms::inet_address get_endpoint();
-    int32_t get_generation();
-    int32_t get_max_version();
+    gms::generation_type get_generation();
+    gms::version_type get_max_version();
 };
 
 class gossip_digest_syn {

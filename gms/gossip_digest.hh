@@ -13,6 +13,8 @@
 #include <seastar/core/sstring.hh>
 #include "utils/serialization.hh"
 #include "gms/inet_address.hh"
+#include "gms/generation-number.hh"
+#include "gms/version_generator.hh"
 
 namespace gms {
 
@@ -24,16 +26,12 @@ class gossip_digest { // implements Comparable<GossipDigest>
 private:
     using inet_address = gms::inet_address;
     inet_address _endpoint;
-    int32_t _generation;
-    int32_t _max_version;
+    generation_type _generation;
+    version_type _max_version;
 public:
-    gossip_digest()
-        : _endpoint(0)
-        , _generation(0)
-        , _max_version(0) {
-    }
+    gossip_digest() = default;
 
-    gossip_digest(inet_address ep, int32_t gen, int32_t version)
+    explicit gossip_digest(inet_address ep, generation_type gen = {}, version_type version = {}) noexcept
         : _endpoint(ep)
         , _generation(gen)
         , _max_version(version) {
@@ -43,19 +41,12 @@ public:
         return _endpoint;
     }
 
-    int32_t get_generation() const {
+    generation_type get_generation() const {
         return _generation;
     }
 
-    int32_t get_max_version() const {
+    version_type get_max_version() const {
         return _max_version;
-    }
-
-    int32_t compare_to(gossip_digest d) const {
-        if (_generation != d.get_generation()) {
-            return (_generation - d.get_generation());
-        }
-        return (_max_version - d.get_max_version());
     }
 
     friend bool operator<(const gossip_digest& x, const gossip_digest& y) {

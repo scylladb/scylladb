@@ -14,7 +14,7 @@
 
 namespace gms {
 
-static_assert(!std::is_default_constructible_v<heart_beat_state>);
+static_assert(std::is_default_constructible_v<heart_beat_state>);
 static_assert(std::is_nothrow_copy_constructible_v<heart_beat_state>);
 static_assert(std::is_nothrow_move_constructible_v<heart_beat_state>);
 
@@ -48,7 +48,7 @@ bool endpoint_state::is_cql_ready() const noexcept {
         return false;
     }
     try {
-        return boost::lexical_cast<int>(app_state->value);
+        return boost::lexical_cast<int>(app_state->value());
     } catch (...) {
         return false;
     }

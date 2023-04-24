@@ -179,7 +179,7 @@ void migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, 
 
     if (endpoint != utils::fb_utilities::get_broadcast_address() && value) {
         // FIXME: discarded future
-        (void)maybe_schedule_schema_pull(table_schema_version(utils::UUID{value->value}), endpoint).handle_exception([endpoint] (auto ep) {
+        (void)maybe_schedule_schema_pull(table_schema_version(utils::UUID{value->value()}), endpoint).handle_exception([endpoint] (auto ep) {
             mlogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
         });
     }
@@ -205,7 +205,7 @@ bool migration_manager::have_schema_agreement() {
             mlogger.debug("Schema state not yet available for {}.", endpoint);
             return false;
         }
-        auto remote_version = table_schema_version(utils::UUID{schema->value});
+        auto remote_version = table_schema_version(utils::UUID{schema->value()});
         if (our_version != remote_version) {
             mlogger.debug("Schema mismatch for {} ({} != {}).", endpoint, our_version, remote_version);
             return false;
@@ -251,7 +251,7 @@ future<> migration_manager::maybe_schedule_schema_pull(const table_schema_versio
                 mlogger.debug("application_state::SCHEMA does not exist for {}, not submitting migration task", endpoint);
                 return make_ready_future<>();
             }
-            auto current_version = table_schema_version(utils::UUID{value->value});
+            auto current_version = table_schema_version(utils::UUID{value->value()});
             if (db.get_version() == current_version) {
                 mlogger.debug("not submitting migration task for {} because our versions match", endpoint);
                 return make_ready_future<>();
@@ -366,7 +366,7 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
 
 bool migration_manager::has_compatible_schema_tables_version(const gms::inet_address& endpoint) {
     auto* version = _gossiper.get_application_state_ptr(endpoint, gms::application_state::SCHEMA_TABLES_VERSION);
-    return version && version->value == db::schema_tables::version;
+    return version && version->value() == db::schema_tables::version;
 }
 
 bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoint) {
