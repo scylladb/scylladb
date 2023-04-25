@@ -201,8 +201,9 @@ public:
         return _impl->semaphore.make_tracking_only_permit(nullptr, "test", timeout, {});
     }
 
-    replica::table::config make_table_config() {
-        return replica::table::config{.compaction_concurrency_semaphore = &_impl->semaphore};
+    replica::table::config make_table_config(replica::table::config cfg = replica::table::config{}) {
+        cfg.compaction_concurrency_semaphore = &_impl->semaphore;
+        return cfg;
     }
 
     template <typename Func>
@@ -234,20 +235,16 @@ public:
         });
     }
 
-    table_for_tests make_table_for_tests(schema_ptr s, sstring dir) {
+    table_for_tests make_table_for_tests(schema_ptr s, sstring dir, replica::table::config cfg_in = replica::table::config{}) {
         maybe_start_compaction_manager();
-        auto cfg = make_table_config();
+        auto cfg = make_table_config(cfg_in);
         cfg.datadir = dir;
         cfg.enable_commitlog = false;
         return table_for_tests(manager(), _impl->cmgr->get_compaction_manager(), s, std::move(cfg), _impl->storage);
     }
 
-    table_for_tests make_table_for_tests(schema_ptr s = nullptr) {
-        maybe_start_compaction_manager();
-        auto cfg = make_table_config();
-        cfg.datadir = _impl->dir.path().native();
-        cfg.enable_commitlog = false;
-        return table_for_tests(manager(), _impl->cmgr->get_compaction_manager(), s, std::move(cfg), _impl->storage);
+    table_for_tests make_table_for_tests(schema_ptr s = nullptr, replica::table::config cfg_in = replica::table::config{}) {
+        return make_table_for_tests(s, _impl->dir.path().native(), std::move(cfg_in));
     }
 };
 

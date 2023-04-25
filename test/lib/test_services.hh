@@ -91,4 +91,9 @@ struct table_for_tests {
     }
 
     void set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept;
+
+    lw_shared_ptr<sstables::sstable_set> make_table_sstable_set() {
+        auto& table = *_data->cf;
+        return table.make_table_sstable_set();
+    }
 };
