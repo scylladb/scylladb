@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "compaction/compaction.hh"
 #include "replica/database_fwd.hh"
 #include "schema/schema_fwd.hh"
 #include "tasks/task_manager.hh"
@@ -273,6 +274,29 @@ public:
     {}
 
     virtual tasks::is_internal is_internal() const noexcept override;
+protected:
+    virtual future<> run() override;
+};
+
+class scrub_sstables_compaction_task_impl : public sstables_compaction_task_impl {
+private:
+    sharded<replica::database>& _db;
+    std::vector<sstring> _column_families;
+    sstables::compaction_type_options::scrub _opts;
+    sstables::compaction_stats& _stats;
+public:
+    scrub_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
+            std::string keyspace,
+            sharded<replica::database>& db,
+            std::vector<sstring> column_families,
+            sstables::compaction_type_options::scrub opts,
+            sstables::compaction_stats& stats) noexcept
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", tasks::task_id::create_null_id())
+        , _db(db)
+        , _column_families(std::move(column_families))
+        , _opts(opts)
+        , _stats(stats)
+    {}
 protected:
     virtual future<> run() override;
 };

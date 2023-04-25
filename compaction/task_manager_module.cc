@@ -128,4 +128,19 @@ future<> shard_upgrade_sstables_compaction_task_impl::run() {
     });
 }
 
+future<> scrub_sstables_compaction_task_impl::run() {
+    _stats = co_await _db.map_reduce0([&] (replica::database& db) {
+        return map_reduce(_column_families, [&] (sstring cfname) -> future<sstables::compaction_stats> {
+            auto& cm = db.get_compaction_manager();
+            auto& cf = db.find_column_family(_status.keyspace, cfname);
+            sstables::compaction_stats stats{};
+            co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) mutable -> future<> {
+                auto r = co_await cm.perform_sstable_scrub(ts, _opts);
+                stats += r.value_or(sstables::compaction_stats{});
+            });
+            co_return stats;
+        }, sstables::compaction_stats{}, std::plus<sstables::compaction_stats>());
+    }, sstables::compaction_stats{}, std::plus<sstables::compaction_stats>());
+}
+
 }

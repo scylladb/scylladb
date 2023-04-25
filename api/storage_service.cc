@@ -1494,20 +1494,12 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             throw httpd::bad_param_exception(fmt::format("Unknown argument for 'quarantine_mode' parameter: {}", quarantine_mode_str));
         }
 
+        sstables::compaction_stats stats;
+        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+        auto task = co_await compaction_module.make_and_start_task<scrub_sstables_compaction_task_impl>({}, std::move(keyspace), db, column_families, opts, stats);
         try {
-            auto compaction_stats = co_await db.map_reduce0([&] (replica::database& db) {
-                return map_reduce(column_families, [&] (sstring cfname) -> future<sstables::compaction_stats> {
-                    auto& cm = db.get_compaction_manager();
-                    auto& cf = db.find_column_family(keyspace, cfname);
-                    sstables::compaction_stats stats{};
-                    co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) mutable -> future<> {
-                        auto r = co_await cm.perform_sstable_scrub(ts, opts);
-                        stats += r.value_or(sstables::compaction_stats{});
-                    });
-                    co_return stats;
-                }, sstables::compaction_stats{}, std::plus<sstables::compaction_stats>());
-            }, sstables::compaction_stats{}, std::plus<sstables::compaction_stats>());
-            if (compaction_stats.validation_errors) {
+            co_await task->done();
+            if (stats.validation_errors) {
                 co_return json::json_return_type(static_cast<int>(scrub_status::validation_errors));
             }
         } catch (const sstables::compaction_aborted_exception&) {
