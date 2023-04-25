@@ -42,7 +42,6 @@
 
 namespace db {
 class config;
-class system_keyspace;
 }
 
 namespace gms {
@@ -55,8 +54,6 @@ class inet_address;
 class i_endpoint_state_change_subscriber;
 class gossip_get_endpoint_states_request;
 class gossip_get_endpoint_states_response;
-
-class feature_service;
 
 using advertise_myself = bool_class<class advertise_myself_tag>;
 
@@ -242,7 +239,7 @@ private:
     // The value must be kept alive until completes and not change.
     future<> replicate(inet_address, application_state key, const versioned_value& value);
 public:
-    explicit gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, sharded<db::system_keyspace>& sys_ks, const db::config& cfg, gossip_config gcfg);
+    explicit gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, const db::config& cfg, gossip_config gcfg);
 
     /**
      * Register for interesting state changes.
@@ -591,10 +588,8 @@ private:
     class msg_proc_guard;
 private:
     abort_source& _abort_source;
-    feature_service& _feature_service;
     const locator::shared_token_metadata& _shared_token_metadata;
     netw::messaging_service& _messaging;
-    sharded<db::system_keyspace>& _sys_ks;
     utils::updateable_value<uint32_t> _failure_detector_timeout_ms;
     utils::updateable_value<int32_t> _force_gossip_generation;
     gossip_config _gcfg;
