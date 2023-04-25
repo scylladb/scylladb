@@ -83,6 +83,9 @@ void test_format_range(const char* desc, Range x, std::vector<std::string> expec
     auto fmt_str = fmt::format("{}", x);
     BOOST_REQUIRE_EQUAL(str, fmt_str);
 
+    auto fmt_to_string = fmt::to_string(x);
+    BOOST_REQUIRE_EQUAL(str, fmt_to_string);
+
     size_t num_elements = expected_strings.size();
 
     size_t paren_size = expect_parenthesis ? 2 : 0;
@@ -122,6 +125,9 @@ void test_format_range(const char* desc, Range x, std::unordered_set<std::string
 
     auto fmt_str = fmt::format("{}", x);
     BOOST_REQUIRE_EQUAL(str, fmt_str);
+
+    auto fmt_to_string = fmt::to_string(x);
+    BOOST_REQUIRE_EQUAL(str, fmt_to_string);
 
     size_t num_elements = expected_strings.size();
 

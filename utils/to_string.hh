@@ -76,13 +76,6 @@ std::ostream& operator<<(std::ostream& os, const print_with_comma<NeedsComma, Pr
 namespace std {
 
 // FIXME: delete in favor of fmt::format
-template <std::ranges::range Range>
-sstring
-to_string(const Range& items) {
-    return fmt::format("{{{}}}", fmt::join(items, ", "));
-}
-
-// FIXME: delete in favor of fmt::format
 template<typename Printable>
 static inline
 sstring
