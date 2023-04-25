@@ -80,15 +80,14 @@ public:
             , _feat(f)
             , _sys_ks(s)
     {
-        (void)_feat;
         (void)_sys_ks;
     }
     future<> on_join(inet_address ep, endpoint_state state) override {
-        return _g.do_enable_features();
+        return enable_features();
     }
     future<> on_change(inet_address ep, application_state state, const versioned_value&) override {
         if (state == application_state::SUPPORTED_FEATURES) {
-            return _g.do_enable_features();
+            return enable_features();
         }
         return make_ready_future();
     }
@@ -97,6 +96,8 @@ public:
     future<> on_dead(inet_address, endpoint_state) override { return make_ready_future(); }
     future<> on_remove(inet_address) override { return make_ready_future(); }
     future<> on_restart(inet_address, endpoint_state) override { return make_ready_future(); }
+
+    future<> enable_features();
 };
 
 gossiper::gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, sharded<db::system_keyspace>& sys_ks, const db::config& cfg, gossip_config gcfg)
@@ -2554,15 +2555,15 @@ void gossiper::append_endpoint_state(std::stringstream& ss, const endpoint_state
 future<> gossiper::enable_features() {
     auto enabler = make_shared<persistent_feature_enabler>(*this, _feature_service, _sys_ks.local());
     register_(enabler);
-    return do_enable_features();
+    return enabler->enable_features();
 }
 
-future<> gossiper::do_enable_features() {
+future<> persistent_feature_enabler::enable_features() {
     auto loaded_peer_features = co_await db::system_keyspace::load_peer_features();
-    auto&& features = get_supported_features(loaded_peer_features, ignore_features_of_local_node::no);
-    co_await container().invoke_on_all([&features] (gossiper& g) -> future<> {
+    auto&& features = _g.get_supported_features(loaded_peer_features, gossiper::ignore_features_of_local_node::no);
+    co_await _feat.container().invoke_on_all([&features] (feature_service& fs) -> future<> {
         std::set<std::string_view> features_v = boost::copy_range<std::set<std::string_view>>(features);
-        co_await g._feature_service.enable(std::move(features_v));
+        co_await fs.enable(std::move(features_v));
     });
 }
 

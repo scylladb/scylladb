@@ -11,6 +11,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_future.hh>
+#include <seastar/core/sharded.hh>
 #include <unordered_map>
 #include <functional>
 #include <set>
@@ -46,7 +47,7 @@ using namespace std::literals;
  * A pointer to `cql3::query_processor` can be optionally supplied
  * if the instance needs to persist enabled features in a system table.
  */
-class feature_service final {
+class feature_service final : public peering_sharded_service<feature_service> {
     void register_feature(feature& f);
     void unregister_feature(feature& f);
     friend class feature;
