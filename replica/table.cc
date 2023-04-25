@@ -934,7 +934,6 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
 
 void
 table::start() {
-    // FIXME: add option to disable automatic compaction.
     start_compaction();
 }
 
