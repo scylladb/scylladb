@@ -871,6 +871,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
+        apilog.info("column_family/enable_auto_compaction: name={}", req->param["name"]);
         return ctx.db.invoke_on(0, [&ctx, req = std::move(req)] (replica::database& db) {
             auto g = replica::database::autocompaction_toggle_guard(db);
             return foreach_column_family(ctx, req->param["name"], [](replica::column_family &cf) {
@@ -882,6 +883,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
+        apilog.info("column_family/disable_auto_compaction: name={}", req->param["name"]);
         return ctx.db.invoke_on(0, [&ctx, req = std::move(req)] (replica::database& db) {
             auto g = replica::database::autocompaction_toggle_guard(db);
             return foreach_column_family(ctx, req->param["name"], [](replica::column_family &cf) {
@@ -955,6 +957,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     cf::set_compaction_strategy_class.set(r, [&ctx](std::unique_ptr<http::request> req) {
         sstring strategy = req->get_query_param("class_name");
+        apilog.info("column_family/set_compaction_strategy_class: name={} strategy={}", req->param["name"], strategy);
         return foreach_column_family(ctx, req->param["name"], [strategy](replica::column_family& cf) {
             cf.set_compaction_strategy(sstables::compaction_strategy::type(strategy));
         }).then([] {
@@ -1023,6 +1026,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
             fail(unimplemented::cause::API);
         }
 
+        apilog.info("column_family/force_major_compaction: name={}", req->param["name"]);
         auto [ks, cf] = parse_fully_qualified_cf_name(req->param["name"]);
         auto keyspace = validate_keyspace(ctx, ks);
         std::vector<table_id> table_infos = {ctx.db.local().find_uuid(ks, cf)};
