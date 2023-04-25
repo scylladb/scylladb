@@ -122,10 +122,6 @@ public:
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
 
     static std::set<sstring> to_feature_set(sstring features_string);
-    // Persist enabled feature in the `system.scylla_local` table under the "enabled_features" key.
-    // The key itself is maintained as an `unordered_set<string>` and serialized via `to_string`
-    // function to preserve readability.
-    future<> persist_enabled_feature_info(std::set<std::string_view> extra) const;
     future<> enable_features_on_join(gossiper&, db::system_keyspace&);
 };
 

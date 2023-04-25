@@ -184,6 +184,7 @@ class persistent_feature_enabler : public i_endpoint_state_change_subscriber {
     gossiper& _g;
     feature_service& _feat;
     db::system_keyspace& _sys_ks;
+
 public:
     persistent_feature_enabler(gossiper& g, feature_service& f, db::system_keyspace& s)
             : _g(g)
@@ -218,25 +219,22 @@ future<> feature_service::enable_features_on_join(gossiper& g, db::system_keyspa
 future<> persistent_feature_enabler::enable_features() {
     auto loaded_peer_features = co_await _sys_ks.load_peer_features();
     auto&& features = _g.get_supported_features(loaded_peer_features, gossiper::ignore_features_of_local_node::no);
-    std::set<std::string_view> persist;
+
+    // Persist enabled feature in the `system.scylla_local` table under the "enabled_features" key.
+    // The key itself is maintained as an `unordered_set<string>` and serialized via `to_string`
+    // function to preserve readability.
+    std::set<sstring> feats_set = co_await db::system_keyspace::load_local_enabled_features();
     for (feature& f : _feat.registered_features() | boost::adaptors::map_values) {
         if (!f && features.contains(f.name())) {
-            persist.emplace(f.name());
+            feats_set.emplace(f.name());
         }
     }
-    co_await _feat.persist_enabled_feature_info(std::move(persist));
+    co_await db::system_keyspace::save_local_enabled_features(std::move(feats_set));
+
     co_await _feat.container().invoke_on_all([&features] (feature_service& fs) -> future<> {
         std::set<std::string_view> features_v = boost::copy_range<std::set<std::string_view>>(features);
         co_await fs.enable(std::move(features_v));
     });
-}
-
-future<> feature_service::persist_enabled_feature_info(std::set<std::string_view> extra) const {
-    std::set<sstring> feats_set = co_await db::system_keyspace::load_local_enabled_features();
-    for (const auto& x : extra) {
-        feats_set.emplace(x);
-    }
-    co_await db::system_keyspace::save_local_enabled_features(std::move(feats_set));
 }
 
 future<> feature_service::enable(std::set<std::string_view> list) {
