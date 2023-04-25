@@ -1494,16 +1494,9 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             throw httpd::bad_param_exception(fmt::format("Unknown argument for 'quarantine_mode' parameter: {}", quarantine_mode_str));
         }
 
-        const auto& reduce_compaction_stats = [] (const compaction_manager::compaction_stats_opt& lhs, const compaction_manager::compaction_stats_opt& rhs) {
-            sstables::compaction_stats stats{};
-            stats += lhs.value();
-            stats += rhs.value();
-            return stats;
-        };
-
         try {
-            auto opt_stats = co_await db.map_reduce0([&] (replica::database& db) {
-                return map_reduce(column_families, [&] (sstring cfname) -> future<std::optional<sstables::compaction_stats>> {
+            auto compaction_stats = co_await db.map_reduce0([&] (replica::database& db) {
+                return map_reduce(column_families, [&] (sstring cfname) -> future<sstables::compaction_stats> {
                     auto& cm = db.get_compaction_manager();
                     auto& cf = db.find_column_family(keyspace, cfname);
                     sstables::compaction_stats stats{};
@@ -1512,9 +1505,9 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
                         stats += r.value_or(sstables::compaction_stats{});
                     });
                     co_return stats;
-                }, std::make_optional(sstables::compaction_stats{}), reduce_compaction_stats);
-            }, std::make_optional(sstables::compaction_stats{}), reduce_compaction_stats);
-            if (opt_stats && opt_stats->validation_errors) {
+                }, sstables::compaction_stats{}, std::plus<sstables::compaction_stats>());
+            }, sstables::compaction_stats{}, std::plus<sstables::compaction_stats>());
+            if (compaction_stats.validation_errors) {
                 co_return json::json_return_type(static_cast<int>(scrub_status::validation_errors));
             }
         } catch (const sstables::compaction_aborted_exception&) {
