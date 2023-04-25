@@ -3639,14 +3639,10 @@ future<service::topology> system_keyspace::load_topology_state() {
 
         if (some_row.has("transition_state")) {
             ret.tstate = service::transition_state_from_string(some_row.get_as<sstring>("transition_state"));
+        } else if (!ret.transition_nodes.empty()) {
+            on_internal_error(slogger,
+                "load_topology_state: topology not in transition state but transition nodes are present");
         }
-
-        if (ret.tstate == service::topology::transition_state::normal
-                && !ret.transition_nodes.empty()) {
-            on_internal_error(slogger, format(
-                "load_topology_state: replication state is normal but transition nodes are present"));
-        }
-
 
         if (some_row.has("current_cdc_generation_uuid")) {
             auto gen_uuid = some_row.get_as<utils::UUID>("current_cdc_generation_uuid");

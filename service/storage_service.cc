@@ -473,6 +473,7 @@ public:
     topology_mutation_builder& set(const char* cell, const utils::UUID& value);
     topology_mutation_builder& set_transition_state(topology::transition_state);
     topology_mutation_builder& set_current_cdc_generation_id(const cdc::generation_id_v2&);
+    topology_mutation_builder& del_transition_state();
     topology_mutation_builder& del(const char* cell);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };
@@ -549,6 +550,13 @@ topology_mutation_builder& topology_mutation_builder::set(const char* cell, cons
 
 topology_mutation_builder& topology_mutation_builder::set_transition_state(topology::transition_state value) {
     _m.set_static_cell("transition_state", fmt::format("{}", value), _ts);
+    return *this;
+}
+
+topology_mutation_builder& topology_mutation_builder::del_transition_state() {
+    auto cdef = _s->get_column_definition("transition_state");
+    assert(cdef);
+    _m.partition().static_row().apply(*cdef, atomic_cell::make_dead(_ts, gc_clock::now()));
     return *this;
 }
 
@@ -782,11 +790,19 @@ class topology_coordinator {
 
     // Returns `true` iff there was work to do.
     future<bool> handle_topology_transition(group0_guard guard) {
-        bool had_work = false;
+        auto tstate = _topo_sm._topology.tstate;
+        if (!tstate) {
+            auto node_opt = get_node_to_work_on_opt(std::move(guard));
+            if (!node_opt) {
+                co_return false;
+            }
+            co_await handle_node_transition(std::move(*node_opt));
+            co_return true;
+        }
+
         bool exec_command_res;
-        switch (_topo_sm._topology.tstate) {
+        switch (*tstate) {
             case topology::transition_state::commit_cdc_generation: {
-                had_work = true;
                 auto node = get_node_to_work_on(std::move(guard));
 
                 // make sure all nodes know about new topology and have the new CDC generation data
@@ -856,7 +872,6 @@ class topology_coordinator {
             }
                 break;
             case topology::transition_state::write_both_read_old: {
-                had_work = true;
                 auto node = get_node_to_work_on(std::move(guard));
 
                 // make sure all nodes know about new topology (we require all nodes to be alive for topo change for now)
@@ -904,7 +919,6 @@ class topology_coordinator {
             }
                 break;
             case topology::transition_state::write_both_read_new: {
-                had_work = true;
                 auto node = get_node_to_work_on(std::move(guard));
 
                 // In this state writes goes to old and new replicas but reads start to be done from new replicas
@@ -917,7 +931,7 @@ class topology_coordinator {
                 switch(node.rs->state) {
                 case node_state::bootstrapping: {
                     topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
-                    builder.set_transition_state(topology::transition_state::normal)
+                    builder.del_transition_state()
                            .set("node_state", node_state::normal);
                     co_await update_replica_state(std::move(node), {builder.build()}, "bootstrap: read fence completed");
                     }
@@ -927,7 +941,7 @@ class topology_coordinator {
                     topology_mutation_builder builder(node.guard.write_timestamp(), node.id);
                     builder.del("tokens")
                            .set("node_state", node_state::left)
-                           .set_transition_state(topology::transition_state::normal);
+                           .del_transition_state();
                     auto str = fmt::format("{}: read fence completed", node.rs->state);
                     co_await update_replica_state(std::move(node), {builder.build()}, std::move(str));
                     }
@@ -935,7 +949,7 @@ class topology_coordinator {
                 case node_state::replacing: {
                     topology_mutation_builder builder1(node.guard.write_timestamp(), node.id);
                     // Move new node to 'normal'
-                    builder1.set_transition_state(topology::transition_state::normal)
+                    builder1.del_transition_state()
                             .set("node_state", node_state::normal);
 
                     // Move old node to 'left'
@@ -951,20 +965,11 @@ class topology_coordinator {
                             "Ring state on node {} is write_both_read_new while the node is in state {}",
                             node.id, node.rs->state));
                 }
-                // Reads are fenced. We can now move tokens state to topology::transition_state::normal and node to normal
-            }
-                break;
-            case topology::transition_state::normal: {
-                auto node_opt = get_node_to_work_on_opt(std::move(guard));
-                if (!node_opt) {
-                    break;
-                }
-                had_work = true;
-                co_await handle_node_transition(std::move(*node_opt));
+                // Reads are fenced. We can now remove topology::transition_state and move node state to normal
             }
                 break;
         }
-        co_return had_work;
+        co_return true;
     };
 
     // Called when there is no ongoing topology transition.

@@ -68,13 +68,12 @@ struct replica_state {
 
 struct topology {
     enum class transition_state: uint8_t {
-        normal,
         commit_cdc_generation,
         write_both_read_old,
         write_both_read_new,
     };
 
-    transition_state tstate{transition_state::normal};
+    std::optional<transition_state> tstate;
 
     // Nodes that are normal members of the ring
     std::unordered_map<raft::server_id, replica_state> normal_nodes;
