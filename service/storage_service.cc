@@ -864,27 +864,27 @@ class topology_coordinator {
         bool exec_command_res;
         switch (*tstate) {
             case topology::transition_state::commit_cdc_generation: {
-                auto node = get_node_to_work_on(std::move(guard));
-
                 // make sure all nodes know about new topology and have the new CDC generation data
                 // (we require all nodes to be alive for topo change for now)
-                std::tie(node, exec_command_res) = co_await exec_global_command(
-                        std::move(node), raft_topology_cmd{raft_topology_cmd::command::barrier}, false);
+                // Note: if there was a replace or removenode going on, we'd need to put the replaced/removed
+                // node into `exclude_nodes` parameter in `exec_global_command`, but CDC generations are never
+                // introduced during replace/remove.
+                std::tie(guard, exec_command_res) = co_await exec_global_command(
+                        std::move(guard), raft_topology_cmd{raft_topology_cmd::command::barrier}, {_raft.id()});
                 if (!exec_command_res) {
                     break;
                 }
 
                 // We don't need to add delay to the generation timestamp if this is the first generation.
-                bool add_ts_delay = bool(node.topology->current_cdc_generation_id);
+                bool add_ts_delay = bool(_topo_sm._topology.current_cdc_generation_id);
 
                 // Begin the race.
                 // See the large FIXME below.
                 auto cdc_gen_ts = cdc::new_generation_timestamp(add_ts_delay, _ring_delay);
-                auto cdc_gen_uuid = node.topology->new_cdc_generation_data_uuid;
+                auto cdc_gen_uuid = _topo_sm._topology.new_cdc_generation_data_uuid;
                 if (!cdc_gen_uuid) {
-                    on_internal_error(slogger, ::format(
-                        "raft topology: new CDC generation data UUID missing in `commit_cdc_generation` state"
-                        ", transitioning node: {}", node.id));
+                    on_internal_error(slogger,
+                        "raft topology: new CDC generation data UUID missing in `commit_cdc_generation` state");
                 }
 
                 cdc::generation_id_v2 cdc_gen_id {
@@ -895,7 +895,7 @@ class topology_coordinator {
                 {
                     // Sanity check.
                     // This could happen if the topology coordinator's clock is broken.
-                    auto curr_gen_id = node.topology->current_cdc_generation_id;
+                    auto curr_gen_id = _topo_sm._topology.current_cdc_generation_id;
                     if (curr_gen_id && curr_gen_id->ts >= cdc_gen_ts) {
                         on_internal_error(slogger, ::format(
                             "raft topology: new CDC generation has smaller timestamp than the previous one."
@@ -925,11 +925,11 @@ class topology_coordinator {
                 // in the middle of a CDC generation switch (when they are prepared to switch but not
                 // committed) - they won't coordinate CDC-enabled writes until they reconnect to the
                 // majority and commit.
-                topology_mutation_builder builder(node.guard.write_timestamp());
+                topology_mutation_builder builder(guard.write_timestamp());
                 builder.set_transition_state(topology::transition_state::publish_cdc_generation)
                        .set_current_cdc_generation_id(cdc_gen_id);
                 auto str = ::format("committed new CDC generation, ID: {}", cdc_gen_id);
-                co_await update_topology_state(take_guard(std::move(node)), {builder.build()}, std::move(str));
+                co_await update_topology_state(std::move(guard), {builder.build()}, std::move(str));
             }
                 break;
             case topology::transition_state::publish_cdc_generation: {
