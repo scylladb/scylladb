@@ -519,6 +519,7 @@ void table::enable_off_strategy_trigger() {
 std::vector<std::unique_ptr<compaction_group>> table::make_compaction_groups() {
     std::vector<std::unique_ptr<compaction_group>> ret;
     auto&& ranges = dht::split_token_range_msb(_x_log2_compaction_groups);
+    ret.reserve(ranges.size());
     tlogger.debug("Created {} compaction groups for {}.{}", ranges.size(), _schema->ks_name(), _schema->cf_name());
     for (auto&& range : ranges) {
         ret.emplace_back(std::make_unique<compaction_group>(*this, std::move(range)));
