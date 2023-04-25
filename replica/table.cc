@@ -47,6 +47,7 @@
 #include "utils/lister.hh"
 #include "dht/token.hh"
 #include "dht/i_partitioner.hh"
+#include <span>
 
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm.hpp>
@@ -551,9 +552,10 @@ compaction_group& table::compaction_group_for_key(partition_key_view key, const 
     return compaction_group_for_token(dht::get_token(*s, key));
 }
 
-compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) const noexcept {
-    // FIXME: a sstable can belong to more than one group, change interface to reflect that.
-    return compaction_group_for_token(sst->get_first_decorated_key().token());
+auto table::compaction_groups_for_sstable(const sstables::shared_sstable& sst) const noexcept {
+    auto start = dht::compaction_group_of(_x_log2_compaction_groups, sst->get_first_decorated_key().token());
+    auto end = dht::compaction_group_of(_x_log2_compaction_groups, sst->get_last_decorated_key().token());
+    return std::span(_compaction_groups.begin() + start, _compaction_groups.begin() + end + 1);
 }
 
 const std::vector<std::unique_ptr<compaction_group>>& table::compaction_groups() const noexcept {
@@ -579,11 +581,12 @@ table::do_add_sstable_and_update_cache(sstables::shared_sstable sst, sstables::o
     co_return co_await get_row_cache().invalidate(row_cache::external_updater([this, sst, offstrategy] () noexcept {
         // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
         // atomically load all opened sstables into column family.
-        compaction_group& cg = compaction_group_for_sstable(sst);
-        if (!offstrategy) {
-            add_sstable(cg, sst);
-        } else {
-            add_maintenance_sstable(cg, sst);
+        for (auto& cg : compaction_groups_for_sstable(sst)) {
+            if (!offstrategy) {
+                add_sstable(*cg, sst);
+            } else {
+                add_maintenance_sstable(*cg, sst);
+            }
         }
         update_stats_for_new_sstable(sst);
     }), dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}));
@@ -2585,7 +2588,9 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
             // That being said, we'll only add this SSTable to tracker if its origin is other than repair.
             // Otherwise, we can count on off-strategy completion to add it when updating lists.
             if (sst->get_origin() != sstables::repair_origin) {
-                add_sstable_to_backlog_tracker(compaction_group_for_sstable(sst).get_backlog_tracker(), sst);
+                for (auto& cg : compaction_groups_for_sstable(sst)) {
+                    add_sstable_to_backlog_tracker(cg->get_backlog_tracker(), sst);
+                }
             }
         } catch (...) {
             tlogger.warn("Failed to move sstable {} from staging: {}", sst->get_filename(), std::current_exception());
@@ -2820,20 +2825,22 @@ table::as_data_dictionary() const {
 }
 
 bool table::update_sstable_cleanup_state(const sstables::shared_sstable& sst, compaction::owned_ranges_ptr owned_ranges_ptr) {
-    // FIXME: it's possible that the sstable belongs to multiple compaction_groups
-    auto& cg = compaction_group_for_sstable(sst);
-    return get_compaction_manager().update_sstable_cleanup_state(cg.as_table_state(), sst, std::move(owned_ranges_ptr));
+    bool r = false;
+    for (auto& cg : compaction_groups_for_sstable(sst)) {
+        r |= get_compaction_manager().update_sstable_cleanup_state(cg->as_table_state(), sst, std::move(owned_ranges_ptr));
+    }
+    return r;
 }
 
 bool table::requires_cleanup(const sstables::shared_sstable& sst) const {
-    auto& cg = compaction_group_for_sstable(sst);
-    return get_compaction_manager().requires_cleanup(cg.as_table_state(), sst);
+    return std::ranges::any_of(compaction_groups_for_sstable(sst), [this, &sst] (const compaction_group_ptr& cg) mutable {
+        return get_compaction_manager().requires_cleanup(cg->as_table_state(), sst);
+    });
 }
 
 bool table::requires_cleanup(const sstables::sstable_set& set) const {
-    return bool(set.for_each_sstable_until([this] (const sstables::shared_sstable &sst) {
-        auto& cg = compaction_group_for_sstable(sst);
-        return stop_iteration(_compaction_manager.requires_cleanup(cg.as_table_state(), sst));
+    return bool(set.for_each_sstable_until([this] (const sstables::shared_sstable& sst) {
+        return stop_iteration(requires_cleanup(sst));
     }));
 }
 
