@@ -1184,7 +1184,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Re-enable previously enabled features on node startup.
             // This should be done before commitlog starts replaying
             // since some features affect storage.
-            db::system_keyspace::enable_features_on_startup(feature_service).get();
+            feature_service.local().enable_features_on_startup(sys_ks.local()).get();
 
             db.local().maybe_init_schema_commitlog();
 

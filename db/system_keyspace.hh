@@ -435,8 +435,6 @@ public:
     future<bool> cdc_is_rewritten();
     future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
 
-    static future<> enable_features_on_startup(sharded<gms::feature_service>& feat);
-
     // Load Raft Group 0 id from scylla.local
     static future<utils::UUID> get_raft_group0_id();
 

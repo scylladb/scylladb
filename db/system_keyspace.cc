@@ -3364,19 +3364,19 @@ future<> system_keyspace::save_local_enabled_features(std::set<sstring> features
     co_await set_scylla_local_param(gms::feature_service::ENABLED_FEATURES_KEY, features_str);
 }
 
-future<> system_keyspace::enable_features_on_startup(sharded<gms::feature_service>& feat) {
+} namespace gms {
+
+future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks) {
     std::set<sstring> features_to_enable;
-    const auto persisted_features = co_await load_local_enabled_features();
+    const auto persisted_features = co_await db::system_keyspace::load_local_enabled_features();
     if (persisted_features.empty()) {
         co_return;
     }
 
-    gms::feature_service& local_feat_srv = feat.local();
-    const auto known_features = local_feat_srv.supported_feature_set();
-    const auto& registered_features = local_feat_srv.registered_features();
+    const auto known_features = supported_feature_set();
     for (auto&& f : persisted_features) {
-        slogger.debug("Enabling persisted feature '{}'", f);
-        const bool is_registered_feat = registered_features.contains(sstring(f));
+        db::slogger.debug("Enabling persisted feature '{}'", f);
+        const bool is_registered_feat = _registered_features.contains(sstring(f));
         if (!is_registered_feat || !known_features.contains(f)) {
             if (is_registered_feat) {
                 throw std::runtime_error(format(
@@ -3396,11 +3396,13 @@ future<> system_keyspace::enable_features_on_startup(sharded<gms::feature_servic
         // enabled in the code by default, so just skip it.
     }
 
-    co_await feat.invoke_on_all([&features_to_enable] (auto& srv) -> future<> {
+    co_await container().invoke_on_all([&features_to_enable] (auto& srv) -> future<> {
         std::set<std::string_view> feat = boost::copy_range<std::set<std::string_view>>(features_to_enable);
         co_await srv.enable(std::move(feat));
     });
 }
+
+} namespace db {
 
 future<utils::UUID> system_keyspace::get_raft_group0_id() {
     auto opt = co_await get_scylla_local_param_as<utils::UUID>("raft_group0_id");
