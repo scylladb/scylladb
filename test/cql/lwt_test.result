@@ -968,7 +968,7 @@ Error from server: code=2200 [Invalid query] message="Missing mandatory PRIMARY 
 |   1 |   1 | ['d']     | [1, 2]     |
 +-----+-----+-----------+------------+
 > update lwt set flistint = flistint + [3] where a = 1 and b = 1 if exists;
-Error from server: code=2200 [Invalid query] message="Invalid operation (flistint = flistint + [3]) for frozen collection column 666c697374696e74"
+Error from server: code=2200 [Invalid query] message="Invalid operation (flistint = flistint + [3]) for frozen collection column flistint"
 > select * from lwt allow filtering;
 +-----+-----+-----------+------------+
 |   a |   b | smapint   | flistint   |
@@ -1830,7 +1830,7 @@ Error from server: code=2200 [Invalid query] message="null is not supported insi
 > update lwt set s = {false} where a = 1 if s = 1;
 Error from server: code=2200 [Invalid query] message="Invalid INTEGER constant (1) for "s" of type set<boolean>"
 > update lwt set s = {true} + s where a = 1 if s = {false};
-Error from server: code=2200 [Invalid query] message="Invalid operation (s = {true} + s) for non list column 73"
+Error from server: code=2200 [Invalid query] message="Invalid operation (s = {true} + s) for non list column s"
 > -- sets
 > -- null value == empty set
 > update lwt set s = {} where a = 1 if s = {};
@@ -1866,7 +1866,7 @@ Error from server: code=2200 [Invalid query] message="null is not supported insi
 > update lwt set s = {false} where a = 1 if s = 1;
 Error from server: code=2200 [Invalid query] message="Invalid INTEGER constant (1) for "s" of type set<boolean>"
 > update lwt set s = {true} + s where a = 1 if s = {false};
-Error from server: code=2200 [Invalid query] message="Invalid operation (s = {true} + s) for non list column 73"
+Error from server: code=2200 [Invalid query] message="Invalid operation (s = {true} + s) for non list column s"
 > drop table lwt;
 OK
 > --
@@ -1901,9 +1901,9 @@ OK
 | False       | [False] |
 +-------------+---------+
 > update lwt set b[true] = false where a = 1 if b[true] != true;
-Error from server: code=2200 [Invalid query] message="Invalid operation (b[true] = false) for frozen collection column 62"
+Error from server: code=2200 [Invalid query] message="Invalid operation (b[true] = false) for frozen collection column b"
 > update lwt set b = b + {false:true} where a = 1 if b[true] = true;
-Error from server: code=2200 [Invalid query] message="Invalid operation (b = b + {false:true}) for frozen collection column 62"
+Error from server: code=2200 [Invalid query] message="Invalid operation (b = b + {false:true}) for frozen collection column b"
 > select b from lwt where a = 1;
 +---------+
 | b       |
@@ -2028,7 +2028,7 @@ Error from server: code=2200 [Invalid query] message="Invalid FLOAT constant (-1
 > update lwt set c = [false] where a = 1 if c[null] = null;
 Error from server: code=2200 [Invalid query] message="Invalid null value for frozen<list<boolean>> element access"
 > update lwt set c = [true] + c where a = 1 if c = [false];
-Error from server: code=2200 [Invalid query] message="Invalid operation (c = [true] + c) for frozen list column 63"
+Error from server: code=2200 [Invalid query] message="Invalid operation (c = [true] + c) for frozen list column c"
 > update lwt set c = [true,true,true,false,false,false] where a = 1 if exists;
 +-------------+-----+------+--------+------+
 | [applied]   |   a | b    | c      | s    |
@@ -2080,7 +2080,7 @@ Error from server: code=2200 [Invalid query] message="null is not supported insi
 > update lwt set s = {true, false} where a = 1 if s{true} = false;
 <Error from server: code=2000 [Syntax error in CQL query] message="line 1:49 no viable alternative at input '{'">
 > update lwt set s = s + {true} where a = 1 if s = {true, false};
-Error from server: code=2200 [Invalid query] message="Invalid operation (s = s + {true}) for frozen collection column 73"
+Error from server: code=2200 [Invalid query] message="Invalid operation (s = s + {true}) for frozen collection column s"
 > update lwt set s = {true, true} where a = 1 if exists;
 +-------------+-----+------+------+-----+
 | [applied]   |   a | b    | c    | s   |

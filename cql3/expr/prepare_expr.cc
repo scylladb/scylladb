@@ -78,7 +78,7 @@ static
 void
 usertype_constructor_validate_assignable_to(const usertype_constructor& u, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     if (!receiver.type->is_user_type()) {
-        throw exceptions::invalid_request_exception(format("Invalid user type literal for {} of type {}", receiver.name, receiver.type->as_cql3_type()));
+        throw exceptions::invalid_request_exception(format("Invalid user type literal for {} of type {}", *receiver.name, receiver.type->as_cql3_type()));
     }
 
     auto ut = static_pointer_cast<const user_type_impl>(receiver.type);
@@ -90,7 +90,7 @@ usertype_constructor_validate_assignable_to(const usertype_constructor& u, data_
         const expression& value = u.elements.at(field);
         auto&& field_spec = usertype_field_spec_of(receiver, i);
         if (!assignment_testable::is_assignable(test_assignment(value, db, keyspace, *field_spec))) {
-            throw exceptions::invalid_request_exception(format("Invalid user type literal for {}: field {} is not of type {}", receiver.name, field, field_spec->type->as_cql3_type()));
+            throw exceptions::invalid_request_exception(format("Invalid user type literal for {}: field {} is not of type {}", *receiver.name, field, field_spec->type->as_cql3_type()));
         }
     }
 }
@@ -313,7 +313,7 @@ set_validate_assignable_to(const collection_constructor& c, data_dictionary::dat
             return;
         }
 
-        throw exceptions::invalid_request_exception(format("Invalid set literal for {} of type {}", receiver.name, receiver.type->as_cql3_type()));
+        throw exceptions::invalid_request_exception(format("Invalid set literal for {} of type {}", *receiver.name, receiver.type->as_cql3_type()));
     }
 
     auto&& value_spec = set_value_spec_of(receiver);
@@ -501,18 +501,18 @@ void
 tuple_constructor_validate_assignable_to(const tuple_constructor& tc, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     auto tt = dynamic_pointer_cast<const tuple_type_impl>(receiver.type->underlying_type());
     if (!tt) {
-        throw exceptions::invalid_request_exception(format("Invalid tuple type literal for {} of type {}", receiver.name, receiver.type->as_cql3_type()));
+        throw exceptions::invalid_request_exception(format("Invalid tuple type literal for {} of type {}", *receiver.name, receiver.type->as_cql3_type()));
     }
     for (size_t i = 0; i < tc.elements.size(); ++i) {
         if (i >= tt->size()) {
             throw exceptions::invalid_request_exception(format("Invalid tuple literal for {}: too many elements. Type {} expects {:d} but got {:d}",
-                                                            receiver.name, tt->as_cql3_type(), tt->size(), tc.elements.size()));
+                                                            *receiver.name, tt->as_cql3_type(), tt->size(), tc.elements.size()));
         }
 
         auto&& value = tc.elements[i];
         auto&& spec = component_spec_of(receiver, i);
         if (!assignment_testable::is_assignable(test_assignment(value, db, keyspace, *spec))) {
-            throw exceptions::invalid_request_exception(format("Invalid tuple literal for {}: component {:d} is not of type {}", receiver.name, i, spec->type->as_cql3_type()));
+            throw exceptions::invalid_request_exception(format("Invalid tuple literal for {}: component {:d} is not of type {}", *receiver.name, i, spec->type->as_cql3_type()));
         }
     }
 }

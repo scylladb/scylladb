@@ -32,9 +32,9 @@ operation::set_element::prepare(data_dictionary::database db, const sstring& key
     using exceptions::invalid_request_exception;
     auto rtype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!rtype) {
-        throw invalid_request_exception(format("Invalid operation ({}) for non collection column {}", to_string(receiver), receiver.name()));
+        throw invalid_request_exception(format("Invalid operation ({}) for non collection column {}", to_string(receiver), receiver.name_as_text()));
     } else if (!rtype->is_multi_cell()) {
-        throw invalid_request_exception(format("Invalid operation ({}) for frozen collection column {}", to_string(receiver), receiver.name()));
+        throw invalid_request_exception(format("Invalid operation ({}) for frozen collection column {}", to_string(receiver), receiver.name_as_text()));
     }
 
     if (rtype->get_kind() == abstract_type::kind::list) {
@@ -47,7 +47,7 @@ operation::set_element::prepare(data_dictionary::database db, const sstring& key
             return make_shared<lists::setter_by_index>(receiver, std::move(idx), std::move(lval));
         }
     } else if (rtype->get_kind() == abstract_type::kind::set) {
-        throw invalid_request_exception(format("Invalid operation ({}) for set column {}", to_string(receiver), receiver.name()));
+        throw invalid_request_exception(format("Invalid operation ({}) for set column {}", to_string(receiver), receiver.name_as_text()));
     } else if (rtype->get_kind() == abstract_type::kind::map) {
         auto key = prepare_expression(_selector, db, keyspace, nullptr, maps::key_spec_of(*receiver.column_specification));
         auto mval = prepare_expression(_value, db, keyspace, nullptr, maps::value_spec_of(*receiver.column_specification));
@@ -136,11 +136,11 @@ operation::addition::prepare(data_dictionary::database db, const sstring& keyspa
     auto ctype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!ctype) {
         if (!receiver.is_counter()) {
-            throw exceptions::invalid_request_exception(format("Invalid operation ({}) for non counter column {}", to_string(receiver), receiver.name()));
+            throw exceptions::invalid_request_exception(format("Invalid operation ({}) for non counter column {}", to_string(receiver), receiver.name_as_text()));
         }
         return make_shared<constants::adder>(receiver, std::move(v));
     } else if (!ctype->is_multi_cell()) {
-        throw exceptions::invalid_request_exception(format("Invalid operation ({}) for frozen collection column {}", to_string(receiver), receiver.name()));
+        throw exceptions::invalid_request_exception(format("Invalid operation ({}) for frozen collection column {}", to_string(receiver), receiver.name_as_text()));
     }
 
     if (ctype->get_kind() == abstract_type::kind::list) {
@@ -169,14 +169,14 @@ operation::subtraction::prepare(data_dictionary::database db, const sstring& key
     auto ctype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!ctype) {
         if (!receiver.is_counter()) {
-            throw exceptions::invalid_request_exception(format("Invalid operation ({}) for non counter column {}", to_string(receiver), receiver.name()));
+            throw exceptions::invalid_request_exception(format("Invalid operation ({}) for non counter column {}", to_string(receiver), receiver.name_as_text()));
         }
         auto v = prepare_expression(_value, db, keyspace, nullptr, receiver.column_specification);
         return make_shared<constants::subtracter>(receiver, std::move(v));
     }
     if (!ctype->is_multi_cell()) {
         throw exceptions::invalid_request_exception(
-                format("Invalid operation ({}) for frozen collection column {}", to_string(receiver), receiver.name()));
+                format("Invalid operation ({}) for frozen collection column {}", to_string(receiver), receiver.name_as_text()));
     }
 
     if (ctype->get_kind() == abstract_type::kind::list) {
@@ -211,9 +211,9 @@ operation::prepend::prepare(data_dictionary::database db, const sstring& keyspac
     auto v = prepare_expression(_value, db, keyspace, nullptr, receiver.column_specification);
 
     if (!dynamic_cast<const list_type_impl*>(receiver.type.get())) {
-        throw exceptions::invalid_request_exception(format("Invalid operation ({}) for non list column {}", to_string(receiver), receiver.name()));
+        throw exceptions::invalid_request_exception(format("Invalid operation ({}) for non list column {}", to_string(receiver), receiver.name_as_text()));
     } else if (!receiver.type->is_multi_cell()) {
-        throw exceptions::invalid_request_exception(format("Invalid operation ({}) for frozen list column {}", to_string(receiver), receiver.name()));
+        throw exceptions::invalid_request_exception(format("Invalid operation ({}) for frozen list column {}", to_string(receiver), receiver.name_as_text()));
     }
 
     return make_shared<lists::prepender>(receiver, std::move(v));
@@ -340,9 +340,9 @@ operation::element_deletion::affected_column() const {
 shared_ptr<operation>
 operation::element_deletion::prepare(data_dictionary::database db, const sstring& keyspace, const column_definition& receiver) const {
     if (!receiver.type->is_collection()) {
-        throw exceptions::invalid_request_exception(format("Invalid deletion operation for non collection column {}", receiver.name()));
+        throw exceptions::invalid_request_exception(format("Invalid deletion operation for non collection column {}", receiver.name_as_text()));
     } else if (!receiver.type->is_multi_cell()) {
-        throw exceptions::invalid_request_exception(format("Invalid deletion operation for frozen collection column {}", receiver.name()));
+        throw exceptions::invalid_request_exception(format("Invalid deletion operation for frozen collection column {}", receiver.name_as_text()));
     }
     auto ctype = static_pointer_cast<const collection_type_impl>(receiver.type);
     if (ctype->get_kind() == abstract_type::kind::list) {
