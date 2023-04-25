@@ -34,26 +34,6 @@ std::ostream& format_range(std::ostream& os, const Range& items, std::string_vie
     return os;
 }
 
-template<typename Iterator>
-static inline
-sstring join(sstring delimiter, Iterator begin, Iterator end) {
-    std::ostringstream oss;
-    while (begin != end) {
-        oss << *begin;
-        ++begin;
-        if (begin != end) {
-            oss << delimiter;
-        }
-    }
-    return oss.str();
-}
-
-template<typename PrintableRange>
-static inline
-sstring join(sstring delimiter, const PrintableRange& items) {
-    return join(delimiter, items.begin(), items.end());
-}
-
 namespace internal {
 
 template<bool NeedsComma, typename Printable>
