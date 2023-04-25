@@ -740,9 +740,7 @@ class topology_coordinator {
         // Leaving the scope destroys the object and releases the guard.
     }
 
-    future<node_to_work_on> retake_node(raft::server_id id) {
-        auto guard = co_await start_operation();
-
+    node_to_work_on retake_node(group0_guard guard, raft::server_id id) {
         auto& topo = _topo_sm._topology;
 
         auto it = topo.find(id);
@@ -758,7 +756,7 @@ class topology_coordinator {
         if (pit != topo.req_param.end()) {
             req_param = pit->second;
         }
-        co_return node_to_work_on{std::move(guard), &topo, id, &it->second, std::move(req), std::move(req_param)};
+        return node_to_work_on{std::move(guard), &topo, id, &it->second, std::move(req), std::move(req_param)};
     }
 
     group0_guard take_guard(node_to_work_on&& node) {
@@ -808,7 +806,7 @@ class topology_coordinator {
         auto id = node.id;
         release_node(std::move(node));
         co_await exec_direct_command_helper(id, cmd);
-        co_return co_await retake_node(id);
+        co_return retake_node(co_await start_operation(), id);
     };
 
     future<bool> exec_global_command_helper(auto nodes, const raft_topology_cmd& cmd) {
@@ -825,18 +823,30 @@ class topology_coordinator {
         }
     };
 
+    future<std::pair<group0_guard, bool>> exec_global_command(
+            group0_guard guard, const raft_topology_cmd& cmd,
+            const utils::small_vector<raft::server_id, 2>& exclude_nodes) {
+        auto nodes = _topo_sm._topology.normal_nodes | boost::adaptors::filtered(
+                [&exclude_nodes] (const std::pair<const raft::server_id, replica_state>& n) {
+                    return std::none_of(exclude_nodes.begin(), exclude_nodes.end(),
+                            [&n] (const raft::server_id& m) { return n.first == m; });
+                }) | boost::adaptors::map_keys;
+        {
+            // release guard
+            auto _ = std::move(guard);
+        }
+        bool res = co_await exec_global_command_helper(std::move(nodes), cmd);
+        co_return std::pair{co_await start_operation(), res};
+    }
+
     future<std::pair<node_to_work_on, bool>> exec_global_command(
             node_to_work_on&& node, const raft_topology_cmd& cmd, bool include_local) {
-        auto my_id = _raft.id();
-        auto id = node.id;
-        auto exclude_node = parse_replaced_node(node);
-        auto nodes = node.topology->normal_nodes | boost::adaptors::filtered(
-                [my_id, include_local, exclude_node] (const std::pair<const raft::server_id, replica_state>& n)  {
-                    return (include_local || n.first != my_id) && n.first != exclude_node;
-                }) | boost::adaptors::map_keys;
-        release_node(std::move(node));
-        bool res = co_await exec_global_command_helper(nodes, cmd);
-        co_return std::make_pair(co_await retake_node(id), res);
+        utils::small_vector<raft::server_id, 2> exclude_nodes{parse_replaced_node(node)};
+        if (!include_local) {
+            exclude_nodes.push_back(_raft.id());
+        }
+        auto [guard, res] = co_await exec_global_command(std::move(node.guard), cmd, exclude_nodes);
+        co_return std::pair{retake_node(std::move(guard), node.id), res};
     };
 
     // Returns `true` iff there was work to do.
