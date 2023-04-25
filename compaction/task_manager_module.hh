@@ -213,9 +213,9 @@ protected:
     virtual future<> run() override;
 };
 
-class rewrite_sstables_compaction_task_impl : public compaction_task_impl {
+class sstables_compaction_task_impl : public compaction_task_impl {
 public:
-    rewrite_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
+    sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
             unsigned sequence_number,
             std::string keyspace,
@@ -234,7 +234,7 @@ protected:
     virtual future<> run() override = 0;
 };
 
-class upgrade_sstables_compaction_task_impl : public rewrite_sstables_compaction_task_impl {
+class upgrade_sstables_compaction_task_impl : public sstables_compaction_task_impl {
 private:
     sharded<replica::database>& _db;
     std::vector<table_id> _table_infos;
@@ -245,7 +245,7 @@ public:
             sharded<replica::database>& db,
             std::vector<table_id> table_infos,
             bool exclude_current_version) noexcept
-        : rewrite_sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", tasks::task_id::create_null_id())
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _exclude_current_version(exclude_current_version)
@@ -254,7 +254,7 @@ protected:
     virtual future<> run() override;
 };
 
-class shard_upgrade_sstables_compaction_task_impl : public rewrite_sstables_compaction_task_impl {
+class shard_upgrade_sstables_compaction_task_impl : public sstables_compaction_task_impl {
 private:
     replica::database& _db;
     std::vector<table_id> _table_infos;
@@ -266,7 +266,7 @@ public:
             replica::database& db,
             std::vector<table_id> table_infos,
             bool exclude_current_version) noexcept
-        : rewrite_sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", parent_id)
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _exclude_current_version(exclude_current_version)
