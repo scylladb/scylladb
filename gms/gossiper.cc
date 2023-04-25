@@ -80,7 +80,6 @@ public:
             , _feat(f)
             , _sys_ks(s)
     {
-        (void)_sys_ks;
     }
     future<> on_join(inet_address ep, endpoint_state state) override {
         return enable_features();
@@ -2559,7 +2558,7 @@ future<> gossiper::enable_features() {
 }
 
 future<> persistent_feature_enabler::enable_features() {
-    auto loaded_peer_features = co_await db::system_keyspace::load_peer_features();
+    auto loaded_peer_features = co_await _sys_ks.load_peer_features();
     auto&& features = _g.get_supported_features(loaded_peer_features, gossiper::ignore_features_of_local_node::no);
     co_await _feat.container().invoke_on_all([&features] (feature_service& fs) -> future<> {
         std::set<std::string_view> features_v = boost::copy_range<std::set<std::string_view>>(features);

@@ -370,7 +370,7 @@ public:
      */
     future<std::unordered_set<dht::token>> get_local_tokens();
 
-    static future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
+    future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
     static future<std::set<sstring>> load_local_enabled_features();
     static future<> save_local_enabled_features(std::set<sstring> features);
 

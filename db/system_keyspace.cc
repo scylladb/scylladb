@@ -1627,7 +1627,7 @@ future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
 
 future<std::unordered_map<gms::inet_address, sstring>> system_keyspace::load_peer_features() {
     sstring req = format("SELECT peer, supported_features FROM system.{}", PEERS);
-    return qctx->execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+    return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         std::unordered_map<gms::inet_address, sstring> ret;
         for (auto& row : *cql_result) {
             if (row.has("supported_features")) {

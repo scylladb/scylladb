@@ -2514,7 +2514,7 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
         auto initial_contact_nodes = loaded_endpoints.empty() ?
             std::unordered_set<gms::inet_address>(seeds.begin(), seeds.end()) :
             loaded_endpoints;
-        auto loaded_peer_features = db::system_keyspace::load_peer_features().get0();
+        auto loaded_peer_features = _sys_ks.local().load_peer_features().get0();
         slogger.info("initial_contact_nodes={}, loaded_endpoints={}, loaded_peer_features={}",
                 initial_contact_nodes, loaded_endpoints, loaded_peer_features.size());
         for (auto& x : loaded_peer_features) {
