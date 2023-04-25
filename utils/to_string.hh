@@ -75,14 +75,6 @@ std::ostream& operator<<(std::ostream& os, const print_with_comma<NeedsComma, Pr
 
 namespace std {
 
-// FIXME: delete in favor of fmt::format
-template<typename Printable>
-static inline
-sstring
-to_string(std::initializer_list<Printable> items) {
-    return "[" + utils::join(", ", std::begin(items), std::end(items)) + "]";
-}
-
 template <typename K, typename V>
 std::ostream& operator<<(std::ostream& os, const std::pair<K, V>& p) {
     os << "{" << p.first << ", " << p.second << "}";
