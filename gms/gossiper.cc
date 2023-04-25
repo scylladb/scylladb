@@ -70,35 +70,6 @@ std::chrono::milliseconds gossiper::quarantine_delay() const noexcept {
     return ring_delay * 2;
 }
 
-class persistent_feature_enabler : public i_endpoint_state_change_subscriber {
-    gossiper& _g;
-    feature_service& _feat;
-    db::system_keyspace& _sys_ks;
-public:
-    persistent_feature_enabler(gossiper& g, feature_service& f, db::system_keyspace& s)
-            : _g(g)
-            , _feat(f)
-            , _sys_ks(s)
-    {
-    }
-    future<> on_join(inet_address ep, endpoint_state state) override {
-        return enable_features();
-    }
-    future<> on_change(inet_address ep, application_state state, const versioned_value&) override {
-        if (state == application_state::SUPPORTED_FEATURES) {
-            return enable_features();
-        }
-        return make_ready_future();
-    }
-    future<> before_change(inet_address, endpoint_state, application_state, const versioned_value&) override { return make_ready_future(); }
-    future<> on_alive(inet_address, endpoint_state) override { return make_ready_future(); }
-    future<> on_dead(inet_address, endpoint_state) override { return make_ready_future(); }
-    future<> on_remove(inet_address) override { return make_ready_future(); }
-    future<> on_restart(inet_address, endpoint_state) override { return make_ready_future(); }
-
-    future<> enable_features();
-};
-
 gossiper::gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, sharded<db::system_keyspace>& sys_ks, const db::config& cfg, gossip_config gcfg)
         : _abort_source(as)
         , _feature_service(features)
@@ -2549,28 +2520,6 @@ void gossiper::append_endpoint_state(std::stringstream& ss, const endpoint_state
     } else {
         ss << "  TOKENS: not present" << "\n";
     }
-}
-
-future<> feature_service::enable_features_on_join(gossiper& g, db::system_keyspace& sys_ks) {
-    auto enabler = make_shared<persistent_feature_enabler>(g, *this, sys_ks);
-    g.register_(enabler);
-    return enabler->enable_features();
-}
-
-future<> persistent_feature_enabler::enable_features() {
-    auto loaded_peer_features = co_await _sys_ks.load_peer_features();
-    auto&& features = _g.get_supported_features(loaded_peer_features, gossiper::ignore_features_of_local_node::no);
-    std::set<std::string_view> persist;
-    for (feature& f : _feat.registered_features() | boost::adaptors::map_values) {
-        if (!f && features.contains(f.name())) {
-            persist.emplace(f.name());
-        }
-    }
-    co_await _feat.persist_enabled_feature_info(std::move(persist));
-    co_await _feat.container().invoke_on_all([&features] (feature_service& fs) -> future<> {
-        std::set<std::string_view> features_v = boost::copy_range<std::set<std::string_view>>(features);
-        co_await fs.enable(std::move(features_v));
-    });
 }
 
 locator::token_metadata_ptr gossiper::get_token_metadata_ptr() const noexcept {
