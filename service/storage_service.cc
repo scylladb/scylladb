@@ -478,6 +478,7 @@ public:
     topology_mutation_builder& set(const char* cell, const utils::UUID& value);
     topology_mutation_builder& set_transition_state(topology::transition_state);
     topology_mutation_builder& set_current_cdc_generation_id(const cdc::generation_id_v2&);
+    topology_mutation_builder& set_new_cdc_generation_data_uuid(const utils::UUID& value);
     topology_mutation_builder& del_transition_state();
     topology_mutation_builder& del(const char* cell);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
@@ -569,6 +570,12 @@ topology_mutation_builder& topology_mutation_builder::set_current_cdc_generation
         const cdc::generation_id_v2& value) {
     _m.set_static_cell("current_cdc_generation_timestamp", value.ts, _ts);
     _m.set_static_cell("current_cdc_generation_uuid", value.id, _ts);
+    return *this;
+}
+
+topology_mutation_builder& topology_mutation_builder::set_new_cdc_generation_data_uuid(
+        const utils::UUID& value) {
+    _m.set_static_cell("new_cdc_generation_data_uuid", value, _ts);
     return *this;
 }
 
@@ -828,7 +835,7 @@ class topology_coordinator {
                 // Begin the race.
                 // See the large FIXME below.
                 auto cdc_gen_ts = cdc::new_generation_timestamp(add_ts_delay, _ring_delay);
-                auto cdc_gen_uuid = node.rs->ring.value().new_cdc_generation_data_uuid;
+                auto cdc_gen_uuid = node.topology->new_cdc_generation_data_uuid;
                 if (!cdc_gen_uuid) {
                     on_internal_error(slogger, ::format(
                         "raft topology: new CDC generation data UUID missing in `commit_cdc_generation` state"
@@ -837,7 +844,7 @@ class topology_coordinator {
 
                 cdc::generation_id_v2 cdc_gen_id {
                     .ts = cdc_gen_ts,
-                    .id = cdc_gen_uuid,
+                    .id = *cdc_gen_uuid,
                 };
 
                 {
@@ -1063,7 +1070,7 @@ class topology_coordinator {
                                 .del("topology_request")
                                 .set("tokens", bootstrap_tokens)
                                 .set_transition_state(topology::transition_state::commit_cdc_generation)
-                                .set("new_cdc_generation_data_uuid", gen_uuid);
+                                .set_new_cdc_generation_data_uuid(gen_uuid);
                         updates.push_back(builder.build());
                         auto reason = ::format(
                             "bootstrap: assign tokens and insert CDC generation data (UUID: {})", gen_uuid);

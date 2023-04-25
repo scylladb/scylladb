@@ -49,11 +49,6 @@ using request_param = std::variant<raft::server_id, sstring, uint32_t>;
 
 struct ring_slice {
     std::unordered_set<dht::token> tokens;
-
-    // When a new node joins the cluster, always a new CDC generation is created.
-    // This is the UUID used to access the data of the CDC generation introduced
-    // when the node owning this ring_slice joined (it's the partition key in CDC_GENERATIONS_V3 table).
-    utils::UUID new_cdc_generation_data_uuid;
 };
 
 struct replica_state {
@@ -92,7 +87,13 @@ struct topology {
     // operation untill the node becomes normal
     std::unordered_map<raft::server_id, request_param> req_param;
 
+    // The ID of the last introduced CDC generation.
     std::optional<cdc::generation_id_v2> current_cdc_generation_id;
+
+    // This is the UUID used to access the data of a new CDC generation introduced
+    // e.g. when a new node bootstraps, needed in `commit_cdc_generation` transition state.
+    // It's used as partition key in CDC_GENERATIONS_V3 table.
+    std::optional<utils::UUID> new_cdc_generation_data_uuid;
 
     // Find only nodes in non 'left' state
     const std::pair<const raft::server_id, replica_state>* find(raft::server_id id) const;

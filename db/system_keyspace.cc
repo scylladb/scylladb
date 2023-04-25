@@ -256,7 +256,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("num_tokens", int32_type)
             .with_column("shard_count", int32_type)
             .with_column("ignore_msb", int32_type)
-            .with_column("new_cdc_generation_data_uuid", uuid_type)
+            .with_column("new_cdc_generation_data_uuid", uuid_type, column_kind::static_column)
             .with_column("transition_state", utf8_type, column_kind::static_column)
             .with_column("current_cdc_generation_uuid", uuid_type, column_kind::static_column)
             .with_column("current_cdc_generation_timestamp", timestamp_type, column_kind::static_column)
@@ -3555,14 +3555,8 @@ future<service::topology> system_keyspace::load_topology_state() {
                     host_id));
             }
 
-            utils::UUID new_cdc_gen_uuid;
-            if (row.has("new_cdc_generation_data_uuid")) {
-                new_cdc_gen_uuid = row.get_as<utils::UUID>("new_cdc_generation_data_uuid");
-            }
-
             ring_slice = service::ring_slice {
                 .tokens = std::move(tokens),
-                .new_cdc_generation_data_uuid = new_cdc_gen_uuid,
             };
         }
 
@@ -3655,6 +3649,10 @@ future<service::topology> system_keyspace::load_topology_state() {
         } else if (!ret.transition_nodes.empty()) {
             on_internal_error(slogger,
                 "load_topology_state: topology not in transition state but transition nodes are present");
+        }
+
+        if (some_row.has("new_cdc_generation_data_uuid")) {
+            ret.new_cdc_generation_data_uuid = some_row.get_as<utils::UUID>("new_cdc_generation_data_uuid");
         }
 
         if (some_row.has("current_cdc_generation_uuid")) {
