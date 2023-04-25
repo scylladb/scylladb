@@ -587,7 +587,6 @@ private:
 
     uint64_t _nr_run = 0;
     uint64_t _msg_processing = 0;
-    bool _gossip_settled = false;
 
     class msg_proc_guard;
 private:
@@ -606,7 +605,8 @@ private:
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 public:
     void check_knows_remote_features(std::set<std::string_view>& local_features, const std::unordered_map<inet_address, sstring>& loaded_peer_features) const;
-    future<> maybe_enable_features();
+    future<> do_enable_features();
+    future<> enable_features();
 private:
     seastar::metrics::metric_groups _metrics;
 public:

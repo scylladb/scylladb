@@ -84,11 +84,11 @@ public:
         (void)_sys_ks;
     }
     future<> on_join(inet_address ep, endpoint_state state) override {
-        return _g.maybe_enable_features();
+        return _g.do_enable_features();
     }
     future<> on_change(inet_address ep, application_state state, const versioned_value&) override {
         if (state == application_state::SUPPORTED_FEATURES) {
-            return _g.maybe_enable_features();
+            return _g.do_enable_features();
         }
         return make_ready_future();
     }
@@ -116,7 +116,6 @@ gossiper::gossiper(abort_source& as, feature_service& features, const locator::s
     _scheduled_gossip_task.set_callback(_gcfg.gossip_scheduling_group, [this] { run(); });
     // half of QUARATINE_DELAY, to ensure _just_removed_endpoints has enough leeway to prevent re-gossip
     fat_client_timeout = quarantine_delay() / 2;
-    register_(make_shared<persistent_feature_enabler>(*this, _feature_service, _sys_ks.local()));
     // Register this instance with JMX
     namespace sm = seastar::metrics;
     auto ep = get_broadcast_address();
@@ -2381,9 +2380,6 @@ future<> gossiper::wait_for_gossip_to_settle() {
     if (force_after != 0) {
         co_await wait_for_gossip(GOSSIP_SETTLE_MIN_WAIT_MS, force_after);
     }
-    if (!std::exchange(_gossip_settled, true)) {
-        co_await maybe_enable_features();
-    }
 }
 
 future<> gossiper::wait_for_range_setup() {
@@ -2555,10 +2551,13 @@ void gossiper::append_endpoint_state(std::stringstream& ss, const endpoint_state
     }
 }
 
-future<> gossiper::maybe_enable_features() {
-    if (!_gossip_settled) {
-        co_return;
-    }
+future<> gossiper::enable_features() {
+    auto enabler = make_shared<persistent_feature_enabler>(*this, _feature_service, _sys_ks.local());
+    register_(enabler);
+    return do_enable_features();
+}
+
+future<> gossiper::do_enable_features() {
     auto loaded_peer_features = co_await db::system_keyspace::load_peer_features();
     auto&& features = get_supported_features(loaded_peer_features, ignore_features_of_local_node::no);
     co_await container().invoke_on_all([&features] (gossiper& g) -> future<> {
