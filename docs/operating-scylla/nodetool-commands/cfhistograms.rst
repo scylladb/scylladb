@@ -30,7 +30,7 @@ Min         00.00           36.00          7.00          210             5
 Max         26.00           42.00          35425.00      310             5
 ==========  ==============  =============  ============  ==============  ==========
 
-In this example, 95% of the write latency measurements were 42 microseconds (μs) or less, 95% of the read latencies were 42 μs or less, and 95% of the partitions are 300 bytes or less. The SSTables column means that the 95% read request refers to 25 SSTables.
+In this example, 95% of the write latency measurements were 42 microseconds (μs) or less, 95% of the read latencies were 42 μs or less, and 95% of the partitions are 300 bytes or less. The SSTables column means that the 95% of all single-key read requests touched at most 25 SSTables.
 
 ==============  ========================================
 Parameter       Description
