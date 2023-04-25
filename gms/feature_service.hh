@@ -20,11 +20,15 @@
 #include "db/schema_features.hh"
 #include "gms/feature.hh"
 
-namespace db { class config; }
+namespace db {
+class config;
+class system_keyspace;
+}
 namespace service { class storage_service; }
 
 namespace gms {
 
+class gossiper;
 class feature_service;
 
 struct feature_config {
@@ -122,6 +126,7 @@ public:
     // The key itself is maintained as an `unordered_set<string>` and serialized via `to_string`
     // function to preserve readability.
     future<> persist_enabled_feature_info(std::set<std::string_view> extra) const;
+    future<> enable_features_on_join(gossiper&, db::system_keyspace&);
 };
 
 } // namespace gms

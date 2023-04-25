@@ -2551,9 +2551,9 @@ void gossiper::append_endpoint_state(std::stringstream& ss, const endpoint_state
     }
 }
 
-future<> gossiper::enable_features() {
-    auto enabler = make_shared<persistent_feature_enabler>(*this, _feature_service, _sys_ks.local());
-    register_(enabler);
+future<> feature_service::enable_features_on_join(gossiper& g, db::system_keyspace& sys_ks) {
+    auto enabler = make_shared<persistent_feature_enabler>(g, *this, sys_ks);
+    g.register_(enabler);
     return enabler->enable_features();
 }
 
