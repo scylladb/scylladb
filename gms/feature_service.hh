@@ -121,7 +121,7 @@ public:
     // Persist enabled feature in the `system.scylla_local` table under the "enabled_features" key.
     // The key itself is maintained as an `unordered_set<string>` and serialized via `to_string`
     // function to preserve readability.
-    future<> persist_enabled_feature_info(const gms::feature& f) const;
+    future<> persist_enabled_feature_info(std::set<std::string_view> extra) const;
 };
 
 } // namespace gms

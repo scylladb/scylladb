@@ -2560,6 +2560,13 @@ future<> gossiper::enable_features() {
 future<> persistent_feature_enabler::enable_features() {
     auto loaded_peer_features = co_await _sys_ks.load_peer_features();
     auto&& features = _g.get_supported_features(loaded_peer_features, gossiper::ignore_features_of_local_node::no);
+    std::set<std::string_view> persist;
+    for (feature& f : _feat.registered_features() | boost::adaptors::map_values) {
+        if (!f && features.contains(f.name())) {
+            persist.emplace(f.name());
+        }
+    }
+    co_await _feat.persist_enabled_feature_info(std::move(persist));
     co_await _feat.container().invoke_on_all([&features] (feature_service& fs) -> future<> {
         std::set<std::string_view> features_v = boost::copy_range<std::set<std::string_view>>(features);
         co_await fs.enable(std::move(features_v));

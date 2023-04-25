@@ -178,9 +178,11 @@ std::set<sstring> feature_service::to_feature_set(sstring features_string) {
     return features;
 }
 
-future<> feature_service::persist_enabled_feature_info(const gms::feature& f) const {
+future<> feature_service::persist_enabled_feature_info(std::set<std::string_view> extra) const {
     std::set<sstring> feats_set = co_await db::system_keyspace::load_local_enabled_features();
-    feats_set.emplace(f.name());
+    for (const auto& x : extra) {
+        feats_set.emplace(x);
+    }
     co_await db::system_keyspace::save_local_enabled_features(std::move(feats_set));
 }
 
@@ -189,9 +191,6 @@ future<> feature_service::enable(std::set<std::string_view> list) {
     return seastar::async([this, list = std::move(list)] {
         for (gms::feature& f : _registered_features | boost::adaptors::map_values) {
             if (list.contains(f.name())) {
-                if (db::qctx && !f) {
-                    persist_enabled_feature_info(f).get();
-                }
                 f.enable();
             }
         }
