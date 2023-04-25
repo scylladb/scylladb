@@ -371,8 +371,8 @@ public:
     future<std::unordered_set<dht::token>> get_local_tokens();
 
     future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
-    static future<std::set<sstring>> load_local_enabled_features();
-    static future<> save_local_enabled_features(std::set<sstring> features);
+    future<std::set<sstring>> load_local_enabled_features();
+    future<> save_local_enabled_features(std::set<sstring> features);
 
     future<int> increment_and_get_generation();
     bool bootstrap_needed() const;
