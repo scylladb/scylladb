@@ -70,10 +70,19 @@ std::chrono::milliseconds gossiper::quarantine_delay() const noexcept {
     return ring_delay * 2;
 }
 
-class feature_enabler : public i_endpoint_state_change_subscriber {
+class persistent_feature_enabler : public i_endpoint_state_change_subscriber {
     gossiper& _g;
+    feature_service& _feat;
+    db::system_keyspace& _sys_ks;
 public:
-    feature_enabler(gossiper& g) : _g(g) {}
+    persistent_feature_enabler(gossiper& g, feature_service& f, db::system_keyspace& s)
+            : _g(g)
+            , _feat(f)
+            , _sys_ks(s)
+    {
+        (void)_feat;
+        (void)_sys_ks;
+    }
     future<> on_join(inet_address ep, endpoint_state state) override {
         return _g.maybe_enable_features();
     }
@@ -107,7 +116,7 @@ gossiper::gossiper(abort_source& as, feature_service& features, const locator::s
     _scheduled_gossip_task.set_callback(_gcfg.gossip_scheduling_group, [this] { run(); });
     // half of QUARATINE_DELAY, to ensure _just_removed_endpoints has enough leeway to prevent re-gossip
     fat_client_timeout = quarantine_delay() / 2;
-    register_(make_shared<feature_enabler>(*this));
+    register_(make_shared<persistent_feature_enabler>(*this, _feature_service, _sys_ks.local()));
     // Register this instance with JMX
     namespace sm = seastar::metrics;
     auto ep = get_broadcast_address();
