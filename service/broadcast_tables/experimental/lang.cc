@@ -118,7 +118,7 @@ future<query_result> execute_broadcast_table_query(
 
                 auto value = utf8_type->deserialize(q.new_value);
                 new_mutation.set_clustered_cell(clustering_key::make_empty(), "value", std::move(value), ts);
-                co_await proxy.mutate_locally(new_mutation, {}, {});
+                co_await proxy.mutate_locally(std::move(new_mutation), {}, {});
             }
 
             if (is_conditional) {

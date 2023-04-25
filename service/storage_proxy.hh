@@ -293,6 +293,9 @@ private:
     cdc::cdc_service* _cdc = nullptr;
 
     cdc_stats _cdc_stats;
+
+    // Gate for async work like destroying mutation in the background.
+    gate _async_gate;
 private:
     future<result<coordinator_query_result>> query_singular(lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector&& partition_ranges,
@@ -310,9 +313,9 @@ private:
             service_permit permit, db::allow_per_partition_rate_limit allow_limit);
     result<response_id_type> create_write_response_handler(locator::effective_replication_map_ptr ermp, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, inet_address_vector_replica_set targets,
             const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info);
-    result<response_id_type> create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
-    result<response_id_type> create_write_response_handler(const hint_wrapper&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
-    result<response_id_type> create_write_response_handler(const read_repair_mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
+    result<response_id_type> create_write_response_handler(mutation&&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
+    result<response_id_type> create_write_response_handler(hint_wrapper&&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
+    result<response_id_type> create_write_response_handler(read_repair_mutation&&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
     result<response_id_type> create_write_response_handler(const std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, shared_ptr<paxos_response_handler>, dht::token>& proposal,
             db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
     result<response_id_type> create_write_response_handler(const std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, dht::token, inet_address_vector_replica_set>& meta,
@@ -440,6 +443,10 @@ private:
         inet_address_vector_replica_set& l1,
         inet_address_vector_replica_set& l2) const;
 
+    void destroy_mutation_gently(mutation&& m);
+    frozen_mutation freeze_and_destroy_mutation(mutation&& m);
+    frozen_mutation_and_schema freeze_mutation_and_schema_and_destroy_mutation(mutation&& m);
+
 public:
     storage_proxy(distributed<replica::database>& db, gms::gossiper& gossiper, config cfg, db::view::node_update_backlog& max_view_update_backlog,
             scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms);
@@ -487,7 +494,7 @@ public:
 private:
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
-    future<> mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info);
+    future<> mutate_locally(mutation&& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info);
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(const schema_ptr&, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout,
@@ -499,8 +506,8 @@ private:
 public:
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
-    future<> mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max(), db::per_partition_rate_limit::info rate_limit_info = std::monostate()) {
-        return mutate_locally(m, tr_state, sync, timeout, _write_smp_service_group, rate_limit_info);
+    future<> mutate_locally(mutation&& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max(), db::per_partition_rate_limit::info rate_limit_info = std::monostate()) {
+        return mutate_locally(std::move(m), tr_state, sync, timeout, _write_smp_service_group, rate_limit_info);
     }
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.

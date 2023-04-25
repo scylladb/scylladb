@@ -27,6 +27,7 @@
 #include <seastar/util/backtrace.hh>
 #include <seastar/util/later.hh>
 
+#include "seastar/core/thread_impl.hh"
 #include "utils/logalloc.hh"
 #include "log.hh"
 #include "utils/dynamic_bitset.hh"
@@ -34,6 +35,7 @@
 #include "utils/preempt.hh"
 #include "utils/vle.hh"
 #include "utils/coarse_steady_clock.hh"
+#include "utils/maybe_yield.hh"
 
 #include <random>
 #include <chrono>
@@ -1680,7 +1682,7 @@ private:
         }
     };
 
-    void* alloc_small(const object_descriptor& desc, segment::size_type size, size_t alignment) {
+    void* alloc_small(const object_descriptor& desc, segment::size_type size, size_t alignment, utils::can_yield can_yield = utils::can_yield::no, int reentered = 0) {
         if (!_active) {
             _active = new_segment();
             _active_offset = 0;
@@ -1690,8 +1692,11 @@ private:
 
         size_t obj_offset = align_up_for_asan(align_up(_active_offset + desc_encoded_size, alignment));
         if (obj_offset + size > segment::size) {
+            if (reentered && can_yield && thread_impl::should_yield()) {
+                throw std::bad_alloc();
+            }
             close_and_open();
-            return alloc_small(desc, size, alignment);
+            return alloc_small(desc, size, alignment, can_yield, ++reentered);
         }
 
         auto old_active_offset = _active_offset;
@@ -2058,7 +2063,7 @@ public:
             pool.add_non_lsa_memory_in_use(allocated_size);
             return ptr;
         } else {
-            auto ptr = alloc_small(object_descriptor(migrator), (segment::size_type) size, alignment);
+            auto ptr = alloc_small(object_descriptor(migrator), (segment::size_type) size, alignment, utils::can_yield::yes);
             _sanitizer.on_allocation(ptr, size);
             return ptr;
         }

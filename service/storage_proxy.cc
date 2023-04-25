@@ -908,13 +908,13 @@ class per_destination_mutation : public mutation_holder {
     std::unordered_map<gms::inet_address, lw_shared_ptr<const frozen_mutation>> _mutations;
     dht::token _token;
 public:
-    per_destination_mutation(const std::unordered_map<gms::inet_address, std::optional<mutation>>& mutations) {
+    per_destination_mutation(storage_proxy& sp, std::unordered_map<gms::inet_address, std::optional<mutation>>&& mutations) {
         for (auto&& m : mutations) {
             lw_shared_ptr<const frozen_mutation> fm;
             if (m.second) {
                 _schema = m.second.value().schema();
                 _token = m.second.value().token();
-                fm = make_lw_shared<const frozen_mutation>(freeze(m.second.value()));
+                fm = make_lw_shared<const frozen_mutation>(sp.freeze_and_destroy_mutation(std::move(*m.second)));
                 _size += fm->representation().size();
             }
             _mutations.emplace(m.first, std::move(fm));
@@ -974,8 +974,6 @@ public:
             : _mutation(make_lw_shared<const frozen_mutation>(std::move(fm_a_s.fm))) {
         _size = _mutation->representation().size();
         _schema = std::move(fm_a_s.s);
-    }
-    explicit shared_mutation(const mutation& m) : shared_mutation(frozen_mutation_and_schema{freeze(m), m.schema()}) {
     }
     virtual bool store_hint(db::hints::manager& hm, gms::inet_address ep, tracing::trace_state_ptr tr_state) override {
             return hm.store_hint(ep, _schema, _mutation, tr_state);
@@ -2764,13 +2762,32 @@ storage_proxy::response_id_type storage_proxy::unique_response_handler::release(
     return r;
 }
 
+void storage_proxy::destroy_mutation_gently(mutation&& m) {
+    // destroy the mutation in the background.
+    // the gate is closed on shutdown
+    (void)with_gate(_async_gate, [m = std::move(m)] () mutable {
+        return m.clear_gently();
+    });
+}
+
+frozen_mutation storage_proxy::freeze_and_destroy_mutation(mutation&& m) {
+    auto fm = freeze(m);
+    destroy_mutation_gently(std::move(m));
+    return fm;
+}
+
+frozen_mutation_and_schema storage_proxy::freeze_mutation_and_schema_and_destroy_mutation(mutation&& m) {
+    auto s = m.schema();
+    return frozen_mutation_and_schema{freeze_and_destroy_mutation(std::move(m)), std::move(s)};
+}
+
 future<>
-storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
+storage_proxy::mutate_locally(mutation&& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
     auto shard = m.shard_of();
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
     return _db.invoke_on(shard, {smp_grp, timeout},
             [s = global_schema_ptr(m.schema()),
-             m = freeze(m),
+             m = freeze_and_destroy_mutation(std::move(m)),
              gtr = tracing::global_trace_state_ptr(std::move(tr_state)),
              timeout,
              sync,
@@ -2792,8 +2809,8 @@ storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tra
 
 future<>
 storage_proxy::mutate_locally(std::vector<mutation> mutations, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
-    co_await coroutine::parallel_for_each(mutations, [&] (const mutation& m) mutable {
-            return mutate_locally(m, tr_state, db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info);
+    co_await coroutine::parallel_for_each(mutations, [&] (mutation& m) mutable {
+            return mutate_locally(std::move(m), tr_state, db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info);
     });
 }
 
@@ -2915,24 +2932,30 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
  * to the hint method below (dead nodes).
  */
 result<storage_proxy::response_id_type>
-storage_proxy::create_write_response_handler(const mutation& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
-    return create_write_response_handler_helper(m.schema(), m.token(), std::make_unique<shared_mutation>(m), cl, type, tr_state,
+storage_proxy::create_write_response_handler(mutation&& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
+    auto s = m.schema();
+    auto token = m.token();
+    auto fmas = freeze_mutation_and_schema_and_destroy_mutation(std::move(m));
+    return create_write_response_handler_helper(std::move(s), std::move(token), std::make_unique<shared_mutation>(std::move(fmas)), cl, type, tr_state,
             std::move(permit), allow_limit);
 }
 
 result<storage_proxy::response_id_type>
-storage_proxy::create_write_response_handler(const hint_wrapper& h, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
-    return create_write_response_handler_helper(h.mut.schema(), h.mut.token(), std::make_unique<hint_mutation>(h.mut), cl, type, tr_state,
+storage_proxy::create_write_response_handler(hint_wrapper&& h, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
+    auto s = h.mut.schema();
+    auto token = h.mut.token();
+    auto fmas = freeze_mutation_and_schema_and_destroy_mutation(std::move(h.mut));
+    return create_write_response_handler_helper(std::move(s), std::move(token), std::make_unique<hint_mutation>(std::move(fmas)), cl, type, tr_state,
             std::move(permit), allow_limit);
 }
 
 result<storage_proxy::response_id_type>
-storage_proxy::create_write_response_handler(const read_repair_mutation& mut, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
+storage_proxy::create_write_response_handler(read_repair_mutation&& mut, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
     inet_address_vector_replica_set endpoints;
-    const auto& m = mut.value;
+    auto m = std::move(mut.value);
     endpoints.reserve(m.size());
     boost::copy(m | boost::adaptors::map_keys, std::inserter(endpoints, endpoints.begin()));
-    auto mh = std::make_unique<per_destination_mutation>(m);
+    auto mh = std::make_unique<per_destination_mutation>(*this, std::move(m));
 
     slogger.trace("creating write handler for read repair token: {} endpoint: {}", mh->token(), endpoints);
     tracing::trace(tr_state, "Creating write handler for read repair token: {} endpoint: {}", mh->token(), endpoints);
@@ -2999,7 +3022,7 @@ future<result<storage_proxy::unique_response_handler_vector>> storage_proxy::mut
         unique_response_handler_vector ids;
         ids.reserve(std::distance(std::begin(mutations), std::end(mutations)));
         for (auto&& m : mutations) {
-            auto r_handler = create_handler(m, cl, type, permit);
+            auto r_handler = create_handler(std::move(m), cl, type, permit);
             if (!r_handler) {
                 return make_ready_future<result<unique_response_handler_vector>>(std::move(r_handler).as_failure());
             }
@@ -3011,8 +3034,8 @@ future<result<storage_proxy::unique_response_handler_vector>> storage_proxy::mut
 
 template<typename Range>
 future<result<storage_proxy::unique_response_handler_vector>> storage_proxy::mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
-    return mutate_prepare<>(std::forward<Range>(mutations), cl, type, std::move(permit), [this, tr_state = std::move(tr_state), allow_limit] (const typename std::decay_t<Range>::value_type& m, db::consistency_level cl, db::write_type type, service_permit permit) mutable {
-        return create_write_response_handler(m, cl, type, tr_state, std::move(permit), allow_limit);
+    return mutate_prepare<>(std::forward<Range>(mutations), cl, type, std::move(permit), [this, tr_state = std::move(tr_state), allow_limit] (typename std::decay_t<Range>::value_type&& m, db::consistency_level cl, db::write_type type, service_permit permit) mutable {
+        return create_write_response_handler(std::move(m), cl, type, tr_state, std::move(permit), allow_limit);
     });
 }
 
@@ -3489,10 +3512,11 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
         }
 
         future<result<>> send_batchlog_mutation(mutation m, db::consistency_level cl = db::consistency_level::ONE) {
-            return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, cl, db::write_type::BATCH_LOG, _permit, [this] (const mutation& m, db::consistency_level cl, db::write_type type, service_permit permit) {
+            return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, cl, db::write_type::BATCH_LOG, _permit, [this] (mutation&& m, db::consistency_level cl, db::write_type type, service_permit permit) {
                 auto& ks = _p._db.local().find_keyspace(m.schema()->ks_name());
                 auto ermp = ks.get_effective_replication_map();
-                return _p.create_write_response_handler(std::move(ermp), cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats, std::move(permit), std::monostate());
+                auto fmas = _p.freeze_mutation_and_schema_and_destroy_mutation(std::move(m));
+                return _p.create_write_response_handler(std::move(ermp), cl, type, std::make_unique<shared_mutation>(std::move(fmas)), _batchlog_endpoints, {}, {}, _trace_state, _stats, std::move(permit), std::monostate());
             }).then(utils::result_wrap([this, cl] (unique_response_handler_vector ids) {
                 _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
                 return _p.mutate_begin(std::move(ids), cl, _trace_state, _timeout);
@@ -3610,7 +3634,7 @@ future<> storage_proxy::send_to_endpoint(
     }
     return mutate_prepare(std::array{std::move(m)}, cl, type, /* does view building should hold a real permit */ empty_service_permit(),
             [this, tr_state, target = std::array{target}, pending_endpoints = std::move(pending_endpoints), &stats] (
-                std::unique_ptr<mutation_holder>& m,
+                std::unique_ptr<mutation_holder>&& m,
                 db::consistency_level cl,
                 db::write_type type, service_permit permit) mutable {
         inet_address_vector_replica_set targets;
@@ -6261,6 +6285,9 @@ future<> storage_proxy::drain_on_shutdown() {
     return async([this] {
         retire_view_response_handlers([] (const abstract_write_response_handler&) { return true; });
         _hints_resource_manager.stop().get();
+        if (!_async_gate.is_closed()) {
+            _async_gate.close().get();
+        }
     });
 }
 

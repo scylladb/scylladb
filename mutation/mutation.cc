@@ -34,6 +34,19 @@ mutation::data::data(schema_ptr&& schema, dht::decorated_key&& key, mutation_par
     , _p(std::move(mp))
 { }
 
+future<> mutation::data::clear_gently() noexcept {
+    _schema = nullptr;
+    while (_p.clear_gently(nullptr) == stop_iteration::no) {
+        co_await coroutine::maybe_yield();
+    }
+}
+
+future<> mutation::clear_gently() noexcept {
+    if (auto p = std::exchange(_ptr, nullptr)) {
+        co_await p->clear_gently();
+    }
+}
+
 void mutation::set_static_cell(const column_definition& def, atomic_cell_or_collection&& value) {
     partition().static_row().apply(def, std::move(value));
 }

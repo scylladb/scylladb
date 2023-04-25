@@ -14,6 +14,7 @@
 #include "keys.hh"
 #include "schema/schema_fwd.hh"
 #include "dht/i_partitioner.hh"
+#include "seastar/core/future.hh"
 #include "utils/hashing.hh"
 #include "mutation_fragment_v2.hh"
 #include "mutation_consumer.hh"
@@ -71,6 +72,8 @@ private:
         data(partition_key&& key, schema_ptr&& schema);
         data(schema_ptr&& schema, dht::decorated_key&& key, const mutation_partition& mp);
         data(schema_ptr&& schema, dht::decorated_key&& key, mutation_partition&& mp);
+
+        future<> clear_gently() noexcept;
     };
     std::unique_ptr<data> _ptr;
 private:
@@ -188,6 +191,8 @@ public:
     // Does not drop expired tombstones.
     // Does not expire TTLed data.
     mutation compacted() const;
+
+    future<> clear_gently() noexcept;
 private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
