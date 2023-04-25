@@ -35,13 +35,17 @@ concept Hasher =
         { h.update(ptr, size) } noexcept -> std::same_as<void>;
     };
 
+template<typename H, typename ValueType>
+concept HasherReturning = Hasher<H> &&
+    requires (H& h) {
+        { h.finalize() } -> std::convertible_to<ValueType>;
+    };
+
 class hasher {
 public:
     virtual ~hasher() = default;
     virtual void update(const char* ptr, size_t size) noexcept = 0;
 };
-
-static_assert(Hasher<hasher>);
 
 template<typename T>
 struct appending_hash;

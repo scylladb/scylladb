@@ -17,7 +17,7 @@
 #include <functional>
 #include <compare>
 #include "utils/mutable_view.hh"
-#include <xxhash.h>
+#include "utils/simple_hashers.hh"
 
 using bytes = basic_sstring<int8_t, uint32_t, 31, false>;
 using bytes_view = std::basic_string_view<int8_t>;
@@ -160,18 +160,7 @@ struct appending_hash<bytes_view> {
     }
 };
 
-struct bytes_view_hasher : public hasher {
-    XXH64_state_t _state;
-    bytes_view_hasher(uint64_t seed = 0) noexcept {
-        XXH64_reset(&_state, seed);
-    }
-    void update(const char* ptr, size_t length) noexcept {
-        XXH64_update(&_state, ptr, length);
-    }
-    size_t finalize() {
-        return static_cast<size_t>(XXH64_digest(&_state));
-    }
-};
+using bytes_view_hasher = simple_xx_hasher;
 
 namespace std {
 template <>

@@ -13,6 +13,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include "utils/hashers.hh"
 #include "utils/xx_hasher.hh"
+#include "utils/simple_hashers.hh"
 #include "gc_clock.hh"
 #include "test/lib/simple_schema.hh"
 #include "reader_concurrency_semaphore.hh"
@@ -101,4 +102,18 @@ SEASTAR_THREAD_TEST_CASE(mutation_fragment_sanity_check) {
         mutation_fragment f(*s.schema(), permit, s.make_range_tombstone(query::clustering_range::make(s.make_ckey(2), s.make_ckey(3)), ts));
         check_hash(f, 0x5092daca1b27ea26ull);
     }
+}
+
+BOOST_AUTO_TEST_CASE(basic_xx_hasher_sanity_check) {
+    simple_xx_hasher hasher1;
+    hasher1.update(reinterpret_cast<const char*>(std::data(text_part1)), std::size(text_part1));
+    hasher1.update(reinterpret_cast<const char*>(std::data(text_part2)), std::size(text_part2));
+    auto hash1 = hasher1.finalize();
+
+    bytes_view_hasher hasher2;
+    hasher2.update(reinterpret_cast<const char*>(std::data(text_part1)), std::size(text_part1));
+    hasher2.update(reinterpret_cast<const char*>(std::data(text_part2)), std::size(text_part2));
+    auto hash2 = hasher2.finalize();
+
+    BOOST_CHECK_EQUAL(hash1, hash2);
 }

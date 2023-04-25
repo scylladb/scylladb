@@ -11,6 +11,9 @@
 #include "bytes.hh"
 #include "utils/hashing.hh"
 
+template<typename H>
+concept HasherReturningBytes = HasherReturning<H, bytes>;
+
 class md5_hasher;
 
 template <typename T, size_t size> class cryptopp_hasher : public hasher {

@@ -7,10 +7,20 @@
  */
 
 #include "utils/hashers.hh"
+#include "utils/xx_hasher.hh"
+#include "utils/simple_hashers.hh"
 
 #define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
 #include <cryptopp/md5.h>
 #include <cryptopp/sha.h>
+
+static_assert(Hasher<hasher>);
+
+static_assert(HasherReturningBytes<md5_hasher>);
+static_assert(HasherReturningBytes<sha256_hasher>);
+static_assert(HasherReturningBytes<xx_hasher>);
+
+static_assert(SimpleHasher<simple_xx_hasher>);
 
 template <typename T> struct hasher_traits;
 template <> struct hasher_traits<md5_hasher> { using impl_type = CryptoPP::Weak::MD5; };

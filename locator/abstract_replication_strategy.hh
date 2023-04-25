@@ -19,6 +19,7 @@
 #include <seastar/util/bool_class.hh>
 #include "utils/maybe_yield.hh"
 #include "utils/sequenced_set.hh"
+#include "utils/simple_hashers.hh"
 
 // forward declaration since replica/database.hh includes this file
 namespace replica {
@@ -325,25 +326,12 @@ struct appending_hash<locator::effective_replication_map::factory_key> {
     }
 };
 
-struct factory_key_hasher : public hasher {
-    XXH64_state_t _state;
-    factory_key_hasher(uint64_t seed = 0) noexcept {
-        XXH64_reset(&_state, seed);
-    }
-    void update(const char* ptr, size_t length) noexcept {
-        XXH64_update(&_state, ptr, length);
-    }
-    size_t finalize() {
-        return static_cast<size_t>(XXH64_digest(&_state));
-    }
-};
-
 namespace std {
 
 template <>
 struct hash<locator::effective_replication_map::factory_key> {
     size_t operator()(const locator::effective_replication_map::factory_key& key) const {
-        factory_key_hasher h;
+        simple_xx_hasher h;
         appending_hash<locator::effective_replication_map::factory_key>{}(h, key);
         return h.finalize();
     }
