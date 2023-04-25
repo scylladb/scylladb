@@ -1328,7 +1328,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     // Save the advertised feature set to system.local table after
     // all remote feature checks are complete and after gossip shadow rounds are done.
     // At this point, the final feature set is already determined before the node joins the ring.
-    co_await db::system_keyspace::save_local_supported_features(features);
+    co_await _sys_ks.local().save_local_supported_features(features);
 
     // If this is a restarting node, we should update tokens before gossip starts
     auto my_tokens = co_await _sys_ks.local().get_saved_tokens();

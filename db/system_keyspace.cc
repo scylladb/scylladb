@@ -1391,7 +1391,7 @@ future<> system_keyspace::setup_version(sharded<netw::messaging_service>& ms) {
 
 future<> system_keyspace::save_local_supported_features(const std::set<std::string_view>& feats) {
     static const auto req = format("INSERT INTO system.{} (key, supported_features) VALUES (?, ?)", LOCAL);
-    return qctx->execute_cql(req,
+    return execute_cql(req,
         sstring(db::system_keyspace::LOCAL),
         fmt::to_string(fmt::join(feats, ","))).discard_result();
 }
