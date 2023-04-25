@@ -109,6 +109,28 @@ topology_request topology_request_from_string(const sstring& s) {
     throw std::runtime_error(fmt::format("cannot map name {} to topology_request", s));
 }
 
+static std::unordered_map<global_topology_request, sstring> global_topology_request_to_name_map = {
+    {global_topology_request::new_cdc_generation, "new_cdc_generation"},
+};
+
+std::ostream& operator<<(std::ostream& os, const global_topology_request& req) {
+    auto it = global_topology_request_to_name_map.find(req);
+    if (it == global_topology_request_to_name_map.end()) {
+        on_internal_error(tsmlogger, format("cannot print global topology request {}", static_cast<uint8_t>(req)));
+    }
+    return os << it->second;
+}
+
+global_topology_request global_topology_request_from_string(const sstring& s) {
+    for (auto&& e : global_topology_request_to_name_map) {
+        if (e.second == s) {
+            return e.first;
+        }
+    }
+
+    on_internal_error(tsmlogger, format("cannot map name {} to global_topology_request", s));
+}
+
 std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd) {
     switch (cmd) {
         case raft_topology_cmd::command::barrier:

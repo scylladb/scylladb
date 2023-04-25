@@ -47,6 +47,10 @@ enum class topology_request: uint16_t {
 
 using request_param = std::variant<raft::server_id, sstring, uint32_t>;
 
+enum class global_topology_request: uint16_t {
+    new_cdc_generation,
+};
+
 struct ring_slice {
     std::unordered_set<dht::token> tokens;
 };
@@ -86,6 +90,9 @@ struct topology {
     // Holds parameters for a request per node and valid during entire
     // operation untill the node becomes normal
     std::unordered_map<raft::server_id, request_param> req_param;
+
+    // Pending global topology request (i.e. not related to any specific node).
+    std::optional<global_topology_request> global_request;
 
     // The ID of the last introduced CDC generation.
     std::optional<cdc::generation_id_v2> current_cdc_generation_id;
@@ -145,5 +152,7 @@ std::ostream& operator<<(std::ostream& os, node_state s);
 node_state node_state_from_string(const sstring& s);
 std::ostream& operator<<(std::ostream& os, const topology_request& req);
 topology_request topology_request_from_string(const sstring& s);
+std::ostream& operator<<(std::ostream&, const global_topology_request&);
+global_topology_request global_topology_request_from_string(const sstring&);
 std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd);
 }
