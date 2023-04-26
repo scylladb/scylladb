@@ -190,6 +190,62 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_replace_with_replicas) {
         inet_address_vector_topology_change{});
 }
 
+SEASTAR_THREAD_TEST_CASE(test_endpoints_for_reading_when_bootstrap_with_replicas) {
+    dc_rack_fn get_dc_rack_fn = get_dc_rack;
+
+    const auto t1 = dht::token::from_int64(1);
+    const auto t10 = dht::token::from_int64(10);
+    const auto t100 = dht::token::from_int64(100);
+    const auto t1000 = dht::token::from_int64(1000);
+    const auto e1 = inet_address("192.168.0.1");
+    const auto e2 = inet_address("192.168.0.2");
+    const auto e3 = inet_address("192.168.0.3");
+    auto token_metadata = create_token_metadata(e1);
+    token_metadata.update_topology(e1, get_dc_rack(e1));
+    token_metadata.update_topology(e2, get_dc_rack(e2));
+    token_metadata.update_topology(e3, get_dc_rack(e3));
+    const auto replication_strategy = simple_strategy(replication_strategy_config_options {
+        {"replication_factor", "2"}
+    });
+    token_metadata.update_normal_tokens({t1, t1000}, e2).get();
+    token_metadata.update_normal_tokens({t10}, e3).get();
+    token_metadata.add_bootstrap_token(t100, e1);
+
+    auto check_endpoints = [&](int64_t t, inet_address_vector_replica_set expected_replicas,
+        seastar::compat::source_location sl = seastar::compat::source_location::current())
+    {
+        BOOST_TEST_INFO("line: " << sl.line());
+        const auto expected_set = std::unordered_set<inet_address>(expected_replicas.begin(),
+            expected_replicas.end());
+        const auto actual_replicas = token_metadata.endpoints_for_reading(dht::token::from_int64(t), ks_name);
+        BOOST_REQUIRE(actual_replicas.has_value());
+        const auto actual_set = std::unordered_set<inet_address>(actual_replicas->begin(),
+            actual_replicas->end());
+        BOOST_REQUIRE_EQUAL(expected_set, actual_set);
+    };
+
+    auto check_no_endpoints = [&](int64_t t,
+        seastar::compat::source_location sl = seastar::compat::source_location::current())
+    {
+        BOOST_TEST_INFO("line: " << sl.line());
+        BOOST_REQUIRE(!token_metadata.endpoints_for_reading(dht::token::from_int64(t), ks_name).has_value());
+    };
+
+    token_metadata.update_pending_ranges(replication_strategy, ks_name, get_dc_rack_fn).get();
+    check_no_endpoints(2);
+
+    token_metadata.set_topology_transition_state(service::topology::transition_state::write_both_read_new);
+    token_metadata.update_pending_ranges(replication_strategy, ks_name, get_dc_rack_fn).get();
+
+    check_endpoints(2, {e3, e1});
+    check_endpoints(10, {e3, e1});
+    check_endpoints(11, {e1, e2});
+    check_endpoints(100, {e1, e2});
+    check_no_endpoints(101);
+    check_no_endpoints(1001);
+    check_no_endpoints(1);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_replace_node_with_same_endpoint) {
     dc_rack_fn get_dc_rack_fn = get_dc_rack;
 
