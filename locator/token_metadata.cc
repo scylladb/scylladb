@@ -271,6 +271,13 @@ public:
 private:
     future<> update_normal_token_owners();
 
+    enum class endpoints_field {
+        pending_endpoints,
+        read_endpoints
+    };
+    const std::unordered_set<inet_address>* maybe_migration_endpoints(endpoints_field field,
+        const token& token,
+        const sstring& keyspace_name) const;
 public:
     // returns empty vector if keyspace_name not found.
     inet_address_vector_topology_change pending_endpoints_for(const token& token, const sstring& keyspace_name) const;
@@ -885,26 +892,38 @@ void token_metadata_impl::del_replacing_endpoint(inet_address existing_node) {
     _replacing_endpoints.erase(existing_node);
 }
 
+const std::unordered_set<inet_address>* token_metadata_impl::maybe_migration_endpoints(endpoints_field field,
+    const token& token,
+    const sstring& keyspace_name) const
+{
+    // Fast path 0: migration_info not found for this keyspace_name
+    const auto migration_info_it = _keyspace_to_migration_info.find(keyspace_name);
+    if (migration_info_it == _keyspace_to_migration_info.end()) {
+        return nullptr;
+    }
+
+    // Fast path 1: empty ring_mapping for this keyspace_name
+    const auto& migration_info = migration_info_it->second;
+    const auto& ring_mapping = field == endpoints_field::pending_endpoints
+        ? migration_info.pending_endpoints
+        : migration_info.read_endpoints;
+    if (ring_mapping.empty()) {
+        return nullptr;
+    }
+
+    // Slow path: lookup remapping
+    const auto interval = range_to_interval(range<dht::token>(token));
+    const auto it = ring_mapping.find(interval);
+    return it != ring_mapping.end() ? &it->second : nullptr;
+}
+
 inet_address_vector_topology_change token_metadata_impl::pending_endpoints_for(const token& token, const sstring& keyspace_name) const {
-    // Fast path 0: pending ranges not found for this keyspace_name
-    const auto pr_it = _keyspace_to_migration_info.find(keyspace_name);
-    if (pr_it == _keyspace_to_migration_info.end()) {
-        return {};
-    }
-
-    // Fast path 1: empty pending ranges for this keyspace_name
-    const auto& ks_map = pr_it->second.pending_endpoints;
-    if (ks_map.empty()) {
-        return {};
-    }
-
-    // Slow path: lookup pending ranges
     inet_address_vector_topology_change endpoints;
-    auto interval = range_to_interval(range<dht::token>(token));
-    const auto it = ks_map.find(interval);
-    if (it != ks_map.end()) {
-        // interval_map does not work with std::vector, convert to std::vector of ips
-        endpoints = inet_address_vector_topology_change(it->second.begin(), it->second.end());
+    const auto* pending_endpoints = maybe_migration_endpoints(endpoints_field::pending_endpoints,
+        token, keyspace_name);
+    if (pending_endpoints) {
+        // interval_map does not work with std::vector, convert to inet_address_vector_topology_change
+        endpoints = inet_address_vector_topology_change(pending_endpoints->begin(), pending_endpoints->end());
     }
     return endpoints;
 }
