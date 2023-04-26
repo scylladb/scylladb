@@ -1414,7 +1414,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                 for (auto& x : range_addresses) {
                     const range<dht::token>& src_range = x.first;
                     seastar::thread::maybe_yield();
-                    if (src_range.contains(desired_range, dht::tri_compare)) {
+                    if (src_range.contains(desired_range, dht::operator<=>)) {
                         std::vector<inet_address> old_endpoints(x.second.begin(), x.second.end());
                         auto it = pending_range_addresses.find(desired_range);
                         if (it == pending_range_addresses.end()) {

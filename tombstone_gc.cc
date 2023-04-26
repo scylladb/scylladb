@@ -97,7 +97,7 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
                 auto r = locator::token_metadata::interval_to_range(x.first);
                 min = std::min(x.second, min);
                 max = std::max(x.second, max);
-                if (++hits == 1 && r.contains(range, dht::tri_compare)) {
+                if (++hits == 1 && r.contains(range, dht::operator<=>)) {
                     contains_all = true;
                 }
             }

@@ -95,7 +95,7 @@ decorated_key::equal(const schema& s, const decorated_key& other) const {
 
 std::strong_ordering
 decorated_key::tri_compare(const schema& s, const decorated_key& other) const {
-    auto r = dht::tri_compare(_token, other._token);
+    auto r = _token <=> other._token;
     if (r != 0) {
         return r;
     } else {
@@ -105,7 +105,7 @@ decorated_key::tri_compare(const schema& s, const decorated_key& other) const {
 
 std::strong_ordering
 decorated_key::tri_compare(const schema& s, const ring_position& other) const {
-    auto r = dht::tri_compare(_token, other.token());
+    auto r = _token <=> other.token();
     if (r != 0) {
         return r;
     } else if (other.has_key()) {
@@ -279,7 +279,7 @@ std::strong_ordering ring_position::tri_compare(const schema& s, const ring_posi
 }
 
 std::strong_ordering token_comparator::operator()(const token& t1, const token& t2) const {
-    return tri_compare(t1, t2);
+    return t1 <=> t2;
 }
 
 bool ring_position::equal(const schema& s, const ring_position& other) const {
@@ -291,7 +291,7 @@ bool ring_position::less_compare(const schema& s, const ring_position& other) co
 }
 
 std::strong_ordering ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh) {
-    auto token_cmp = tri_compare(*lh._token, *rh._token);
+    auto token_cmp = *lh._token <=> *rh._token;
     if (token_cmp != 0) {
         return token_cmp;
     }
@@ -312,7 +312,7 @@ std::strong_ordering ring_position_tri_compare(const schema& s, ring_position_vi
 }
 
 std::strong_ordering ring_position_comparator_for_sstables::operator()(ring_position_view lh, sstables::decorated_key_view rh) const {
-    auto token_cmp = tri_compare(*lh._token, rh.token());
+    auto token_cmp = *lh._token <=> rh.token();
     if (token_cmp != 0) {
         return token_cmp;
     }
