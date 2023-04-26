@@ -395,9 +395,6 @@ bool cdc::options::operator==(const options& o) const {
     return enabled() == o.enabled() && _preimage == o._preimage && _postimage == o._postimage && _ttl == o._ttl
             && _delta_mode == o._delta_mode;
 }
-bool cdc::options::operator!=(const options& o) const {
-    return !(*this == o);
-}
 
 namespace cdc {
 
@@ -634,9 +631,6 @@ public:
     }
     bool operator==(const collection_iterator& x) const {
         return _v == x._v;
-    }
-    bool operator!=(const collection_iterator& x) const {
-        return !(*this == x);
     }
 private:
     void next() {

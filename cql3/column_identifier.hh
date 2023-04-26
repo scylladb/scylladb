@@ -88,8 +88,6 @@ public:
 
     bool operator==(const column_identifier_raw& other) const;
 
-    bool operator!=(const column_identifier_raw& other) const;
-
     virtual sstring to_string() const;
     sstring to_cql_string() const;
 

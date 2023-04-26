@@ -105,7 +105,6 @@ public:
     void validate();
     std::map<sstring, sstring> get_options() const;
     bool operator==(const compression_parameters& other) const;
-    bool operator!=(const compression_parameters& other) const;
 
     static compression_parameters no_compression() {
         return compression_parameters(nullptr);

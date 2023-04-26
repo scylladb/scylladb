@@ -25,11 +25,9 @@ namespace qos {
 struct service_level_options {
     struct unset_marker {
         bool operator==(const unset_marker&) const { return true; };
-        bool operator!=(const unset_marker&) const { return false; };
     };
     struct delete_marker {
         bool operator==(const delete_marker&) const { return true; };
-        bool operator!=(const delete_marker&) const { return false; };
     };
 
     enum class workload_type {
@@ -46,7 +44,6 @@ struct service_level_options {
     service_level_options merge_with(const service_level_options& other) const;
 
     bool operator==(const service_level_options& other) const = default;
-    bool operator!=(const service_level_options& other) const = default;
 
     static std::string_view to_string(const workload_type& wt);
     static std::optional<workload_type> parse_workload_type(std::string_view sv);

@@ -10,6 +10,7 @@
 
 #include <boost/multiprecision/cpp_int.hpp>
 #include <iosfwd>
+#include <compare>
 
 namespace utils {
 
@@ -161,31 +162,10 @@ public:
     multiprecision_int operator>>(const T& x) const {
         return cpp_int(_v >> maybe_unwrap(x));
     }
-    bool operator==(const multiprecision_int& x) const {
-        return _v == x._v;
-    }
-    bool operator!=(const multiprecision_int& x) const {
-        return _v != x._v;
-    }
-    bool operator>(const multiprecision_int& x) const {
-        return _v > x._v;
-    }
-    bool operator>=(const multiprecision_int& x) const {
-        return _v >= x._v;
-    }
-    bool operator<(const multiprecision_int& x) const {
-        return _v < x._v;
-    }
-    bool operator<=(const multiprecision_int& x) const {
-        return _v <= x._v;
-    }
+    std::strong_ordering operator<=>(const multiprecision_int& x) const = default;
     template <typename T>
     bool operator==(const T& x) const {
         return _v == maybe_unwrap(x);
-    }
-    template <typename T>
-    bool operator!=(const T& x) const {
-        return _v != maybe_unwrap(x);
     }
     template <typename T>
     bool operator>(const T& x) const {
@@ -230,30 +210,6 @@ public:
     template <typename T>
     friend multiprecision_int operator>>(const T& x, const multiprecision_int& y) {
         return cpp_int(maybe_unwrap(x) >> y._v);
-    }
-    template <typename T>
-    friend bool operator==(const T& x, const multiprecision_int& y) {
-        return maybe_unwrap(x) == y._v;
-    }
-    template <typename T>
-    friend bool operator!=(const T& x, const multiprecision_int& y) {
-        return maybe_unwrap(x) != y._v;
-    }
-    template <typename T>
-    friend bool operator>(const T& x, const multiprecision_int& y) {
-        return maybe_unwrap(x) > y._v;
-    }
-    template <typename T>
-    friend bool operator>=(const T& x, const multiprecision_int& y) {
-        return maybe_unwrap(x) >= y._v;
-    }
-    template <typename T>
-    friend bool operator<(const T& x, const multiprecision_int& y) {
-        return maybe_unwrap(x) < y._v;
-    }
-    template <typename T>
-    friend bool operator<=(const T& x, const multiprecision_int& y) {
-        return maybe_unwrap(x) <= y._v;
     }
     std::string str() const;
     friend std::ostream& operator<<(std::ostream& os, const multiprecision_int& x);

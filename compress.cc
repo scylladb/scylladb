@@ -175,10 +175,6 @@ bool compression_parameters::operator==(const compression_parameters& other) con
            && _crc_check_chance == other._crc_check_chance;
 }
 
-bool compression_parameters::operator!=(const compression_parameters& other) const {
-    return !(*this == other);
-}
-
 void compression_parameters::validate_options(const std::map<sstring, sstring>& options) {
     // currently, there are no options specific to a particular compressor
     static std::set<sstring> keywords({

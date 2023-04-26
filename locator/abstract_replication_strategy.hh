@@ -147,7 +147,6 @@ public:
         factory_key(const factory_key&) = default;
 
         bool operator==(const factory_key& o) const = default;
-        bool operator!=(const factory_key& o) const = default;
 
         sstring to_sstring() const;
     };

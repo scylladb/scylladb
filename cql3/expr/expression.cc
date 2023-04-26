@@ -56,10 +56,6 @@ bool operator==(const expression& e1, const expression& e2) {
     }, e1);
 }
 
-bool operator!=(const expression& e1, const expression& e2) {
-    return !(e1 == e2);
-}
-
 expression::expression(const expression& o)
         : _v(std::make_unique<impl>(*o._v)) {
 }

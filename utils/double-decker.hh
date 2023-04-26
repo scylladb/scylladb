@@ -89,8 +89,7 @@ public:
             return cur;
         }
 
-        bool operator==(const iterator_base& o) const noexcept { return _bucket == o._bucket && _idx == o._idx; }
-        bool operator!=(const iterator_base& o) const noexcept { return !(*this == o); }
+        bool operator==(const iterator_base& o) const noexcept = default;
     };
 
     using const_iterator = iterator_base<true>;

@@ -35,15 +35,8 @@ public:
     ///
     authenticated_user() = default;
     explicit authenticated_user(std::string_view name);
+    friend bool operator==(const authenticated_user&, const authenticated_user&) noexcept = default;
 };
-
-inline bool operator==(const authenticated_user& u1, const authenticated_user& u2) noexcept {
-    return u1.name == u2.name;
-}
-
-inline bool operator!=(const authenticated_user& u1, const authenticated_user& u2) noexcept {
-    return !(u1 == u2);
-}
 
 const authenticated_user& anonymous_user() noexcept;
 

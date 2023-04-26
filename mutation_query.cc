@@ -46,10 +46,6 @@ reconcilable_result::operator==(const reconcilable_result& other) const {
     return boost::equal(_partitions, other._partitions);
 }
 
-bool reconcilable_result::operator!=(const reconcilable_result& other) const {
-    return !(*this == other);
-}
-
 std::ostream& operator<<(std::ostream& out, const reconcilable_result::printer& pr) {
     out << "{rows=" << pr.self.row_count() << ", short_read="
         << pr.self.is_short_read() << ", [";

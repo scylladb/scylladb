@@ -31,25 +31,10 @@ public:
     const dht::ring_position_view& position() const {
         return *_rpv;
     }
-    friend std::strong_ordering tri_compare(const compatible_ring_position_or_view& x, const compatible_ring_position_or_view& y) {
-        return dht::ring_position_tri_compare(*x._schema, x.position(), y.position());
+    std::strong_ordering operator<=>(const compatible_ring_position_or_view& other) const {
+        return dht::ring_position_tri_compare(*_schema, position(), other.position());
     }
-    friend bool operator<(const compatible_ring_position_or_view& x, const compatible_ring_position_or_view& y) {
-        return tri_compare(x, y) < 0;
-    }
-    friend bool operator<=(const compatible_ring_position_or_view& x, const compatible_ring_position_or_view& y) {
-        return tri_compare(x, y) <= 0;
-    }
-    friend bool operator>(const compatible_ring_position_or_view& x, const compatible_ring_position_or_view& y) {
-        return tri_compare(x, y) > 0;
-    }
-    friend bool operator>=(const compatible_ring_position_or_view& x, const compatible_ring_position_or_view& y) {
-        return tri_compare(x, y) >= 0;
-    }
-    friend bool operator==(const compatible_ring_position_or_view& x, const compatible_ring_position_or_view& y) {
-        return tri_compare(x, y) == 0;
-    }
-    friend bool operator!=(const compatible_ring_position_or_view& x, const compatible_ring_position_or_view& y) {
-        return tri_compare(x, y) != 0;
+    bool operator==(const compatible_ring_position_or_view& other) const {
+        return *this <=> other == 0;
     }
 };

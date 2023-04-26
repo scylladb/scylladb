@@ -103,9 +103,6 @@ public:
         return _cf_names_idx == i._cf_names_idx
             && _ranges_idx == i._ranges_idx;
     }
-    bool operator!=(const virtual_row_iterator& i) const {
-        return !(*this == i);
-    }
 };
 
 /**

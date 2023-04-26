@@ -93,9 +93,6 @@ public:
         bool operator==(const iterator& other) const {
             return _position == other._position;
         }
-        bool operator!=(const iterator& other) const {
-            return !(*this == other);
-        }
     };
 public:
     explicit partition_cells_range(const mutation_partition& mp) : _mp(mp) { }

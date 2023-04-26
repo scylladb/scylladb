@@ -77,14 +77,3 @@ caching_options
 caching_options::from_sstring(const sstring& str) {
     return from_map(rjson::parse_to_map<std::map<sstring, sstring>>(str));
 }
-
-bool
-caching_options::operator==(const caching_options& other) const {
-    return _key_cache == other._key_cache && _row_cache == other._row_cache
-        && _enabled == other._enabled;
-}
-
-bool
-caching_options::operator!=(const caching_options& other) const {
-    return !(*this == other);
-}

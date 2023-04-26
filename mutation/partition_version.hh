@@ -251,9 +251,6 @@ public:
         bool operator==(const change_mark& m) const {
             return _reclaim_count == m._reclaim_count && _versions_count == m._versions_count;
         }
-        bool operator!=(const change_mark& m) const {
-            return !(*this == m);
-        }
         explicit operator bool() const {
             return _reclaim_count > 0;
         }

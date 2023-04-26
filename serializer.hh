@@ -87,9 +87,6 @@ public:
         bool operator==(const iterator& other) const {
             return _left == other._left;
         }
-        bool operator!=(const iterator& other) const {
-            return !(*this == other);
-        }
     };
     using const_iterator = iterator;
 

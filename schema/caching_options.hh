@@ -42,9 +42,5 @@ public:
     static caching_options from_map(const std::map<sstring, sstring>& map);
     static caching_options from_sstring(const sstring& str);
 
-    bool operator==(const caching_options& other) const;
-    bool operator!=(const caching_options& other) const;
+    bool operator==(const caching_options& other) const = default;
 };
-
-
-

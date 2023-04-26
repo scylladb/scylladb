@@ -60,9 +60,6 @@ public:
     bool operator==(const tuple_deserializing_iterator& x) const {
         return _v == x._v;
     }
-    bool operator!=(const tuple_deserializing_iterator& x) const {
-        return !operator==(x);
-    }
 private:
     void parse() {
         _current = std::nullopt;

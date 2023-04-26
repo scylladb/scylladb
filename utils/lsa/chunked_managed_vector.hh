@@ -240,9 +240,6 @@ public:
         bool operator==(iterator_type x) const {
             return _i == x._i;
         }
-        bool operator!=(iterator_type x) const {
-            return _i != x._i;
-        }
         bool operator<(iterator_type x) const {
             return _i < x._i;
         }
@@ -277,9 +274,6 @@ public:
 public:
     bool operator==(const chunked_managed_vector& x) const {
         return boost::equal(*this, x);
-    }
-    bool operator!=(const chunked_managed_vector& x) const {
-        return !operator==(x);
     }
 
     // Returns the amount of external memory used to hold inserted items.

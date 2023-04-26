@@ -97,9 +97,6 @@ public:
     bool operator==(const listlike_partial_deserializing_iterator& x) const {
         return _remain == x._remain;
     }
-    bool operator!=(const listlike_partial_deserializing_iterator& x) const {
-        return _remain != x._remain;
-    }
     static listlike_partial_deserializing_iterator begin(managed_bytes_view& in) {
         return { in };
     }

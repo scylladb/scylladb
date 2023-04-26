@@ -26,13 +26,11 @@ struct add_op {
     sstring name;
     service_level_options slo;
     bool operator==(const add_op& other) const = default;
-    bool operator!=(const add_op& other) const = default;
 };
 
 struct remove_op {
     sstring name;
     bool operator==(const remove_op& other) const = default;
-    bool operator!=(const remove_op& other) const = default;
 };
 
 struct change_op {
@@ -40,7 +38,6 @@ struct change_op {
     service_level_options slo_before;
     service_level_options slo_after;
     bool operator==(const change_op& other) const = default;
-    bool operator!=(const change_op& other) const = default;
 };
 
 using service_level_op =  std::variant<add_op, remove_op, change_op>;

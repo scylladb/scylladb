@@ -61,10 +61,6 @@ struct partition {
     bool operator==(const partition& other) const {
         return row_count() == other.row_count() && _m.representation() == other._m.representation();
     }
-
-    bool operator!=(const partition& other) const {
-        return !(*this == other);
-    }
 };
 
 // The partitions held by this object are ordered according to dht::decorated_key ordering and non-overlapping.
@@ -111,7 +107,6 @@ public:
     }
 
     bool operator==(const reconcilable_result& other) const;
-    bool operator!=(const reconcilable_result& other) const;
 
     struct printer {
         const reconcilable_result& self;

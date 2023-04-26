@@ -17,10 +17,6 @@ std::ostream& operator<<(std::ostream& os, const role_or_anonymous& mr) {
     return os;
 }
 
-bool operator==(const role_or_anonymous& mr1, const role_or_anonymous& mr2) noexcept {
-    return mr1.name == mr2.name;
-}
-
 bool is_anonymous(const role_or_anonymous& mr) noexcept {
     return !mr.name.has_value();
 }

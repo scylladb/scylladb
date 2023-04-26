@@ -256,7 +256,6 @@ public:
     bytes_opt serialize() const;
     bytes serialize_nonnull() const;
     friend bool operator==(const data_value& x, const data_value& y);
-    friend inline bool operator!=(const data_value& x, const data_value& y);
     friend class abstract_type;
     static data_value make_null(data_type type) {
         return data_value(nullptr, std::move(type));
@@ -548,11 +547,6 @@ public:
 };
 
 bool operator==(const data_value& x, const data_value& y);
-
-inline bool operator!=(const data_value& x, const data_value& y)
-{
-    return !(x == y);
-}
 
 using bytes_view_opt = std::optional<bytes_view>;
 using managed_bytes_view_opt = std::optional<managed_bytes_view>;

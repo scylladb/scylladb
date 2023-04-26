@@ -40,10 +40,6 @@ inline bool operator==(const processing_result& result, proceed value) {
     return (p != nullptr && *p == value);
 }
 
-inline bool operator!=(const processing_result& result, proceed value) {
-    return !(result == value);
-}
-
 enum class read_status { ready, waiting };
 
 // Incremental parser for primitive data types.

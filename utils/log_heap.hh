@@ -178,9 +178,6 @@ public:
         bool operator==(const hist_iterator& other) const noexcept {
             return _b == other._b && _it == other._it;
         }
-        bool operator!=(const hist_iterator& other) const noexcept {
-            return !(*this == other);
-        }
     };
     using iterator = hist_iterator<false>;
     using const_iterator = hist_iterator<true>;
