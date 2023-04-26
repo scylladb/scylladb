@@ -88,18 +88,9 @@ public:
         throw no_value(column_name);
     }
     const std::unordered_map<sstring, non_null_data_value>& cells() const { return _cells; }
-    friend inline bool operator==(const result_set_row& x, const result_set_row& y);
-    friend inline bool operator!=(const result_set_row& x, const result_set_row& y);
+    friend inline bool operator==(const result_set_row& x, const result_set_row& y) = default;
     friend std::ostream& operator<<(std::ostream& out, const result_set_row& row);
 };
-
-inline bool operator==(const result_set_row& x, const result_set_row& y) {
-    return x._schema == y._schema && x._cells == y._cells;
-}
-
-inline bool operator!=(const result_set_row& x, const result_set_row& y) {
-    return !(x == y);
-}
 
 // Result set is an in-memory representation of query results in
 // deserialized format. To obtain a result set, use the result_set_builder

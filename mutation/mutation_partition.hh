@@ -610,9 +610,6 @@ public:
         }
         return _ttl == no_ttl || _expiry == other._expiry;
     }
-    bool operator!=(const row_marker& other) const {
-        return !(*this == other);
-    }
     // Consistent with operator==()
     template<typename Hasher>
     void feed_hash(Hasher& h) const {
@@ -652,7 +649,6 @@ public:
     }
 
     bool operator==(const shadowable_tombstone&) const = default;
-    bool operator!=(const shadowable_tombstone&) const = default;
 
     explicit operator bool() const {
         return bool(_tomb);
@@ -746,9 +742,6 @@ public:
     }
     bool operator==(const row_tombstone& t) const {
         return _shadowable == t._shadowable;
-    }
-    bool operator!=(const row_tombstone& t) const {
-        return _shadowable != t._shadowable;
     }
 
     explicit operator bool() const {

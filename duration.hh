@@ -110,6 +110,12 @@ public:
     months_counter::value_type months{0};
     days_counter::value_type days{0};
     nanoseconds_counter::value_type nanoseconds{0};
+
+    //
+    // Note that equality comparison is based on exact counter matches. It is not valid to expect equivalency across
+    // counters like months and days. See the documentation for `duration` for more.
+    //
+    friend bool operator==(const cql_duration&, const cql_duration&) noexcept = default;
 };
 
 //
@@ -121,11 +127,3 @@ std::ostream& operator<<(std::ostream& os, const cql_duration& d);
 
 // See above.
 seastar::sstring to_string(const cql_duration&);
-
-//
-// Note that equality comparison is based on exact counter matches. It is not valid to expect equivalency across
-// counters like months and days. See the documentation for `duration` for more.
-//
-
-bool operator==(const cql_duration&, const cql_duration&) noexcept;
-bool operator!=(const cql_duration&, const cql_duration&) noexcept;

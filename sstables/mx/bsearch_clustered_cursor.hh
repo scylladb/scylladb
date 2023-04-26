@@ -63,7 +63,6 @@ public:
 
         bool operator<(const promoted_index_block& other) const { return index < other.index; }
         bool operator==(const promoted_index_block& other) const { return index == other.index; }
-        bool operator!=(const promoted_index_block& other) const { return index != other.index; }
 
         friend std::ostream& operator<<(std::ostream& out, const promoted_index_block& b) {
             return out << "{idx=" << b.index

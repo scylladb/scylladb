@@ -117,19 +117,11 @@ private:
     friend class functions_resource_view;
 
     friend bool operator<(const resource&, const resource&);
-    friend bool operator==(const resource&, const resource&);
+    friend bool operator==(const resource&, const resource&) = default;
     friend resource parse_resource(std::string_view);
 };
 
 bool operator<(const resource&, const resource&);
-
-inline bool operator==(const resource& r1, const resource& r2) {
-    return (r1._kind == r2._kind) && (r1._parts == r2._parts);
-}
-
-inline bool operator!=(const resource& r1, const resource& r2) {
-    return !(r1 == r2);
-}
 
 std::ostream& operator<<(std::ostream&, const resource&);
 

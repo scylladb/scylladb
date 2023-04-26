@@ -58,13 +58,7 @@ public:
         return key.key().second;
     }
 
-    bool operator==(const prepared_cache_key_type& other) const {
-        return _key == other._key;
-    }
-
-    bool operator!=(const prepared_cache_key_type& other) const {
-        return !(*this == other);
-    }
+    bool operator==(const prepared_cache_key_type& other) const = default;
 };
 
 class prepared_statements_cache {

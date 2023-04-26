@@ -451,11 +451,3 @@ seastar::sstring to_string(const cql_duration& d) {
     ss << d;
     return ss.str();
 }
-
-bool operator==(const cql_duration& d1, const cql_duration& d2) noexcept {
-    return (d1.months == d2.months) && (d1.days == d2.days) && (d1.nanoseconds == d2.nanoseconds);
-}
-
-bool operator!=(const cql_duration& d1, const cql_duration& d2) noexcept {
-    return !(d1 == d2);
-}

@@ -96,10 +96,6 @@ bool column_identifier_raw::operator==(const column_identifier_raw& other) const
     return _text == other._text;
 }
 
-bool column_identifier_raw::operator!=(const column_identifier_raw& other) const {
-    return !operator==(other);
-}
-
 sstring column_identifier_raw::to_string() const {
     return _text;
 }

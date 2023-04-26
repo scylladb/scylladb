@@ -75,12 +75,7 @@ public:
             ++(*this);
             return tmp;
         }
-        bool operator==(const fragment_iterator& other) const {
-            return _current == other._current;
-        }
-        bool operator!=(const fragment_iterator& other) const {
-            return _current != other._current;
-        }
+        bool operator==(const fragment_iterator&) const = default;
     };
     using const_iterator = fragment_iterator;
 
@@ -430,10 +425,6 @@ public:
             }
         }
         return true;
-    }
-
-    bool operator!=(const bytes_ostream& other) const {
-        return !(*this == other);
     }
 
     // Makes this instance empty.

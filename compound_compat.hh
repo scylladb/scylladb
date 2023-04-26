@@ -123,10 +123,6 @@ public:
         bool operator==(const iterator& other) const {
             return _offset == other._offset && other._i == _i;
         }
-
-        bool operator!=(const iterator& other) const {
-            return !(*this == other);
-        }
     };
 
     // A trichotomic comparator defined on @CompoundType representations which
@@ -429,7 +425,6 @@ public:
 
         const value_type& operator*() const { return _current; }
         const value_type* operator->() const { return &_current; }
-        bool operator!=(const iterator& i) const { return _v.begin() != i._v.begin(); }
         bool operator==(const iterator& i) const { return _v.begin() == i._v.begin(); }
 
         friend class composite;
@@ -636,7 +631,6 @@ public:
     }
 
     bool operator==(const composite_view& k) const { return k._bytes == _bytes && k._is_compound == _is_compound; }
-    bool operator!=(const composite_view& k) const { return !(k == *this); }
 
     friend fmt::formatter<composite_view>;
 };

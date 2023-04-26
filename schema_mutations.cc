@@ -125,10 +125,6 @@ bool schema_mutations::operator==(const schema_mutations& other) const {
            ;
 }
 
-bool schema_mutations::operator!=(const schema_mutations& other) const {
-    return !(*this == other);
-}
-
 bool schema_mutations::live() const {
     return _columnfamilies.live_row_count() > 0 || _columns.live_row_count() > 0 ||
             (_view_virtual_columns && _view_virtual_columns->live_row_count() > 0) ||

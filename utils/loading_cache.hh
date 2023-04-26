@@ -716,8 +716,7 @@ public:
         }
     }
     value_ptr(std::nullptr_t) noexcept : _ts_val_ptr() {}
-    bool operator==(const value_ptr& x) const { return _ts_val_ptr == x._ts_val_ptr; }
-    bool operator!=(const value_ptr& x) const { return !operator==(x); }
+    bool operator==(const value_ptr&) const = default;
     explicit operator bool() const noexcept { return bool(_ts_val_ptr); }
     value_type& operator*() const noexcept { return _ts_val_ptr->value(); }
     value_type* operator->() const noexcept { return &_ts_val_ptr->value(); }

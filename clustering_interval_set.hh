@@ -75,8 +75,7 @@ public:
             const interval::interval_type& iv = *_i;
             return position_range{iv.lower().position(), iv.upper().position()};
         }
-        bool operator==(const position_range_iterator& other) const { return _i == other._i; }
-        bool operator!=(const position_range_iterator& other) const { return _i != other._i; }
+        bool operator==(const position_range_iterator& other) const = default;
         position_range_iterator& operator++() {
             ++_i;
             return *this;

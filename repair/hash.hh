@@ -20,15 +20,7 @@ public:
     void add(const repair_hash& other) {
         hash ^= other.hash;
     }
-    bool operator==(const repair_hash& x) const {
-        return x.hash == hash;
-    }
-    bool operator!=(const repair_hash& x) const {
-        return x.hash != hash;
-    }
-    bool operator<(const repair_hash& x) const {
-        return x.hash < hash;
-    }
+    std::strong_ordering operator<=>(const repair_hash&) const = default;
     friend std::ostream& operator<<(std::ostream& os, const repair_hash& x) {
         return os << x.hash;
     }

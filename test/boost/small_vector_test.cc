@@ -49,12 +49,7 @@ public:
         return it;
     }
 
-    bool operator==(const input_iterator_wrapper& other) const {
-        return _it == other._it;
-    }
-    bool operator!=(const input_iterator_wrapper& other) const {
-        return _it != other._it;
-    }
+    bool operator==(const input_iterator_wrapper& other) const = default;
 };
 
 template<typename T>

@@ -1991,7 +1991,6 @@ public:
         reference operator*() const noexcept { return *_value; }
 
         bool operator==(const iterator_base& o) const noexcept { return _value == o._value; }
-        bool operator!=(const iterator_base& o) const noexcept { return !(*this == o); }
     };
 
     using iterator = iterator_base<false>;

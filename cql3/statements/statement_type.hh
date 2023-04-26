@@ -56,13 +56,7 @@ public:
         return size_t(_type);
     }
 
-    bool operator==(const statement_type& other) const {
-        return _type == other._type;
-    }
-
-    bool operator!=(const statement_type& other) const {
-        return !(_type == other._type);
-    }
+    bool operator==(const statement_type&) const = default;
 
     friend std::ostream &operator<<(std::ostream &os, const statement_type& t) {
         switch (t._type) {

@@ -144,8 +144,7 @@ public:
             return *this;
         }
         explicit operator bool() const noexcept { return bool(_e); }
-        bool operator==(const entry_ptr& x) const { return _e == x._e; }
-        bool operator!=(const entry_ptr& x) const { return !operator==(x); }
+        bool operator==(const entry_ptr&) const = default;
         element_type& operator*() const noexcept { return _e->value(); }
         element_type* operator->() const noexcept { return &_e->value(); }
 

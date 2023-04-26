@@ -232,10 +232,6 @@ struct compression {
                 return _index == other._index;
             }
 
-            bool operator!=(const const_iterator& other) const {
-                return !(*this == other);
-            }
-
             bool operator<(const const_iterator& other) const {
                 return _index < other._index;
             }

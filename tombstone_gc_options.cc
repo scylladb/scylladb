@@ -56,16 +56,6 @@ seastar::sstring tombstone_gc_options::to_sstring() const {
     return rjson::print(rjson::from_string_map(to_map()));
 }
 
-bool
-tombstone_gc_options::operator==(const tombstone_gc_options& other) const {
-    return _mode == other._mode && _propagation_delay_in_seconds == other._propagation_delay_in_seconds;
-}
-
-bool
-tombstone_gc_options::operator!=(const tombstone_gc_options& other) const {
-    return !(*this == other);
-}
-
 std::ostream& operator<<(std::ostream& os, const tombstone_gc_mode& mode) {
     switch (mode) {
     case tombstone_gc_mode::timeout:     return os << "timeout";

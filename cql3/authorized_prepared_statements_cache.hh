@@ -57,13 +57,7 @@ public:
 
     const cache_key_type& key() const { return _key; }
 
-    bool operator==(const authorized_prepared_statements_cache_key& other) const {
-        return _key == other._key;
-    }
-
-    bool operator!=(const authorized_prepared_statements_cache_key& other) const {
-        return !(*this == other);
-    }
+    bool operator==(const authorized_prepared_statements_cache_key&) const = default;
 
     static size_t hash(const auth::authenticated_user& user, const cql3::prepared_cache_key_type::cache_key_type& prep_cache_key) {
         return utils::hash_combine(std::hash<auth::authenticated_user>()(user), utils::tuple_hash()(prep_cache_key));

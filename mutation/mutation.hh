@@ -135,7 +135,6 @@ public:
     const table_id& column_family_id() const { return _ptr->_schema->id(); }
     // Consistent with hash<canonical_mutation>
     bool operator==(const mutation&) const;
-    bool operator!=(const mutation&) const;
 public:
     // Consumes the mutation's content.
     //

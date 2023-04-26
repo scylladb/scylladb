@@ -214,12 +214,7 @@ public:
     double get_value() const {
         return _v;
     }
-    bool operator==(const speculative_retry& other) const {
-        return _t == other._t && _v == other._v;
-    }
-    bool operator!=(const speculative_retry& other) const {
-        return !(*this == other);
-    }
+    bool operator==(const speculative_retry& other) const = default;
 };
 
 typedef std::unordered_map<sstring, sstring> index_options_map;
@@ -394,7 +389,6 @@ public:
 };
 
 bool operator==(const column_definition&, const column_definition&);
-inline bool operator!=(const column_definition& a, const column_definition& b) { return !(a == b); }
 
 static constexpr int DEFAULT_MIN_COMPACTION_THRESHOLD = 4;
 static constexpr int DEFAULT_MAX_COMPACTION_THRESHOLD = 32;
@@ -422,7 +416,6 @@ public:
 };
 
 bool operator==(const column_mapping_entry& lhs, const column_mapping_entry& rhs);
-bool operator!=(const column_mapping_entry& lhs, const column_mapping_entry& rhs);
 
 // Encapsulates information needed for converting mutations between different schema versions.
 //

@@ -167,9 +167,6 @@ public:
         bool operator==(const iterator& other) const noexcept {
             return _left == other._left;
         }
-        bool operator!=(const iterator& other) const noexcept {
-            return !(*this == other);
-        }
     };
 
     using const_iterator = iterator;
@@ -267,10 +264,6 @@ public:
             other_fragment.remove_prefix(length);
         }
         return this_it == end() && other_it == other.end();
-    }
-
-    bool operator!=(const fragmented_temporary_buffer::view& other) const noexcept {
-        return !(*this == other);
     }
 };
 static_assert(FragmentRange<fragmented_temporary_buffer::view>);

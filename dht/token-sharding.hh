@@ -63,11 +63,6 @@ public:
     bool operator==(const sharder& o) const {
         return _shard_count == o._shard_count && _sharding_ignore_msb_bits == o._sharding_ignore_msb_bits;
     }
-
-    bool operator!=(const sharder& o) const {
-        return !(*this == o);
-    }
-
 };
 
 inline std::ostream& operator<<(std::ostream& os, const sharder& sharder) {

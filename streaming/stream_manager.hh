@@ -54,12 +54,7 @@ struct stream_bytes {
         ret += y;
         return ret;
     }
-    friend bool operator!=(const stream_bytes& x, const stream_bytes& y) {
-        return x.bytes_sent != y.bytes_sent && x.bytes_received != y.bytes_received;
-    }
-    friend bool operator==(const stream_bytes& x, const stream_bytes& y) {
-        return x.bytes_sent == y.bytes_sent && x.bytes_received == y.bytes_received;
-    }
+    friend bool operator==(const stream_bytes&, const stream_bytes&) = default;
     stream_bytes& operator+=(const stream_bytes& x) {
         bytes_sent += x.bytes_sent;
         bytes_received += x.bytes_received;

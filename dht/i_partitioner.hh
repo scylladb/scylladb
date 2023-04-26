@@ -160,9 +160,6 @@ public:
     bool operator==(const i_partitioner& o) const {
         return name() == o.name();
     }
-    bool operator!=(const i_partitioner& o) const {
-        return !(*this == o);
-    }
 };
 
 //

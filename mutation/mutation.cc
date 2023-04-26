@@ -87,10 +87,6 @@ bool mutation::operator==(const mutation& m) const {
            && partition().equal(*schema(), m.partition(), *m.schema());
 }
 
-bool mutation::operator!=(const mutation& m) const {
-    return !(*this == m);
-}
-
 uint64_t
 mutation::live_row_count(gc_clock::time_point query_time) const {
     return partition().live_row_count(*schema(), query_time);

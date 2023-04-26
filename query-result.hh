@@ -268,12 +268,7 @@ public:
     result_digest() = default;
     result_digest(type&& digest) : _digest(std::move(digest)) {}
     const type& get() const { return _digest; }
-    bool operator==(const result_digest& rh) const {
-        return _digest == rh._digest;
-    }
-    bool operator!=(const result_digest& rh) const {
-        return _digest != rh._digest;
-    }
+    bool operator==(const result_digest& rh) const = default;
 };
 
 //

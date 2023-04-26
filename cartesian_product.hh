@@ -68,7 +68,6 @@ public:
             _pos = -1;
         }
         bool operator==(const iterator& o) const { return _pos == o._pos; }
-        bool operator!=(const iterator& o) const { return _pos != o._pos; }
     };
 public:
     cartesian_product(const std::vector<std::vector<T>>& vec_of_vecs) : _vec_of_vecs(vec_of_vecs) {}

@@ -46,12 +46,7 @@ public:
             operator--();
             return it;
         }
-        bool operator==(const iterator& other) const {
-            return _position == other._position;
-        }
-        bool operator!=(const iterator& other) const {
-            return !(*this == other);
-        }
+        bool operator==(const iterator&) const = default;
     };
 
     template <typename ValueType>
@@ -76,12 +71,7 @@ public:
             operator++();
             return it;
         }
-        bool operator==(const reverse_iterator& other) const {
-            return _position == other._position;
-        }
-        bool operator!=(const reverse_iterator& other) const {
-            return !(*this == other);
-        }
+        bool operator==(const reverse_iterator& other) const = default;
     };
 
     class range {

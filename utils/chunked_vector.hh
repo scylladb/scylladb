@@ -264,9 +264,6 @@ public:
         bool operator==(iterator_type x) const {
             return _i == x._i;
         }
-        bool operator!=(iterator_type x) const {
-            return _i != x._i;
-        }
         bool operator<(iterator_type x) const {
             return _i < x._i;
         }
@@ -301,9 +298,6 @@ public:
 public:
     bool operator==(const chunked_vector& x) const {
         return boost::equal(*this, x);
-    }
-    bool operator!=(const chunked_vector& x) const {
-        return !operator==(x);
     }
 };
 

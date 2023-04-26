@@ -34,7 +34,6 @@ struct tombstone final {
 
     std::strong_ordering operator<=>(const tombstone& t) const = default;
     bool operator==(const tombstone&) const = default;
-    bool operator!=(const tombstone&) const = default;
 
     explicit operator bool() const {
         return timestamp != api::missing_timestamp;

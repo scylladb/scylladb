@@ -73,10 +73,6 @@ bool operator==(const column_mapping_entry& lhs, const column_mapping_entry& rhs
     return lhs.name() == rhs.name() && lhs.type() == rhs.type();
 }
 
-bool operator!=(const column_mapping_entry& lhs, const column_mapping_entry& rhs) {
-    return !(lhs == rhs);
-}
-
 bool operator==(const column_mapping& lhs, const column_mapping& rhs) {
     const auto& lhs_columns = lhs.columns(), rhs_columns = rhs.columns();
     if (lhs_columns.size() != rhs_columns.size()) {

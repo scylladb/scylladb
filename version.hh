@@ -28,26 +28,7 @@ public:
         return v;
     }
 
-    bool operator==(version v) const {
-        return _version == v._version;
-    }
-
-    bool operator!=(version v) const {
-        return _version != v._version;
-    }
-
-    bool operator<(version v) const {
-        return _version < v._version;
-    }
-    bool operator<=(version v) {
-        return _version <= v._version;
-    }
-    bool operator>(version v) {
-        return _version > v._version;
-    }
-    bool operator>=(version v) {
-        return _version >= v._version;
-    }
+    std::strong_ordering operator<=>(const version&) const = default;
 };
 
 inline const seastar::sstring& release() {

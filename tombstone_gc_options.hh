@@ -27,8 +27,7 @@ public:
     }
     std::map<seastar::sstring, seastar::sstring> to_map() const;
     seastar::sstring to_sstring() const;
-    bool operator==(const tombstone_gc_options& other) const;
-    bool operator!=(const tombstone_gc_options& other) const;
+    bool operator==(const tombstone_gc_options&) const = default;
 };
 
 std::ostream& operator<<(std::ostream& os, const tombstone_gc_mode& m);

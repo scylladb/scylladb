@@ -26,15 +26,10 @@ public:
     role_or_anonymous() = default;
     role_or_anonymous(std::string_view name) : name(name) {
     }
+    friend bool operator==(const role_or_anonymous&, const role_or_anonymous&) noexcept = default;
 };
 
 std::ostream& operator<<(std::ostream&, const role_or_anonymous&);
-
-bool operator==(const role_or_anonymous&, const role_or_anonymous&) noexcept;
-
-inline bool operator!=(const role_or_anonymous& mr1, const role_or_anonymous& mr2) noexcept {
-    return !(mr1 == mr2);
-}
 
 bool is_anonymous(const role_or_anonymous&) noexcept;
 

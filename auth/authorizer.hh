@@ -39,10 +39,6 @@ inline bool operator==(const permission_details& pd1, const permission_details& 
             == std::forward_as_tuple(pd2.role_name, pd2.resource, pd2.permissions.mask());
 }
 
-inline bool operator!=(const permission_details& pd1, const permission_details& pd2) {
-    return !(pd1 == pd2);
-}
-
 inline bool operator<(const permission_details& pd1, const permission_details& pd2) {
     return std::forward_as_tuple(pd1.role_name, pd1.resource, pd1.permissions)
             < std::forward_as_tuple(pd2.role_name, pd2.resource, pd2.permissions);

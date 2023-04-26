@@ -65,7 +65,6 @@ public:
     void ttl(int v) { _ttl = v; }
 
     bool operator==(const options& o) const;
-    bool operator!=(const options& o) const;
 };
 
 } // namespace cdc

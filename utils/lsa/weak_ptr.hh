@@ -102,8 +102,7 @@ public:
 
     explicit operator bool() const { return _ptr && _ptr->engaged(); }
 
-    bool operator==(const weak_ptr& o) const noexcept { return _ptr == o._ptr; }
-    bool operator!=(const weak_ptr& o) const noexcept { return _ptr != o._ptr; }
+    bool operator==(const weak_ptr& o) const noexcept = default;
 
     // Returns true iff there are no other weak_ptr:s to this object.
     bool unique() const {

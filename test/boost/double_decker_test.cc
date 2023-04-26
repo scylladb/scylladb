@@ -38,11 +38,7 @@ public:
         return seastar::format("{}.{}", key, sub_key);
     }
 
-    bool operator==(const compound_key& other) const {
-        return key == other.key && sub_key == other.sub_key;
-    }
-
-    bool operator!=(const compound_key& other) const { return !(*this == other); }
+    bool operator==(const compound_key&) const = default;
 
     struct compare {
         std::strong_ordering operator()(const int& a, const int& b) const { return a <=> b; }

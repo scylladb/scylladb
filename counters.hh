@@ -78,9 +78,6 @@ public:
         return id() == other.id() && value() == other.value()
                && logical_clock() == other.logical_clock();
     }
-    bool operator!=(const basic_counter_shard_view& other) const {
-        return !(*this == other);
-    }
 
     struct less_compare_by_id {
         bool operator()(const basic_counter_shard_view& x, const basic_counter_shard_view& y) const {

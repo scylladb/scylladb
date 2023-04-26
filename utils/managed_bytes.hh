@@ -294,10 +294,6 @@ public:
         }
     }
 
-    bool operator!=(const managed_bytes& o) const {
-        return !(*this == o);
-    }
-
     bytes_view::value_type& operator[](size_type index) {
         return value_at_index(index);
     }

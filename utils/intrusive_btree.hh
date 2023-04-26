@@ -799,7 +799,6 @@ public:
         }
 
         bool operator==(const iterator_base& o) const noexcept { return is_end() ? o.is_end() : _hook == o._hook; }
-        bool operator!=(const iterator_base& o) const noexcept { return !(*this == o); }
         operator bool() const noexcept { return !is_end(); }
 
         /*
