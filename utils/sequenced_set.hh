@@ -129,6 +129,10 @@ public:
         return _set;
     }
 
+    auto extract_set() && noexcept {
+        return std::move(_set);
+    }
+
     bool contains(const T& t) const noexcept {
         return _set.contains(t);
     }
