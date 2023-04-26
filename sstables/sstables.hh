@@ -317,9 +317,8 @@ public:
         return _index_file;
     }
     file uncached_index_file();
-    uint64_t filter_size() const {
-        return _filter_file_size;
-    }
+    // Returns size of bloom filter data.
+    uint64_t filter_size() const;
 
     db_clock::time_point data_file_write_time() const {
         return _data_file_write_time;
@@ -496,7 +495,6 @@ public:
         virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) = 0;
         struct stat {
             uint64_t bytes_on_disk = 0;
-            uint64_t filter_file_size = 0;
         };
         virtual future<stat> get_stats(const sstable& sst) = 0;
 
@@ -537,7 +535,6 @@ private:
     file _data_file;
     uint64_t _data_file_size;
     uint64_t _index_file_size;
-    uint64_t _filter_file_size = 0;
     uint64_t _bytes_on_disk = 0;
     db_clock::time_point _data_file_write_time;
     position_range _min_max_position_range = position_range::all_clustered_rows();

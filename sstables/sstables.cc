@@ -1469,9 +1469,6 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
     _run_identifier = _components->scylla_metadata->get_optional_run_identifier().value_or(run_id::create_random_id());
     auto stat = co_await _storage->get_stats(*this);
     _bytes_on_disk = stat.bytes_on_disk;
-    if (stat.filter_file_size != 0) {
-        _filter_file_size = stat.filter_file_size;
-    }
     if (cfg.load_first_and_last_position_metadata) {
         co_await load_first_and_last_position_in_partition();
     }
@@ -1497,13 +1494,6 @@ future<sstable::storage::stat> sstable::filesystem_storage::get_stats(const ssta
             co_return f.get0().allocated_size;
         }));
         ret.bytes_on_disk += bytes;
-    }
-
-    if (sst.has_component(component_type::Filter)) {
-        auto size = co_await io_check([&] {
-            return file_size(sst.filename(component_type::Filter));
-        });
-        ret.filter_file_size = size;
     }
 
     co_return ret;
@@ -2005,6 +1995,10 @@ uint64_t sstable::ondisk_data_size() const {
 uint64_t sstable::bytes_on_disk() const {
     assert(_bytes_on_disk > 0);
     return _bytes_on_disk;
+}
+
+uint64_t sstable::filter_size() const {
+    return _components->filter->memory_size();
 }
 
 const bool sstable::has_component(component_type f) const {
