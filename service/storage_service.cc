@@ -692,6 +692,12 @@ future<> storage_service::topology_change_coordinator_fiber(raft::server& raft, 
                 // See the large FIXME below.
                 auto cdc_gen_ts = cdc::new_generation_timestamp(add_ts_delay, get_ring_delay());
                 auto cdc_gen_uuid = node.rs->ring.value().new_cdc_generation_data_uuid;
+                if (!cdc_gen_uuid) {
+                    on_internal_error(slogger, format(
+                        "raft topology: new CDC generation data UUID missing in `commit_cdc_generation` state"
+                        ", transitioning node: {}", node.id));
+                }
+
                 cdc::generation_id_v2 cdc_gen_id {
                     .ts = cdc_gen_ts,
                     .id = cdc_gen_uuid,
@@ -1124,7 +1130,9 @@ future<> storage_service::raft_replace(raft::server& raft_server, raft::server_i
                .set("release_version", version::release())
                .set("topology_request", topology_request::replace)
                .set("replaced_id", replaced_id)
-               .set("num_tokens", _db.local().get_config().num_tokens());
+               .set("num_tokens", _db.local().get_config().num_tokens())
+               .set("shard_count", smp::count)
+               .set("ignore_msb", _db.local().get_config().murmur3_partitioner_ignore_msb_bits());
         topology_change change{{builder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, fmt::format("replace {}/{}: add myself ({}) to topology", replaced_id, replaced_ip, raft_server.id()));
         try {
