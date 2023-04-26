@@ -1097,8 +1097,7 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
 
     auto file_path = filename(Type);
     sstlog.debug(("Reading " + sstable_version_constants::get_component_map(_version).at(Type) + " file {} ").c_str(), file_path);
-        try {
-
+    try {
         file fi = co_await new_sstable_component_file(_read_error_handler, Type, open_flags::ro);
         uint64_t size = co_await fi.size();
 
@@ -1112,15 +1111,14 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
         co_await r.close();
 
         maybe_rethrow_exception(std::move(ex));
-
-        }  catch (std::system_error& e) {
-            if (e.code() == std::error_code(ENOENT, std::system_category())) {
-                throw malformed_sstable_exception(file_path + ": file not found");
-            }
-            throw;
-        } catch (malformed_sstable_exception &e) {
-            throw malformed_sstable_exception(e.what(), file_path);
+    }  catch (std::system_error& e) {
+        if (e.code() == std::error_code(ENOENT, std::system_category())) {
+            throw malformed_sstable_exception(file_path + ": file not found");
         }
+        throw;
+    } catch (malformed_sstable_exception& e) {
+        throw malformed_sstable_exception(e.what(), file_path);
+    }
 }
 
 void sstable::do_write_simple(component_type type, const io_priority_class& pc,
