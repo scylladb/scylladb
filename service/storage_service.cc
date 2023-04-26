@@ -686,7 +686,8 @@ class topology_coordinator {
         }
     }
 
-    std::optional<node_to_work_on> get_node_to_work_on_opt(group0_guard guard) {
+    // Returns the guard back if no node to work on is found.
+    std::variant<group0_guard, node_to_work_on> get_node_to_work_on_opt(group0_guard guard) {
         auto& topo = _topo_sm._topology;
         const std::pair<const raft::server_id, replica_state>* e = nullptr;
 
@@ -705,7 +706,7 @@ class topology_coordinator {
         }
 
         if (!e) {
-            return std::nullopt;
+            return guard;
         }
 
         std::optional<request_param> req_param;
@@ -717,13 +718,13 @@ class topology_coordinator {
     };
 
     node_to_work_on get_node_to_work_on(group0_guard guard) {
-        auto node_opt = get_node_to_work_on_opt(std::move(guard));
-        if (!node_opt) {
-            on_internal_error(slogger, ::format(
-                "raft topology: could not find node to work on"
-                " even though the state requires it (state: {})", _topo_sm._topology.tstate));
+        auto node_or_guard = get_node_to_work_on_opt(std::move(guard));
+        if (auto* node = std::get_if<node_to_work_on>(&node_or_guard)) {
+            return std::move(*node);
         }
-        return std::move(*node_opt);
+        on_internal_error(slogger, ::format(
+            "raft topology: could not find node to work on"
+            " even though the state requires it (state: {})", _topo_sm._topology.tstate));
      };
 
     future<group0_guard> start_operation() {
@@ -853,12 +854,12 @@ class topology_coordinator {
     future<bool> handle_topology_transition(group0_guard guard) {
         auto tstate = _topo_sm._topology.tstate;
         if (!tstate) {
-            auto node_opt = get_node_to_work_on_opt(std::move(guard));
-            if (!node_opt) {
-                co_return false;
+            auto node_or_guard = get_node_to_work_on_opt(std::move(guard));
+            if (auto* node = std::get_if<node_to_work_on>(&node_or_guard)) {
+                co_await handle_node_transition(std::move(*node));
+                co_return true;
             }
-            co_await handle_node_transition(std::move(*node_opt));
-            co_return true;
+            co_return false;
         }
 
         bool exec_command_res;
