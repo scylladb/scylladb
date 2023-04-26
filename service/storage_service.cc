@@ -926,10 +926,29 @@ class topology_coordinator {
                 // committed) - they won't coordinate CDC-enabled writes until they reconnect to the
                 // majority and commit.
                 topology_mutation_builder builder(node.guard.write_timestamp());
-                builder.set_transition_state(topology::transition_state::write_both_read_old)
+                builder.set_transition_state(topology::transition_state::publish_cdc_generation)
                        .set_current_cdc_generation_id(cdc_gen_id);
-                auto str = ::format("{}: committed new CDC generation, ID: {}", node.rs->state, cdc_gen_id);
+                auto str = ::format("committed new CDC generation, ID: {}", cdc_gen_id);
                 co_await update_topology_state(take_guard(std::move(node)), {builder.build()}, std::move(str));
+            }
+                break;
+            case topology::transition_state::publish_cdc_generation: {
+                // We just committed a new CDC generation in the commit_cdc_generation step.
+                // Publish it to the user-facing distributed CDC description tables.
+                auto curr_gen_id = _topo_sm._topology.current_cdc_generation_id.value();
+                auto gen_data = co_await _sys_ks.read_cdc_generation(curr_gen_id.id);
+
+                co_await _sys_dist_ks.local().create_cdc_desc(
+                    curr_gen_id.ts, gen_data, { get_token_metadata().count_normal_token_owners() });
+
+                topology_mutation_builder builder(guard.write_timestamp());
+                if (_topo_sm._topology.transition_nodes.empty()) {
+                    builder.del_transition_state();
+                } else {
+                    builder.set_transition_state(topology::transition_state::write_both_read_old);
+                }
+                auto str = ::format("published CDC generation, ID: {}", curr_gen_id);
+                co_await update_topology_state(std::move(guard), {builder.build()}, std::move(str));
             }
                 break;
             case topology::transition_state::write_both_read_old: {
@@ -940,16 +959,6 @@ class topology_coordinator {
                         std::move(node), raft_topology_cmd{raft_topology_cmd::command::barrier}, false);
                 if (!exec_command_res) {
                     break;
-                }
-
-                // If a node is bootstrapping, we just committed a new CDC generation in the commit_cdc_generation step.
-                // Publish it to the user-facing distributed CDC description tables.
-                if (node.rs->state == node_state::bootstrapping) {
-                    auto curr_gen_id = node.topology->current_cdc_generation_id.value();
-                    auto gen_data = co_await _sys_ks.read_cdc_generation(curr_gen_id.id);
-
-                    co_await _sys_dist_ks.local().create_cdc_desc(
-                        curr_gen_id.ts, gen_data, { get_token_metadata().count_normal_token_owners() });
                 }
 
                 raft_topology_cmd cmd{raft_topology_cmd::command::stream_ranges};
