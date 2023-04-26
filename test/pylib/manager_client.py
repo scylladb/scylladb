@@ -65,6 +65,11 @@ class ManagerClient():
             self.ccluster = None
         self.cql = None
 
+    def get_cql(self) -> CassandraSession:
+        """Precondition: driver is connected"""
+        assert(self.cql)
+        return self.cql
+
     # Make driver update endpoints from remote connection
     def _driver_update(self) -> None:
         if self.ccluster is not None:
