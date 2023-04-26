@@ -2104,6 +2104,7 @@ with open(buildfile, 'w') as f:
     f.write(
             'build check: phony {}\n'.format(' '.join(['{mode}-check'.format(mode=mode) for mode in default_modes]))
     )
+    f.write('build ci-build: phony debug release dev dev-headers\n')
 
     f.write(textwrap.dedent(f'''\
         build dist-unified-tar: phony {' '.join([f'$builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz' for mode in default_modes])}
