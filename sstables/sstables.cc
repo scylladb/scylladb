@@ -2652,26 +2652,23 @@ static future<bool> do_validate_uncompressed(input_stream<char>& stream, const c
 future<uint32_t> sstable::read_digest(io_priority_class pc) {
     sstring digest_str;
 
-    /// FIXME: restore indentation
     co_await do_read_simple(component_type::Digest, [&] (version_types v, file digest_file) -> future<> {
+        file_input_stream_options options;
+        options.buffer_size = 4096;
+        options.io_priority_class = pc;
 
-    file_input_stream_options options;
-    options.buffer_size = 4096;
-    options.io_priority_class = pc;
+        auto digest_stream = make_file_input_stream(std::move(digest_file), options);
 
-    auto digest_stream = make_file_input_stream(std::move(digest_file), options);
+        std::exception_ptr ex;
 
-    std::exception_ptr ex;
+        try {
+            digest_str = co_await util::read_entire_stream_contiguous(digest_stream);
+        } catch (...) {
+            ex = std::current_exception();
+        }
 
-    try {
-        digest_str = co_await util::read_entire_stream_contiguous(digest_stream);
-    } catch (...) {
-        ex = std::current_exception();
-    }
-
-    co_await digest_stream.close();
-    maybe_rethrow_exception(std::move(ex));
-
+        co_await digest_stream.close();
+        maybe_rethrow_exception(std::move(ex));
     });
 
     co_return boost::lexical_cast<uint32_t>(digest_str);
@@ -2680,37 +2677,34 @@ future<uint32_t> sstable::read_digest(io_priority_class pc) {
 future<checksum> sstable::read_checksum(io_priority_class pc) {
     sstables::checksum checksum;
 
-    // FIXME: restore indentation
     co_await do_read_simple(component_type::CRC, [&] (version_types v, file crc_file) -> future<> {
+        file_input_stream_options options;
+        options.buffer_size = 4096;
+        options.io_priority_class = pc;
 
-    file_input_stream_options options;
-    options.buffer_size = 4096;
-    options.io_priority_class = pc;
+        auto crc_stream = make_file_input_stream(std::move(crc_file), options);
 
-    auto crc_stream = make_file_input_stream(std::move(crc_file), options);
+        std::exception_ptr ex;
 
-    std::exception_ptr ex;
+        try {
+            const auto size = sizeof(uint32_t);
 
-    try {
-        const auto size = sizeof(uint32_t);
-
-        auto buf = co_await crc_stream.read_exactly(size);
-        check_buf_size(buf, size);
-        checksum.chunk_size = net::ntoh(read_unaligned<uint32_t>(buf.get()));
-
-        buf = co_await crc_stream.read_exactly(size);
-        while (!buf.empty()) {
+            auto buf = co_await crc_stream.read_exactly(size);
             check_buf_size(buf, size);
-            checksum.checksums.push_back(net::ntoh(read_unaligned<uint32_t>(buf.get())));
+            checksum.chunk_size = net::ntoh(read_unaligned<uint32_t>(buf.get()));
+
             buf = co_await crc_stream.read_exactly(size);
+            while (!buf.empty()) {
+                check_buf_size(buf, size);
+                checksum.checksums.push_back(net::ntoh(read_unaligned<uint32_t>(buf.get())));
+                buf = co_await crc_stream.read_exactly(size);
+            }
+        } catch (...) {
+            ex = std::current_exception();
         }
-    } catch (...) {
-        ex = std::current_exception();
-    }
 
-    co_await crc_stream.close();
-    maybe_rethrow_exception(std::move(ex));
-
+        co_await crc_stream.close();
+        maybe_rethrow_exception(std::move(ex));
     });
 
     co_return checksum;
