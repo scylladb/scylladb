@@ -710,6 +710,9 @@ public:
 
     future<std::map<gms::inet_address, float>> effective_ownership(sstring keyspace_name);
 
+    // Must run on shard 0.
+    future<> check_and_repair_cdc_streams(cdc::generation_service&);
+
 private:
     promise<> _drain_finished;
     std::optional<shared_future<>> _transport_stopped;
@@ -789,6 +792,7 @@ private:
     future<> raft_removenode(locator::host_id host_id);
     future<> raft_replace(raft::server&, raft::server_id, gms::inet_address);
     future<> raft_rebuild(sstring source_dc);
+    future<> raft_check_and_repair_cdc_streams();
     future<> update_topology_with_local_metadata(raft::server&);
 
     // This is called on all nodes for each new command received through raft
