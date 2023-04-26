@@ -1130,7 +1130,6 @@ void sstable::do_write_simple(component_type type, const io_priority_class& pc,
     options.buffer_size = sstable_buffer_size;
     options.io_priority_class = pc;
     auto w = make_component_file_writer(type, std::move(options)).get0();
-    std::exception_ptr eptr;
     write_component(_version, w);
     w.close();
 }
