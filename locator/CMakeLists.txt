@@ -4,7 +4,6 @@ add_library(scylla_locator STATIC)
 target_sources(scylla_locator
   PRIVATE
     abstract_replication_strategy.cc
-    azure_snitch.cc
     simple_strategy.cc
     local_strategy.cc
     network_topology_strategy.cc
@@ -15,9 +14,6 @@ target_sources(scylla_locator
     rack_inferring_snitch.cc
     gossiping_property_file_snitch.cc
     production_snitch_base.cc
-    ec2_snitch.cc
-    ec2_multi_region_snitch.cc
-    gce_snitch.cc
     topology.cc
     util.cc)
 target_include_directories(scylla_locator
