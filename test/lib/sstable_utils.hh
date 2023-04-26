@@ -173,19 +173,13 @@ public:
 
     // Used to create synthetic sstables for testing leveled compaction strategy.
     void set_values_for_leveled_strategy(uint64_t fake_data_size, uint32_t sstable_level, int64_t max_timestamp, const partition_key& first_key, const partition_key& last_key) {
-        _sst->_data_file_size = fake_data_size;
-        _sst->_bytes_on_disk = fake_data_size;
         // Create a synthetic stats metadata
         stats_metadata stats = {};
         // leveled strategy sorts sstables by age using max_timestamp, let's set it to 0.
         stats.max_timestamp = max_timestamp;
         stats.sstable_level = sstable_level;
-        _sst->_components->statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
-        _sst->_components->summary.first_key.value = sstables::key::from_partition_key(*_sst->_schema, first_key).get_bytes();
-        _sst->_components->summary.last_key.value = sstables::key::from_partition_key(*_sst->_schema, last_key).get_bytes();
-        _sst->set_first_and_last_keys();
-        _sst->_run_identifier = run_id::create_random_id();
-        _sst->_shards.push_back(this_shard_id());
+
+        set_values(first_key, last_key, std::move(stats), fake_data_size);
     }
 
     void set_values(const partition_key& first_key, const partition_key& last_key, stats_metadata stats, uint64_t data_file_size = 1) {
