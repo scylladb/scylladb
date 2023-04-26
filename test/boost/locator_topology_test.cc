@@ -17,6 +17,7 @@
 #include "utils/fb_utilities.hh"
 #include "locator/host_id.hh"
 #include "locator/topology.hh"
+#include "locator/load_sketch.hh"
 #include "log.hh"
 
 extern logging::logger testlog;
@@ -177,3 +178,119 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
     BOOST_REQUIRE_EQUAL(node->get_state(), locator::node::state::left);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
+    inet_address ip1("192.168.0.1");
+    inet_address ip2("192.168.0.2");
+    inet_address ip3("192.168.0.3");
+
+    auto host1 = host_id(utils::make_random_uuid());
+    auto host2 = host_id(utils::make_random_uuid());
+    auto host3 = host_id(utils::make_random_uuid());
+
+    unsigned node1_shard_count = 7;
+    unsigned node2_shard_count = 1;
+    unsigned node3_shard_count = 3;
+
+    semaphore sem(1);
+    shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
+        topology::config{
+            .this_endpoint = ip1,
+        }
+    });
+
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
+        tm.update_host_id(host1, ip1);
+        tm.update_host_id(host2, ip2);
+        tm.update_host_id(host3, ip3);
+        tm.update_topology(ip1, locator::endpoint_dc_rack::default_location, std::nullopt, node1_shard_count);
+        tm.update_topology(ip2, locator::endpoint_dc_rack::default_location, std::nullopt, node2_shard_count);
+        tm.update_topology(ip3, locator::endpoint_dc_rack::default_location, std::nullopt, node3_shard_count);
+        return make_ready_future<>();
+    }).get();
+
+    // Check that allocation is even when starting from empty state
+    {
+        auto tm = stm.get();
+        load_sketch load(tm);
+        load.populate().get();
+
+        std::vector<unsigned> node1_shards(node1_shard_count, 0);
+        std::vector<unsigned> node2_shards(node2_shard_count, 0);
+        std::vector<unsigned> node3_shards(node3_shard_count, 0);
+
+        for (int i = 0; i < node1_shard_count * 3; ++i) {
+            node1_shards[load.next_shard(host1)] += 1;
+        }
+        for (int i = 0; i < node2_shard_count * 3; ++i) {
+            node2_shards[load.next_shard(host2)] += 1;
+        }
+        for (int i = 0; i < node3_shard_count * 3; ++i) {
+            node3_shards[load.next_shard(host3)] += 1;
+        }
+
+        for (int i = 1; i < node1_shard_count; ++i) {
+            BOOST_REQUIRE_EQUAL(node1_shards[i], node1_shards[0]);
+        }
+        for (int i = 1; i < node2_shard_count; ++i) {
+            BOOST_REQUIRE_EQUAL(node2_shards[i], node2_shards[0]);
+        }
+        for (int i = 1; i < node3_shard_count; ++i) {
+            BOOST_REQUIRE_EQUAL(node3_shards[i], node3_shards[0]);
+        }
+    }
+
+    // Check that imbalance is reduced when starting from unbalanced prior state
+
+    std::vector<unsigned> node3_shards(node3_shard_count, 0);
+
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
+        tablet_metadata tab_meta;
+        tablet_map tmap(4);
+
+        auto tid = tmap.first_tablet();
+        tmap.set_tablet(tid, tablet_info{{
+                tablet_replica{host3, 2}
+        }});
+        node3_shards[2]++;
+
+        tid = *tmap.next_tablet(tid);
+        tmap.set_tablet(tid, tablet_info{{
+                tablet_replica{host3, 2}
+        }});
+        node3_shards[2]++;
+
+        tid = *tmap.next_tablet(tid);
+        tmap.set_tablet(tid, tablet_info{{
+                tablet_replica{host3, 2}
+        }});
+        node3_shards[2]++;
+
+        tid = *tmap.next_tablet(tid);
+        tmap.set_tablet(tid, tablet_info{{
+                tablet_replica{host3, 1}
+        }});
+        node3_shards[1]++;
+
+        auto table = table_id(utils::make_random_uuid());
+        tab_meta.set_tablet_map(table, tmap);
+        tm.set_tablets(std::move(tab_meta));
+        return make_ready_future<>();
+    }).get();
+
+    {
+        auto tm = stm.get();
+        load_sketch load(tm);
+        load.populate().get();
+
+        // host3 has max shard load of 3 and 3 shards, and 4 tablets allocated.
+        // So to achieve even load we need to allocate 3 * 3 - 4 = 5 more tablets.
+        for (int i = 0; i < 5; ++i) {
+            auto s = load.next_shard(host3);
+            node3_shards[s] += 1;
+        }
+
+        for (int i = 1; i < node3_shard_count; ++i) {
+            BOOST_REQUIRE_EQUAL(node3_shards[i], node3_shards[0]);
+        }
+    }
+}
