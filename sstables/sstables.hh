@@ -54,6 +54,8 @@ class large_data_handler;
 
 namespace sstables {
 
+class random_access_reader;
+
 class sstable_directory;
 extern thread_local utils::updateable_value<bool> global_cache_index_pages;
 
@@ -596,6 +598,11 @@ private:
 
     template <component_type Type, typename T>
     future<> read_simple(T& comp, const io_priority_class& pc);
+    future<> do_read_simple(component_type type,
+                            noncopyable_function<future<> (version_types, file&&, uint64_t sz)> read_component);
+    // this variant closes the file on parse completion
+    future<> do_read_simple(component_type type,
+                            noncopyable_function<future<> (version_types, file)> read_component);
 
     template <component_type Type, typename T>
     void write_simple(const T& comp, const io_priority_class& pc);
