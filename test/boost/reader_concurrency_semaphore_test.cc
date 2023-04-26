@@ -1645,6 +1645,14 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_permit_waiting_for_me
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().permit_based_evictions, 1);
     BOOST_REQUIRE_EQUAL(permit2.get_state(), reader_permit::state::evicted);
     BOOST_REQUIRE_THROW(res_fut.get(), std::bad_alloc);
+
+    res.clear();
+
+    // Reproduce #13539: successful request for memory, should not include
+    // amounts of failed request in the past
+    BOOST_REQUIRE(permit2.needs_readmission());
+    permit2.wait_readmission().get();
+    permit2.request_memory(1024).get();
 }
 
 // Check that inactive reads are not needlessly evicted when admission is not

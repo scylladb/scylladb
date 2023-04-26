@@ -187,6 +187,11 @@ private:
     }
 
     void on_permit_inactive(reader_permit::state st) {
+        // If the permit is registered as inactive, while waiting for memory,
+        // clear the memory amount, the requests are failed anyway.
+        if (_state == reader_permit::state::waiting_for_memory) {
+            _requested_memory = {};
+        }
         _state = st;
         if (_marked_as_awaits) {
             on_permit_not_awaits();
