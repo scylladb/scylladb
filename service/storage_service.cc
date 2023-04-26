@@ -347,6 +347,10 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
 
         tmptr->set_version(_topology_state_machine._topology.version);
 
+        auto update_topology = [&] (inet_address ip, const replica_state& rs) {
+            tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack});
+        };
+
         auto add_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
             locator::host_id host_id{id.uuid()};
             auto ip = co_await id2ip(id);
@@ -371,7 +375,7 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
                 co_await _sys_ks.local().update_tokens(rs.ring.value().tokens);
                 co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens) }});
             }
-            tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack});
+            update_topology(ip, rs);
             co_await tmptr->update_normal_tokens(rs.ring.value().tokens, ip);
             tmptr->update_host_id(host_id, ip);
         };
@@ -409,7 +413,7 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
                     co_await _sys_ks.local().update_tokens(ip, {});
                     co_await _sys_ks.local().update_peer_info(ip, "host_id", id.uuid());
                 }
-                tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack});
+                update_topology(ip, rs);
                 if (_topology_state_machine._topology.normal_nodes.empty()) {
                     // This is the first node in the cluster. Insert the tokens as normal to the token ring early
                     // so we can perform writes to regular 'distributed' tables during the bootstrap procedure
@@ -423,7 +427,7 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
                 break;
             case node_state::decommissioning:
             case node_state::removing:
-                tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack});
+                update_topology(ip, rs);
                 co_await tmptr->update_normal_tokens(rs.ring.value().tokens, ip);
                 tmptr->update_host_id(host_id, ip);
                 tmptr->add_leaving_endpoint(ip);
@@ -438,7 +442,7 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
                     on_fatal_internal_error(slogger, ::format("Cannot map id of a node being replaced {} to its ip", replaced_id));
                 }
                 assert(existing_ip);
-                tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack});
+                update_topology(ip, rs);
                 tmptr->add_replacing_endpoint(*existing_ip, ip);
                 co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
             }
