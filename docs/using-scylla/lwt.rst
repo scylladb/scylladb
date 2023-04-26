@@ -2,12 +2,6 @@
 Lightweight Transactions
 ========================
 
-.. versionadded:: 3.2 Scylla Open Source (experimental)
-.. versionchanged:: 4.0 Scylla Open Source (production ready)
-
-
-In releases prior to **Scylla 4.0** this feature is an **experimental** feature, to use it you must :ref:`enable the experimental status <yaml_enabling_experimental_features>`.
-
 There are cases when it is necessary to modify data based on its current state: that is, to perform an update that is executed only if a row does not exist or contains a certain value.
 :abbr:`LWTs (lightweight transactions)` provide this functionality by only allowing changes to data to occur if the condition provided evaluates as true.
 The conditional statements provide linearizable semantics thus allowing data to remain consistent.

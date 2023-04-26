@@ -2,12 +2,6 @@
 Defining Workload Attributes
 =============================
 
-.. versionadded:: 2022.1 ScyllaDB Enterprise
-
-
-.. versionadded:: 5.0 ScyllaDB Open Source
-
-
 Introduction
 -------------
 

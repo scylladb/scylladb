@@ -102,8 +102,6 @@ To enable all experimental features to add to the scylla.yaml:
 Enable Specific Experimental Features
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. versionadded:: 3.2 Scylla Open Source
-
 To enable specific experimental features, add to the scylla.yaml the list of experimental features you want to enable, by setting the experimental_features array.
 The list of valid elements for this array can be obtained from ``scylla --help``.
 Note that this list is version specific. Your results may be different.

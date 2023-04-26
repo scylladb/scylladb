@@ -1,8 +1,6 @@
 SSTables 3.0 Summary File Format
 ================================
 
-.. versionadded:: 3.0
-
 SSTables summary file contains samples of keys that are used for the first, coarse-grained, stage of search through the index. Every summary entry points to a sequence of index entries commonly referred to as an index page where the key looked for is located. So with the summary, it is possible to only read and search through a small part of the index.
 
 The summary file is meant to be read and stored entirely in memory, therefore it is aimed to be reasonably small. This incurs some trade-off between the size of the summary and the cardinality of an index page (number of index entries covered by it). The less the cardinality is, the better precision the initial lookup through summary gives, but this also tends to increase the size of the summary. The balance between the two is regulated by the sampling level which rules how many index entries should one summary entry cover.

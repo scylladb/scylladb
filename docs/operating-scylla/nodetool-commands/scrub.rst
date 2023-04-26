@@ -19,8 +19,6 @@ SYNOPSIS
                    [(-m <scrub_mode> | --mode <scrub_mode>)]
                    [--] <keyspace> [<table...>]
 
-.. versionadded:: version 4.6 ``scrub mode``
-
    Supported scrub modes: ABORT, SKIP, SEGREGATE, VALIDATE
 
 OPTIONS

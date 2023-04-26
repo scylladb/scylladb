@@ -172,8 +172,6 @@ The ``uuid`` function takes no parameters and generates a random type 4 uuid sui
 Datetime functions
 ``````````````````
 
-.. versionadded:: 2.3
-
 Retrieving the current date/time
 ################################
 

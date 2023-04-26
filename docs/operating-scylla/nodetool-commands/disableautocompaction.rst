@@ -1,8 +1,6 @@
 Nodetool disableautocompaction
 ==============================
 
-.. versionadded:: 4.1 Scylla Open Source
-
 **disableautocompaction** disables automatic compaction for the given keyspace and table according to its compaction strategy.
 
 For example:

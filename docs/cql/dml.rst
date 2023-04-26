@@ -220,8 +220,6 @@ map keys.
 Grouping results
 ~~~~~~~~~~~~~~~~~
 
-.. versionadded:: 3.2 Scylla Open Source
-
 The ``GROUP BY`` option lets you condense into a single row all selected rows that share the same values for a set of columns. 
 Using the ``GROUP BY`` option, it is only possible to group rows at the partition key level or at a clustering column level. 
 The ``GROUP BY`` arguments must form a prefix of the primary key. 
@@ -266,8 +264,6 @@ Currently, the possible orderings are limited by the :ref:`clustering order <clu
 
 Limiting results
 ~~~~~~~~~~~~~~~~
-
-.. versionchanged::  3.1 Scylla Open Source
 
 The ``LIMIT`` option to a ``SELECT`` statement limits the number of rows returned by a query, while the ``PER PARTITION
 LIMIT``  option (introduced in Scylla 3.1) limits the number of rows returned for a given **partition** by the query. Note that both types of limit can be
@@ -413,10 +409,6 @@ FILTERING`` and so the following query is valid::
 Bypass Cache
 ~~~~~~~~~~~~~~~~~~
 
-.. versionadded:: Scylla Enterprise 2019.1.1
-.. versionadded:: Scylla 3.1
-                  
-
 The ``BYPASS CACHE`` clause on SELECT statements informs the database that the data being read is unlikely to be read again in the near future, and also was unlikely to have been read in the near past; therefore, no attempt should be made to read it from the cache or to populate the cache with the data. This is mostly useful for range scans; these typically process large amounts of data with no temporal locality and do not benefit from the cache.
 The clause is placed immediately after the optional ALLOW FILTERING clause.
 
@@ -433,8 +425,6 @@ For example::
 Using Timeout
 ~~~~~~~~~~~~~~~~~~
 
-.. versionadded:: Scylla 4.4
-
 The ``USING TIMEOUT`` clause allows specifying a timeout for a specific request.
 
 For example::
@@ -448,8 +438,6 @@ For example::
 
 LIKE Operator
 ~~~~~~~~~~~~~
-
-.. versionadded:: 3.2 Scylla Open Source
 
 The ``LIKE`` operation on ``SELECT`` statements informs Scylla that you are looking for a pattern match. The expression ‘column LIKE pattern’ yields true only if the entire column value matches the pattern.   
  
@@ -660,7 +648,7 @@ Also note that ``INSERT`` does not support counters, while ``UPDATE`` does.
 .. note:: New in Scylla Open Source 3.2, you can use the ``IF NOT EXISTS`` condition with the ``INSERT`` statement. When this is used, the insert is only made if the row does not exist prior to the insertion. Each such ``INSERT`` gets a globally unique timestamp. Using ``IF NOT EXISTS`` incurs a non-negligible performance cost (internally, as Paxos will be used), so use ``IF NOT EXISTS`` wisely.
 
 
-Starting with Scylla Open Source 3.2, if :ref:`enabled <cdc-options>` on a table, you can use UPDATE, INSERT, and DELETE statements with Change Data Capture (CDC) tables. Note that this feature is :ref:`experimental <yaml_enabling_experimental_features>`  in version 3.2. 
+If :ref:`enabled <cdc-options>` on a table, you can use UPDATE, INSERT, and DELETE statements with Change Data Capture (CDC) tables.
 
 .. to-do - add link to cdc doc
 
@@ -737,8 +725,6 @@ Regarding the :token:`assignment`:
 
 IF condition
 ~~~~~~~~~~~~
-
-.. versionadded:: 3.2 Scylla Open Source
 
 It is, however, possible to use the conditions on some columns through ``IF``, in which case the row will not be updated
 unless the conditions are met. Each such ``UPDATE`` gets a globally unique timestamp.
@@ -830,8 +816,6 @@ Range deletions allow you to delete rows from a single partition, given that the
 
 Open range deletions
 ~~~~~~~~~~~~~~~~~~~~
-
-.. versionadded:: 3.2 Scylla Open Source 
 
 Open range deletions delete rows based on an open-ended request (>, <, >=, =<, etc.)
 

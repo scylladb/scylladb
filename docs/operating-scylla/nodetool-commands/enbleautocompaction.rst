@@ -1,8 +1,6 @@
 Nodetool enableautocompaction
 =============================
 
-.. versionadded:: 4.1 Scylla Open Source
-
 **enableautocompaction** enables automatic compaction for the given keyspace and table according to its compaction strategy.
 
 For example:

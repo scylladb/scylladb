@@ -1,8 +1,6 @@
 Scylla SStable
 ==============
 
-.. versionadded:: 5.0
-
 Introduction
 -------------
 
@@ -610,8 +608,6 @@ This can be relaxed, for example, if you want to produce intentionally corrupt S
 
 script
 ^^^^^^
-
-.. versionadded:: 5.2
 
 Reads the SStable(s) and passes the resulting `fragment stream <scylla-sstable-sstable-content_>`_ to the script specified by `--script-file`.
 Currently, only scripts written in `Lua <http://www.lua.org/>`_ are supported.

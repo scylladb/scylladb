@@ -23,8 +23,6 @@
 JSON Support
 ------------
 
-.. versionadded:: 2.3
-
 Scylla introduces JSON support to :ref:`SELECT <select-statement>` and :ref:`INSERT <insert-statement>`
 statements. This support does not fundamentally alter the CQL API (for example, the schema is still enforced). It simply
 provides a convenient way to work with JSON documents.

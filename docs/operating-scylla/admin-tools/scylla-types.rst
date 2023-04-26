@@ -1,8 +1,6 @@
 Scylla Types
 ==============
 
-.. versionadded:: 5.0
-
 Introduction
 -------------
 This tool allows you to examine raw values obtained from SStables, logs, coredumps, etc., by performing operations on them,

@@ -25,8 +25,6 @@ For example:
 Load and Stream
 ---------------
 
-.. versionadded:: 4.6
-
 .. code::
 
    nodetool refresh <my_keyspace> <my_table> [--load-and-stream | -las]

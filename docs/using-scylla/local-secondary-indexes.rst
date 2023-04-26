@@ -2,9 +2,6 @@
 Local Secondary Indexes
 ===============================
 
-.. versionchanged:: Scylla Open Source 4.0
-.. versionadded:: Scylla Enterprise 2020.1
-
 Local Secondary Indexes is an enhancement to :doc:`Global Secondary Indexes <secondary-indexes>`,
 which allows Scylla to optimize workloads where the partition key of the base table and the index are the same key.
 

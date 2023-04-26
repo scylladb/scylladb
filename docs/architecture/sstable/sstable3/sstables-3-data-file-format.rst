@@ -1,8 +1,6 @@
 SSTables 3.0 Data File Format
 =============================
 
-.. versionadded:: 3.0
-
 This article aims at describing the format of data files introduced in Cassandra 3.0. The data file is the file that actually stores the data managed by the database. As important as it is, this file does not come alone. There are other files that altogether constitute a set of components sufficient for manipulating the stored data.
 The following table outlines the types of files used by Cassandra SSTables 3.0:
 
