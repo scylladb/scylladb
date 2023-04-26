@@ -296,8 +296,6 @@ operation::set_counter_value_from_tuple_list::prepare(data_dictionary::database 
                 auto clock = value_cast<int64_t>(tuple[2]);
                 auto value = value_cast<int64_t>(tuple[3]);
 
-                using namespace std::rel_ops;
-
                 if (id <= last) {
                     throw marshal_exception(
                                     format("invalid counter id order, {} <= {}",

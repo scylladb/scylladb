@@ -40,7 +40,7 @@ maximum_token() noexcept {
     return max_token;
 }
 
-std::strong_ordering tri_compare(const token& t1, const token& t2) {
+std::strong_ordering operator<=>(const token& t1, const token& t2) {
     if (t1._kind < t2._kind) {
             return std::strong_ordering::less;
     } else if (t1._kind > t2._kind) {

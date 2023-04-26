@@ -95,7 +95,7 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, lo
                 seastar::thread::yield();
             }
             const range<token>& src_range = x.first;
-            if (src_range.contains(desired_range, dht::tri_compare)) {
+            if (src_range.contains(desired_range, dht::operator<=>)) {
                 inet_address_vector_replica_set preferred(x.second.begin(), x.second.end());
                 get_token_metadata().get_topology().sort_by_proximity(_address, preferred);
                 for (inet_address& p : preferred) {
@@ -142,7 +142,7 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
             if (need_preempt()) {
                 seastar::thread::yield();
             }
-            if (src_range.contains(desired_range, dht::tri_compare)) {
+            if (src_range.contains(desired_range, dht::operator<=>)) {
                 std::vector<inet_address> old_endpoints(x.second.begin(), x.second.end());
                 auto it = pending_range_addresses.find(desired_range);
                 if (it == pending_range_addresses.end()) {
