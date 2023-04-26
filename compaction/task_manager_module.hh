@@ -327,6 +327,30 @@ protected:
     virtual future<> run() override;
 };
 
+class table_scrub_sstables_compaction_task_impl : public sstables_compaction_task_impl {
+private:
+    replica::database& _db;
+    sstables::compaction_type_options::scrub _opts;
+    sstables::compaction_stats& _stats;
+public:
+    table_scrub_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
+            std::string keyspace,
+            std::string table,
+            tasks::task_id parent_id,
+            replica::database& db,
+            sstables::compaction_type_options::scrub opts,
+            sstables::compaction_stats& stats) noexcept
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), std::move(table), "", parent_id)
+        , _db(db)
+        , _opts(opts)
+        , _stats(stats)
+    {}
+
+    virtual tasks::is_internal is_internal() const noexcept override;
+protected:
+    virtual future<> run() override;
+};
+
 class task_manager_module : public tasks::task_manager::module {
 public:
     task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "compaction") {}
