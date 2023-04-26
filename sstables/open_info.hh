@@ -53,6 +53,7 @@ struct foreign_sstable_open_info {
     sstable_version_types version;
     sstable_format_types format;
     uint64_t uncompressed_data_size;
+    uint64_t metadata_size_on_disk;
 };
 
 struct sstable_open_config {

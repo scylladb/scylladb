@@ -184,7 +184,8 @@ public:
 
     void set_values(const partition_key& first_key, const partition_key& last_key, stats_metadata stats, uint64_t data_file_size = 1) {
         _sst->_data_file_size = data_file_size;
-        _sst->_bytes_on_disk = data_file_size;
+        _sst->_index_file_size = std::max(1UL, uint64_t(data_file_size * 0.1));
+        _sst->_metadata_size_on_disk = std::max(1UL, uint64_t(data_file_size * 0.01));
         // scylla component must be present for a sstable to be considered fully expired.
         _sst->_recognized_components.insert(component_type::Scylla);
         _sst->_components->statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));

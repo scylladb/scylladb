@@ -495,10 +495,6 @@ public:
         virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) = 0;
         virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) = 0;
         virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) = 0;
-        struct stat {
-            uint64_t bytes_on_disk = 0;
-        };
-        virtual future<stat> get_stats(const sstable& sst) = 0;
 
         virtual sstring prefix() const  = 0;
     };
@@ -537,7 +533,8 @@ private:
     file _data_file;
     uint64_t _data_file_size;
     uint64_t _index_file_size;
-    uint64_t _bytes_on_disk = 0;
+    // on-disk size of components but data and index.
+    uint64_t _metadata_size_on_disk = 0;
     db_clock::time_point _data_file_write_time;
     position_range _min_max_position_range = position_range::all_clustered_rows();
     position_in_partition _first_partition_first_position = position_in_partition::before_all_clustered_rows();
