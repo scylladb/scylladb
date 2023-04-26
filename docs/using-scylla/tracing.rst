@@ -247,8 +247,6 @@ Slow query logging results are stored in the ``node_slow_log`` table for 24 hour
 Lightweight slow-queries logging mode
 ............................................
 
-.. versionadded:: 4.5
-
 Natural desire is to run database with slow query tracing mode always enabled.
 But the implementation can't detect early if the request will be slow before
 it got processed so it has to record all the tracing events before making

@@ -744,8 +744,6 @@ For example, to disable compression:
 CDC options
 ###########
 
-.. versionadded:: 3.2 Scylla Open Source
-
 The following options can be used with Change Data Capture.
 
 +---------------------------+-----------------+------------------------------------------------------------------------------------------------------------------------+

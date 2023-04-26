@@ -1,8 +1,6 @@
 SSTables 3.0 Index File Format
 ==============================
 
-.. versionadded:: 3.0
-
 The SSTables index file, together with the :doc:`SSTables summary file </architecture/sstable/sstable3/sstables-3-summary/>` , provides a way to efficiently locate a partition with a specific key or some position within a partition in the :doc:`SSTables data file</architecture/sstable/sstable3/sstables-3-data-file-format/>`.
 
 Broadly, the index file lists the keys in the data file in order, giving for each key its position in the data file. The summary file, which is held in memory, contains samples of these keys, pointing to their position in the index file. So to efficiently search for a specific key, we use the summary to find a (relatively short) range of positions in the index file which may hold this key, then read this range from the index file and look for the specific key. The details on how to further pinpoint specific columns inside very long partitions are explained below.

@@ -62,8 +62,6 @@ automatically at insertion time.
 Local Secondary Index
 ^^^^^^^^^^^^^^^^^^^^^
 
-.. versionadded:: Scylla 3.1
-
 :doc:`Local Secondary Indexes </using-scylla/local-secondary-indexes>` is an enhancement of :doc:`Global Secondary Indexes </using-scylla/secondary-indexes>`, which allows Scylla to optimize the use case in which the partition key of the base table is also the partition key of the index. Local Secondary Index syntax is the same as above, with extra parentheses on the partition key.
 
 .. code-block::

@@ -8,8 +8,6 @@ Usage
 .. code:: sh
 
           nodetool <options> stop -- <compaction_type>
-
-.. versionadded:: version 4.5 ``compaction type``
    
    Supported compaction types: COMPACTION, CLEANUP, VALIDATION, SCRUB, RESHARD, RESHAPE
 

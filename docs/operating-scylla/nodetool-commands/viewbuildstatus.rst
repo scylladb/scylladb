@@ -1,8 +1,6 @@
 Nodetool viewbuildstatus
 ========================
 
-.. versionadded:: 2.3 (experimental)
-
 **viewbuildstatus** - ``<keyspace> <view>`` Shows the progress of a materialized view build.
 
 For example:

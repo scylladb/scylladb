@@ -8,8 +8,6 @@ There are two alternative upgrade procedures:
 
 **To upgrade ScyllaDB and update 3rd party and OS packages (RECOMMENDED):**
 
-.. versionadded:: 5.0
-
 Choosing this upgrade procedure allows you to upgrade your ScyllaDB version and update the 3rd party and OS packages using one command. 
 
 #. Update the |SCYLLA_REPO|_ to |NEW_VERSION|.

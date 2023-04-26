@@ -1,9 +1,6 @@
 ScyllaDB Large Rows and Large Cells Tables
 ===========================================
 
-.. versionadded:: Scylla Open Source 3.1
-
-
 This document describes how to detect large rows and large cells in Scylla.
 Scylla is not optimized for very large rows or large cells. They require allocation of large, contiguous memory areas and therefore may increase latency.
 Rows may also grow over time. For example, many insert operations may add elements to the same collection, or a large blob can be inserted in a single operation.

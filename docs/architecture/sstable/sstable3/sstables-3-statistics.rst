@@ -1,8 +1,6 @@
 SSTables 3.0 Statistics File Format
 ===================================
 
-.. versionadded:: 3.0
-
 This file stores metadata for SSTable. There are 4 types of metadata:
 
 1. **Validation metadata** - used to validate SSTable correctness.

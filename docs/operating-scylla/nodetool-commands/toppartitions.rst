@@ -1,11 +1,7 @@
 Nodetool toppartitions
 ======================
 
-.. versionadded:: 3.1
-
 **toppartitions** <keyspace> <table> <duration> - Samples cluster writes and reads and reports the most active partitions in a specified table and time frame.
-                  
-.. versionchanged:: 4.6
 
 **toppartitions**  [<--ks-filters ks>] [<--cf-filters tables>] [<-d duration>]
 

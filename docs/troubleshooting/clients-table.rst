@@ -1,10 +1,6 @@
 Clients Table
 ==============
 
-.. versionadded:: 3.3
-
-
-
 This document describes how to work with Scylla's client table, which provides real-time information on CQL clients **currently** connected to the Scylla cluster.
 
 Viewing - List Active CQL connections

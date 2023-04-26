@@ -445,8 +445,6 @@ Lastly, as for :ref:`maps <maps>`, TTLs, when used, only apply to the newly inse
 User-Defined Types
 ^^^^^^^^^^^^^^^^^^
 
-.. versionchanged:: 3.2 Scylla Open Source
-
 CQL support the definition of user-defined types (UDT for short). Such a type can be created, modified and removed using
 the :token:`create_type_statement`, :token:`alter_type_statement` and :token:`drop_type_statement` described below. But
 once created, a UDT is simply referred to by its name:
@@ -459,10 +457,6 @@ once created, a UDT is simply referred to by its name:
 
 Creating a UDT
 ~~~~~~~~~~~~~~
-
-.. versionchanged:: 3.2 Scylla Open Source
-
-.. note:: If you are using Scylla Open Source 3.1.x (and prior) or Scylla Enterprise (any version), UDTs must be **frozen** - meaning you cannot update individual components of the UDT value. The whole value must be overwritten. Starting with Scylla Open Source 3.2, UDTs that are not in a collection **can be non-frozen**. 
 
 Creating a new user-defined type is done using a ``CREATE TYPE`` statement defined by:
 

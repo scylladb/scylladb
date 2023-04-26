@@ -1,10 +1,6 @@
 ScyllaDB Large Partitions Table
 ================================
 
-.. versionadded:: 2.3
-
-
-
 This document describes how to work with Scylla's large partitions table.
 The large partitions table can be used to trace large partitions in a cluster.
 The table is updated every time a partition is written and/or deleted,and includes a compaction process which flushes MemTables to SSTables.
