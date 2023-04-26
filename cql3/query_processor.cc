@@ -731,22 +731,6 @@ bool query_processor::has_more_results(::shared_ptr<cql3::internal_query_state> 
 
 future<> query_processor::for_each_cql_result(
         ::shared_ptr<cql3::internal_query_state> state,
-        std::function<stop_iteration(const cql3::untyped_result_set::row&)>&& f) {
-    do {
-        auto msg = co_await execute_paged_internal(state);
-        if (msg->empty()) {
-            co_return;
-        }
-        for (auto& row : *msg) {
-            if (f(row) == stop_iteration::yes) {
-                co_return;
-            }
-        }
-    } while (has_more_results(state));
-}
-
-future<> query_processor::for_each_cql_result(
-        ::shared_ptr<cql3::internal_query_state> state,
          noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set::row&)>&& f) {
     do {
         auto msg = co_await execute_paged_internal(state);
