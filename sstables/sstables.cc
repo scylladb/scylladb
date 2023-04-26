@@ -1010,13 +1010,14 @@ void sstable::open_sstable(const io_priority_class& pc) {
 void sstable::write_toc(file_writer w) {
     sstlog.debug("Writing TOC file {} ", w.get_filename());
 
-    for (auto&& key : _recognized_components) {
+    do_write_simple(std::move(w), [&] (version_types v, file_writer& w) {
+        for (auto&& key : _recognized_components) {
             // new line character is appended to the end of each component name.
-        auto value = sstable_version_constants::get_component_map(_version).at(key) + "\n";
-        bytes b = bytes(reinterpret_cast<const bytes::value_type *>(value.c_str()), value.size());
-        write(_version, w, b);
-    }
-    w.close();
+            auto value = sstable_version_constants::get_component_map(_version).at(key) + "\n";
+            bytes b = bytes(reinterpret_cast<const bytes::value_type *>(value.c_str()), value.size());
+            write(_version, w, b);
+        }
+    });
 }
 
 void sstable::filesystem_storage::open(sstable& sst, const io_priority_class& pc) {
@@ -1064,28 +1065,19 @@ future<> sstable::filesystem_storage::seal(const sstable& sst) {
 }
 
 void sstable::write_crc(const checksum& c) {
-    auto file_path = filename(component_type::CRC);
-    sstlog.debug("Writing CRC file {} ", file_path);
-
-    file_output_stream_options options;
-    options.buffer_size = 4096;
-    auto w = make_component_file_writer(component_type::CRC, std::move(options)).get0();
-    write(get_version(), w, c);
-    w.close();
+    unsigned buffer_size = 4096;
+    do_write_simple(component_type::CRC, default_priority_class(), [&] (version_types v, file_writer& w) {
+        write(v, w, c);
+    }, buffer_size);
 }
 
 // Digest file stores the full checksum of data file converted into a string.
 void sstable::write_digest(uint32_t full_checksum) {
-    auto file_path = filename(component_type::Digest);
-    sstlog.debug("Writing Digest file {} ", file_path);
-
-    file_output_stream_options options;
-    options.buffer_size = 4096;
-    auto w = make_component_file_writer(component_type::Digest, std::move(options)).get0();
-
-    auto digest = to_sstring<bytes>(full_checksum);
-    write(get_version(), w, digest);
-    w.close();
+    unsigned buffer_size = 4096;
+    do_write_simple(component_type::Digest, default_priority_class(), [&] (version_types v, file_writer& w) {
+        auto digest = to_sstring<bytes>(full_checksum);
+        write(v, w, digest);
+    }, buffer_size);
 }
 
 thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_sample_pattern_cache;
@@ -1121,24 +1113,29 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
     }
 }
 
+void sstable::do_write_simple(file_writer&& writer,
+                              noncopyable_function<void (version_types, file_writer&)> write_component) {
+    write_component(_version, writer);
+    writer.close();
+}
+
 void sstable::do_write_simple(component_type type, const io_priority_class& pc,
-        noncopyable_function<void (version_types version, file_writer& writer)> write_component) {
+        noncopyable_function<void (version_types version, file_writer& writer)> write_component, unsigned buffer_size) {
     auto file_path = filename(type);
     sstlog.debug(("Writing " + sstable_version_constants::get_component_map(_version).at(type) + " file {} ").c_str(), file_path);
 
     file_output_stream_options options;
-    options.buffer_size = sstable_buffer_size;
+    options.buffer_size = buffer_size;
     options.io_priority_class = pc;
     auto w = make_component_file_writer(type, std::move(options)).get0();
-    write_component(_version, w);
-    w.close();
+    do_write_simple(std::move(w), std::move(write_component));
 }
 
 template <component_type Type, typename T>
 void sstable::write_simple(const T& component, const io_priority_class& pc) {
     do_write_simple(Type, pc, [&component] (version_types v, file_writer& w) {
         write(v, w, component);
-    });
+    }, sstable_buffer_size);
 }
 
 template future<> sstable::read_simple<component_type::Filter>(sstables::filter& f, const io_priority_class& pc);
