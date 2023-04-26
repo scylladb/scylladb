@@ -19,7 +19,6 @@ BOOST_AUTO_TEST_CASE(test_generation_of_name_based_UUID) {
 }
 
 using utils::UUID;
-using namespace std::rel_ops;
 
 BOOST_AUTO_TEST_CASE(test_UUID_comparison) {
     static const std::initializer_list<std::pair<UUID, UUID>> uuid_pairs = {

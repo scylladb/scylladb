@@ -65,10 +65,6 @@ public:
     friend inline bool operator==(const inet_address& x, const inet_address& y) noexcept {
         return x._addr == y._addr;
     }
-    friend inline bool operator!=(const inet_address& x, const inet_address& y) noexcept {
-        using namespace std::rel_ops;
-        return x._addr != y._addr;
-    }
     friend inline bool operator<(const inet_address& x, const inet_address& y) noexcept {
         return x.bytes() < y.bytes();
     }
