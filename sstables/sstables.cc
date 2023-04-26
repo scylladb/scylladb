@@ -1097,28 +1097,30 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
 
     auto file_path = filename(Type);
     sstlog.debug(("Reading " + sstable_version_constants::get_component_map(_version).at(Type) + " file {} ").c_str(), file_path);
-    return new_sstable_component_file(_read_error_handler, Type, open_flags::ro).then([this, &component] (file fi) {
-        auto fut = fi.size();
-        return fut.then([this, &component, fi = std::move(fi)] (uint64_t size) {
-            auto r = make_lw_shared<file_random_access_reader>(std::move(fi), size, sstable_buffer_size);
-            auto fut = parse(*_schema, _version, *r, component);
-            return fut.finally([r] {
-                return r->close();
-            }).then([r] {});
-        });
-    }).then_wrapped([file_path] (future<> f) {
         try {
-            f.get();
-        } catch (std::system_error& e) {
-            if (e.code() == std::error_code(ENOENT, std::system_category())) {
-                return make_exception_future<>(malformed_sstable_exception(file_path + ": file not found"));
-            }
-            return make_exception_future<>(e);
-        } catch (malformed_sstable_exception &e) {
-            return make_exception_future<>(malformed_sstable_exception(e.what(), file_path));
+
+        file fi = co_await new_sstable_component_file(_read_error_handler, Type, open_flags::ro);
+        uint64_t size = co_await fi.size();
+
+        auto r = file_random_access_reader(std::move(fi), size, sstable_buffer_size);
+        std::exception_ptr ex;
+        try {
+            co_await parse(*_schema, _version, r, component);
+        } catch (...) {
+            ex = std::current_exception();
         }
-        return make_ready_future<>();
-    });
+        co_await r.close();
+
+        maybe_rethrow_exception(std::move(ex));
+
+        }  catch (std::system_error& e) {
+            if (e.code() == std::error_code(ENOENT, std::system_category())) {
+                throw malformed_sstable_exception(file_path + ": file not found");
+            }
+            throw;
+        } catch (malformed_sstable_exception &e) {
+            throw malformed_sstable_exception(e.what(), file_path);
+        }
 }
 
 void sstable::do_write_simple(component_type type, const io_priority_class& pc,
