@@ -426,10 +426,6 @@ private:
     // Ensures that concurrent updates to sstable set will work correctly
     seastar::named_semaphore _sstable_set_mutation_sem = {1, named_semaphore_exception_factory{"sstable set mutation"}};
     mutable row_cache _cache; // Cache covers only sstables.
-    // FIXME: until we use uuid for sstables generation (#10459)
-    // _sstable_generation keeps track of the highest
-    // generation number in the table so that newly created sstables
-    // will use numeric generation numbers larger than this one.
     // Initialized when the table is populated via update_sstables_known_generation.
     std::optional<sstables::sstable_generation_generator> _sstable_generation_generator;
 
