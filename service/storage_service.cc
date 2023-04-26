@@ -348,15 +348,15 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
         tmptr->set_version(_topology_state_machine._topology.version);
 
         auto update_topology = [&] (inet_address ip, const replica_state& rs) {
-            tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack});
+            tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack}, std::nullopt, rs.shard_count);
         };
 
         auto add_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
             locator::host_id host_id{id.uuid()};
             auto ip = co_await id2ip(id);
 
-            slogger.trace("raft topology: loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={}",
-                          id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate, rs.ring.value().tokens);
+            slogger.trace("raft topology: loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={} shards={}",
+                          id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate, rs.ring.value().tokens, rs.shard_count);
             // Save tokens, not needed for raft topology management, but needed by legacy
             // Also ip -> id mapping is needed for address map recreation on reboot
             if (!utils::fb_utilities::is_me(ip)) {
