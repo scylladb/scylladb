@@ -38,6 +38,16 @@ public:
         : _fragments(std::move(fragments)), _size_bytes(size_bytes)
     { }
 
+    fragmented_temporary_buffer(const char* str, size_t size)
+    {
+        *this = allocate_to_fit(size);
+        size_t pos = 0;
+        for (auto& frag : _fragments) {
+            std::memcpy(frag.get_write(), str + pos, frag.size());
+            pos += frag.size();
+        }
+    }
+
     explicit operator view() const noexcept;
 
     istream get_istream() const noexcept;

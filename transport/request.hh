@@ -10,7 +10,6 @@
 
 #include "server.hh"
 #include "utils/utf8.hh"
-#include "utils/reusable_buffer.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 
 namespace cql_transport {
