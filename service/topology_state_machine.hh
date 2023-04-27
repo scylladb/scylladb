@@ -108,6 +108,9 @@ struct topology {
     const std::pair<const raft::server_id, replica_state>* find(raft::server_id id) const;
     // Return true if node exists in any state including 'left' one
     bool contains(raft::server_id id);
+
+    // Returns the set of enabled features (common set of all features of non-left nodes).
+    std::set<sstring> calculate_enabled_features() const;
 };
 
 struct raft_topology_snapshot {

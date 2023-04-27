@@ -8,6 +8,7 @@
  */
 
 #include "topology_state_machine.hh"
+#include <algorithm>
 
 namespace service {
 
@@ -34,6 +35,34 @@ bool topology::contains(raft::server_id id) {
            transition_nodes.contains(id) ||
            new_nodes.contains(id) ||
            left_nodes.contains(id);
+}
+
+std::set<sstring> topology::calculate_enabled_features() const {
+    bool first = true;
+    std::set<sstring> common_features;
+
+    auto process_nodes = [&] (const std::unordered_map<raft::server_id, replica_state>& repmap) {
+        for (const auto& [host_id, rs] : repmap) {
+            if (first) {
+                common_features = rs.supported_features;
+                first = false;
+            } else {
+                // Remove the common features that are not present in the current node's features.
+                // Most of the time there will be nothing to remove, unless an upgrade is happening.
+                std::vector<sstring> to_remove;
+                std::ranges::set_difference(common_features, rs.supported_features, std::back_inserter(to_remove));
+                for (const auto& s : to_remove) {
+                    common_features.erase(s);
+                }
+            }
+        }
+    };
+
+    process_nodes(normal_nodes);
+    process_nodes(new_nodes);
+    process_nodes(transition_nodes);
+
+    return common_features;
 }
 
 static std::unordered_map<topology::transition_state, sstring> transition_state_to_name_map = {
