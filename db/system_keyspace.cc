@@ -3521,6 +3521,11 @@ future<service::topology> system_keyspace::load_topology_state() {
             rebuild_option = row.get_as<sstring>("rebuild_option");
         }
 
+        std::set<sstring> supported_features;
+        if (row.has("supported_features")) {
+            supported_features = gms::feature_service::to_feature_set(row.get_as<sstring>("supported_features"));
+        }
+
         if (row.has("topology_request")) {
             auto req = service::topology_request_from_string(row.get_as<sstring>("topology_request"));
             ret.requests.emplace(host_id, req);
@@ -3587,7 +3592,7 @@ future<service::topology> system_keyspace::load_topology_state() {
         if (map) {
             map->emplace(host_id, service::replica_state{
                 nstate, std::move(datacenter), std::move(rack), std::move(release_version),
-                ring_slice, shard_count, ignore_msb});
+                ring_slice, shard_count, ignore_msb, std::move(supported_features)});
         }
     }
 

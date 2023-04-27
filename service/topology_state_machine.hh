@@ -63,6 +63,7 @@ struct replica_state {
     std::optional<ring_slice> ring; // if engaged contain the set of tokens the node owns together with their state
     size_t shard_count;
     uint8_t ignore_msb;
+    std::set<sstring> supported_features;
 };
 
 struct topology {
