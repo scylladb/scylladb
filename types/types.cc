@@ -15,6 +15,7 @@
 #include "cql3/sets.hh"
 #include "cql3/util.hh"
 #include "concrete_types.hh"
+#include <exception>
 #include <seastar/core/print.hh>
 #include "types/types.hh"
 #include "utils/exceptions.hh"
@@ -325,7 +326,7 @@ int64_t timestamp_from_string(sstring_view s) {
     } catch (const marshal_exception& me) {
         throw marshal_exception(format("unable to parse date '{}': {}", s, me.what()));
     } catch (...) {
-        throw marshal_exception(format("unable to parse date '{}'", s));
+        throw marshal_exception(format("unable to parse date '{}': {}", s, std::current_exception()));
     }
 }
 
