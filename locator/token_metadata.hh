@@ -15,6 +15,7 @@
 #include <unordered_map>
 #include "gms/inet_address.hh"
 #include "dht/i_partitioner.hh"
+#include "locator/token_range_splitter.hh"
 #include "inet_address_vectors.hh"
 #include <optional>
 #include <memory>
@@ -40,6 +41,7 @@ class abstract_replication_strategy;
 using token = dht::token;
 
 class token_metadata;
+class tablet_metadata;
 
 struct host_id_or_endpoint {
     host_id id;
@@ -76,6 +78,7 @@ public:
     };
     using inet_address = gms::inet_address;
 private:
+    friend class token_metadata_ring_splitter;
     class tokens_iterator {
     public:
         using iterator_category = std::input_iterator_tag;
@@ -104,6 +107,8 @@ public:
     token_metadata& operator=(token_metadata&&) noexcept;
     ~token_metadata();
     const std::vector<token>& sorted_tokens() const;
+    const tablet_metadata& tablets() const;
+    void set_tablets(tablet_metadata);
     // Update token->endpoint mappings for a given \c endpoint.
     // \c tokens are all the tokens that are now owned by \c endpoint.
     //
@@ -123,16 +128,19 @@ public:
      */
     void update_topology(inet_address ep, endpoint_dc_rack dr, std::optional<node::state> opt_st = std::nullopt);
     /**
-     * Creates an iterable range of the sorted tokens starting at the token next
-     * after the given one.
+     * Creates an iterable range of the sorted tokens starting at the token t
+     * such that t >= start.
      *
      * @param start A token that will define the beginning of the range
      *
      * @return The requested range (see the description above)
      */
     boost::iterator_range<tokens_iterator> ring_range(const token& start) const;
-    boost::iterator_range<tokens_iterator> ring_range(
-        const std::optional<dht::partition_range::bound>& start) const;
+
+    /**
+     * Returns a range of tokens such that the first token t satisfies dht::ring_position_view::ending_at(t) >= start.
+     */
+    boost::iterator_range<tokens_iterator> ring_range(dht::ring_position_view start) const;
 
     topology& get_topology();
     const topology& get_topology() const;
@@ -162,6 +170,9 @@ public:
 
     /** @return a copy of the endpoint-to-id map for read-only operations */
     std::unordered_map<inet_address, host_id> get_endpoint_to_host_id_map_for_reading() const;
+
+    /// Returns host_id of the local node.
+    host_id get_my_id() const;
 
     void add_bootstrap_token(token t, inet_address endpoint);
 
@@ -344,5 +355,7 @@ public:
     // Must be called on shard 0.
     static future<> mutate_on_all_shards(sharded<shared_token_metadata>& stm, seastar::noncopyable_function<future<> (token_metadata&)> func);
 };
+
+std::unique_ptr<locator::token_range_splitter> make_splitter(token_metadata_ptr);
 
 }

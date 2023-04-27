@@ -4205,7 +4205,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             cfg.enable_commitlog = false;
             cfg.enable_incremental_backups = false;
 
-            auto cf = make_lw_shared<replica::column_family>(s, cfg, make_lw_shared<replica::storage_options>(), replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker);
+            auto cf = make_lw_shared<replica::column_family>(s, cfg, make_lw_shared<replica::storage_options>(), replica::column_family::no_commitlog(), *cm, env.manager(), *cl_stats, *tracker, nullptr);
             cf->start();
             cf->mark_ready_for_writes();
             tables.push_back(cf);

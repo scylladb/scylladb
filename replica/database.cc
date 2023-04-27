@@ -401,6 +401,14 @@ const data_dictionary::user_types_storage& database::user_types() const noexcept
     return *_user_types;
 }
 
+locator::vnode_effective_replication_map_ptr keyspace::get_effective_replication_map() const {
+    // FIXME: Examine all users.
+    if (get_replication_strategy().is_per_table()) {
+        on_internal_error(dblog, format("Tried to obtain per-keyspace effective replication map of {} but it's per-table", _metadata->name()));
+    }
+    return _effective_replication_map;
+}
+
 } // namespace replica
 
 void backlog_controller::adjust() {
@@ -782,8 +790,8 @@ do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring
         auto v = co_await read_schema_partition_for_keyspace(proxy, cf_name, name);
         try {
             co_await func(v);
-        } catch (std::exception& e) {
-            dblog.error("Skipping: {}. Exception occurred when loading system table {}: {}", v.first, cf_name, e.what());
+        } catch (...) {
+            dblog.error("Skipping: {}. Exception occurred when loading system table {}: {}", v.first, cf_name, std::current_exception());
         }
     });
 }
@@ -943,6 +951,13 @@ void database::maybe_init_schema_commitlog() {
 void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg) {
     schema = local_schema_registry().learn(schema);
     schema->registry_entry()->mark_synced();
+    auto&& rs = ks.get_replication_strategy();
+    locator::effective_replication_map_ptr erm;
+    if (auto pt_rs = rs.maybe_as_per_table()) {
+        erm = pt_rs->make_replication_map(schema->id(), _shared_token_metadata.get());
+    } else {
+        erm = ks.get_effective_replication_map();
+    }
     // avoid self-reporting
     auto& sst_manager = is_system_table(*schema) ? get_system_sstables_manager() : get_user_sstables_manager();
     lw_shared_ptr<column_family> cf;
@@ -950,9 +965,9 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
         db::commitlog& cl = schema->static_props().use_schema_commitlog && _uses_schema_commitlog
                 ? *_schema_commitlog
                 : *_commitlog;
-        cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), cl, _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
+        cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), cl, _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
     } else {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), column_family::no_commitlog(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker);
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), column_family::no_commitlog(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
     }
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
@@ -1136,11 +1151,24 @@ std::vector<sstring> database::get_non_local_strategy_keyspaces() const {
     return res;
 }
 
-std::unordered_map<sstring, locator::effective_replication_map_ptr> database::get_non_local_strategy_keyspaces_erms() const {
-    std::unordered_map<sstring, locator::effective_replication_map_ptr> res;
+std::vector<sstring> database::get_non_local_vnode_based_strategy_keyspaces() const {
+    std::vector<sstring> res;
     res.reserve(_keyspaces.size());
     for (auto const& i : _keyspaces) {
-        if (i.second.get_replication_strategy().get_type() != locator::replication_strategy_type::local) {
+        auto&& rs = i.second.get_replication_strategy();
+        if (rs.get_type() != locator::replication_strategy_type::local && rs.is_vnode_based()) {
+            res.push_back(i.first);
+        }
+    }
+    return res;
+}
+
+std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> database::get_non_local_strategy_keyspaces_erms() const {
+    std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> res;
+    res.reserve(_keyspaces.size());
+    for (auto const& i : _keyspaces) {
+        auto&& rs = i.second.get_replication_strategy();
+        if (rs.get_type() != locator::replication_strategy_type::local && !rs.is_per_table()) {
             res.emplace(i.first, i.second.get_effective_replication_map());
         }
     }
@@ -1201,21 +1229,15 @@ keyspace::create_replication_strategy(const locator::shared_token_metadata& stm,
     _replication_strategy =
             abstract_replication_strategy::create_replication_strategy(
                 _metadata->strategy_name(), options);
-
+    rslogger.debug("replication strategy for keyspace {} is {}, opts={}", _metadata->name(), _metadata->strategy_name(), options);
     auto erm = co_await get_erm_factory().create_effective_replication_map(_replication_strategy, stm.get());
     update_effective_replication_map(std::move(erm));
 }
 
 void
-keyspace::update_effective_replication_map(locator::effective_replication_map_ptr erm) {
+keyspace::update_effective_replication_map(locator::vnode_effective_replication_map_ptr erm) {
     _effective_replication_map = std::move(erm);
 }
-
-locator::abstract_replication_strategy&
-keyspace::get_replication_strategy() {
-    return *_replication_strategy;
-}
-
 
 const locator::abstract_replication_strategy&
 keyspace::get_replication_strategy() const {
@@ -1296,14 +1318,14 @@ const column_family& database::find_column_family(const schema_ptr& schema) cons
 }
 
 void database::validate_keyspace_update(keyspace_metadata& ksm) {
-    ksm.validate(get_token_metadata().get_topology());
+    ksm.validate(_feat, get_token_metadata().get_topology());
     if (!has_keyspace(ksm.name())) {
         throw exceptions::configuration_exception(format("Cannot update non existing keyspace '{}'.", ksm.name()));
     }
 }
 
 void database::validate_new_keyspace(keyspace_metadata& ksm) {
-    ksm.validate(get_token_metadata().get_topology());
+    ksm.validate(_feat, get_token_metadata().get_topology());
     if (has_keyspace(ksm.name())) {
         throw exceptions::already_exists_exception{ksm.name()};
     }

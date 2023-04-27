@@ -55,6 +55,7 @@ public:
     virtual void on_update_function(const sstring& ks_name, const sstring& function_name) = 0;
     virtual void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) = 0;
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) = 0;
+    virtual void on_update_tablet_metadata() = 0;
 
     // The callback runs inside seastar thread
     virtual void on_drop_keyspace(const sstring& ks_name) = 0;
@@ -70,6 +71,7 @@ public:
     virtual void on_before_create_column_family(const schema&, std::vector<mutation>&, api::timestamp_type) {}
     virtual void on_before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>&, api::timestamp_type) {}
     virtual void on_before_drop_column_family(const schema&, std::vector<mutation>&, api::timestamp_type) {}
+    virtual void on_before_drop_keyspace(const sstring& keyspace_name, std::vector<mutation>&, api::timestamp_type) {}
 
     class only_view_notifications;
     class empty_listener;
@@ -88,6 +90,7 @@ public:
     void on_update_user_type(const sstring& ks_name, const sstring& type_name) override {}
     void on_update_function(const sstring& ks_name, const sstring& function_name) override {}
     void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
+    void on_update_tablet_metadata() override {}
 
     void on_drop_keyspace(const sstring& ks_name) override {}
     void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {}
@@ -122,6 +125,7 @@ public:
     future<> update_column_family(const schema_ptr& cfm, bool columns_changed);
     future<> update_user_type(const user_type& type);
     future<> update_view(const view_ptr& view, bool columns_changed);
+    future<> update_tablet_metadata();
     future<> drop_keyspace(const sstring& ks_name);
     future<> drop_column_family(const schema_ptr& cfm);
     future<> drop_user_type(const user_type& type);
@@ -130,6 +134,7 @@ public:
     void before_create_column_family(const schema&, std::vector<mutation>&, api::timestamp_type);
     void before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>&, api::timestamp_type);
     void before_drop_column_family(const schema&, std::vector<mutation>&, api::timestamp_type);
+    void before_drop_keyspace(const sstring& keyspace_name, std::vector<mutation>&, api::timestamp_type);
 };
 
 }

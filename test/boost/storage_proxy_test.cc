@@ -43,7 +43,7 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
 
             auto check = [&s](locator::token_metadata_ptr tmptr, dht::partition_range input,
                               dht::partition_range_vector expected) {
-                query_ranges_to_vnodes_generator ranges_to_vnodes(tmptr, s, {input});
+                query_ranges_to_vnodes_generator ranges_to_vnodes(locator::make_splitter(tmptr), s, {input});
                 auto actual = ranges_to_vnodes(1000);
                 if (!std::equal(actual.begin(), actual.end(), expected.begin(), [&s](auto&& r1, auto&& r2) {
                     return r1.equal(r2, dht::ring_position_comparator(*s));
@@ -51,26 +51,6 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
                     BOOST_FAIL(format("Ranges differ, expected {} but got {}", expected, actual));
                 }
             };
-
-            {
-                const auto endpoint = gms::inet_address("10.0.0.1");
-                const auto endpoint_token = ring[2].token();
-                auto tmptr = locator::make_token_metadata_ptr(locator::token_metadata::config{});
-                tmptr->update_topology(endpoint, {"dc1", "rack1"});
-                tmptr->update_normal_tokens({endpoint_token}, endpoint).get();
-
-                const auto next_token = dht::token::from_int64(dht::token::to_int64(endpoint_token) + 1);
-                const auto endpoint_token_ending_bound = dht::partition_range::bound {
-                    dht::ring_position::ending_at(endpoint_token), true
-                };
-                const auto input = dht::partition_range::make(
-                    endpoint_token_ending_bound,
-                    {dht::ring_position::starting_at(next_token), false});
-                const auto expected_output = dht::partition_range::make(
-                    endpoint_token_ending_bound,
-                    endpoint_token_ending_bound);
-                check(tmptr, input, { expected_output });
-            }
 
             {
                 // Ring with minimum token

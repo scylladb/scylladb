@@ -66,6 +66,9 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
     if (!cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
         fcfg._disabled_features.insert("KEYSPACE_STORAGE_OPTIONS"s);
     }
+    if (!cfg.check_experimental(db::experimental_features_t::feature::TABLETS)) {
+        fcfg._disabled_features.insert("TABLETS"s);
+    }
 
     return fcfg;
 }

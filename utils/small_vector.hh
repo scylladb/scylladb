@@ -18,6 +18,7 @@
 #include <initializer_list>
 #include <memory>
 #include <stdexcept>
+#include <malloc.h>
 
 namespace utils {
 
@@ -232,6 +233,13 @@ public:
         if (__builtin_expect(!uses_internal_storage(), false)) {
             std::free(_begin);
         }
+    }
+
+    size_t external_memory_usage() const {
+        if (uses_internal_storage()) {
+            return 0;
+        }
+        return ::malloc_usable_size(_begin);
     }
 
     void reserve(size_t n) {

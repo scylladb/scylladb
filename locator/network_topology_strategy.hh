@@ -11,13 +11,16 @@
 #pragma once
 
 #include "locator/abstract_replication_strategy.hh"
+#include "locator/tablet_replication_strategy.hh"
 #include "exceptions/exceptions.hh"
 
 #include <optional>
 #include <set>
 
 namespace locator {
-class network_topology_strategy : public abstract_replication_strategy {
+
+class network_topology_strategy : public abstract_replication_strategy
+                                , public tablet_aware_replication_strategy {
 public:
     network_topology_strategy(
         const replication_strategy_config_options& config_options);
@@ -39,6 +42,9 @@ public:
         return true;
     }
 
+public: // tablet_aware_replication_strategy
+    virtual effective_replication_map_ptr make_replication_map(table_id, token_metadata_ptr) const override;
+    virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata_ptr) const override;
 protected:
     /**
      * calculate endpoints in one pass through the tokens by tracking our
@@ -47,7 +53,7 @@ protected:
     virtual future<endpoint_set> calculate_natural_endpoints(
         const token& search_token, const token_metadata& tm) const override;
 
-    virtual void validate_options() const override;
+    virtual void validate_options(const gms::feature_service&) const override;
 
     virtual std::optional<std::unordered_set<sstring>> recognized_options(const topology&) const override;
 

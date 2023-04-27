@@ -1222,11 +1222,16 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
     std::set<sstring> keyspaces;
     std::set<table_id> column_families;
     std::unordered_map<keyspace_name, table_selector> affected_tables;
+    bool has_tablet_mutations = false;
     for (auto&& mutation : mutations) {
         sstring keyspace_name = value_cast<sstring>(utf8_type->deserialize(mutation.key().get_component(*s, 0)));
 
         if (schema_tables_holding_schema_mutations().contains(mutation.schema()->id())) {
             affected_tables[keyspace_name] += get_affected_tables(keyspace_name, mutation);
+        }
+
+        if (mutation.schema()->id() == system_keyspace::tablets()->id()) {
+            has_tablet_mutations = true;
         }
 
         keyspaces.emplace(std::move(keyspace_name));
@@ -1280,6 +1285,13 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
     auto new_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
     auto new_aggregates = co_await read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
     auto new_scylla_aggregates = co_await read_schema_for_keyspaces(proxy, SCYLLA_AGGREGATES, keyspaces);
+
+    if (has_tablet_mutations) {
+        slogger.info("Tablet metadata changed");
+        co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
+            co_await db.get_notifier().update_tablet_metadata();
+        });
+    }
 
     std::set<sstring> keyspaces_to_drop = co_await merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces));
     auto types_to_drop = co_await merge_types(proxy, std::move(old_types), std::move(new_types));

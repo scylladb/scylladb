@@ -14,6 +14,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "locator/network_topology_strategy.hh"
+#include "utils/fb_utilities.hh"
 #include <boost/algorithm/string.hpp>
 #include "utils/hash.hh"
 
@@ -32,7 +33,10 @@ network_topology_strategy::network_topology_strategy(
     const replication_strategy_config_options& config_options) :
         abstract_replication_strategy(config_options,
                                       replication_strategy_type::network_topology) {
-    for (auto& config_pair : config_options) {
+    auto opts = config_options;
+    process_tablet_options(*this, opts);
+
+    for (auto& config_pair : opts) {
         auto& key = config_pair.first;
         auto& val = config_pair.second;
 
@@ -251,8 +255,13 @@ network_topology_strategy::calculate_natural_endpoints(
     co_return std::move(tracker.replicas());
 }
 
-void network_topology_strategy::validate_options() const {
+void network_topology_strategy::validate_options(const gms::feature_service& fs) const {
+    validate_tablet_options(fs, _config_options);
+    auto tablet_opts = recognized_tablet_options();
     for (auto& c : _config_options) {
+        if (tablet_opts.contains(c.first)) {
+            continue;
+        }
         if (c.first == sstring("replication_factor")) {
             throw exceptions::configuration_exception(
                 "replication_factor is an option for simple_strategy, not "
@@ -264,7 +273,59 @@ void network_topology_strategy::validate_options() const {
 
 std::optional<std::unordered_set<sstring>> network_topology_strategy::recognized_options(const topology& topology) const {
     // We only allow datacenter names as options
-    return topology.get_datacenters();
+    auto opts = topology.get_datacenters();
+    opts.merge(recognized_tablet_options());
+    return opts;
+}
+
+effective_replication_map_ptr network_topology_strategy::make_replication_map(table_id table, token_metadata_ptr tm) const {
+    if (!uses_tablets()) {
+        on_internal_error(rslogger, format("make_replication_map() called for table {} but replication strategy not configured to use tablets", table));
+    }
+    return do_make_replication_map(table, shared_from_this(), std::move(tm), _rep_factor);
+}
+
+future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm) const {
+    auto tablet_count = get_initial_tablets();
+    auto aligned_tablet_count = 1ul << log2ceil(tablet_count);
+    if (tablet_count != aligned_tablet_count) {
+        rslogger.info("Rounding up tablet count from {} to {} for table {}.{}", tablet_count, aligned_tablet_count, s->ks_name(), s->cf_name());
+        tablet_count = aligned_tablet_count;
+    }
+
+    tablet_map tablets(tablet_count);
+
+    // FIXME: Don't use tokens to distribute nodes.
+    // The following reuses the existing token-based algorithm used by NetworkTopologyStrategy.
+    assert(!tm->sorted_tokens().empty());
+    auto token_range = tm->ring_range(dht::token::get_random_token());
+
+    for (tablet_id tb : tablets.tablet_ids()) {
+        natural_endpoints_tracker tracker(*tm, _dc_rep_factor);
+
+        while (true) {
+            co_await coroutine::maybe_yield();
+            if (token_range.begin() == token_range.end()) {
+                token_range = tm->ring_range(dht::minimum_token());
+            }
+            inet_address ep = *tm->get_endpoint(*token_range.begin());
+            token_range.drop_front();
+            if (tracker.add_endpoint_and_check_if_done(ep)) {
+                break;
+            }
+        }
+
+        tablet_replica_set replicas;
+        for (auto&& ep : tracker.replicas()) {
+            // FIXME: Allocate shard. Currently ignored by the replica.
+            replicas.emplace_back(tablet_replica{tm->get_host_id(ep), 0});
+        }
+
+        tablets.set_tablet(tb, tablet_info{std::move(replicas)});
+    }
+
+    tablet_logger.debug("Allocated tablets for {}.{} ({}): {}", s->ks_name(), s->cf_name(), s->id(), tablets);
+    co_return tablets;
 }
 
 using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, const replication_strategy_config_options&>;

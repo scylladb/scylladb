@@ -21,7 +21,7 @@ future<endpoint_set> local_strategy::calculate_natural_endpoints(const token& t,
     return make_ready_future<endpoint_set>(endpoint_set({utils::fb_utilities::get_broadcast_address()}));
 }
 
-void local_strategy::validate_options() const {
+void local_strategy::validate_options(const gms::feature_service&) const {
 }
 
 std::optional<std::unordered_set<sstring>> local_strategy::recognized_options(const topology&) const {
@@ -33,11 +33,11 @@ size_t local_strategy::get_replication_factor(const token_metadata&) const {
     return 1;
 }
 
-inet_address_vector_replica_set local_strategy::get_natural_endpoints(const token&, const effective_replication_map&) const {
+inet_address_vector_replica_set local_strategy::get_natural_endpoints(const token&, const vnode_effective_replication_map&) const {
     return inet_address_vector_replica_set({utils::fb_utilities::get_broadcast_address()});
 }
 
-stop_iteration local_strategy::for_each_natural_endpoint_until(const token&, const effective_replication_map&, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {
+stop_iteration local_strategy::for_each_natural_endpoint_until(const token&, const vnode_effective_replication_map&, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {
     return func(utils::fb_utilities::get_broadcast_address());
 }
 

@@ -212,9 +212,27 @@ std::strong_ordering operator<=>(const token& t1, const token& t2);
 inline bool operator==(const token& t1, const token& t2) { return t1 <=> t2 == 0; }
 std::ostream& operator<<(std::ostream& out, const token& t);
 
+// Returns a successor for token t.
+// The caller must ensure there is a next token, otherwise
+// the result is unspecified.
+//
+// Precondition: t.kind() == dht::token::kind::key
+inline
+token next_token(const token& t) {
+    return {dht::token::kind::key, t._data + 1};
+}
+
+// Returns the smallest token in the ring which can be associated with a partition key.
+inline
+token first_token() {
+    // dht::token::normalize() does not allow std::numeric_limits<int64_t>::min()
+    return dht::token(dht::token_kind::key, std::numeric_limits<int64_t>::min() + 1);
+}
+
 uint64_t unbias(const token& t);
 token bias(uint64_t n);
 size_t compaction_group_of(unsigned most_significant_bits, const token& t);
+token last_token_of_compaction_group(unsigned most_significant_bits, size_t group);
 
 } // namespace dht
 

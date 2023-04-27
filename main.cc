@@ -25,6 +25,7 @@
 #include "db/legacy_schema_migrator.hh"
 #include "service/storage_service.hh"
 #include "service/migration_manager.hh"
+#include "service/tablet_allocator.hh"
 #include "service/load_meter.hh"
 #include "service/view_update_backlog_broker.hh"
 #include "service/qos/service_level_controller.hh"
@@ -1114,6 +1115,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 forward_service.stop().get();
             });
 
+            distributed<service::tablet_allocator> tablet_allocator;
+            if (cfg->check_experimental(db::experimental_features_t::feature::TABLETS)) {
+                tablet_allocator.start(std::ref(mm_notifier), std::ref(db)).get();
+            }
+            auto stop_tablet_allocator = defer_verbose_shutdown("tablet allocator", [&tablet_allocator] {
+                tablet_allocator.stop().get();
+            });
+
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
 
@@ -1151,6 +1160,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
             qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::ref(group0_client), std::move(wasm_ctx)).get();
+
+            ss.invoke_on_all([&] (service::storage_service& ss) {
+                ss.set_query_processor(qp.local());
+            }).get();
+
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
             sstables::init_metrics().get();
@@ -1209,6 +1223,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     startlog.error("Bad configuration: RAFT feature has to be enabled if BROADCAST_TABLES is enabled");
                     throw bad_configuration_error();
                 }
+                if (cfg->check_experimental(db::experimental_features_t::feature::TABLETS)) {
+                    startlog.error("Bad configuration: consistent_cluster_management feature has to be enabled if tablets feature is enabled");
+                    throw bad_configuration_error();
+                }
             }
             group0_client.init().get();
 
@@ -1224,6 +1242,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // 2. cql_test_env() doesn't do it
             // 3. need to check if it depends on any of the above steps
             sys_ks.local().setup(snitch, messaging).get();
+
+            supervisor::notify("loading tablet metadata");
+            ss.local().load_tablet_metadata().get();
 
             supervisor::notify("starting schema commit log");
 
@@ -1784,6 +1805,7 @@ int main(int ac, char** av) {
         {"sstable", tools::scylla_sstable_main, "a multifunctional command-line tool to examine the content of sstables"},
         {"perf-fast-forward", perf::scylla_fast_forward_main, "run performance tests by fast forwarding the reader on this server"},
         {"perf-row-cache-update", perf::scylla_row_cache_update_main, "run performance tests by updating row cache on this server"},
+        {"perf-tablets", perf::scylla_tablets_main, "run performance tests of tablet metadata management"},
         {"perf-simple-query", perf::scylla_simple_query_main, "run performance tests by sending simple queries to this server"},
         {"perf-sstable", perf::scylla_sstable_main, "run performance tests by exercising sstable related operations on this server"},
     };

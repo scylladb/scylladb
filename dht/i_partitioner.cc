@@ -458,28 +458,22 @@ dht::token_range_vector split_token_range_msb(unsigned most_significant_bits) {
     uint64_t number_of_ranges = 1 << most_significant_bits;
     ret.reserve(number_of_ranges);
     assert(most_significant_bits < 64);
-    uint8_t log2_shift = (64 - most_significant_bits);
-    uint64_t unbiased_key = 0;
-    dht::token token;
-    for (uint64_t i = 0; i < number_of_ranges; ) {
+    dht::token prev_last_token;
+    for (uint64_t i = 0; i < number_of_ranges; i++) {
         std::optional<dht::token_range::bound> start_bound;
         std::optional<dht::token_range::bound> end_bound;
         if (i == 0) {
             start_bound = dht::token_range::bound(dht::minimum_token(), true);
         } else {
-            start_bound = dht::token_range::bound(token, true);
-        }
-        if (++i < number_of_ranges) {
-            unbiased_key = i << log2_shift;
-            token = dht::bias(unbiased_key);
+            auto token = dht::next_token(prev_last_token);
             if (compaction_group_of(most_significant_bits, token) != i) {
                 on_fatal_internal_error(logger, format("split_token_range_msb: inconsistent end_bound compaction group: index={} msbits={} token={} compaction_group_of={}",
-                        i, most_significant_bits, token, compaction_group_of(most_significant_bits, token)));
+                                                       i, most_significant_bits, token, compaction_group_of(most_significant_bits, token)));
             }
-            end_bound = dht::token_range::bound(token, false);
-        } else {
-            end_bound = dht::token_range::bound(dht::maximum_token(), true);
+            start_bound = dht::token_range::bound(prev_last_token, false);
         }
+        prev_last_token = dht::last_token_of_compaction_group(most_significant_bits, i);
+        end_bound = dht::token_range::bound(prev_last_token, true);
         ret.emplace_back(std::move(start_bound), std::move(end_bound));
     }
     return ret;

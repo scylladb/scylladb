@@ -18,6 +18,7 @@
 #include "data_dictionary/user_types_metadata.hh"
 #include "data_dictionary/storage_options.hh"
 #include "data_dictionary/keyspace_element.hh"
+#include "gms/feature_service.hh"
 
 namespace data_dictionary {
 
@@ -55,7 +56,7 @@ public:
                  bool durables_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{},
                  storage_options storage_opts = {});
-    void validate(const locator::topology&) const;
+    void validate(const gms::feature_service&, const locator::topology&) const;
     const sstring& name() const {
         return _name;
     }

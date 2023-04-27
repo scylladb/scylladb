@@ -25,6 +25,7 @@
 #include "view_info.hh"
 #include "schema/schema_builder.hh"
 #include "replica/database.hh"
+#include "replica/tablets.hh"
 #include "db/schema_tables.hh"
 #include "types/user.hh"
 #include "db/system_keyspace.hh"
@@ -132,6 +133,9 @@ void migration_manager::init_messaging_service()
                     "migration request handler: group0 snapshot transfer requested, but canonical mutations not supported");
             }
             cm.emplace_back(co_await db::system_keyspace::get_group0_history(proxy));
+            for (auto&& m : co_await replica::read_tablet_mutations(proxy)) {
+                cm.emplace_back(std::move(m));
+            }
         }
         if (cm_retval_supported) {
             co_return rpc::tuple(std::vector<frozen_mutation>{}, std::move(cm));
@@ -498,6 +502,14 @@ future<> migration_notifier::update_view(const view_ptr& view, bool columns_chan
     });
 }
 
+future<> migration_notifier::update_tablet_metadata() {
+    return seastar::async([this] {
+        _listeners.thread_for_each([] (migration_listener* listener) {
+            listener->on_update_tablet_metadata();
+        });
+    });
+}
+
 #if 0
 public void notifyUpdateFunction(UDFunction udf)
 {
@@ -590,6 +602,12 @@ void migration_notifier::before_drop_column_family(const schema& schema,
     });
 }
 
+void migration_notifier::before_drop_keyspace(const sstring& keyspace_name,
+        std::vector<mutation>& mutations, api::timestamp_type ts) {
+    _listeners.thread_for_each([&mutations, &keyspace_name, ts] (migration_listener* listener) {
+        listener->on_before_drop_keyspace(keyspace_name, mutations, ts);
+    });
+}
 
 #if 0
 public void notifyDropFunction(UDFunction udf)
@@ -738,14 +756,18 @@ future<std::vector<mutation>> migration_manager::prepare_aggregate_drop_announce
     return include_keyspace(*keyspace.metadata(), std::move(mutations));
 }
 
-std::vector<mutation> migration_manager::prepare_keyspace_drop_announcement(const sstring& ks_name, api::timestamp_type ts) {
+future<std::vector<mutation>> migration_manager::prepare_keyspace_drop_announcement(const sstring& ks_name, api::timestamp_type ts) {
     auto& db = _storage_proxy.get_db().local();
     if (!db.has_keyspace(ks_name)) {
         throw exceptions::configuration_exception(format("Cannot drop non existing keyspace '{}'.", ks_name));
     }
     auto& keyspace = db.find_keyspace(ks_name);
     mlogger.info("Drop Keyspace '{}'", ks_name);
-    return db::schema_tables::make_drop_keyspace_mutations(db.features().cluster_schema_features(), keyspace.metadata(), ts);
+    return seastar::async([this, &db, &keyspace, ts, ks_name] {
+        auto mutations = db::schema_tables::make_drop_keyspace_mutations(db.features().cluster_schema_features(), keyspace.metadata(), ts);
+        get_notifier().before_drop_keyspace(ks_name, mutations, ts);
+        return mutations;
+    });
 }
 
 future<std::vector<mutation>> migration_manager::prepare_column_family_drop_announcement(const sstring& ks_name,

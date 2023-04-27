@@ -10,6 +10,7 @@
 #include <optional>
 #include "locator/snitch_base.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "locator/tablets.hh"
 #include "log.hh"
 #include "partition_range_compat.hh"
 #include <unordered_map>
@@ -62,6 +63,8 @@ private:
 
     std::vector<token> _sorted_tokens;
 
+    tablet_metadata _tablets;
+
     topology _topology;
 
     long _ring_version = 0;
@@ -71,6 +74,13 @@ private:
     // clone_async() must be updated to copy that member.
 
     void sort_tokens();
+
+    const tablet_metadata& tablets() const { return _tablets; }
+
+    void set_tablets(tablet_metadata&& tablets) {
+        _tablets = std::move(tablets);
+        invalidate_cached_rings();
+    }
 
     struct shallow_copy {};
     token_metadata_impl(shallow_copy, const token_metadata_impl& o) noexcept
@@ -113,8 +123,7 @@ public:
      */
     boost::iterator_range<token_metadata::tokens_iterator> ring_range(const token& start) const;
 
-    boost::iterator_range<token_metadata::tokens_iterator> ring_range(
-        const std::optional<dht::partition_range::bound>& start) const;
+    boost::iterator_range<token_metadata::tokens_iterator> ring_range(dht::ring_position_view pos) const;
 
     topology& get_topology() {
         return _topology;
@@ -331,6 +340,10 @@ token_metadata::tokens_iterator& token_metadata::tokens_iterator::operator++() {
     return *this;
 }
 
+host_id token_metadata::get_my_id() const {
+    return get_host_id(utils::fb_utilities::get_broadcast_address());
+}
+
 inline
 boost::iterator_range<token_metadata::tokens_iterator>
 token_metadata_impl::ring_range(const token& start) const {
@@ -369,6 +382,7 @@ future<token_metadata_impl> token_metadata_impl::clone_only_token_map(bool clone
         ret._sorted_tokens = _sorted_tokens;
         co_await coroutine::maybe_yield();
     }
+    ret._tablets = _tablets;
     co_return ret;
 }
 
@@ -381,6 +395,7 @@ future<> token_metadata_impl::clear_gently() noexcept {
     co_await utils::clear_gently(_pending_ranges_interval_map);
     co_await utils::clear_gently(_sorted_tokens);
     co_await _topology.clear_gently();
+    co_await _tablets.clear_gently();
     co_return;
 }
 
@@ -395,6 +410,14 @@ void token_metadata_impl::sort_tokens() {
     std::sort(sorted.begin(), sorted.end());
 
     _sorted_tokens = std::move(sorted);
+}
+
+const tablet_metadata& token_metadata::tablets() const {
+    return _impl->tablets();
+}
+
+void token_metadata::set_tablets(tablet_metadata tm) {
+    _impl->set_tablets(std::move(tm));
 }
 
 const std::vector<token>& token_metadata_impl::sorted_tokens() const {
@@ -559,21 +582,8 @@ void token_metadata_impl::add_bootstrap_token(token t, inet_address endpoint) {
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>
-token_metadata_impl::ring_range(const std::optional<dht::partition_range::bound>& start) const {
-    auto r = ring_range(start ? start->value().token() : dht::minimum_token());
-
-    if (!r.empty()) {
-        // We should skip the first token if it's excluded by the range.
-        if (start
-            && !start->is_inclusive()
-            && !start->value().has_key()
-            && start->value().token() == *r.begin())
-        {
-            r.pop_front();
-        }
-    }
-
-    return r;
+token_metadata_impl::ring_range(const dht::ring_position_view start) const {
+    return ring_range(start.token());
 }
 
 void token_metadata_impl::add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
@@ -1026,8 +1036,37 @@ token_metadata::ring_range(const token& start) const {
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>
-token_metadata::ring_range(const std::optional<dht::partition_range::bound>& start) const {
+token_metadata::ring_range(dht::ring_position_view start) const {
     return _impl->ring_range(start);
+}
+
+class token_metadata_ring_splitter : public locator::token_range_splitter {
+    token_metadata_ptr _tmptr;
+    boost::iterator_range<token_metadata::tokens_iterator> _range;
+public:
+    token_metadata_ring_splitter(token_metadata_ptr tmptr)
+        : _tmptr(std::move(tmptr))
+        , _range(_tmptr->sorted_tokens().empty() // ring_range() throws if the ring is empty
+                ? boost::make_iterator_range(token_metadata::tokens_iterator(), token_metadata::tokens_iterator())
+                : _tmptr->ring_range(dht::minimum_token()))
+    { }
+
+    void reset(dht::ring_position_view pos) override {
+        _range = _tmptr->ring_range(pos);
+    }
+
+    std::optional<dht::token> next_token() override {
+        if (_range.empty()) {
+            return std::nullopt;
+        }
+        auto t = *_range.begin();
+        _range.drop_front();
+        return t;
+    }
+};
+
+std::unique_ptr<locator::token_range_splitter> make_splitter(token_metadata_ptr tmptr) {
+    return std::make_unique<token_metadata_ring_splitter>(std::move(tmptr));
 }
 
 topology&

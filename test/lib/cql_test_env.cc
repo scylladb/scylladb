@@ -29,6 +29,7 @@
 #include <seastar/core/coroutine.hh>
 #include "utils/UUID_gen.hh"
 #include "service/migration_manager.hh"
+#include "service/tablet_allocator.hh"
 #include "compaction/compaction_manager.hh"
 #include "message/messaging_service.hh"
 #include "service/raft/raft_address_map.hh"
@@ -298,9 +299,7 @@ public:
     }
 
     virtual future<> create_table(std::function<schema(std::string_view)> schema_maker) override {
-        auto id = table_id(utils::UUID_gen::get_time_UUID());
         schema_builder builder(make_lw_shared<schema>(schema_maker(ks_name)));
-        builder.set_uuid(id);
         auto s = builder.build(schema_builder::compact_storage::no);
         auto group0_guard = co_await _mm.local().start_group0_operation();
         auto ts = group0_guard.write_timestamp();
@@ -767,6 +766,12 @@ public:
             mm.start(std::ref(mm_notif), std::ref(feature_service), std::ref(ms), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
 
+            distributed<service::tablet_allocator> the_tablet_allocator;
+            the_tablet_allocator.start(std::ref(mm_notif), std::ref(db)).get();
+            auto stop_tablet_allocator = defer([&] {
+                the_tablet_allocator.stop().get();
+            });
+
             cql3::query_processor::memory_config qp_mcfg;
             if (cfg_in.qp_mcfg) {
                 qp_mcfg = *cfg_in.qp_mcfg;
@@ -812,6 +817,10 @@ public:
                 std::ref(bm),
                 std::ref(snitch)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
+
+            ss.invoke_on_all([&] (service::storage_service& ss) {
+                ss.set_query_processor(qp.local());
+            }).get();
 
             for (const auto p: all_system_table_load_phases) {
                 replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, raft_gr, *cfg, p).get();

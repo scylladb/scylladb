@@ -1190,9 +1190,11 @@ future<> server_impl::applier_fiber() {
                utils::get_local_injector().inject("raft_server_snapshot_reduce_threshold",
                    [this] { _config.snapshot_threshold = 3; _config.snapshot_trailing = 1; });
 
-               if (_applied_idx > last_snap_idx &&
+               bool force_snapshot = utils::get_local_injector().enter("raft_server_force_snapshot");
+
+               if (force_snapshot || (_applied_idx > last_snap_idx &&
                    (_applied_idx - last_snap_idx >= _config.snapshot_threshold ||
-                   _fsm->log_memory_usage() >= _config.snapshot_threshold_log_size))
+                   _fsm->log_memory_usage() >= _config.snapshot_threshold_log_size)))
                {
                    snapshot_descriptor snp;
                    snp.term = last_term;
@@ -1203,7 +1205,9 @@ future<> server_impl::applier_fiber() {
                    // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
                    // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon receive
                    // a later snapshot from the queue.
-                   if (!_fsm->apply_snapshot(snp, _config.snapshot_trailing, _config.snapshot_trailing_size, true)) {
+                   if (!_fsm->apply_snapshot(snp,
+                                             force_snapshot ? 0 : _config.snapshot_trailing,
+                                             force_snapshot ? 0 : _config.snapshot_trailing_size, true)) {
                        logger.trace("[{}] applier fiber: while taking snapshot term={} idx={} id={},"
                               " fsm received a later snapshot at idx={}", _id, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
                    }

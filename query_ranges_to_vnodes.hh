@@ -10,6 +10,7 @@
 
 #include "dht/i_partitioner.hh"
 #include "locator/token_metadata.hh"
+#include "locator/token_range_splitter.hh"
 #include "schema/schema.hh"
 
 class query_ranges_to_vnodes_generator {
@@ -17,10 +18,10 @@ class query_ranges_to_vnodes_generator {
     dht::partition_range_vector _ranges;
     dht::partition_range_vector::iterator _i; // iterator to current range in _ranges
     bool _local;
-    const locator::token_metadata_ptr _tmptr;
+    std::unique_ptr<locator::token_range_splitter> _splitter;
     void process_one_range(size_t n, dht::partition_range_vector& ranges);
 public:
-    query_ranges_to_vnodes_generator(const locator::token_metadata_ptr tmptr, schema_ptr s, dht::partition_range_vector ranges, bool local = false);
+    query_ranges_to_vnodes_generator(std::unique_ptr<locator::token_range_splitter> splitter, schema_ptr s, dht::partition_range_vector ranges, bool local = false);
     query_ranges_to_vnodes_generator(const query_ranges_to_vnodes_generator&) = delete;
     query_ranges_to_vnodes_generator(query_ranges_to_vnodes_generator&&) = default;
     // generate next 'n' vnodes, may return less than requested number of ranges
