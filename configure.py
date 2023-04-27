@@ -508,6 +508,7 @@ scylla_tests = set([
     'test/boost/exceptions_fallback_test',
     'test/boost/s3_test',
     'test/boost/locator_topology_test',
+    'test/boost/string_format_test',
     'test/manual/ec2_snitch_test',
     'test/manual/enormous_table_scan_test',
     'test/manual/gce_snitch_test',
@@ -1240,6 +1241,7 @@ pure_boost_tests = set([
     'test/boost/vint_serialization_test',
     'test/boost/bptree_test',
     'test/boost/utf8_test',
+    'test/boost/string_format_test',
     'test/manual/streaming_histogram_test',
 ])
 
