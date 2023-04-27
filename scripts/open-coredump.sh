@@ -324,7 +324,7 @@ Launching dbuild container.
 
 To examine the coredump with gdb:
 
-    $ gdb -x scylla-gdb.py -ex 'set directories /src/scylla' --core ${COREFILE} /opt/scylladb/libexec/scylla
+    $ gdb -x scylla-gdb.py -ex 'set directories /src/scylla' -iex 'set solib-search-path /opt/scylladb/libreloc/' --core ${COREFILE} /opt/scylladb/libexec/scylla
 
 See https://github.com/scylladb/scylladb/blob/master/docs/dev/debugging.md for more information on how to debug scylla.
 
