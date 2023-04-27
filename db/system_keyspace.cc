@@ -3470,6 +3470,14 @@ future<> system_keyspace::set_must_synchronize_topology(bool value) {
     return set_scylla_local_param_as<bool>(MUST_SYNCHRONIZE_TOPOLOGY_KEY, value);
 }
 
+static std::set<sstring> decode_features(const set_type_impl::native_type& features) {
+    std::set<sstring> fset;
+    for (auto& f : features) {
+        fset.insert(value_cast<sstring>(std::move(f)));
+    }
+    return fset;
+}
+
 future<service::topology> system_keyspace::load_topology_state() {
     auto rs = co_await qctx->execute_cql(
         format("SELECT * FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
@@ -3515,6 +3523,11 @@ future<service::topology> system_keyspace::load_topology_state() {
         std::optional<sstring> rebuild_option;
         if (row.has("rebuild_option")) {
             rebuild_option = row.get_as<sstring>("rebuild_option");
+        }
+
+        std::set<sstring> supported_features;
+        if (row.has("supported_features")) {
+            supported_features = decode_features(deserialize_set_column(*topology(), row, "supported_features"));
         }
 
         if (row.has("topology_request")) {
@@ -3583,7 +3596,7 @@ future<service::topology> system_keyspace::load_topology_state() {
         if (map) {
             map->emplace(host_id, service::replica_state{
                 nstate, std::move(datacenter), std::move(rack), std::move(release_version),
-                ring_slice, shard_count, ignore_msb});
+                ring_slice, shard_count, ignore_msb, std::move(supported_features)});
         }
     }
 
@@ -3645,6 +3658,10 @@ future<service::topology> system_keyspace::load_topology_state() {
             auto req = service::global_topology_request_from_string(
                     some_row.get_as<sstring>("global_topology_request"));
             ret.global_request.emplace(req);
+        }
+
+        if (some_row.has("enabled_features")) {
+            ret.enabled_features = decode_features(deserialize_set_column(*topology(), some_row, "enabled_features"));
         }
     }
 

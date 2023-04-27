@@ -63,6 +63,7 @@ struct replica_state {
     std::optional<ring_slice> ring; // if engaged contain the set of tokens the node owns together with their state
     size_t shard_count;
     uint8_t ignore_msb;
+    std::set<sstring> supported_features;
 };
 
 struct topology {
@@ -102,6 +103,9 @@ struct topology {
     // e.g. when a new node bootstraps, needed in `commit_cdc_generation` transition state.
     // It's used as partition key in CDC_GENERATIONS_V3 table.
     std::optional<utils::UUID> new_cdc_generation_data_uuid;
+
+    // Features that are considered enabled by the cluster
+    std::set<sstring> enabled_features;
 
     // Find only nodes in non 'left' state
     const std::pair<const raft::server_id, replica_state>* find(raft::server_id id) const;
