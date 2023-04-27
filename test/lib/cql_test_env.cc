@@ -893,7 +893,7 @@ public:
 
             service::raft_group0 group0_service{
                     abort_sources.local(), raft_gr.local(), ms,
-                    gossiper.local(), feature_service.local(), sys_ks.local(), group0_client, cdc_generation_service.local()};
+                    gossiper.local(), feature_service.local(), sys_ks.local(), group0_client};
             group0_service.start().get();
             auto stop_group0_service = defer([&group0_service] {
                 group0_service.abort().get();
