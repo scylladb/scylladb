@@ -9,6 +9,7 @@ target_sources(test-perf
     perf/perf_row_cache_update.cc
     perf/perf_simple_query.cc
     perf/perf_sstable.cc
+    perf/perf_tablets.cc
     perf/perf.cc)
 target_include_directories(test-perf
   PUBLIC
