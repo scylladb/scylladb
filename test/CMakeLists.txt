@@ -1,13 +1,6 @@
 find_package(jsoncpp REQUIRED)
 
 add_subdirectory(lib)
-
-if(NOT TARGET Seastar::seastar_perf_testing)
-    add_library(Seastar::seastar_perf_testing)
-    target_sources(
-        tests/perf/linux_perf_event.cc)
-endif()
-
 add_subdirectory(perf)
 
 #
