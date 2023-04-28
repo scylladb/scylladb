@@ -11,6 +11,8 @@
 #include <memory>
 #include <functional>
 #include <unordered_map>
+#include <boost/icl/interval.hpp>
+#include <boost/icl/interval_map.hpp>
 #include "gms/inet_address.hh"
 #include "gms/feature_service.hh"
 #include "locator/snitch_base.hh"
@@ -154,6 +156,7 @@ public:
     future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address, locator::endpoint_dc_rack dr) const;
 };
 
+using ring_mapping = boost::icl::interval_map<token, std::unordered_set<inet_address>>;
 using replication_strategy_ptr = seastar::shared_ptr<const abstract_replication_strategy>;
 using mutable_replication_strategy_ptr = seastar::shared_ptr<abstract_replication_strategy>;
 
@@ -250,6 +253,8 @@ public:
 
 private:
     replication_map _replication_map;
+    ring_mapping _pending_endpoints;
+    ring_mapping _read_endpoints;
     std::optional<factory_key> _factory_key = std::nullopt;
     effective_replication_map_factory* _factory = nullptr;
 
@@ -261,9 +266,12 @@ public: // effective_replication_map
     inet_address_vector_topology_change get_pending_endpoints(const token& search_token, const sstring& ks_name) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
 public:
-    explicit vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map, size_t replication_factor) noexcept
+    explicit vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map,
+            ring_mapping pending_endpoints, ring_mapping read_endpoints, size_t replication_factor) noexcept
         : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
         , _replication_map(std::move(replication_map))
+        , _pending_endpoints(std::move(pending_endpoints))
+        , _read_endpoints(std::move(read_endpoints))
     { }
     vnode_effective_replication_map() = delete;
     vnode_effective_replication_map(vnode_effective_replication_map&&) = default;
@@ -336,9 +344,11 @@ using mutable_vnode_effective_replication_map_ptr = shared_ptr<vnode_effective_r
 using vnode_erm_ptr = vnode_effective_replication_map_ptr;
 using mutable_vnode_erm_ptr = mutable_vnode_effective_replication_map_ptr;
 
-inline mutable_vnode_erm_ptr make_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map, size_t replication_factor) {
+inline mutable_vnode_erm_ptr make_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map, ring_mapping pending_endpoints,
+    ring_mapping read_endpoints, size_t replication_factor) {
     return seastar::make_shared<vnode_effective_replication_map>(
-            std::move(rs), std::move(tmptr), std::move(replication_map), replication_factor);
+            std::move(rs), std::move(tmptr), std::move(replication_map),
+        std::move(pending_endpoints), std::move(read_endpoints), replication_factor);
 }
 
 // Apply the replication strategy over the current configuration and the given token_metadata.
