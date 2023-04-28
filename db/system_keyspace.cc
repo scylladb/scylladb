@@ -1075,7 +1075,7 @@ schema_ptr system_keyspace::sstables_registry() {
         auto id = generate_legacy_id(NAME, SSTABLES_REGISTRY);
         return schema_builder(NAME, SSTABLES_REGISTRY, id)
             .with_column("location", utf8_type, column_kind::partition_key)
-            .with_column("generation", long_type, column_kind::clustering_key)
+            .with_column("generation", timeuuid_type, column_kind::clustering_key)
             .with_column("uuid", uuid_type)
             .with_column("status", utf8_type)
             .with_column("version", utf8_type)
@@ -3773,7 +3773,7 @@ future<> system_keyspace::sstables_registry_list(sstring location, sstable_regis
     co_await _qp.local().query_internal(req, db::consistency_level::ONE, { location }, 1000, [ consumer = std::move(consumer) ] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
         auto uuid = row.get_as<utils::UUID>("uuid");
         auto status = row.get_as<sstring>("status");
-        auto gen = sstables::generation_from_value(row.get_as<int64_t>("generation"));
+        auto gen = sstables::generation_type::from_uuid(row.get_as<utils::UUID>("generation"));
         auto ver = sstables::version_from_string(row.get_as<sstring>("version"));
         auto fmt = sstables::format_from_string(row.get_as<sstring>("format"));
         sstables::entry_descriptor desc("", "", "", gen, ver, fmt, sstables::component_type::TOC);
