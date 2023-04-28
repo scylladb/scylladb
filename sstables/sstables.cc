@@ -172,7 +172,6 @@ public:
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
-    virtual future<storage::stat> get_stats(const sstable& sst) override;
 
     virtual sstring prefix() const override { return dir; }
 };
@@ -875,9 +874,7 @@ future<> sstable::read_toc() noexcept {
         return make_ready_future<>();
     }
 
-    sstlog.debug("Reading TOC file {}", filename(component_type::TOC));
-
-    return with_file(new_sstable_component_file(_read_error_handler, component_type::TOC, open_flags::ro), [this] (file f) {
+    return do_read_simple(component_type::TOC, [&] (version_types v, file f) -> future<> {
         auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
         auto buf = bufptr.get();
 
@@ -1010,13 +1007,14 @@ void sstable::open_sstable(const io_priority_class& pc) {
 void sstable::write_toc(file_writer w) {
     sstlog.debug("Writing TOC file {} ", w.get_filename());
 
-    for (auto&& key : _recognized_components) {
+    do_write_simple(std::move(w), [&] (version_types v, file_writer& w) {
+        for (auto&& key : _recognized_components) {
             // new line character is appended to the end of each component name.
-        auto value = sstable_version_constants::get_component_map(_version).at(key) + "\n";
-        bytes b = bytes(reinterpret_cast<const bytes::value_type *>(value.c_str()), value.size());
-        write(_version, w, b);
-    }
-    w.close();
+            auto value = sstable_version_constants::get_component_map(_version).at(key) + "\n";
+            bytes b = bytes(reinterpret_cast<const bytes::value_type *>(value.c_str()), value.size());
+            write(_version, w, b);
+        }
+    });
 }
 
 void sstable::filesystem_storage::open(sstable& sst, const io_priority_class& pc) {
@@ -1064,81 +1062,99 @@ future<> sstable::filesystem_storage::seal(const sstable& sst) {
 }
 
 void sstable::write_crc(const checksum& c) {
-    auto file_path = filename(component_type::CRC);
-    sstlog.debug("Writing CRC file {} ", file_path);
-
-    file_output_stream_options options;
-    options.buffer_size = 4096;
-    auto w = make_component_file_writer(component_type::CRC, std::move(options)).get0();
-    write(get_version(), w, c);
-    w.close();
+    unsigned buffer_size = 4096;
+    do_write_simple(component_type::CRC, default_priority_class(), [&] (version_types v, file_writer& w) {
+        write(v, w, c);
+    }, buffer_size);
 }
 
 // Digest file stores the full checksum of data file converted into a string.
 void sstable::write_digest(uint32_t full_checksum) {
-    auto file_path = filename(component_type::Digest);
-    sstlog.debug("Writing Digest file {} ", file_path);
-
-    file_output_stream_options options;
-    options.buffer_size = 4096;
-    auto w = make_component_file_writer(component_type::Digest, std::move(options)).get0();
-
-    auto digest = to_sstring<bytes>(full_checksum);
-    write(get_version(), w, digest);
-    w.close();
+    unsigned buffer_size = 4096;
+    do_write_simple(component_type::Digest, default_priority_class(), [&] (version_types v, file_writer& w) {
+        auto digest = to_sstring<bytes>(full_checksum);
+        write(v, w, digest);
+    }, buffer_size);
 }
 
 thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_sample_pattern_cache;
 thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_original_index_cache;
 
+future<> sstable::do_read_simple(component_type type,
+                                 noncopyable_function<future<> (version_types, file&&, uint64_t sz)> read_component) {
+    auto file_path = filename(type);
+    sstlog.debug(("Reading " + sstable_version_constants::get_component_map(_version).at(type) + " file {} ").c_str(), file_path);
+    try {
+        file fi = co_await new_sstable_component_file(_read_error_handler, type, open_flags::ro);
+        uint64_t size = co_await fi.size();
 
-template <component_type Type, typename T>
-future<> sstable::read_simple(T& component, const io_priority_class& pc) {
-
-    auto file_path = filename(Type);
-    sstlog.debug(("Reading " + sstable_version_constants::get_component_map(_version).at(Type) + " file {} ").c_str(), file_path);
-    return new_sstable_component_file(_read_error_handler, Type, open_flags::ro).then([this, &component] (file fi) {
-        auto fut = fi.size();
-        return fut.then([this, &component, fi = std::move(fi)] (uint64_t size) {
-            auto r = make_lw_shared<file_random_access_reader>(std::move(fi), size, sstable_buffer_size);
-            auto fut = parse(*_schema, _version, *r, component);
-            return fut.finally([r] {
-                return r->close();
-            }).then([r] {});
-        });
-    }).then_wrapped([file_path] (future<> f) {
-        try {
-            f.get();
-        } catch (std::system_error& e) {
-            if (e.code() == std::error_code(ENOENT, std::system_category())) {
-                return make_exception_future<>(malformed_sstable_exception(file_path + ": file not found"));
-            }
-            return make_exception_future<>(e);
-        } catch (malformed_sstable_exception &e) {
-            return make_exception_future<>(malformed_sstable_exception(e.what(), file_path));
+        co_await read_component(_version, std::move(fi), size);
+        _metadata_size_on_disk += size;
+    }  catch (std::system_error& e) {
+        if (e.code() == std::error_code(ENOENT, std::system_category())) {
+            throw malformed_sstable_exception(file_path + ": file not found");
         }
-        return make_ready_future<>();
+        throw;
+    } catch (malformed_sstable_exception& e) {
+        throw malformed_sstable_exception(e.what(), file_path);
+    }
+}
+
+future<> sstable::do_read_simple(component_type type,
+                                 noncopyable_function<future<> (version_types, file)> read_component) {
+    return do_read_simple(type, [this, read_component = std::move(read_component)] (version_types v, file&& f, uint64_t) -> future<> {
+        std::exception_ptr ex;
+        try {
+            co_await read_component(_version, f);
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        co_await f.close();
+
+        maybe_rethrow_exception(std::move(ex));
     });
 }
 
+template <component_type Type, typename T>
+future<> sstable::read_simple(T& component, const io_priority_class& pc) {
+    return do_read_simple(Type, [&] (version_types v, file&& f, uint64_t size) -> future<> {
+        std::exception_ptr ex;
+        auto r = file_random_access_reader(std::move(f), size, sstable_buffer_size);
+        try {
+            co_await parse(*_schema, v, r, component);
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        co_await r.close();
+
+        maybe_rethrow_exception(std::move(ex));
+    });
+}
+
+void sstable::do_write_simple(file_writer&& writer,
+                              noncopyable_function<void (version_types, file_writer&)> write_component) {
+    write_component(_version, writer);
+    _metadata_size_on_disk += writer.offset();
+    writer.close();
+}
+
 void sstable::do_write_simple(component_type type, const io_priority_class& pc,
-        noncopyable_function<void (version_types version, file_writer& writer)> write_component) {
+        noncopyable_function<void (version_types version, file_writer& writer)> write_component, unsigned buffer_size) {
     auto file_path = filename(type);
     sstlog.debug(("Writing " + sstable_version_constants::get_component_map(_version).at(type) + " file {} ").c_str(), file_path);
 
     file_output_stream_options options;
-    options.buffer_size = sstable_buffer_size;
+    options.buffer_size = buffer_size;
     options.io_priority_class = pc;
     auto w = make_component_file_writer(type, std::move(options)).get0();
-    write_component(_version, w);
-    w.close();
+    do_write_simple(std::move(w), std::move(write_component));
 }
 
 template <component_type Type, typename T>
 void sstable::write_simple(const T& component, const io_priority_class& pc) {
     do_write_simple(Type, pc, [&component] (version_types v, file_writer& w) {
         write(v, w, component);
-    });
+    }, sstable_buffer_size);
 }
 
 template future<> sstable::read_simple<component_type::Filter>(sstables::filter& f, const io_priority_class& pc);
@@ -1467,46 +1483,9 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
     this->set_min_max_position_range();
     this->set_first_and_last_keys();
     _run_identifier = _components->scylla_metadata->get_optional_run_identifier().value_or(run_id::create_random_id());
-    auto stat = co_await _storage->get_stats(*this);
-    _bytes_on_disk = stat.bytes_on_disk;
-    if (stat.filter_file_size != 0) {
-        _filter_file_size = stat.filter_file_size;
-    }
     if (cfg.load_first_and_last_position_metadata) {
         co_await load_first_and_last_position_in_partition();
     }
-}
-
-future<sstable::storage::stat> sstable::filesystem_storage::get_stats(const sstable& sst) {
-    storage::stat ret;
-    // Get disk usage for this sstable (includes all components).
-    for (component_type c : sst._recognized_components) {
-        uint64_t bytes = co_await sst.sstable_write_io_check(coroutine::lambda([&] () -> future<uint64_t> {
-            future<seastar::stat_data> f = co_await coroutine::as_future(file_stat(sst.filename(c)));
-            if (f.failed()) [[unlikely]] {
-                try {
-                    std::rethrow_exception(f.get_exception());
-                } catch (const std::system_error& ex) {
-                    // ignore summary that isn't present in disk but was previously generated by read_summary().
-                    if (ex.code().value() == ENOENT && c == component_type::Summary && sst._components->summary.memory_footprint()) {
-                        co_return 0;
-                    }
-                    co_return coroutine::exception(std::make_exception_ptr(ex));
-                }
-            }
-            co_return f.get0().allocated_size;
-        }));
-        ret.bytes_on_disk += bytes;
-    }
-
-    if (sst.has_component(component_type::Filter)) {
-        auto size = co_await io_check([&] {
-            return file_size(sst.filename(component_type::Filter));
-        });
-        ret.filter_file_size = size;
-    }
-
-    co_return ret;
 }
 
 future<> sstable::create_data() noexcept {
@@ -1582,6 +1561,7 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
         _data_file = make_checked_file(_read_error_handler, info.data.to_file());
         _index_file = make_checked_file(_read_error_handler, info.index.to_file());
         _shards = std::move(info.owners);
+        _metadata_size_on_disk = info.metadata_size_on_disk;
         validate_min_max_metadata();
         validate_max_local_deletion_time();
         validate_partitioner();
@@ -1592,7 +1572,7 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
 future<foreign_sstable_open_info> sstable::get_open_info() & {
     return _components.copy().then([this] (auto c) mutable {
         return foreign_sstable_open_info{std::move(c), this->get_shards_for_this_sstable(), _data_file.dup(), _index_file.dup(),
-            _generation, _version, _format, data_size()};
+            _generation, _version, _format, data_size(), _metadata_size_on_disk};
     });
 }
 
@@ -2003,8 +1983,20 @@ uint64_t sstable::ondisk_data_size() const {
 }
 
 uint64_t sstable::bytes_on_disk() const {
-    assert(_bytes_on_disk > 0);
-    return _bytes_on_disk;
+    if (!_metadata_size_on_disk) {
+        on_internal_error(sstlog, "On-disk size of sstable metadata was not set");
+    }
+    if (!_data_file_size) {
+        on_internal_error(sstlog, "On-disk size of sstable data was not set");
+    }
+    if (!_index_file_size) {
+        on_internal_error(sstlog, "On-disk size of sstable index was not set");
+    }
+    return _metadata_size_on_disk + _data_file_size + _index_file_size;
+}
+
+uint64_t sstable::filter_size() const {
+    return _components->filter->memory_size();
 }
 
 const bool sstable::has_component(component_type f) const {
@@ -2641,58 +2633,62 @@ static future<bool> do_validate_uncompressed(input_stream<char>& stream, const c
 }
 
 future<uint32_t> sstable::read_digest(io_priority_class pc) {
-    file_input_stream_options options;
-    options.buffer_size = 4096;
-    options.io_priority_class = pc;
-
-    auto digest_file = co_await open_file_dma(filename(component_type::Digest), open_flags::ro);
-    auto digest_stream = make_file_input_stream(std::move(digest_file), options);
-
-    std::exception_ptr ex;
-
     sstring digest_str;
-    try {
-        digest_str = co_await util::read_entire_stream_contiguous(digest_stream);
-    } catch (...) {
-        ex = std::current_exception();
-    }
 
-    co_await digest_stream.close();
-    maybe_rethrow_exception(std::move(ex));
+    co_await do_read_simple(component_type::Digest, [&] (version_types v, file digest_file) -> future<> {
+        file_input_stream_options options;
+        options.buffer_size = 4096;
+        options.io_priority_class = pc;
+
+        auto digest_stream = make_file_input_stream(std::move(digest_file), options);
+
+        std::exception_ptr ex;
+
+        try {
+            digest_str = co_await util::read_entire_stream_contiguous(digest_stream);
+        } catch (...) {
+            ex = std::current_exception();
+        }
+
+        co_await digest_stream.close();
+        maybe_rethrow_exception(std::move(ex));
+    });
 
     co_return boost::lexical_cast<uint32_t>(digest_str);
 }
 
 future<checksum> sstable::read_checksum(io_priority_class pc) {
-    file_input_stream_options options;
-    options.buffer_size = 4096;
-    options.io_priority_class = pc;
+    sstables::checksum checksum;
 
-    auto crc_file = co_await open_file_dma(filename(component_type::CRC), open_flags::ro);
-    auto crc_stream = make_file_input_stream(std::move(crc_file), options);
+    co_await do_read_simple(component_type::CRC, [&] (version_types v, file crc_file) -> future<> {
+        file_input_stream_options options;
+        options.buffer_size = 4096;
+        options.io_priority_class = pc;
 
-    checksum checksum;
-    std::exception_ptr ex;
+        auto crc_stream = make_file_input_stream(std::move(crc_file), options);
 
-    try {
-        const auto size = sizeof(uint32_t);
+        std::exception_ptr ex;
 
-        auto buf = co_await crc_stream.read_exactly(size);
-        check_buf_size(buf, size);
-        checksum.chunk_size = net::ntoh(read_unaligned<uint32_t>(buf.get()));
+        try {
+            const auto size = sizeof(uint32_t);
 
-        buf = co_await crc_stream.read_exactly(size);
-        while (!buf.empty()) {
+            auto buf = co_await crc_stream.read_exactly(size);
             check_buf_size(buf, size);
-            checksum.checksums.push_back(net::ntoh(read_unaligned<uint32_t>(buf.get())));
-            buf = co_await crc_stream.read_exactly(size);
-        }
-    } catch (...) {
-        ex = std::current_exception();
-    }
+            checksum.chunk_size = net::ntoh(read_unaligned<uint32_t>(buf.get()));
 
-    co_await crc_stream.close();
-    maybe_rethrow_exception(std::move(ex));
+            buf = co_await crc_stream.read_exactly(size);
+            while (!buf.empty()) {
+                check_buf_size(buf, size);
+                checksum.checksums.push_back(net::ntoh(read_unaligned<uint32_t>(buf.get())));
+                buf = co_await crc_stream.read_exactly(size);
+            }
+        } catch (...) {
+            ex = std::current_exception();
+        }
+
+        co_await crc_stream.close();
+        maybe_rethrow_exception(std::move(ex));
+    });
 
     co_return checksum;
 }
@@ -3317,7 +3313,6 @@ public:
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
-    virtual future<storage::stat> get_stats(const sstable& sst) override;
 
     virtual sstring prefix() const override { return _location; }
 };
@@ -3366,21 +3361,6 @@ future<data_sink> sstable::s3_storage::make_component_sink(sstable& sst, compone
 
 future<> sstable::s3_storage::seal(const sstable& sst) {
     co_await sst.manager().system_keyspace().sstables_registry_update_entry_status(_location, sst.generation(), status_sealed);
-}
-
-future<sstable::storage::stat> sstable::s3_storage::get_stats(const sstable& sst) {
-    sstable::storage::stat ret;
-
-    // FIXME:
-    //
-    // Stat-ing each file over S3 is a bit painful. Need to preserve the components
-    // size while sealing and reporting these values back. For now just return the
-    // sum of pre-obtained Data and Index file sizes to avoid assertion about the
-    // bytes_on_disk being non zero :(
-
-    ret.bytes_on_disk = sst._data_file_size + sst._index_file_size;
-
-    co_return ret;
 }
 
 future<> sstable::s3_storage::change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay) {

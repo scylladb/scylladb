@@ -3144,3 +3144,38 @@ SEASTAR_TEST_CASE(find_first_position_in_partition_from_sstable_test) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_sstable_bytes_on_disk_correctness) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto random_spec = tests::make_random_schema_specification(
+                get_name(),
+                std::uniform_int_distribution<size_t>(1, 4),
+                std::uniform_int_distribution<size_t>(2, 4),
+                std::uniform_int_distribution<size_t>(2, 8),
+                std::uniform_int_distribution<size_t>(2, 8));
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto schema = random_schema.schema();
+
+        testlog.info("Random schema:\n{}", random_schema.cql());
+
+        const auto muts = tests::generate_random_mutations(random_schema, 20).get();
+
+        auto sst = make_sstable_containing(env.make_sstable(schema), muts);
+
+        auto get_bytes_on_disk_from_storage = [&] (const sstables::shared_sstable& sst) {
+            uint64_t bytes_on_disk = 0;
+            auto& underlying_storage = const_cast<sstable::storage&>(sst->get_storage());
+            for (auto& component_type : sstables::test(sst).get_components()) {
+                file f = underlying_storage.open_component(*sst, component_type, open_flags::ro, file_open_options{}, true).get0();
+                bytes_on_disk += f.size().get0();
+            }
+            return bytes_on_disk;
+        };
+
+        auto expected_bytes_on_disk = get_bytes_on_disk_from_storage(sst);
+
+        testlog.info("expected={}, actual={}", expected_bytes_on_disk, sst->bytes_on_disk());
+
+        BOOST_REQUIRE(sst->bytes_on_disk() == expected_bytes_on_disk);
+    });
+}

@@ -54,6 +54,8 @@ class large_data_handler;
 
 namespace sstables {
 
+class random_access_reader;
+
 class sstable_directory;
 extern thread_local utils::updateable_value<bool> global_cache_index_pages;
 
@@ -317,9 +319,8 @@ public:
         return _index_file;
     }
     file uncached_index_file();
-    uint64_t filter_size() const {
-        return _filter_file_size;
-    }
+    // Returns size of bloom filter data.
+    uint64_t filter_size() const;
 
     db_clock::time_point data_file_write_time() const {
         return _data_file_write_time;
@@ -494,11 +495,6 @@ public:
         virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) = 0;
         virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) = 0;
         virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) = 0;
-        struct stat {
-            uint64_t bytes_on_disk = 0;
-            uint64_t filter_file_size = 0;
-        };
-        virtual future<stat> get_stats(const sstable& sst) = 0;
 
         virtual sstring prefix() const  = 0;
     };
@@ -537,8 +533,8 @@ private:
     file _data_file;
     uint64_t _data_file_size;
     uint64_t _index_file_size;
-    uint64_t _filter_file_size = 0;
-    uint64_t _bytes_on_disk = 0;
+    // on-disk size of components but data and index.
+    uint64_t _metadata_size_on_disk = 0;
     db_clock::time_point _data_file_write_time;
     position_range _min_max_position_range = position_range::all_clustered_rows();
     position_in_partition _first_partition_first_position = position_in_partition::before_all_clustered_rows();
@@ -599,11 +595,19 @@ private:
 
     template <component_type Type, typename T>
     future<> read_simple(T& comp, const io_priority_class& pc);
+    future<> do_read_simple(component_type type,
+                            noncopyable_function<future<> (version_types, file&&, uint64_t sz)> read_component);
+    // this variant closes the file on parse completion
+    future<> do_read_simple(component_type type,
+                            noncopyable_function<future<> (version_types, file)> read_component);
 
     template <component_type Type, typename T>
     void write_simple(const T& comp, const io_priority_class& pc);
+    void do_write_simple(file_writer&& writer,
+                         noncopyable_function<void (version_types, file_writer&)> write_component);
     void do_write_simple(component_type type, const io_priority_class& pc,
-            noncopyable_function<void (version_types version, file_writer& writer)> write_component);
+            noncopyable_function<void (version_types version, file_writer& writer)> write_component,
+            unsigned buffer_size);
 
     void write_crc(const checksum& c);
     void write_digest(uint32_t full_checksum);
