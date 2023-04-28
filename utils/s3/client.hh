@@ -32,6 +32,8 @@ class client : public enable_shared_from_this<client> {
     struct private_tag {};
 
     void authorize(http::request&);
+
+    future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler);
 public:
     explicit client(std::string host, endpoint_config_ptr cfg, private_tag);
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg);

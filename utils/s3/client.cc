@@ -159,12 +159,16 @@ void client::authorize(http::request& req) {
     req._headers["Authorization"] = format("AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}", _cfg->aws->key, time_point_st, _cfg->aws->region, signed_headers_list, sig);
 }
 
-future<uint64_t> client::get_object_size(sstring object_name) {
+future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler) {
     s3l.trace("HEAD {}", object_name);
     auto req = http::request::make("HEAD", _host, object_name);
-    uint64_t len = 0;
     authorize(req);
-    co_await _http.make_request(std::move(req), [&len] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+    return _http.make_request(std::move(req), std::move(handler));
+}
+
+future<uint64_t> client::get_object_size(sstring object_name) {
+    uint64_t len = 0;
+    co_await get_object_header(std::move(object_name), [&len] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         len = rep.content_length;
         return make_ready_future<>(); // it's HEAD with no body
     });
