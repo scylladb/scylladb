@@ -1,6 +1,6 @@
-===================
-Scylla CQL Drivers
-===================
+=====================
+ScyllaDB CQL Drivers
+=====================
 
 .. toctree::
    :titlesonly:
@@ -13,49 +13,73 @@ Scylla CQL Drivers
    scylla-cpp-driver
    scylla-rust-driver
 
-All Scylla Drivers are Shard-Aware and provide additional benefits over third-party drivers.
+ScyllaDB Drivers
+-----------------
 
-It is always recommended to use the Scylla drivers over third-party drivers.
+We recommend using ScyllaDB drivers. All ScyllaDB drivers are shard-aware and provide additional 
+benefits over third-party drivers.
 
-Scylla supports the CQL binary protocol version 3, so any Apache Cassandra/CQL driver that implements the same version, works with Scylla.
+ScyllaDB supports the CQL binary protocol version 3, so any Apache Cassandra/CQL driver that implements 
+the same version works with Scylla.
+
+The following table lists the available ScyllaDB drivers, specifying which support
+`ScyllaDB Cloud Serversless <https://cloud.docs.scylladb.com/stable/serverless/index.html>`_ 
+or include a library for :doc:`CDC </using-scylla/cdc/cdc-intro>`.
+
+.. list-table:: 
+   :widths: 25 25 25 25
+   :header-rows: 1
+
+   * - 
+     - ScyllaDB Driver
+     - ScyllaDB Cloud Serverless
+     - CDC Connector
+   * - :doc:`Python</using-scylla/drivers/cql-drivers/scylla-python-driver>`
+     - |v| 
+     - |v|
+     - |x| 
+   * - :doc:`Java </using-scylla/drivers/cql-drivers/scylla-java-driver>`
+     - |v| 
+     - |v|
+     - |v|
+   * - :doc:`Go </using-scylla/drivers/cql-drivers/scylla-go-driver>`
+     - |v| 
+     - |v|
+     - |v|
+   * - :doc:`Go Extension </using-scylla/drivers/cql-drivers/scylla-gocqlx-driver>`
+     - |v|
+     - |x| 
+     - |x| 
+   * - :doc:`C++ </using-scylla/drivers/cql-drivers/scylla-cpp-driver>`
+     - |v|
+     - |x| 
+     - |x| 
+   * - :doc:`Rust </using-scylla/drivers/cql-drivers/scylla-rust-driver>`
+     - |v|
+     - |v|
+     - |x| 
 
 
+Third-party Drivers
+----------------------
 
-.. panel-box::
-  :title: Scylla Drivers
-  :id: "getting-started"
-  :class: my-panel
+You can find the third-party driver documentation on the GitHub pages for each driver:
 
-  All Scylla Drivers are Shard-Aware and provide additional benefits over third-party drivers.
+* `DataStax Java Driver <https://github.com/datastax/java-driver/>`_
+* `DataStax Python Driver <https://github.com/datastax/python-driver/>`_
+* `DataStax C# Driver <https://github.com/datastax/csharp-driver/>`_
+* `DataStax Ruby Driver <https://github.com/datastax/ruby-driver/>`_
+* `DataStax Node.js Driver <https://github.com/datastax/nodejs-driver/>`_
+* `DataStax C++ Driver <https://github.com/datastax/cpp-driver/>`_
+* `DataStax PHP Driver (Supported versions: 7.1)  <https://github.com/datastax/php-driver>`_
+* `He4rt PHP Driver (Supported versions: 8.1 and 8.2)  <https://github.com/he4rt/scylladb-php-driver/>`_
+* `Rust <https://github.com/AlexPikalov/cdrs>`_
+* `Scala Phantom Project <https://github.com/outworkers/phantom>`_
 
-  * :doc:`Scylla Python Driver </using-scylla/drivers/cql-drivers/scylla-python-driver>`
-  * :doc:`Scylla Java Driver </using-scylla/drivers/cql-drivers/scylla-java-driver>` - now includes a library for CDC
-  * :doc:`Scylla Go Driver </using-scylla/drivers/cql-drivers/scylla-go-driver>` - now includes a library for CDC
-  * :doc:`Scylla Go Extension Driver </using-scylla/drivers/cql-drivers/scylla-gocqlx-driver>`
-  * :doc:`Scylla C++ Driver </using-scylla/drivers/cql-drivers/scylla-cpp-driver>`
-  * :doc:`Scylla Rust Driver </using-scylla/drivers/cql-drivers/scylla-rust-driver>` - available for preview
 
-.. panel-box::
-  :title: Third-party Drivers
-  :id: "getting-started"
-  :class: my-panel
+Learn about ScyllaDB Drivers on ScyllaDB University
+----------------------------------------------------
 
-  You can find the third-party driver documentation on the GitHub pages for each driver:
-
-  * `DataStax Java Driver <https://github.com/datastax/java-driver/>`_
-  * `DataStax Python Driver <https://github.com/datastax/python-driver/>`_
-  * `DataStax C# Driver <https://github.com/datastax/csharp-driver/>`_
-  * `DataStax Ruby Driver <https://github.com/datastax/ruby-driver/>`_
-  * `DataStax Node.js Driver <https://github.com/datastax/nodejs-driver/>`_
-  * `DataStax C++ Driver <https://github.com/datastax/cpp-driver/>`_
-  * `DataStax PHP Driver (Supported versions: 7.1)  <https://github.com/datastax/php-driver>`_
-  * `He4rt PHP Driver (Supported versions: 8.1 and 8.2)  <https://github.com/he4rt/scylladb-php-driver/>`_
-  * `Rust <https://github.com/AlexPikalov/cdrs>`_
-  * `Scala Phantom Project <https://github.com/outworkers/phantom>`_
-
-.. panel-box::
-  :title: Lessons on Scylla University
-  :id: "getting-started"
-  :class: my-panel
-
-  The free `Using Scylla Drivers course <https://university.scylladb.com/courses/using-scylla-drivers/>`_ on Scylla University covers the use of drivers in multiple languages to interact with a Scylla cluster. Some of the languages covered include: Java, CPP, Rust, Golang, Python, Node.JS, Scala and others.
+  The free `Using ScyllaDB Drivers course <https://university.scylladb.com/courses/using-scylla-drivers/>`_ 
+  on ScyllaDB University covers the use of drivers in multiple languages to interact with a ScyllaDB 
+  cluster. The languages covered include Java, CPP, Rust, Golang, Python, Node.JS, Scala, and others.
