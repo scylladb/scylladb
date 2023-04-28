@@ -1691,8 +1691,8 @@ create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key,
             auto&& right_token = right.token();
             auto right_exclusive = !right.has_key() && right.bound() == dht::ring_position::token_bound::start;
             sm.token_ranges.elements.push_back(disk_token_range{
-                {left_exclusive, left_token.data()},
-                {right_exclusive, right_token.data()}});
+                {left_exclusive, {left_token.data()}},
+                {right_exclusive, {right_token.data()}}});
         }
     }
     return sm;
