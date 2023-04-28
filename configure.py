@@ -1351,7 +1351,6 @@ warnings = [
     '-Wno-tautological-compare',
     '-Wno-parentheses-equality',
     '-Wno-c++11-narrowing',
-    '-Wno-missing-braces',
     '-Wno-ignored-attributes',
     '-Wno-overloaded-virtual',
     '-Wno-unused-command-line-argument',

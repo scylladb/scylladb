@@ -1,7 +1,6 @@
 set(disabled_warnings
   c++11-narrowing
   mismatched-tags
-  missing-braces
   overloaded-virtual
   parentheses-equality
   unsupported-friend)
