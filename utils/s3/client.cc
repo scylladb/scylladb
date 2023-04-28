@@ -592,13 +592,16 @@ public:
     }
 
     virtual future<struct stat> stat(void) override {
-        auto size = co_await _client->get_object_size(_object_name);
+        auto object_stats = co_await _client->get_object_stats(_object_name);
         struct stat ret {};
         ret.st_nlink = 1;
         ret.st_mode = S_IFREG | S_IRUSR | S_IRGRP | S_IROTH;
-        ret.st_size = size;
+        ret.st_size = object_stats.size;
         ret.st_blksize = 1 << 10; // huh?
-        ret.st_blocks = size >> 9;
+        ret.st_blocks = object_stats.size >> 9;
+        // objects are immutable on S3, therefore we can use Last-Modified to set both st_mtime and st_ctime
+        ret.st_mtime = object_stats.last_modified;
+        ret.st_ctime = object_stats.last_modified;
         co_return ret;
     }
 
