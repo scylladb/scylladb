@@ -23,6 +23,27 @@ function(add_perf_test name)
   endif()
 endfunction()
 
+add_library(test-perf STATIC)
+target_sources(test-perf
+  PRIVATE
+    perf_fast_forward.cc
+    perf_row_cache_update.cc
+    perf_simple_query.cc
+    perf_sstable.cc
+    perf_tablets.cc
+    perf.cc)
+target_include_directories(test-perf
+  PUBLIC
+    ${CMAKE_SOURCE_DIR})
+target_link_libraries(test-perf
+  PRIVATE
+    idl
+    test-lib
+    Seastar::seastar_perf_testing
+    JsonCpp::JsonCpp
+    xxHash::xxhash
+    wasmtime_bindings)
+
 add_library(perf-lib OBJECT perf.cc)
 target_include_directories(perf-lib
   PUBLIC

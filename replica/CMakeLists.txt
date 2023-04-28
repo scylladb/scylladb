@@ -4,6 +4,7 @@ target_sources(replica
     distributed_loader.cc
     database.cc
     table.cc
+    tablets.cc
     distributed_loader.cc
     memtable.cc
     exceptions.cc

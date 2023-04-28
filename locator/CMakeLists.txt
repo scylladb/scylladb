@@ -18,6 +18,7 @@ target_sources(scylla_locator
     ec2_snitch.cc
     ec2_multi_region_snitch.cc
     gce_snitch.cc
+    tablets.cc
     topology.cc
     util.cc)
 target_include_directories(scylla_locator
