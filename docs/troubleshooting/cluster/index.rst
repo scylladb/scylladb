@@ -10,6 +10,7 @@ Cluster and Node
    Node Joined With No Data </troubleshooting/node-joined-without-any-data>
    SocketTimeoutException </troubleshooting/nodetool-memory-read-timeout/> 
    NullPointerException </troubleshooting/nodetool-nullpointerexception/> 
+   Failed Schema Sync </troubleshooting/failed-schema-sync/> 
 
 .. raw:: html
 
@@ -25,6 +26,7 @@ Cluster and Node
 * :doc:`Node Joined With No Data </troubleshooting/node-joined-without-any-data>`
 * :doc:`Nodetool fails with SocketTimeoutException 'Read timed out' </troubleshooting/nodetool-memory-read-timeout>`
 * :doc:`Nodetool Throws NullPointerException </troubleshooting/nodetool-nullpointerexception>`
+* :doc:`Failed Schema Sync </troubleshooting/failed-schema-sync>`
 
 .. raw:: html
 
