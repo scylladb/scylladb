@@ -40,7 +40,7 @@ class functions {
 private:
     static std::unordered_multimap<function_name, shared_ptr<function>> init() noexcept;
 public:
-    static lw_shared_ptr<column_specification> make_arg_spec(const sstring& receiver_ks, const sstring& receiver_cf,
+    static lw_shared_ptr<column_specification> make_arg_spec(const sstring& receiver_ks, std::optional<const std::string_view> receiver_cf,
             const function& fun, size_t i);
 public:
     static shared_ptr<function> get(data_dictionary::database db,
@@ -48,7 +48,7 @@ public:
                                     const function_name& name,
                                     const std::vector<shared_ptr<assignment_testable>>& provided_args,
                                     const sstring& receiver_ks,
-                                    const sstring& receiver_cf,
+                                    std::optional<const std::string_view> receiver_cf,
                                     const column_specification* receiver = nullptr);
     template <typename AssignmentTestablePtrRange>
     static shared_ptr<function> get(data_dictionary::database db,
@@ -56,7 +56,7 @@ public:
                                     const function_name& name,
                                     AssignmentTestablePtrRange&& provided_args,
                                     const sstring& receiver_ks,
-                                    const sstring& receiver_cf,
+                                    std::optional<const std::string_view> receiver_cf,
                                     const column_specification* receiver = nullptr) {
         const std::vector<shared_ptr<assignment_testable>> args(std::begin(provided_args), std::end(provided_args));
         return get(db, keyspace, name, args, receiver_ks, receiver_cf, receiver);
@@ -87,12 +87,12 @@ private:
                               shared_ptr<function> fun,
                               const std::vector<shared_ptr<assignment_testable>>& provided_args,
                               const sstring& receiver_ks,
-                              const sstring& receiver_cf);
+                              std::optional<const std::string_view> receiver_cf);
     static assignment_testable::test_result match_arguments(data_dictionary::database db, const sstring& keyspace,
             shared_ptr<function> fun,
             const std::vector<shared_ptr<assignment_testable>>& provided_args,
             const sstring& receiver_ks,
-            const sstring& receiver_cf);
+            std::optional<const std::string_view> receiver_cf);
 
     static bool type_equals(const std::vector<data_type>& t1, const std::vector<data_type>& t2);
 

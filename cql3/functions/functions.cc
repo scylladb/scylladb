@@ -202,9 +202,10 @@ std::optional<function_name> functions::used_by_user_function(const ut_name& use
 }
 
 lw_shared_ptr<column_specification>
-functions::make_arg_spec(const sstring& receiver_ks, const sstring& receiver_cf,
+functions::make_arg_spec(const sstring& receiver_ks, std::optional<const std::string_view> receiver_cf_opt,
         const function& fun, size_t i) {
     auto&& name = fmt::to_string(fun.name());
+    const std::string_view receiver_cf = receiver_cf_opt.has_value() ? *receiver_cf_opt : "<unknown_col_family>";
     std::transform(name.begin(), name.end(), name.begin(), ::tolower);
     return make_lw_shared<column_specification>(receiver_ks,
                                    receiver_cf,
@@ -322,7 +323,7 @@ functions::get(data_dictionary::database db,
         const function_name& name,
         const std::vector<shared_ptr<assignment_testable>>& provided_args,
         const sstring& receiver_ks,
-        const sstring& receiver_cf,
+        std::optional<const std::string_view> receiver_cf,
         const column_specification* receiver) {
 
     static const function_name TOKEN_FUNCTION_NAME = function_name::native_function("token");
@@ -332,7 +333,11 @@ functions::get(data_dictionary::database db,
     if (name.has_keyspace()
                 ? name == TOKEN_FUNCTION_NAME
                 : name.name == TOKEN_FUNCTION_NAME.name) {
-        auto fun = ::make_shared<token_fct>(db.find_schema(receiver_ks, receiver_cf));
+
+        if (!receiver_cf.has_value()) {
+            throw exceptions::invalid_request_exception("functions::get for token doesn't have a known column family");
+        }
+        auto fun = ::make_shared<token_fct>(db.find_schema(receiver_ks, *receiver_cf));
         validate_types(db, keyspace, fun, provided_args, receiver_ks, receiver_cf);
         return fun;
     }
@@ -504,7 +509,7 @@ functions::validate_types(data_dictionary::database db,
                           shared_ptr<function> fun,
                           const std::vector<shared_ptr<assignment_testable>>& provided_args,
                           const sstring& receiver_ks,
-                          const sstring& receiver_cf) {
+                          std::optional<const std::string_view> receiver_cf) {
     if (provided_args.size() != fun->arg_types().size()) {
         throw exceptions::invalid_request_exception(
                 format("Invalid number of arguments in call to function {}: {:d} required but {:d} provided",
@@ -534,7 +539,7 @@ functions::match_arguments(data_dictionary::database db, const sstring& keyspace
         shared_ptr<function> fun,
         const std::vector<shared_ptr<assignment_testable>>& provided_args,
         const sstring& receiver_ks,
-        const sstring& receiver_cf) {
+        std::optional<const std::string_view> receiver_cf) {
     if (provided_args.size() != fun->arg_types().size()) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;
     }
