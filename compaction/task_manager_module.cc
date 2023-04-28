@@ -24,19 +24,18 @@ struct table_tasks_info {
 
 future<> run_on_table(sstring op, replica::database& db, std::string keyspace, table_info ti, std::function<future<> (replica::table&)> func) {
     std::exception_ptr ex;
-        // FIXME: fix indentation
-        tasks::tmlogger.debug("Starting {} on {}.{}", op, keyspace, ti.name);
-        try {
-            co_await func(db.find_column_family(ti.id));
-        } catch (const replica::no_such_column_family& e) {
-            tasks::tmlogger.warn("Skipping {} of {}.{}: {}", op, keyspace, ti.name, e.what());
-        } catch (...) {
-            ex = std::current_exception();
-            tasks::tmlogger.error("Failed {} of {}.{}: {}", op, keyspace, ti.name, ex);
-        }
-        if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
-        }
+    tasks::tmlogger.debug("Starting {} on {}.{}", op, keyspace, ti.name);
+    try {
+        co_await func(db.find_column_family(ti.id));
+    } catch (const replica::no_such_column_family& e) {
+        tasks::tmlogger.warn("Skipping {} of {}.{}: {}", op, keyspace, ti.name, e.what());
+    } catch (...) {
+        ex = std::current_exception();
+        tasks::tmlogger.error("Failed {} of {}.{}: {}", op, keyspace, ti.name, ex);
+    }
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
 }
 
 // Run on all tables, skipping dropped tables
