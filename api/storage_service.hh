@@ -51,11 +51,6 @@ sstring validate_keyspace(http_context& ctx, const httpd::parameters& param);
 // If the parameter is found and empty, returns a list of all table names in the keyspace.
 std::vector<sstring> parse_tables(const sstring& ks_name, http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name);
 
-struct table_info {
-    sstring name;
-    table_id id;
-};
-
 // splits a request parameter assumed to hold a comma-separated list of table names
 // verify that the tables are found, otherwise a bad_param_exception exception is thrown
 // containing the description of the respective no_such_column_family error.
@@ -79,14 +74,3 @@ void unset_snapshot(http_context& ctx, httpd::routes& r);
 seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, http_context &ctx, bool legacy_request = false);
 
 } // namespace api
-
-namespace std {
-
-std::ostream& operator<<(std::ostream& os, const api::table_info& ti);
-
-} // namespace std
-
-template <>
-struct fmt::formatter<api::table_info> : fmt::formatter<std::string_view> {
-    auto format(const api::table_info&, fmt::format_context& ctx) const -> decltype(ctx.out());
-};

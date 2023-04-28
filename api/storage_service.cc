@@ -52,20 +52,6 @@ using namespace std::chrono_literals;
 
 extern logging::logger apilog;
 
-namespace std {
-
-std::ostream& operator<<(std::ostream& os, const api::table_info& ti) {
-    fmt::print(os, "{}", ti);
-    return os;
-}
-
-} // namespace std
-
-auto fmt::formatter<api::table_info>::format(const api::table_info& ti,
-                                             fmt::format_context& ctx) const -> decltype(ctx.out()) {
-    return fmt::format_to(ctx.out(), "table{{name={}, id={}}}", ti.name, ti.id);
-}
-
 namespace api {
 
 const locator::token_metadata& http_context::get_token_metadata() {
