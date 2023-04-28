@@ -61,21 +61,6 @@ private:
 
     std::optional<topology_change_info> _topology_change_info;
 
-    using ring_mapping = boost::icl::interval_map<token, std::unordered_set<inet_address>>;
-    // For each keyspace, migration_info contains ranges of tokens and
-    // corresponding replicas to which writes or reads will be directed:
-    //   - pending_endpoints - will be appended to normal endpoints for writes;
-    //   - read_endpoints - will completely replace normal endpoints for reads.
-    // This data structure is filled only during data migration between nodes
-    // when they are added or removed from the cluster.
-    // During normal operation, token mapping to nodes is
-    // implemented in the effective_replication_map.
-    struct migration_info {
-        ring_mapping pending_endpoints;
-        ring_mapping read_endpoints;
-    };
-    std::unordered_map<sstring, migration_info> _keyspace_to_migration_info;
-
     std::vector<token> _sorted_tokens;
 
     tablet_metadata _tablets;
@@ -244,8 +229,6 @@ public:
     static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
 public:
-    bool has_pending_ranges(sstring keyspace_name, inet_address endpoint) const;
-
     future<> update_topology_change_info(dc_rack_fn& get_dc_rack);
     const std::optional<topology_change_info>& get_topology_change_info() const {
         return _topology_change_info;
@@ -344,10 +327,6 @@ future<std::unique_ptr<token_metadata_impl>> token_metadata_impl::clone_async() 
     }
     ret->_leaving_endpoints = _leaving_endpoints;
     ret->_replacing_endpoints = _replacing_endpoints;
-    for (const auto& p : _keyspace_to_migration_info) {
-        ret->_keyspace_to_migration_info.emplace(p);
-        co_await coroutine::maybe_yield();
-    }
     ret->_ring_version = _ring_version;
     co_return ret;
 }
@@ -376,7 +355,6 @@ future<> token_metadata_impl::clear_gently() noexcept {
     co_await utils::clear_gently(_bootstrap_tokens);
     co_await utils::clear_gently(_leaving_endpoints);
     co_await utils::clear_gently(_replacing_endpoints);
-    co_await utils::clear_gently(_keyspace_to_migration_info);
     co_await utils::clear_gently(_sorted_tokens);
     co_await _topology.clear_gently();
     co_await _tablets.clear_gently();
@@ -706,21 +684,6 @@ token_metadata_impl::interval_to_range(boost::icl::interval<token>::interval_typ
         throw std::runtime_error("Invalid boost::icl::interval<token> bounds");
     }
     return range<dht::token>({{i.lower(), start_inclusive}}, {{i.upper(), end_inclusive}});
-}
-
-bool
-token_metadata_impl::has_pending_ranges(sstring keyspace_name, inet_address endpoint) const {
-    const auto it = _keyspace_to_migration_info.find(keyspace_name);
-    if (it == _keyspace_to_migration_info.end()) {
-        return false;
-    }
-    for (const auto& item : it->second.pending_endpoints) {
-        const auto& nodes = item.second;
-        if (nodes.contains(endpoint)) {
-            return true;
-        }
-    }
-    return false;
 }
 
 future<> token_metadata_impl::update_topology_change_info(dc_rack_fn& get_dc_rack) {
@@ -1120,11 +1083,6 @@ token_metadata::range_to_interval(range<dht::token> r) {
 range<dht::token>
 token_metadata::interval_to_range(boost::icl::interval<token>::interval_type i) {
     return token_metadata_impl::interval_to_range(std::move(i));
-}
-
-bool
-token_metadata::has_pending_ranges(sstring keyspace_name, inet_address endpoint) const {
-    return _impl->has_pending_ranges(std::move(keyspace_name), endpoint);
 }
 
 future<>

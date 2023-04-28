@@ -244,8 +244,6 @@ public:
     static boost::icl::interval<token>::interval_type range_to_interval(range<dht::token> r);
     static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
-    bool has_pending_ranges(sstring keyspace_name, inet_address endpoint) const;
-
     future<> update_topology_change_info(dc_rack_fn& get_dc_rack);
 
     const std::optional<topology_change_info>& get_topology_change_info() const;
