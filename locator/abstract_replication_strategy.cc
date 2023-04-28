@@ -120,6 +120,16 @@ std::optional<inet_address_vector_replica_set> vnode_effective_replication_map::
     return inet_address_vector_replica_set(endpoints->begin(), endpoints->end());
 }
 
+bool vnode_effective_replication_map::has_pending_ranges(inet_address endpoint) const {
+    for (const auto& item : _pending_endpoints) {
+        const auto& nodes = item.second;
+        if (nodes.contains(endpoint)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::unique_ptr<token_range_splitter> vnode_effective_replication_map::make_splitter() const {
     return locator::make_splitter(_tmptr);
 }

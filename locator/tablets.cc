@@ -244,6 +244,19 @@ public:
         return std::nullopt;
     }
 
+    virtual bool has_pending_ranges(inet_address endpoint) const override {
+        const auto host_id = _tmptr->get_host_id_if_known(endpoint);
+        if (!host_id.has_value()) {
+            return false;
+        }
+        for (const auto& [id, transition_info]: get_tablet_map().transitions()) {
+            if (transition_info.pending_replica.host == *host_id) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     virtual std::unique_ptr<token_range_splitter> make_splitter() const override {
         class splitter : public token_range_splitter {
             token_metadata_ptr _tmptr; // To keep the tablet map alive.

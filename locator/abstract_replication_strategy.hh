@@ -205,6 +205,11 @@ public:
     /// new set of replicas differs from the old one.
     virtual std::optional<inet_address_vector_replica_set> get_endpoints_for_reading(const token& search_token) const = 0;
 
+    /// Returns true if there are any pending ranges for this endpoint.
+    /// This operation is expensive, for vnode_erm it iterates
+    /// over all pending ranges which is O(number of tokens).
+    virtual bool has_pending_ranges(inet_address endpoint) const = 0;
+
     /// Returns a token_range_splitter which is line with the replica assignment of this replication map.
     /// The splitter can live longer than this instance.
     virtual std::unique_ptr<token_range_splitter> make_splitter() const = 0;
@@ -267,6 +272,7 @@ public: // effective_replication_map
     inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override;
     inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override;
     std::optional<inet_address_vector_replica_set> get_endpoints_for_reading(const token& search_token) const override;
+    bool has_pending_ranges(inet_address endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
 public:
     explicit vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map,
