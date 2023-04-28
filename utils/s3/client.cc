@@ -175,6 +175,29 @@ future<uint64_t> client::get_object_size(sstring object_name) {
     co_return len;
 }
 
+// TODO: possibly move this to seastar's http subsystem.
+static std::time_t parse_http_last_modified_time(const sstring& object_name, sstring last_modified) {
+    std::tm tm = {0};
+
+    // format conforms to HTTP-date, defined in the specification (RFC 7231).
+    if (strptime(last_modified.c_str(), "%a, %d %b %Y %H:%M:%S %Z", &tm) == nullptr) {
+        s3l.warn("Unable to parse {} as Last-Modified for {}", last_modified, object_name);
+    } else {
+        s3l.trace("Successfully parsed {} as Last-modified for {}", last_modified, object_name);
+    }
+    return std::mktime(&tm);
+}
+
+future<client::stats> client::get_object_stats(sstring object_name) {
+    struct stats st{};
+    co_await get_object_header(object_name, [&] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+        st.size = rep.content_length;
+        st.last_modified = parse_http_last_modified_time(object_name, rep.get_header("Last-Modified"));
+        return make_ready_future<>();
+    });
+    co_return st;
+}
+
 future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name, std::optional<range> range) {
     auto req = http::request::make("GET", _host, object_name);
     http::reply::status_type expected = http::reply::status_type::ok;
