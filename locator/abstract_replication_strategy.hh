@@ -198,7 +198,12 @@ public:
     /// Returns the set of pending replicas for a given token.
     /// Pending replica is a replica which gains ownership of data.
     /// Non-empty only during topology change.
-    virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token, const sstring& ks_name) const = 0;
+    virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const = 0;
+
+    /// Returns a list of nodes to which a read request should be directed.
+    /// Returns not null only during topology changes, if request_read_new was called and
+    /// new set of replicas differs from the old one.
+    virtual std::optional<inet_address_vector_replica_set> get_endpoints_for_reading(const token& search_token) const = 0;
 
     /// Returns a token_range_splitter which is line with the replica assignment of this replication map.
     /// The splitter can live longer than this instance.
@@ -260,7 +265,8 @@ private:
 public: // effective_replication_map
     inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override;
     inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override;
-    inet_address_vector_topology_change get_pending_endpoints(const token& search_token, const sstring& ks_name) const override;
+    inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override;
+    std::optional<inet_address_vector_replica_set> get_endpoints_for_reading(const token& search_token) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
 public:
     explicit vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map,

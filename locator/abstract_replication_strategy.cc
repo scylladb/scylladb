@@ -93,8 +93,31 @@ void maybe_remove_node_being_replaced(const token_metadata& tm,
     }
 }
 
-inet_address_vector_topology_change vnode_effective_replication_map::get_pending_endpoints(const token& search_token, const sstring& ks_name) const {
-    return _tmptr->pending_endpoints_for(search_token, ks_name);
+static const std::unordered_set<inet_address>* find_token(const ring_mapping& ring_mapping, const token& token) {
+    if (ring_mapping.empty()) {
+        return nullptr;
+    }
+    const auto interval = token_metadata::range_to_interval(range<dht::token>(token));
+    const auto it = ring_mapping.find(interval);
+    return it != ring_mapping.end() ? &it->second : nullptr;
+}
+
+inet_address_vector_topology_change vnode_effective_replication_map::get_pending_endpoints(const token& search_token) const {
+    inet_address_vector_topology_change endpoints;
+    const auto* pending_endpoints = find_token(_pending_endpoints, search_token);
+    if (pending_endpoints) {
+        // interval_map does not work with std::vector, convert to inet_address_vector_topology_change
+        endpoints = inet_address_vector_topology_change(pending_endpoints->begin(), pending_endpoints->end());
+    }
+    return endpoints;
+}
+
+std::optional<inet_address_vector_replica_set> vnode_effective_replication_map::get_endpoints_for_reading(const token& token) const {
+    const auto* endpoints = find_token(_read_endpoints, token);
+    if (endpoints == nullptr) {
+        return {};
+    }
+    return inet_address_vector_replica_set(endpoints->begin(), endpoints->end());
 }
 
 std::unique_ptr<token_range_splitter> vnode_effective_replication_map::make_splitter() const {

@@ -228,7 +228,7 @@ public:
         return result;
     }
 
-    virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token, const sstring& ks_name) const override {
+    virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
         auto&& info = tablets.get_tablet_transition_info(tablet);
@@ -238,6 +238,10 @@ public:
         tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}",
                             search_token, _table, tablet, info->pending_replica);
         return {get_endpoint_for_host_id(info->pending_replica.host)};
+    }
+
+    virtual std::optional<inet_address_vector_replica_set> get_endpoints_for_reading(const token& search_token) const override {
+        return std::nullopt;
     }
 
     virtual std::unique_ptr<token_range_splitter> make_splitter() const override {
