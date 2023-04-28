@@ -642,6 +642,11 @@ inline bool is_multi_column(const binary_operator& op) {
     return expr::is<tuple_constructor>(op.lhs);
 }
 
+/// Check whether the expression contains a binary_operator whose LHS is a call to the token
+/// function representing a partition key token.
+/// Examples:
+/// For expression: "token(p1, p2, p3) < 123 AND c = 2" returns true
+/// For expression: "p1 = token(1, 2, 3) AND c = 2" return false
 inline bool has_partition_token(const expression& e, const schema& table_schema) {
     return find_binop(e, [] (const binary_operator& o) { return expr::is<token>(o.lhs); });
 }
