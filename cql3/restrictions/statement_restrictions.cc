@@ -528,7 +528,8 @@ bool statement_restrictions::has_eq_restriction_on_column(const column_definitio
 std::vector<const column_definition*> statement_restrictions::get_column_defs_for_filtering(data_dictionary::database db) const {
     std::vector<const column_definition*> column_defs_for_filtering;
     if (need_filtering()) {
-        auto& sim = db.find_column_family(_schema).get_index_manager();
+        auto cf = db.find_column_family(_schema);
+        auto& sim = cf.get_index_manager();
         auto opt_idx = std::get<0>(find_idx(sim));
         auto column_uses_indexing = [&opt_idx] (const column_definition* cdef, const expr::expression* single_col_restr) {
             return opt_idx && single_col_restr && is_supported_by(*single_col_restr, *opt_idx);

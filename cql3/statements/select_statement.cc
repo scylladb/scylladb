@@ -900,7 +900,8 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
                                          cql_stats &stats,
                                          std::unique_ptr<attributes> attrs)
 {
-    auto& sim = db.find_column_family(schema).get_index_manager();
+    auto cf = db.find_column_family(schema);
+    auto& sim = cf.get_index_manager();
     auto [index_opt, used_index_restrictions] = restrictions->find_idx(sim);
     if (!index_opt) {
         throw std::runtime_error("No index found.");
