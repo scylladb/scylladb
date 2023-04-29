@@ -3540,7 +3540,8 @@ view_ptr maybe_fix_legacy_secondary_index_mv_schema(replica::database& db, const
     if (v->clustering_key_size() == 0) {
         return view_ptr(nullptr);
     }
-    const column_definition& first_view_ck = v->clustering_key_columns().front();
+    const auto ck_cols = v->clustering_key_columns();
+    const column_definition& first_view_ck = ck_cols.front();
     if (first_view_ck.is_computed()) {
         return view_ptr(nullptr);
     }
