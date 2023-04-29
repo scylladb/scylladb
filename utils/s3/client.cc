@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <memory>
 #include <rapidxml.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/semaphore.hh>
@@ -222,16 +223,16 @@ future<> client::upload_sink::do_flush() {
 }
 
 sstring parse_multipart_upload_id(sstring& body) {
-    rapidxml::xml_document<> doc;
+    auto doc = std::make_unique<rapidxml::xml_document<>>();
     try {
-        doc.parse<0>(body.data());
+        doc->parse<0>(body.data());
     } catch (const rapidxml::parse_error& e) {
         s3l.warn("cannot parse initiate multipart upload response: {}", e.what());
         // The caller is supposed to check the upload-id to be empty
         // and handle the error the way it prefers
         return "";
     }
-    auto root_node = doc.first_node("InitiateMultipartUploadResult");
+    auto root_node = doc->first_node("InitiateMultipartUploadResult");
     auto uploadid_node = root_node->first_node("UploadId");
     return uploadid_node->value();
 }
