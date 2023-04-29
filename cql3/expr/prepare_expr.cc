@@ -1270,6 +1270,21 @@ static lw_shared_ptr<column_specification> get_lhs_receiver(const expression& pr
                                                         ::make_shared<column_identifier>("partition key token", true),
                                                         dht::token::get_token_validator());
         },
+        [&](const function_call& fun_call) -> lw_shared_ptr<column_specification> {
+            data_type return_type = std::visit(
+                    overloaded_functor{
+                        [](const shared_ptr<db::functions::function>& fun) -> data_type { return fun->return_type(); },
+                        [&](const functions::function_name&) -> data_type {
+                            on_internal_error(expr_logger,
+                                              format("get_lhs_receiver: unprepared function call {:debug}", fun_call));
+                        }},
+                    fun_call.func);
+
+            return make_lw_shared<column_specification>(
+                schema.ks_name(), schema.cf_name(),
+                ::make_shared<column_identifier>(format("{:user}", fun_call), true),
+                return_type);
+        },
         [](const auto& other) -> lw_shared_ptr<column_specification> {
             on_internal_error(expr_logger, format("get_lhs_receiver: unexpected expression: {}", other));
         },
