@@ -65,7 +65,8 @@ void cql3::statements::authorization_statement::maybe_correct_resource(auth::res
             // This is an "ALL FUNCTIONS IN KEYSPACE" resource.
             return;
         }
-        const auto& utm = qp.db().find_keyspace(*keyspace).user_types();
+        auto ks = qp.db().find_keyspace(*keyspace);
+        const auto& utm = ks.user_types();
         auto function_name = *functions_view.function_name();
         auto function_args = functions_view.function_args();
         std::vector<data_type> parsed_types;
