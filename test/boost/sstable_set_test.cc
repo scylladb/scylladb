@@ -36,7 +36,7 @@ SEASTAR_TEST_CASE(test_sstables_sstable_set_read_modify_write) {
         auto mut = mutation(s, pk);
         ss.add_row(mut, ss.make_ckey(0), "val");
 
-        auto mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), {mut});
+        auto mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), mut);
         sstable_writer_config cfg = env.manager().configure_writer("");
         auto sst1 = make_sstable_easy(env, std::move(mr), cfg);
 
@@ -44,7 +44,7 @@ SEASTAR_TEST_CASE(test_sstables_sstable_set_read_modify_write) {
         BOOST_REQUIRE_EQUAL(ss1->all()->size(), 1);
 
         // Test that a random sstable_origin is stored and retrieved properly.
-        mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), {mut});
+        mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), mut);
         auto sst2 = make_sstable_easy(env, std::move(mr), cfg);
 
         auto ss2 = make_lw_shared<sstables::sstable_set>(*ss1);
@@ -64,7 +64,7 @@ SEASTAR_TEST_CASE(test_time_series_sstable_set_read_modify_write) {
         ss.add_row(mut, ss.make_ckey(0), "val");
         sstable_writer_config cfg = env.manager().configure_writer("");
 
-        auto mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), {mut});
+        auto mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), mut);
         auto sst1 = make_sstable_easy(env, std::move(mr), cfg);
 
         auto ss1 = make_lw_shared<time_series_sstable_set>(ss.schema(), true);
@@ -72,7 +72,7 @@ SEASTAR_TEST_CASE(test_time_series_sstable_set_read_modify_write) {
         BOOST_REQUIRE_EQUAL(ss1->all()->size(), 1);
 
         // Test that a random sstable_origin is stored and retrieved properly.
-        mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), {mut});
+        mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), mut);
         auto sst2 = make_sstable_easy(env, std::move(mr), cfg);
 
         auto ss2 = make_lw_shared<time_series_sstable_set>(*ss1);

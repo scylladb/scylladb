@@ -1761,7 +1761,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
         for (auto&& mf : fragments) {
             mut.apply(mf);
         }
-        auto sst = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(table.schema(), std::move(permit), { std::move(mut) }), cfg, version);
+        auto sst = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(table.schema(), std::move(permit), std::move(mut)), cfg, version);
         auto ms = as_mutation_source(sst);
 
         for (uint32_t i = 3; i < seq; i++) {
@@ -2502,7 +2502,7 @@ SEASTAR_TEST_CASE(sstable_run_identifier_correctness) {
 
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.run_identifier = sstables::run_id::create_random_id();
-        auto sst = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), { std::move(mut) }), cfg);
+        auto sst = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), std::move(mut)), cfg);
 
         BOOST_REQUIRE(sst->run_identifier() == cfg.run_identifier);
     });
@@ -2679,7 +2679,7 @@ SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
         for (const auto version : writable_sstable_versions) {
             testlog.info("version={}", version);
 
-            auto mr = make_flat_mutation_reader_from_mutations_v2(ss.schema(), env.make_reader_permit(), {mut});
+            auto mr = make_flat_mutation_reader_from_mutations_v2(ss.schema(), env.make_reader_permit(), mut);
             sstable_writer_config cfg = env.manager().configure_writer();
             auto sst = make_sstable_easy(env, std::move(mr), cfg, version, 0);
 
@@ -2782,13 +2782,13 @@ SEASTAR_TEST_CASE(test_sstable_origin) {
             }
 
             // Test empty sstable_origin.
-            auto mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), {mut});
+            auto mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), mut);
             sstable_writer_config cfg = env.manager().configure_writer("");
             auto sst = make_sstable_easy(env, std::move(mr), cfg, version, 0);
             BOOST_REQUIRE_EQUAL(sst->get_origin(), "");
 
             // Test that a random sstable_origin is stored and retrieved properly.
-            mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), {mut});
+            mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), mut);
             sstring origin = fmt::format("test-{}", tests::random::get_sstring());
             cfg = env.manager().configure_writer(origin);
             sst = make_sstable_easy(env, std::move(mr), cfg, version, 0);

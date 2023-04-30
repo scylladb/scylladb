@@ -86,7 +86,7 @@ snapshot_source make_decorated_snapshot_source(snapshot_source src, std::functio
 mutation_source make_source_with(mutation m) {
     return mutation_source([m] (schema_ptr s, reader_permit permit, const dht::partition_range&, const query::partition_slice&, const io_priority_class&, tracing::trace_state_ptr, streamed_mutation::forwarding fwd) {
         assert(m.schema() == s);
-        return make_flat_mutation_reader_from_mutations_v2(s, std::move(permit), {m}, std::move(fwd));
+        return make_flat_mutation_reader_from_mutations_v2(s, std::move(permit), m, std::move(fwd));
     });
 }
 
@@ -289,7 +289,7 @@ void test_cache_delegates_to_underlying_only_once_with_single_partition(schema_p
             streamed_mutation::forwarding fwd) {
         assert(m.schema() == s);
         if (range.contains(dht::ring_position(m.decorated_key()), dht::ring_position_comparator(*s))) {
-            return make_counting_reader(make_flat_mutation_reader_from_mutations_v2(s, std::move(permit), {m}, std::move(fwd)), secondary_calls_count);
+            return make_counting_reader(make_flat_mutation_reader_from_mutations_v2(s, std::move(permit), m, std::move(fwd)), secondary_calls_count);
         } else {
             return make_counting_reader(make_empty_flat_reader_v2(s, std::move(permit)), secondary_calls_count);
         }

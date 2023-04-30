@@ -589,7 +589,7 @@ public:
         , _create_reader(std::move(create_reader))
         , _filter(std::move(filter))
         , _dummy_reader(make_flat_mutation_reader_from_mutations_v2(_query_schema,
-                std::move(permit), {mutation(_query_schema, std::move(pk))}, _query_schema->full_slice(), fwd_sm))
+                std::move(permit), mutation(_query_schema, std::move(pk)), _query_schema->full_slice(), fwd_sm))
         , _reversed(reversed)
     {
         while (_it != _end && !this->filter(*_it->second)) {
@@ -885,7 +885,7 @@ sstable_set_impl::create_single_key_sstable_reader(
     // all sstables actually containing the partition were filtered.
     auto num_readers = readers.size();
     if (num_readers != num_sstables) {
-        readers.push_back(make_flat_mutation_reader_from_mutations_v2(schema, permit, {mutation(schema, *pos.key())}, slice, fwd));
+        readers.push_back(make_flat_mutation_reader_from_mutations_v2(schema, permit, mutation(schema, *pos.key()), slice, fwd));
     }
     sstable_histogram.add(num_readers);
     return make_combined_reader(schema, std::move(permit), std::move(readers), fwd, fwd_mr);
