@@ -59,6 +59,7 @@
 #include "repair/reader.hh"
 #include "compaction/compaction_manager.hh"
 #include "utils/xx_hasher.hh"
+#include "db/config.hh"
 
 extern logging::logger rlogger;
 
@@ -496,8 +497,8 @@ public:
     }
 };
 
-mutation_fragment_queue make_mutation_fragment_queue(schema_ptr s, reader_permit permit, queue_reader_handle_v2 handle) {
-    return mutation_fragment_queue(std::move(s), std::move(permit), seastar::make_shared<queue_reader_handle_adapter>(std::move(handle)));
+mutation_fragment_queue make_mutation_fragment_queue(schema_ptr s, reader_permit permit, queue_reader_handle_v2 handle, mutation_fragment_stream_validation_level validation_level) {
+    return mutation_fragment_queue(std::move(s), std::move(permit), seastar::make_shared<queue_reader_handle_adapter>(std::move(handle)), validation_level);
 }
 
 void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
@@ -531,7 +532,10 @@ lw_shared_ptr<repair_writer> make_repair_writer(
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<db::view::view_update_generator>& view_update_generator) {
     auto [queue_reader, queue_handle] = make_queue_reader_v2(schema, permit);
-    auto queue = make_mutation_fragment_queue(schema, permit, std::move(queue_handle));
+    auto validation_level = db.local().get_config().enable_sstable_key_validation()
+        ? mutation_fragment_stream_validation_level::clustering_key
+        : mutation_fragment_stream_validation_level::token;
+    auto queue = make_mutation_fragment_queue(schema, permit, std::move(queue_handle), validation_level);
     auto i = std::make_unique<repair_writer_impl>(schema, permit, db, sys_dist_ks, view_update_generator, reason, std::move(queue), std::move(queue_reader));
     return make_lw_shared<repair_writer>(schema, permit, std::move(i));
 }

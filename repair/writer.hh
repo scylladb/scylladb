@@ -56,9 +56,9 @@ private:
     upgrading_consumer<consumer> _consumer;
 
 public:
-    mutation_fragment_queue(schema_ptr s, reader_permit permit, seastar::shared_ptr<impl> impl)
+    mutation_fragment_queue(schema_ptr s, reader_permit permit, seastar::shared_ptr<impl> impl, mutation_fragment_stream_validation_level validation_level)
         : _impl(std::move(impl))
-        , _consumer(*s, std::move(permit), consumer(_impl->pending()))
+        , _consumer(*s, std::move(permit), consumer(_impl->pending()), validation_level)
     {}
 
     future<> push(mutation_fragment mf) {
