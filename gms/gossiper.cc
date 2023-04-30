@@ -518,7 +518,7 @@ void gossiper::init_messaging_service_handler() {
         auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return handle_echo_msg(from, generation_number_opt);
     });
-    _messaging.register_gossip_shutdown([this] (inet_address from, rpc::optional<int64_t> generation_number_opt) {
+    _messaging.register_gossip_shutdown([this] (const rpc::client_info& cinfo, gms::inet_address from, rpc::optional<int64_t> generation_number_opt) {
         return background_msg("GOSSIP_SHUTDOWN", [from, generation_number_opt] (gms::gossiper& gossiper) {
             return gossiper.handle_shutdown_msg(from, generation_number_opt);
         });

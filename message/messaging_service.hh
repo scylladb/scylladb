@@ -459,7 +459,7 @@ public:
     future<> send_gossip_echo(msg_addr id, int64_t generation_number, abort_source&);
 
     // Wrapper for GOSSIP_SHUTDOWN
-    void register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from, rpc::optional<int64_t> generation_number)>&& func);
+    void register_gossip_shutdown(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, inet_address from, rpc::optional<int64_t> generation_number)>&& func);
     future<> unregister_gossip_shutdown();
     future<> send_gossip_shutdown(msg_addr id, inet_address from, int64_t generation_number);
 

@@ -1154,7 +1154,7 @@ future<> messaging_service::send_gossip_echo(msg_addr id, int64_t generation_num
     return send_message_cancellable<void>(this, messaging_verb::GOSSIP_ECHO, std::move(id), as, generation_number);
 }
 
-void messaging_service::register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from, rpc::optional<int64_t> generation_number)>&& func) {
+void messaging_service::register_gossip_shutdown(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, inet_address from, rpc::optional<int64_t> generation_number)>&& func) {
     register_handler(this, messaging_verb::GOSSIP_SHUTDOWN, std::move(func));
 }
 future<> messaging_service::unregister_gossip_shutdown() {
