@@ -104,7 +104,7 @@ public:
         std::function<bool(const sstable&)> filter,
         partition_key pk, schema_ptr schema, reader_permit permit,
         streamed_mutation::forwarding fwd_sm,
-        bool reversed) const;
+        bool reversed, mutation_fragment_stream_validation_level validation_level) const;
 
     virtual flat_mutation_reader_v2 create_single_key_sstable_reader(
         replica::column_family*,

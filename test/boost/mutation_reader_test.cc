@@ -3895,7 +3895,7 @@ static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
                                           query_slice, nullptr, fwd);
             },
             [included_gens] (const sstable& sst) { return included_gens.contains(sst.generation()); },
-            pk.key(), query_schema, permit, fwd, reversed);
+            pk.key(), query_schema, permit, fwd, reversed, mutation_fragment_stream_validation_level::clustering_key);
         return make_clustering_combined_reader(query_schema, permit, fwd, std::move(q));
     };
 
