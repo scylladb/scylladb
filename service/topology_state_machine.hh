@@ -48,14 +48,6 @@ enum class topology_request: uint8_t {
 using request_param = std::variant<raft::server_id, sstring, uint32_t>;
 
 struct ring_slice {
-    enum class replication_state: uint8_t {
-        commit_cdc_generation,
-        write_both_read_old,
-        write_both_read_new,
-        owner
-    };
-
-    replication_state state;
     std::unordered_set<dht::token> tokens;
 
     // When a new node joins the cluster, always a new CDC generation is created.
@@ -75,6 +67,14 @@ struct replica_state {
 };
 
 struct topology {
+    enum class transition_state: uint8_t {
+        commit_cdc_generation,
+        write_both_read_old,
+        write_both_read_new,
+    };
+
+    std::optional<transition_state> tstate;
+
     // Nodes that are normal members of the ring
     std::unordered_map<raft::server_id, replica_state> normal_nodes;
     // Nodes that are left
@@ -138,8 +138,8 @@ struct raft_topology_cmd_result {
     command_status status = command_status::fail;
 };
 
-std::ostream& operator<<(std::ostream& os, ring_slice::replication_state s);
-ring_slice::replication_state replication_state_from_string(const sstring& s);
+std::ostream& operator<<(std::ostream& os, topology::transition_state s);
+topology::transition_state transition_state_from_string(const sstring& s);
 std::ostream& operator<<(std::ostream& os, node_state s);
 node_state node_state_from_string(const sstring& s);
 std::ostream& operator<<(std::ostream& os, const topology_request& req);

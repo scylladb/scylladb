@@ -248,7 +248,6 @@ schema_ptr system_keyspace::topology() {
             .with_column("datacenter", utf8_type)
             .with_column("rack", utf8_type)
             .with_column("tokens", set_type_impl::get_instance(utf8_type, true))
-            .with_column("replication_state", utf8_type)
             .with_column("node_state", utf8_type)
             .with_column("release_version", utf8_type)
             .with_column("topology_request", utf8_type)
@@ -258,6 +257,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("shard_count", int32_type)
             .with_column("ignore_msb", int32_type)
             .with_column("new_cdc_generation_data_uuid", uuid_type)
+            .with_column("transition_state", utf8_type, column_kind::static_column)
             .with_column("current_cdc_generation_uuid", uuid_type, column_kind::static_column)
             .with_column("current_cdc_generation_timestamp", timestamp_type, column_kind::static_column)
             .set_comment("Current state of topology change machine")
@@ -3542,22 +3542,17 @@ future<service::topology> system_keyspace::load_topology_state() {
         service::node_state nstate = service::node_state_from_string(row.get_as<sstring>("node_state"));
 
         std::optional<service::ring_slice> ring_slice;
-        if (row.has("replication_state")) {
-            auto repl_state = service::replication_state_from_string(row.get_as<sstring>("replication_state"));
-
-            std::unordered_set<dht::token> tokens;
-            if (row.has("tokens")) {
-                auto blob = row.get_blob("tokens");
-                auto cdef = topology()->get_column_definition("tokens");
-                auto deserialized = cdef->type->deserialize(blob);
-                auto ts = value_cast<set_type_impl::native_type>(deserialized);
-                tokens = decode_tokens(ts);
-            }
+        if (row.has("tokens")) {
+            auto blob = row.get_blob("tokens");
+            auto cdef = topology()->get_column_definition("tokens");
+            auto deserialized = cdef->type->deserialize(blob);
+            auto ts = value_cast<set_type_impl::native_type>(deserialized);
+            auto tokens = decode_tokens(ts);
 
             if (tokens.empty()) {
                 on_fatal_internal_error(slogger, format(
-                    "load_topology_state: node {} has replication state ({}) but missing tokens",
-                    host_id, repl_state));
+                    "load_topology_state: node {} has tokens column present but tokens are empty",
+                    host_id));
             }
 
             utils::UUID new_cdc_gen_uuid;
@@ -3566,7 +3561,6 @@ future<service::topology> system_keyspace::load_topology_state() {
             }
 
             ring_slice = service::ring_slice {
-                .state = repl_state,
                 .tokens = std::move(tokens),
                 .new_cdc_generation_data_uuid = new_cdc_gen_uuid,
             };
@@ -3655,6 +3649,14 @@ future<service::topology> system_keyspace::load_topology_state() {
     {
         // Here we access static columns, any row will do.
         auto& some_row = *rs->begin();
+
+        if (some_row.has("transition_state")) {
+            ret.tstate = service::transition_state_from_string(some_row.get_as<sstring>("transition_state"));
+        } else if (!ret.transition_nodes.empty()) {
+            on_internal_error(slogger,
+                "load_topology_state: topology not in transition state but transition nodes are present");
+        }
+
         if (some_row.has("current_cdc_generation_uuid")) {
             auto gen_uuid = some_row.get_as<utils::UUID>("current_cdc_generation_uuid");
             if (!some_row.has("current_cdc_generation_timestamp")) {
