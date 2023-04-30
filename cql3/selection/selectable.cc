@@ -173,18 +173,6 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
         [&] (const expr::subscript& sub) -> shared_ptr<selectable> {
             on_internal_error(slogger, "no way to express 'SELECT a[b]' in the grammar yet");
         },
-        [&] (const expr::token& tok) -> shared_ptr<selectable> {
-            // expr::token implicitly the partition key as arguments, but
-            // the selectable equivalent (with_function) needs explicit arguments,
-            // so construct them here.
-            auto name = functions::function_name("system", "token");
-            auto args = boost::copy_range<std::vector<shared_ptr<selectable>>>(
-                s.partition_key_columns()
-                | boost::adaptors::transformed([&] (const column_definition& cdef) {
-                    return ::make_shared<selectable_column>(column_identifier(cdef.name(), cdef.name_as_text()));
-                }));
-            return ::make_shared<selectable::with_function>(std::move(name), std::move(args));
-        },
         [&] (const expr::unresolved_identifier& ui) -> shared_ptr<selectable> {
             return make_shared<selectable_column>(*ui.ident->prepare(s));
         },
@@ -259,11 +247,6 @@ selectable_processes_selection(const expr::expression& raw_selectable) {
             // There is no path that reaches here, but expr::column_value and column_identifier are logically the same,
             // so bridge them.
             return false;
-        },
-        [&] (const expr::token&) -> bool {
-            // Arguably, should return false, because it only processes the partition key.
-            // But selectable::with_function considers it true now, so return that.
-            return true;
         },
         [&] (const expr::unresolved_identifier& ui) -> bool {
             return ui.ident->processes_selection();

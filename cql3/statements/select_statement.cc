@@ -876,7 +876,7 @@ primary_key_select_statement::primary_key_select_statement(schema_ptr schema, ui
     if (_ks_sel == ks_selector::NONSYSTEM) {
         if (_restrictions->need_filtering() ||
                 _restrictions->partition_key_restrictions_is_empty() ||
-                (has_token(_restrictions->get_partition_key_restrictions()) &&
+                (_restrictions->has_token_restrictions() &&
                  !find(_restrictions->get_partition_key_restrictions(), expr::oper_t::EQ))) {
             _range_scan = true;
             if (!_parameters->bypass_cache())
@@ -1211,7 +1211,7 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_g
     partition_slice_builder partition_slice_builder{*_view_schema};
 
     if (!_restrictions->has_partition_key_unrestricted_components()) {
-        bool pk_restrictions_is_single = !has_token(_restrictions->get_partition_key_restrictions());
+        bool pk_restrictions_is_single = !_restrictions->has_token_restrictions();
         // Only EQ restrictions on base partition key can be used in an index view query
         if (pk_restrictions_is_single && _restrictions->partition_key_restrictions_is_all_eq()) {
             partition_slice_builder.with_ranges(
@@ -2027,7 +2027,7 @@ static bool needs_allow_filtering_anyway(
     const auto& pk_restrictions = restrictions.get_partition_key_restrictions();
     // Even if no filtering happens on the coordinator, we still warn about poor performance when partition
     // slice is defined but in potentially unlimited number of partitions (see #7608).
-    if ((expr::is_empty_restriction(pk_restrictions) || has_token(pk_restrictions)) // Potentially unlimited partitions.
+    if ((expr::is_empty_restriction(pk_restrictions) || restrictions.has_token_restrictions()) // Potentially unlimited partitions.
         && !expr::is_empty_restriction(ck_restrictions) // Slice defined.
         && !restrictions.uses_secondary_indexing()) { // Base-table is used. (Index-table use always limits partitions.)
         if (strict_allow_filtering == flag_t::WARN) {

@@ -181,7 +181,7 @@ public:
     }
 
     bool has_token_restrictions() const {
-        return has_token(_partition_key_restrictions);
+        return has_partition_token(_partition_key_restrictions, *_schema);
     }
 
     // Checks whether the given column has an EQ restriction.
@@ -478,7 +478,7 @@ public:
         // If token restrictions are present in an indexed query, then all other restrictions need to be filtered.
         // A single token restriction can have multiple matching partition key values.
         // Because of this we can't create a clustering prefix with more than token restriction.
-        || (_uses_secondary_indexing && has_token(_partition_key_restrictions));
+        || (_uses_secondary_indexing && has_token_restrictions());
     }
 
     bool clustering_key_restrictions_need_filtering() const;

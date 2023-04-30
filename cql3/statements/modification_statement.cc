@@ -393,7 +393,7 @@ modification_statement::process_where_clause(data_dictionary::database db, expr:
             _has_regular_column_conditions = true;
         }
     }
-    if (has_token(_restrictions->get_partition_key_restrictions())) {
+    if (_restrictions->has_token_restrictions()) {
         throw exceptions::invalid_request_exception(format("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: {}",
                 to_string(_restrictions->get_partition_key_restrictions())));
     }
