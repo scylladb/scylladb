@@ -175,7 +175,8 @@ future<query::result> to_data_query_result(
         const query::partition_slice&,
         uint64_t row_limit,
         uint32_t partition_limit,
-        query::result_options opts = query::result_options::only_result());
+        query::result_options opts = query::result_options::only_result(),
+        mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::none);
 
 // Query the content of the mutation.
 //
@@ -185,7 +186,8 @@ query::result query_mutation(
         const query::partition_slice& slice,
         uint64_t row_limit = query::max_rows,
         gc_clock::time_point now = gc_clock::now(),
-        query::result_options opts = query::result_options::only_result());
+        query::result_options opts = query::result_options::only_result(),
+        mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::none);
 
 // Performs a query for counter updates.
 future<mutation_opt> counter_write_query(schema_ptr, const mutation_source&, reader_permit permit,

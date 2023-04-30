@@ -35,8 +35,9 @@ struct mutation_consume_cookie {
         rts_iterator_type rts_end;
         range_tombstone_change_generator rt_gen;
 
-        clustering_iterators(const schema& s, crs_iterator_type crs_b, crs_iterator_type crs_e, rts_iterator_type rts_b, rts_iterator_type rts_e)
-            : crs_begin(std::move(crs_b)), crs_end(std::move(crs_e)), rts_begin(std::move(rts_b)), rts_end(std::move(rts_e)), rt_gen(s) { }
+        clustering_iterators(const schema& s, crs_iterator_type crs_b, crs_iterator_type crs_e, rts_iterator_type rts_b, rts_iterator_type rts_e,
+                mutation_fragment_stream_validation_level validation_level)
+            : crs_begin(std::move(crs_b)), crs_end(std::move(crs_e)), rts_begin(std::move(rts_b)), rts_end(std::move(rts_e)), rt_gen(s, validation_level) { }
     };
 
     schema_ptr schema;
@@ -158,10 +159,14 @@ public:
     // will be called each time the consume is stopping, regardless of whether
     // you are pausing or the consumption is ending for good.
     template<FlattenedConsumerV2 Consumer>
-    auto consume(Consumer& consumer, consume_in_reverse reverse, mutation_consume_cookie cookie = {}) && -> mutation_consume_result<decltype(consumer.consume_end_of_stream())>;
+    auto consume(Consumer& consumer, consume_in_reverse reverse,
+            mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::none,
+            mutation_consume_cookie cookie = {}) && -> mutation_consume_result<decltype(consumer.consume_end_of_stream())>;
 
     template<FlattenedConsumerV2 Consumer>
-    auto consume_gently(Consumer& consumer, consume_in_reverse reverse, mutation_consume_cookie cookie = {}) && -> future<mutation_consume_result<decltype(consumer.consume_end_of_stream())>>;
+    auto consume_gently(Consumer& consumer, consume_in_reverse reverse,
+            mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::none,
+            mutation_consume_cookie cookie = {}) && -> future<mutation_consume_result<decltype(consumer.consume_end_of_stream())>>;
 
     // See mutation_partition::live_row_count()
     uint64_t live_row_count(gc_clock::time_point query_time = gc_clock::time_point::min()) const;
@@ -194,7 +199,7 @@ inline std::vector<mutation> make_mutation_vector(mutation&& m) {
 }
 
 template<consume_in_reverse reverse, FlattenedConsumerV2 Consumer>
-std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutation_partition& partition, Consumer& consumer, mutation_consume_cookie& cookie, is_preemptible preempt = is_preemptible::no) {
+std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutation_partition& partition, Consumer& consumer, mutation_fragment_stream_validation_level validation_level, mutation_consume_cookie& cookie, is_preemptible preempt = is_preemptible::no) {
     constexpr bool crs_in_reverse = reverse == consume_in_reverse::yes;
     // We can read the range_tombstone_list in reverse order in consume_in_reverse::yes mode
     // since we deoverlap range_tombstones on insertion.
@@ -217,7 +222,7 @@ std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutatio
     if (!cookie.iterators) {
         auto& crs = partition.mutable_clustered_rows();
         auto& rts = partition.mutable_row_tombstones();
-        cookie.iterators = std::make_unique<mutation_consume_cookie::clustering_iterators>(*s, crs.begin(), crs.end(), rts.begin(), rts.end());
+        cookie.iterators = std::make_unique<mutation_consume_cookie::clustering_iterators>(*s, crs.begin(), crs.end(), rts.begin(), rts.end(), validation_level);
     }
 
     crs_iterator_type crs_it, crs_end;
@@ -311,7 +316,7 @@ std::optional<stop_iteration> consume_clustering_fragments(schema_ptr s, mutatio
 }
 
 template<FlattenedConsumerV2 Consumer>
-auto mutation::consume(Consumer& consumer, consume_in_reverse reverse, mutation_consume_cookie cookie) &&
+auto mutation::consume(Consumer& consumer, consume_in_reverse reverse, mutation_fragment_stream_validation_level validation_level, mutation_consume_cookie cookie) &&
         -> mutation_consume_result<decltype(consumer.consume_end_of_stream())> {
     auto& partition = _ptr->_p;
 
@@ -331,9 +336,9 @@ auto mutation::consume(Consumer& consumer, consume_in_reverse reverse, mutation_
     cookie.static_row_consumed = true;
 
     if (reverse == consume_in_reverse::yes) {
-        stop = *consume_clustering_fragments<consume_in_reverse::yes>(_ptr->_schema, partition, consumer, cookie);
+        stop = *consume_clustering_fragments<consume_in_reverse::yes>(_ptr->_schema, partition, consumer, validation_level, cookie);
     } else {
-        stop = *consume_clustering_fragments<consume_in_reverse::no>(_ptr->_schema, partition, consumer, cookie);
+        stop = *consume_clustering_fragments<consume_in_reverse::no>(_ptr->_schema, partition, consumer, validation_level, cookie);
     }
 
     const auto stop_consuming = consumer.consume_end_of_partition();
@@ -347,7 +352,7 @@ auto mutation::consume(Consumer& consumer, consume_in_reverse reverse, mutation_
 }
 
 template<FlattenedConsumerV2 Consumer>
-auto mutation::consume_gently(Consumer& consumer, consume_in_reverse reverse, mutation_consume_cookie cookie) &&
+auto mutation::consume_gently(Consumer& consumer, consume_in_reverse reverse, mutation_fragment_stream_validation_level validation_level, mutation_consume_cookie cookie) &&
         -> future<mutation_consume_result<decltype(consumer.consume_end_of_stream())>> {
     auto& partition = _ptr->_p;
 
@@ -368,11 +373,11 @@ auto mutation::consume_gently(Consumer& consumer, consume_in_reverse reverse, mu
 
     std::optional<stop_iteration> stop_opt;
     if (reverse == consume_in_reverse::yes) {
-        while (!(stop_opt = consume_clustering_fragments<consume_in_reverse::yes>(_ptr->_schema, partition, consumer, cookie, is_preemptible::yes))) {
+        while (!(stop_opt = consume_clustering_fragments<consume_in_reverse::yes>(_ptr->_schema, partition, consumer, validation_level, cookie, is_preemptible::yes))) {
             co_await yield();
         }
     } else {
-        while (!(stop_opt = consume_clustering_fragments<consume_in_reverse::no>(_ptr->_schema, partition, consumer, cookie, is_preemptible::yes))) {
+        while (!(stop_opt = consume_clustering_fragments<consume_in_reverse::no>(_ptr->_schema, partition, consumer, validation_level, cookie, is_preemptible::yes))) {
             co_await yield();
         }
     }

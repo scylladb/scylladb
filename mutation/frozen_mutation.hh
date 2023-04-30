@@ -73,9 +73,10 @@ private:
     }
 
 public:
-    frozen_mutation_consumer_adaptor(schema_ptr s, Consumer& consumer)
+    frozen_mutation_consumer_adaptor(schema_ptr s, Consumer& consumer,
+            mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::none)
         : _schema(*s)
-        , _rt_gen(_schema)
+        , _rt_gen(_schema, validation_level)
         , _consumer(consumer)
     {
     }
@@ -197,7 +198,7 @@ public:
     // will be called each time the consume is stopping, regardless of whether
     // you are pausing or the consumption is ending for good.
     template<FlattenedConsumerV2 Consumer>
-    auto consume(schema_ptr s, Consumer& consumer) const -> frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())>;
+    auto consume(schema_ptr s, Consumer& consumer, mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::none) const -> frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())>;
 
     template<FlattenedConsumerV2 Consumer>
     auto consume(schema_ptr s, frozen_mutation_consumer_adaptor<Consumer>& adaptor) const -> frozen_mutation_consume_result<decltype(adaptor.consumer().consume_end_of_stream())>;
@@ -212,7 +213,7 @@ public:
     // will be called each time the consume is stopping, regardless of whether
     // you are pausing or the consumption is ending for good.
     template<FlattenedConsumerV2 Consumer>
-    auto consume_gently(schema_ptr s, Consumer& consumer) const -> future<frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())>>;
+    auto consume_gently(schema_ptr s, Consumer& consumer, mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::none) const -> future<frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())>>;
 
     template<FlattenedConsumerV2 Consumer>
     auto consume_gently(schema_ptr s, frozen_mutation_consumer_adaptor<Consumer>& adaptor) const -> future<frozen_mutation_consume_result<decltype(adaptor.consumer().consume_end_of_stream())>>;
@@ -302,8 +303,8 @@ auto frozen_mutation::consume(schema_ptr s, frozen_mutation_consumer_adaptor<Con
 }
 
 template<FlattenedConsumerV2 Consumer>
-auto frozen_mutation::consume(schema_ptr s, Consumer& consumer) const -> frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())> {
-    frozen_mutation_consumer_adaptor adaptor(s, consumer);
+auto frozen_mutation::consume(schema_ptr s, Consumer& consumer, mutation_fragment_stream_validation_level validation_level) const -> frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())> {
+    frozen_mutation_consumer_adaptor adaptor(s, consumer, validation_level);
     return consume(s, adaptor);
 }
 
@@ -322,8 +323,8 @@ auto frozen_mutation::consume_gently(schema_ptr s, frozen_mutation_consumer_adap
 }
 
 template<FlattenedConsumerV2 Consumer>
-auto frozen_mutation::consume_gently(schema_ptr s, Consumer& consumer) const -> future<frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())>> {
-    frozen_mutation_consumer_adaptor adaptor(s, consumer);
+auto frozen_mutation::consume_gently(schema_ptr s, Consumer& consumer, mutation_fragment_stream_validation_level validation_level) const -> future<frozen_mutation_consume_result<decltype(consumer.consume_end_of_stream())>> {
+    frozen_mutation_consumer_adaptor adaptor(s, consumer, validation_level);
     co_return co_await consume_gently(s, adaptor);
 }
 
