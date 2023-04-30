@@ -1347,7 +1347,8 @@ memory_limit_table create_memory_limit_table(cql_test_env& env, uint64_t target_
                 auto sst = tbl.make_sstable();
                 auto writer_cfg = sst_man.configure_writer("test");
                 sst->write_components(
-                    make_flat_mutation_reader_from_mutations_v2(s, semaphore.make_tracking_only_permit(s, "test", db::no_timeout, {}), mut, s->full_slice()),
+                    make_flat_mutation_reader_from_mutations_v2(s, semaphore.make_tracking_only_permit(s, "test", db::no_timeout, {}), mut, s->full_slice(),
+                            streamed_mutation::forwarding::no, mutation_fragment_stream_validation_level::clustering_key),
                     1,
                     s,
                     writer_cfg,

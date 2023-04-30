@@ -796,7 +796,7 @@ SEASTAR_TEST_CASE(test_querying_of_mutation) {
 
         auto resultify = [s] (const mutation& m) -> query::result_set {
             auto slice = make_full_slice(*s);
-            return query::result_set::from_raw_result(s, slice, query_mutation(mutation(m), slice));
+            return query::result_set::from_raw_result(s, slice, query_mutation(mutation(m), slice, mutation_fragment_stream_validation_level::clustering_key));
         };
 
         mutation m(s, partition_key::from_single_value(*s, "key1"));
@@ -831,7 +831,7 @@ SEASTAR_TEST_CASE(test_partition_with_no_live_data_is_absent_in_data_query_resul
 
         auto slice = make_full_slice(*s);
 
-        assert_that(query::result_set::from_raw_result(s, slice, query_mutation(mutation(m), slice)))
+        assert_that(query::result_set::from_raw_result(s, slice, query_mutation(mutation(m), slice, mutation_fragment_stream_validation_level::clustering_key)))
             .is_empty();
     });
 }
@@ -855,7 +855,7 @@ SEASTAR_TEST_CASE(test_partition_with_live_data_in_static_row_is_present_in_the_
             .build();
 
         assert_that(query::result_set::from_raw_result(s, slice,
-                query_mutation(mutation(m), slice)))
+                query_mutation(mutation(m), slice, mutation_fragment_stream_validation_level::clustering_key)))
             .has_only(a_row()
                 .with_column("pk", data_value(bytes("key1")))
                 .with_column("v", data_value::make_null(bytes_type)));
@@ -879,7 +879,7 @@ SEASTAR_TEST_CASE(test_query_result_with_one_regular_column_missing) {
         auto slice = partition_slice_builder(*s).build();
 
         assert_that(query::result_set::from_raw_result(s, slice,
-                query_mutation(mutation(m), slice)))
+                query_mutation(mutation(m), slice, mutation_fragment_stream_validation_level::clustering_key)))
             .has_only(a_row()
                 .with_column("pk", data_value(bytes("key1")))
                 .with_column("ck", data_value(bytes("ck:A")))
@@ -1385,9 +1385,9 @@ SEASTAR_TEST_CASE(test_query_digest) {
             auto ps1 = partition_slice_builder(*m1.schema()).build();
             auto ps2 = partition_slice_builder(*m2.schema()).build();
             auto digest1 = *query_mutation(mutation(m1), ps1, query::max_rows, now,
-                    query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
-            auto digest2 = *query_mutation( mutation(m2), ps2, query::max_rows, now,
-                    query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
+                    query::result_options::only_digest(query::digest_algorithm::xxHash), mutation_fragment_stream_validation_level::clustering_key).digest();
+            auto digest2 = *query_mutation(mutation(m2), ps2, query::max_rows, now,
+                    query::result_options::only_digest(query::digest_algorithm::xxHash), mutation_fragment_stream_validation_level::clustering_key).digest();
 
             if (digest1 != digest2) {
                 BOOST_FAIL(format("Digest should be the same for {} and {}", m1, m2));
@@ -1637,7 +1637,7 @@ SEASTAR_THREAD_TEST_CASE(test_querying_expired_rows) {
                 .without_partition_key_columns()
                 .build();
         auto opts = query::result_options{query::result_request::result_and_digest, query::digest_algorithm::xxHash};
-        return query::result_set::from_raw_result(s, slice, query_mutation(mutation(m), slice, query::max_rows, t, opts));
+        return query::result_set::from_raw_result(s, slice, query_mutation(mutation(m), slice, query::max_rows, t, opts, mutation_fragment_stream_validation_level::clustering_key));
     };
 
     mutation m(s, pk);
@@ -1701,7 +1701,7 @@ SEASTAR_TEST_CASE(test_querying_expired_cells) {
                     .without_partition_key_columns()
                     .build();
             auto opts = query::result_options{query::result_request::result_and_digest, query::digest_algorithm::xxHash};
-            return query::result_set::from_raw_result(s, slice, query_mutation(mutation(m), slice, query::max_rows, t, opts));
+            return query::result_set::from_raw_result(s, slice, query_mutation(mutation(m), slice, query::max_rows, t, opts, mutation_fragment_stream_validation_level::clustering_key));
         };
 
         {
@@ -2794,7 +2794,7 @@ void run_compaction_data_stream_split_test(const schema& schema, reader_permit p
         mut.partition().compact_for_compaction(schema, never_gc, mut.decorated_key(), query_time, tombstone_gc_state(nullptr));
     }
 
-    auto reader = make_flat_mutation_reader_from_mutations_v2(schema.shared_from_this(), std::move(permit), mutations);
+    auto reader = make_flat_mutation_reader_from_mutations_v2(schema.shared_from_this(), std::move(permit), mutations, streamed_mutation::forwarding::no, mutation_fragment_stream_validation_level::clustering_key);
     auto close_reader = deferred_close(reader);
     auto get_max_purgeable = [] (const dht::decorated_key&) {
         return api::max_timestamp;
@@ -3009,7 +3009,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_consume) {
     {
         for (const auto& mut : muts) {
             mutation_rebuilder_v2 rebuilder(forward_schema);
-            auto rebuilt_mut = *mutation(mut).consume(rebuilder, consume_in_reverse::no).result;
+            auto rebuilt_mut = *mutation(mut).consume(rebuilder, consume_in_reverse::no, mutation_fragment_stream_validation_level::clustering_key).result;
             assert_that(std::move(rebuilt_mut)).is_equal_to(mut);
         }
     }
@@ -3017,7 +3017,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_consume) {
     {
         for (const auto& mut : muts) {
             mutation_rebuilder_v2 rebuilder(reverse_schema);
-            auto rebuilt_mut = *mutation(mut).consume(rebuilder, consume_in_reverse::yes).result;
+            auto rebuilt_mut = *mutation(mut).consume(rebuilder, consume_in_reverse::yes, mutation_fragment_stream_validation_level::clustering_key).result;
             assert_that(reverse(std::move(rebuilt_mut))).is_equal_to(mut);
         }
     }
@@ -3048,26 +3048,26 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_consume_position_monotonicity) {
     {
         auto mut = muts.front();
         validating_consumer consumer(*forward_schema);
-        std::move(mut).consume(consumer, consume_in_reverse::no);
+        std::move(mut).consume(consumer, consume_in_reverse::no, mutation_fragment_stream_validation_level::clustering_key);
     }
     BOOST_TEST_MESSAGE("Reverse");
     {
         auto mut = muts.front();
         validating_consumer consumer(*reverse_schema);
-        std::move(mut).consume(consumer, consume_in_reverse::yes);
+        std::move(mut).consume(consumer, consume_in_reverse::yes, mutation_fragment_stream_validation_level::clustering_key);
     }
 
     BOOST_TEST_MESSAGE("Forward gently");
     {
         auto mut = muts.front();
         validating_consumer consumer(*forward_schema);
-        std::move(mut).consume_gently(consumer, consume_in_reverse::no).get();
+        std::move(mut).consume_gently(consumer, consume_in_reverse::no, mutation_fragment_stream_validation_level::clustering_key).get();
     }
     BOOST_TEST_MESSAGE("Reverse gently");
     {
         auto mut = muts.front();
         validating_consumer consumer(*reverse_schema);
-        std::move(mut).consume_gently(consumer, consume_in_reverse::yes).get();
+        std::move(mut).consume_gently(consumer, consume_in_reverse::yes, mutation_fragment_stream_validation_level::clustering_key).get();
     }
 }
 
@@ -3173,11 +3173,11 @@ SEASTAR_TEST_CASE(mutation_with_dummy_clustering_row_is_consumed_monotonically) 
         {
             schema_ptr reverse_schema = s->make_reversed();
             validating_consumer consumer{*reverse_schema};
-            std::move(m).consume(consumer, consume_in_reverse::yes);
+            std::move(m).consume(consumer, consume_in_reverse::yes, mutation_fragment_stream_validation_level::clustering_key);
         }
         {
             validating_consumer consumer{*s};
-            std::move(m1).consume(consumer, consume_in_reverse::no);
+            std::move(m1).consume(consumer, consume_in_reverse::no, mutation_fragment_stream_validation_level::clustering_key);
         }
     });
 }

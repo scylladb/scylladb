@@ -64,7 +64,9 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                     auto shard = s->get_sharder().shard_of(m.token());
                     shards_before[shard]++;
                 }
-                auto source_reader = partition_nr > 0 ? make_flat_mutation_reader_from_mutations_v2(gen.schema(), make_reader_permit(e), muts) : make_empty_flat_reader_v2(s, make_reader_permit(e));
+                auto source_reader = partition_nr > 0
+                        ? make_flat_mutation_reader_from_mutations_v2(gen.schema(), make_reader_permit(e), muts, streamed_mutation::forwarding::no, mutation_fragment_stream_validation_level::clustering_key)
+                        : make_empty_flat_reader_v2(s, make_reader_permit(e));
                 auto close_source_reader = deferred_close(source_reader);
                 auto& sharder = s->get_sharder();
                 size_t partitions_received = distribute_reader_and_consume_on_shards(s, sharder,
@@ -126,7 +128,9 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
         auto test_random_streams = [&e] (random_mutation_generator&& gen, size_t partition_nr, generate_error error = generate_error::no) {
             auto muts = gen(partition_nr);
             schema_ptr s = gen.schema();
-            auto source_reader = partition_nr > 0 ? make_flat_mutation_reader_from_mutations_v2(s, make_reader_permit(e), muts) : make_empty_flat_reader_v2(s, make_reader_permit(e));
+            auto source_reader = partition_nr > 0
+                    ? make_flat_mutation_reader_from_mutations_v2(s, make_reader_permit(e), muts, streamed_mutation::forwarding::no, mutation_fragment_stream_validation_level::clustering_key)
+                    : make_empty_flat_reader_v2(s, make_reader_permit(e));
             auto close_source_reader = deferred_close(source_reader);
             int mf_produced = 0;
             auto get_next_mutation_fragment = [&source_reader, &mf_produced] () mutable {
@@ -383,7 +387,8 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
         });
     };
 
-    segregate_by_timestamp(make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), muts), classify_fn, std::move(consumer)).get();
+    segregate_by_timestamp(make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), muts,
+            streamed_mutation::forwarding::no, mutation_fragment_stream_validation_level::clustering_key), classify_fn, std::move(consumer)).get();
 
     testlog.debug("Data split into {} buckets: {}", buckets.size(), boost::copy_range<std::vector<int64_t>>(buckets | boost::adaptors::map_keys));
 
@@ -392,7 +397,10 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
 
 static void assert_that_segregator_produces_correct_data(const bucket_map_t& buckets, std::vector<mutation>& muts, reader_permit permit, tests::random_schema& random_schema) {
     auto bucket_readers = boost::copy_range<std::vector<flat_mutation_reader_v2>>(buckets | boost::adaptors::map_values |
-            boost::adaptors::transformed([&random_schema, &permit] (std::vector<mutation> muts) { return make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), permit, std::move(muts)); }));
+            boost::adaptors::transformed([&random_schema, &permit] (std::vector<mutation> muts) {
+                return make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), permit, std::move(muts),
+                        streamed_mutation::forwarding::no, mutation_fragment_stream_validation_level::clustering_key);
+            }));
     auto reader = make_combined_reader(random_schema.schema(), permit, std::move(bucket_readers), streamed_mutation::forwarding::no,
             mutation_reader::forwarding::no);
     auto close_reader = deferred_close(reader);
@@ -457,7 +465,8 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer_abort) {
     };
 
     try {
-        segregate_by_timestamp(make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), muts), classify_fn, std::move(consumer)).get();
+        segregate_by_timestamp(make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), muts,
+                streamed_mutation::forwarding::no, mutation_fragment_stream_validation_level::clustering_key), classify_fn, std::move(consumer)).get();
     } catch (const test_bucket_writer::expected_exception&) {
         BOOST_TEST_PASSPOINT();
     } catch (const seastar::broken_promise&) {
@@ -527,7 +536,8 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
             }
         });
         for (auto muts : output_mutations) {
-            readers.emplace_back(make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), std::move(muts)));
+            readers.emplace_back(make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), std::move(muts),
+                    streamed_mutation::forwarding::no, mutation_fragment_stream_validation_level::clustering_key));
         }
         auto rd = assert_that(make_combined_reader(random_schema.schema(), semaphore.make_permit(), std::move(readers)));
         for (const auto& mut : input_mutations) {
@@ -540,7 +550,8 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
     for (const size_t max_memory : {1'000, 10'000, 1'000'000, 10'000'000, 100'000'000}) {
         testlog.info("Segregating with in-memory method (max_memory={})", max_memory);
         mutation_writer::segregate_by_partition(
-                make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), shuffled_input_mutations),
+                make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), shuffled_input_mutations,
+                        streamed_mutation::forwarding::no, mutation_fragment_stream_validation_level::clustering_key),
                 mutation_writer::segregate_config{max_memory},
                 consumer).get();
         testlog.info("Done segregating with in-memory method (max_memory={}): input segregated into {} buckets", max_memory, output_mutations.size());

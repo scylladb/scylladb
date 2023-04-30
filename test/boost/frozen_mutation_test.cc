@@ -118,7 +118,7 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_fragment) {
     for_each_mutation([&] (const mutation& m) {
         auto& s = *m.schema();
         std::vector<mutation_fragment> mfs;
-        auto rd = mutation_fragment_v1_stream{make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), { m })};
+        auto rd = mutation_fragment_v1_stream{make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), m, mutation_fragment_stream_validation_level::clustering_key)};
         auto close_rd = deferred_close(rd);
         rd.consume_pausable([&] (mutation_fragment mf) {
             mfs.emplace_back(std::move(mf));
@@ -202,7 +202,7 @@ SEASTAR_TEST_CASE(frozen_mutation_is_consumed_in_order) {
 
         testlog.info("Validating frozen_mutation::consume_gently: rebuilding mutation");
         mutation_rebuilder_v2 rebuilder(s);
-        auto rebuilt_mut = fm.consume(s, rebuilder).result;
+        auto rebuilt_mut = fm.consume(s, rebuilder, mutation_fragment_stream_validation_level::clustering_key).result;
         assert_that(rebuilt_mut).has_mutation();
         assert_that(std::move(*rebuilt_mut)).is_equal_to(m);
     };

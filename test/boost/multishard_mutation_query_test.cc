@@ -790,7 +790,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_reversed) {
 
             std::vector<query::result_set_row> expected_rows;
             for (const auto& mut : expected_results) {
-                auto rs = query::result_set(mut);
+                auto rs = query::result_set(mut, mutation_fragment_stream_validation_level::clustering_key);
                 // mut re-sorts rows into forward order, so we have to reverse them again here
                 std::copy(rs.rows().rbegin(), rs.rows().rend(), std::back_inserter(expected_rows));
             }

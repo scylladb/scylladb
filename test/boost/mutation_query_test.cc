@@ -62,7 +62,7 @@ static mutation_source make_source(std::vector<mutation> mutations) {
                 assert(m.schema() == s);
             }
         }
-        return make_flat_mutation_reader_from_mutations_v2(s, std::move(permit), mutations, slice, fwd);
+        return make_flat_mutation_reader_from_mutations_v2(s, std::move(permit), mutations, slice, fwd, mutation_fragment_stream_validation_level::clustering_key);
     });
 }
 
@@ -579,7 +579,7 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_consumer) {
 
     // Rebuild mutation by consuming from the frozen_mutation
     mutation_rebuilder_v2 rebuilder(s);
-    auto res = fm.consume(s, rebuilder);
+    auto res = fm.consume(s, rebuilder, mutation_fragment_stream_validation_level::clustering_key);
     BOOST_REQUIRE(res.result);
     const auto& rebuilt = *res.result;
     BOOST_REQUIRE_EQUAL(rebuilt, m);
