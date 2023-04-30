@@ -125,9 +125,12 @@ if __name__ == '__main__':
                 procs.append(proc)
     for proc in procs:
         proc.wait()
+    for disk in disks:
+        run(f'wipefs -a {disk}', shell=True, check=True)
     if raid:
         run('udevadm settle', shell=True, check=True)
         run('mdadm --create --verbose --force --run {raid} --level={level} -c1024 --raid-devices={nr_disk} {disks}'.format(raid=fsdev, level=args.raid_level, nr_disk=len(disks), disks=args.disks.replace(',', ' ')), shell=True, check=True)
+        run(f'wipefs -a {fsdev}', shell=True, check=True)
         run('udevadm settle', shell=True, check=True)
 
     major_minor = os.stat(fsdev).st_rdev
@@ -138,7 +141,7 @@ if __name__ == '__main__':
     # and it also cannot be smaller than the sector size.
     block_size = max(1024, sector_size)
     run('udevadm settle', shell=True, check=True)
-    run(f'mkfs.xfs -b size={block_size} {fsdev} -f -K', shell=True, check=True)
+    run(f'mkfs.xfs -b size={block_size} {fsdev} -K', shell=True, check=True)
     run('udevadm settle', shell=True, check=True)
 
     if is_debian_variant():
