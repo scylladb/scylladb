@@ -31,6 +31,7 @@
 #include "readers/generating_v2.hh"
 #include "service/topology_guard.hh"
 #include "utils/error_injection.hh"
+#include "db/config.hh"
 
 namespace streaming {
 
@@ -197,9 +198,12 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             auto op = table.stream_in_progress();
             auto sharder_ptr = std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this());
             auto& sharder = *sharder_ptr;
+            auto validation_level = _db.local().get_config().enable_sstable_key_validation()
+                ? mutation_fragment_stream_validation_level::clustering_key
+                : mutation_fragment_stream_validation_level::token;
             //FIXME: discarded future.
             (void)mutation_writer::distribute_reader_and_consume_on_shards(s, sharder,
-                make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment)),
+                make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment), validation_level),
                 make_streaming_consumer("streaming", _db, _sys_dist_ks, _view_update_generator, estimated_partitions, reason, is_offstrategy_supported(reason), topo_guard),
                 std::move(op)
             ).then_wrapped([s, plan_id, from, sink, estimated_partitions, log_done, sh_ptr = std::move(sharder_ptr)] (future<uint64_t> f) mutable {
