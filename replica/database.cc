@@ -1249,6 +1249,9 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.view_update_concurrency_semaphore_limit = _config.view_update_concurrency_semaphore_limit;
     cfg.data_listeners = &db.data_listeners();
     cfg.enable_compacting_data_for_streaming_and_repair = db_config.enable_compacting_data_for_streaming_and_repair();
+    cfg.validation_level = db_config.enable_sstable_key_validation()
+            ? mutation_fragment_stream_validation_level::clustering_key
+            : mutation_fragment_stream_validation_level::token;
 
     return cfg;
 }

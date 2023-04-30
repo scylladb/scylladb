@@ -130,6 +130,7 @@ table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, c
     : _data(make_lw_shared<data>())
 {
     cfg.cf_stats = &_data->cf_stats;
+    cfg.validation_level = mutation_fragment_stream_validation_level::clustering_key;
     _data->s = s ? s : make_default_schema();
     _data->cf = make_lw_shared<replica::column_family>(_data->s, std::move(cfg), make_lw_shared<replica::storage_options>(), cm, sstables_manager, _data->cl_stats, sstables_manager.get_cache_tracker(), nullptr);
     _data->cf->mark_ready_for_writes(nullptr);
@@ -443,7 +444,8 @@ test_env::make_reader_permit(db::timeout_clock::time_point timeout) {
 
 replica::table::config
 test_env::make_table_config() {
-    return replica::table::config{.compaction_concurrency_semaphore = &_impl->semaphore};
+    return replica::table::config{.compaction_concurrency_semaphore = &_impl->semaphore,
+            .validation_level = mutation_fragment_stream_validation_level::clustering_key};
 }
 
 future<>

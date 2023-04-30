@@ -31,6 +31,17 @@ make_flat_mutation_reader_from_mutations_v2(
     bool reversed = false,
     mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::none);
 
+inline flat_mutation_reader_v2
+make_flat_mutation_reader_from_mutations_v2(
+    schema_ptr schema,
+    reader_permit permit,
+    mutation m,
+    mutation_fragment_stream_validation_level validation_level) {
+    constexpr bool reversed = false;
+    return make_flat_mutation_reader_from_mutations_v2(std::move(schema), std::move(permit), std::move(m),
+            streamed_mutation::forwarding::no, reversed, validation_level);
+}
+
 // Reader optimized for a single mutation.
 flat_mutation_reader_v2
 make_flat_mutation_reader_from_mutations_v2(

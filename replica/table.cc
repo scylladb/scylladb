@@ -2646,7 +2646,7 @@ future<> table::generate_and_propagate_view_updates(shared_ptr<db::view::view_up
             *this,
             base,
             std::move(views),
-            make_flat_mutation_reader_from_mutations_v2(std::move(m_schema), std::move(permit), std::move(m)),
+            make_flat_mutation_reader_from_mutations_v2(std::move(m_schema), std::move(permit), std::move(m), _config.validation_level),
             std::move(existings),
             now);
 
