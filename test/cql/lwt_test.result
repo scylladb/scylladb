@@ -1047,8 +1047,7 @@ OK
 +-------------+-----+
 > -- OR predicate: Cassandra users do not deserve it :(
 > update lwt set c=0 where a = 1 if c = 1 or c = 1;
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:40  : syntax error...
-">
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:40 : Syntax error">
 > -- null
 > update lwt set c=0 where a = 1 if c = null;
 +-------------+-----+
