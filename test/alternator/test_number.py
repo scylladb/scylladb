@@ -70,6 +70,30 @@ def test_number_magnitude_not_allowed(test_table_s):
                 UpdateExpression='SET a = :val',
                 ExpressionAttributeValues={':val': num})
 
+# DynamoDB limits the magnitude of the numbers (the exponent can be between
+# -130 and 125). If we neglect to limit the magnitude, it can allow a user
+# to request an addition operation between two numbers of wildly different
+# magnitudes, that requires an unlimited amount of memory and CPU time - i.e.,
+# a DoS attack. The attacker can cause a std::bad_alloc, large allocations,
+# and very long scheduler stall, all with a very short request.
+# Due to issue #6794 we need to skip this test, because it takes a very
+# long time and/or crashes Scylla.
+@pytest.mark.skip(reason="Issue #6794")
+def test_number_magnitude_not_allowed_dos(test_table_s):
+    p = random_string()
+    # Python's "Decimal" type and the way it's used by the Boto3 library
+    # has its own limitations, so we need to bypass them with the wrapper
+    # client_no_transform(), and pass numbers directly to the protocol as
+    # strings.
+    a = "1.0"
+    b = "1.0e100000000"
+    with pytest.raises(ClientError, match='ValidationException.*overflow'):
+        with client_no_transform(test_table_s.meta.client) as client:
+            client.update_item(TableName=test_table_s.name,
+                Key={'p': {'S': p}},
+                UpdateExpression='SET x = :a + :b',
+                ExpressionAttributeValues={':a': {'N': a}, ':b': {'N': b}})
+
 # Check that numbers up to the specified precision (38 decimal digits) can
 # be stored and retrieved unchanged.
 def test_number_precision_allowed(test_table_s):
