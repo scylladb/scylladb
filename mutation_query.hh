@@ -189,6 +189,13 @@ query::result query_mutation(
         query::result_options opts = query::result_options::only_result(),
         mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::none);
 
+inline query::result query_mutation(
+        mutation&& m,
+        const query::partition_slice& slice,
+        mutation_fragment_stream_validation_level validation_level) {
+    return query_mutation(std::move(m), slice, query::max_rows, gc_clock::now(), query::result_options::only_result(), validation_level);
+}
+
 // Performs a query for counter updates.
 future<mutation_opt> counter_write_query(schema_ptr, const mutation_source&, reader_permit permit,
                                          const dht::decorated_key& dk,
