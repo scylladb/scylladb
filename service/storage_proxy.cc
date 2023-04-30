@@ -5098,8 +5098,12 @@ protected:
                         && !data_resolver->any_partition_short_read()) {
                     tracing::trace(_trace_state, "Read stage is done for read-repair");
                     mlogger.trace("reconciled: {}", rr_opt->pretty_printer(_schema));
+                    auto validation_level = _proxy->local_db().get_config().enable_sstable_key_validation()
+                        ? mutation_fragment_stream_validation_level::clustering_key
+                        : mutation_fragment_stream_validation_level::token;
                     auto result = ::make_foreign(::make_lw_shared<query::result>(
-                            co_await to_data_query_result(std::move(*rr_opt), _schema, _cmd->slice, _cmd->get_row_limit(), cmd->partition_limit)));
+                            co_await to_data_query_result(std::move(*rr_opt), _schema, _cmd->slice, _cmd->get_row_limit(), cmd->partition_limit,
+                                    query::result_options::only_result(), validation_level)));
                     qlogger.trace("reconciled: {}", result->pretty_printer(_schema, _cmd->slice));
                     // wait for write to complete before returning result to prevent multiple concurrent read requests to
                     // trigger repair multiple times and to prevent quorum read to return an old value, even after a quorum
@@ -6439,8 +6443,11 @@ storage_proxy::query_nonsingular_data_locally(schema_ptr s, lw_shared_ptr<query:
         ret = co_await query_data_on_all_shards(_db, std::move(s), *local_cmd, ranges, opts, std::move(trace_state), timeout);
     } else {
         auto res = co_await query_mutations_on_all_shards(_db, s, *local_cmd, ranges, std::move(trace_state), timeout);
+        auto validation_level = _db.local().get_config().enable_sstable_key_validation()
+            ? mutation_fragment_stream_validation_level::clustering_key
+            : mutation_fragment_stream_validation_level::token;
         ret = rpc::tuple(make_foreign(make_lw_shared<query::result>(co_await to_data_query_result(std::move(*std::get<0>(res)), std::move(s), local_cmd->slice,
-                local_cmd->get_row_limit(), local_cmd->partition_limit, opts))), std::get<1>(res));
+                local_cmd->get_row_limit(), local_cmd->partition_limit, opts, validation_level))), std::get<1>(res));
     }
     co_return ret;
 }
