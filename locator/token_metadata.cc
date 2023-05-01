@@ -203,14 +203,14 @@ public:
      * @return new token metadata
      */
     future<std::unique_ptr<token_metadata_impl>> clone_after_all_left() const noexcept {
-      return clone_only_token_map(false).then([this] (std::unique_ptr<token_metadata_impl> all_left_metadata) {
-        for (auto endpoint : _leaving_endpoints) {
-            all_left_metadata->remove_endpoint(endpoint);
-        }
-        all_left_metadata->sort_tokens();
+        return clone_only_token_map(false).then([this] (std::unique_ptr<token_metadata_impl> all_left_metadata) {
+            for (auto endpoint : _leaving_endpoints) {
+                all_left_metadata->remove_endpoint(endpoint);
+            }
+            all_left_metadata->sort_tokens();
 
-        return all_left_metadata;
-      });
+            return all_left_metadata;
+        });
     }
 
     /**
