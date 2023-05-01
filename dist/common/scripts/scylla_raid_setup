@@ -14,9 +14,83 @@ import grp
 import sys
 import stat
 import distro
+import logging
+import pyudev
 from pathlib import Path
 from scylla_util import *
 from subprocess import run, SubprocessError
+
+LOGGER = logging.getLogger(__name__)
+
+class UdevInfo:
+    def __init__(self, device_file):
+        self.context = pyudev.Context()
+        self.device = pyudev.Devices.from_device_file(self.context, device_file)
+
+    def verify(self):
+        if not self.id_fs_uuid:
+            LOGGER.error('ID_FS_UUID does not found')
+        if self.id_fs_type != 'xfs':
+            LOGGER.error('ID_FS_TYPE is not "xfs"')
+        if self.id_fs_usage != 'filesystem':
+            LOGGER.error('ID_FS_USAGE is not "filesystem"')
+
+    def dump_variables(self):
+        LOGGER.error(f'    sys_path: {self.device.sys_path}')
+        LOGGER.error(f'    sys_name: {self.device.sys_name}')
+        LOGGER.error(f'    sys_number: {self.device.sys_number}')
+        LOGGER.error(f'    device_path: {self.device.device_path}')
+        LOGGER.error(f'    tags: {list(self.device.tags)}')
+        LOGGER.error(f'    subsystem: {self.device.subsystem}')
+        LOGGER.error(f'    driver: {self.device.driver}')
+        LOGGER.error(f'    device_type: {self.device.device_type}')
+        LOGGER.error(f'    device_node: {self.device.device_node}')
+        LOGGER.error(f'    device_number: {self.device.device_number}')
+        LOGGER.error(f'    device_links: {list(self.device.device_links)}')
+        LOGGER.error(f'    is_initialized: {self.device.is_initialized}')
+        LOGGER.error(f'    time_since_initialized: {self.device.time_since_initialized}')
+        for k, v in self.device.properties.items():
+            LOGGER.error(f'    {k}: {v}')
+
+    @property
+    def id_fs_uuid(self):
+        return self.device.properties.get('ID_FS_UUID')
+
+    @property
+    def id_fs_type(self):
+        return self.device.properties.get('ID_FS_TYPE')
+
+    @property
+    def id_fs_usage(self):
+        return self.device.properties.get('ID_FS_USAGE')
+
+    @property
+    def uuid_link(self):
+        for l in self.device.device_links:
+            if l.startswith('/dev/disk/by-uuid/'):
+                return l
+
+    @property
+    def label_link(self):
+        for l in self.device.device_links:
+            if l.startswith('/dev/disk/by-label/'):
+                return l
+
+    @property
+    def partuuid_link(self):
+        for l in self.device.device_links:
+            if l.startswith('/dev/disk/by-partuuid/'):
+                return l
+
+    @property
+    def path_link(self):
+        for l in self.device.device_links:
+            if l.startswith('/dev/disk/by-path/'):
+                return l
+
+    @property
+    def id_links(self):
+        return [l for l in self.device.device_links if l.startswith('/dev/disk/by-id')]
 
 if __name__ == '__main__':
     if os.getuid() > 0:
@@ -157,11 +231,27 @@ if __name__ == '__main__':
 
     os.makedirs(mount_at, exist_ok=True)
 
-    uuid = out(f'blkid -s UUID -o value {fsdev}')
-    if not uuid:
-        raise Exception(f'Failed to get UUID of {fsdev}')
-
-    uuidpath = f'/dev/disk/by-uuid/{uuid}'
+    udev_info = UdevInfo(fsdev)
+    mount_dev = None
+    if udev_info.uuid_link:
+        mount_dev = udev_info.uuid_link
+    else:
+        if udev_info.label_link:
+            mount_dev = udev_info.label_link
+            dev_type = 'label'
+        elif udev_info.partuuid_link:
+            mount_dev = udev_info.partuuid_link
+            dev_type = 'partuuid'
+        elif udev_info.path_link:
+            mount_dev = udev_info.path_link
+            dev_type = 'path'
+        elif udev_info.id_links:
+            mount_dev = udev_info.id_links[0]
+            dev_type = 'id'
+        else:
+            mount_dev = fsdev
+            dev_type = 'realpath'
+        LOGGER.error(f'Failed to detect uuid, using {dev_type}: {mount_dev}')
 
     after = 'local-fs.target'
     wants = ''
@@ -179,7 +269,7 @@ After={after}{wants}
 DefaultDependencies=no
 
 [Mount]
-What={uuidpath}
+What={mount_dev}
 Where={mount_at}
 Type=xfs
 Options=noatime{opt_discard}
@@ -205,10 +295,18 @@ WantedBy=multi-user.target
         mount = systemd_unit(mntunit_bn)
         mount.start()
     except SubprocessError as e:
-        if not os.path.exists(uuidpath):
-            print(f'\nERROR: {uuidpath} is not found\n')
-        elif not stat.S_ISBLK(os.stat(uuidpath).st_mode):
-            print(f'\nERROR: {uuidpath} is not block device\n')
+        if mount_dev != fsdev:
+            if not os.path.islink(mount_dev):
+                LOGGER.error('{mount_dev} is not found')
+            if not os.path.exists(mount_dev):
+                LOGGER.error('{mount_dev} is broken link')
+        if not os.path.exists(fsdev):
+            LOGGER.error('{fsdev} is not found')
+        if not stat.S_ISBLK(os.stat(fsdev).st_mode):
+            LOGGER.error('{fsdev} is not block device')
+        LOGGER.error(f'Error detected, dumping udev env parameters on {fsdev}')
+        udev_info.verify()
+        udev_info.dump_variables()
         raise e
 
     if args.enable_on_nextboot:
@@ -224,3 +322,8 @@ WantedBy=multi-user.target
 
     if is_debian_variant():
         run('update-initramfs -u', shell=True, check=True)
+
+    if not udev_info.uuid_link:
+        LOGGER.error(f'Error detected, dumping udev env parameters on {fsdev}')
+        udev_info.verify()
+        udev_info.dump_variables()
