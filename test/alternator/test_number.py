@@ -119,6 +119,66 @@ def test_number_precision_not_allowed(test_table_s):
                 UpdateExpression='SET a = :val',
                 ExpressionAttributeValues={':val': num})
 
+# The above tests checked the legal magnitudes and precisions of non-key
+# columns, and the following tests do the same for a numberic key column.
+# Because different code paths are involved for serializing and storing
+# key and non-key columns, it's important to check this case as well.
+@pytest.mark.xfail(reason="Issue #6794")
+def test_number_magnitude_key(test_table_sn):
+    p = random_string()
+    # Legal magnitudes are allowed:
+    for num in [Decimal("1e10"), Decimal("1e100"), Decimal("1e125"),
+                Decimal("9.99999999e125"), Decimal("1e-100"),
+                Decimal("1e-130")]:
+        for sign in [False, True]:
+            if sign:
+                num = -num
+            x = random_string()
+            test_table_sn.update_item(Key={'p': p, 'c': num},
+                UpdateExpression='SET a = :val',
+                ExpressionAttributeValues={':val': x})
+            assert test_table_sn.get_item(Key={'p': p, 'c': num}, ConsistentRead=True)['Item']['a'] == x
+    # Illegal magnitudes are not allowed:
+    x = random_string()
+    for num in [Decimal("1e126"), Decimal("11e125")]:
+        for sign in [False, True]:
+            if sign:
+                num = -num
+            with pytest.raises(ClientError, match='ValidationException.*overflow'):
+                test_table_sn.update_item(Key={'p': p, 'c': num},
+                    UpdateExpression='SET a = :val',
+                    ExpressionAttributeValues={':val': x})
+    for num in [Decimal("1e-131"), Decimal("0.9e-130")]:
+        for sign in [False, True]:
+            if sign:
+                num = -num
+            with pytest.raises(ClientError, match='ValidationException.*underflow'):
+                test_table_sn.update_item(Key={'p': p, 'c': num},
+                    UpdateExpression='SET a = :val',
+                    ExpressionAttributeValues={':val': x})
+
+@pytest.mark.xfail(reason="Issue #6794")
+def test_number_precision_key(test_table_sn):
+    p = random_string()
+    # Legal precision is allowed:
+    for num in [Decimal("3.1415926535897932384626433832795028841"),
+                Decimal("314159265358979323846.26433832795028841"),
+                Decimal("31415926535897932384626433832795028841e30")]:
+        x = random_string()
+        test_table_sn.update_item(Key={'p': p, 'c': num},
+            UpdateExpression='SET a = :val',
+            ExpressionAttributeValues={':val': x})
+        assert test_table_sn.get_item(Key={'p': p, 'c': num}, ConsistentRead=True)['Item']['a'] == x
+    # Illegal precision is not allowed:
+    x = random_string()
+    for num in [Decimal("3.14159265358979323846264338327950288419"),
+                Decimal("314159265358979323846.264338327950288419"),
+                Decimal("314159265358979323846264338327950288419e30")]:
+        with pytest.raises(ClientError, match='ValidationException.*significant'):
+            test_table_sn.update_item(Key={'p': p, 'c': num},
+                UpdateExpression='SET a = :val',
+                ExpressionAttributeValues={':val': x})
+
 # While most of the Alternator code just saves high-precision numbers
 # unchanged, the "+" and "-" operations need to calculate with them, and
 # we should check the calculation isn't done with some lower-precision
@@ -186,7 +246,7 @@ def test_invalid_numbers(test_table_s):
                     UpdateExpression='SET a = :val',
                     ExpressionAttributeValues={':val': {'N': s}})
         # As a sanity check, check that *allowed* numbers are fine:
-        for s in ['3', '-7.1234', '-17e5', '-17.4E37']:
+        for s in ['3', '-7.1234', '-17e5', '-17.4E37', '+3', '.123', '0001.23', '1e+5', '0e1000']:
             client.update_item(TableName=test_table_s.name,
                 Key={'p': {'S': p}},
                 UpdateExpression='SET a = :val',
