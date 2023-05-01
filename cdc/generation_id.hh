@@ -28,7 +28,35 @@ struct generation_id_v2 {
 
 using generation_id = std::variant<generation_id_v1, generation_id_v2>;
 
-std::ostream& operator<<(std::ostream&, const generation_id&);
 db_clock::time_point get_ts(const generation_id&);
 
 } // namespace cdc
+
+template <>
+struct fmt::formatter<cdc::generation_id_v1> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    template <typename FormatContext>
+    auto format(const cdc::generation_id_v1& gen_id, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", gen_id.ts);
+    }
+};
+
+template <>
+struct fmt::formatter<cdc::generation_id_v2> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    template <typename FormatContext>
+    auto format(const cdc::generation_id_v2& gen_id, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "({}, {})", gen_id.ts, gen_id.id);
+    }
+};
+
+template <>
+struct fmt::formatter<cdc::generation_id> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    template <typename FormatContext>
+    auto format(const cdc::generation_id& gen_id, FormatContext& ctx) const {
+        return std::visit([&ctx] (auto& id) {
+            return fmt::format_to(ctx.out(), "{}", id);
+        }, gen_id);
+    }
+};

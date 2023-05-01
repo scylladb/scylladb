@@ -1090,14 +1090,6 @@ shared_ptr<db::system_distributed_keyspace> generation_service::get_sys_dist_ks(
     return _sys_dist_ks.local_shared();
 }
 
-std::ostream& operator<<(std::ostream& os, const generation_id& gen_id) {
-    std::visit(make_visitor(
-    [&os] (const generation_id_v1& id) { os << id.ts; },
-    [&os] (const generation_id_v2& id) { os << "(" << id.ts << ", " << id.id << ")"; }
-    ), gen_id);
-    return os;
-}
-
 db_clock::time_point get_ts(const generation_id& gen_id) {
     return std::visit([] (auto& id) { return id.ts; }, gen_id);
 }
