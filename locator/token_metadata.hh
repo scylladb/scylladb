@@ -245,17 +245,6 @@ public:
     static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
     bool has_pending_ranges(sstring keyspace_name, inet_address endpoint) const;
-     /**
-     * Calculate pending ranges according to bootstrapping, leaving and replacing nodes.
-     *
-     * We construct an updated version of the token_metadata by incorporating
-     * all proposed modifications (join, bootstrap, and replace operations).
-     * Subsequently, for each token range, we compare the outcomes of the calculate_natural_endpoints
-     * function applied to both the previous and the new token_metadata.
-     * Endpoints present in the updated version but absent in the original one
-     * ought to be appended to the pending_ranges.
-     */
-    future<> update_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name, dc_rack_fn& get_dc_rack);
 
     future<> update_topology_change_info(dc_rack_fn& get_dc_rack);
 
