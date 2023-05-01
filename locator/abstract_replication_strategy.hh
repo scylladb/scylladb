@@ -281,7 +281,14 @@ public:
         return _replication_map;
     }
 
-    future<replication_map> clone_endpoints_gently() const;
+    struct cloned_data {
+        replication_map replication_map;
+        ring_mapping pending_endpoints;
+        ring_mapping read_endpoints;
+    };
+    // boost::icl::interval_map is not no_throw_move_constructible -> can't return cloned_data by val,
+    // since future_state requires T to be no_throw_move_constructible.
+    future<std::unique_ptr<cloned_data>> clone_data_gently() const;
 
     stop_iteration for_each_natural_endpoint_until(const token& search_token, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
 

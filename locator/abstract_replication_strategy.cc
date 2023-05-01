@@ -353,15 +353,24 @@ future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replicat
         ring_mapping{}, ring_mapping{}, rf);
 }
 
-future<replication_map> vnode_effective_replication_map::clone_endpoints_gently() const {
-    replication_map cloned_endpoints;
+auto vnode_effective_replication_map::clone_data_gently() const -> future<std::unique_ptr<cloned_data>> {
+    auto result = std::make_unique<cloned_data>();
 
     for (auto& i : _replication_map) {
-        cloned_endpoints.emplace(i.first, i.second);
+        result->replication_map.emplace(i.first, i.second);
         co_await coroutine::maybe_yield();
     }
 
-    co_return cloned_endpoints;
+    for (const auto& i : _pending_endpoints) {
+        result->pending_endpoints += i;
+        co_await coroutine::maybe_yield();
+    }
+
+    for (const auto& i : _read_endpoints) {
+        result->read_endpoints += i;
+        co_await coroutine::maybe_yield();
+    }
+    co_return std::move(result);
 }
 
 inet_address_vector_replica_set vnode_effective_replication_map::get_natural_endpoints(const token& search_token) const {
@@ -418,9 +427,9 @@ future<vnode_effective_replication_map_ptr> effective_replication_map_factory::c
     mutable_vnode_effective_replication_map_ptr new_erm;
     if (ref_erm) {
         auto rf = ref_erm->get_replication_factor();
-        auto local_replication_map = co_await ref_erm->clone_endpoints_gently();
-        new_erm = make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(local_replication_map),
-            ring_mapping{}, ring_mapping{}, rf);
+        auto local_data = co_await ref_erm->clone_data_gently();
+        new_erm = make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(local_data->replication_map),
+            std::move(local_data->pending_endpoints), std::move(local_data->read_endpoints), rf);
     } else {
         new_erm = co_await calculate_effective_replication_map(std::move(rs), std::move(tmptr));
     }
