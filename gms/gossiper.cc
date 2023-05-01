@@ -197,39 +197,39 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
         p.syn_msg = std::move(syn_msg);
         co_return;
     }
-    // FIXME: indentation
-        // Process the syn message immediately
-        logger.debug("Process gossip syn msg from node {}, syn_msg={}", from, syn_msg);
-        p.pending = true;
+
+    // Process the syn message immediately
+    logger.debug("Process gossip syn msg from node {}, syn_msg={}", from, syn_msg);
+    p.pending = true;
     for (;;) {
         try {
             co_await do_send_ack_msg(from, std::move(syn_msg));
-                    if (!_syn_handlers.contains(from.addr)) {
-                        co_return;
-                    }
-                    syn_msg_pending& p = _syn_handlers[from.addr];
-                    if (p.syn_msg) {
-                        // Process pending gossip syn msg and send ack msg back
-                        logger.debug("Handle queued gossip syn msg from node {}, syn_msg={}, pending={}",
-                                from, p.syn_msg, p.pending);
-                        syn_msg = std::move(p.syn_msg.value());
-                        p.syn_msg = {};
-                        continue;
-                    } else {
-                        // No more pending syn msg to process
-                        p.pending = false;
-                        logger.debug("No more queued gossip syn msg from node {}, syn_msg={}, pending={}",
-                                from, p.syn_msg, p.pending);
-                        co_return;
-                    }
+            if (!_syn_handlers.contains(from.addr)) {
+                co_return;
+            }
+            syn_msg_pending& p = _syn_handlers[from.addr];
+            if (p.syn_msg) {
+                // Process pending gossip syn msg and send ack msg back
+                logger.debug("Handle queued gossip syn msg from node {}, syn_msg={}, pending={}",
+                        from, p.syn_msg, p.pending);
+                syn_msg = std::move(p.syn_msg.value());
+                p.syn_msg = {};
+                continue;
+            } else {
+                // No more pending syn msg to process
+                p.pending = false;
+                logger.debug("No more queued gossip syn msg from node {}, syn_msg={}, pending={}",
+                        from, p.syn_msg, p.pending);
+                co_return;
+            }
         } catch (...) {
             auto ep = std::current_exception();
-                    if (_syn_handlers.contains(from.addr)) {
-                        syn_msg_pending& p = _syn_handlers[from.addr];
-                        p.pending = false;
-                        p.syn_msg = {};
-                    }
-                    logger.warn("Failed to process gossip syn msg from node {}:  {}", from, ep);
+            if (_syn_handlers.contains(from.addr)) {
+                syn_msg_pending& p = _syn_handlers[from.addr];
+                p.pending = false;
+                p.syn_msg = {};
+            }
+            logger.warn("Failed to process gossip syn msg from node {}: {}", from, ep);
             throw;
         }
     }
