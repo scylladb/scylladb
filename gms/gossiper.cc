@@ -280,7 +280,6 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
         co_return;
     }
 
-
     auto g_digest_list = ack_msg.get_gossip_digest_list();
     auto& ep_state_map = ack_msg.get_endpoint_state_map();
 
@@ -301,54 +300,53 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
 
     auto from = id;
     auto ack_msg_digest = std::move(g_digest_list);
-    // FIXME: indentation
-        if (this->is_in_shadow_round()) {
-            this->finish_shadow_round();
-            // don't bother doing anything else, we have what we came for
-            co_return;
-        }
-        ack_msg_pending& p = _ack_handlers[from.addr];
-        if (p.pending) {
-            // The latest ack message digests from peer has the latest infomation, so
-            // it is safe to drop the previous ack message digests and keep the latest
-            // one only.
-            logger.debug("Queue gossip ack msg digests from node {}, ack_msg_digest={}", from, ack_msg_digest);
-            p.ack_msg_digest = std::move(ack_msg_digest);
-            co_return;
-        }
+    if (this->is_in_shadow_round()) {
+        this->finish_shadow_round();
+        // don't bother doing anything else, we have what we came for
+        co_return;
+    }
+    ack_msg_pending& p = _ack_handlers[from.addr];
+    if (p.pending) {
+        // The latest ack message digests from peer has the latest infomation, so
+        // it is safe to drop the previous ack message digests and keep the latest
+        // one only.
+        logger.debug("Queue gossip ack msg digests from node {}, ack_msg_digest={}", from, ack_msg_digest);
+        p.ack_msg_digest = std::move(ack_msg_digest);
+        co_return;
+    }
 
-            // Process the ack message immediately
-            logger.debug("Process gossip ack msg digests from node {}, ack_msg_digest={}", from, ack_msg_digest);
-            p.pending = true;
+    // Process the ack message immediately
+    logger.debug("Process gossip ack msg digests from node {}, ack_msg_digest={}", from, ack_msg_digest);
+    p.pending = true;
     for (;;) {
         try {
-                    co_await do_send_ack2_msg(from, std::move(ack_msg_digest));
-                        if (!_ack_handlers.contains(from.addr)) {
-                            co_return;
-                        }
-                        ack_msg_pending& p = _ack_handlers[from.addr];
-                        if (p.ack_msg_digest) {
-                            // Process pending gossip ack msg digests and send ack2 msg back
-                            logger.debug("Handle queued gossip ack msg digests from node {}, ack_msg_digest={}, pending={}",
-                                    from, p.ack_msg_digest, p.pending);
-                            ack_msg_digest = std::move(p.ack_msg_digest.value());
-                            p.ack_msg_digest= {};
-                            continue;
-                        } else {
-                            // No more pending ack msg digests to process
-                            p.pending = false;
-                            logger.debug("No more queued gossip ack msg digests from node {}, ack_msg_digest={}, pending={}",
-                                    from, p.ack_msg_digest, p.pending);
-                            co_return;
-                        }
+            co_await do_send_ack2_msg(from, std::move(ack_msg_digest));
+            if (!_ack_handlers.contains(from.addr)) {
+                co_return;
+            }
+            ack_msg_pending& p = _ack_handlers[from.addr];
+            if (p.ack_msg_digest) {
+                // Process pending gossip ack msg digests and send ack2 msg back
+                logger.debug("Handle queued gossip ack msg digests from node {}, ack_msg_digest={}, pending={}",
+                        from, p.ack_msg_digest, p.pending);
+                ack_msg_digest = std::move(p.ack_msg_digest.value());
+                p.ack_msg_digest= {};
+                continue;
+            } else {
+                // No more pending ack msg digests to process
+                p.pending = false;
+                logger.debug("No more queued gossip ack msg digests from node {}, ack_msg_digest={}, pending={}",
+                        from, p.ack_msg_digest, p.pending);
+                co_return;
+            }
         } catch (...) {
             auto ep = std::current_exception();
-                        if (_ack_handlers.contains(from.addr)) {
-                            ack_msg_pending& p = _ack_handlers[from.addr];
-                            p.pending = false;
-                            p.ack_msg_digest = {};
-                            logger.warn("Failed to process gossip ack msg digests from node {}: {}", from, ep);
-                        }
+            if (_ack_handlers.contains(from.addr)) {
+                ack_msg_pending& p = _ack_handlers[from.addr];
+                p.pending = false;
+                p.ack_msg_digest = {};
+                logger.warn("Failed to process gossip ack msg digests from node {}: {}", from, ep);
+            }
             throw;
         }
     }
