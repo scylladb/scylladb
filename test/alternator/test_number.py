@@ -55,7 +55,6 @@ def test_number_magnitude_allowed(test_table_s):
             assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == num
 
 # Test that numbers of too big (or small) a magnitude cannot be stored.
-@pytest.mark.xfail(reason="Number type allows too much magnitude and precision")
 def test_number_magnitude_not_allowed(test_table_s):
     p = random_string()
     for num in [Decimal("1e126"), Decimal("11e125")]:
@@ -76,9 +75,8 @@ def test_number_magnitude_not_allowed(test_table_s):
 # magnitudes, that requires an unlimited amount of memory and CPU time - i.e.,
 # a DoS attack. The attacker can cause a std::bad_alloc, large allocations,
 # and very long scheduler stall, all with a very short request.
-# Due to issue #6794 we need to skip this test, because it takes a very
+# When we had issue #6794 we had to skip this test, because it took a very
 # long time and/or crashes Scylla.
-@pytest.mark.skip(reason="Issue #6794")
 def test_number_magnitude_not_allowed_dos(test_table_s):
     p = random_string()
     # Python's "Decimal" type and the way it's used by the Boto3 library
@@ -87,8 +85,8 @@ def test_number_magnitude_not_allowed_dos(test_table_s):
     # strings.
     a = "1.0"
     b = "1.0e100000000"
-    with pytest.raises(ClientError, match='ValidationException.*overflow'):
-        with client_no_transform(test_table_s.meta.client) as client:
+    with client_no_transform(test_table_s.meta.client) as client:
+        with pytest.raises(ClientError, match='ValidationException.*overflow'):
             client.update_item(TableName=test_table_s.name,
                 Key={'p': {'S': p}},
                 UpdateExpression='SET x = :a + :b',
@@ -108,7 +106,6 @@ def test_number_precision_allowed(test_table_s):
 
 # Check that numbers with more significant digits than supported (38 decimal
 # digits) cannot be stored.
-@pytest.mark.xfail(reason="Number type allows too much magnitude and precision")
 def test_number_precision_not_allowed(test_table_s):
     p = random_string()
     for num in [Decimal("3.14159265358979323846264338327950288419"),
@@ -123,7 +120,6 @@ def test_number_precision_not_allowed(test_table_s):
 # columns, and the following tests do the same for a numberic key column.
 # Because different code paths are involved for serializing and storing
 # key and non-key columns, it's important to check this case as well.
-@pytest.mark.xfail(reason="Issue #6794")
 def test_number_magnitude_key(test_table_sn):
     p = random_string()
     # Legal magnitudes are allowed:
@@ -157,7 +153,6 @@ def test_number_magnitude_key(test_table_sn):
                     UpdateExpression='SET a = :val',
                     ExpressionAttributeValues={':val': x})
 
-@pytest.mark.xfail(reason="Issue #6794")
 def test_number_precision_key(test_table_sn):
     p = random_string()
     # Legal precision is allowed:
@@ -196,7 +191,6 @@ def test_update_expression_plus_precision(test_table_s):
 
 # Some additions or subtractions can result in overflow to the allowed range,
 # causing the update to fail: 9e125 + 9e125 = 1.8e126 which overflows.
-@pytest.mark.xfail(reason="Number type allows too much magnitude and precision")
 def test_update_expression_plus_overflow(test_table_s):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*overflow'):
@@ -207,11 +201,16 @@ def test_update_expression_plus_overflow(test_table_s):
         test_table_s.update_item(Key={'p': p},
             UpdateExpression='SET b = :val1 - :val2',
             ExpressionAttributeValues={':val1': Decimal("9e125"), ':val2': Decimal("-9e125")})
+    # Validate that the individual operands aren't too large - the only
+    # problem was the sum
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET b = :val1 + :val2',
+        ExpressionAttributeValues={':val1': Decimal("9e125"), ':val2': Decimal("9e124")})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['b'] == Decimal("9.9e125")
 
 # Similarly, addition or subtraction can also result in unsupported precision
 # and causing the update to fail: For example, 1e50 + 1 cannot be represented
 # in 38 digits of precision.
-@pytest.mark.xfail(reason="Number type allows too much magnitude and precision")
 def test_update_expression_plus_imprecise(test_table_s):
     p = random_string()
     # Strangely, DynamoDB says that the error is: "Number overflow. Attempting
