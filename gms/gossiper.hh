@@ -27,6 +27,7 @@
 #include "gms/feature.hh"
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest.hh"
+#include "gms/endpoint_id.hh"
 #include "utils/loading_shared_values.hh"
 #include "utils/updateable_value.hh"
 #include "utils/in.hh"
@@ -105,11 +106,11 @@ private:
 
     void init_messaging_service_handler();
     future<> uninit_messaging_service_handler();
-    future<> handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg);
-    future<> handle_ack_msg(msg_addr from, gossip_digest_ack ack_msg);
-    future<> handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg);
-    future<> handle_echo_msg(inet_address from, std::optional<int64_t> generation_number_opt);
-    future<> handle_shutdown_msg(inet_address from, std::optional<int64_t> generation_number_opt);
+    future<> handle_syn_msg(endpoint_id node, gossip_digest_syn syn_msg);
+    future<> handle_ack_msg(endpoint_id node, gossip_digest_ack ack_msg);
+    future<> handle_ack2_msg(endpoint_id node, gossip_digest_ack2 msg);
+    future<> handle_echo_msg(endpoint_id node, std::optional<int64_t> generation_number_opt);
+    future<> handle_shutdown_msg(endpoint_id node, std::optional<int64_t> generation_number_opt);
     future<> do_send_ack_msg(msg_addr from, gossip_digest_syn syn_msg);
     future<> do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_digest> ack_msg_digest);
     future<gossip_get_endpoint_states_response> handle_get_endpoint_states_msg(gossip_get_endpoint_states_request request);
@@ -199,6 +200,8 @@ private:
     std::unordered_map<inet_address, endpoint_state_ptr> _endpoint_state_map;
     // Used for serializing changes to _endpoint_state_map and running of associated change listeners.
     endpoint_locks_map _endpoint_locks;
+
+    endpoint_id get_endpoint_id(const rpc::client_info& cinfo) noexcept;
 
 public:
     const std::vector<sstring> DEAD_STATES = {

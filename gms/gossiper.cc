@@ -165,7 +165,7 @@ void gossiper::do_sort(utils::chunked_vector<gossip_digest>& g_digest_list) cons
 
 // Depends on
 // - no external dependency
-future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
+future<> gossiper::handle_syn_msg(endpoint_id from, gossip_digest_syn syn_msg) {
     logger.trace("handle_syn_msg():from={},cluster_name:peer={},local={},group0_id:peer={},local={},partitioner_name:peer={},local={}",
         from, syn_msg.cluster_id(), get_cluster_name(), syn_msg.group0_id(), get_group0_id(), syn_msg.partioner(), get_partitioner_name());
     if (!this->is_enabled()) {
@@ -174,7 +174,7 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
 
     /* If the message is from a different cluster throw it away. */
     if (syn_msg.cluster_id() != get_cluster_name()) {
-        logger.warn("ClusterName mismatch from {} {}!={}", from.addr, syn_msg.cluster_id(), get_cluster_name());
+        logger.warn("ClusterName mismatch from {} {}!={}", from, syn_msg.cluster_id(), get_cluster_name());
         co_return;
     }
 
@@ -185,7 +185,7 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
     }
 
     if (syn_msg.partioner() != "" && syn_msg.partioner() != get_partitioner_name()) {
-        logger.warn("Partitioner mismatch from {} {}!={}", from.addr, syn_msg.partioner(), get_partitioner_name());
+        logger.warn("Partitioner mismatch from {} {}!={}", from, syn_msg.partioner(), get_partitioner_name());
         co_return;
     }
 
@@ -204,7 +204,7 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
     p.pending = true;
     for (;;) {
         try {
-            co_await do_send_ack_msg(from, std::move(syn_msg));
+            co_await do_send_ack_msg(msg_addr(from.addr), std::move(syn_msg));
             if (!_syn_handlers.contains(from.addr)) {
                 co_return;
             }
@@ -274,8 +274,8 @@ static bool should_count_as_msg_processing(const std::map<inet_address, endpoint
 // - on_restart callbacks
 // - on_join callbacks
 // - on_alive
-future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
-    logger.trace("handle_ack_msg():from={},msg={}", id, ack_msg);
+future<> gossiper::handle_ack_msg(endpoint_id from, gossip_digest_ack ack_msg) {
+    logger.trace("handle_ack_msg():from={},msg={}", from, ack_msg);
 
     if (!this->is_enabled() && !this->is_in_shadow_round()) {
         co_return;
@@ -299,7 +299,6 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
         co_await this->apply_state_locally(std::move(ep_state_map));
     }
 
-    auto from = id;
     auto ack_msg_digest = std::move(g_digest_list);
     if (this->is_in_shadow_round()) {
         this->finish_shadow_round();
@@ -321,7 +320,7 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     p.pending = true;
     for (;;) {
         try {
-            co_await do_send_ack2_msg(from, std::move(ack_msg_digest));
+            co_await do_send_ack2_msg(msg_addr(from.addr), std::move(ack_msg_digest));
             if (!_ack_handlers.contains(from.addr)) {
                 co_return;
             }
@@ -387,8 +386,8 @@ future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_
 // - on_restart callbacks
 // - on_join callbacks
 // - on_alive callbacks
-future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
-    logger.trace("handle_ack2_msg():msg={}", msg);
+future<> gossiper::handle_ack2_msg(endpoint_id from, gossip_digest_ack2 msg) {
+    logger.trace("handle_ack2_msg():from={},msg={}", from, msg);
     if (!is_enabled()) {
         co_return;
     }
@@ -410,17 +409,18 @@ future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
     co_await apply_state_locally(std::move(remote_ep_state_map));
 }
 
-future<> gossiper::handle_echo_msg(gms::inet_address from, std::optional<int64_t> generation_number_opt) {
+future<> gossiper::handle_echo_msg(endpoint_id from, std::optional<int64_t> generation_number_opt) {
+    logger.trace("handle_echo_msg():from={},generation={}", from, generation_number_opt);
     bool respond = true;
     if (!_advertise_myself) {
         respond = false;
     } else {
         if (!_advertise_to_nodes.empty()) {
-            auto it = _advertise_to_nodes.find(from);
+            auto it = _advertise_to_nodes.find(from.addr);
             if (it == _advertise_to_nodes.end()) {
                 respond = false;
             } else {
-                auto es = get_endpoint_state_ptr(from);
+                auto es = get_endpoint_state_ptr(from.addr);
                 if (es) {
                     auto saved_generation_number = it->second;
                     auto current_generation_number = generation_number_opt ?
@@ -440,16 +440,17 @@ future<> gossiper::handle_echo_msg(gms::inet_address from, std::optional<int64_t
     return make_ready_future<>();
 }
 
-future<> gossiper::handle_shutdown_msg(inet_address from, std::optional<int64_t> generation_number_opt) {
+future<> gossiper::handle_shutdown_msg(endpoint_id from, std::optional<int64_t> generation_number_opt) {
+    logger.trace("handle_shutdown_msg():from={},generation={}", from, generation_number_opt);
     if (!is_enabled()) {
         logger.debug("Ignoring shutdown message from {} because gossip is disabled", from);
         co_return;
     }
 
-    auto permit = co_await this->lock_endpoint(from, null_permit_id);
+    auto permit = co_await this->lock_endpoint(from.addr, null_permit_id);
     if (generation_number_opt) {
         debug_validate_gossip_generation(*generation_number_opt);
-        auto es = this->get_endpoint_state_ptr(from);
+        auto es = this->get_endpoint_state_ptr(from.addr);
         if (es) {
             auto local_generation = es->get_heart_beat_state().get_generation();
             logger.info("Got shutdown message from {}, received_generation={}, local_generation={}",
@@ -465,7 +466,7 @@ future<> gossiper::handle_shutdown_msg(inet_address from, std::optional<int64_t>
             co_return;
         }
     }
-    co_await this->mark_as_shutdown(from, permit.id());
+    co_await this->mark_as_shutdown(from.addr, permit.id());
 }
 
 future<gossip_get_endpoint_states_response>
@@ -497,28 +498,32 @@ rpc::no_wait_type gossiper::background_msg(sstring type, noncopyable_function<fu
 
 void gossiper::init_messaging_service_handler() {
     _messaging.register_gossip_digest_syn([this] (const rpc::client_info& cinfo, gossip_digest_syn syn_msg) {
-        auto from = netw::messaging_service::get_source(cinfo);
+        auto from = get_endpoint_id(cinfo);
         return background_msg("GOSSIP_DIGEST_SYN", [from, syn_msg = std::move(syn_msg)] (gms::gossiper& gossiper) mutable {
             return gossiper.handle_syn_msg(from, std::move(syn_msg));
         });
     });
     _messaging.register_gossip_digest_ack([this] (const rpc::client_info& cinfo, gossip_digest_ack msg) {
-        auto from = netw::messaging_service::get_source(cinfo);
+        auto from = get_endpoint_id(cinfo);
         return background_msg("GOSSIP_DIGEST_ACK", [from, msg = std::move(msg)] (gms::gossiper& gossiper) mutable {
             return gossiper.handle_ack_msg(from, std::move(msg));
         });
     });
     _messaging.register_gossip_digest_ack2([this] (const rpc::client_info& cinfo, gossip_digest_ack2 msg) {
-        auto from = netw::messaging_service::get_source(cinfo);
+        auto from = get_endpoint_id(cinfo);
         return background_msg("GOSSIP_DIGEST_ACK2", [from, msg = std::move(msg)] (gms::gossiper& gossiper) mutable {
             return gossiper.handle_ack2_msg(from, std::move(msg));
         });
     });
     _messaging.register_gossip_echo([this] (const rpc::client_info& cinfo, rpc::optional<int64_t> generation_number_opt) {
-        auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        auto from = get_endpoint_id(cinfo);
         return handle_echo_msg(from, generation_number_opt);
     });
-    _messaging.register_gossip_shutdown([this] (const rpc::client_info& cinfo, gms::inet_address from, rpc::optional<int64_t> generation_number_opt) {
+    _messaging.register_gossip_shutdown([this] (const rpc::client_info& cinfo, gms::inet_address addr, rpc::optional<int64_t> generation_number_opt) {
+        auto from = get_endpoint_id(cinfo);
+        if (from.addr != addr) {
+            on_internal_error(logger, format("Peer {} address mismatches addr param {}", from, addr));
+        }
         return background_msg("GOSSIP_SHUTDOWN", [from, generation_number_opt] (gms::gossiper& gossiper) {
             return gossiper.handle_shutdown_msg(from, generation_number_opt);
         });
@@ -1413,6 +1418,12 @@ endpoint_state_ptr gossiper::get_endpoint_state_ptr(inet_address ep) const noexc
     } else {
         return it->second;
     }
+}
+
+endpoint_id gossiper::get_endpoint_id(const rpc::client_info& cinfo) noexcept {
+    auto host_id = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+    auto addr = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+    return endpoint_id(host_id, addr);
 }
 
 void gossiper::update_timestamp(const endpoint_state_ptr& eps) noexcept {
