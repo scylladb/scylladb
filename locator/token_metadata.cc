@@ -281,14 +281,6 @@ public:
     size_t count_normal_token_owners() const;
 private:
     future<> update_normal_token_owners();
-
-    enum class endpoints_field {
-        pending_endpoints,
-        read_endpoints
-    };
-    const std::unordered_set<inet_address>* maybe_migration_endpoints(endpoints_field field,
-        const token& token,
-        const sstring& keyspace_name) const;
 public:
     // returns empty vector if keyspace_name not found.
     inet_address_vector_topology_change pending_endpoints_for(const token& token, const sstring& keyspace_name) const;
@@ -998,50 +990,6 @@ void token_metadata_impl::del_replacing_endpoint(inet_address existing_node) {
     _replacing_endpoints.erase(existing_node);
 }
 
-const std::unordered_set<inet_address>* token_metadata_impl::maybe_migration_endpoints(endpoints_field field,
-    const token& token,
-    const sstring& keyspace_name) const
-{
-    // Fast path 0: migration_info not found for this keyspace_name
-    const auto migration_info_it = _keyspace_to_migration_info.find(keyspace_name);
-    if (migration_info_it == _keyspace_to_migration_info.end()) {
-        return nullptr;
-    }
-
-    // Fast path 1: empty ring_mapping for this keyspace_name
-    const auto& migration_info = migration_info_it->second;
-    const auto& ring_mapping = field == endpoints_field::pending_endpoints
-        ? migration_info.pending_endpoints
-        : migration_info.read_endpoints;
-    if (ring_mapping.empty()) {
-        return nullptr;
-    }
-
-    // Slow path: lookup remapping
-    const auto interval = range_to_interval(range<dht::token>(token));
-    const auto it = ring_mapping.find(interval);
-    return it != ring_mapping.end() ? &it->second : nullptr;
-}
-
-inet_address_vector_topology_change token_metadata_impl::pending_endpoints_for(const token& token, const sstring& keyspace_name) const {
-    inet_address_vector_topology_change endpoints;
-    const auto* pending_endpoints = maybe_migration_endpoints(endpoints_field::pending_endpoints,
-        token, keyspace_name);
-    if (pending_endpoints) {
-        // interval_map does not work with std::vector, convert to inet_address_vector_topology_change
-        endpoints = inet_address_vector_topology_change(pending_endpoints->begin(), pending_endpoints->end());
-    }
-    return endpoints;
-}
-
-std::optional<inet_address_vector_replica_set> token_metadata_impl::endpoints_for_reading(const token& token, const sstring& keyspace_name) const {
-    const auto* endpoints = maybe_migration_endpoints(endpoints_field::read_endpoints, token, keyspace_name);
-    if (endpoints == nullptr) {
-        return std::nullopt;
-    }
-    return inet_address_vector_replica_set(endpoints->begin(), endpoints->end());
-}
-
 std::map<token, inet_address> token_metadata_impl::get_normal_and_bootstrapping_token_to_endpoint_map() const {
     std::map<token, inet_address> ret(_token_to_endpoint_map.begin(), _token_to_endpoint_map.end());
     ret.insert(_bootstrap_tokens.begin(), _bootstrap_tokens.end());
@@ -1359,16 +1307,6 @@ token_metadata::get_all_endpoints() const {
 size_t
 token_metadata::count_normal_token_owners() const {
     return _impl->count_normal_token_owners();
-}
-
-inet_address_vector_topology_change
-token_metadata::pending_endpoints_for(const token& token, const sstring& keyspace_name) const {
-    return _impl->pending_endpoints_for(token, keyspace_name);
-}
-
-std::optional<inet_address_vector_replica_set>
-token_metadata::endpoints_for_reading(const token& token, const sstring& keyspace_name) const {
-    return _impl->endpoints_for_reading(token, keyspace_name);
 }
 
 void

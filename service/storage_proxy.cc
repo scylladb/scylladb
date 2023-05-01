@@ -6008,7 +6008,7 @@ void storage_proxy::sort_endpoints_by_proximity(const locator::topology& topo, i
 }
 
 inet_address_vector_replica_set storage_proxy::get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const {
-    auto endpoints = erm.get_token_metadata_ptr()->endpoints_for_reading(token, ks_name);
+    auto endpoints = erm.get_endpoints_for_reading(token);
     if (!endpoints) {
         endpoints = erm.get_natural_endpoints_without_node_being_replaced(token);
     }

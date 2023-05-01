@@ -269,14 +269,6 @@ public:
      * Bootstrapping tokens are not taken into account. */
     size_t count_normal_token_owners() const;
 
-    // returns empty vector if keyspace_name not found.
-    inet_address_vector_topology_change pending_endpoints_for(const token& token, const sstring& keyspace_name) const;
-
-    // This function returns a list of nodes to which a read request should be directed.
-    // Returns not null only during topology changes, if _topology_change_stage == read_new and
-    // new set of replicas differs from the old one.
-    std::optional<inet_address_vector_replica_set> endpoints_for_reading(const token& token, const sstring& keyspace_name) const;
-
     // Updates the read_new flag, switching read requests from
     // the old endpoints to the new ones during topology changes:
     // read_new_t::no - no read_endpoints will be stored on update_pending_ranges, all reads goes to normal endpoints;
