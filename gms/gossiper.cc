@@ -389,7 +389,7 @@ future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_
 future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
     logger.trace("handle_ack2_msg():msg={}", msg);
     if (!is_enabled()) {
-        return make_ready_future<>();
+        co_return;
     }
 
 
@@ -406,7 +406,7 @@ future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
         }
     });
 
-    return apply_state_locally(std::move(remote_ep_state_map)).finally([mp = std::move(mp)] {});
+    co_await apply_state_locally(std::move(remote_ep_state_map));
 }
 
 future<> gossiper::handle_echo_msg(gms::inet_address from, std::optional<int64_t> generation_number_opt) {
