@@ -200,8 +200,8 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
         // Process the syn message immediately
         logger.debug("Process gossip syn msg from node {}, syn_msg={}", from, syn_msg);
         p.pending = true;
-        return do_with(std::move(syn_msg), [this, from, g = this->shared_from_this()] (gossip_digest_syn& syn_msg) mutable {
-            return repeat([this, from, g, &syn_msg] {
+        return do_with(std::move(syn_msg), [this, from] (gossip_digest_syn& syn_msg) mutable {
+            return repeat([this, from, &syn_msg] {
                 return do_send_ack_msg(from, std::move(syn_msg)).then([this, from, &syn_msg] () mutable {
                     if (!_syn_handlers.contains(from.addr)) {
                         return stop_iteration::yes;
@@ -300,7 +300,7 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
         f = this->apply_state_locally(std::move(ep_state_map));
     }
 
-    return f.then([this, from = id, ack_msg_digest = std::move(g_digest_list), mp = std::move(mp), g = this->shared_from_this()] () mutable {
+    return f.then([this, from = id, ack_msg_digest = std::move(g_digest_list), mp = std::move(mp)] () mutable {
         if (this->is_in_shadow_round()) {
             this->finish_shadow_round();
             // don't bother doing anything else, we have what we came for
@@ -318,8 +318,8 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
             // Process the ack message immediately
             logger.debug("Process gossip ack msg digests from node {}, ack_msg_digest={}", from, ack_msg_digest);
             p.pending = true;
-            return do_with(std::move(ack_msg_digest), [this, from, g] (utils::chunked_vector<gossip_digest>& ack_msg_digest) mutable {
-                return repeat([this, from, g, &ack_msg_digest] {
+            return do_with(std::move(ack_msg_digest), [this, from] (utils::chunked_vector<gossip_digest>& ack_msg_digest) mutable {
+                return repeat([this, from, &ack_msg_digest] {
                     return do_send_ack2_msg(from, std::move(ack_msg_digest)).then([this, from, &ack_msg_digest] () mutable {
                         if (!_ack_handlers.contains(from.addr)) {
                             return stop_iteration::yes;
