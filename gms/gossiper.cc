@@ -277,7 +277,7 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     logger.trace("handle_ack_msg():from={},msg={}", id, ack_msg);
 
     if (!this->is_enabled() && !this->is_in_shadow_round()) {
-        return make_ready_future<>();
+        co_return;
     }
 
 
@@ -294,17 +294,18 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
         }
     });
 
-    auto f = make_ready_future<>();
     if (ep_state_map.size() > 0) {
         update_timestamp_for_nodes(ep_state_map);
-        f = this->apply_state_locally(std::move(ep_state_map));
+        co_await this->apply_state_locally(std::move(ep_state_map));
     }
 
-    return f.then([this, from = id, ack_msg_digest = std::move(g_digest_list), mp = std::move(mp)] () mutable {
+    auto from = id;
+    auto ack_msg_digest = std::move(g_digest_list);
+    // FIXME: indentation
         if (this->is_in_shadow_round()) {
             this->finish_shadow_round();
             // don't bother doing anything else, we have what we came for
-            return make_ready_future<>();
+            co_return;
         }
         ack_msg_pending& p = _ack_handlers[from.addr];
         if (p.pending) {
@@ -313,16 +314,17 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
             // one only.
             logger.debug("Queue gossip ack msg digests from node {}, ack_msg_digest={}", from, ack_msg_digest);
             p.ack_msg_digest = std::move(ack_msg_digest);
-            return make_ready_future<>();
-        } else {
+            co_return;
+        }
+
             // Process the ack message immediately
             logger.debug("Process gossip ack msg digests from node {}, ack_msg_digest={}", from, ack_msg_digest);
             p.pending = true;
-            return do_with(std::move(ack_msg_digest), [this, from] (utils::chunked_vector<gossip_digest>& ack_msg_digest) mutable {
-                return repeat([this, from, &ack_msg_digest] {
-                    return do_send_ack2_msg(from, std::move(ack_msg_digest)).then([this, from, &ack_msg_digest] () mutable {
+    for (;;) {
+        try {
+                    co_await do_send_ack2_msg(from, std::move(ack_msg_digest));
                         if (!_ack_handlers.contains(from.addr)) {
-                            return stop_iteration::yes;
+                            co_return;
                         }
                         ack_msg_pending& p = _ack_handlers[from.addr];
                         if (p.ack_msg_digest) {
@@ -331,27 +333,25 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
                                     from, p.ack_msg_digest, p.pending);
                             ack_msg_digest = std::move(p.ack_msg_digest.value());
                             p.ack_msg_digest= {};
-                            return stop_iteration::no;
+                            continue;
                         } else {
                             // No more pending ack msg digests to process
                             p.pending = false;
                             logger.debug("No more queued gossip ack msg digests from node {}, ack_msg_digest={}, pending={}",
                                     from, p.ack_msg_digest, p.pending);
-                            return stop_iteration::yes;
+                            co_return;
                         }
-                    }).handle_exception([this, from] (std::exception_ptr ep) {
+        } catch (...) {
+            auto ep = std::current_exception();
                         if (_ack_handlers.contains(from.addr)) {
                             ack_msg_pending& p = _ack_handlers[from.addr];
                             p.pending = false;
                             p.ack_msg_digest = {};
                             logger.warn("Failed to process gossip ack msg digests from node {}: {}", from, ep);
                         }
-                        return make_exception_future<stop_iteration>(ep);
-                    });
-                });
-            });
+            throw;
         }
-    });
+    }
 }
 
 future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_digest> ack_msg_digest) {
