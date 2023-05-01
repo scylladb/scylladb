@@ -13,6 +13,7 @@
 #include <seastar/util/log.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <utility>
 
 #include "reader_concurrency_semaphore.hh"
 #include "readers/flat_mutation_reader_v2.hh"
@@ -928,7 +929,7 @@ void reader_concurrency_semaphore::consume(reader_permit::impl& permit, resource
     // We check whether we even reached the memory limit first.
     // This is a cheap check and should be false most of the time, providing a
     // cheap short-circuit.
-    if (_resources.memory <= 0 && (consumed_resources().memory + r.memory) >= get_kill_limit()) [[unlikely]] {
+    if (_resources.memory <= 0 && std::cmp_greater_equal(consumed_resources().memory + r.memory, get_kill_limit())) [[unlikely]] {
         if (permit.on_oom_kill()) {
             ++_stats.total_reads_killed_due_to_kill_limit;
         }
@@ -1220,10 +1221,10 @@ reader_concurrency_semaphore::admit_result
 reader_concurrency_semaphore::can_admit_read(const reader_permit::impl& permit) const noexcept {
     if (_resources.memory < 0) [[unlikely]] {
         const auto consumed_memory = consumed_resources().memory;
-        if (consumed_memory >= get_kill_limit()) {
+        if (std::cmp_greater_equal(consumed_memory, get_kill_limit())) {
             return {can_admit::no, reason::memory_resources};
         }
-        if (consumed_memory >= get_serialize_limit()) {
+        if (std::cmp_greater_equal(consumed_memory, get_serialize_limit())) {
             if (_blessed_permit) {
                 // blessed permit is never in the wait list
                 return {can_admit::no, reason::memory_resources};

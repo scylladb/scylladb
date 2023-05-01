@@ -389,7 +389,7 @@ struct extract_changes_visitor {
     }
 
     void partition_delete(const tombstone& t) {
-        _result[t.timestamp].partition_deletions = {t};
+        _result[t.timestamp].partition_deletions = partition_deletion{t};
     }
 
     constexpr bool finished() const { return false; }
