@@ -46,7 +46,10 @@ public:
 
 struct test_env_config {
     db::large_data_handler* large_data_handler = nullptr;
+    data_dictionary::storage_options storage; // will be local by default
 };
+
+data_dictionary::storage_options make_test_object_storage_options();
 
 class test_env {
     struct impl {
@@ -59,6 +62,7 @@ class test_env {
         test_env_sstables_manager mgr;
         reader_concurrency_semaphore semaphore;
         sstables::sstable_generation_generator gen{0};
+        data_dictionary::storage_options storage;
 
         impl(test_env_config cfg);
         impl(impl&&) = delete;
@@ -86,8 +90,7 @@ public:
     shared_sstable make_sstable(schema_ptr schema, sstring dir, sstables::generation_type generation,
             sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
             size_t buffer_size = default_sstable_buffer_size, gc_clock::time_point now = gc_clock::now()) {
-        data_dictionary::storage_options local;
-        return _impl->mgr.make_sstable(std::move(schema), local, dir, generation, v, f, now, default_io_error_handler_gen(), buffer_size);
+        return _impl->mgr.make_sstable(std::move(schema), _impl->storage, dir, generation, v, f, now, default_io_error_handler_gen(), buffer_size);
     }
 
     shared_sstable make_sstable(schema_ptr schema, sstring dir, sstable::version_types v = sstables::get_highest_sstable_version()) {
@@ -175,6 +178,7 @@ public:
     reader_concurrency_semaphore& semaphore() { return _impl->semaphore; }
     db::config& db_config() { return *_impl->db_config; }
     tmpdir& tempdir() noexcept { return _impl->dir; }
+    data_dictionary::storage_options get_storage_options() const noexcept { return _impl->storage; }
 
     reader_permit make_reader_permit(const schema* const s, const char* n, db::timeout_clock::time_point timeout) {
         return _impl->semaphore.make_tracking_only_permit(s, n, timeout, {});
@@ -196,13 +200,7 @@ public:
         });
     }
 
-    static inline future<> do_with_async(noncopyable_function<void (test_env&)> func, test_env_config cfg = {}) {
-        return seastar::async([func = std::move(func), cfg = std::move(cfg)] () mutable {
-            test_env env(std::move(cfg));
-            auto close_env = defer([&] { env.stop().get(); });
-            func(env);
-        });
-    }
+    static future<> do_with_async(noncopyable_function<void (test_env&)> func, test_env_config cfg = {});
 
     static inline future<> do_with_sharded_async(noncopyable_function<void (sharded<test_env>&)> func) {
         return seastar::async([func = std::move(func)] {
@@ -223,11 +221,11 @@ public:
     }
 
     table_for_tests make_table_for_tests(schema_ptr s, sstring dir) {
-        return table_for_tests(manager(), s, std::move(dir));
+        return table_for_tests(manager(), s, std::move(dir), _impl->storage);
     }
 
     table_for_tests make_table_for_tests(schema_ptr s = nullptr) {
-        return table_for_tests(manager(), s, tempdir().path().native());
+        return table_for_tests(manager(), s, tempdir().path().native(), _impl->storage);
     }
 };
 

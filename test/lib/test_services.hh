@@ -47,6 +47,7 @@ struct table_for_tests {
         compaction_manager cm{tm, compaction_manager::for_testing_tag{}};
         lw_shared_ptr<replica::column_family> cf;
         std::unique_ptr<table_state> table_s;
+        data_dictionary::storage_options storage;
         data();
         ~data();
     };
@@ -56,7 +57,7 @@ struct table_for_tests {
 
     explicit table_for_tests(sstables::sstables_manager& sstables_manager);
 
-    explicit table_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir = {});
+    explicit table_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir = {}, data_dictionary::storage_options storage = {});
 
     schema_ptr schema() { return _data->s; }
 
@@ -76,15 +77,13 @@ struct table_for_tests {
     sstables::shared_sstable make_sstable() {
         auto& table = *_data->cf;
         auto& sstables_manager = table.get_sstables_manager();
-        data_dictionary::storage_options local;
-        return sstables_manager.make_sstable(_data->s, local, _data->cfg.datadir, table.calculate_generation_for_new_table());
+        return sstables_manager.make_sstable(_data->s, _data->storage, _data->cfg.datadir, table.calculate_generation_for_new_table());
     }
 
     sstables::shared_sstable make_sstable(sstables::sstable_version_types version) {
         auto& table = *_data->cf;
         auto& sstables_manager = table.get_sstables_manager();
-        data_dictionary::storage_options local;
-        return sstables_manager.make_sstable(_data->s, local, _data->cfg.datadir, table.calculate_generation_for_new_table(), version);
+        return sstables_manager.make_sstable(_data->s, _data->storage, _data->cfg.datadir, table.calculate_generation_for_new_table(), version);
     }
 
     std::function<sstables::shared_sstable()> make_sst_factory() {
