@@ -122,7 +122,8 @@ table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, s
     : _data(make_lw_shared<data>())
 {
     _data->s = s ? s : make_default_schema();
-    _data->cfg = replica::table::config{.compaction_concurrency_semaphore = &_data->semaphore};
+    _data->cfg = replica::table::config{.compaction_concurrency_semaphore = &_data->semaphore,
+            .validation_level = mutation_fragment_stream_validation_level::clustering_key};
     _data->cfg.enable_disk_writes = bool(datadir);
     _data->cfg.datadir = datadir.value_or(sstring());
     _data->cfg.cf_stats = &_data->cf_stats;

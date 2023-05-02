@@ -12,6 +12,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include "types/types.hh"
 #include "schema/schema.hh"
+#include "mutation/mutation_fragment_stream_validator.hh"
 
 #include <optional>
 #include <stdexcept>
@@ -103,7 +104,7 @@ public:
     result_set(schema_ptr s, std::vector<result_set_row>&& rows)
         : _schema(std::move(s)), _rows{std::move(rows)}
     { }
-    explicit result_set(const mutation&);
+    explicit result_set(const mutation&, mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::none);
     bool empty() const {
         return _rows.empty();
     }

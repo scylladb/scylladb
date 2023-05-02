@@ -114,7 +114,7 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_fragment) {
     for_each_mutation([&] (const mutation& m) {
         auto& s = *m.schema();
         std::vector<mutation_fragment> mfs;
-        auto rd = mutation_fragment_v1_stream{make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), { m })};
+        auto rd = mutation_fragment_v1_stream{make_flat_mutation_reader_from_mutations_v2(m.schema(), semaphore.make_permit(), m, mutation_fragment_stream_validation_level::clustering_key)};
         auto close_rd = deferred_close(rd);
         rd.consume_pausable([&] (mutation_fragment mf) {
             mfs.emplace_back(std::move(mf));
@@ -181,11 +181,11 @@ SEASTAR_TEST_CASE(frozen_mutation_is_consumed_in_order) {
     auto validate_consume = [] (schema_ptr s, const frozen_mutation& fm, const mutation& m) {
         testlog.info("Validating frozen_mutation::consume");
         auto c = validating_consumer(*s);
-        fm.consume(s, c);
+        fm.consume(s, c, mutation_fragment_stream_validation_level::clustering_key);
 
         testlog.info("Validating frozen_mutation::consume: rebuilding mutation");
         mutation_rebuilder_v2 rebuilder(s);
-        auto rebuilt_mut = fm.consume(s, rebuilder).result;
+        auto rebuilt_mut = fm.consume(s, rebuilder, mutation_fragment_stream_validation_level::clustering_key).result;
         assert_that(rebuilt_mut).has_mutation();
         assert_that(std::move(*rebuilt_mut)).is_equal_to(m);
     };
@@ -193,12 +193,12 @@ SEASTAR_TEST_CASE(frozen_mutation_is_consumed_in_order) {
     auto validate_consume_gently = [] (schema_ptr s, const frozen_mutation& fm, const mutation& m) -> future<> {
         testlog.info("Validating frozen_mutation::consume_gently");
         auto c = validating_consumer(*s);
-        auto adaptor = frozen_mutation_consumer_adaptor(s, c);
+        auto adaptor = frozen_mutation_consumer_adaptor(s, c, mutation_fragment_stream_validation_level::clustering_key);
         co_await fm.consume_gently(s, adaptor);
 
         testlog.info("Validating frozen_mutation::consume_gently: rebuilding mutation");
         mutation_rebuilder_v2 rebuilder(s);
-        auto rebuilt_mut = fm.consume(s, rebuilder).result;
+        auto rebuilt_mut = fm.consume(s, rebuilder, mutation_fragment_stream_validation_level::clustering_key).result;
         assert_that(rebuilt_mut).has_mutation();
         assert_that(std::move(*rebuilt_mut)).is_equal_to(m);
     };

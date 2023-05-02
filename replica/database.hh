@@ -383,6 +383,7 @@ public:
         utils::updateable_value<bool> enable_optimized_reversed_reads{true};
         uint32_t tombstone_warn_threshold{0};
         unsigned x_log2_compaction_groups{0};
+        mutation_fragment_stream_validation_level validation_level;
     };
     struct no_commitlog {};
 

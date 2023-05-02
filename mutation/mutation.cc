@@ -177,7 +177,7 @@ mutation mutation::compacted() const {
 mutation reverse(mutation mut) {
     auto reverse_schema = mut.schema()->make_reversed();
     mutation_rebuilder_v2 reverse_rebuilder(reverse_schema);
-    return *std::move(mut).consume(reverse_rebuilder, consume_in_reverse::yes).result;
+    return *std::move(mut).consume(reverse_rebuilder, consume_in_reverse::yes, mutation_fragment_stream_validation_level::none).result;
 }
 
 std::ostream& operator<<(std::ostream& os, const mutation& m) {

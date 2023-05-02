@@ -63,7 +63,7 @@ static mutation_source make_source(std::vector<mutation> mutations) {
                 assert(m.schema() == s);
             }
         }
-        return make_flat_mutation_reader_from_mutations_v2(s, std::move(permit), mutations, slice, fwd);
+        return make_flat_mutation_reader_from_mutations_v2(s, std::move(permit), mutations, slice, fwd, mutation_fragment_stream_validation_level::clustering_key);
     });
 }
 
@@ -79,7 +79,8 @@ static query::result_memory_accounter make_accounter() {
 
 // Called from a seastar thread
 query::result_set to_result_set(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice) {
-    return query::result_set::from_raw_result(s, slice, to_data_query_result(r, s, slice, inf32, inf32).get0());
+    return query::result_set::from_raw_result(s, slice, to_data_query_result(r, s, slice, inf32, inf32,
+            query::result_options::only_result(), mutation_fragment_stream_validation_level::clustering_key).get0());
 }
 
 static reconcilable_result mutation_query(schema_ptr s, reader_permit permit, const mutation_source& source, const dht::partition_range& range,
@@ -464,28 +465,28 @@ SEASTAR_TEST_CASE(test_result_row_count) {
             auto src = make_source({m1});
 
             auto r = to_data_query_result(mutation_query(s, semaphore.make_permit(), make_source({m1}), query::full_partition_range, slice, 10000, query::max_partitions, now),
-                    s, slice, inf32, inf32).get0();
+                    s, slice, inf32, inf32, query::result_options::only_result(), mutation_fragment_stream_validation_level::clustering_key).get0();
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 0);
 
             m1.set_static_cell("s1", data_value(bytes("S_v1")), 1);
             r = to_data_query_result(mutation_query(s, semaphore.make_permit(), make_source({m1}), query::full_partition_range, slice, 10000, query::max_partitions, now),
-                    s, slice, inf32, inf32).get0();
+                    s, slice, inf32, inf32, query::result_options::only_result(), mutation_fragment_stream_validation_level::clustering_key).get0();
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 1);
 
             m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")), "v1", data_value(bytes("A_v1")), 1);
             r = to_data_query_result(mutation_query(s, semaphore.make_permit(), make_source({m1}), query::full_partition_range, slice, 10000, query::max_partitions, now),
-                    s, slice, inf32, inf32).get0();
+                    s, slice, inf32, inf32, query::result_options::only_result(), mutation_fragment_stream_validation_level::clustering_key).get0();
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 1);
 
             m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("B")), "v1", data_value(bytes("B_v1")), 1);
             r = to_data_query_result(mutation_query(s, semaphore.make_permit(), make_source({m1}), query::full_partition_range, slice, 10000, query::max_partitions, now),
-                    s, slice, inf32, inf32).get0();
+                    s, slice, inf32, inf32, query::result_options::only_result(), mutation_fragment_stream_validation_level::clustering_key).get0();
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 2);
 
             mutation m2(s, partition_key::from_single_value(*s, "key2"));
             m2.set_static_cell("s1", data_value(bytes("S_v1")), 1);
             r = to_data_query_result(mutation_query(s, semaphore.make_permit(), make_source({m1, m2}), query::full_partition_range, slice, 10000, query::max_partitions, now),
-                    s, slice, inf32, inf32).get0();
+                    s, slice, inf32, inf32, query::result_options::only_result(), mutation_fragment_stream_validation_level::clustering_key).get0();
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 3);
     });
 }
@@ -579,7 +580,7 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_consumer) {
 
     // Rebuild mutation by consuming from the frozen_mutation
     mutation_rebuilder_v2 rebuilder(s);
-    auto res = fm.consume(s, rebuilder);
+    auto res = fm.consume(s, rebuilder, mutation_fragment_stream_validation_level::clustering_key);
     BOOST_REQUIRE(res.result);
     const auto& rebuilt = *res.result;
     BOOST_REQUIRE_EQUAL(rebuilt, m);

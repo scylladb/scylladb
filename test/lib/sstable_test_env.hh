@@ -184,7 +184,8 @@ public:
     }
 
     replica::table::config make_table_config() {
-        return replica::table::config{.compaction_concurrency_semaphore = &_impl->semaphore};
+        return replica::table::config{.compaction_concurrency_semaphore = &_impl->semaphore,
+                .validation_level = mutation_fragment_stream_validation_level::clustering_key};
     }
 
     template <typename Func>
