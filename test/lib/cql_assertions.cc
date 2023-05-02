@@ -38,7 +38,7 @@ rows_assertions::is_empty() {
     auto row_count = rs.size();
     if (row_count != 0) {
         auto&& first_row = *rs.rows().begin();
-        fail(format("Expected no rows, but got {:d}. First row: {}", row_count, to_string(first_row)));
+        fail(format("Expected no rows, but got {:d}. First row: {}", row_count, fmt::to_string(first_row)));
     }
     return {*this};
 }
@@ -72,7 +72,7 @@ rows_assertions::rows_assertions::is_not_null() {
     for (auto&& row : rs.rows()) {
         for (const bytes_opt& v : row) {
             if (!v) {
-                fail(format("Expected non-null values. {}\n", to_string(row)));
+                fail(format("Expected non-null values. {}\n", fmt::to_string(row)));
             }
         }
     }
@@ -107,7 +107,7 @@ rows_assertions::with_row(std::initializer_list<bytes_opt> values) {
             return {*this};
         }
     }
-    fail(format("Expected row not found: {} not in {}\n", to_string(expected_row), _rows));
+    fail(format("Expected row not found: {} not in {}\n", fmt::to_string(expected_row), _rows));
     return {*this};
 }
 
@@ -126,14 +126,14 @@ rows_assertions::with_rows(std::vector<std::vector<bytes_opt>> rows) {
         if (!std::equal(
             std::begin(row), std::end(row),
             std::begin(actual), std::end(actual))) {
-            fail(format("row {:d} differs, expected {} got {}", row_nr, to_string(row), to_string(actual)));
+            fail(format("row {:d} differs, expected {} got {}", row_nr, fmt::to_string(row), fmt::to_string(actual)));
         }
         ++actual_i;
         ++row_nr;
     }
     if (actual_i != actual_end) {
         fail(format("Expected less rows ({:d}), got {:d}. Next row is: {}", rows.size(), rs.size(),
-                    to_string(*actual_i)));
+                    fmt::to_string(*actual_i)));
     }
     return {*this};
 }
@@ -150,8 +150,8 @@ rows_assertions::with_rows_ignore_order(std::vector<std::vector<bytes_opt>> rows
                     std::begin(expected), std::end(expected));
         });
         if (found == std::end(actual)) {
-            fail(format("row {} not found in result set ({})", to_string(expected),
-               fmt::join(actual | boost::adaptors::transformed([] (auto& r) { return to_string(r); }), ", ")));
+            fail(format("row {} not found in result set ({})", fmt::to_string(expected),
+               fmt::join(actual | boost::adaptors::transformed([] (auto& r) { return fmt::to_string(r); }), ", ")));
         }
     }
     if (rs.size() != rows.size()) {
