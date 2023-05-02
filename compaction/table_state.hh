@@ -50,7 +50,20 @@ public:
     virtual bool is_auto_compaction_disabled_by_user() const noexcept = 0;
     virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept = 0;
     virtual compaction_backlog_tracker& get_backlog_tracker() = 0;
+    virtual const std::string& get_group_id() const noexcept = 0;
 };
 
-}
+} // namespace compaction
 
+namespace fmt {
+
+template <>
+struct formatter<compaction::table_state> : formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const compaction::table_state& t, FormatContext& ctx) const {
+        auto s = t.schema();
+        return format_to(ctx.out(), "{}.{} compaction_group={}", s->ks_name(), s->cf_name(), t.get_group_id());
+    }
+};
+
+} // namespace fmt

@@ -31,6 +31,7 @@ class compaction_group {
     table& _t;
     class table_state;
     std::unique_ptr<table_state> _table_state;
+    std::string _group_id;
     // Tokens included in this compaction_groups
     dht::token_range _token_range;
     compaction::compaction_strategy_state _compaction_strategy_state;
@@ -62,7 +63,11 @@ private:
 
     future<> delete_sstables_atomically(std::vector<sstables::shared_sstable> sstables_to_remove);
 public:
-    compaction_group(table& t, dht::token_range token_range);
+    compaction_group(table& t, std::string gid, dht::token_range token_range);
+
+    const std::string& get_group_id() const noexcept {
+        return _group_id;
+    }
 
     // Will stop ongoing compaction on behalf of this group, etc.
     future<> stop() noexcept;
