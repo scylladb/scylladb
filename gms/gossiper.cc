@@ -476,7 +476,7 @@ gossiper::handle_get_endpoint_states_msg(gossip_get_endpoint_states_request requ
         auto state_wanted = endpoint_state(hbs);
         const std::map<application_state, versioned_value>& apps = state->get_application_state_map();
         for (const auto& app : apps) {
-            if (application_states_wanted.count(app.first) > 0) {
+            if (application_states_wanted.contains(app.first)) {
                 state_wanted.get_application_state_map().emplace(app);
             }
         }
