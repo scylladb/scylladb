@@ -515,6 +515,12 @@ future<> client::upload_sink_base::finalize_upload() {
 future<> client::upload_sink_base::close() {
     if (upload_started()) {
         s3l.warn("closing incomplete multipart upload -> aborting");
+        // If we got here, we need to pick up any background activity as it may
+        // still trying to handle successful request and 'this' should remain alive
+        //
+        // The semaphore is not waited by finalize_upload() (i.e. -- no self-lock),
+        // because otherwise the upload_started() would return false
+        co_await _flush_sem.wait(flush_concurrency);
         co_await abort_upload();
     } else {
         s3l.trace("closing multipart upload");
