@@ -197,8 +197,8 @@ private:
         if (_current_emitted_tombstone || (rtc.tombstone() && !can_purge)) {
             partition_is_not_empty(consumer);
             _current_emitted_tombstone = rtc.tombstone();
-            consumer_stop = consumer.consume(std::move(rtc));
             _validator(mutation_fragment_v2::kind::range_tombstone_change, rtc.position(), rtc.tombstone());
+            consumer_stop = consumer.consume(std::move(rtc));
         }
         return gc_consumer_stop || consumer_stop;
     }
