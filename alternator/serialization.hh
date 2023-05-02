@@ -94,5 +94,12 @@ std::optional<rjson::value> set_diff(const rjson::value& v1, const rjson::value&
 // Returns a null value if one of the arguments is not actually a list.
 rjson::value list_concatenate(const rjson::value& v1, const rjson::value& v2);
 
+namespace internal {
+struct magnitude_and_precision {
+    int magnitude;
+    int precision;
+};
+magnitude_and_precision get_magnitude_and_precision(std::string_view);
+}
 
 }

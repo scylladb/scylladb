@@ -1173,7 +1173,7 @@ scylla_tests_generic_dependencies = [
     'test/lib/sstable_run_based_compaction_strategy_for_tests.cc',
 ]
 
-scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependencies + [
+scylla_tests_dependencies = scylla_core + alternator + idls + scylla_tests_generic_dependencies + [
     'test/lib/cql_assertions.cc',
     'test/lib/result_set_assertions.cc',
     'test/lib/mutation_source_test.cc',
@@ -1277,7 +1277,7 @@ for t in sorted(scylla_tests):
     if t not in tests_not_using_seastar_test_framework:
         deps[t] += scylla_tests_dependencies
     else:
-        deps[t] += scylla_core + idls + scylla_tests_generic_dependencies
+        deps[t] += scylla_core + alternator + idls + scylla_tests_generic_dependencies
 
 perf_tests_seastar_deps = [
     'seastar/tests/perf/perf_tests.cc'

@@ -13,10 +13,7 @@
 #include <seastar/core/memory.hh>
 #include "utils/base64.hh"
 #include "utils/rjson.hh"
-
-static bytes_view to_bytes_view(const std::string& s) {
-    return bytes_view(reinterpret_cast<const signed char*>(s.c_str()), s.size());
-}
+#include "alternator/serialization.hh"
 
 static std::map<std::string, std::string> strings {
     {"", ""},
@@ -85,4 +82,87 @@ BOOST_AUTO_TEST_CASE(test_allocator_fail_gracefully) {
     // and also be destroyed gracefully later
     rapidjson::internal::Stack stack(&allocator, 0);
     BOOST_REQUIRE_THROW(stack.Push<char>(too_large_alloc_size), rjson::error);
+}
+
+// Test the alternator::internal::magnitude_and_precision() function which we
+// use to used to check if a number exceeds DynamoDB's limits on magnitude and
+// precision (for issue #6794). This just tests the internal implementation -
+// we also have end-to-end tests trying to insert various numbers with bad
+// magnitude and precision to the database in test/alternator/test_number.py.
+BOOST_AUTO_TEST_CASE(test_magnitude_and_precision) {
+    struct expected {
+        const char* number;
+        int magnitude;
+        int precision;
+    };
+    std::vector<expected> tests = {
+        // number     magnitude, precision
+        {"0",         0, 0},
+        {"0e10",      0, 0},
+        {"0e-10",     0, 0},
+        {"0e+10",     0, 0},
+        {"0.0",       0, 0},
+        {"0.00e10",   0, 0},
+        {"1",         0, 1},
+        {"12.",       1, 2},
+        {"1.1",       0, 2},
+        {"12.3",      1, 3},
+        {"12.300",    1, 3},
+        {"0.3",       -1, 1},
+        {".3",        -1, 1},
+        {"3e-1",      -1, 1},
+        {"0.00012",   -4, 2},
+        {"1.2e-4",    -4, 2},
+        {"1.2E-4",    -4, 2},
+        {"12.345e50", 51, 5},
+        {"12.345e-50",-49, 5},
+        {"123000000", 8, 3},
+        {"123000000.000e+5", 13, 3},
+        {"10.01",     1, 4},
+        {"1.001e1",   1, 4},
+        {"1e5",       5, 1},
+        {"1e+5",      5, 1},
+        {"1e-5",      -5, 1},
+        {"123e-7",    -5, 3},
+        // These are important edge cases: DynamoDB considers 1e126 to be
+        // overflowing but 9.9999e125 is considered to have magnitude 125
+        // and ok. Conversely, 1e-131 is underflowing and 0.9e-130 is too.
+        {"9.99999e125", 125, 6},
+        {"0.99999e-130", -131, 5},
+        {"0.9e-130", -131, 1},
+        // Although 1e1000 is not allowed, 0e0000 is allowed - it's just 0.
+        {"0e1000",    0, 0},
+    };
+    // prefixes that should do nothing to a number
+    std::vector<std::string> prefixes = {
+        "",
+        "0",
+        "+",
+        "-",
+        "+0000",
+        "-0000"
+    };
+    for (expected test : tests) {
+        for (std::string prefix : prefixes) {
+            std::string number = prefix + test.number;
+            auto res = alternator::internal::get_magnitude_and_precision(number);
+            BOOST_CHECK_MESSAGE(res.magnitude == test.magnitude,
+                format("{}: expected magnitude {}, got {}", number, test.magnitude, res.magnitude));
+            BOOST_CHECK_MESSAGE(res.precision == test.precision,
+                format("{}: expected precision {}, got {}", number, test.precision, res.precision));
+        }
+    }
+    // Huge exponents like 1e1000000 are not guaranteed to return that
+    // specific number as magnitude, but is guaranteed to return some
+    // other high magnitude that the caller can complain is excessive.
+    auto res = alternator::internal::get_magnitude_and_precision("1e1000000");
+    BOOST_CHECK(res.magnitude > 1000);
+    res = alternator::internal::get_magnitude_and_precision("1e-1000000");
+    BOOST_CHECK(res.magnitude < -1000);
+    // Even if an exponent so huge that it doesn't even fit in a 32-bit
+    // integer, we shouldn't fail to recognize its excessive magnitude:
+    res = alternator::internal::get_magnitude_and_precision("1e1000000000000");
+    BOOST_CHECK(res.magnitude > 1000);
+    res = alternator::internal::get_magnitude_and_precision("1e-1000000000000");
+    BOOST_CHECK(res.magnitude < -1000);
 }
