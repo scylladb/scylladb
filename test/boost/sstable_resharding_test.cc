@@ -83,8 +83,12 @@ void run_sstable_resharding_test(sstables::test_env& env) {
     // for a shard that owns the shared input sstable.
     sstables::test(sst).set_shards(boost::copy_range<std::vector<unsigned>>(boost::irange(0u, smp::count)));
 
-    auto filter_fname = sstables::test(sst).filename(component_type::Filter);
-    uint64_t bloom_filter_size_before = file_size(filter_fname).get0();
+    auto filter_size = [&env] (shared_sstable sst) -> uint64_t {
+        auto filter_fname = sstables::test(sst).filename(component_type::Filter);
+        return file_size(filter_fname).get0();
+    };
+
+    uint64_t bloom_filter_size_before = filter_size(sst);
 
     auto descriptor = sstables::compaction_descriptor({sst}, default_priority_class(), 0, std::numeric_limits<uint64_t>::max());
     descriptor.options = sstables::compaction_type_options::make_reshard();
@@ -107,8 +111,7 @@ void run_sstable_resharding_test(sstables::test_env& env) {
 
     for (auto& sstable : new_sstables) {
         auto new_sst = env.reusable_sst(s, generation_value(sstable->generation()), version).get0();
-        filter_fname = sstables::test(new_sst).filename(component_type::Filter);
-        bloom_filter_size_after += file_size(filter_fname).get0();
+        bloom_filter_size_after += filter_size(new_sst);
         auto shards = new_sst->get_shards_for_this_sstable();
         BOOST_REQUIRE(shards.size() == 1); // check sstable is unshared.
         auto shard = shards.front();
