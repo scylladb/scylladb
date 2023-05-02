@@ -166,18 +166,18 @@ public:
     shared_ptr<stream_session> get_session(streaming::plan_id plan_id, gms::inet_address from, const char* verb, std::optional<table_id> cf_id = {});
 
 public:
-    virtual future<> on_join(inet_address endpoint, endpoint_state_ptr ep_state, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> before_change(inet_address endpoint, endpoint_state_ptr current_state, application_state new_state_key, const versioned_value& new_value) override { return make_ready_future(); }
-    virtual future<> on_change(inet_address endpoint, application_state state, const versioned_value& value, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_alive(inet_address endpoint, endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_dead(inet_address endpoint, endpoint_state_ptr state, gms::permit_id) override;
-    virtual future<> on_remove(inet_address endpoint, gms::permit_id) override;
-    virtual future<> on_restart(inet_address endpoint, endpoint_state_ptr ep_state, gms::permit_id) override;
+    virtual future<> on_join(gms::endpoint_id node, endpoint_state_ptr ep_state, gms::permit_id) override { return make_ready_future(); }
+    virtual future<> before_change(gms::endpoint_id node, endpoint_state_ptr current_state, application_state new_state_key, const versioned_value& new_value) override { return make_ready_future(); }
+    virtual future<> on_change(gms::endpoint_id node, application_state state, const versioned_value& value, gms::permit_id) override { return make_ready_future(); }
+    virtual future<> on_alive(gms::endpoint_id node, endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
+    virtual future<> on_dead(gms::endpoint_id node, endpoint_state_ptr state, gms::permit_id) override;
+    virtual future<> on_remove(gms::endpoint_id node, gms::permit_id) override;
+    virtual future<> on_restart(gms::endpoint_id node, endpoint_state_ptr ep_state, gms::permit_id) override;
 
 private:
     void fail_all_sessions();
-    void fail_sessions(inet_address endpoint);
-    bool has_peer(inet_address endpoint) const;
+    void fail_sessions(const gms::endpoint_id& node);
+    bool has_peer(const gms::endpoint_id& node) const;
 
     void init_messaging_service_handler(abort_source& as);
     future<> uninit_messaging_service_handler();

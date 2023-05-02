@@ -35,31 +35,31 @@ public:
         assert(_stopped);
     }
 
-    virtual future<> on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value, gms::permit_id) override {
+    virtual future<> on_change(gms::endpoint_id node, gms::application_state state, const gms::versioned_value& value, gms::permit_id) override {
         if (state == gms::application_state::LOAD) {
-            _load_info[endpoint] = std::stod(value.value());
+            _load_info[node.addr] = std::stod(value.value());
         }
         return make_ready_future();
     }
 
-    virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id pid) override {
+    virtual future<> on_join(gms::endpoint_id node, gms::endpoint_state_ptr ep_state, gms::permit_id pid) override {
         auto* local_value = ep_state->get_application_state_ptr(gms::application_state::LOAD);
         if (local_value) {
-            return on_change(endpoint, gms::application_state::LOAD, *local_value, pid);
+            return on_change(node, gms::application_state::LOAD, *local_value, pid);
         }
         return make_ready_future();
     }
     
-    virtual future<> before_change(gms::inet_address endpoint, gms::endpoint_state_ptr current_state, gms::application_state new_state_key, const gms::versioned_value& newValue) override { return make_ready_future(); }
+    virtual future<> before_change(gms::endpoint_id node, gms::endpoint_state_ptr current_state, gms::application_state new_state_key, const gms::versioned_value& newValue) override { return make_ready_future(); }
 
-    future<> on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
+    future<> on_alive(gms::endpoint_id node, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
 
-    future<> on_dead(gms::inet_address endpoint, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
+    future<> on_dead(gms::endpoint_id node, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
 
-    future<> on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
+    future<> on_restart(gms::endpoint_id node, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
 
-    virtual future<> on_remove(gms::inet_address endpoint, gms::permit_id) override {
-        _load_info.erase(endpoint);
+    virtual future<> on_remove(gms::endpoint_id node, gms::permit_id) override {
+        _load_info.erase(node.addr);
         return make_ready_future();
     }
 

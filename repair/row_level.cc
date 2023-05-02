@@ -2972,11 +2972,11 @@ public:
     row_level_repair_gossip_helper(repair_service& repair_service) noexcept
         : _repair_service(repair_service)
     {}
-    future<> remove_row_level_repair(gms::inet_address node) {
+    future<> remove_row_level_repair(gms::endpoint_id node) {
         rlogger.debug("Started to remove row level repair on all shards for node {}", node);
         try {
             co_await _repair_service.container().invoke_on_all([node] (repair_service& local_repair) {
-                return local_repair.remove_repair_meta(node);
+                return local_repair.remove_repair_meta(node.addr);
             });
             rlogger.debug("Finished to remove row level repair on all shards for node {}", node);
         } catch(...) {
@@ -2984,47 +2984,47 @@ public:
         }
     }
     virtual future<> on_join(
-            gms::inet_address endpoint,
+            gms::endpoint_id node,
             gms::endpoint_state_ptr ep_state,
             gms::permit_id) override {
         return make_ready_future();
     }
     virtual future<> before_change(
-            gms::inet_address endpoint,
+            gms::endpoint_id node,
             gms::endpoint_state_ptr current_state,
             gms::application_state new_state_key,
             const gms::versioned_value& new_value) override {
         return make_ready_future();
     }
     virtual future<> on_change(
-            gms::inet_address endpoint,
+            gms::endpoint_id node,
             gms::application_state state,
             const gms::versioned_value& value,
             gms::permit_id) override {
         return make_ready_future();
     }
     virtual future<> on_alive(
-            gms::inet_address endpoint,
+            gms::endpoint_id node,
             gms::endpoint_state_ptr state,
             gms::permit_id) override {
         return make_ready_future();
     }
     virtual future<> on_dead(
-            gms::inet_address endpoint,
+            gms::endpoint_id node,
             gms::endpoint_state_ptr state,
             gms::permit_id) override {
-        return remove_row_level_repair(endpoint);
+        return remove_row_level_repair(node);
     }
     virtual future<> on_remove(
-            gms::inet_address endpoint,
+            gms::endpoint_id node,
             gms::permit_id) override {
-        return remove_row_level_repair(endpoint);
+        return remove_row_level_repair(node);
     }
     virtual future<> on_restart(
-            gms::inet_address endpoint,
+            gms::endpoint_id node,
             gms::endpoint_state_ptr ep_state,
             gms::permit_id) override {
-        return remove_row_level_repair(endpoint);
+        return remove_row_level_repair(node);
     }
 };
 

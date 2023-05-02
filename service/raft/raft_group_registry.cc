@@ -81,12 +81,11 @@ class gossiper_state_change_subscriber_proxy: public gms::i_endpoint_state_chang
     raft_address_map& _address_map;
 
     future<>
-    on_endpoint_change(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state) {
-        auto app_state_ptr = ep_state->get_application_state_ptr(gms::application_state::HOST_ID);
-        if (app_state_ptr) {
-            raft::server_id id(utils::UUID(app_state_ptr->value()));
-            rslog.debug("gossiper_state_change_subscriber_proxy::on_endpoint_change() {} {}", endpoint, id);
-            co_await _address_map.add_or_update_entry(id, endpoint, ep_state->get_heart_beat_state().get_generation());
+    on_endpoint_change(gms::endpoint_id node, gms::endpoint_state_ptr ep_state) {
+        raft::server_id id(utils::UUID(node.host_id.uuid()));
+        if (id) {
+            rslog.debug("gossiper_state_change_subscriber_proxy::on_endpoint_change() {} {}", node, id);
+            co_await _address_map.add_or_update_entry(id, node.addr, ep_state->get_heart_beat_state().get_generation());
         }
     }
 
@@ -96,12 +95,12 @@ public:
     {}
 
     virtual future<>
-    on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
-        return on_endpoint_change(endpoint, ep_state);
+    on_join(gms::endpoint_id node, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
+        return on_endpoint_change(node, ep_state);
     }
 
     virtual future<>
-    before_change(gms::inet_address endpoint,
+    before_change(gms::endpoint_id node,
         gms::endpoint_state_ptr current_state, gms::application_state new_statekey,
         const gms::versioned_value& newvalue) override {
         // Raft server ID never changes - do nothing
@@ -109,41 +108,36 @@ public:
     }
 
     virtual future<>
-    on_change(gms::inet_address endpoint,
+    on_change(gms::endpoint_id node,
         gms::application_state state, const gms::versioned_value& value, gms::permit_id) override {
         // Raft server ID never changes - do nothing
         return make_ready_future<>();
     }
 
     virtual future<>
-    on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
-        co_await utils::get_local_injector().inject_with_handler("raft_group_registry::on_alive", [endpoint, ep_state] (auto& handler) -> future<> {
-            auto app_state_ptr = ep_state->get_application_state_ptr(gms::application_state::HOST_ID);
-            if (!app_state_ptr) {
-                co_return;
-            }
-            
-            raft::server_id id(utils::UUID(app_state_ptr->value()));
-            rslog.info("gossiper_state_change_subscriber_proxy::on_alive() {} {}", endpoint, id);
+    on_alive(gms::endpoint_id node, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
+        co_await utils::get_local_injector().inject_with_handler("raft_group_registry::on_alive", [node, ep_state] (auto& handler) -> future<> {
+            raft::server_id id(node.host_id.uuid());
+            rslog.info("gossiper_state_change_subscriber_proxy::on_alive() {} {}", node, id);
             auto second_node_ip = handler.get("second_node_ip");
             assert(second_node_ip);
 
-            if (endpoint == gms::inet_address(sstring{*second_node_ip})) {
+            if (node.addr == gms::inet_address(sstring{*second_node_ip})) {
                 rslog.info("Sleeping before handling on_alive");
                 co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{1});
                 rslog.info("Finished Sleeping before handling on_alive");
             }
         });
-        co_await on_endpoint_change(endpoint, ep_state);
+        co_await on_endpoint_change(node, ep_state);
     }
 
     virtual future<>
-    on_dead(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override {
+    on_dead(gms::endpoint_id node, gms::endpoint_state_ptr state, gms::permit_id) override {
         return make_ready_future<>();
     }
 
     virtual future<>
-    on_remove(gms::inet_address endpoint, gms::permit_id) override {
+    on_remove(gms::endpoint_id node, gms::permit_id) override {
         // The mapping is removed when the server is removed from
         // Raft configuration, not when it's dead or alive, or
         // removed
@@ -151,8 +145,8 @@ public:
     }
 
     virtual future<>
-    on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
-        return on_endpoint_change(endpoint, ep_state);
+    on_restart(gms::endpoint_id node, gms::endpoint_state_ptr ep_state, gms::permit_id) override {
+        return on_endpoint_change(node, ep_state);
     }
 };
 

@@ -798,7 +798,7 @@ future<> generation_service::leave_ring() {
     co_await _gossiper.unregister_(shared_from_this());
 }
 
-future<> generation_service::on_join(gms::inet_address ep, gms::endpoint_state_ptr ep_state, gms::permit_id pid) {
+future<> generation_service::on_join(gms::endpoint_id node, gms::endpoint_state_ptr ep_state, gms::permit_id pid) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
     auto val = ep_state->get_application_state_ptr(gms::application_state::CDC_GENERATION_ID);
@@ -806,10 +806,10 @@ future<> generation_service::on_join(gms::inet_address ep, gms::endpoint_state_p
         return make_ready_future();
     }
 
-    return on_change(ep, gms::application_state::CDC_GENERATION_ID, *val, pid);
+    return on_change(node, gms::application_state::CDC_GENERATION_ID, *val, pid);
 }
 
-future<> generation_service::on_change(gms::inet_address ep, gms::application_state app_state, const gms::versioned_value& v, gms::permit_id) {
+future<> generation_service::on_change(gms::endpoint_id node, gms::application_state app_state, const gms::versioned_value& v, gms::permit_id) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
     if (app_state != gms::application_state::CDC_GENERATION_ID) {
@@ -817,7 +817,7 @@ future<> generation_service::on_change(gms::inet_address ep, gms::application_st
     }
 
     auto gen_id = gms::versioned_value::cdc_generation_id_from_string(v.value());
-    cdc_log.debug("Endpoint: {}, CDC generation ID change: {}", ep, gen_id);
+    cdc_log.debug("Endpoint: {}, CDC generation ID change: {}", node, gen_id);
 
     return legacy_handle_cdc_generation(gen_id);
 }

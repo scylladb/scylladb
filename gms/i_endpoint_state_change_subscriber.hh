@@ -14,6 +14,7 @@
 #include "gms/endpoint_state.hh"
 #include "gms/application_state.hh"
 #include "gms/versioned_value.hh"
+#include "gms/endpoint_id.hh"
 
 namespace gms {
 
@@ -39,20 +40,20 @@ public:
      * Use to inform interested parties about the change in the state
      * for specified endpoint
      *
-     * @param endpoint endpoint for which the state change occurred.
+     * @param node endpoint for which the state change occurred.
      * @param epState  state that actually changed for the above endpoint.
      */
-    virtual future<> on_join(inet_address endpoint, endpoint_state_ptr ep_state, permit_id) = 0;
+    virtual future<> on_join(endpoint_id node, endpoint_state_ptr ep_state, permit_id) = 0;
 
-    virtual future<> before_change(inet_address endpoint, endpoint_state_ptr current_state, application_state new_statekey, const versioned_value& newvalue) = 0;
+    virtual future<> before_change(endpoint_id node, endpoint_state_ptr current_state, application_state new_statekey, const versioned_value& newvalue) = 0;
 
-    virtual future<> on_change(inet_address endpoint, application_state state, const versioned_value& value, permit_id) = 0;
+    virtual future<> on_change(endpoint_id node, application_state state, const versioned_value& value, permit_id) = 0;
 
-    virtual future<> on_alive(inet_address endpoint, endpoint_state_ptr state, permit_id) = 0;
+    virtual future<> on_alive(endpoint_id node, endpoint_state_ptr state, permit_id) = 0;
 
-    virtual future<> on_dead(inet_address endpoint, endpoint_state_ptr state, permit_id) = 0;
+    virtual future<> on_dead(endpoint_id node, endpoint_state_ptr state, permit_id) = 0;
 
-    virtual future<> on_remove(inet_address endpoint, permit_id) = 0;
+    virtual future<> on_remove(endpoint_id node, permit_id) = 0;
 
     /**
      * Called whenever a node is restarted.
@@ -60,7 +61,7 @@ public:
      * previously marked down. It will have only if {@code state.isAlive() == false}
      * as {@code state} is from before the restarted node is marked up.
      */
-    virtual future<> on_restart(inet_address endpoint, endpoint_state_ptr state, permit_id) = 0;
+    virtual future<> on_restart(endpoint_id node, endpoint_state_ptr state, permit_id) = 0;
 };
 
 } // namespace gms

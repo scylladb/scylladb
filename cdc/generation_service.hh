@@ -104,14 +104,14 @@ public:
         return _cdc_metadata;
     }
 
-    virtual future<> before_change(gms::inet_address, gms::endpoint_state_ptr, gms::application_state, const gms::versioned_value&) override { return make_ready_future(); }
-    virtual future<> on_alive(gms::inet_address, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_dead(gms::inet_address, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_remove(gms::inet_address, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_restart(gms::inet_address, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
+    virtual future<> before_change(gms::endpoint_id, gms::endpoint_state_ptr, gms::application_state, const gms::versioned_value&) override { return make_ready_future(); }
+    virtual future<> on_alive(gms::endpoint_id, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
+    virtual future<> on_dead(gms::endpoint_id, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
+    virtual future<> on_remove(gms::endpoint_id, gms::permit_id) override { return make_ready_future(); }
+    virtual future<> on_restart(gms::endpoint_id, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
 
-    virtual future<> on_join(gms::inet_address, gms::endpoint_state_ptr, gms::permit_id) override;
-    virtual future<> on_change(gms::inet_address, gms::application_state, const gms::versioned_value&, gms::permit_id) override;
+    virtual future<> on_join(gms::endpoint_id, gms::endpoint_state_ptr, gms::permit_id) override;
+    virtual future<> on_change(gms::endpoint_id, gms::application_state, const gms::versioned_value&, gms::permit_id) override;
 
     future<> check_and_repair_cdc_streams();
 

@@ -130,8 +130,8 @@ public:
         });
     }
 
-    bool should_pull_schema_from(const gms::inet_address& endpoint);
-    bool has_compatible_schema_tables_version(const gms::inet_address& endpoint);
+    bool should_pull_schema_from(const gms::endpoint_id& node);
+    bool has_compatible_schema_tables_version(const gms::endpoint_id& node);
 
     // The function needs to be called if the user wants to read most up-to-date group 0 state (including schema state)
     // (the function ensures that all previously finished group0 operations are visible on this node) or to write it.
@@ -169,9 +169,9 @@ private:
 
     future<> passive_announce();
 
-    void schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state);
+    void schedule_schema_pull(const gms::endpoint_id& node, const gms::endpoint_state& state);
 
-    future<> maybe_schedule_schema_pull(const table_schema_version& their_version, const gms::inet_address& endpoint);
+    future<> maybe_schedule_schema_pull(const table_schema_version& their_version, const gms::endpoint_id& node);
 
     future<> announce_with_raft(std::vector<mutation> schema, group0_guard, std::string_view description);
     future<> announce_without_raft(std::vector<mutation> schema, group0_guard);
@@ -190,13 +190,13 @@ public:
     future<schema_ptr> get_schema_for_write(table_schema_version, netw::msg_addr from, netw::messaging_service& ms, abort_source* as = nullptr);
 
 private:
-    virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override;
-    virtual future<> on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value, gms::permit_id) override;
-    virtual future<> on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override;
-    virtual future<> on_dead(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_remove(gms::inet_address endpoint, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> before_change(gms::inet_address endpoint, gms::endpoint_state_ptr current_state, gms::application_state new_statekey, const gms::versioned_value& newvalue) override { return make_ready_future(); }
+    virtual future<> on_join(gms::endpoint_id node, gms::endpoint_state_ptr ep_state, gms::permit_id) override;
+    virtual future<> on_change(gms::endpoint_id node, gms::application_state state, const gms::versioned_value& value, gms::permit_id) override;
+    virtual future<> on_alive(gms::endpoint_id node, gms::endpoint_state_ptr state, gms::permit_id) override;
+    virtual future<> on_dead(gms::endpoint_id node, gms::endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
+    virtual future<> on_remove(gms::endpoint_id node, gms::permit_id) override { return make_ready_future(); }
+    virtual future<> on_restart(gms::endpoint_id node, gms::endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
+    virtual future<> before_change(gms::endpoint_id node, gms::endpoint_state_ptr current_state, gms::application_state new_statekey, const gms::versioned_value& newvalue) override { return make_ready_future(); }
 
 public:
     // For tests only.

@@ -31,6 +31,7 @@
 
 #include "locator/types.hh"
 #include "locator/topology.hh"
+#include "gms/endpoint_id.hh"
 
 // forward declaration since replica/database.hh includes this file
 namespace replica {
@@ -168,6 +169,9 @@ public:
      * @param endpoint
      */
     void update_host_id(const locator::host_id& host_id, inet_address endpoint);
+    void update_host_id(const gms::endpoint_id& node) {
+        update_host_id(node.host_id, node.addr);
+    }
 
     /** Return the unique host ID for an end-point. */
     host_id get_host_id(inet_address endpoint) const;
