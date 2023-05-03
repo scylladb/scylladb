@@ -19,6 +19,7 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"
+#include "test/lib/test_utils.hh"
 #include "service/storage_proxy.hh"
 #include "db/config.hh"
 
@@ -143,7 +144,7 @@ SEASTAR_TEST_CASE(sstable_resharding_test) {
     });
 }
 
-SEASTAR_TEST_CASE(sstable_resharding_over_s3_test) {
+SEASTAR_TEST_CASE(sstable_resharding_over_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
     return sstables::test_env::do_with_async([] (auto& env) {
         run_sstable_resharding_test(env);
     }, test_env_config{ .storage = make_test_object_storage_options() });

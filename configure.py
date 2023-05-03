@@ -1910,7 +1910,7 @@ with open(buildfile, 'w') as f:
                 if binary not in tests_not_using_seastar_test_framework:
                     local_libs += ' ' + "$seastar_testing_libs_{}".format(mode)
                 else:
-                    local_libs += ' ' + '-lgnutls'
+                    local_libs += ' ' + '-lgnutls' + ' ' + '-lboost_unit_test_framework'
                 # Our code's debugging information is huge, and multiplied
                 # by many tests yields ridiculous amounts of disk space.
                 # So we strip the tests by default; The user can very
