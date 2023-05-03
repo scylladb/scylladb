@@ -269,7 +269,7 @@ public:
     compact_mutation_state(compact_mutation_state&&) = delete; // Because 'this' is captured
 
     compact_mutation_state(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint64_t limit,
-              uint32_t partition_limit)
+              uint32_t partition_limit, mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::token)
         : _schema(s)
         , _query_time(query_time)
         , _can_gc(always_gc)
@@ -280,7 +280,7 @@ public:
         , _tombstone_gc_state(nullptr)
         , _last_dk({dht::token(), partition_key::make_empty()})
         , _last_pos(position_in_partition::for_partition_end())
-        , _validator("mutation_compactor for read", _schema, mutation_fragment_stream_validation_level::token)
+        , _validator("mutation_compactor for read", _schema, validation_level)
     {
         static_assert(!sstable_compaction(), "This constructor cannot be used for sstable compaction.");
     }
