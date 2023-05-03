@@ -3481,6 +3481,79 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_detach_state) {
     }
 };
 
+// Check that consumed fragments are forwarded intact to the validator.
+SEASTAR_THREAD_TEST_CASE(test_compactor_validator_sanity_test) {
+    simple_schema ss;
+    auto pk = ss.make_pkey();
+    auto s = ss.schema();
+
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+
+    auto permit = semaphore.make_permit();
+
+    const auto expiry_point = gc_clock::now() + std::chrono::days(10);
+
+    const auto marker_ts = ss.new_timestamp();
+    const auto tomb_ts = ss.new_timestamp();
+    const auto row_ts = ss.new_timestamp();
+
+    const auto query_time = gc_clock::now();
+    const auto max_rows = std::numeric_limits<uint64_t>::max();
+    const auto max_partitions = std::numeric_limits<uint32_t>::max();
+
+    auto make_frags = [&] {
+        std::deque<mutation_fragment_v2> frags;
+
+        frags.emplace_back(*s, permit, partition_start(pk, {}));
+
+        frags.emplace_back(*s, permit, ss.make_static_row_v2(permit, "static_row"));
+
+        const auto& v_def = *s->get_column_definition(to_bytes("v"));
+
+        for (uint32_t ck = 0; ck < 2; ++ck) {
+            auto ckey = ss.make_ckey(ck);
+            frags.emplace_back(*s, permit, range_tombstone_change(position_in_partition::before_key(ckey), tombstone{tomb_ts, expiry_point}));
+            auto row = clustering_row(ckey);
+            row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, row_ts, serialized("v")));
+            row.marker() = row_marker(marker_ts);
+            frags.emplace_back(mutation_fragment_v2(*s, permit, std::move(row)));
+        }
+
+        frags.emplace_back(*s, permit, range_tombstone_change(position_in_partition::after_key(*s, ss.make_ckey(10)), tombstone{}));
+
+        frags.emplace_back(*s, permit, partition_end{});
+
+        return frags;
+    };
+
+    struct consumer_v2 {
+        void consume_new_partition(const dht::decorated_key& dk) { }
+        void consume(const tombstone& t) { }
+        stop_iteration consume(static_row&& sr, tombstone, bool) {
+            auto _ = std::move(sr);
+            return stop_iteration::no;
+        }
+        stop_iteration consume(clustering_row&& cr, row_tombstone t, bool is_alive) {
+            auto _ = std::move(cr);
+            return stop_iteration::no;
+        }
+        stop_iteration consume(range_tombstone_change&& rtc) {
+            auto _ = std::move(rtc);
+            return stop_iteration::no;
+        }
+        stop_iteration consume_end_of_partition() {
+            return stop_iteration::no;
+        }
+        void consume_end_of_stream() { }
+    };
+
+    auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), max_rows, max_partitions,
+            mutation_fragment_stream_validation_level::clustering_key);
+    auto reader = make_flat_mutation_reader_from_fragments(s, permit, make_frags());
+    auto close_reader = deferred_close(reader);
+    reader.consume(compact_for_query_v2<consumer_v2>(compaction_state, consumer_v2{})).get();
+};
+
 SEASTAR_TEST_CASE(test_tracing_format) {
     // scylla-dtest/tools/cdc_utils.py::CDCTraceInfoMatcher matches the
     // formatted token with "{key: pk(.*?), token:(.*)}", so let's make
