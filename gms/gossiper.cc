@@ -582,12 +582,31 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address>
 future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state remote_state, bool listener_notification) {
     // If state does not exist just add it. If it does then add it if the remote generation is greater.
     // If there is a generation tie, attempt to break it by heartbeat version.
+    locator::host_id remote_host_id = remote_state.get_host_id();
+    locator::host_id local_host_id;
+    const auto& addr = node;
     auto permit = co_await this->lock_endpoint(node, null_permit_id);
     auto es = this->get_endpoint_state_ptr(node);
     if (es) {
+        local_host_id = es->get_host_id();
         endpoint_state local_state = *es;
         auto local_generation = local_state.get_heart_beat_state().get_generation();
         auto remote_generation = remote_state.get_heart_beat_state().get_generation();
+
+        if (!local_host_id) {
+            if (!remote_host_id) {
+                logger.warn("Node {} sent null host_id in remote state", addr);
+            } else {
+                logger.info("Node {} host_id is {}", addr, remote_host_id);
+            }
+        } else {
+            if (remote_host_id) {
+                if (local_host_id != remote_host_id) {
+                    logger.info("Node {}/{} is replaced by {}/{} with same IP address", local_host_id, addr, remote_host_id, addr);
+                }
+            }
+        }
+
         logger.trace("{} local generation {}, remote generation {}", node, local_generation, remote_generation);
         if (remote_generation > generation_type(get_generation_number().value() + MAX_GENERATION_DIFFERENCE)) {
             // assume some peer has corrupted memory and is broadcasting an unbelievable generation about another peer (or itself)
@@ -641,6 +660,12 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state
             logger.debug("Ignoring remote generation {} < {}", remote_generation, local_generation);
         }
     } else {
+        if (remote_host_id) {
+            logger.info("Node {} host_id is {}", addr, remote_host_id);
+        } else {
+            logger.warn("Node {} sent null host_id in remote state", addr);
+        }
+
         if (listener_notification) {
             co_await this->handle_major_state_change(node, std::move(remote_state), permit.id());
         } else {
