@@ -2,7 +2,6 @@ set(disabled_warnings
   c++11-narrowing
   mismatched-tags
   overloaded-virtual
-  parentheses-equality
   unsupported-friend)
 include(CheckCXXCompilerFlag)
 foreach(warning ${disabled_warnings})

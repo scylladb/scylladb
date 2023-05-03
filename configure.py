@@ -1351,7 +1351,6 @@ warnings = [
     '-Werror',
     '-Wno-mismatched-tags',  # clang-only
     '-Wno-tautological-compare',
-    '-Wno-parentheses-equality',
     '-Wno-c++11-narrowing',
     '-Wno-ignored-attributes',
     '-Wno-overloaded-virtual',
@@ -2031,13 +2030,14 @@ with open(buildfile, 'w') as f:
             for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
                 obj = cc.replace('.cpp', '.o')
                 f.write('build {}: cxx.{} {} || {}\n'.format(obj, mode, cc, ' '.join(serializers)))
+                flags = '-Wno-parentheses-equality'
                 if cc.endswith('Parser.cpp'):
                     # Unoptimized parsers end up using huge amounts of stack space and overflowing their stack
-                    flags = '-O1' if modes[mode]['optimization-level'] in ['0', 'g', 's'] else ''
+                    flags += ' -O1' if modes[mode]['optimization-level'] in ['0', 'g', 's'] else ''
 
                     if has_sanitize_address_use_after_scope:
                         flags += ' -fno-sanitize-address-use-after-scope'
-                    f.write('  obj_cxxflags = %s\n' % flags)
+                f.write(f'  obj_cxxflags = {flags}\n')
         f.write(f'build $builddir/{mode}/gen/empty.cc: gen\n')
         for hh in headers:
             f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} | $builddir/{mode}/gen/empty.cc || {gen_headers_dep}\n'.format(
