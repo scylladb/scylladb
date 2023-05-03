@@ -1075,7 +1075,7 @@ schema_ptr system_keyspace::sstables_registry() {
         auto id = generate_legacy_id(NAME, SSTABLES_REGISTRY);
         return schema_builder(NAME, SSTABLES_REGISTRY, id)
             .with_column("location", utf8_type, column_kind::partition_key)
-            .with_column("generation", long_type, column_kind::clustering_key)
+            .with_column("generation", timeuuid_type, column_kind::clustering_key)
             .with_column("uuid", uuid_type)
             .with_column("status", utf8_type)
             .with_column("version", utf8_type)
@@ -3738,34 +3738,34 @@ system_keyspace::read_cdc_generation(utils::UUID id) {
 
 future<> system_keyspace::sstables_registry_create_entry(sstring location, utils::UUID uuid, sstring status, sstables::entry_descriptor desc) {
     static const auto req = format("INSERT INTO system.{} (location, generation, uuid, status, version, format) VALUES (?, ?, ?, ?, ?, ?)", SSTABLES_REGISTRY);
-    slogger.trace("Inserting {}.{}:{} into {}", location, desc.generation.value(), uuid, SSTABLES_REGISTRY);
-    co_await execute_cql(req, location, desc.generation.value(), uuid, status, fmt::to_string(desc.version), fmt::to_string(desc.format)).discard_result();
+    slogger.trace("Inserting {}.{}:{} into {}", location, desc.generation, uuid, SSTABLES_REGISTRY);
+    co_await execute_cql(req, location, desc.generation, uuid, status, fmt::to_string(desc.version), fmt::to_string(desc.format)).discard_result();
 }
 
 future<utils::UUID> system_keyspace::sstables_registry_lookup_entry(sstring location, sstables::generation_type gen) {
     static const auto req = format("SELECT uuid FROM system.{} WHERE location = ? AND generation = ?", SSTABLES_REGISTRY);
-    slogger.trace("Looking up {}.{} in {}", location, gen.value(), SSTABLES_REGISTRY);
-    auto msg = co_await execute_cql(req, location, gen.value());
+    slogger.trace("Looking up {}.{} in {}", location, gen, SSTABLES_REGISTRY);
+    auto msg = co_await execute_cql(req, location, gen);
     if (msg->empty() || !msg->one().has("uuid")) {
-        slogger.trace("ERROR: Cannot find {}.{} in {}", location, gen.value(), SSTABLES_REGISTRY);
+        slogger.trace("ERROR: Cannot find {}.{} in {}", location, gen, SSTABLES_REGISTRY);
         co_await coroutine::return_exception(std::runtime_error("No entry in sstables registry"));
     }
 
     auto uuid = msg->one().get_as<utils::UUID>("uuid");
-    slogger.trace("Found {}.{}:{} in {}", location, gen.value(), uuid, SSTABLES_REGISTRY);
+    slogger.trace("Found {}.{}:{} in {}", location, gen, uuid, SSTABLES_REGISTRY);
     co_return uuid;
 }
 
 future<> system_keyspace::sstables_registry_update_entry_status(sstring location, sstables::generation_type gen, sstring status) {
     static const auto req = format("UPDATE system.{} SET status = ? WHERE location = ? AND generation = ?", SSTABLES_REGISTRY);
-    slogger.trace("Updating {}.{} -> {} in {}", location, gen.value(), status, SSTABLES_REGISTRY);
-    co_await execute_cql(req, status, location, gen.value()).discard_result();
+    slogger.trace("Updating {}.{} -> {} in {}", location, gen, status, SSTABLES_REGISTRY);
+    co_await execute_cql(req, status, location, gen).discard_result();
 }
 
 future<> system_keyspace::sstables_registry_delete_entry(sstring location, sstables::generation_type gen) {
     static const auto req = format("DELETE FROM system.{} WHERE location = ? AND generation = ?", SSTABLES_REGISTRY);
-    slogger.trace("Removing {}.{} from {}", location, gen.value(), SSTABLES_REGISTRY);
-    co_await execute_cql(req, location, gen.value()).discard_result();
+    slogger.trace("Removing {}.{} from {}", location, gen, SSTABLES_REGISTRY);
+    co_await execute_cql(req, location, gen).discard_result();
 }
 
 future<> system_keyspace::sstables_registry_list(sstring location, sstable_registry_entry_consumer consumer) {
@@ -3775,7 +3775,7 @@ future<> system_keyspace::sstables_registry_list(sstring location, sstable_regis
     co_await _qp.local().query_internal(req, db::consistency_level::ONE, { location }, 1000, [ consumer = std::move(consumer) ] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
         auto uuid = row.get_as<utils::UUID>("uuid");
         auto status = row.get_as<sstring>("status");
-        auto gen = sstables::generation_from_value(row.get_as<int64_t>("generation"));
+        auto gen = sstables::generation_type::from_uuid(row.get_as<utils::UUID>("generation"));
         auto ver = sstables::version_from_string(row.get_as<sstring>("version"));
         auto fmt = sstables::format_from_string(row.get_as<sstring>("format"));
         sstables::entry_descriptor desc("", "", "", gen, ver, fmt, sstables::component_type::TOC);

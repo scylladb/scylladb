@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <fmt/core.h>
 #include <cstdint>
 #include <compare>
@@ -17,6 +18,8 @@
 #include <boost/range/adaptors.hpp>
 #include <seastar/core/smp.hh>
 #include <seastar/core/sstring.hh>
+#include "types/types.hh"
+#include "utils/UUID_gen.hh"
 
 namespace sstables {
 
@@ -32,6 +35,34 @@ public:
 
     explicit constexpr generation_type(int_t value) noexcept: _value(value) {}
     constexpr int_t value() const noexcept { return _value; }
+
+    // convert to data_value
+    //
+    // this function is used when performing queries to SSTABLES_REGISTRY in
+    // the "system_keyspace", since its "generation" column cannot be a variant
+    // of bigint and timeuuid, we need to use a single value to represent these
+    // two types, and single value should allow us to tell the type of the
+    // original value of generation identifier, so we can convert the value back
+    // to the generation when necessary without losing its type information.
+    // since the timeuuid always encodes the timestamp in its MSB, and the timestamp
+    // should always be greater than zero, we use this fact to tell a regular
+    // timeuuid from a timeuuid converted from a bigint -- we just use zero
+    // for its timestamp of the latter.
+    explicit operator data_value() const noexcept {
+        // use zero as the timestamp to differentiate from the regular timeuuid,
+        // and use the least_sig_bits to encode the value of generation identifier.
+        return data_value(
+            utils::UUID(
+                utils::UUID_gen::create_time(std::chrono::milliseconds::zero()),
+                _value));
+    }
+    static generation_type from_uuid(utils::UUID value) {
+        // if the value of generation_type should be an int64_t, its timestamp
+        // must be zero, and the least significant bits is used to encode the
+        // value of the int64_t.
+        assert(value.timestamp() == 0);
+        return generation_type(value.get_least_significant_bits());
+    }
 
     constexpr bool operator==(const generation_type& other) const noexcept { return _value == other._value; }
     constexpr std::strong_ordering operator<=>(const generation_type& other) const noexcept { return _value <=> other._value; }
