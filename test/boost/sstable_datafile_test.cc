@@ -60,6 +60,7 @@
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/test_utils.hh"
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
 #include "test/lib/random_schema.hh"
@@ -301,7 +302,7 @@ SEASTAR_TEST_CASE(datafile_generation_16) {
     return test_datafile_generation_16({});
 }
 
-SEASTAR_TEST_CASE(datafile_generation_16_s3) {
+SEASTAR_TEST_CASE(datafile_generation_16_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
     return test_datafile_generation_16(test_env_config{ .storage = make_test_object_storage_options() });
 }
 

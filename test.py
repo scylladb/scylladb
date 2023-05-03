@@ -1032,6 +1032,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
                          # TMPDIR env variable is used by any seastar/scylla
                          # test for directory to store test temporary data.
                          TMPDIR=os.path.join(options.tmpdir, test.mode),
+                         SCYLLA_TEST_ENV='yes',
                          **env,
                          ),
                 preexec_fn=os.setsid,

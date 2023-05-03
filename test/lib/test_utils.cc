@@ -51,6 +51,17 @@ void fail(std::string_view msg, std::source_location sl) {
     throw_with_backtrace<std::runtime_error>(format_msg(__FUNCTION__, false, sl, msg));
 }
 
+
+extern boost::test_tools::assertion_result has_scylla_test_env(boost::unit_test::test_unit_id) {
+    if (::getenv("SCYLLA_TEST_ENV")) {
+        return true;
+    }
+
+    testlog.info("Test environment is not configured. "
+        "Check test/pylib/minio_server.py for an example of how to configure the environment for it to run.");
+    return false;
+}
+
 }
 
 sstring make_random_string(size_t size) {
