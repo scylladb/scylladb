@@ -428,7 +428,7 @@ future<> service_level_controller::do_remove_service_level(sstring name, bool re
 void service_level_controller::on_join_cluster(const gms::inet_address& endpoint) { }
 
 void service_level_controller::on_leave_cluster(const gms::inet_address& endpoint) {
-    if (this_shard_id() == global_controller && endpoint == utils::fb_utilities::get_broadcast_address()) {
+    if (this_shard_id() == global_controller && utils::fb_utilities::is_me(endpoint)) {
         _global_controller_db->dist_data_update_aborter.request_abort();
     }
 }

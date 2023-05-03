@@ -1562,7 +1562,7 @@ static std::vector<cdc::generation_id_v2> decode_cdc_generations_ids(const set_t
 
 future<> system_keyspace::update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens)
 {
-    if (ep == utils::fb_utilities::get_broadcast_address()) {
+    if (utils::fb_utilities::is_me(ep)) {
         co_return co_await remove_endpoint(ep);
     }
 
@@ -1659,7 +1659,7 @@ future<> system_keyspace::update_cached_values(gms::inet_address ep, sstring col
 
 template <typename Value>
 future<> system_keyspace::update_peer_info(gms::inet_address ep, sstring column_name, Value value) {
-    if (ep == utils::fb_utilities::get_broadcast_address()) {
+    if (utils::fb_utilities::is_me(ep)) {
         co_return;
     }
 

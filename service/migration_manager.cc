@@ -214,7 +214,7 @@ void migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, 
 
     const auto* value = state.get_application_state_ptr(gms::application_state::SCHEMA);
 
-    if (endpoint != utils::fb_utilities::get_broadcast_address() && value) {
+    if (!utils::fb_utilities::is_me(endpoint) && value) {
         // FIXME: discarded future
         (void)maybe_schedule_schema_pull(table_schema_version(utils::UUID{value->value()}), endpoint).handle_exception([endpoint] (auto ep) {
             mlogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
@@ -230,7 +230,7 @@ bool migration_manager::have_schema_agreement() {
     auto our_version = _storage_proxy.get_db().local().get_version();
     bool match = false;
     _gossiper.for_each_endpoint_state_until([&] (const gms::inet_address& endpoint, const gms::endpoint_state& eps) {
-        if (endpoint == utils::fb_utilities::get_broadcast_address() || !_gossiper.is_alive(endpoint)) {
+        if (utils::fb_utilities::is_me(endpoint) || !_gossiper.is_alive(endpoint)) {
             return stop_iteration::no;
         }
         mlogger.debug("Checking schema state for {}.", endpoint);
@@ -954,7 +954,7 @@ future<> migration_manager::announce_without_raft(std::vector<mutation> schema, 
         auto all_live = _gossiper.get_live_members();
         auto live_members = all_live | boost::adaptors::filtered([this] (const gms::inet_address& endpoint) {
             // only push schema to nodes with known and equal versions
-            return endpoint != utils::fb_utilities::get_broadcast_address() &&
+            return !utils::fb_utilities::is_me(endpoint) &&
                 _messaging.knows_version(endpoint) &&
                 _messaging.get_raw_version(endpoint) == netw::messaging_service::current_version;
         });

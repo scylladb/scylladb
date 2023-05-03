@@ -685,7 +685,7 @@ future<> raft_group0::setup_group0(
 
     std::vector<gms::inet_address> seeds;
     for (auto& addr: initial_contact_nodes) {
-        if (addr != _gossiper.get_broadcast_address()) {
+        if (!_gossiper.is_me(addr)) {
             seeds.push_back(addr);
         }
     }

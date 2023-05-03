@@ -334,7 +334,7 @@ filter_for_query(consistency_level cl,
 
         if (!old_node && ht_max - ht_min > 0.01) { // if there is old node or hit rates are close skip calculations
             // local node is always first if present (see storage_proxy::get_endpoints_for_reading)
-            unsigned local_idx = epi[0].first == utils::fb_utilities::get_broadcast_address() ? 0 : epi.size() + 1;
+            unsigned local_idx = utils::fb_utilities::is_me(epi[0].first) ? 0 : epi.size() + 1;
             live_endpoints = boost::copy_range<inet_address_vector_replica_set>(miss_equalizing_combination(epi, local_idx, remaining_bf, bool(extra)));
         }
     }

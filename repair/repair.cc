@@ -260,7 +260,7 @@ static std::vector<gms::inet_address> get_neighbors(
             } catch(...) {
                 throw std::runtime_error(format("Unknown host specified: {}", host));
             }
-            if (endpoint == utils::fb_utilities::get_broadcast_address()) {
+            if (utils::fb_utilities::is_me(endpoint)) {
                 found_me = true;
             } else if (neighbor_set.contains(endpoint)) {
                 ret.push_back(endpoint);

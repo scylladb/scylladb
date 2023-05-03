@@ -153,7 +153,7 @@ static future<ResultTuple> add_replica_exception_to_query_result(gms::feature_se
 }
 
 static bool only_me(const inet_address_vector_replica_set& replicas) {
-    return replicas.size() == 1 && replicas[0] == utils::fb_utilities::get_broadcast_address();
+    return replicas.size() == 1 && utils::fb_utilities::is_me(replicas[0]);
 }
 
 // This class handles all communication with other nodes in `storage_proxy`:
@@ -3547,7 +3547,7 @@ static inet_address_vector_replica_set endpoint_filter(
     std::unordered_multimap<sstring, gms::inet_address> validated;
 
     auto is_valid = [&is_alive] (gms::inet_address input) {
-        return input != utils::fb_utilities::get_broadcast_address()
+        return !utils::fb_utilities::is_me(input)
             && is_alive(input);
     };
 
@@ -5310,7 +5310,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     // reordering of endpoints happens. The local endpoint, if
     // present, is always first in the list, as get_endpoints_for_reading()
     // orders the list by proximity to the local endpoint.
-    is_read_non_local |= !all_replicas.empty() && all_replicas.front() != utils::fb_utilities::get_broadcast_address();
+    is_read_non_local |= !all_replicas.empty() && !utils::fb_utilities::is_me(all_replicas.front());
 
     auto cf = _db.local().find_column_family(schema).shared_from_this();
     inet_address_vector_replica_set target_replicas = filter_replicas_for_read(cl, *erm, all_replicas, preferred_endpoints, repair_decision,
@@ -6270,7 +6270,7 @@ storage_proxy::filter_replicas_for_read(
 }
 
 bool storage_proxy::is_alive(const gms::inet_address& ep) const {
-    return _remote ? _remote->is_alive(ep) : (ep == utils::fb_utilities::get_broadcast_address());
+    return _remote ? _remote->is_alive(ep) : utils::fb_utilities::is_me(ep);
 }
 
 inet_address_vector_replica_set storage_proxy::intersection(const inet_address_vector_replica_set& l1, const inet_address_vector_replica_set& l2) {

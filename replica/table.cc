@@ -2362,7 +2362,7 @@ table::cache_hit_rate table::get_my_hit_rate() const {
 }
 
 table::cache_hit_rate table::get_hit_rate(const gms::gossiper& gossiper, gms::inet_address addr) {
-    if (utils::fb_utilities::get_broadcast_address() == addr) {
+    if (utils::fb_utilities::is_me(addr)) {
         return get_my_hit_rate();
     }
     auto it = _cluster_cache_hit_rates.find(addr);

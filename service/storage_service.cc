@@ -240,7 +240,7 @@ bool storage_service::is_first_node() {
     // bootstrap in the cluser. All other nodes will bootstrap.
     std::vector<gms::inet_address> sorted_seeds(seeds.begin(), seeds.end());
     std::sort(sorted_seeds.begin(), sorted_seeds.end());
-    if (sorted_seeds.front() == get_broadcast_address()) {
+    if (utils::fb_utilities::is_me(sorted_seeds.front())) {
         slogger.info("I am the first node in the cluster. Skip bootstrap. Node={}", get_broadcast_address());
         return true;
     }
@@ -2772,11 +2772,11 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         };
         if (!_raft_topology_change_enabled) {
             bootstrap_tokens = std::move(ri->tokens);
-            replacing_a_node_with_same_ip = *replace_address == get_broadcast_address();
-            replacing_a_node_with_diff_ip = *replace_address != get_broadcast_address();
+            replacing_a_node_with_same_ip = utils::fb_utilities::is_me(*replace_address);
+            replacing_a_node_with_diff_ip = !replacing_a_node_with_same_ip;
 
             slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
-                get_broadcast_address() == *replace_address ? "the same" : "a different",
+                replacing_a_node_with_same_ip ? "the same" : "a different",
                 get_broadcast_address(), *replace_address);
             tmptr->update_topology(*replace_address, std::move(ri->dc_rack), locator::node::state::being_replaced);
             co_await tmptr->update_normal_tokens(bootstrap_tokens, *replace_address);
@@ -3080,7 +3080,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
                 bootstrap_tokens = boot_strapper::get_bootstrap_tokens(tmptr, _db.local().get_config(), dht::check_token_endpoint::yes);
             }
         } else {
-            if (*replace_address != get_broadcast_address()) {
+            if (!utils::fb_utilities::is_me(*replace_address)) {
                 // Sleep additionally to make sure that the server actually is not alive
                 // and giving it more time to gossip if alive.
                 slogger.info("Sleeping before replacing {}...", *replace_address);
@@ -3423,7 +3423,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
     auto host_id = _gossiper.get_host_id(endpoint);
     auto existing = tmptr->get_endpoint_for_host_id(host_id);
     if (existing && *existing != endpoint) {
-        if (*existing == get_broadcast_address()) {
+        if (utils::fb_utilities::is_me(*existing)) {
             slogger.warn("Not updating host ID {} for {} because it's mine", host_id, endpoint);
             do_remove_node(endpoint);
         } else if (_gossiper.compare_endpoint_startup(endpoint, *existing) > 0) {
@@ -3599,7 +3599,7 @@ void storage_service::handle_state_moving(inet_address endpoint, std::vector<sst
 future<> storage_service::handle_state_removed(inet_address endpoint, std::vector<sstring> pieces, gms::permit_id pid) {
     slogger.debug("endpoint={} handle_state_removed: permit_id={}", endpoint, pid);
 
-    if (endpoint == get_broadcast_address()) {
+    if (utils::fb_utilities::is_me(endpoint)) {
         slogger.info("Received removenode gossip about myself. Is this node rejoining after an explicit removenode?");
         try {
             co_await drain();
@@ -3722,7 +3722,7 @@ future<> storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_stat
 future<> storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id pid) {
     slogger.debug("endpoint={} on_restart: permit_id={}", endpoint, pid);
     // If we have restarted before the node was even marked down, we need to reset the connection pool
-    if (endpoint != get_broadcast_address() && _gossiper.is_alive(endpoint)) {
+    if (!utils::fb_utilities::is_me(endpoint) && _gossiper.is_alive(endpoint)) {
         return on_dead(endpoint, state, pid);
     }
     return make_ready_future();
@@ -3913,7 +3913,7 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
         for (auto x : loaded_tokens) {
             auto ep = x.first;
             auto tokens = x.second;
-            if (ep == get_broadcast_address()) {
+            if (utils::fb_utilities::is_me(ep)) {
                 // entry has been mistakenly added, delete it
                 co_await _sys_ks.local().remove_endpoint(ep);
             } else {

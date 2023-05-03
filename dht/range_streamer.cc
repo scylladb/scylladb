@@ -37,7 +37,7 @@ range_streamer::get_range_fetch_map(const std::unordered_map<dht::token_range, s
         const std::vector<inet_address>& addresses = x.second;
         bool found_source = false;
         for (const auto& address : addresses) {
-            if (address == utils::fb_utilities::get_broadcast_address()) {
+            if (utils::fb_utilities::is_me(address)) {
                 // If localhost is a source, we have found one, but we don't add it to the map to avoid streaming locally
                 found_source = true;
                 continue;
