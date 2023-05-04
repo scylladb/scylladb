@@ -225,10 +225,6 @@ public:
         _sst->_generation = std::move(new_generation);
     }
 
-    static fs::path filename(const sstable& sst, component_type c) {
-        return fs::path(sst.filename(c));
-    }
-
     sstring storage_prefix() const {
         return _sst->_storage->prefix();
     }
