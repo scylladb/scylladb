@@ -538,7 +538,6 @@ future<> sstable_directory::delete_with_pending_deletion_log(std::vector<shared_
 future<> sstable_directory::replay_pending_delete_log(fs::path pending_delete_log) {
     sstlog.debug("Reading pending_deletes log file {}", pending_delete_log);
     fs::path pending_delete_dir = pending_delete_log.parent_path();
-    assert(sstable::is_pending_delete_dir(pending_delete_dir));
     try {
         sstring sstdir = pending_delete_dir.parent_path().native();
         auto text = co_await seastar::util::read_entire_file_contiguous(pending_delete_log);
@@ -590,7 +589,7 @@ future<> sstable_directory::handle_sstables_pending_delete() {
 
     std::vector<future<>> futures;
 
-    co_await lister::scan_dir(pending_delete_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), [&futures] (fs::path dir, directory_entry de) {
+    co_await lister::scan_dir(pending_delete_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), [this, &futures] (fs::path dir, directory_entry de) {
         // push nested futures that remove files/directories into an array of futures,
         // so that the supplied callback will not block scan_dir() from
         // reading the next entry in the directory.
@@ -600,7 +599,7 @@ future<> sstable_directory::handle_sstables_pending_delete() {
             futures.push_back(remove_file(file_path.string()));
         } else if (file_path.extension() == ".log") {
             sstlog.info("Found pending_delete log file: {}, replaying", file_path);
-            auto f = sstables::sstable_directory::replay_pending_delete_log(std::move(file_path));
+            auto f = replay_pending_delete_log(std::move(file_path));
             futures.push_back(std::move(f));
         } else {
             sstlog.debug("Found unknown file in pending_delete directory: {}, ignoring", file_path);

@@ -178,6 +178,7 @@ private:
 
     future<> cleanup_column_family_temp_sst_dirs();
     future<> handle_sstables_pending_delete();
+    future<> replay_pending_delete_log(std::filesystem::path log_file);
 
 public:
     sstable_directory(sstables_manager& manager,
@@ -263,7 +264,6 @@ public:
     //
     // This function only solves the second problem for now.
     static future<> delete_with_pending_deletion_log(std::vector<shared_sstable> ssts);
-    static future<> replay_pending_delete_log(std::filesystem::path log_file);
 
     static bool compare_sstable_storage_prefix(const sstring& a, const sstring& b) noexcept;
     future<> garbage_collect();

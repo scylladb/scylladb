@@ -390,11 +390,6 @@ public:
         return pending_delete_dir;
     }
 
-    static bool is_pending_delete_dir(const fs::path& dirpath)
-    {
-        return dirpath.filename().string() == pending_delete_dir_basename().c_str();
-    }
-
     bool requires_view_building() const;
 
     bool is_quarantined() const noexcept;
