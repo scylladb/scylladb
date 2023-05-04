@@ -557,6 +557,58 @@ future<> sstable_directory::replay_pending_delete_log(fs::path pending_delete_lo
     }
 }
 
+future<> sstable_directory::garbage_collect(fs::path sstdir) {
+    // First pass, cleanup temporary sstable directories and sstables pending delete.
+    co_await cleanup_column_family_temp_sst_dirs(sstdir);
+    auto pending_delete_dir = sstdir / sstable::pending_delete_dir_basename();
+    auto exists = co_await file_exists(pending_delete_dir.native());
+    if (exists) {
+        co_await handle_sstables_pending_delete(pending_delete_dir);
+    }
+}
+
+future<> sstable_directory::cleanup_column_family_temp_sst_dirs(fs::path sstdir) {
+    std::vector<future<>> futures;
+
+    co_await lister::scan_dir(sstdir, lister::dir_entry_types::of<directory_entry_type::directory>(), [&] (fs::path sstdir, directory_entry de) {
+        // push futures that remove files/directories into an array of futures,
+        // so that the supplied callback will not block scan_dir() from
+        // reading the next entry in the directory.
+        fs::path dirpath = sstdir / de.name;
+        if (sstables::sstable::is_temp_dir(dirpath)) {
+            sstlog.info("Found temporary sstable directory: {}, removing", dirpath);
+            futures.push_back(io_check([dirpath = std::move(dirpath)] () { return lister::rmdir(dirpath); }));
+        }
+        return make_ready_future<>();
+    });
+
+    co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
+}
+
+future<> sstable_directory::handle_sstables_pending_delete(fs::path pending_delete_dir) {
+    std::vector<future<>> futures;
+
+    co_await lister::scan_dir(pending_delete_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), [&futures] (fs::path dir, directory_entry de) {
+        // push nested futures that remove files/directories into an array of futures,
+        // so that the supplied callback will not block scan_dir() from
+        // reading the next entry in the directory.
+        fs::path file_path = dir / de.name;
+        if (file_path.extension() == ".tmp") {
+            sstlog.info("Found temporary pending_delete log file: {}, deleting", file_path);
+            futures.push_back(remove_file(file_path.string()));
+        } else if (file_path.extension() == ".log") {
+            sstlog.info("Found pending_delete log file: {}, replaying", file_path);
+            auto f = sstables::sstable_directory::replay_pending_delete_log(std::move(file_path));
+            futures.push_back(std::move(f));
+        } else {
+            sstlog.debug("Found unknown file in pending_delete directory: {}, ignoring", file_path);
+        }
+        return make_ready_future<>();
+    });
+
+    co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
+}
+
 future<std::optional<sstables::generation_type>>
 highest_generation_seen(sharded<sstables::sstable_directory>& directory) {
     auto highest = co_await directory.map_reduce0(std::mem_fn(&sstables::sstable_directory::highest_generation_seen), sstables::generation_type(0), [] (std::optional<sstables::generation_type> a, std::optional<sstables::generation_type> b) {
