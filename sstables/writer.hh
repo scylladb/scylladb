@@ -81,6 +81,7 @@ public:
         return _offset;
     }
 
+private:
     const char* get_filename() const noexcept;
 };
 

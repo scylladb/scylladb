@@ -1006,7 +1006,7 @@ void sstable::open_sstable(const io_priority_class& pc) {
 }
 
 void sstable::write_toc(file_writer w) {
-    sstlog.debug("Writing TOC file {} ", w.get_filename());
+    sstlog.debug("Writing TOC file {} ", toc_filename());
 
     do_write_simple(std::move(w), [&] (version_types v, file_writer& w) {
         for (auto&& key : _recognized_components) {
