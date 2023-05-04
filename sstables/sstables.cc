@@ -2904,9 +2904,7 @@ future<> remove_by_toc_name(sstring sstable_toc_name) {
     std::vector<sstring> components;
     std::exception_ptr ex;
     try {
-        auto size = co_await toc_file.size();
-        auto text = co_await in.read_exactly(size);
-        sstring all(text.begin(), text.end());
+        auto all = co_await util::read_entire_stream_contiguous(in);
         boost::split(components, all, boost::is_any_of("\n"));
     } catch (...) {
         ex = std::current_exception();
