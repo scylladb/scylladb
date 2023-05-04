@@ -62,7 +62,7 @@ struct formatter<compaction::table_state> : formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const compaction::table_state& t, FormatContext& ctx) const {
         auto s = t.schema();
-        return format_to(ctx.out(), "{}.{} compaction_group={}", s->ks_name(), s->cf_name(), t.get_group_id());
+        return fmt::format_to(ctx.out(), "{}.{} compaction_group={}", s->ks_name(), s->cf_name(), t.get_group_id());
     }
 };
 
