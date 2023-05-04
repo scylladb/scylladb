@@ -163,7 +163,7 @@ future<> filesystem_storage::touch_temp_dir(const sstable& sst) {
     if (temp_dir) {
         co_return;
     }
-    auto tmp = dir + "/" + sstable::sst_dir_basename(sst._generation);
+    auto tmp = fmt::format("{}/{}{}", dir, sst._generation, tempdir_extension);
     sstlog.debug("Touching temp_dir={}", tmp);
     co_await sst.sstable_touch_directory_io_check(tmp);
     temp_dir = std::move(tmp);

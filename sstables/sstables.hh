@@ -122,6 +122,7 @@ constexpr const char* upload_dir = "upload";
 constexpr const char* snapshots_dir = "snapshots";
 constexpr const char* quarantine_dir = "quarantine";
 constexpr const char* pending_delete_dir = "pending_delete";
+constexpr const char* tempdir_extension = ".sstable";
 
 constexpr auto table_subdirectories = std::to_array({
     staging_dir,
@@ -375,15 +376,6 @@ public:
 
     sstring index_filename() const {
         return filename(component_type::Index);
-    }
-
-    static sstring sst_dir_basename(generation_type gen) {
-        return fmt::format("{}.sstable", gen);
-    }
-
-    static bool is_temp_dir(const fs::path& dirpath)
-    {
-        return dirpath.extension().string() == ".sstable";
     }
 
     bool requires_view_building() const;

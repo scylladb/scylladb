@@ -570,7 +570,7 @@ future<> sstable_directory::cleanup_column_family_temp_sst_dirs() {
         // so that the supplied callback will not block scan_dir() from
         // reading the next entry in the directory.
         fs::path dirpath = sstdir / de.name;
-        if (sstables::sstable::is_temp_dir(dirpath)) {
+        if (dirpath.extension().string() == tempdir_extension) {
             sstlog.info("Found temporary sstable directory: {}, removing", dirpath);
             futures.push_back(io_check([dirpath = std::move(dirpath)] () { return lister::rmdir(dirpath); }));
         }

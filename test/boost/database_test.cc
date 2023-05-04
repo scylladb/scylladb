@@ -322,10 +322,10 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
         require_exist(file_name, true);
     };
 
-    auto temp_sst_dir_2 = sst_dir + "/" + sst::sst_dir_basename(generation_from_value(2));
+    auto temp_sst_dir_2 = fmt::format("{}/{}{}", sst_dir, generation_from_value(2), tempdir_extension);
     touch_dir(temp_sst_dir_2);
 
-    auto temp_sst_dir_3 = sst_dir + "/" + sst::sst_dir_basename(generation_from_value(3));
+    auto temp_sst_dir_3 = fmt::format("{}/{}{}", sst_dir, generation_from_value(3), tempdir_extension);
     touch_dir(temp_sst_dir_3);
 
     auto temp_file_name = sst::filename(temp_sst_dir_3, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(3), sst::format_types::big, component_type::TemporaryTOC);
