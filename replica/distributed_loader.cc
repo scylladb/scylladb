@@ -648,14 +648,10 @@ private:
     future<> populate_subdir(sstring subdir, allow_offstrategy_compaction, must_exist = must_exist::yes);
 
     future<> start_subdir(sstring subdir);
+    future<> garbage_collect(sstring subdir);
 };
 
-future<> table_populator::start_subdir(sstring subdir) {
-    sstring sstdir = get_path(subdir).native();
-    if (!co_await file_exists(sstdir)) {
-        co_return;
-    }
-
+future<> table_populator::garbage_collect(sstring sstdir) {
     // First pass, cleanup temporary sstable directories and sstables pending delete.
     co_await distributed_loader::cleanup_column_family_temp_sst_dirs(sstdir);
     auto pending_delete_dir = sstdir + "/" + sstables::sstable::pending_delete_dir_basename();
@@ -663,6 +659,15 @@ future<> table_populator::start_subdir(sstring subdir) {
     if (exists) {
         co_await distributed_loader::handle_sstables_pending_delete(pending_delete_dir);
     }
+}
+
+future<> table_populator::start_subdir(sstring subdir) {
+    sstring sstdir = get_path(subdir).native();
+    if (!co_await file_exists(sstdir)) {
+        co_return;
+    }
+
+    co_await garbage_collect(sstdir);
 
     auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
     auto& directory = *dptr;
