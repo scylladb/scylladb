@@ -134,6 +134,15 @@ public:
         return std::string_view(value.c_str(), pos);
     }
 
+    locator::host_id get_host_id() const noexcept {
+        locator::host_id host_id;
+        auto* app_state = get_application_state_ptr(application_state::HOST_ID);
+        if (app_state) {
+            host_id = locator::host_id(utils::UUID(app_state->value()));
+        }
+        return host_id;
+    }
+
     bool is_shutdown() const noexcept {
         return get_status() == versioned_value::SHUTDOWN;
     }
