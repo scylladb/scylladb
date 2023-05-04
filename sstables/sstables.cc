@@ -3461,14 +3461,6 @@ future<> sstable::destroy() {
     }
 }
 
-future<file_writer> file_writer::make(file f, file_output_stream_options options, sstring filename) noexcept {
-    // note: make_file_output_stream closes the file if the stream creation fails
-    return make_file_output_stream(std::move(f), std::move(options))
-        .then([filename = std::move(filename)] (output_stream<char>&& out) {
-            return file_writer(std::move(out), std::move(filename));
-        });
-}
-
 std::ostream& operator<<(std::ostream& out, const deletion_time& dt) {
     return out << "{timestamp=" << dt.marked_for_delete_at << ", deletion_time=" << dt.marked_for_delete_at << "}";
 }

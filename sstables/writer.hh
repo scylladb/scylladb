@@ -37,9 +37,6 @@ class file_writer {
     std::optional<sstring> _filename;
     bool _closed = false;
 public:
-    // Closes the file if file_writer creation fails
-    static future<file_writer> make(file f, file_output_stream_options options, sstring filename) noexcept;
-
     file_writer(output_stream<char>&& out, sstring filename) noexcept
         : _out(std::move(out))
         , _filename(std::move(filename))
