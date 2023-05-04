@@ -109,6 +109,12 @@ distributed_loader::process_sstable_dir(sharded<sstables::sstable_directory>& di
         return utils::directories::verify_owner_and_mode(d.sstable_dir());
     });
 
+    if (flags.garbage_collect) {
+        co_await dir.invoke_on(0, [] (sstables::sstable_directory& d) {
+            return d.garbage_collect();
+        });
+    }
+
     co_await dir.invoke_on_all([&dir, flags] (sstables::sstable_directory& d) -> future<> {
         // Supposed to be called with the node either down or on behalf of maintenance tasks
         // like nodetool refresh
@@ -614,8 +620,6 @@ future<> table_populator::start_subdir(sstring subdir) {
         co_return;
     }
 
-    co_await sstables::sstable_directory::garbage_collect(fs::path(sstdir));
-
     auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
     auto& directory = *dptr;
     auto& global_table = _global_table;
@@ -637,6 +641,7 @@ future<> table_populator::start_subdir(sstring subdir) {
         .throw_on_missing_toc = true,
         .enable_dangerous_direct_import_of_cassandra_counters = db.local().get_config().enable_dangerous_direct_import_of_cassandra_counters(),
         .allow_loading_materialized_view = true,
+        .garbage_collect = true,
     };
     co_await distributed_loader::process_sstable_dir(directory, flags);
 
