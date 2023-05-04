@@ -208,8 +208,8 @@ public:
         return remove_file(_sst->filename(c));
     }
 
-    const sstring filename(component_type c) const {
-        return _sst->filename(c);
+    fs::path filename(component_type c) const {
+        return fs::path(_sst->filename(c));
     }
 
     void set_shards(std::vector<unsigned> shards) {
