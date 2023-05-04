@@ -1781,6 +1781,45 @@ future<> view_update_generator::mutate_MV(
     });
 }
 
+
+utils::small_vector<gms::inet_address, 2> view_update_generator::get_endpoints_for_view_update(
+        schema_ptr base,
+        dht::token base_token,
+        const frozen_mutation_and_schema& view_update) const {
+    dht::token view_token = dht::get_token(*view_update.s, view_update.fm.key());
+    const sstring& keyspace_name = view_update.s->ks_name();
+    auto base_ermp = base->table().get_effective_replication_map();
+    auto view_ermp = view_update.s->table().get_effective_replication_map();
+    auto& ks = _proxy.local().local_db().find_keyspace(keyspace_name);
+    bool network_topology = dynamic_cast<const locator::network_topology_strategy*>(&ks.get_replication_strategy());
+    bool use_legacy_self_pairing = !ks.get_replication_strategy().uses_tablets();
+
+    // For every base table replica there's a single paired view replica.
+    std::optional<gms::inet_address> paired_replica_endpoint =
+        get_view_natural_endpoint(base_ermp, view_ermp, network_topology, base_token, view_token, use_legacy_self_pairing);
+
+    // In case of an ongoing topology change it might also be necessary to send the update to pending nodes.
+    inet_address_vector_topology_change pending_endpoints = _proxy.local()
+                                                                .local_db()
+                                                                .find_keyspace(keyspace_name)
+                                                                .get_effective_replication_map()
+                                                                ->get_pending_endpoints(view_token);
+
+    utils::small_vector<gms::inet_address, 2> result;
+    if (paired_replica_endpoint.has_value()) {
+        result.push_back(*paired_replica_endpoint);
+    }
+
+    for (const gms::inet_address& pending_endpoint : pending_endpoints) {
+        // std::find is there to avoid any possible duplicates.
+        if (std::find(result.begin(), result.end(), pending_endpoint) == result.end()) {
+            result.push_back(pending_endpoint);
+        }
+    }
+
+    return result;
+}
+
 view_builder::view_builder(replica::database& db, db::system_keyspace& sys_ks, db::system_distributed_keyspace& sys_dist_ks, service::migration_notifier& mn, view_update_generator& vug)
         : _db(db)
         , _sys_ks(sys_ks)
