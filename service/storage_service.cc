@@ -2720,7 +2720,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
 future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<service::storage_proxy>& proxy,
         std::unordered_set<gms::inet_address> initial_contact_nodes,
-        std::unordered_set<gms::inet_address> loaded_endpoints,
+        std::unordered_map<gms::inet_address, locator::host_id> loaded_endpoints,
         std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
         std::chrono::milliseconds delay) {
     std::unordered_set<token> bootstrap_tokens;
@@ -2800,7 +2800,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
                     my_ip, local_host_id));
         }
         co_await _gossiper.reset_endpoint_state_map();
-        for (auto ep : loaded_endpoints) {
+        for (const auto& [ep, host_id] : loaded_endpoints) {
             co_await _gossiper.add_saved_endpoint(ep);
         }
     }
@@ -3883,7 +3883,7 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
 
     set_mode(mode::STARTING);
 
-    std::unordered_set<inet_address> loaded_endpoints;
+    std::unordered_map<inet_address, locator::host_id> loaded_endpoints;
     if (_db.local().get_config().load_ring_state() && !_raft_topology_change_enabled) {
         slogger.info("Loading persisted ring state");
         auto loaded_tokens = co_await _sys_ks.local().load_tokens();
@@ -3919,10 +3919,17 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
             } else {
                 tmptr->update_topology(ep, get_dc_rack(ep), locator::node::state::normal);
                 co_await tmptr->update_normal_tokens(tokens, ep);
+                locator::host_id host_id;
                 if (loaded_host_ids.contains(ep)) {
-                    tmptr->update_host_id(loaded_host_ids.at(ep), ep);
+                    host_id = loaded_host_ids.at(ep);
+                    if (!host_id) {
+                        on_internal_error(slogger, format("Cannot load node {}: null host_id in system.peers table", ep));
+                    }
+                    tmptr->update_host_id(host_id, ep);
+                } else {
+                    on_internal_error(slogger, format("Cannot load node {}: host_id not found", ep));
                 }
-                loaded_endpoints.insert(ep);
+                loaded_endpoints.emplace(ep, host_id);
                 co_await _gossiper.add_saved_endpoint(ep);
             }
         }
@@ -3936,7 +3943,7 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
     auto seeds = _gossiper.get_seeds();
     auto initial_contact_nodes = loaded_endpoints.empty() ?
         std::unordered_set<gms::inet_address>(seeds.begin(), seeds.end()) :
-        loaded_endpoints;
+        boost::copy_range<std::unordered_set<gms::inet_address>>(loaded_endpoints | boost::adaptors::map_keys);
     auto loaded_peer_features = co_await _sys_ks.local().load_peer_features();
     slogger.info("initial_contact_nodes={}, loaded_endpoints={}, loaded_peer_features={}",
             initial_contact_nodes, loaded_endpoints, loaded_peer_features.size());
