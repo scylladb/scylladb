@@ -11,6 +11,8 @@
 #include <compare>
 #include <cstddef>
 #include <limits>
+#include <chrono>
+#include "db/timeout_clock.hh"
 
 namespace db::view {
 
@@ -41,4 +43,17 @@ struct update_backlog {
     }
 };
 
+// View updates are asynchronous, and because of this limiting their concurrency requires
+// a special approach. The current algorithm places all of the pending view updates in
+// the backlog and artifically slows down new updates based on how full the backlog is.
+// This function calculates how much a request should be slowed down based on the backlog's fullness.
+// The equation is basically: view_fullness_ratio^3
+// The more full the backlog gets the more aggresively the requests are slowed down.
+// The delay is limited to the amount of time left until timeout.
+// After the timeout the request fails, so there's no point in waiting longer than that.
+// The second argument defines this timeout point - we can't delay the request more than this time point.
+// See: https://www.scylladb.com/2018/12/04/worry-free-ingestion-flow-control/
+std::chrono::microseconds calculate_view_update_throttling_delay(
+    update_backlog backlog,
+    db::timeout_clock::time_point timeout_delay_limit);
 }
