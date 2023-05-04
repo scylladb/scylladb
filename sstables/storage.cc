@@ -99,7 +99,7 @@ static future<file> open_sstable_component_file_non_checked(std::string_view nam
 future<file> filesystem_storage::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
     auto create_flags = open_flags::create | open_flags::exclusive;
     auto readonly = (flags & create_flags) != create_flags;
-    auto tgt_dir = !readonly && temp_dir ? dir + "/" + sstable::sst_dir_basename(sst._generation) : dir;
+    auto tgt_dir = !readonly && temp_dir ? *temp_dir : dir;
     auto name = sst.filename(tgt_dir, type);
 
     auto f = open_sstable_component_file_non_checked(name, flags, options, check_integrity);
