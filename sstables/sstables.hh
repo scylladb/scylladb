@@ -386,10 +386,6 @@ public:
         return dirpath.extension().string() == ".sstable";
     }
 
-    static sstring pending_delete_dir_basename() {
-        return pending_delete_dir;
-    }
-
     bool requires_view_building() const;
 
     bool is_quarantined() const noexcept;

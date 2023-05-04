@@ -358,7 +358,7 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
     sstring ks = "system";
     sstring cf = "peers-37f71aca7dc2383ba70672528af04d4f";
     sstring sst_dir = (data_dir.path() / std::string_view(ks) / std::string_view(cf)).string();
-    sstring pending_delete_dir = sst_dir + "/" + sst::pending_delete_dir_basename();
+    sstring pending_delete_dir = sst_dir + "/" + sstables::pending_delete_dir;
 
     auto require_exist = [] (const sstring& name, bool should_exist) {
         auto exists = file_exists(name).get0();

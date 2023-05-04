@@ -483,7 +483,7 @@ future<> sstable_directory::delete_with_pending_deletion_log(std::vector<shared_
             }
         }
 
-        sstring pending_delete_dir = first->_storage->prefix() + "/" + sstable::pending_delete_dir_basename();
+        sstring pending_delete_dir = first->_storage->prefix() + "/" + sstables::pending_delete_dir;
         sstring pending_delete_log = format("{}/sstables-{}-{}.log", pending_delete_dir, gen_tracker.min(), gen_tracker.max());
         sstring tmp_pending_delete_log = pending_delete_log + ".tmp";
         sstlog.trace("Writing {}", tmp_pending_delete_log);
@@ -581,7 +581,7 @@ future<> sstable_directory::cleanup_column_family_temp_sst_dirs() {
 }
 
 future<> sstable_directory::handle_sstables_pending_delete() {
-    auto pending_delete_dir = _sstable_dir / sstable::pending_delete_dir_basename();
+    auto pending_delete_dir = _sstable_dir / sstables::pending_delete_dir;
     auto exists = co_await file_exists(pending_delete_dir.native());
     if (!exists) {
         co_return;
