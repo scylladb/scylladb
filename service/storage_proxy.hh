@@ -227,6 +227,13 @@ public:
     query::tombstone_limit get_tombstone_limit() const;
     inet_address_vector_replica_set get_live_endpoints(const locator::effective_replication_map& erm, const dht::token& token) const;
 
+    // Get information about this node's view update backlog. It combines information from all local shards.
+    db::view::update_backlog get_view_update_backlog() const;
+
+    // Get information about a remote node's view update backlog. Information about remote backlogs is constantly updated
+    // using gossip and by passing the information in each MUTATION_DONE rpc call response.
+    db::view::update_backlog get_backlog_of(gms::inet_address) const;
+
     future<std::vector<dht::token_range_endpoints>> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const;
 
 private:
@@ -436,11 +443,7 @@ private:
             allow_hints,
             is_cancellable);
 
-    db::view::update_backlog get_view_update_backlog() const;
-
     void maybe_update_view_backlog_of(gms::inet_address, std::optional<db::view::update_backlog>);
-
-    db::view::update_backlog get_backlog_of(gms::inet_address) const;
 
     template<typename Range>
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
