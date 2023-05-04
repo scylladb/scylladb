@@ -171,18 +171,17 @@ future<> filesystem_storage::touch_temp_dir(const sstable& sst) {
 
 future<> filesystem_storage::remove_temp_dir() {
     if (!temp_dir) {
-        return make_ready_future<>();
+        co_return;
     }
     sstlog.debug("Removing temp_dir={}", temp_dir);
-    return remove_file(*temp_dir).then_wrapped([this] (future<> f) {
-        if (!f.failed()) {
-            temp_dir.reset();
-            return make_ready_future<>();
-        }
-        auto ep = f.get_exception();
-        sstlog.error("Could not remove temporary directory: {}", ep);
-        return make_exception_future<>(ep);
-    });
+    try {
+        co_await remove_file(*temp_dir);
+    } catch (...) {
+        sstlog.error("Could not remove temporary directory: {}", std::current_exception());
+        throw;
+    }
+
+    temp_dir.reset();
 }
 
 static bool is_same_file(const seastar::stat_data& sd1, const seastar::stat_data& sd2) noexcept {
