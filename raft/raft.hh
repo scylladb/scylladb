@@ -40,7 +40,7 @@ using server_id = internal::tagged_id<struct server_id_tag>;
 using group_id = raft::internal::tagged_id<struct group_id_tag>;
 
 // This type represents the raft term
-using term_t = utils::tagged_integer<struct term_tag, int64_t>;
+using term_t = utils::tagged_integer<struct term_tag, uint64_t>;
 // This type represensts the index into the raft log
 using index_t = utils::tagged_integer<struct index_tag, uint64_t>;
 // Identifier for a read barrier request
