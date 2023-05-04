@@ -75,6 +75,8 @@ class mutation;
 class frozen_mutation;
 class reconcilable_result;
 
+namespace s3 { struct endpoint_config; }
+
 namespace service {
 class storage_proxy;
 class storage_service;
@@ -1385,6 +1387,14 @@ private:
 
     serialized_action _update_memtable_flush_static_shares_action;
     utils::observer<float> _memtable_flush_static_shares_observer;
+
+    struct object_storage_config_updater {
+        serialized_action action;
+        utils::observer<std::unordered_map<sstring, s3::endpoint_config>> observer;
+        object_storage_config_updater(database&);
+    };
+
+    std::unique_ptr<object_storage_config_updater> _object_storage_config_updater;
 
 public:
     data_dictionary::database as_data_dictionary() const;

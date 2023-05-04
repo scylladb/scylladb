@@ -8,6 +8,7 @@ import atexit
 import os
 import requests
 import shutil
+import yaml
 
 print('Scylla is: ' + run.find_scylla() + '.')
 success = True
@@ -22,9 +23,27 @@ else:
 
 test_tempdir = run.pid_to_dir(os.getpid())
 os.mkdir(test_tempdir)
+s3_server_address = os.environ['S3_SERVER_ADDRESS_FOR_TEST']
+s3_server_port = int(os.environ['S3_SERVER_PORT_FOR_TEST'])
+s3_public_bucket = os.environ['S3_PUBLIC_BUCKET_FOR_TEST']
 
 def get_tempdir(pid):
     return test_tempdir
+
+with open(test_tempdir + '/object_storage.yaml', 'w') as config_file:
+    yaml.dump({ 'endpoints': [
+            {
+                'name': s3_server_address,
+                'port': s3_server_port,
+            }
+        ]
+    }, config_file)
+
+def run_scylla_cmd(pid, dir):
+    global cmd
+    (c, e) = cmd(pid, dir)
+    c += ['--object-storage-config-file', test_tempdir + '/object_storage.yaml']
+    return (c, e)
 
 def teardown(pid):
     print('Kill scylla')
@@ -33,18 +52,16 @@ def teardown(pid):
     shutil.copyfileobj(log, sys.stdout.buffer)
 
 print(f'Start scylla (dir={test_tempdir}')
-pid = run.run_with_generated_dir(cmd, get_tempdir)
+pid = run.run_with_generated_dir(run_scylla_cmd, get_tempdir)
 atexit.register(lambda: teardown(pid))
 
 ip = run.pid_to_ip(pid)
 run.wait_for_services(pid, [ lambda: check_cql(ip) ])
-s3_server_address = os.environ['S3_SERVER_ADDRESS_FOR_TEST']
-s3_public_bucket = os.environ['S3_PUBLIC_BUCKET_FOR_TEST']
 
 print(f'Create keyspace (minio listening at {s3_server_address})')
 cluster = run.get_cql_cluster(ip)
 conn = cluster.connect()
-conn.execute("CREATE KEYSPACE test_ks WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': '1' } AND STORAGE = { 'type': 'S3', 'endpoint': '" + f'{s3_server_address}' + ":9000', 'bucket': '" + f'{s3_public_bucket}' + "' };")
+conn.execute("CREATE KEYSPACE test_ks WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': '1' } AND STORAGE = { 'type': 'S3', 'endpoint': '" + f'{s3_server_address}' + "', 'bucket': '" + f'{s3_public_bucket}' + "' };")
 conn.execute("CREATE TABLE test_ks.test_cf ( name text primary key, value text );")
 conn.execute("INSERT INTO test_ks.test_cf ( name, value ) VALUES ('0', 'zero');")
 conn.execute("INSERT INTO test_ks.test_cf ( name, value ) VALUES ('1', 'one');")
@@ -69,7 +86,7 @@ for row in res:
 cluster.shutdown()
 
 print('Restart scylla')
-pid = run.restart_with_dir(pid, cmd, test_tempdir)
+pid = run.restart_with_dir(pid, run_scylla_cmd, test_tempdir)
 ip = run.pid_to_ip(pid)
 run.wait_for_services(pid, [ lambda: check_cql(ip) ])
 

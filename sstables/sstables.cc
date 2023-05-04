@@ -3298,8 +3298,8 @@ class sstable::s3_storage final : public sstable::storage {
     future<> ensure_remote_prefix(const sstable& sst);
 
 public:
-    s3_storage(sstring host, sstring bucket, sstring dir)
-        : _client(s3::client::make(ipv4_addr(host)))
+    s3_storage(sstring endpoint, s3::endpoint_config_ptr cfg, sstring bucket, sstring dir)
+        : _client(s3::client::make(std::move(endpoint), std::move(cfg)))
         , _bucket(std::move(bucket))
         , _location(std::move(dir))
     {
@@ -3390,13 +3390,13 @@ future<> sstable::s3_storage::snapshot(const sstable& sst, sstring dir, absolute
     co_await coroutine::return_exception(std::runtime_error("Snapshotting S3 objects not implemented"));
 }
 
-std::unique_ptr<sstable::storage> make_storage(const data_dictionary::storage_options& s_opts, sstring dir) {
+std::unique_ptr<sstable::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstring dir) {
     return std::visit(overloaded_functor {
         [dir] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstable::storage> {
             return std::make_unique<sstable::filesystem_storage>(std::move(dir));
         },
-        [dir] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable::storage> {
-            return std::make_unique<sstable::s3_storage>(os.endpoint, os.bucket, std::move(dir));
+        [dir, &manager] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable::storage> {
+            return std::make_unique<sstable::s3_storage>(os.endpoint, manager.get_endpoint_config(os.endpoint), os.bucket, std::move(dir));
         }
     }, s_opts.value);
 }
@@ -3415,7 +3415,7 @@ sstable::sstable(schema_ptr schema,
     : sstable_buffer_size(buffer_size)
     , _schema(std::move(schema))
     , _generation(generation)
-    , _storage(make_storage(storage, std::move(dir)))
+    , _storage(make_storage(manager, storage, std::move(dir)))
     , _version(v)
     , _format(f)
     , _index_cache(std::make_unique<partition_index_cache>(
