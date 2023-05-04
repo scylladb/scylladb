@@ -521,7 +521,10 @@ future<> storage_service::topology_state_load() {
     // will be up to date and reachable at the time of restart.
     for (const auto& e: get_token_metadata_ptr()->get_all_endpoints()) {
         if (!utils::fb_utilities::is_me(e) && !_gossiper.get_endpoint_state_ptr(e)) {
-            co_await _gossiper.add_saved_endpoint(e);
+            if (auto server_id_opt = am.find_by_addr(e)) {
+                auto host_id = locator::host_id(server_id_opt->uuid());
+                co_await _gossiper.add_saved_endpoint(e, host_id);
+            }
         }
     }
 
@@ -2801,7 +2804,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         }
         co_await _gossiper.reset_endpoint_state_map();
         for (const auto& [ep, host_id] : loaded_endpoints) {
-            co_await _gossiper.add_saved_endpoint(ep);
+            co_await _gossiper.add_saved_endpoint(ep, host_id);
         }
     }
     auto features = _feature_service.supported_feature_set();
@@ -3930,7 +3933,7 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
                     on_internal_error(slogger, format("Cannot load node {}: host_id not found", ep));
                 }
                 loaded_endpoints.emplace(ep, host_id);
-                co_await _gossiper.add_saved_endpoint(ep);
+                co_await _gossiper.add_saved_endpoint(ep, host_id);
             }
         }
         co_await replicate_to_all_cores(std::move(tmptr));

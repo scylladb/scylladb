@@ -2176,8 +2176,12 @@ void gossiper::build_seeds_list() {
     }
 }
 
-future<> gossiper::add_saved_endpoint(inet_address ep) {
-    if (is_me(ep)) {
+future<> gossiper::add_saved_endpoint(inet_address ep, locator::host_id host_id) {
+    if (!ep || !host_id) {
+        on_internal_error(logger, format("Cannot add saved endpoint {}/{}", host_id, ep));
+    }
+
+    if (is_me(ep) || is_me(host_id)) {
         logger.debug("Attempt to add self as saved endpoint");
         co_return;
     }
@@ -2198,14 +2202,12 @@ future<> gossiper::add_saved_endpoint(inet_address ep) {
         std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
         ep_state.add_application_state(gms::application_state::TOKENS, versioned_value::tokens(tokens_set));
     }
-    auto host_id = tmptr->get_host_id_if_known(ep);
-    if (host_id) {
-        ep_state.add_application_state(gms::application_state::HOST_ID, versioned_value::host_id(host_id.value()));
-    }
+    ep_state.add_application_state(gms::application_state::HOST_ID, versioned_value::host_id(host_id));
     auto generation = ep_state.get_heart_beat_state().get_generation();
+    co_await update_address_map(host_id, ep, generation);
     co_await replicate(ep, std::move(ep_state), permit.id());
     _unreachable_endpoints[ep] = now();
-    logger.trace("Adding saved endpoint {} {}", ep, generation);
+    logger.debug("Added saved node {}/{}: generation={}", host_id, ep, generation);
 }
 
 future<> gossiper::add_local_application_state(application_state state, versioned_value value) {

@@ -650,7 +650,7 @@ public:
     /**
      * Add an endpoint we knew about previously, but whose state is unknown
      */
-    future<> add_saved_endpoint(inet_address ep);
+    future<> add_saved_endpoint(inet_address ep, locator::host_id host_id);
 
     future<> add_local_application_state(application_state state, versioned_value value);
 
