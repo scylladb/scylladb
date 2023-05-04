@@ -8,7 +8,6 @@
  */
 
 #include <unordered_map>
-#include <regex>
 #include <sstream>
 
 #include <boost/any.hpp>

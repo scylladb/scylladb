@@ -11,8 +11,6 @@
 #include "cql3/util.hh"
 #include "cql3/query_options.hh"
 
-#include <regex>
-
 namespace cql3 {
 
 column_identifier::column_identifier(sstring raw_text, bool keep_case) {
