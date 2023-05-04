@@ -1502,28 +1502,11 @@ public:
                     return std::max(lhs, rhs);
                 });
     }
-    std::chrono::microseconds calculate_delay(db::view::update_backlog backlog) {
-        constexpr auto delay_limit_us = 1000000;
-        auto adjust = [] (float x) { return x * x * x; };
-        auto budget = std::max(storage_proxy::clock_type::duration(0),
-            _expire_timer.get_timeout() - storage_proxy::clock_type::now());
-        std::chrono::microseconds ret(uint32_t(adjust(backlog.relative_size()) * delay_limit_us));
-        // "budget" has millisecond resolution and can potentially be long
-        // in the future so converting it to microseconds may overflow.
-        // So to compare buget and ret we need to convert both to the lower
-        // resolution.
-        if (std::chrono::duration_cast<storage_proxy::clock_type::duration>(ret) < budget) {
-            return ret;
-        } else {
-            // budget is small (< ret) so can be converted to microseconds
-            return std::chrono::duration_cast<std::chrono::microseconds>(budget);
-        }
-    }
     // Calculates how much to delay completing the request. The delay adds to the request's inherent latency.
     template<typename Func>
     void delay(tracing::trace_state_ptr trace, Func&& on_resume) {
         auto backlog = max_backlog();
-        auto delay = calculate_delay(backlog);
+        auto delay = db::view::calculate_view_update_throttling_delay(backlog, _expire_timer.get_timeout());
         stats().last_mv_flow_control_delay = delay;
         if (delay.count() == 0) {
             tracing::trace(trace, "Delay decision due to throttling: do not delay, resuming now");
