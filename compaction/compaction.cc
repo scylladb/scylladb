@@ -169,6 +169,10 @@ std::ostream& operator<<(std::ostream& os, pretty_printed_throughput tp) {
 
 static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_s, sstable_set::incremental_selector& selector,
         const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk) {
+    if (!table_s.tombstone_gc_enabled()) [[unlikely]] {
+        return api::min_timestamp;
+    }
+
     auto timestamp = table_s.min_memtable_timestamp();
     std::optional<utils::hashed_key> hk;
     for (auto&& sst : boost::range::join(selector.select(dk).sstables, table_s.compacted_undeleted_sstables())) {
@@ -571,7 +575,7 @@ protected:
     // Tombstone expiration is enabled based on the presence of sstable set.
     // If it's not present, we cannot purge tombstones without the risk of resurrecting data.
     bool tombstone_expiration_enabled() const {
-        return bool(_sstable_set);
+        return bool(_sstable_set) && _table_s.tombstone_gc_enabled();
     }
 
     compaction_writer create_gc_compaction_writer() const {
