@@ -11,8 +11,6 @@
 #include "marshal_exception.hh"
 #include <seastar/core/print.hh>
 
-#include <regex>
-
 #ifdef __clang__
 
 // Clang or boost have a problem navigating the enable_if maze
