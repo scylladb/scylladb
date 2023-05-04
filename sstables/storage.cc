@@ -161,14 +161,12 @@ future<> filesystem_storage::seal(const sstable& sst) {
 
 future<> filesystem_storage::touch_temp_dir(const sstable& sst) {
     if (temp_dir) {
-        return make_ready_future<>();
+        co_return;
     }
     auto tmp = dir + "/" + sstable::sst_dir_basename(sst._generation);
     sstlog.debug("Touching temp_dir={}", tmp);
-    auto fut = sst.sstable_touch_directory_io_check(tmp);
-    return fut.then([this, tmp = std::move(tmp)] () mutable {
-        temp_dir = std::move(tmp);
-    });
+    co_await sst.sstable_touch_directory_io_check(tmp);
+    temp_dir = std::move(tmp);
 }
 
 future<> filesystem_storage::remove_temp_dir() {
