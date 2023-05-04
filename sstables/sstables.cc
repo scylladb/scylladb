@@ -1011,9 +1011,9 @@ void sstable::write_toc(file_writer w) {
     do_write_simple(std::move(w), [&] (version_types v, file_writer& w) {
         for (auto&& key : _recognized_components) {
             // new line character is appended to the end of each component name.
-            auto value = sstable_version_constants::get_component_map(_version).at(key) + "\n";
+            auto value = sstable_version_constants::get_component_map(v).at(key) + "\n";
             bytes b = bytes(reinterpret_cast<const bytes::value_type *>(value.c_str()), value.size());
-            write(_version, w, b);
+            write(v, w, b);
         }
     });
 }
@@ -1103,10 +1103,10 @@ future<> sstable::do_read_simple(component_type type,
 
 future<> sstable::do_read_simple(component_type type,
                                  noncopyable_function<future<> (version_types, file)> read_component) {
-    return do_read_simple(type, [this, read_component = std::move(read_component)] (version_types v, file&& f, uint64_t) -> future<> {
+    return do_read_simple(type, [read_component = std::move(read_component)] (version_types v, file&& f, uint64_t) -> future<> {
         std::exception_ptr ex;
         try {
-            co_await read_component(_version, f);
+            co_await read_component(v, f);
         } catch (...) {
             ex = std::current_exception();
         }
