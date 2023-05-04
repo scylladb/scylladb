@@ -11,6 +11,7 @@
 #include "sstables/shared_sstable.hh"
 #include "db/timeout_clock.hh"
 #include "utils/chunked_vector.hh"
+#include "gms/inet_address.hh"
 
 #include <seastar/core/sharded.hh>
 #include <seastar/core/metrics_registration.hh>
@@ -85,6 +86,14 @@ public:
             wait_for_all_updates wait_for_all);
 
     ssize_t available_register_units() const { return _registration_sem.available_units(); }
+
+    // Each view update has to be sent to the proper view table replica.
+    // This function finds all endpoints to which a particular update should be sent.
+    // Usually each update is sent to the single paired view replica, but in case of an
+    // ongoing topology change it might also be necessary to send the update to pending nodes.
+    utils::small_vector<gms::inet_address, 2> get_endpoints_for_view_update(
+        dht::token base_token,
+        const frozen_mutation_and_schema& view_update) const;
 private:
     bool should_throttle() const;
     void setup_metrics();
