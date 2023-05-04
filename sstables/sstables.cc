@@ -2900,19 +2900,15 @@ future<> remove_by_toc_name(sstring sstable_toc_name) {
         }
     }
     auto toc_file = co_await open_checked_file_dma(sstable_write_error_handler, new_toc_name, open_flags::ro);
-    auto in = make_file_input_stream(toc_file);
-    std::vector<sstring> components;
-    std::exception_ptr ex;
-    try {
-        auto all = co_await util::read_entire_stream_contiguous(in);
-        boost::split(components, all, boost::is_any_of("\n"));
-    } catch (...) {
-        ex = std::current_exception();
-    }
-    co_await in.close();
-    if (ex) {
-        std::rethrow_exception(std::move(ex));
-    }
+    std::vector<sstring> components = co_await with_closeable(std::move(toc_file), [] (file& toc_file) {
+        return with_closeable(make_file_input_stream(toc_file), [] (input_stream<char>& in) -> future<std::vector<sstring>> {
+            std::vector<sstring> components;
+            auto all = co_await util::read_entire_stream_contiguous(in);
+            boost::split(components, all, boost::is_any_of("\n"));
+            co_return components;
+        });
+    });
+
     co_await coroutine::parallel_for_each(components, [&prefix] (sstring component) -> future<> {
         if (component.empty()) {
             // eof
