@@ -75,6 +75,8 @@ public:
 
     replica::database& get_db() noexcept { return _db; }
 
+    const sharded<service::storage_proxy>& get_storage_proxy() const noexcept { return _proxy; };
+
     future<> mutate_MV(
             dht::token base_token,
             utils::chunked_vector<frozen_mutation_and_schema> view_updates,
