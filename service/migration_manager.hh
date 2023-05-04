@@ -60,6 +60,7 @@ private:
     migration_notifier& _notifier;
 
     std::unordered_map<netw::msg_addr, serialized_action, netw::msg_addr::hash> _schema_pulls;
+    serialized_action _group0_barrier;
     std::vector<gms::feature::listener_registration> _feature_listeners;
     seastar::gate _background_tasks;
     static const std::chrono::milliseconds migration_delay;
