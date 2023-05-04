@@ -1100,6 +1100,18 @@ def test_gsi_backfill(dynamodb):
         assert multiset([items1[3]]) == multiset(full_query(table,
             ConsistentRead=False, IndexName='hello',
             KeyConditions={'x': {'AttributeValueList': [items1[3]['x']], 'ComparisonOperator': 'EQ'}}))
+        # Because the GSI now exists, we are no longer allowed to add to the
+        # base table items with a wrong type for x (like we were able to add
+        # earlier - see items3). But if x is missing (as in items2), we
+        # *are* allowed to add the item and it appears in the base table
+        # (but the view table doesn't change)
+        p = random_string()
+        y = random_string()
+        table.put_item(Item={'p': p, 'y': y})
+        assert table.get_item(Key={'p':  p}, ConsistentRead=True)['Item'] == {'p': p, 'y': y}
+        with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+            table.put_item(Item={'p': random_string(), 'x': 3})
+
         # Let's also test that we cannot add another index with the same name
         # that already exists
         with pytest.raises(ClientError, match='ValidationException.*already exists'):
@@ -1147,6 +1159,12 @@ def test_gsi_delete(dynamodb):
         with pytest.raises(ClientError, match='ValidationException.*hello'):
             full_query(table, ConsistentRead=False, IndexName='hello',
                 KeyConditions={'x': {'AttributeValueList': [items[3]['x']], 'ComparisonOperator': 'EQ'}})
+        # When we had a GSI on x with type S, we weren't allowed to insert
+        # items with a number for x. Now, after dropping this GSI, we should
+        # be able to insert any type for x:
+        p = random_string()
+        table.put_item(Item={'p': p, 'x': 7})
+        assert table.get_item(Key={'p':  p}, ConsistentRead=True)['Item'] == {'p': p, 'x': 7}
 
 # Utility function for creating a new table a GSI with the given name,
 # and, if creation was successful, delete it. Useful for testing which
