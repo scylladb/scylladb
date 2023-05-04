@@ -726,16 +726,22 @@ class topology_coordinator {
         return std::move(*node_opt);
      };
 
-    void release_node(std::optional<node_to_work_on> node) {
-        // Leaving the scope destroys the object and releases the guard.
-    }
-
-    future<node_to_work_on> retake_node(raft::server_id id) {
+    future<group0_guard> start_operation() {
         auto guard = co_await _group0.client().start_operation(&_as);
 
         if (_term != _raft.get_current_term()) {
             throw term_changed_error{};
         }
+
+        co_return std::move(guard);
+    }
+
+    void release_node(std::optional<node_to_work_on> node) {
+        // Leaving the scope destroys the object and releases the guard.
+    }
+
+    future<node_to_work_on> retake_node(raft::server_id id) {
+        auto guard = co_await start_operation();
 
         auto& topo = _topo_sm._topology;
 
@@ -1226,7 +1232,7 @@ future<> topology_coordinator::run() {
                 wait_for_event = false;
             }
 
-            auto guard = co_await _group0.client().start_operation(&_as);
+            auto guard = co_await start_operation();
             co_await cleanup_group0_config_if_needed();
 
             bool had_work = co_await handle_topology_transition(std::move(guard));
