@@ -3060,9 +3060,8 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint, gms::per
 
     tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::node::state::bootstrapping);
     tmptr->add_bootstrap_tokens(tokens, endpoint);
-    if (_gossiper.uses_host_id(endpoint)) {
+    // FIXME: indentation
         tmptr->update_host_id(_gossiper.get_host_id(endpoint), endpoint);
-    }
     co_await update_topology_change_info(tmptr, ::format("handle_state_bootstrap {}", endpoint));
     co_await replicate_to_all_cores(std::move(tmptr));
 }
@@ -3091,7 +3090,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
         endpoints_to_remove.insert(node);
     };
     // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
-    if (_gossiper.uses_host_id(endpoint)) {
+    // FIXME: indentation
         auto host_id = _gossiper.get_host_id(endpoint);
         auto existing = tmptr->get_endpoint_for_host_id(host_id);
         if (existing && *existing != endpoint) {
@@ -3121,7 +3120,6 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
             slogger.info("Set host_id={} to be owned by node={}", host_id, endpoint);
             tmptr->update_host_id(host_id, endpoint);
         }
-    }
 
     // Tokens owned by the handled endpoint.
     // The endpoint broadcasts its set of chosen tokens. If a token was also chosen by another endpoint,
