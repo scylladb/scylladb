@@ -17,9 +17,9 @@ BASE_URL = 'https://docs.scylladb.com'
 TAGS = []
 BRANCHES = ["master", "branch-5.1", "branch-5.2"]
 # Set the latest version.
-LATEST_VERSION = "branch-5.1"
+LATEST_VERSION = "branch-5.2"
 # Set which versions are not released yet.
-UNSTABLE_VERSIONS = ["master", "branch-5.2"]
+UNSTABLE_VERSIONS = ["master"]
 # Set which versions are deprecated.
 DEPRECATED_VERSIONS = [""]
 
