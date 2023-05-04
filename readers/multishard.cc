@@ -58,7 +58,7 @@ class foreign_reader : public flat_mutation_reader_v2::impl {
     // we don't have to wait on the remote reader filling its buffer.
     template <typename Operation, typename Result = futurize_t<std::result_of_t<Operation()>>>
     Result forward_operation(Operation op) {
-        reader_permit::blocked_guard bg{_permit};
+        reader_permit::awaits_guard awaits_guard{_permit};
         return smp::submit_to(_reader.get_owner_shard(), [reader = _reader.get(),
                 read_ahead_future = std::exchange(_read_ahead_future, nullptr),
                 op = std::move(op)] () mutable {
@@ -84,7 +84,7 @@ class foreign_reader : public flat_mutation_reader_v2::impl {
                 auto result = std::get<1>(std::move(fut_and_result));
                 return make_ready_future<decltype(result)>(std::move(result));
             }
-        }).finally([bg = std::move(bg)] { });
+        }).finally([awaits_guard = std::move(awaits_guard)] { });
     }
 public:
     foreign_reader(schema_ptr schema,
@@ -855,7 +855,7 @@ future<> shard_reader_v2::do_fill_buffer() {
 
                 try {
                     tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
-                    reader_permit::used_guard ug{rreader->permit()};
+                    reader_permit::need_cpu_guard ncpu_guard{rreader->permit()};
                     co_await rreader->fill_buffer();
                     auto res = remote_fill_buffer_result_v2(rreader->detach_buffer(), rreader->is_end_of_stream());
                     co_return reader_and_buffer_fill_result{std::move(rreader), std::move(res)};
@@ -869,7 +869,7 @@ future<> shard_reader_v2::do_fill_buffer() {
             co_return std::move(res.result);
         } else {
             co_return co_await smp::submit_to(_shard, coroutine::lambda([this] () -> future<remote_fill_buffer_result_v2>  {
-                reader_permit::used_guard ug{_reader->permit()};
+                reader_permit::need_cpu_guard ncpu_guard{_reader->permit()};
                 co_await _reader->fill_buffer();
                 co_return remote_fill_buffer_result_v2(_reader->detach_buffer(), _reader->is_end_of_stream());
             }));
@@ -886,7 +886,7 @@ future<> shard_reader_v2::do_fill_buffer() {
 
 future<> shard_reader_v2::fill_buffer() {
     // FIXME: want to move this to the inner scopes but it makes clang miscompile the code.
-    reader_permit::blocked_guard guard(_permit);
+    reader_permit::awaits_guard guard(_permit);
     if (_read_ahead) {
         co_await *std::exchange(_read_ahead, std::nullopt);
         co_return;
@@ -903,7 +903,7 @@ future<> shard_reader_v2::next_partition() {
     }
 
     // FIXME: want to move this to the inner scopes but it makes clang miscompile the code.
-    reader_permit::blocked_guard guard(_permit);
+    reader_permit::awaits_guard guard(_permit);
 
     if (_read_ahead) {
         co_await *std::exchange(_read_ahead, std::nullopt);
@@ -925,7 +925,7 @@ future<> shard_reader_v2::fast_forward_to(const dht::partition_range& pr) {
         co_return;
     }
 
-    reader_permit::blocked_guard guard(_permit);
+    reader_permit::awaits_guard guard(_permit);
 
     if (_read_ahead) {
         co_await *std::exchange(_read_ahead, std::nullopt);

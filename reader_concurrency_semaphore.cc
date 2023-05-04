@@ -140,10 +140,10 @@ private:
     bool _base_resources_consumed = false;
     reader_resources _resources;
     reader_permit::state _state = reader_permit::state::active;
-    uint64_t _used_branches = 0;
-    bool _marked_as_used = false;
-    uint64_t _blocked_branches = 0;
-    bool _marked_as_blocked = false;
+    uint64_t _need_cpu_branches = 0;
+    bool _marked_as_need_cpu = false;
+    uint64_t _awaits_branches = 0;
+    bool _marked_as_awaits = false;
     std::exception_ptr _ex; // exception the permit was aborted with, nullptr if not aborted
     timer<db::timeout_clock> _ttl_timer;
     query::max_result_size _max_result_size{query::result_memory_limiter::unlimited_result_size};
@@ -157,29 +157,29 @@ private:
     auxiliary_data _aux_data;
 
 private:
-    void on_permit_used() {
-        _semaphore.on_permit_used();
-        _marked_as_used = true;
+    void on_permit_need_cpu() {
+        _semaphore.on_permit_need_cpu();
+        _marked_as_need_cpu = true;
     }
-    void on_permit_unused() {
-        _semaphore.on_permit_unused();
-        _marked_as_used = false;
+    void on_permit_not_need_cpu() {
+        _semaphore.on_permit_not_need_cpu();
+        _marked_as_need_cpu = false;
     }
-    void on_permit_blocked() {
-        _semaphore.on_permit_blocked();
-        _marked_as_blocked = true;
+    void on_permit_awaits() {
+        _semaphore.on_permit_awaits();
+        _marked_as_awaits = true;
     }
-    void on_permit_unblocked() {
-        _semaphore.on_permit_unblocked();
-        _marked_as_blocked = false;
+    void on_permit_not_awaits() {
+        _semaphore.on_permit_not_awaits();
+        _marked_as_awaits = false;
     }
     void on_permit_active() {
-        if (_used_branches) {
+        if (_need_cpu_branches) {
             _state = reader_permit::state::active_need_cpu;
-            on_permit_used();
-            if (_blocked_branches) {
+            on_permit_need_cpu();
+            if (_awaits_branches) {
                 _state = reader_permit::state::active_await;
-                on_permit_blocked();
+                on_permit_awaits();
             }
         } else {
             _state = reader_permit::state::active;
@@ -188,11 +188,11 @@ private:
 
     void on_permit_inactive(reader_permit::state st) {
         _state = st;
-        if (_marked_as_blocked) {
-            on_permit_unblocked();
+        if (_marked_as_awaits) {
+            on_permit_not_awaits();
         }
-        if (_marked_as_used) {
-            on_permit_unused();
+        if (_marked_as_need_cpu) {
+            on_permit_not_need_cpu();
         }
     }
 
@@ -251,22 +251,22 @@ public:
             signal(_resources);
         }
 
-        if (_used_branches) {
-            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {}.{}:{} destroyed with {} used branches",
+        if (_need_cpu_branches) {
+            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {}.{}:{} destroyed with {} need_cpu branches",
                         _schema ? _schema->ks_name() : "*",
                         _schema ? _schema->cf_name() : "*",
                         _op_name_view,
-                        _used_branches));
-            _semaphore.on_permit_unused();
+                        _need_cpu_branches));
+            _semaphore.on_permit_not_need_cpu();
         }
 
-        if (_blocked_branches) {
-            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {}.{}:{} destroyed with {} blocked branches",
+        if (_awaits_branches) {
+            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {}.{}:{} destroyed with {} awaits branches",
                         _schema ? _schema->ks_name() : "*",
                         _schema ? _schema->cf_name() : "*",
                         _op_name_view,
-                        _blocked_branches));
-            _semaphore.on_permit_unblocked();
+                        _awaits_branches));
+            _semaphore.on_permit_not_awaits();
         }
 
         // Should probably make a scene here, but its not worth it.
@@ -385,47 +385,47 @@ public:
                 _op_name_view);
     }
 
-    void mark_used() noexcept {
-        ++_used_branches;
-        if (!_marked_as_used && _state == reader_permit::state::active) {
+    void mark_need_cpu() noexcept {
+        ++_need_cpu_branches;
+        if (!_marked_as_need_cpu && _state == reader_permit::state::active) {
             _state = reader_permit::state::active_need_cpu;
-            on_permit_used();
-            if (_blocked_branches && !_marked_as_blocked) {
+            on_permit_need_cpu();
+            if (_awaits_branches && !_marked_as_awaits) {
                 _state = reader_permit::state::active_await;
-                on_permit_blocked();
+                on_permit_awaits();
             }
         }
     }
 
-    void mark_unused() noexcept {
-        assert(_used_branches);
-        --_used_branches;
-        if (_marked_as_used && !_used_branches) {
-            // When an exception is thrown, blocked and used guards might be
-            // destroyed out-of-order. Force an unblock here so that we maintain
-            // used >= blocked.
-            if (_marked_as_blocked) {
-                on_permit_unblocked();
+    void mark_not_need_cpu() noexcept {
+        assert(_need_cpu_branches);
+        --_need_cpu_branches;
+        if (_marked_as_need_cpu && !_need_cpu_branches) {
+            // When an exception is thrown, need_cpu and awaits guards might be
+            // destroyed out-of-order. Force the state out of awaits state here
+            // so that we maintain awaits >= need_cpu.
+            if (_marked_as_awaits) {
+                on_permit_not_awaits();
             }
             _state = reader_permit::state::active;
-            on_permit_unused();
+            on_permit_not_need_cpu();
         }
     }
 
-    void mark_blocked() noexcept {
-        ++_blocked_branches;
-        if (_blocked_branches == 1 && _state == reader_permit::state::active_need_cpu) {
+    void mark_awaits() noexcept {
+        ++_awaits_branches;
+        if (_awaits_branches == 1 && _state == reader_permit::state::active_need_cpu) {
             _state = reader_permit::state::active_await;
-            on_permit_blocked();
+            on_permit_awaits();
         }
     }
 
-    void mark_unblocked() noexcept {
-        assert(_blocked_branches);
-        --_blocked_branches;
-        if (_marked_as_blocked && !_blocked_branches) {
+    void mark_not_awaits() noexcept {
+        assert(_awaits_branches);
+        --_awaits_branches;
+        if (_marked_as_awaits && !_awaits_branches) {
             _state = reader_permit::state::active_need_cpu;
-            on_permit_unblocked();
+            on_permit_not_awaits();
         }
     }
 
@@ -577,20 +577,20 @@ sstring reader_permit::description() const {
     return _impl->description();
 }
 
-void reader_permit::mark_used() noexcept {
-    _impl->mark_used();
+void reader_permit::mark_need_cpu() noexcept {
+    _impl->mark_need_cpu();
 }
 
-void reader_permit::mark_unused() noexcept {
-    _impl->mark_unused();
+void reader_permit::mark_not_need_cpu() noexcept {
+    _impl->mark_not_need_cpu();
 }
 
-void reader_permit::mark_blocked() noexcept {
-    _impl->mark_blocked();
+void reader_permit::mark_awaits() noexcept {
+    _impl->mark_awaits();
 }
 
-void reader_permit::mark_unblocked() noexcept {
-    _impl->mark_unblocked();
+void reader_permit::mark_not_awaits() noexcept {
+    _impl->mark_not_awaits();
 }
 
 db::timeout_clock::time_point reader_permit::timeout() const noexcept {
@@ -772,14 +772,14 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
             "reads_enqueued_for_memory: {}\n"
             "reads_admitted_immediately: {}\n"
             "reads_queued_because_ready_list: {}\n"
-            "reads_queued_because_used_permits: {}\n"
+            "reads_queued_because_need_cpu_permits: {}\n"
             "reads_queued_because_memory_resources: {}\n"
             "reads_queued_because_count_resources: {}\n"
             "reads_queued_with_eviction: {}\n"
             "total_permits: {}\n"
             "current_permits: {}\n"
-            "used_permits: {}\n"
-            "blocked_permits: {}\n"
+            "need_cpu_permits: {}\n"
+            "awaits_permits: {}\n"
             "disk_reads: {}\n"
             "sstables_read: {}",
             stats.permit_based_evictions,
@@ -794,14 +794,14 @@ static void do_dump_reader_permit_diagnostics(std::ostream& os, const reader_con
             stats.reads_enqueued_for_memory,
             stats.reads_admitted_immediately,
             stats.reads_queued_because_ready_list,
-            stats.reads_queued_because_used_permits,
+            stats.reads_queued_because_need_cpu_permits,
             stats.reads_queued_because_memory_resources,
             stats.reads_queued_because_count_resources,
             stats.reads_queued_with_eviction,
             stats.total_permits,
             stats.current_permits,
-            stats.used_permits,
-            stats.blocked_permits,
+            stats.need_cpu_permits,
+            stats.awaits_permits,
             stats.disk_reads,
             stats.sstables_read);
 }
@@ -1162,8 +1162,8 @@ bool reader_concurrency_semaphore::has_available_units(const resources& r) const
     return (_resources.non_zero() && _resources.count >= r.count && _resources.memory >= r.memory) || _resources.count == _initial_resources.count;
 }
 
-bool reader_concurrency_semaphore::all_used_permits_are_stalled() const {
-    return _stats.used_permits == _stats.blocked_permits;
+bool reader_concurrency_semaphore::all_need_cpu_permits_are_awaiting() const {
+    return _stats.need_cpu_permits == _stats.awaits_permits;
 }
 
 std::exception_ptr reader_concurrency_semaphore::check_queue_size(std::string_view queue_name) {
@@ -1246,8 +1246,8 @@ reader_concurrency_semaphore::can_admit_read(const reader_permit::impl& permit) 
         return {can_admit::no, reason::ready_list};
     }
 
-    if (!all_used_permits_are_stalled()) {
-        return {can_admit::no, reason::used_permits};
+    if (!all_need_cpu_permits_are_awaiting()) {
+        return {can_admit::no, reason::need_cpu_permits};
     }
 
     if (!has_available_units(permit.base_resources())) {
@@ -1281,7 +1281,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
     static uint64_t stats::*stats_table[] = {
         &stats::reads_admitted_immediately,
         &stats::reads_queued_because_ready_list,
-        &stats::reads_queued_because_used_permits,
+        &stats::reads_queued_because_need_cpu_permits,
         &stats::reads_queued_because_memory_resources,
         &stats::reads_queued_because_count_resources
     };
@@ -1289,7 +1289,7 @@ future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& pe
     static const char* result_as_string[] = {
         "admitted immediately",
         "queued because of non-empty ready list",
-        "queued because of used permits",
+        "queued because of need_cpu permits",
         "queued because of memory resources",
         "queued because of count resources"
     };
@@ -1414,26 +1414,26 @@ void reader_concurrency_semaphore::on_permit_destroyed(reader_permit::impl& perm
     }
 }
 
-void reader_concurrency_semaphore::on_permit_used() noexcept {
-    ++_stats.used_permits;
+void reader_concurrency_semaphore::on_permit_need_cpu() noexcept {
+    ++_stats.need_cpu_permits;
 }
 
-void reader_concurrency_semaphore::on_permit_unused() noexcept {
-    assert(_stats.used_permits);
-    --_stats.used_permits;
-    assert(_stats.used_permits >= _stats.blocked_permits);
+void reader_concurrency_semaphore::on_permit_not_need_cpu() noexcept {
+    assert(_stats.need_cpu_permits);
+    --_stats.need_cpu_permits;
+    assert(_stats.need_cpu_permits >= _stats.awaits_permits);
     maybe_admit_waiters();
 }
 
-void reader_concurrency_semaphore::on_permit_blocked() noexcept {
-    ++_stats.blocked_permits;
-    assert(_stats.used_permits >= _stats.blocked_permits);
+void reader_concurrency_semaphore::on_permit_awaits() noexcept {
+    ++_stats.awaits_permits;
+    assert(_stats.need_cpu_permits >= _stats.awaits_permits);
     maybe_admit_waiters();
 }
 
-void reader_concurrency_semaphore::on_permit_unblocked() noexcept {
-    assert(_stats.blocked_permits);
-    --_stats.blocked_permits;
+void reader_concurrency_semaphore::on_permit_not_awaits() noexcept {
+    assert(_stats.awaits_permits);
+    --_stats.awaits_permits;
 }
 
 future<reader_permit> reader_concurrency_semaphore::obtain_permit(const schema* const schema, const char* const op_name, size_t memory,
