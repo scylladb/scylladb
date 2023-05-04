@@ -560,11 +560,7 @@ future<> sstable_directory::replay_pending_delete_log(fs::path pending_delete_lo
 future<> sstable_directory::garbage_collect(fs::path sstdir) {
     // First pass, cleanup temporary sstable directories and sstables pending delete.
     co_await cleanup_column_family_temp_sst_dirs(sstdir);
-    auto pending_delete_dir = sstdir / sstable::pending_delete_dir_basename();
-    auto exists = co_await file_exists(pending_delete_dir.native());
-    if (exists) {
-        co_await handle_sstables_pending_delete(pending_delete_dir);
-    }
+    co_await handle_sstables_pending_delete(sstdir);
 }
 
 future<> sstable_directory::cleanup_column_family_temp_sst_dirs(fs::path sstdir) {
@@ -585,7 +581,13 @@ future<> sstable_directory::cleanup_column_family_temp_sst_dirs(fs::path sstdir)
     co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
 }
 
-future<> sstable_directory::handle_sstables_pending_delete(fs::path pending_delete_dir) {
+future<> sstable_directory::handle_sstables_pending_delete(fs::path sstdir) {
+    auto pending_delete_dir = sstdir / sstable::pending_delete_dir_basename();
+    auto exists = co_await file_exists(pending_delete_dir.native());
+    if (!exists) {
+        co_return;
+    }
+
     std::vector<future<>> futures;
 
     co_await lister::scan_dir(pending_delete_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), [&futures] (fs::path dir, directory_entry de) {
