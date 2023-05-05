@@ -341,6 +341,7 @@ public:
 
     int64_t get_endpoint_downtime(inet_address ep) const noexcept;
 
+private:
     /**
      * Return either: the greatest heartbeat or application state
      *
@@ -349,8 +350,6 @@ public:
      */
     version_type get_max_endpoint_state_version(const endpoint_state& state) const noexcept;
 
-
-private:
     /**
      * @param endpoint end point that is convicted.
      */
