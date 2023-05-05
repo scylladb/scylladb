@@ -784,9 +784,18 @@ auto format_pk(const WithSchemaWrapper& pk, FormatContext& ctx) {
                                                                      components.end()))) |
                       boost::adaptors::transformed([](const auto& type_and_component) {
                           auto& [type, component] = type_and_component;
-                          auto key = type->to_string(to_bytes(component));
+                          auto bs = to_bytes(component);
+                          auto key = type->to_string(bs);
                           if (!utils::utf8::validate((const uint8_t *) key.data(), key.size())) {
                               return sstring("<non-utf8-key>");
+                          }
+                          if (!std::all_of(key.begin(), key.end(), [] (auto ch) { return std::isprint(ch) || std::isspace(ch); })) {
+                            auto s = sstring(sstring::initialized_later{}, 4 * bs.size());
+                            auto out = s.begin();
+                            for (const auto& b : bs) {
+                                out = fmt::format_to(out, "\\x{:02x}", static_cast<unsigned char>(b));
+                            }
+                            return s;
                           }
                           return key;
                       }),
