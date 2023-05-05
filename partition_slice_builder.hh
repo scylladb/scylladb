@@ -45,6 +45,7 @@ public:
     partition_slice_builder& mutate_ranges(std::function<void(std::vector<query::clustering_range>&)>);
     // noop if no specific ranges have been set yet
     partition_slice_builder& mutate_specific_ranges(std::function<void(query::specific_ranges&)>);
+    partition_slice_builder& set_specific_ranges(query::specific_ranges);
     partition_slice_builder& without_partition_key_columns();
     partition_slice_builder& without_clustering_key_columns();
     partition_slice_builder& reversed();
