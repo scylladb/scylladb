@@ -151,6 +151,14 @@ struct mutation_write_timeout_exception : public read_write_timeout_exception {
     { }
 };
 
+// Generating view updates for a single client request can take a long time and might not finish before the timeout is
+// reached. In such case this exception is thrown.
+// "Generating a view update" means creating a view update and scheduling it to be sent later.
+// This exception isn't thrown if the sending timeouts, it's only concrened with generating.
+struct view_update_generation_timeout_exception : public request_timeout_exception {
+    view_update_generation_timeout_exception();
+};
+
 class request_failure_exception : public cassandra_exception {
 public:
     db::consistency_level consistency;

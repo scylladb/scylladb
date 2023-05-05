@@ -70,6 +70,10 @@ read_write_timeout_exception::read_write_timeout_exception(exception_code code, 
     , block_for{block_for}
     { }
 
+view_update_generation_timeout_exception::view_update_generation_timeout_exception()
+    : request_timeout_exception{
+          exception_code::WRITE_TIMEOUT, "Request timed out - couldn't prepare materialized view updates in time"} {}
+
 request_failure_exception::request_failure_exception(exception_code code, const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_) noexcept
     : cassandra_exception{code, prepare_message("Operation failed for {}.{} - received {} responses and {} failures from {} CL={}.", ks, cf, received_, failures_, block_for_, consistency_)}
     , consistency{consistency_}
