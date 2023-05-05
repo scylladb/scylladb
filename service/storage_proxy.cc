@@ -1442,19 +1442,19 @@ public:
     std::chrono::microseconds calculate_delay(db::view::update_backlog backlog) {
         constexpr auto delay_limit_us = 1000000;
         auto adjust = [] (float x) { return x * x * x; };
-        auto budget = std::max(storage_proxy::clock_type::duration(0),
-            _expire_timer.get_timeout() - storage_proxy::clock_type::now());
         std::chrono::microseconds ret(uint32_t(adjust(backlog.relative_size()) * delay_limit_us));
-        // "budget" has millisecond resolution and can potentially be long
-        // in the future so converting it to microseconds may overflow.
-        // So to compare buget and ret we need to convert both to the lower
-        // resolution.
-        if (std::chrono::duration_cast<storage_proxy::clock_type::duration>(ret) < budget) {
-            return ret;
-        } else {
-            // budget is small (< ret) so can be converted to microseconds
-            return std::chrono::duration_cast<std::chrono::microseconds>(budget);
-        }
+
+        // The maximum delay applied to the response is the amount of time left until the request timeouts.
+        // Delaying the response more than the timeout point doesn't make much sense - the request will fail
+        // at the timeout point anyway.
+        std::chrono::nanoseconds budget =
+            std::max(std::chrono::nanoseconds(0), _expire_timer.get_timeout() - storage_proxy::clock_type::now());
+
+        // budget is in nanoseconds, so it can be cast to microseconds without worrying about overflows,
+        // casting from nano to micro means dividing by 1000.
+        std::chrono::microseconds max_delay = std::chrono::duration_cast<std::chrono::microseconds>(budget);
+
+        return std::min(ret, max_delay);
     }
     // Calculates how much to delay completing the request. The delay adds to the request's inherent latency.
     template<typename Func>
