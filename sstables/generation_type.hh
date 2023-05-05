@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <charconv>
 #include <chrono>
 #include <fmt/core.h>
 #include <cstdint>
@@ -49,6 +50,15 @@ public:
             on_internal_error(sstlog, "UUID generation used as an int");
         }
         return _value.get_least_significant_bits();
+    }
+    static generation_type from_string(const std::string& s) {
+        int64_t int_value;
+        if (auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), int_value);
+            ec == std::errc() && ptr == s.data() + s.size()) {
+            return generation_type(int_value);
+        } else {
+            throw std::invalid_argument(fmt::format("invalid UUID: {}", s));
+        }
     }
     // convert to data_value
     //
