@@ -1096,6 +1096,65 @@ SEASTAR_THREAD_TEST_CASE(max_result_size_for_unlimited_query_selection_test) {
     }, std::move(cfg)).get();
 }
 
+// Check that during a multi-page range scan:
+// * semaphore mismatch is detected
+// * code is exception safe w.r.t. to the mismatch exception, e.g. readers are closed properly
+SEASTAR_TEST_CASE(multipage_range_scan_semaphore_mismatch) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto do_abort = set_abort_on_internal_error(false);
+        auto reset_abort = defer([do_abort] {
+            set_abort_on_internal_error(do_abort);
+        });
+        e.execute_cql("CREATE TABLE ks.tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
+
+        auto insert_id = e.prepare("INSERT INTO ks.tbl(pk, ck, v) VALUES(?, ?, ?)").get();
+
+        auto& db = e.local_db();
+        auto& tbl = db.find_column_family("ks", "tbl");
+        auto s = tbl.schema();
+
+        auto dk = tests::generate_partition_key(tbl.schema());
+        const auto pk = cql3::raw_value::make_value(managed_bytes(*dk.key().begin(*s)));
+        const auto v = cql3::raw_value::make_value(int32_type->decompose(0));
+        for (int32_t ck = 0; ck < 100; ++ck) {
+            e.execute_prepared(insert_id, {pk, cql3::raw_value::make_value(int32_type->decompose(ck)), v}).get();
+        }
+
+        auto sched_groups = get_scheduling_groups().get();
+
+        query::read_command cmd1(
+                s->id(),
+                s->version(),
+                s->full_slice(),
+                query::max_result_size(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max()),
+                query::tombstone_limit::max,
+                query::row_limit(4),
+                query::partition_limit::max,
+                gc_clock::now(),
+                std::nullopt,
+                query_id::create_random_id(),
+                query::is_first_page::yes);
+
+        auto cmd2 = cmd1;
+        auto cr = query::clustering_range::make_starting_with({clustering_key::from_single_value(*s, int32_type->decompose(3)), false});
+        cmd2.slice = partition_slice_builder(*s).set_specific_ranges(query::specific_ranges(dk.key(), {cr})).build();
+        cmd2.is_first_page = query::is_first_page::no;
+
+        auto pr = dht::partition_range::make_starting_with({dk, true});
+        auto prs = dht::partition_range_vector{pr};
+
+        auto read_page = [&] (scheduling_group sg, const query::read_command& cmd) {
+            with_scheduling_group(sg, [&] {
+                return query_data_on_all_shards(e.db(), s, cmd, prs, query::result_options::only_result(), {}, db::no_timeout);
+            }).get();
+        };
+
+        read_page(default_scheduling_group(), cmd1);
+        BOOST_REQUIRE_EXCEPTION(read_page(sched_groups.statement_scheduling_group, cmd2), std::runtime_error,
+                testing::exception_predicate::message_contains("looked-up reader belongs to different semaphore than the one appropriate for this query class:"));
+    });
+}
+
 // Test `upgrade_sstables` on all keyspaces (including the system keyspace).
 // Refs: #9494 (https://github.com/scylladb/scylla/issues/9494)
 SEASTAR_TEST_CASE(upgrade_sstables) {
