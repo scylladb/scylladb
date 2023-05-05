@@ -1215,7 +1215,9 @@ future<column_mapping> get_column_mapping(table_id table_id, table_schema_versio
 }
 
 future<> migration_manager::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-    schedule_schema_pull(endpoint, ep_state);
+    if (!_group0_client.using_raft()) {
+        schedule_schema_pull(endpoint, ep_state);
+    }
     return make_ready_future();
 }
 
@@ -1227,14 +1229,18 @@ future<> migration_manager::on_change(gms::inet_address endpoint, gms::applicati
             return make_ready_future();
         }
         if (_storage_proxy.get_token_metadata_ptr()->is_normal_token_owner(endpoint)) {
-            schedule_schema_pull(endpoint, *ep_state);
+            if (!_group0_client.using_raft()) {
+                schedule_schema_pull(endpoint, *ep_state);
+            }
         }
     }
     return make_ready_future();
 }
 
 future<> migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
-    schedule_schema_pull(endpoint, state);
+    if (!_group0_client.using_raft()) {
+        schedule_schema_pull(endpoint, state);
+    }
     return make_ready_future();
 }
 
