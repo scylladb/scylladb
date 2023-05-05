@@ -91,7 +91,7 @@ void run_sstable_resharding_test(sstables::test_env& env) {
         }
 
         auto filter_fname = sstables::test(sst).filename(component_type::Filter);
-        return file_size(filter_fname).get0();
+        return file_size(filter_fname.native()).get0();
     };
 
     uint64_t bloom_filter_size_before = filter_size(sst);

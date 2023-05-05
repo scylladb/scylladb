@@ -208,8 +208,8 @@ public:
         return remove_file(_sst->filename(c));
     }
 
-    const sstring filename(component_type c) const {
-        return _sst->filename(c);
+    fs::path filename(component_type c) const {
+        return fs::path(_sst->filename(c));
     }
 
     void set_shards(std::vector<unsigned> shards) {
@@ -223,10 +223,6 @@ public:
     future<> move_to_new_dir(sstring new_dir, generation_type new_generation) {
         co_await _sst->_storage->move(*_sst, std::move(new_dir), new_generation, nullptr);
         _sst->_generation = std::move(new_generation);
-    }
-
-    static fs::path filename(const sstable& sst, component_type c) {
-        return fs::path(sst.filename(c));
     }
 
     sstring storage_prefix() const {
