@@ -66,8 +66,8 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
         data_value(id.uuid()).serialize_nonnull()
     }));
     m.partition().apply(tombstone(tombstone_ts, gc_now));
-    m.set_static_cell("tablet_count", data_value(int(tablets.tablet_count())).serialize(), ts);
-    m.set_static_cell("table_name", data_value(table_name).serialize(), ts);
+    m.set_static_cell("tablet_count", data_value(int(tablets.tablet_count())), ts);
+    m.set_static_cell("table_name", data_value(table_name), ts);
 
     tablet_id tid = tablets.first_tablet();
     for (auto&& tablet : tablets.tablets()) {
