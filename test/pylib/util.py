@@ -8,11 +8,13 @@ import asyncio
 import logging
 import pathlib
 import os
+import pytest
 
 from typing import Callable, Awaitable, Optional, TypeVar, Generic
 
-from cassandra.cluster import NoHostAvailable, Session  # type: ignore # pylint: disable=no-name-in-module
-from cassandra.pool import Host                         # type: ignore # pylint: disable=no-name-in-module
+from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore # pylint: disable=no-name-in-module
+from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=no-name-in-module
+from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 
 from test.pylib.internal_types import ServerInfo
 
@@ -93,6 +95,30 @@ def read_last_line(file_path: pathlib.Path, max_line_bytes = 512):
     elif file_size > max_line_bytes:
         line_str = '...' + line_str
     return line_str
+
+
+async def get_available_host(cql: Session, deadline: float) -> Host:
+    hosts = cql.cluster.metadata.all_hosts()
+    async def find_host():
+        for h in hosts:
+            try:
+                await cql.run_async(
+                    "select key from system.local where key = 'local'", host=h)
+            except NoHostAvailable:
+                logging.debug(f"get_available_host: {h} not available")
+                continue
+            return h
+        return None
+    return await wait_for(find_host, deadline)
+
+
+async def read_barrier(cql: Session, host: Host):
+    """To issue a read barrier it is sufficient to attempt altering
+       a non-existing table: in order to validate the DDL the node needs to sync
+       with the leader and fetch latest group 0 state.
+    """
+    with pytest.raises(InvalidRequest, match="nosuch"):
+        await cql.run_async("alter table nosuchkeyspace.nosuchtable with comment=''", host = host)
 
 
 unique_name.last_ms = 0
