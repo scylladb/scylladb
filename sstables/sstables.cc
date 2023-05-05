@@ -1006,7 +1006,7 @@ void sstable::open_sstable(const io_priority_class& pc) {
 }
 
 void sstable::write_toc(file_writer w) {
-    sstlog.debug("Writing TOC file {} ", w.get_filename());
+    sstlog.debug("Writing TOC file {} ", toc_filename());
 
     do_write_simple(std::move(w), [&] (version_types v, file_writer& w) {
         for (auto&& key : _recognized_components) {
@@ -3459,14 +3459,6 @@ future<> sstable::destroy() {
     if (ex) {
         co_await coroutine::return_exception_ptr(std::move(ex));
     }
-}
-
-future<file_writer> file_writer::make(file f, file_output_stream_options options, sstring filename) noexcept {
-    // note: make_file_output_stream closes the file if the stream creation fails
-    return make_file_output_stream(std::move(f), std::move(options))
-        .then([filename = std::move(filename)] (output_stream<char>&& out) {
-            return file_writer(std::move(out), std::move(filename));
-        });
 }
 
 std::ostream& operator<<(std::ostream& out, const deletion_time& dt) {
