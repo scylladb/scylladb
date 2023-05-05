@@ -42,4 +42,5 @@ target_link_libraries(test-lib
     service
     sstables
     utils
-    Boost::regex)
+    Boost::regex
+    Boost::unit_test_framework)
