@@ -1149,7 +1149,8 @@ private:
             mutation&& m,
             flat_mutation_reader_v2_opt existings,
             tracing::trace_state_ptr tr_state,
-            gc_clock::time_point now) const;
+            gc_clock::time_point now,
+            db::timeout_clock::time_point timeout) const;
 
     mutable row_locker _row_locker;
     future<row_locker::lock_holder> local_base_lock(

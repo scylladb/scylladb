@@ -15,6 +15,9 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/util/defer.hh>
 
+#include "db/view/view_update_backlog.hh"
+#include "exceptions/exceptions.hh"
+#include "gms/inet_address.hh"
 #include "replica/database.hh"
 #include "replica/data_dictionary_impl.hh"
 #include "replica/compaction_group.hh"
@@ -58,6 +61,7 @@
 #include "readers/multi_range.hh"
 #include "readers/combined.hh"
 #include "readers/compacting.hh"
+#include "service/storage_proxy.hh"
 
 namespace replica {
 
@@ -2300,6 +2304,35 @@ static size_t memory_usage_of(const utils::chunked_vector<frozen_mutation_and_sc
     }), size_t{base_overhead_bytes * ms.size()});
 }
 
+// Finds all endpoints to which the view updates will be sent, reads their current view backlogs,
+// chooses the backlog that is the most full and calculates the amount of time to sleep for based on it.
+// The local node's backlog is also included in the calculations, as every view update spawns a local
+// task before being sent away to the remote node.
+// The throttling is a heuristic, so we don't need to have 100% accurate endpoints, there's no need to lock
+// topology changes during the calculation or anything like that.
+static std::chrono::microseconds calculate_throttling_delay_for_view_update_batch(
+    const schema_ptr& base,
+    const utils::chunked_vector<frozen_mutation_and_schema>& view_updates,
+    const dht::token& base_token,
+    const shared_ptr<db::view::view_update_generator>& gen,
+    const db::timeout_clock::time_point timeout) {
+
+    // Find the maximum batchlog, initial value is the local batchlog
+    db::view::update_backlog max_backlog = gen->get_storage_proxy().local().get_view_update_backlog();
+
+    for (const frozen_mutation_and_schema& view_update : view_updates) {
+        auto target_endpoints = gen->get_endpoints_for_view_update(base, base_token, view_update);
+
+        for (const gms::inet_address& endpoint_addr : target_endpoints) {
+            db::view::update_backlog endpoint_backlog = gen->get_storage_proxy().local().get_backlog_of(endpoint_addr);
+            max_backlog = std::max(max_backlog, endpoint_backlog);
+        }
+    }
+
+    // Calculate the delay
+    return db::view::calculate_view_update_throttling_delay(max_backlog, timeout);
+}
+
 /**
  * Given some updates on the base table and the existing values for the rows affected by that update, generates the
  * mutations to be applied to the base table's views, and sends them to the paired view replicas.
@@ -2308,6 +2341,8 @@ static size_t memory_usage_of(const utils::chunked_vector<frozen_mutation_and_sc
  * @param views the affected views which need to be updated.
  * @param updates the base table updates being applied.
  * @param existings the existing values for the rows affected by updates. This is used to decide if a view is
+ * @param now the current time, used to calculate timeouts for individual view updates
+ * @param timeout client reques timeout
  * obsoleted by the update and should be removed, gather the values for columns that may not be part of the update if
  * a new view entry needs to be created, and compute the minimal updates to be applied if the view entry isn't changed
  * but has simply some updated values.
@@ -2319,7 +2354,8 @@ future<> table::generate_and_propagate_view_updates(shared_ptr<db::view::view_up
         mutation&& m,
         flat_mutation_reader_v2_opt existings,
         tracing::trace_state_ptr tr_state,
-        gc_clock::time_point now) const {
+        gc_clock::time_point now,
+        db::timeout_clock::time_point timeout) const {
     auto base_token = m.token();
     auto m_schema = m.schema();
     db::view::view_update_builder builder = db::view::make_view_update_builder(
@@ -2332,7 +2368,7 @@ future<> table::generate_and_propagate_view_updates(shared_ptr<db::view::view_up
             now);
 
     std::exception_ptr err = nullptr;
-    while (true) {
+    for (size_t batch_num = 0; ; batch_num++) {
         std::optional<utils::chunked_vector<frozen_mutation_and_schema>> updates;
         try {
             updates = co_await builder.build_some();
@@ -2345,6 +2381,29 @@ future<> table::generate_and_propagate_view_updates(shared_ptr<db::view::view_up
         }
         tracing::trace(tr_state, "Generated {} view update mutations", updates->size());
         auto units = seastar::consume_units(*_config.view_update_concurrency_semaphore, memory_usage_of(*updates));
+
+        // To prevent overload we sleep for a moment before sending another batch of view updates.
+        // The amount of time to sleep for is chosen based on how full the view update backlog is,
+        // the more full the queue of pending view updates is the more aggresively we should delay
+        // new ones.
+        // The first batch of updates doesn't have any delays becase it's slowed down by the other throttling mechanism,
+        // the one which limits the number of incoming client requests by delaying the response to the client.
+        try {
+            if (batch_num > 0) {
+                std::chrono::microseconds throttle_delay =
+                    calculate_throttling_delay_for_view_update_batch(base, *updates, base_token, gen, timeout);
+
+                co_await seastar::sleep(throttle_delay);
+
+                if (db::timeout_clock::now() > timeout) {
+                    throw exceptions::view_update_generation_timeout_exception();
+                }
+            }
+        } catch(...) {
+            err = std::current_exception();
+            break;
+        }
+
         try {
             co_await gen->mutate_MV(base, base_token, std::move(*updates), _view_stats, *_config.cf_stats, tr_state,
                 std::move(units), service::allow_hints::yes, db::view::wait_for_all_updates::no);
@@ -2935,7 +2994,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     const bool need_static = db::view::needs_static_row(m.partition(), views);
     if (!need_regular && !need_static) {
         tracing::trace(tr_state, "View updates do not require read-before-write");
-        co_await generate_and_propagate_view_updates(gen, base, sem.make_tracking_only_permit(s, "push-view-updates-1", timeout, tr_state), std::move(views), std::move(m), { }, tr_state, now);
+        co_await generate_and_propagate_view_updates(gen, base, sem.make_tracking_only_permit(s, "push-view-updates-1", timeout, tr_state), std::move(views), std::move(m), { }, tr_state, now, timeout);
         // In this case we are not doing a read-before-write, just a
         // write, so no lock is needed.
         co_return row_locker::lock_holder();
@@ -2970,7 +3029,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     auto pk = dht::partition_range::make_singular(m.decorated_key());
     auto permit = sem.make_tracking_only_permit(base, "push-view-updates-2", timeout, tr_state);
     auto reader = source.make_reader_v2(base, permit, pk, slice, tr_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
-    co_await this->generate_and_propagate_view_updates(gen, base, std::move(permit), std::move(views), std::move(m), std::move(reader), tr_state, now);
+    co_await this->generate_and_propagate_view_updates(gen, base, std::move(permit), std::move(views), std::move(m), std::move(reader), tr_state, now, timeout);
     tracing::trace(tr_state, "View updates for {}.{} were generated and propagated", base->ks_name(), base->cf_name());
     // return the local partition/row lock we have taken so it
     // remains locked until the caller is done modifying this
