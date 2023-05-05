@@ -78,28 +78,21 @@ async def wait_for_cql_and_get_hosts(cql: Session, servers: list[ServerInfo], de
 
     return hosts
 
-def read_last_line(file_path: pathlib.Path):
-    block_size = 4 * 1024
+def read_last_line(file_path: pathlib.Path, max_line_bytes = 512):
     file_size = os.stat(file_path).st_size
-    pos = file_size
-    blocks = []
-    linesep = os.linesep.encode()
     with file_path.open('rb') as f:
-        linesep_index = -1
-        while pos > 0 and linesep_index == -1:
-            next_pos = max(pos - block_size, 0)
-            f.seek(next_pos, os.SEEK_SET)
-            block = f.read(pos - next_pos)
-            # ignore the last empty line if any
-            if pos == file_size and block.endswith(linesep):
-                block = block[:-len(linesep)]
-            linesep_index = block.rfind(linesep)
-            blocks.append(block)
-            pos = next_pos
+        f.seek(max(0, file_size - max_line_bytes), os.SEEK_SET)
+        line_bytes = f.read()
+    line_str = line_bytes.decode('utf-8', errors='ignore')
+    linesep = os.linesep
+    if line_str.endswith(linesep):
+        line_str = line_str[:-len(linesep)]
+    linesep_index = line_str.rfind(linesep)
     if linesep_index != -1:
-        blocks[-1] = block[linesep_index + len(linesep):]
-    blocks.reverse()
-    return b''.join(blocks).decode()
+        line_str = line_str[linesep_index + len(linesep):]
+    elif file_size > max_line_bytes:
+        line_str = '...' + line_str
+    return line_str
 
 
 unique_name.last_ms = 0
