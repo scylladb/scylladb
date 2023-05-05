@@ -23,6 +23,11 @@ unsigned shard_of(unsigned shard_count, unsigned sharding_ignore_msb_bits, const
 
 token token_for_next_shard(const std::vector<uint64_t>& shard_start, unsigned shard_count, unsigned sharding_ignore_msb_bits, const token& t, shard_id shard, unsigned spans);
 
+struct shard_and_token {
+    shard_id shard;
+    token token;
+};
+
 class sharder {
 protected:
     unsigned _shard_count;
@@ -48,6 +53,14 @@ public:
      * On overflow, maximum_token() is returned.
      */
     virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const;
+
+    /**
+     * Finds the next token greater than t which is owned by a different shard than the owner of t
+     * and returns that token and its owning shard. If no such token exists, returns nullopt.
+     *
+     * The next shard may not necessarily be a successor of the shard owning t.
+     */
+    virtual std::optional<shard_and_token> next_shard(const token& t) const;
 
     /**
      * @return number of shards configured for this partitioner

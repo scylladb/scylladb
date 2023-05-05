@@ -47,6 +47,17 @@ sharder::token_for_next_shard(const token& t, shard_id shard, unsigned spans) co
     return dht::token_for_next_shard(_shard_start, _shard_count, _sharding_ignore_msb_bits, t, shard, spans);
 }
 
+std::optional<shard_and_token>
+sharder::next_shard(const token& t) const {
+    auto shard = shard_of(t);
+    auto next_shard = shard + 1 == _shard_count ? 0 : shard + 1;
+    auto next_token = token_for_next_shard(t, next_shard);
+    if (next_token == dht::maximum_token()) {
+        return std::nullopt;
+    }
+    return shard_and_token{next_shard, next_token};
+}
+
 std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {
     fmt::print(out, "{{key: {}, token: {}}}", dk._key, dk._token);
     return out;
@@ -201,9 +212,14 @@ ring_position_range_sharder::next(const schema& s) {
     if (_done) {
         return {};
     }
-    auto shard = _range.start() ? _sharder.shard_of(_range.start()->value().token()) : token::shard_of_minimum_token();
-    auto next_shard = shard + 1 < _sharder.shard_count() ? shard + 1 : 0;
-    auto shard_boundary_token = _sharder.token_for_next_shard(_range.start() ? _range.start()->value().token() : minimum_token(), next_shard);
+    auto token = _range.start() ? _range.start()->value().token() : dht::minimum_token();
+    auto shard = _sharder.shard_of(token);
+    auto next_shard_and_token = _sharder.next_shard(token);
+    if (!next_shard_and_token) {
+        _done = true;
+        return ring_position_range_and_shard{std::move(_range), shard};
+    }
+    auto shard_boundary_token = next_shard_and_token->token;
     auto shard_boundary = ring_position::starting_at(shard_boundary_token);
     if ((!_range.end() || shard_boundary.less_compare(s, _range.end()->value()))
             && shard_boundary_token != maximum_token()) {
