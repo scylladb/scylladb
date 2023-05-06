@@ -120,10 +120,6 @@ inline UUID null_uuid() noexcept {
 
 UUID make_random_uuid() noexcept;
 
-inline std::strong_ordering uint64_t_tri_compare(uint64_t a, uint64_t b) noexcept {
-    return a <=> b;
-}
-
 // Read 8 most significant bytes of timeuuid from serialized bytes
 inline uint64_t timeuuid_read_msb(const int8_t *b) noexcept {
     // cast to unsigned to avoid sign-compliment during shift.
@@ -161,9 +157,9 @@ inline std::strong_ordering timeuuid_tri_compare(bytes_view o1, bytes_view o2) n
     auto timeuuid_read_lsb = [](bytes_view o) -> uint64_t {
         return uuid_read_lsb(o.begin()) ^ 0x8080808080808080;
     };
-    auto res = uint64_t_tri_compare(timeuuid_read_msb(o1.begin()), timeuuid_read_msb(o2.begin()));
+    auto res = timeuuid_read_msb(o1.begin()) <=> timeuuid_read_msb(o2.begin());
     if (res == 0) {
-        res = uint64_t_tri_compare(timeuuid_read_lsb(o1), timeuuid_read_lsb(o2));
+        res = timeuuid_read_lsb(o1) <=> timeuuid_read_lsb(o2);
     }
     return res;
 }
@@ -176,9 +172,9 @@ inline std::strong_ordering timeuuid_tri_compare(bytes_view o1, bytes_view o2) n
 // to @timeuuid_tri_compare() used for all new features.
 //
 inline std::strong_ordering uuid_tri_compare_timeuuid(bytes_view o1, bytes_view o2) noexcept {
-    auto res = uint64_t_tri_compare(timeuuid_read_msb(o1.begin()), timeuuid_read_msb(o2.begin()));
+    auto res = timeuuid_read_msb(o1.begin()) <=> timeuuid_read_msb(o2.begin());
     if (res == 0) {
-        res = uint64_t_tri_compare(uuid_read_lsb(o1.begin()), uuid_read_lsb(o2.begin()));
+        res = uuid_read_lsb(o1.begin()) <=> uuid_read_lsb(o2.begin());
     }
     return res;
 }
