@@ -37,6 +37,10 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(t
         return candidate;
     }
 
+    if (!table_s.tombstone_gc_enabled()) {
+        return compaction_descriptor();
+    }
+
     // if there is no sstable to compact in standard way, try compacting based on droppable tombstone ratio
     // unlike stcs, lcs can look for sstable with highest droppable tombstone ratio, so as not to choose
     // a sstable which droppable data shadow data in older sstable, by starting from highest levels which

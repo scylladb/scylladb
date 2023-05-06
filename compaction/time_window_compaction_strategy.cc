@@ -284,6 +284,10 @@ time_window_compaction_strategy::get_next_non_expired_sstables(table_state& tabl
         return most_interesting;
     }
 
+    if (!table_s.tombstone_gc_enabled()) {
+        return {};
+    }
+
     // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
     // ratio is greater than threshold.
     auto e = boost::range::remove_if(non_expiring_sstables, [this, compaction_time, &table_s] (const shared_sstable& sst) -> bool {
