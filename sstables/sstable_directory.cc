@@ -73,7 +73,7 @@ sstable_directory::sstable_directory(sstables_manager& manager,
 {}
 
 void sstable_directory::filesystem_components_lister::handle(sstables::entry_descriptor desc, fs::path filename) {
-    if ((generation_value(desc.generation) % smp::count) != this_shard_id()) {
+    if ((desc.generation.as_int() % smp::count) != this_shard_id()) {
         return;
     }
 
@@ -293,7 +293,7 @@ future<> sstable_directory::system_keyspace_components_lister::process(sstable_d
             // FIXME -- handle
             return make_ready_future<>();
         }
-        if ((generation_value(desc.generation) % smp::count) != this_shard_id()) {
+        if ((desc.generation.as_int() % smp::count) != this_shard_id()) {
             return make_ready_future<>();
         }
 
@@ -573,7 +573,7 @@ highest_generation_seen(sharded<sstables::sstable_directory>& directory) {
             return sstables::generation_type(0);
         }
     });
-    co_return highest.value() ? std::make_optional(highest): std::nullopt;
+    co_return highest.as_int() ? std::make_optional(highest) : std::nullopt;
 }
 
 }

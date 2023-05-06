@@ -474,7 +474,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         sharded<sstables::sstable_generation_generator> sharded_gen;
         auto highest_generation = highest_generation_seen(directory).get0().value_or(
             sstables::generation_type{0});
-        sharded_gen.start(highest_generation.value()).get();
+        sharded_gen.start(highest_generation.as_int()).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         auto make_sstable = [&] (shard_id shard) {

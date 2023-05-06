@@ -34,8 +34,9 @@ public:
     generation_type() = delete;
 
     explicit constexpr generation_type(int_t value) noexcept: _value(value) {}
-    constexpr int_t value() const noexcept { return _value; }
-
+    constexpr int_t as_int() const noexcept {
+	return _value;
+    }
     // convert to data_value
     //
     // this function is used when performing queries to SSTABLES_REGISTRY in
@@ -70,9 +71,6 @@ public:
 
 constexpr generation_type generation_from_value(generation_type::int_t value) {
     return generation_type{value};
-}
-constexpr generation_type::int_t generation_value(generation_type generation) {
-    return generation.value();
 }
 
 template <std::ranges::range Range, typename Target = std::vector<sstables::generation_type>>
@@ -124,7 +122,7 @@ namespace std {
 template <>
 struct hash<sstables::generation_type> {
     size_t operator()(const sstables::generation_type& generation) const noexcept {
-        return hash<sstables::generation_type::int_t>{}(generation.value());
+        return hash<sstables::generation_type::int_t>{}(generation.as_int());
     }
 };
 
@@ -144,6 +142,6 @@ template <>
 struct fmt::formatter<sstables::generation_type> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const sstables::generation_type& generation, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{}", generation.value());
+        return fmt::format_to(ctx.out(), "{}", generation.as_int());
     }
 };

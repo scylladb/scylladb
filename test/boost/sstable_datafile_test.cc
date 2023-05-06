@@ -2822,7 +2822,7 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
         set2->insert(sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key(), 0));
         set2->insert(sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key(), 0));
 
-        BOOST_REQUIRE(boost::accumulate(*compound->all() | boost::adaptors::transformed([] (const sstables::shared_sstable& sst) { return generation_value(sst->generation()); }), unsigned(0)) == 6);
+        BOOST_REQUIRE(boost::accumulate(*compound->all() | boost::adaptors::transformed([] (const sstables::shared_sstable& sst) { return sst->generation().as_int(); }), unsigned(0)) == 6);
         {
             unsigned found = 0;
             for (auto sstables = compound->all(); [[maybe_unused]] auto& sst : *sstables) {
