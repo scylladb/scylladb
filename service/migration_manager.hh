@@ -201,12 +201,12 @@ public:
     // Returns schema of given version, either from cache or from remote node identified by 'from'.
     // The returned schema may not be synchronized. See schema::is_synced().
     // Intended to be used in the read path.
-    future<schema_ptr> get_schema_for_read(table_schema_version, netw::msg_addr from, netw::messaging_service& ms);
+    future<schema_ptr> get_schema_for_read(table_schema_version, netw::msg_addr from, netw::messaging_service& ms, abort_source* as = nullptr);
 
     // Returns schema of given version, either from cache or from remote node identified by 'from'.
     // Ensures that this node is synchronized with the returned schema. See schema::is_synced().
     // Intended to be used in the write path, which relies on synchronized schema.
-    future<schema_ptr> get_schema_for_write(table_schema_version, netw::msg_addr from, netw::messaging_service& ms);
+    future<schema_ptr> get_schema_for_write(table_schema_version, netw::msg_addr from, netw::messaging_service& ms, abort_source* as = nullptr);
 
 private:
     virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override;

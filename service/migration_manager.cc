@@ -1121,11 +1121,11 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, netw::me
     });
 }
 
-future<schema_ptr> migration_manager::get_schema_for_read(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
-    return get_schema_for_write(v, dst, ms);
+future<schema_ptr> migration_manager::get_schema_for_read(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, abort_source* as) {
+    return get_schema_for_write(v, dst, ms, as);
 }
 
-future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
+future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, abort_source* as) {
     if (_as.abort_requested()) {
         co_return coroutine::exception(std::make_exception_ptr(abort_requested_exception()));
     }
@@ -1138,7 +1138,7 @@ future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version 
 
     if (_group0_client.using_raft()) {
         // batch group0 raft barriers
-        co_await _group0_barrier.trigger();
+        co_await (as ? _group0_barrier.trigger(*as) : _group0_barrier.trigger());
     }
 
     s = co_await get_schema_definition(v, dst, ms, _storage_proxy);

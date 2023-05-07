@@ -213,7 +213,8 @@ public:
             uint64_t seed,
             shard_config master_node_shard_config,
             table_schema_version schema_version,
-            streaming::stream_reason reason);
+            streaming::stream_reason reason,
+            abort_source& as);
 
     future<>
     remove_repair_meta(const gms::inet_address& from,
