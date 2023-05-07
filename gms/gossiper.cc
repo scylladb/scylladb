@@ -2599,11 +2599,12 @@ future<> gossiper::wait_for_range_setup() const {
     return wait_for_gossip(ring_delay, force_after);
 }
 
-bool gossiper::is_safe_for_bootstrap(inet_address endpoint) const {
+bool gossiper::is_safe_for_bootstrap() const {
     // We allow to bootstrap a new node in only two cases:
     // 1) The node is a completely new node and no state in gossip at all
     // 2) The node has state in gossip and it is already removed from the
     // cluster either by nodetool decommission or nodetool removenode
+    auto endpoint = get_broadcast_address();
     auto eps = get_endpoint_state_ptr(endpoint);
     bool allowed = true;
     if (!eps) {
@@ -2620,10 +2621,12 @@ bool gossiper::is_safe_for_bootstrap(inet_address endpoint) const {
     return allowed;
 }
 
-bool gossiper::is_safe_for_restart(inet_address endpoint, locator::host_id host_id) const {
+bool gossiper::is_safe_for_restart() const {
     // Reject to restart a node in case:
     // *) if the node has been removed from the cluster by nodetool decommission or
     //    nodetool removenode
+    auto endpoint = get_broadcast_address();
+    auto host_id = my_host_id();
     std::unordered_set<std::string_view> not_allowed_statuses{
         versioned_value::STATUS_LEFT,
         versioned_value::REMOVED_TOKEN,
