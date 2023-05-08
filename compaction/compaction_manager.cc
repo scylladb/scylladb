@@ -1613,6 +1613,13 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
     // They are erased from sstables_requiring_cleanup by compacting.release_compacting
     cs.owned_ranges_ptr = std::move(sorted_owned_ranges);
 
+    auto found_maintenance_sstables = bool(t.maintenance_sstable_set().for_each_sstable_until([this, &t] (const sstables::shared_sstable& sst) {
+        return stop_iteration(requires_cleanup(t, sst));
+    }));
+    if (found_maintenance_sstables) {
+        co_await perform_offstrategy(t);
+    }
+
     // Called with compaction_disabled
     auto get_sstables = [this, &t] () -> future<std::vector<sstables::shared_sstable>> {
         auto& cs = get_compaction_state(&t);
