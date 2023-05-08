@@ -560,7 +560,7 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) noe
     }
     try {
         return _db.invoke_on_all([this, cmd = &_cmd, ranges = &_ranges, gs = global_schema_ptr(_schema),
-                gts = tracing::global_trace_state_ptr(_trace_state), timeout] (replica::database& db) mutable {
+                gts = tracing::global_trace_state_ptr(_trace_state), timeout] (replica::database& db) mutable -> future<> {
             auto schema = gs.get();
             auto querier_opt = db.get_querier_cache().lookup_shard_mutation_querier(cmd->query_uuid, *schema, *ranges, cmd->slice, gts.get(), timeout);
             auto& table = db.find_column_family(schema);
@@ -569,7 +569,7 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) noe
 
             if (!querier_opt) {
                 _readers[shard] = reader_meta(reader_state::inexistent);
-                return;
+                co_return;
             }
 
             auto& q = *querier_opt;
