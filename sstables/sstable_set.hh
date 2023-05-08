@@ -15,6 +15,7 @@
 #include "dht/i_partitioner.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/io_priority_class.hh>
+#include <type_traits>
 #include <vector>
 
 namespace utils {
@@ -22,9 +23,6 @@ class estimated_histogram;
 }
 
 namespace sstables {
-
-class sstable_set_impl;
-class incremental_selector_impl;
 
 struct sstable_first_key_less_comparator {
     bool operator()(const shared_sstable& s1, const shared_sstable& s2) const;
@@ -49,9 +47,42 @@ public:
     double estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const;
 };
 
+class incremental_selector_impl {
+public:
+    virtual ~incremental_selector_impl() {}
+    virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext> select(const dht::ring_position_view&) = 0;
+};
+
 using sstable_predicate = noncopyable_function<bool(const sstable&)>;
 // Default predicate includes everything
 const sstable_predicate& default_sstable_predicate();
+
+class sstable_set_impl {
+public:
+    virtual ~sstable_set_impl() {}
+    virtual std::unique_ptr<sstable_set_impl> clone() const = 0;
+    virtual std::vector<shared_sstable> select(const dht::partition_range& range) const = 0;
+    virtual std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const;
+    virtual lw_shared_ptr<sstable_list> all() const = 0;
+    virtual stop_iteration for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const = 0;
+    virtual future<stop_iteration> for_each_sstable_gently_until(std::function<future<stop_iteration>(const shared_sstable&)> func) const = 0;
+    virtual void insert(shared_sstable sst) = 0;
+    virtual void erase(shared_sstable sst) = 0;
+    virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const = 0;
+
+    virtual flat_mutation_reader_v2 create_single_key_sstable_reader(
+        replica::column_family*,
+        schema_ptr,
+        reader_permit,
+        utils::estimated_histogram&,
+        const dht::partition_range&,
+        const query::partition_slice&,
+        const io_priority_class&,
+        tracing::trace_state_ptr,
+        streamed_mutation::forwarding,
+        mutation_reader::forwarding,
+        const sstable_predicate&) const;
+};
 
 class sstable_set : public enable_lw_shared_from_this<sstable_set> {
     std::unique_ptr<sstable_set_impl> _impl;
@@ -70,9 +101,26 @@ public:
     lw_shared_ptr<sstable_list> all() const;
     // Prefer for_each_sstable() over all() for iteration purposes, as the latter may have to copy all sstables into a temporary
     void for_each_sstable(std::function<void(const shared_sstable&)> func) const;
+    template <typename Func>
+    requires std::same_as<typename futurize<std::invoke_result_t<Func, shared_sstable>>::type, future<>>
+    future<> for_each_sstable_gently(Func&& func) const {
+        using futurator = futurize<std::invoke_result_t<Func, shared_sstable>>;
+        co_await _impl->for_each_sstable_gently_until([func = std::forward<Func>(func)] (const shared_sstable& sst) -> future<stop_iteration> {
+            co_await futurator::invoke(func, sst);
+            co_return stop_iteration::no;
+        });
+    }
     // Calls func for each sstable or until it returns stop_iteration::yes
     // Returns the last stop_iteration value.
     stop_iteration for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const;
+    template <typename Func>
+    requires std::same_as<typename futurize<std::invoke_result_t<Func, shared_sstable>>::type, future<stop_iteration>>
+    future<stop_iteration> for_each_sstable_gently_until(Func&& func) const {
+        return _impl->for_each_sstable_gently_until([func = std::forward<Func>(func)] (const shared_sstable& sst) -> future<stop_iteration> {
+            using futurator = futurize<std::invoke_result_t<Func, shared_sstable>>;
+            return futurator::invoke(func, sst);
+        });
+    }
     void insert(shared_sstable sst);
     void erase(shared_sstable sst);
 

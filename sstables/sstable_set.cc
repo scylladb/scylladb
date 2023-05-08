@@ -326,6 +326,16 @@ stop_iteration partitioned_sstable_set::for_each_sstable_until(std::function<sto
     return stop_iteration::no;
 }
 
+future<stop_iteration> partitioned_sstable_set::for_each_sstable_gently_until(std::function<future<stop_iteration>(const shared_sstable&)> func) const {
+    for (auto& sst : *_all) {
+        auto stop = co_await func(sst);
+        if (stop) {
+            co_return stop_iteration::yes;
+        }
+    }
+    co_return stop_iteration::no;
+}
+
 void partitioned_sstable_set::insert(shared_sstable sst) {
     _all->insert(sst);
     auto undo_all_insert = defer([&] () { _all->erase(sst); });
@@ -453,6 +463,16 @@ stop_iteration time_series_sstable_set::for_each_sstable_until(std::function<sto
         }
     }
     return stop_iteration::no;
+}
+
+future<stop_iteration> time_series_sstable_set::for_each_sstable_gently_until(std::function<future<stop_iteration>(const shared_sstable&)> func) const {
+    for (const auto& [pos, sst] : *_sstables) {
+        auto stop = co_await func(sst);
+        if (stop) {
+            co_return stop_iteration::yes;
+        }
+    }
+    co_return stop_iteration::no;
 }
 
 // O(log n)
@@ -1042,6 +1062,16 @@ stop_iteration compound_sstable_set::for_each_sstable_until(std::function<stop_i
         }
     }
     return stop_iteration::no;
+}
+
+future<stop_iteration> compound_sstable_set::for_each_sstable_gently_until(std::function<future<stop_iteration>(const shared_sstable&)> func) const {
+    for (auto& set : _sets) {
+        auto stop = co_await set->for_each_sstable_gently_until([&func] (const shared_sstable& sst) { return func(sst); });
+        if (stop) {
+            co_return stop_iteration::yes;
+        }
+    }
+    co_return stop_iteration::no;
 }
 
 void compound_sstable_set::insert(shared_sstable sst) {

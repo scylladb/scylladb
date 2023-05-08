@@ -16,6 +16,7 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/sstable_utils.hh"
 #include "readers/from_mutations_v2.hh"
+#include "test/lib/tmpdir.hh"
 
 using namespace sstables;
 
@@ -59,10 +60,11 @@ SEASTAR_TEST_CASE(test_sstables_sstable_set_read_modify_write) {
 }
 
 SEASTAR_TEST_CASE(test_time_series_sstable_set_read_modify_write) {
-    return test_setup::do_with_tmp_directory([] (test_env& env, sstring tmpdir_path) {
+    return test_env::do_with_async([] (test_env& env) {
+        tmpdir tmpdir;
+        const auto& tmp = tmpdir.path();
         simple_schema ss;
         auto s = ss.schema();
-        fs::path tmp(tmpdir_path);
 
         auto pk = ss.make_pkey(make_local_key(s));
         auto mut = mutation(s, pk);
@@ -86,6 +88,22 @@ SEASTAR_TEST_CASE(test_time_series_sstable_set_read_modify_write) {
         BOOST_REQUIRE_EQUAL(ss2->all()->size(), 2);
         BOOST_REQUIRE_EQUAL(ss1->all()->size(), 1);
 
-        return make_ready_future<>();
+        std::set<sstables::shared_sstable> in_set;
+        ss2->for_each_sstable_gently_until([&] (sstables::shared_sstable sst) {
+            in_set.insert(sst);
+            return make_ready_future<stop_iteration>(false);
+        }).get();
+        BOOST_REQUIRE(in_set == std::set<sstables::shared_sstable>({sst1, sst2}));
+
+        auto lookup_sst = [&] (sstables::shared_sstable sst) {
+            bool found = false;
+            ss2->for_each_sstable_gently_until([&] (sstables::shared_sstable cur) {
+                found = (cur == sst);
+                return make_ready_future<stop_iteration>(found);
+            }).get();
+            return found;
+        };
+        BOOST_REQUIRE(lookup_sst(sst1));
+        BOOST_REQUIRE(lookup_sst(sst2));
     });
 }

@@ -17,38 +17,6 @@
 
 namespace sstables {
 
-class incremental_selector_impl {
-public:
-    virtual ~incremental_selector_impl() {}
-    virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext> select(const dht::ring_position_view&) = 0;
-};
-
-class sstable_set_impl {
-public:
-    virtual ~sstable_set_impl() {}
-    virtual std::unique_ptr<sstable_set_impl> clone() const = 0;
-    virtual std::vector<shared_sstable> select(const dht::partition_range& range) const = 0;
-    virtual std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const;
-    virtual lw_shared_ptr<sstable_list> all() const = 0;
-    virtual stop_iteration for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const = 0;
-    virtual void insert(shared_sstable sst) = 0;
-    virtual void erase(shared_sstable sst) = 0;
-    virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const = 0;
-
-    virtual flat_mutation_reader_v2 create_single_key_sstable_reader(
-        replica::column_family*,
-        schema_ptr,
-        reader_permit,
-        utils::estimated_histogram&,
-        const dht::partition_range&,
-        const query::partition_slice&,
-        const io_priority_class&,
-        tracing::trace_state_ptr,
-        streamed_mutation::forwarding,
-        mutation_reader::forwarding,
-        const sstable_predicate&) const;
-};
-
 // specialized when sstables are partitioned in the token range space
 // e.g. leveled compaction strategy
 class partitioned_sstable_set : public sstable_set_impl {
@@ -96,6 +64,7 @@ public:
     virtual std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const override;
     virtual lw_shared_ptr<sstable_list> all() const override;
     virtual stop_iteration for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const override;
+    virtual future<stop_iteration> for_each_sstable_gently_until(std::function<future<stop_iteration>(const shared_sstable&)> func) const override;
     virtual void insert(shared_sstable sst) override;
     virtual void erase(shared_sstable sst) override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
@@ -121,6 +90,7 @@ public:
     virtual std::vector<shared_sstable> select(const dht::partition_range& range = query::full_partition_range) const override;
     virtual lw_shared_ptr<sstable_list> all() const override;
     virtual stop_iteration for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const override;
+    virtual future<stop_iteration> for_each_sstable_gently_until(std::function<future<stop_iteration>(const shared_sstable&)> func) const override;
     virtual void insert(shared_sstable sst) override;
     virtual void erase(shared_sstable sst) override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
@@ -161,6 +131,7 @@ public:
     virtual std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const override;
     virtual lw_shared_ptr<sstable_list> all() const override;
     virtual stop_iteration for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const override;
+    virtual future<stop_iteration> for_each_sstable_gently_until(std::function<future<stop_iteration>(const shared_sstable&)> func) const override;
     virtual void insert(shared_sstable sst) override;
     virtual void erase(shared_sstable sst) override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
