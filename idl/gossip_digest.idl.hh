@@ -8,6 +8,9 @@
 
 #include "gms/inet_address_serializer.hh"
 #include "gms/version_generator.hh"
+#include "gms/generation-number.hh"
+
+#include "idl/utils.idl.hh"
 
 namespace gms {
 enum class application_state:int {
