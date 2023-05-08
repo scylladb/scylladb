@@ -2478,6 +2478,7 @@ table::make_reader_v2_excluding_staging(schema_ptr s,
 future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable> sstables) {
     auto units = co_await get_units(_sstable_deletion_sem, 1);
     sstables::sstable::delayed_commit_changes delay_commit;
+    std::unordered_set<compaction_group*> compaction_groups_to_notify;
     for (auto sst : sstables) {
         try {
             // Off-strategy can happen in parallel to view building, so the SSTable may be deleted already if the former
@@ -2485,12 +2486,16 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
             // The _sstable_deletion_sem prevents list update on off-strategy completion and move_sstables_from_staging()
             // from stepping on each other's toe.
             co_await sst->move_to_new_dir(dir(), sst->generation(), &delay_commit);
+            auto& cg = compaction_group_for_sstable(sst);
+            if (get_compaction_manager().requires_cleanup(cg.as_table_state(), sst)) {
+                compaction_groups_to_notify.insert(&cg);
+            }
             // If view building finished faster, SSTable with repair origin still exists.
             // It can also happen the SSTable is not going through reshape, so it doesn't have a repair origin.
             // That being said, we'll only add this SSTable to tracker if its origin is other than repair.
             // Otherwise, we can count on off-strategy completion to add it when updating lists.
             if (sst->get_origin() != sstables::repair_origin) {
-                add_sstable_to_backlog_tracker(compaction_group_for_sstable(sst).get_backlog_tracker(), sst);
+                add_sstable_to_backlog_tracker(cg.get_backlog_tracker(), sst);
             }
         } catch (...) {
             tlogger.warn("Failed to move sstable {} from staging: {}", sst->get_filename(), std::current_exception());
@@ -2499,6 +2504,10 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
     }
 
     co_await delay_commit.commit();
+
+    for (auto* cg : compaction_groups_to_notify) {
+        cg->get_staging_done_condition().broadcast();
+    }
 
     // Off-strategy timer will be rearmed, so if there's more incoming data through repair / streaming,
     // the timer can be updated once again. In practice, it allows off-strategy compaction to kick off
@@ -2692,6 +2701,10 @@ public:
     }
     compaction_backlog_tracker& get_backlog_tracker() override {
         return _t._compaction_manager.get_backlog_tracker(*this);
+    }
+
+    seastar::condition_variable& get_staging_done_condition() noexcept override {
+        return _cg.get_staging_done_condition();
     }
 };
 

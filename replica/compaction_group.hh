@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <seastar/core/condition-variable.hh>
+
 #include "database_fwd.hh"
 #include "compaction/compaction_descriptor.hh"
 #include "compaction/compaction_backlog_manager.hh"
@@ -40,6 +42,7 @@ class compaction_group {
     // have not been deleted yet, so must not GC any tombstones in other sstables
     // that may delete data in these sstables:
     std::vector<sstables::shared_sstable> _sstables_compacted_but_not_deleted;
+    seastar::condition_variable _staging_done_condition;
 private:
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
@@ -103,6 +106,10 @@ public:
     compaction_backlog_tracker& get_backlog_tracker();
 
     compaction::table_state& as_table_state() const noexcept;
+
+    seastar::condition_variable& get_staging_done_condition() noexcept {
+        return _staging_done_condition;
+    }
 };
 
 }

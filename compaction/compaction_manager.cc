@@ -1604,8 +1604,7 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
         };
 
         cmlog.debug("perform_cleanup: waiting for sstables to become eligible for cleanup");
-        // FIXME: wait for a signal from view update builder
-        co_await sleep(sleep_duration);
+        co_await t.get_staging_done_condition().when(sleep_duration, [&] { return has_sstables_eligible_for_compaction(); });
 
         if (!has_sstables_eligible_for_compaction()) {
             continue;
