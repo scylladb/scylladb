@@ -68,6 +68,9 @@ def do_test_storage_service_attribute_api_keyspace(cql, this_dc, rest_api, api_n
 def test_storage_service_auto_compaction_keyspace(cql, this_dc, rest_api):
     do_test_storage_service_attribute_api_keyspace(cql, this_dc, rest_api, "auto_compaction")
 
+def test_storage_service_tombstone_gc_keyspace(cql, this_dc, rest_api):
+    do_test_storage_service_attribute_api_keyspace(cql, this_dc, rest_api, "tombstone_gc")
+
 def do_test_storage_service_attribute_api_table(cql, this_dc, rest_api, api_name):
     keyspace = new_keyspace(cql, this_dc)
     with new_test_table(cql, keyspace, "a int, PRIMARY KEY (a)") as t:
@@ -86,6 +89,9 @@ def do_test_storage_service_attribute_api_table(cql, this_dc, rest_api, api_name
 
 def test_storage_service_auto_compaction_table(cql, this_dc, rest_api):
     do_test_storage_service_attribute_api_table(cql, this_dc, rest_api, "auto_compaction")
+
+def test_storage_service_tombstone_gc_table(cql, this_dc, rest_api):
+    do_test_storage_service_attribute_api_table(cql, this_dc, rest_api, "tombstone_gc")
 
 def do_test_storage_service_attribute_api_tables(cql, this_dc, rest_api, api_name):
     keyspace = new_keyspace(cql, this_dc)
@@ -106,6 +112,9 @@ def do_test_storage_service_attribute_api_tables(cql, this_dc, rest_api, api_nam
 
 def test_storage_service_auto_compaction_tables(cql, this_dc, rest_api):
     do_test_storage_service_attribute_api_tables(cql, this_dc, rest_api, "auto_compaction")
+
+def test_storage_service_tombstone_gc_tables(cql, this_dc, rest_api):
+    do_test_storage_service_attribute_api_tables(cql, this_dc, rest_api, "tombstone_gc")
 
 def test_storage_service_keyspace_offstrategy_compaction(cql, this_dc, rest_api):
     keyspace = new_keyspace(cql, this_dc)
