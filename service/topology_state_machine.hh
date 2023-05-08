@@ -26,7 +26,7 @@
 
 namespace service {
 
-enum class node_state: uint8_t {
+enum class node_state: uint16_t {
     none,                // the new node joined group0 but did not bootstraped yet (has no tokens and data to serve)
     bootstrapping,       // the node is currently in the process of streaming its part of the ring
     decommissioning,     // the node is being decomissioned and stream its data to nodes that took over
@@ -37,7 +37,7 @@ enum class node_state: uint8_t {
     left                 // the node left the cluster and group0
 };
 
-enum class topology_request: uint8_t {
+enum class topology_request: uint16_t {
     join,
     leave,
     remove,
@@ -62,7 +62,7 @@ struct replica_state {
 };
 
 struct topology {
-    enum class transition_state: uint8_t {
+    enum class transition_state: uint16_t {
         commit_cdc_generation,
         write_both_read_old,
         write_both_read_new,
@@ -121,7 +121,7 @@ struct topology_state_machine {
 
 // Raft leader uses this command to drive bootstrap process on other nodes
 struct raft_topology_cmd {
-      enum class command: uint8_t {
+      enum class command: uint16_t {
           barrier,         // request to wait for the latest topology
           stream_ranges,   // reqeust to stream data, return when streaming is
                            // done
@@ -132,7 +132,7 @@ struct raft_topology_cmd {
 
 // returned as a result of raft_bootstrap_cmd
 struct raft_topology_cmd_result {
-    enum class command_status: uint8_t {
+    enum class command_status: uint16_t {
         fail,
         success
     };
