@@ -18,30 +18,6 @@ import random
 import shutil
 import util
 
-# To run the Scylla tools, we need to run Scylla executable itself, so we
-# need to find the path of the executable that was used to run Scylla for
-# this test. We do this by trying to find a local process which is listening
-# to the address and port to which our our CQL connection is connected.
-# If such a process exists, we verify that it is Scylla, and return the
-# executable's path. If we can't find the Scylla executable we use
-# pytest.skip() to skip tests relying on this executable.
-@pytest.fixture(scope="module")
-def scylla_path(cql):
-    pid = util.local_process_id(cql)
-    if not pid:
-        pytest.skip("Can't find local Scylla process")
-    # Now that we know the process id, use /proc to find the executable.
-    try:
-        path = os.readlink(f'/proc/{pid}/exe')
-    except:
-        pytest.skip("Can't find local Scylla executable")
-    # Confirm that this executable is a real tool-providing Scylla by trying
-    # to run it with the "--list-tools" option
-    try:
-        subprocess.check_output([path, '--list-tools'])
-    except:
-        pytest.skip("Local server isn't Scylla")
-    return path
 
 # A fixture for finding Scylla's data directory. We get it using the CQL
 # interface to Scylla's configuration. Note that if the server is remote,
@@ -539,13 +515,6 @@ def test_scylla_sstable_script(cql, test_keyspace, scylla_path, scylla_data_dir,
 
         assert dump_lua_json == cxx_json
         assert slice_lua_json == cxx_json
-
-
-@pytest.fixture(scope="function")
-def temp_workdir():
-    """ Creates a temporary work directory, for the scope of a single test. """
-    with tempfile.TemporaryDirectory() as workdir:
-        yield workdir
 
 
 @pytest.fixture(scope="class")

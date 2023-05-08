@@ -56,5 +56,15 @@ flat_mutation_reader_v2 make_crawling_reader(
         tracing::trace_state_ptr trace_state,
         read_monitor& monitor);
 
+// Validate the content of the sstable with the mutation_fragment_stream_valdiator,
+// additionally cross checking that the content is laid out as expected by the
+// index and promoted index respectively.
+future<uint64_t> validate(
+        shared_sstable sstable,
+        reader_permit permit,
+        const io_priority_class& pc,
+        abort_source& abort,
+        std::function<void(sstring)> error_handler);
+
 } // namespace mx
 } // namespace sstables

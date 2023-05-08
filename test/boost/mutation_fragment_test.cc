@@ -457,7 +457,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator) {
             bool valid = true;
             for (const auto& mf : mfs) {
                 testlog.trace("validate fragment [{}] {} @ {}", i, mf.mutation_fragment_kind(), mf.position());
-                valid &= validator(mf);
+                valid &= bool(validator(mf));
                 if (expect_valid) {
                     if (!valid) {
                         BOOST_FAIL(fmt::format("Unexpected invalid fragment {} @ {}", mf.mutation_fragment_kind(), mf.position()));
@@ -470,7 +470,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_fragment_stream_validator) {
                 ++i;
             }
             if (expect_valid || i <= at) {
-                valid &= validator.on_end_of_stream();
+                valid &= bool(validator.on_end_of_stream());
                 BOOST_REQUIRE(valid == expect_valid);
             }
         }
