@@ -6,11 +6,11 @@ edition = "2021"
 
 [dependencies]
 cxx = { version = "1.0.83", features = ["c++20"] }
-wasmtime-wasi = "5.0.0"
+wasmtime-wasi = "8.0.1"
 futures = "0.3.25"
 anyhow = "1.0.66"
 
 [dependencies.wasmtime]
-version = "5.0.0"
+version = "8.0.1"
 default-features = false
 features = ["async", "wat", "cranelift"]

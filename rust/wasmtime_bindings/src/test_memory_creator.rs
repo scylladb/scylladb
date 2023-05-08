@@ -8,6 +8,7 @@
 
 use crate::memory_creator::ScyllaMemoryCreator;
 use anyhow::{anyhow, Result};
+use std::ops::Range;
 use std::ptr;
 use wasmtime::LinearMemory;
 
@@ -51,6 +52,9 @@ unsafe impl LinearMemory for TestScyllaLinearMemory {
     }
     fn as_ptr(&self) -> *mut u8 {
         self.memory.as_ptr()
+    }
+    fn wasm_accessible(&self) -> Range<usize> {
+        self.memory.wasm_accessible()
     }
 }
 
