@@ -43,6 +43,7 @@ protected:
     virtual void validate(query_processor& qp, const service::client_state& state) const override;
     virtual seastar::future<shared_ptr<db::functions::function>> create(query_processor& qp, db::functions::function* old) const = 0;
     virtual seastar::future<shared_ptr<db::functions::function>> validate_while_executing(query_processor&) const override;
+    virtual seastar::future<> grant_permissions_to_creator(query_processor& qp, const service::client_state& cs) const override;
 
     bool _or_replace;
     bool _if_not_exists;

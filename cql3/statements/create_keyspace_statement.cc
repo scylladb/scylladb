@@ -127,6 +127,13 @@ future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creat
                 *cs.user(),
                 r).handle_exception_type([](const auth::unsupported_authorization_operation&) {
             // Nothing.
+        }).then([&cs, &fr] {
+            return auth::grant_applicable_permissions(
+                    *cs.get_auth_service(),
+                    *cs.user(),
+                    fr).handle_exception_type([](const auth::unsupported_authorization_operation&) {
+                // Nothing.
+            });
         });
     });
 }

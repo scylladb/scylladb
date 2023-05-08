@@ -31,6 +31,19 @@ future<> create_function_statement_base::check_access(query_processor& qp, const
     }
 }
 
+future<> create_function_statement_base::grant_permissions_to_creator(query_processor& qp, const service::client_state& cs) const {
+    std::string_view keyspace = _name.has_keyspace() ? _name.keyspace : cs.get_keyspace();
+
+    return do_with(auth::make_functions_resource(keyspace, auth::encode_signature(_name.name, _arg_types)), [&cs](const auth::resource& r) {
+        return auth::grant_applicable_permissions(
+                *cs.get_auth_service(),
+                *cs.user(),
+                r).handle_exception_type([](const auth::unsupported_authorization_operation&) {
+            // Nothing.
+        });
+    });
+}
+
 future<> drop_function_statement_base::check_access(query_processor& qp, const service::client_state& state) const
 {
     create_arg_types(qp);
