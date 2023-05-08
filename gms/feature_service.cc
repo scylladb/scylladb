@@ -222,9 +222,12 @@ public:
 };
 
 future<> feature_service::enable_features_on_join(gossiper& g, db::system_keyspace& sys_ks) {
-    auto enabler = make_shared<persistent_feature_enabler>(g, *this, sys_ks);
-    g.register_(enabler);
-    return enabler->enable_features_from_gossip();
+    if (!_connected_to_gossip) {
+        return make_ready_future<>();
+    }
+    _enabler = make_shared<persistent_feature_enabler>(g, *this, sys_ks);
+    g.register_(_enabler);
+    return _enabler->enable_features_from_gossip();
 }
 
 future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks) {
@@ -303,6 +306,14 @@ future<> feature_service::enable(std::set<std::string_view> list, feature_servic
             }
         });
     });
+}
+
+future<> feature_service::disconnect_from_gossip(gossiper& g) {
+    _connected_to_gossip = false;
+    if (_enabler) {
+        co_await g.unregister_(_enabler);
+        _enabler = nullptr;
+    }
 }
 
 } // namespace gms

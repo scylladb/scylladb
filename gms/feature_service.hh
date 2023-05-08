@@ -44,6 +44,8 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
 
 using namespace std::literals;
 
+class persistent_feature_enabler;
+
 /**
  * A gossip feature tracks whether all the nodes the current one is
  * aware of support the specified feature.
@@ -58,6 +60,9 @@ class feature_service final : public peering_sharded_service<feature_service> {
     std::unordered_map<sstring, std::reference_wrapper<feature>> _registered_features;
 
     feature_config _config;
+
+    shared_ptr<persistent_feature_enabler> _enabler;
+    bool _connected_to_gossip = true;
 public:
     struct without_persisting {};
 
@@ -131,6 +136,10 @@ public:
 
     future<> enable_features_on_startup(db::system_keyspace&);
     future<> enable_features_on_join(gossiper&, db::system_keyspace&);
+
+    // After calling this the feature service won't enable features
+    // based on what is happening in gossip.
+    future<> disconnect_from_gossip(gossiper&);
 };
 
 } // namespace gms

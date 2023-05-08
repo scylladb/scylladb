@@ -1593,6 +1593,12 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         }
     }
 
+    if (_raft_topology_change_enabled) {
+        // Features are managed in group 0. We don't want to enable features
+        // based on gossip.
+        co_await _feature_service.disconnect_from_gossip(_gossiper);
+    }
+
     bool replacing_a_node_with_same_ip = false;
     bool replacing_a_node_with_diff_ip = false;
     std::optional<replacement_info> ri;
