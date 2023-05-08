@@ -21,6 +21,7 @@
 #include "test/lib/test_utils.hh"
 #include "utils/s3/client.hh"
 #include "utils/s3/creds.hh"
+#include "gc_clock.hh"
 
 // The test can be run on real AWS-S3 bucket. For that, create a bucket with
 // permissive enough policy and then run the test with AWS_S3_EXTRA env set
@@ -71,6 +72,12 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
     testlog.info("Get object size\n");
     size_t sz = cln->get_object_size(name).get0();
     BOOST_REQUIRE_EQUAL(sz, 10);
+
+    testlog.info("Get object stats\n");
+    s3::client::stats st = cln->get_object_stats(name).get0();
+    BOOST_REQUIRE_EQUAL(st.size, 10);
+    // forgive timezone difference as minio server is GMT by default
+    BOOST_REQUIRE(std::difftime(st.last_modified, gc_clock::to_time_t(gc_clock::now())) < 24*3600);
 
     testlog.info("Get object content\n");
     temporary_buffer<char> res = cln->get_object_contiguous(name).get0();
