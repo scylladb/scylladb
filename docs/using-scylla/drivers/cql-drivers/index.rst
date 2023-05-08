@@ -52,6 +52,7 @@ Scylla supports the CQL binary protocol version 3, so any Apache Cassandra/CQL d
   * `He4rt PHP Driver (Supported versions: 8.1 and 8.2)  <https://github.com/he4rt/scylladb-php-driver/>`_
   * `Rust <https://github.com/AlexPikalov/cdrs>`_
   * `Scala Phantom Project <https://github.com/outworkers/phantom>`_
+  * `Xandra Elixir Driver <https://github.com/lexhide/xandra>`_
 
 .. panel-box::
   :title: Lessons on Scylla University
