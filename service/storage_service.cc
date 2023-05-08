@@ -1635,7 +1635,9 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         auto local_features = _feature_service.supported_feature_set();
         slogger.info("Checking remote features with gossip, initial_contact_nodes={}", initial_contact_nodes);
         co_await _gossiper.do_shadow_round(initial_contact_nodes);
-        _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
+        if (!_raft_topology_change_enabled) {
+            _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
+        }
         _gossiper.check_snitch_name_matches(_snitch.local()->get_name());
         // Check if the node is already removed from the cluster
         auto local_host_id = _db.local().get_config().host_id;
@@ -2984,7 +2986,9 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
         do {
             slogger.info("Checking remote features with gossip");
             _gossiper.do_shadow_round(initial_contact_nodes).get();
-            _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
+            if (!_raft_topology_change_enabled) {
+                _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
+            }
             _gossiper.check_snitch_name_matches(_snitch.local()->get_name());
             auto addr = get_broadcast_address();
             if (!_gossiper.is_safe_for_bootstrap(addr)) {
@@ -3063,7 +3067,9 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
     slogger.info("Checking remote features with gossip");
     co_await _gossiper.do_shadow_round(initial_contact_nodes);
     auto local_features = _feature_service.supported_feature_set();
-    _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
+    if (!_raft_topology_change_enabled) {
+        _gossiper.check_knows_remote_features(local_features, loaded_peer_features);
+    }
 
     // now that we've gossiped at least once, we should be able to find the node we're replacing
     if (replace_host_id) {
