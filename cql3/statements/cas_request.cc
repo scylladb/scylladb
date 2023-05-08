@@ -121,6 +121,9 @@ std::optional<mutation> cas_request::apply(foreign_ptr<lw_shared_ptr<query::resu
 
 const update_parameters::prefetch_data::row* cas_request::find_old_row(const cas_row_update& op) const {
     static const clustering_key empty_ckey = clustering_key::make_empty();
+    if (_key.empty()) {
+        throw exceptions::invalid_request_exception("partition key ranges empty - probably caused by an unset value");
+    }
     const partition_key& pkey = _key.front().start()->value().key().value();
     // If a statement has only static columns conditions, we must ignore its clustering columns
     // restriction when choosing a row to check the conditions, i.e. choose any partition row,
@@ -134,6 +137,9 @@ const update_parameters::prefetch_data::row* cas_request::find_old_row(const cas
     // Another case when we pass an empty clustering key prefix is apparently when the table
     // doesn't have any clustering key columns and the clustering key range is empty (open
     // ended on both sides).
+    if (op.ranges.empty()) {
+        throw exceptions::invalid_request_exception("clustering key ranges empty - probably caused by an unset value");
+    }
     const clustering_key& ckey = !op.statement.has_only_static_column_conditions() && op.ranges.front().start() ?
         op.ranges.front().start()->value() : empty_ckey;
     return _rows.find_row(pkey, ckey);
