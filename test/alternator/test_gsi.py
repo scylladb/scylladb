@@ -161,27 +161,80 @@ def test_gsi_strong_consistency(test_table_gsi_1):
 
 # Test that setting an indexed string column to an empty string is illegal,
 # since keys cannot contain empty strings
+# Test this in the different write operations - PutItem, UpdateItem and
+# BatchWriteItem, to verify we didn't miss the checks in any of those
+# code paths.
 def test_gsi_empty_value(test_table_gsi_2):
+    p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*empty'):
-        test_table_gsi_2.put_item(Item={'p': random_string(), 'x': ''})
+        test_table_gsi_2.put_item(Item={'p': p, 'x': ''})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_gsi_2.update_item(Key={'p': p}, AttributeUpdates={'x': {'Value': '', 'Action': 'PUT'}})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        with test_table_gsi_2.batch_writer() as batch:
+            batch.put_item({'p': p, 'x': ''})
 
 def test_gsi_empty_value_with_range_key(test_table_gsi_3):
+    p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*empty'):
-        test_table_gsi_3.put_item(Item={'p': random_string(), 'a': '', 'b': random_string()})
+        test_table_gsi_3.put_item(Item={'p': p, 'a': '', 'b': p})
     with pytest.raises(ClientError, match='ValidationException.*empty'):
-        test_table_gsi_3.put_item(Item={'p': random_string(), 'a': random_string(), 'b': ''})
+        test_table_gsi_3.put_item(Item={'p': p, 'a': p, 'b': ''})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': '', 'Action': 'PUT'}, 'b': {'Value': p, 'Action': 'PUT'}})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': p, 'Action': 'PUT'}, 'b': {'Value': '', 'Action': 'PUT'}})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        with test_table_gsi_3.batch_writer() as batch:
+            batch.put_item({'p': p, 'a': '', 'b': p})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        with test_table_gsi_3.batch_writer() as batch:
+            batch.put_item({'p': p, 'a': p, 'b': ''})
+
+# In test_gsi_empty_value we validated that writing an empty string to
+# column that is a GSI key fails. We also checked BatchWriteItem. Let's
+# verify that with BatchWriteItem, if one of the writes fail this
+# verification, none of the other writes in the batch get done either.
+def test_gsi_empty_value_in_bigger_batch_write(test_table_gsi_2):
+    p1 = random_string()
+    p2 = random_string()
+    p3 = random_string()
+    items = [{'p': p1, 'x': p1}, {'p': p2, 'x': ''}, {'p': p3, 'x': p3}]
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        with test_table_gsi_2.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+    for p in [p1, p2, p3]:
+        assert not 'Item' in test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)
 
 # Dynamodb supports special way of setting NULL value.
 # It's different than non existing value.
 def test_gsi_null_value(test_table_gsi_2):
+    p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*NULL'):
-        test_table_gsi_2.put_item(Item={'p': random_string(), 'x': None})
+        test_table_gsi_2.put_item(Item={'p': p, 'x': None})
+    with pytest.raises(ClientError, match='ValidationException.*NULL'):
+        test_table_gsi_2.update_item(Key={'p': p}, AttributeUpdates={'x': {'Value': None, 'Action': 'PUT'}})
+    with pytest.raises(ClientError, match='ValidationException.*NULL'):
+        with test_table_gsi_2.batch_writer() as batch:
+            batch.put_item({'p': p, 'x': None})
 
 def test_gsi_null_value_with_range_key(test_table_gsi_3):
+    p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*NULL'):
-        test_table_gsi_3.put_item(Item={'p': random_string(), 'a': None, 'b': random_string()})
+        test_table_gsi_3.put_item(Item={'p': p, 'a': None, 'b': p})
     with pytest.raises(ClientError, match='ValidationException.*NULL'):
-        test_table_gsi_3.put_item(Item={'p': random_string(), 'a': random_string(), 'b': None})
+        test_table_gsi_3.put_item(Item={'p': p, 'a': p, 'b': None})
+    with pytest.raises(ClientError, match='ValidationException.*NULL'):
+        test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': None, 'Action': 'PUT'}, 'b': {'Value': p, 'Action': 'PUT'}})
+    with pytest.raises(ClientError, match='ValidationException.*NULL'):
+        test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': p, 'Action': 'PUT'}, 'b': {'Value': None, 'Action': 'PUT'}})
+    with pytest.raises(ClientError, match='ValidationException.*NULL'):
+        with test_table_gsi_3.batch_writer() as batch:
+            batch.put_item({'p': p, 'a': None, 'b': p})
+    with pytest.raises(ClientError, match='ValidationException.*NULL'):
+        with test_table_gsi_3.batch_writer() as batch:
+            batch.put_item({'p': p, 'a': p, 'b': None})
 
 # Verify that a GSI is correctly listed in describe_table
 def test_gsi_describe(test_table_gsi_1):
@@ -362,6 +415,15 @@ def test_gsi_wrong_type_attribute_update(test_table_gsi_2):
     with pytest.raises(ClientError, match='ValidationException.*mismatch'):
         test_table_gsi_2.update_item(Key={'p':  p}, AttributeUpdates={'x': {'Value': 3, 'Action': 'PUT'}})
     assert test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'x': x}
+
+def test_gsi_wrong_type_attribute_batchwrite(test_table_gsi_2):
+    # BatchWriteItem with wrong type for 'x' is rejected, item isn't created
+    # even in the base table.
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*mismatch'):
+        with test_table_gsi_2.batch_writer() as batch:
+            batch.put_item({'p':  p, 'x': 3})
+    assert not 'Item' in test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)
 
 # Since a GSI key x cannot be a map or an array, in particular updates to
 # nested attributes like x.y or x[1] are not legal. The error that DynamoDB
