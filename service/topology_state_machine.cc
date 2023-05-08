@@ -65,6 +65,16 @@ std::set<sstring> topology::calculate_enabled_features() const {
     return common_features;
 }
 
+void topology::check_knows_enabled_features(const std::set<std::string_view>& local_features, const std::set<std::string_view>& enabled_features) {
+    std::vector<std::string_view> unknown_features;
+    std::ranges::set_difference(enabled_features, local_features, std::back_inserter(unknown_features));
+    if (!unknown_features.empty()) {
+        throw std::runtime_error(fmt::format("Feature check failed. The node doesn't support some of the features that are enabled in the cluster. "
+                "Unsupported features = {}, supported features = {}, enabled features in the cluster = {}",
+                unknown_features, local_features, enabled_features));
+    }
+}
+
 static std::unordered_map<topology::transition_state, sstring> transition_state_to_name_map = {
     {topology::transition_state::commit_cdc_generation, "commit cdc generation"},
     {topology::transition_state::publish_cdc_generation, "publish cdc generation"},

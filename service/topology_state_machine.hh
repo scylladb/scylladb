@@ -111,6 +111,11 @@ struct topology {
 
     // Returns the set of enabled features (common set of all features of non-left nodes).
     std::set<sstring> calculate_enabled_features() const;
+
+    // Checks whether the node described by `local_features` supports all
+    // enabled features described by `enabled_features`. Throws an exception
+    // if it doesn't.
+    static void check_knows_enabled_features(const std::set<std::string_view>& local_features, const std::set<std::string_view>& enabled_features);
 };
 
 struct raft_topology_snapshot {
