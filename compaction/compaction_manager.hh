@@ -436,7 +436,10 @@ public:
     // given sstable, e.g. after node loses part of its token range because
     // of a newly added node.
     future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t);
+private:
+    future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t);
 
+public:
     // Submit a table to be upgraded and wait for its termination.
     future<> perform_sstable_upgrade(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, bool exclude_current_version);
 

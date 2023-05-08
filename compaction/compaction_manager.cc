@@ -1578,7 +1578,44 @@ bool compaction_manager::requires_cleanup(table_state& t, const sstables::shared
     return cs.sstables_requiring_cleanup.contains(sst);
 }
 
-future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t) {
+future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_ranges, table_state& t) {
+    constexpr auto sleep_duration = std::chrono::seconds(10);
+    constexpr auto max_idle_duration = std::chrono::seconds(300);
+    auto& cs = get_compaction_state(&t);
+
+    co_await try_perform_cleanup(sorted_owned_ranges, t);
+    auto last_idle = seastar::lowres_clock::now();
+
+    while (!cs.sstables_requiring_cleanup.empty()) {
+        auto idle = seastar::lowres_clock::now() - last_idle;
+        if (idle >= max_idle_duration) {
+            auto msg = ::format("Cleanup timed out after {} seconds of no progress", std::chrono::duration_cast<std::chrono::seconds>(idle).count());
+            cmlog.warn("{}", msg);
+            co_await coroutine::return_exception(std::runtime_error(msg));
+        }
+
+        auto has_sstables_eligible_for_compaction = [&] {
+            for (auto& sst : cs.sstables_requiring_cleanup) {
+                if (sstables::is_eligible_for_compaction(sst)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        cmlog.debug("perform_cleanup: waiting for sstables to become eligible for cleanup");
+        // FIXME: wait for a signal from view update builder
+        co_await sleep(sleep_duration);
+
+        if (!has_sstables_eligible_for_compaction()) {
+            continue;
+        }
+        co_await try_perform_cleanup(sorted_owned_ranges, t);
+        last_idle = seastar::lowres_clock::now();
+    }
+}
+
+future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, table_state& t) {
     auto check_for_cleanup = [this, &t] {
         return boost::algorithm::any_of(_tasks, [&t] (auto& task) {
             return task->compacting_table() == &t && task->type() == sstables::compaction_type::Cleanup;
