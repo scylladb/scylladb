@@ -661,7 +661,7 @@ database::setup_metrics() {
                        sm::description("Holds the number of currently active read operations from \"system\" keyspace tables. "),
                        {system_label_instance}),
 
-        sm::make_gauge("reads_memory_consumption", [this] { return max_memory_system_concurrent_reads() - _system_read_concurrency_sem.consumed_resources().memory; },
+        sm::make_gauge("reads_memory_consumption", [this] { return _system_read_concurrency_sem.consumed_resources().memory; },
                        sm::description("Holds the amount of memory consumed by all read operations from \"system\" keyspace tables. "),
                        {system_label_instance}),
 
