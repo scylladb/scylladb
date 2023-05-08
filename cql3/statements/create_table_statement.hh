@@ -77,7 +77,7 @@ public:
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
-    virtual future<> grant_permissions_to_creator(const service::client_state&) const override;
+    virtual future<> grant_permissions_to_creator(query_processor& qp, const service::client_state&) const override;
 
     virtual future<::shared_ptr<messages::result_message>>
     execute(query_processor& qp, service::query_state& state, const query_options& options) const override;

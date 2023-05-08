@@ -64,7 +64,7 @@ std::unique_ptr<prepared_statement> create_role_statement::prepare(
     return std::make_unique<prepared_statement>(::make_shared<create_role_statement>(*this));
 }
 
-future<> create_role_statement::grant_permissions_to_creator(const service::client_state& cs) const {
+future<> create_role_statement::grant_permissions_to_creator(query_processor& qp, const service::client_state& cs) const {
     return do_with(auth::make_role_resource(_role), [&cs](const auth::resource& r) {
         return auth::grant_applicable_permissions(
                 *cs.get_auth_service(),
@@ -94,7 +94,7 @@ future<> create_role_statement::check_access(query_processor& qp, const service:
 }
 
 future<result_message_ptr>
-create_role_statement::execute(query_processor&,
+create_role_statement::execute(query_processor& qp,
                                service::query_state& state,
                                const query_options&) const {
     auth::role_config config;
@@ -104,12 +104,12 @@ create_role_statement::execute(query_processor&,
     return do_with(
             std::move(config),
             extract_authentication_options(_options),
-            [this, &state](const auth::role_config& config, const auth::authentication_options& authen_options) {
+            [this, &qp, &state](const auth::role_config& config, const auth::authentication_options& authen_options) {
         const auto& cs = state.get_client_state();
         auto& as = *cs.get_auth_service();
 
-        return auth::create_role(as, _role, config, authen_options).then([this, &cs] {
-            return grant_permissions_to_creator(cs);
+        return auth::create_role(as, _role, config, authen_options).then([this, &qp, &cs] {
+            return grant_permissions_to_creator(qp, cs);
         }).then([] {
             return void_result_message();
         }).handle_exception_type([this](const auth::role_already_exists& e) {

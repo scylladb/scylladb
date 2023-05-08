@@ -120,8 +120,8 @@ cql3::statements::create_keyspace_statement::prepare(data_dictionary::database d
     return std::make_unique<prepared_statement>(make_shared<create_keyspace_statement>(*this));
 }
 
-future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creator(const service::client_state& cs) const {
-    return do_with(auth::make_data_resource(keyspace()), [&cs](const auth::resource& r) {
+future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creator(query_processor& qp, const service::client_state& cs) const {
+    return do_with(auth::make_data_resource(keyspace()), auth::make_functions_resource(keyspace()), [&cs](const auth::resource& r, const auth::resource& fr) {
         return auth::grant_applicable_permissions(
                 *cs.get_auth_service(),
                 *cs.user(),
