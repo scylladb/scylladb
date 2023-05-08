@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <seastar/core/condition-variable.hh>
+
 #include "database_fwd.hh"
 #include "compaction/compaction_descriptor.hh"
 #include "compaction/compaction_backlog_manager.hh"
@@ -47,6 +49,7 @@ class compaction_group {
     std::vector<sstables::shared_sstable> _sstables_compacted_but_not_deleted;
     uint64_t _main_set_disk_space_used = 0;
     uint64_t _maintenance_set_disk_space_used = 0;
+    seastar::condition_variable _staging_done_condition;
 private:
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
@@ -126,6 +129,10 @@ public:
     uint64_t total_disk_space_used() const noexcept;
 
     compaction::table_state& as_table_state() const noexcept;
+
+    seastar::condition_variable& get_staging_done_condition() noexcept {
+        return _staging_done_condition;
+    }
 };
 
 // Used by the tests to increase the default number of compaction groups by increasing the minimum to X.
