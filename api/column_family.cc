@@ -894,6 +894,30 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         });
     });
 
+    cf::get_tombstone_gc.set(r, [&ctx] (const_req req) {
+        auto uuid = get_uuid(req.param["name"], ctx.db.local());
+        replica::table& t = ctx.db.local().find_column_family(uuid);
+        return t.tombstone_gc_enabled();
+    });
+
+    cf::enable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
+        apilog.info("column_family/enable_tombstone_gc: name={}", req->param["name"]);
+        return foreach_column_family(ctx, req->param["name"], [](replica::table& t) {
+            t.set_tombstone_gc_enabled(true);
+        }).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+
+    cf::disable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
+        apilog.info("column_family/disable_tombstone_gc: name={}", req->param["name"]);
+        return foreach_column_family(ctx, req->param["name"], [](replica::table& t) {
+            t.set_tombstone_gc_enabled(false);
+        }).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+
     cf::get_built_indexes.set(r, [&ctx, &sys_ks](std::unique_ptr<http::request> req) {
         auto ks_cf = parse_fully_qualified_cf_name(req->param["name"]);
         auto&& ks = std::get<0>(ks_cf);

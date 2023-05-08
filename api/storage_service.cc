@@ -253,6 +253,14 @@ future<json::json_return_type> set_tables_autocompaction(http_context& ctx, cons
     });
 }
 
+future<json::json_return_type> set_tables_tombstone_gc(http_context& ctx, const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
+    apilog.info("set_tables_tombstone_gc: enabled={} keyspace={} tables={}", enabled, keyspace, tables);
+    return set_tables(ctx, keyspace, std::move(tables), [enabled] (replica::table& t) {
+        t.set_tombstone_gc_enabled(enabled);
+        return make_ready_future<>();
+    });
+}
+
 void set_transport_controller(http_context& ctx, routes& r, cql_transport::controller& ctl) {
     ss::start_native_transport.set(r, [&ctl](std::unique_ptr<http::request> req) {
         return smp::submit_to(0, [&] {
@@ -1116,6 +1124,22 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
         apilog.info("disable_auto_compaction: keyspace={} tables={}", keyspace, tables);
         return set_tables_autocompaction(ctx, keyspace, tables, false);
+    });
+
+    ss::enable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
+        auto keyspace = validate_keyspace(ctx, req->param);
+        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+
+        apilog.info("enable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
+        return set_tables_tombstone_gc(ctx, keyspace, tables, true);
+    });
+
+    ss::disable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
+        auto keyspace = validate_keyspace(ctx, req->param);
+        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+
+        apilog.info("disable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
+        return set_tables_tombstone_gc(ctx, keyspace, tables, false);
     });
 
     ss::deliver_hints.set(r, [](std::unique_ptr<http::request> req) {
