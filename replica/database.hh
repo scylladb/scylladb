@@ -969,6 +969,10 @@ public:
 
     void set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept;
 
+    bool tombstone_gc_enabled() const noexcept {
+        return _tombstone_gc_enabled;
+    }
+
     bool is_auto_compaction_disabled_by_user() const {
       return _compaction_disabled_by_user;
     }

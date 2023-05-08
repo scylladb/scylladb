@@ -116,7 +116,7 @@ public:
         return table().is_auto_compaction_disabled_by_user();
     }
     bool tombstone_gc_enabled() const noexcept override {
-        return true;
+        return table().tombstone_gc_enabled();
     }
     const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
         return _tombstone_gc_state;
@@ -154,6 +154,10 @@ future<> table_for_tests::stop() {
     auto data = _data;
     co_await data->cm.remove(*data->table_s);
     co_await when_all_succeed(data->cm.stop(), data->semaphore.stop()).discard_result();
+}
+
+void table_for_tests::set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept {
+    _data->cf->set_tombstone_gc_enabled(tombstone_gc_enabled);
 }
 
 namespace sstables {

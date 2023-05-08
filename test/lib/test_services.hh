@@ -97,4 +97,6 @@ struct table_for_tests {
             return make_sstable(version);
         };
     }
+
+    void set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept;
 };
