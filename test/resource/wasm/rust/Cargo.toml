@@ -1,0 +1,18 @@
+[package]
+name = "examples"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+scylla-udf = "0.1.0"
+
+[[example]]
+name = "return_input"
+path = "return_input.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "test_short_ints"
+path = "test_short_ints.rs"
+crate-type = ["cdylib"]

@@ -563,6 +563,17 @@ raft_tests = set([
     'test/raft/failure_detector_test',
 ])
 
+wasms = set([
+    'wasm/return_input.wat',
+    'wasm/test_fib_called_on_null.wat',
+    'wasm/test_mem_grow.wat',
+    'wasm/test_pow.wat',
+    'wasm/test_short_ints.wat',
+    'wasm/test_UDA_final.wat',
+    'wasm/test_UDA_scalar.wat',
+    'wasm/test_word_double.wat',
+])
+
 apps = set([
     'scylla',
 ])
@@ -573,7 +584,7 @@ other = set([
     'iotune',
 ])
 
-all_artifacts = apps | tests | other
+all_artifacts = apps | tests | other | wasms
 
 arg_parser = argparse.ArgumentParser('Configure scylla')
 arg_parser.add_argument('--out', dest='buildfile', action='store', default='build.ninja',
@@ -1345,6 +1356,17 @@ deps['test/raft/discovery_test'] =  ['test/raft/discovery_test.cc',
                                      'test/lib/log.cc',
                                      'service/raft/discovery.cc'] + scylla_raft_dependencies
 
+wasm_deps = {}
+
+wasm_deps['wasm/return_input.wat'] = 'test/resource/wasm/rust/return_input.rs'
+wasm_deps['wasm/test_short_ints.wat'] = 'test/resource/wasm/rust/test_short_ints.rs'
+
+wasm_deps['wasm/test_fib_called_on_null.wat'] = 'test/resource/wasm/c/test_fib_called_on_null.c'
+wasm_deps['wasm/test_mem_grow.wat'] = 'test/resource/wasm/c/test_mem_grow.c'
+wasm_deps['wasm/test_pow.wat'] = 'test/resource/wasm/c/test_pow.c'
+wasm_deps['wasm/test_UDA_final.wat'] = 'test/resource/wasm/c/test_UDA_final.c'
+wasm_deps['wasm/test_UDA_scalar.wat'] = 'test/resource/wasm/c/test_UDA_scalar.c'
+wasm_deps['wasm/test_word_double.wat'] = 'test/resource/wasm/c/test_word_double.c'
 
 warnings = [
     '-Wall',
@@ -1507,10 +1529,10 @@ default_modes = args.selected_modes or [mode for mode, mode_cfg in modes.items()
 build_modes =  {m: modes[m] for m in selected_modes}
 
 if args.artifacts:
-    build_artifacts = []
+    build_artifacts = set()
     for artifact in args.artifacts:
         if artifact in all_artifacts:
-            build_artifacts.append(artifact)
+            build_artifacts.add(artifact)
         else:
             print("Ignoring unknown build artifact: {}".format(artifact))
     if not build_artifacts:
@@ -1792,7 +1814,32 @@ with open(buildfile, 'w') as f:
             description = RUST_SOURCE $out
         rule cxxbridge_header
             command = cxxbridge --header > $out
+        rule c2wasm
+            command = clang --target=wasm32 --no-standard-libraries -Wl,--export-all -Wl,--no-entry $in -o $out
+            description = C2WASM $out
+        rule rust2wasm
+            # The default stack size in Rust is 1MB, which causes oversized allocation warnings,
+            # because it's allocated in a single chunk as a part of a Wasm Linear Memory.
+            # We change the stack size to 128KB using the RUSTFLAGS environment variable
+            # in the command below.
+            command = RUSTFLAGS="-C link-args=-zstack-size=131072" cargo build --target=wasm32-wasi --example=$example --locked --manifest-path=test/resource/wasm/rust/Cargo.toml --target-dir=$builddir/wasm/ $
+                && wasm-opt -Oz $builddir/wasm/wasm32-wasi/debug/examples/$example.wasm -o $builddir/wasm/$example.wasm $
+                && wasm-strip $builddir/wasm/$example.wasm
+            description = RUST2WASM $out
+        rule wasm2wat
+            command = wasm2wat $in > $out
+            description = WASM2WAT $out
         ''').format(**globals()))
+    for binary in sorted(wasms):
+        src = wasm_deps[binary]
+        wasm = binary[:-4] + '.wasm'
+        if src.endswith('.rs'):
+            f.write(f'build $builddir/{wasm}: rust2wasm {src} | test/resource/wasm/rust/Cargo.lock\n')
+            example_name = binary[binary.rindex('/')+1:-4]
+            f.write(f'   example = {example_name}\n')
+        else:
+            f.write(f'build $builddir/{wasm}: c2wasm {src}\n')
+        f.write(f'build $builddir/{binary}: wasm2wat $builddir/{wasm}\n')
     for mode in build_modes:
         modeval = modes[mode]
         fmt_lib = 'fmt'
@@ -1857,9 +1904,10 @@ with open(buildfile, 'w') as f:
               description = RUST_LIB $out
             ''').format(mode=mode, antlr3_exec=antlr3_exec, fmt_lib=fmt_lib, test_repeat=test_repeat, test_timeout=test_timeout, **modeval))
         f.write(
-            'build {mode}-build: phony {artifacts}\n'.format(
+            'build {mode}-build: phony {artifacts} {wasms}\n'.format(
                 mode=mode,
-                artifacts=str.join(' ', ['$builddir/' + mode + '/' + x for x in sorted(build_artifacts)])
+                artifacts=str.join(' ', ['$builddir/' + mode + '/' + x for x in sorted(build_artifacts - wasms)]),
+                wasms = str.join(' ', ['$builddir/' + x for x in sorted(build_artifacts & wasms)]),
             )
         )
         include_cxx_target = f'{mode}-build' if not args.dist_only else ''
@@ -1876,7 +1924,7 @@ with open(buildfile, 'w') as f:
         seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
         seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
         for binary in sorted(build_artifacts):
-            if binary in other:
+            if binary in other or binary in wasms:
                 continue
             srcs = deps[binary]
             objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
@@ -1964,9 +2012,10 @@ with open(buildfile, 'w') as f:
         )
 
         f.write(
-            'build {mode}-test: test.{mode} {test_executables} $builddir/{mode}/scylla\n'.format(
+            'build {mode}-test: test.{mode} {test_executables} $builddir/{mode}/scylla {wasms}\n'.format(
                 mode=mode,
                 test_executables=' '.join(['$builddir/{}/{}'.format(mode, binary) for binary in sorted(tests)]),
+                wasms=' '.join([f'$builddir/{binary}' for binary in sorted(wasms)]),
             )
         )
         f.write(
@@ -2109,6 +2158,9 @@ with open(buildfile, 'w') as f:
     )
     f.write(
             'build check: phony {}\n'.format(' '.join(['{mode}-check'.format(mode=mode) for mode in default_modes]))
+    )
+    f.write(
+            'build wasm: phony {}\n'.format(' '.join([f'$builddir/{binary}' for binary in sorted(wasms)]))
     )
 
     f.write(textwrap.dedent(f'''\
