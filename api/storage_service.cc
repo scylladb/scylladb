@@ -240,18 +240,17 @@ static future<json::json_return_type> set_tables(http_context& ctx, const sstrin
 future<json::json_return_type> set_tables_autocompaction(http_context& ctx, const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
     apilog.info("set_tables_autocompaction: enabled={} keyspace={} tables={}", enabled, keyspace, tables);
 
-        // FIXME: restore indentation.
-        return ctx.db.invoke_on(0, [&ctx, keyspace, tables = std::move(tables), enabled] (replica::database& db) {
-            auto g = replica::database::autocompaction_toggle_guard(db);
-            return set_tables(ctx, keyspace, tables, [enabled] (replica::table& cf) {
-                    if (enabled) {
-                        cf.enable_auto_compaction();
-                    } else {
-                        return cf.disable_auto_compaction();
-                    }
-                    return make_ready_future<>();
-            }).finally([g = std::move(g)] {});
-        });
+    return ctx.db.invoke_on(0, [&ctx, keyspace, tables = std::move(tables), enabled] (replica::database& db) {
+        auto g = replica::database::autocompaction_toggle_guard(db);
+        return set_tables(ctx, keyspace, tables, [enabled] (replica::table& cf) {
+            if (enabled) {
+                cf.enable_auto_compaction();
+            } else {
+                return cf.disable_auto_compaction();
+            }
+            return make_ready_future<>();
+        }).finally([g = std::move(g)] {});
+    });
 }
 
 void set_transport_controller(http_context& ctx, routes& r, cql_transport::controller& ctl) {
