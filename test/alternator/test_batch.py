@@ -192,7 +192,7 @@ def test_batch_write_invalid_operation(test_table_s):
             for item in items:
                 batch.put_item(item)
     for p in [p1, p2]:
-        assert not 'item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+        assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
     # test missing key attribute:
     p1 = random_string()
     p2 = random_string()
@@ -202,7 +202,7 @@ def test_batch_write_invalid_operation(test_table_s):
             for item in items:
                 batch.put_item(item)
     for p in [p1, p2]:
-        assert not 'item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+        assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
 
 # In test_item.py we have a bunch of test_empty_* tests on different ways to
 # create an empty item (which in Scylla requires the special CQL row marker
