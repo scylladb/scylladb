@@ -33,6 +33,7 @@
 #include "stats.hh"
 #include "utils/observable.hh"
 #include "sstables/shareable_components.hh"
+#include "sstables/storage.hh"
 #include "sstables/generation_type.hh"
 #include "mutation/mutation_fragment_stream_validator.hh"
 #include "readers/flat_mutation_reader_fwd.hh"
@@ -132,6 +133,13 @@ constexpr auto table_subdirectories = std::to_array({
 
 constexpr const char* repair_origin = "repair";
 
+class delayed_commit_changes {
+    std::unordered_set<sstring> _dirs;
+    friend class filesystem_storage;
+public:
+    future<> commit();
+};
+
 class sstable : public enable_lw_shared_from_this<sstable> {
     friend ::sstable_assertions;
 public:
@@ -194,13 +202,6 @@ public:
     // Load set of shards that own the SSTable, while reading the minimum
     // from disk to achieve that.
     future<> load_owner_shards(const io_priority_class& pc = default_priority_class());
-
-    class delayed_commit_changes {
-        std::unordered_set<sstring> _dirs;
-        friend class sstable;
-    public:
-        future<> commit();
-    };
 
     // Call as the last method before the object is destroyed.
     // No other uses of the object can happen at this point.
@@ -475,47 +476,9 @@ public:
         return _last_partition_last_position;
     }
 
-    using mark_for_removal = bool_class<class mark_for_removal_tag>;
-
-    class storage {
-        friend class test;
-
-        // Internal, but can also be used by tests
-        virtual void change_dir_for_test(sstring nd) {
-            assert(false && "Changing directory not implemented");
-        }
-        virtual future<> create_links(const sstable& sst, const sstring& dir) const {
-            assert(false && "Direct links creation not implemented");
-        }
-        virtual future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay) {
-            assert(false && "Direct move not implemented");
-        }
-
-    public:
-        virtual ~storage() {}
-
-        using absolute_path = bool_class<class absolute_path_tag>; // FIXME -- should go away eventually
-
-        virtual future<> seal(const sstable& sst) = 0;
-        virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const = 0;
-        virtual future<> change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay) = 0;
-        // runs in async context
-        virtual void open(sstable& sst, const io_priority_class& pc) = 0;
-        virtual future<> wipe(const sstable& sst) noexcept = 0;
-        virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) = 0;
-        virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) = 0;
-        virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) = 0;
-        virtual future<> destroy(const sstable& sst) = 0;
-
-        virtual sstring prefix() const  = 0;
-    };
-
     const storage& get_storage() const {
         return *_storage;
     }
-
-    class filesystem_storage;
-    class s3_storage;
 
 private:
     sstring filename(component_type f) const {
@@ -527,6 +490,8 @@ private:
     }
 
     friend class sstable_directory;
+    friend class filesystem_storage;
+    friend class s3_storage;
 
     size_t sstable_buffer_size;
 

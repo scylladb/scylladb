@@ -3174,7 +3174,7 @@ SEASTAR_TEST_CASE(test_sstable_bytes_on_disk_correctness) {
 
         auto get_bytes_on_disk_from_storage = [&] (const sstables::shared_sstable& sst) {
             uint64_t bytes_on_disk = 0;
-            auto& underlying_storage = const_cast<sstable::storage&>(sst->get_storage());
+            auto& underlying_storage = const_cast<sstables::storage&>(sst->get_storage());
             for (auto& component_type : sstables::test(sst).get_components()) {
                 file f = underlying_storage.open_component(*sst, component_type, open_flags::ro, file_open_options{}, true).get0();
                 bytes_on_disk += f.size().get0();

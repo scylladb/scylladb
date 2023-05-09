@@ -2581,7 +2581,7 @@ table::make_reader_v2_excluding_sstables(schema_ptr s,
 
 future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable> sstables) {
     auto units = co_await get_units(_sstable_deletion_sem, 1);
-    sstables::sstable::delayed_commit_changes delay_commit;
+    sstables::delayed_commit_changes delay_commit;
     for (auto sst : sstables) {
         try {
             // Off-strategy can happen in parallel to view building, so the SSTable may be deleted already if the former
