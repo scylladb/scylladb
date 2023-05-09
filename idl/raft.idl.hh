@@ -8,7 +8,7 @@
 
 #include "raft/raft.hh"
 
-#include "idl/utils.idl.hh"
+#include "idl/raft_storage.idl.hh"
 
 namespace raft {
 
