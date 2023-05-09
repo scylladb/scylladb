@@ -463,19 +463,19 @@ public:
         // Only check if the active tombstone has to be closed, if the partition
         // was cut by the consumer. Otherwise, leave the stream as-is.
         if (_stop) {
-          if (_effective_tombstone) {
-            auto rtc = range_tombstone_change(position_in_partition::after_key(_schema, _last_pos), tombstone{});
-            // do_consume() overwrites _effective_tombstone with {}, so save and restore it.
-            auto prev_tombstone = _effective_tombstone;
-            do_consume(std::move(rtc), consumer, gc_consumer);
-            _effective_tombstone = prev_tombstone;
-          } else if (_validator.validator().current_tombstone()) {
-              // It is possible that the range-tombstone providing the active
-              // tombstone was purged and never got to the consumer and therefore
-              // didn't set `_effective_tombstone`. In this case we generate a
-              // closing tombstone just for the validator.
-             _validator(mutation_fragment_v2::kind::range_tombstone_change, position_in_partition::after_key(_schema, _last_pos), tombstone{});
-          }
+            if (_effective_tombstone) {
+                auto rtc = range_tombstone_change(position_in_partition::after_key(_schema, _last_pos), tombstone{});
+                // do_consume() overwrites _effective_tombstone with {}, so save and restore it.
+                auto prev_tombstone = _effective_tombstone;
+                do_consume(std::move(rtc), consumer, gc_consumer);
+                _effective_tombstone = prev_tombstone;
+            } else if (_validator.validator().current_tombstone()) {
+                // It is possible that the range-tombstone providing the active
+                // tombstone was purged and never got to the consumer and therefore
+                // didn't set `_effective_tombstone`. In this case we generate a
+                // closing tombstone just for the validator.
+                _validator(mutation_fragment_v2::kind::range_tombstone_change, position_in_partition::after_key(_schema, _last_pos), tombstone{});
+            }
         }
         _validator.on_end_of_partition();
         if (!_empty_partition_in_gc_consumer) {
