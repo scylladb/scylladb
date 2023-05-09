@@ -77,7 +77,6 @@ You can find the third-party driver documentation on the GitHub pages for each d
 * `Scala Phantom Project <https://github.com/outworkers/phantom>`_
 * `Xandra Elixir Driver <https://github.com/lexhide/xandra>`_
 
-
 Learn about ScyllaDB Drivers on ScyllaDB University
 ----------------------------------------------------
 

@@ -129,14 +129,10 @@ raft_group0::raft_group0(seastar::abort_source& abort_source,
         raft_group_registry& raft_gr,
         sharded<netw::messaging_service>& ms,
         gms::gossiper& gs,
-        cql3::query_processor& qp,
-        service::migration_manager& mm,
         gms::feature_service& feat,
         db::system_keyspace& sys_ks,
-        raft_group0_client& client,
-        storage_service& ss,
-        cdc::generation_service& cdc_gen_svc)
-    : _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs), _qp(qp), _mm(mm), _feat(feat), _sys_ks(sys_ks), _client(client), _ss(ss), _cdc_gen_svc(cdc_gen_svc)
+        raft_group0_client& client)
+    : _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs),  _feat(feat), _sys_ks(sys_ks), _client(client)
     , _status_for_monitoring(_raft_gr.is_enabled() ? status_for_monitoring::normal : status_for_monitoring::disabled)
 {
     register_metrics();
@@ -195,14 +191,15 @@ const raft::server_id& raft_group0::load_my_id() {
     return _raft_gr.get_my_raft_id();
 }
 
-raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, raft::server_id my_id) {
-    auto state_machine = std::make_unique<group0_state_machine>(_client, _mm, _qp.proxy(), _ss, _cdc_gen_svc);
+raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, raft::server_id my_id, service::storage_service& ss, cql3::query_processor& qp,
+                                                            service::migration_manager& mm, cdc::generation_service& cdc_gen_svc) {
+    auto state_machine = std::make_unique<group0_state_machine>(_client, mm, qp.proxy(), ss, cdc_gen_svc);
     auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.address_map(), gid, my_id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
-    auto storage = std::make_unique<raft_sys_table_storage>(_qp, gid, my_id);
+    auto storage = std::make_unique<raft_sys_table_storage>(qp, gid, my_id);
     auto& persistence_ref = *storage;
-    auto* cl = _qp.proxy().get_db().local().commitlog();
+    auto* cl = qp.proxy().get_db().local().commitlog();
     auto config = raft::server::configuration {
         .on_background_error = [gid, this](std::exception_ptr e) {
             _raft_gr.abort_server(gid, fmt::format("background error, {}", e));
@@ -234,14 +231,14 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
 }
 
 future<group0_info>
-raft_group0::discover_group0(raft::server_id my_id, const std::vector<gms::inet_address>& seeds) {
+raft_group0::discover_group0(raft::server_id my_id, const std::vector<gms::inet_address>& seeds, cql3::query_processor& qp) {
     discovery::peer_list peers;
     for (auto& ip: seeds) {
         peers.emplace_back(discovery_peer{raft::server_id{}, ip});
     }
     discovery_peer my_addr = {my_id, _gossiper.get_broadcast_address()};
 
-    auto& p_discovery = _group0.emplace<persistent_discovery>(co_await persistent_discovery::make(my_addr, std::move(peers), _qp));
+    auto& p_discovery = _group0.emplace<persistent_discovery>(co_await persistent_discovery::make(my_addr, std::move(peers), qp));
     co_return co_await futurize_invoke([this, &p_discovery, my_addr = std::move(my_addr)] () mutable {
         return p_discovery.run(_ms.local(), _shutdown_gate.hold(), _abort_source, std::move(my_addr));
     }).finally(std::bind_front([] (raft_group0& self, persistent_discovery& p_discovery) -> future<> {
@@ -371,7 +368,8 @@ future<> raft_group0::abort() {
     co_await _shutdown_gate.close();
 }
 
-future<> raft_group0::start_server_for_group0(raft::group_id group0_id) {
+future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
+                                              cdc::generation_service& cdc_gen_service) {
     assert(group0_id != raft::group_id{});
     // The address map may miss our own id in case we connect
     // to an existing Raft Group 0 leader.
@@ -383,25 +381,26 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id) {
     // we ensure we haven't missed any IP update in the map.
     load_initial_raft_address_map();
     group0_log.info("Server {} is starting group 0 with id {}", my_id, group0_id);
-    co_await _raft_gr.start_server_for_group(create_server_for_group0(group0_id, my_id));
+    co_await _raft_gr.start_server_for_group(create_server_for_group0(group0_id, my_id, ss, qp, mm, cdc_gen_service));
     _group0.emplace<raft::group_id>(group0_id);
 }
 
-future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_voter) {
+future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_voter, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
+                                  cdc::generation_service& cdc_gen_service) {
     assert(this_shard_id() == 0);
     assert(!joined_group0());
 
     auto group0_id = raft::group_id{co_await db::system_keyspace::get_raft_group0_id()};
     if (group0_id) {
         // Group 0 ID present means we've already joined group 0 before.
-        co_return co_await start_server_for_group0(group0_id);
+        co_return co_await start_server_for_group0(group0_id, ss, qp, mm, cdc_gen_service);
     }
 
     raft::server* server = nullptr;
     auto my_id = load_my_id();
     group0_log.info("server {} found no local group 0. Discovering...", my_id);
     while (true) {
-        auto g0_info = co_await discover_group0(my_id, seeds);
+        auto g0_info = co_await discover_group0(my_id, seeds, qp);
         group0_log.info("server {} found group 0 with group id {}, leader {}", my_id, g0_info.group0_id, g0_info.id);
 
         if (server && group0_id != g0_info.group0_id) {
@@ -427,8 +426,8 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_
                 initial_configuration.current.emplace(my_addr, true);
             }
             // Bootstrap the initial configuration
-            co_await raft_sys_table_storage(_qp, group0_id, my_id).bootstrap(std::move(initial_configuration));
-            co_await start_server_for_group0(group0_id);
+            co_await raft_sys_table_storage(qp, group0_id, my_id).bootstrap(std::move(initial_configuration));
+            co_await start_server_for_group0(group0_id, ss, qp, mm, cdc_gen_service);
             server = &_raft_gr.group0();
             // FIXME if we crash now or after getting added to the config but before storing group 0 ID,
             // we'll end with a bootstrapped server that possibly added some entries, but we won't remember that we have such a server
@@ -510,7 +509,7 @@ static future<bool> synchronize_schema(
 
 future<> raft_group0::setup_group0(
         db::system_keyspace& sys_ks, const std::unordered_set<gms::inet_address>& initial_contact_nodes,
-        std::optional<replace_info> replace_info) {
+        std::optional<replace_info> replace_info, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, cdc::generation_service& cdc_gen_servic) {
     assert(this_shard_id() == 0);
 
     if (!_raft_gr.is_enabled()) {
@@ -531,7 +530,7 @@ future<> raft_group0::setup_group0(
         if (group0_id) {
             // Group 0 ID is present => we've already joined group 0 earlier.
             group0_log.info("setup_group0: group 0 ID present. Starting existing Raft server.");
-            co_await start_server_for_group0(group0_id);
+            co_await start_server_for_group0(group0_id, ss, qp, mm, cdc_gen_servic);
         } else {
             // Scylla has bootstrapped earlier but group 0 ID not present. This means we're upgrading.
             // Upgrade will start through a feature listener created after we enter NORMAL state.
@@ -554,7 +553,7 @@ future<> raft_group0::setup_group0(
     }
 
     group0_log.info("setup_group0: joining group 0...");
-    co_await join_group0(std::move(seeds), false /* non-voter */);
+    co_await join_group0(std::move(seeds), false /* non-voter */, ss, qp, mm, cdc_gen_servic);
     group0_log.info("setup_group0: successfully joined group 0.");
 
     if (replace_info) {
@@ -602,7 +601,7 @@ future<> raft_group0::setup_group0(
             // Everyone entered `synchronize` state. That means we're bootstrapping in the middle of `upgrade_to_group0`.
             // We need to finish upgrade as others do.
             auto can_finish_early = std::bind_front(anyone_finished_upgrade, std::cref(members0), std::ref(_ms.local()), std::ref(_abort_source));
-            co_await synchronize_schema(_qp.db().real_database(), _ms.local(), members0, _mm, can_finish_early, _abort_source);
+            co_await synchronize_schema(qp.db().real_database(), _ms.local(), members0, mm, can_finish_early, _abort_source);
         }
     }
 
@@ -630,7 +629,7 @@ void raft_group0::load_initial_raft_address_map() {
     }
 }
 
-future<> raft_group0::finish_setup_after_join() {
+future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, cdc::generation_service& cdc_gen_service) {
     if (joined_group0()) {
         group0_log.info("finish_setup_after_join: group 0 ID present, loading server info.");
         auto my_id = load_my_id();
@@ -665,10 +664,10 @@ future<> raft_group0::finish_setup_after_join() {
     }
 
     // The listener may fire immediately, create a thread for that case.
-    co_await seastar::async([this] {
-        _raft_support_listener = _feat.supports_raft_cluster_mgmt.when_enabled([this] {
+    co_await seastar::async([this, &ss, &qp, &mm, &cdc_gen_service] {
+        _raft_support_listener = _feat.supports_raft_cluster_mgmt.when_enabled([this, &ss, &qp, &mm, &cdc_gen_service] {
             group0_log.info("finish_setup_after_join: SUPPORTS_RAFT feature enabled. Starting internal upgrade-to-raft procedure.");
-            upgrade_to_group0().get();
+            upgrade_to_group0(ss, qp, mm, cdc_gen_service).get();
         });
     });
 }
@@ -1426,7 +1425,7 @@ static auto warn_if_upgrade_takes_too_long() {
     });
 }
 
-future<> raft_group0::upgrade_to_group0() {
+future<> raft_group0::upgrade_to_group0(service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, cdc::generation_service& cdc_gen_service) {
     assert(this_shard_id() == 0);
 
     // The SUPPORTS_RAFT cluster feature is enabled, so the local RAFT feature must also be enabled
@@ -1451,10 +1450,11 @@ future<> raft_group0::upgrade_to_group0() {
             break;
     }
 
-    (void)[] (raft_group0& self, abort_source& as, group0_upgrade_state start_state, gate::holder pause_shutdown) -> future<> {
+    (void)[] (raft_group0& self, abort_source& as, group0_upgrade_state start_state, gate::holder pause_shutdown, service::storage_service& ss, cql3::query_processor& qp,
+                service::migration_manager& mm, cdc::generation_service& cdc_gen_service) -> future<> {
         auto warner = warn_if_upgrade_takes_too_long();
         try {
-            co_await self.do_upgrade_to_group0(start_state);
+            co_await self.do_upgrade_to_group0(start_state, ss, qp, mm, cdc_gen_service);
             co_await self._client.set_group0_upgrade_state(group0_upgrade_state::use_post_raft_procedures);
             upgrade_log.info("Raft upgrade finished.");
         } catch (...) {
@@ -1463,11 +1463,12 @@ future<> raft_group0::upgrade_to_group0() {
                 " If the procedure gets stuck, manual recovery may be required."
                 " Consult the relevant documentation: {}", std::current_exception(), raft_upgrade_doc);
         }
-    }(std::ref(*this), std::ref(_abort_source), start_state, _shutdown_gate.hold());
+    }(std::ref(*this), std::ref(_abort_source), start_state, _shutdown_gate.hold(), ss, qp, mm, cdc_gen_service);
 }
 
 // `start_state` is either `use_pre_raft_procedures` or `synchronize`.
-future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state) {
+future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
+                                           cdc::generation_service& cdc_gen_service) {
     assert(this_shard_id() == 0);
 
     // Check if every peer knows about the upgrade procedure.
@@ -1494,7 +1495,7 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state) {
 
     if (!joined_group0()) {
         upgrade_log.info("Joining group 0...");
-        co_await join_group0(co_await _sys_ks.load_peers(), true);
+        co_await join_group0(co_await _sys_ks.load_peers(), true, ss, qp, mm, cdc_gen_service);
     } else {
         upgrade_log.info(
             "We're already a member of group 0."
@@ -1525,7 +1526,7 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state) {
         // to do any additional schema pulls (only verify quickly that the schema is still in sync).
         upgrade_log.info("Waiting for schema to synchronize across all nodes in group 0...");
         auto can_finish_early = [] { return make_ready_future<bool>(false); };
-        co_await synchronize_schema(_qp.db().real_database(), _ms.local(), members0, _mm, can_finish_early, _abort_source);
+        co_await synchronize_schema(qp.db().real_database(), _ms.local(), members0, mm, can_finish_early, _abort_source);
 
         // Before entering `synchronize`, perform a round-trip of `get_group0_upgrade_state` RPC calls
         // to everyone as a dry run, just to check that nodes respond to this RPC.
@@ -1556,7 +1557,7 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state) {
 
     upgrade_log.info("All peers in synchronize state. Waiting for schema to synchronize...");
     auto can_finish_early = std::bind_front(anyone_finished_upgrade, std::cref(members0), std::ref(_ms.local()), std::ref(_abort_source));
-    if (!(co_await synchronize_schema(_qp.db().real_database(), _ms.local(), members0, _mm, can_finish_early, _abort_source))) {
+    if (!(co_await synchronize_schema(qp.db().real_database(), _ms.local(), members0, mm, can_finish_early, _abort_source))) {
         upgrade_log.info("Another node already finished upgrade. We can finish early.");
         co_return;
     }

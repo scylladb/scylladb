@@ -508,6 +508,7 @@ scylla_tests = set([
     'test/boost/exceptions_fallback_test',
     'test/boost/s3_test',
     'test/boost/locator_topology_test',
+    'test/boost/string_format_test',
     'test/manual/ec2_snitch_test',
     'test/manual/enormous_table_scan_test',
     'test/manual/gce_snitch_test',
@@ -562,6 +563,17 @@ raft_tests = set([
     'test/raft/failure_detector_test',
 ])
 
+wasms = set([
+    'wasm/return_input.wat',
+    'wasm/test_fib_called_on_null.wat',
+    'wasm/test_mem_grow.wat',
+    'wasm/test_pow.wat',
+    'wasm/test_short_ints.wat',
+    'wasm/test_UDA_final.wat',
+    'wasm/test_UDA_scalar.wat',
+    'wasm/test_word_double.wat',
+])
+
 apps = set([
     'scylla',
 ])
@@ -572,7 +584,7 @@ other = set([
     'iotune',
 ])
 
-all_artifacts = apps | tests | other
+all_artifacts = apps | tests | other | wasms
 
 arg_parser = argparse.ArgumentParser('Configure scylla')
 arg_parser.add_argument('--out', dest='buildfile', action='store', default='build.ninja',
@@ -1173,7 +1185,7 @@ scylla_tests_generic_dependencies = [
     'test/lib/sstable_run_based_compaction_strategy_for_tests.cc',
 ]
 
-scylla_tests_dependencies = scylla_core + idls + scylla_tests_generic_dependencies + [
+scylla_tests_dependencies = scylla_core + alternator + idls + scylla_tests_generic_dependencies + [
     'test/lib/cql_assertions.cc',
     'test/lib/result_set_assertions.cc',
     'test/lib/mutation_source_test.cc',
@@ -1240,6 +1252,7 @@ pure_boost_tests = set([
     'test/boost/vint_serialization_test',
     'test/boost/bptree_test',
     'test/boost/utf8_test',
+    'test/boost/string_format_test',
     'test/manual/streaming_histogram_test',
 ])
 
@@ -1277,7 +1290,7 @@ for t in sorted(scylla_tests):
     if t not in tests_not_using_seastar_test_framework:
         deps[t] += scylla_tests_dependencies
     else:
-        deps[t] += scylla_core + idls + scylla_tests_generic_dependencies
+        deps[t] += scylla_core + alternator + idls + scylla_tests_generic_dependencies
 
 perf_tests_seastar_deps = [
     'seastar/tests/perf/perf_tests.cc'
@@ -1343,15 +1356,24 @@ deps['test/raft/discovery_test'] =  ['test/raft/discovery_test.cc',
                                      'test/lib/log.cc',
                                      'service/raft/discovery.cc'] + scylla_raft_dependencies
 
+wasm_deps = {}
+
+wasm_deps['wasm/return_input.wat'] = 'test/resource/wasm/rust/return_input.rs'
+wasm_deps['wasm/test_short_ints.wat'] = 'test/resource/wasm/rust/test_short_ints.rs'
+
+wasm_deps['wasm/test_fib_called_on_null.wat'] = 'test/resource/wasm/c/test_fib_called_on_null.c'
+wasm_deps['wasm/test_mem_grow.wat'] = 'test/resource/wasm/c/test_mem_grow.c'
+wasm_deps['wasm/test_pow.wat'] = 'test/resource/wasm/c/test_pow.c'
+wasm_deps['wasm/test_UDA_final.wat'] = 'test/resource/wasm/c/test_UDA_final.c'
+wasm_deps['wasm/test_UDA_scalar.wat'] = 'test/resource/wasm/c/test_UDA_scalar.c'
+wasm_deps['wasm/test_word_double.wat'] = 'test/resource/wasm/c/test_word_double.c'
 
 warnings = [
     '-Wall',
     '-Werror',
     '-Wno-mismatched-tags',  # clang-only
     '-Wno-tautological-compare',
-    '-Wno-parentheses-equality',
     '-Wno-c++11-narrowing',
-    '-Wno-missing-braces',
     '-Wno-ignored-attributes',
     '-Wno-overloaded-virtual',
     '-Wno-unused-command-line-argument',
@@ -1507,10 +1529,10 @@ default_modes = args.selected_modes or [mode for mode, mode_cfg in modes.items()
 build_modes =  {m: modes[m] for m in selected_modes}
 
 if args.artifacts:
-    build_artifacts = []
+    build_artifacts = set()
     for artifact in args.artifacts:
         if artifact in all_artifacts:
-            build_artifacts.append(artifact)
+            build_artifacts.add(artifact)
         else:
             print("Ignoring unknown build artifact: {}".format(artifact))
     if not build_artifacts:
@@ -1792,7 +1814,32 @@ with open(buildfile, 'w') as f:
             description = RUST_SOURCE $out
         rule cxxbridge_header
             command = cxxbridge --header > $out
+        rule c2wasm
+            command = clang --target=wasm32 --no-standard-libraries -Wl,--export-all -Wl,--no-entry $in -o $out
+            description = C2WASM $out
+        rule rust2wasm
+            # The default stack size in Rust is 1MB, which causes oversized allocation warnings,
+            # because it's allocated in a single chunk as a part of a Wasm Linear Memory.
+            # We change the stack size to 128KB using the RUSTFLAGS environment variable
+            # in the command below.
+            command = RUSTFLAGS="-C link-args=-zstack-size=131072" cargo build --target=wasm32-wasi --example=$example --locked --manifest-path=test/resource/wasm/rust/Cargo.toml --target-dir=$builddir/wasm/ $
+                && wasm-opt -Oz $builddir/wasm/wasm32-wasi/debug/examples/$example.wasm -o $builddir/wasm/$example.wasm $
+                && wasm-strip $builddir/wasm/$example.wasm
+            description = RUST2WASM $out
+        rule wasm2wat
+            command = wasm2wat $in > $out
+            description = WASM2WAT $out
         ''').format(**globals()))
+    for binary in sorted(wasms):
+        src = wasm_deps[binary]
+        wasm = binary[:-4] + '.wasm'
+        if src.endswith('.rs'):
+            f.write(f'build $builddir/{wasm}: rust2wasm {src} | test/resource/wasm/rust/Cargo.lock\n')
+            example_name = binary[binary.rindex('/')+1:-4]
+            f.write(f'   example = {example_name}\n')
+        else:
+            f.write(f'build $builddir/{wasm}: c2wasm {src}\n')
+        f.write(f'build $builddir/{binary}: wasm2wat $builddir/{wasm}\n')
     for mode in build_modes:
         modeval = modes[mode]
         fmt_lib = 'fmt'
@@ -1857,9 +1904,10 @@ with open(buildfile, 'w') as f:
               description = RUST_LIB $out
             ''').format(mode=mode, antlr3_exec=antlr3_exec, fmt_lib=fmt_lib, test_repeat=test_repeat, test_timeout=test_timeout, **modeval))
         f.write(
-            'build {mode}-build: phony {artifacts}\n'.format(
+            'build {mode}-build: phony {artifacts} {wasms}\n'.format(
                 mode=mode,
-                artifacts=str.join(' ', ['$builddir/' + mode + '/' + x for x in sorted(build_artifacts)])
+                artifacts=str.join(' ', ['$builddir/' + mode + '/' + x for x in sorted(build_artifacts - wasms)]),
+                wasms = str.join(' ', ['$builddir/' + x for x in sorted(build_artifacts & wasms)]),
             )
         )
         include_cxx_target = f'{mode}-build' if not args.dist_only else ''
@@ -1876,7 +1924,7 @@ with open(buildfile, 'w') as f:
         seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
         seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
         for binary in sorted(build_artifacts):
-            if binary in other:
+            if binary in other or binary in wasms:
                 continue
             srcs = deps[binary]
             objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
@@ -1909,7 +1957,7 @@ with open(buildfile, 'w') as f:
                 if binary not in tests_not_using_seastar_test_framework:
                     local_libs += ' ' + "$seastar_testing_libs_{}".format(mode)
                 else:
-                    local_libs += ' ' + '-lgnutls'
+                    local_libs += ' ' + '-lgnutls' + ' ' + '-lboost_unit_test_framework'
                 # Our code's debugging information is huge, and multiplied
                 # by many tests yields ridiculous amounts of disk space.
                 # So we strip the tests by default; The user can very
@@ -1964,9 +2012,10 @@ with open(buildfile, 'w') as f:
         )
 
         f.write(
-            'build {mode}-test: test.{mode} {test_executables} $builddir/{mode}/scylla\n'.format(
+            'build {mode}-test: test.{mode} {test_executables} $builddir/{mode}/scylla {wasms}\n'.format(
                 mode=mode,
                 test_executables=' '.join(['$builddir/{}/{}'.format(mode, binary) for binary in sorted(tests)]),
+                wasms=' '.join([f'$builddir/{binary}' for binary in sorted(wasms)]),
             )
         )
         f.write(
@@ -2030,13 +2079,14 @@ with open(buildfile, 'w') as f:
             for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
                 obj = cc.replace('.cpp', '.o')
                 f.write('build {}: cxx.{} {} || {}\n'.format(obj, mode, cc, ' '.join(serializers)))
+                flags = '-Wno-parentheses-equality'
                 if cc.endswith('Parser.cpp'):
                     # Unoptimized parsers end up using huge amounts of stack space and overflowing their stack
-                    flags = '-O1' if modes[mode]['optimization-level'] in ['0', 'g', 's'] else ''
+                    flags += ' -O1' if modes[mode]['optimization-level'] in ['0', 'g', 's'] else ''
 
                     if has_sanitize_address_use_after_scope:
                         flags += ' -fno-sanitize-address-use-after-scope'
-                    f.write('  obj_cxxflags = %s\n' % flags)
+                f.write(f'  obj_cxxflags = {flags}\n')
         f.write(f'build $builddir/{mode}/gen/empty.cc: gen\n')
         for hh in headers:
             f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} | $builddir/{mode}/gen/empty.cc || {gen_headers_dep}\n'.format(
@@ -2108,6 +2158,9 @@ with open(buildfile, 'w') as f:
     )
     f.write(
             'build check: phony {}\n'.format(' '.join(['{mode}-check'.format(mode=mode) for mode in default_modes]))
+    )
+    f.write(
+            'build wasm: phony {}\n'.format(' '.join([f'$builddir/{binary}' for binary in sorted(wasms)]))
     )
 
     f.write(textwrap.dedent(f'''\

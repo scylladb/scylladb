@@ -13,11 +13,14 @@ import pytest
 
 from cassandra.cluster import Cluster, NoHostAvailable
 from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
+import os
 import ssl
+import subprocess
+import tempfile
 import time
 import random
 
-from util import unique_name, new_test_table, cql_session
+from util import unique_name, new_test_table, cql_session, local_process_id
 
 
 print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
@@ -167,3 +170,34 @@ def random_seed():
 
 # TODO: use new_test_table and "yield from" to make shared test_table
 # fixtures with some common schemas.
+
+# To run the Scylla tools, we need to run Scylla executable itself, so we
+# need to find the path of the executable that was used to run Scylla for
+# this test. We do this by trying to find a local process which is listening
+# to the address and port to which our our CQL connection is connected.
+# If such a process exists, we verify that it is Scylla, and return the
+# executable's path. If we can't find the Scylla executable we use
+# pytest.skip() to skip tests relying on this executable.
+@pytest.fixture(scope="session")
+def scylla_path(cql):
+    pid = local_process_id(cql)
+    if not pid:
+        pytest.skip("Can't find local Scylla process")
+    # Now that we know the process id, use /proc to find the executable.
+    try:
+        path = os.readlink(f'/proc/{pid}/exe')
+    except:
+        pytest.skip("Can't find local Scylla executable")
+    # Confirm that this executable is a real tool-providing Scylla by trying
+    # to run it with the "--list-tools" option
+    try:
+        subprocess.check_output([path, '--list-tools'])
+    except:
+        pytest.skip("Local server isn't Scylla")
+    return path
+
+@pytest.fixture(scope="function")
+def temp_workdir():
+    """ Creates a temporary work directory, for the scope of a single test. """
+    with tempfile.TemporaryDirectory() as workdir:
+        yield workdir

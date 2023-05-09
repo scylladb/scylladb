@@ -110,6 +110,13 @@ static unresolved_identifier make_column(const char* col_name) {
     return unresolved_identifier{::make_shared<column_identifier_raw>(col_name, true)};
 }
 
+static function_call make_token(std::vector<expression> args) {
+    return function_call {
+        .func = functions::function_name::native_function("token"),
+        .args = args
+    };
+}
+
 BOOST_AUTO_TEST_CASE(expr_printer_test) {
     expression col_eq_1234 = binary_operator(
         make_column("col"),
@@ -119,7 +126,7 @@ BOOST_AUTO_TEST_CASE(expr_printer_test) {
     BOOST_REQUIRE_EQUAL(expr_print(col_eq_1234), "col = 1234");
 
     expression token_p1_p2_lt_min_56 = binary_operator(
-        token({
+        make_token({
             unresolved_identifier{::make_shared<column_identifier_raw>("p1", true)},
             unresolved_identifier{::make_shared<column_identifier_raw>("p2", true)},
         }),
@@ -401,6 +408,20 @@ BOOST_AUTO_TEST_CASE(evaluate_constant_int) {
 static schema_ptr make_simple_test_schema() {
     return schema_builder("test_ks", "test_cf")
         .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("r", int32_type, column_kind::regular_column)
+        .with_column("s", int32_type, column_kind::static_column)
+        .build();
+}
+
+// Creates a schema_ptr with three partition key columns can be used for testing
+// The schema corresponds to a table created by:
+// CREATE TABLE test_ks.test_cf (pk1 int, pk2 int, pk3 int, ck int, r int, s int static, primary key (pk, ck));
+static schema_ptr make_three_pk_schema() {
+    return schema_builder("test_ks", "test_cf")
+        .with_column("pk1", int32_type, column_kind::partition_key)
+        .with_column("pk2", int32_type, column_kind::partition_key)
+        .with_column("pk3", int32_type, column_kind::partition_key)
         .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("r", int32_type, column_kind::regular_column)
         .with_column("s", int32_type, column_kind::static_column)
@@ -1318,21 +1339,23 @@ BOOST_AUTO_TEST_CASE(prepare_token) {
                                   .build();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
-    expression tok =
-        token({::make_shared<column_identifier_raw>("p1", true), ::make_shared<column_identifier_raw>("p2", true),
-               ::make_shared<column_identifier_raw>("p3", true)});
+    expression tok = make_token({unresolved_identifier{::make_shared<column_identifier_raw>("p1", true)},
+                            unresolved_identifier{::make_shared<column_identifier_raw>("p2", true)},
+                            unresolved_identifier{::make_shared<column_identifier_raw>("p3", true)}});
 
     expression prepared = prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr);
 
-    expression expected = token({column_value(table_schema->get_column_definition("p1")),
+    std::vector<expression> expected_args = {column_value(table_schema->get_column_definition("p1")),
                                  column_value(table_schema->get_column_definition("p2")),
-                                 column_value(table_schema->get_column_definition("p3"))});
+                                 column_value(table_schema->get_column_definition("p3"))};
 
-    BOOST_REQUIRE_EQUAL(prepared, expected);
+    const function_call* token_fun_call = as_if<function_call>(&prepared);
+    BOOST_REQUIRE(token_fun_call != nullptr);
+    BOOST_REQUIRE(is_token_function(*token_fun_call));
+    BOOST_REQUIRE(std::holds_alternative<shared_ptr<db::functions::function>>(token_fun_call->func));
+    BOOST_REQUIRE_EQUAL(token_fun_call->args, expected_args);
 }
 
-// prepare_expression(token) doesn't validate its arguments,
-// validation is done in a different place
 BOOST_AUTO_TEST_CASE(prepare_token_no_args) {
     schema_ptr table_schema = schema_builder("test_ks", "test_cf")
                                   .with_column("p1", int32_type, column_kind::partition_key)
@@ -1341,11 +1364,10 @@ BOOST_AUTO_TEST_CASE(prepare_token_no_args) {
                                   .build();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
-    expression tok = token(std::vector<expression>());
+    expression tok = make_token(std::vector<expression>());
 
-    expression prepared = prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr);
-
-    BOOST_REQUIRE_EQUAL(tok, prepared);
+    BOOST_REQUIRE_THROW(prepare_expression(tok, db, "test_ks", table_schema.get(), nullptr),
+                        exceptions::invalid_request_exception);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_cast_int_int) {
@@ -2454,6 +2476,47 @@ BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_with_bind_variable_and_missing
     expression expected = usertype_constructor{.elements = expected_constructor_elements, .type = user_type};
 
     BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_constant_no_receiver) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression int_const = make_int_const(1234);
+    expression prepared_int_const = prepare_expression(int_const, db, "test_ks", table_schema.get(), nullptr);
+
+    BOOST_REQUIRE_EQUAL(int_const, prepared_int_const);
+
+    expression text_const = make_text_const("helo");
+    expression prepared_text_const = prepare_expression(text_const, db, "test_ks", table_schema.get(), nullptr);
+
+    BOOST_REQUIRE_EQUAL(text_const, prepared_text_const);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_constant_with_receiver) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression int_const = make_int_const(1234);
+    expression prepared_int_const =
+        prepare_expression(int_const, db, "test_ks", table_schema.get(), make_receiver(int32_type));
+
+    BOOST_REQUIRE_EQUAL(int_const, prepared_int_const);
+
+    // Preparing an int32 with int64 receiver fails
+    BOOST_REQUIRE_THROW(prepare_expression(int_const, db, "test_ks", table_schema.get(), make_receiver(long_type)),
+                        exceptions::invalid_request_exception);
+
+    // Preparing an int32 with text receiver fails
+    BOOST_REQUIRE_THROW(prepare_expression(int_const, db, "test_ks", table_schema.get(), make_receiver(utf8_type)),
+                        exceptions::invalid_request_exception);
+
+    // Preparing an int32 with blob receiver works - ints can be implicitly converted to blobs
+    expression prepared_int_blob =
+        prepare_expression(int_const, db, "test_ks", table_schema.get(), make_receiver(bytes_type));
+    expression expected_blob = constant(make_int_const(1234).value, bytes_type);
+
+    BOOST_REQUIRE_EQUAL(prepared_int_blob, expected_blob);
 }
 
 // Test how evaluating a given binary operator behaves when null is present.
@@ -4168,4 +4231,170 @@ BOOST_AUTO_TEST_CASE(optimized_constant_like) {
             // repeated for simplicity
             binary_operator(target_var, oper_t::LIKE, make_text_const("xx%")));
     BOOST_REQUIRE(check(std::move(complex), "xxyyz", true));
+}
+
+BOOST_AUTO_TEST_CASE(prepare_token_func_without_receiver) {
+    schema_ptr table_schema = make_three_pk_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression token_fun_call = function_call{
+        .func = functions::function_name::native_function("token"),
+        .args = {column_value(table_schema->get_column_definition("pk1")), make_column("pk2"), make_int_const(1234)}};
+
+    expression prepared_no_receiver = prepare_expression(token_fun_call, db, "test_ks", table_schema.get(), nullptr);
+    expression prepared_with_receiver =
+        prepare_expression(token_fun_call, db, "test_ks", table_schema.get(), make_receiver(long_type));
+
+    auto check_prepared = [&](const expression& prepared) {
+        const function_call* prepared_token = as_if<function_call>(&prepared);
+        BOOST_REQUIRE(prepared_token != nullptr);
+
+        const seastar::shared_ptr<functions::function>* token_fun =
+            std::get_if<shared_ptr<functions::function>>(&prepared_token->func);
+        BOOST_REQUIRE(token_fun != nullptr);
+        BOOST_REQUIRE((*token_fun)->name() == functions::function_name::native_function("token"));
+
+        std::vector<expression> expected_args = {column_value(table_schema->get_column_definition("pk1")),
+                                                 column_value(table_schema->get_column_definition("pk2")),
+                                                 make_int_const(1234)};
+        BOOST_REQUIRE_EQUAL(prepared_token->args, expected_args);
+    };
+
+    check_prepared(prepared_no_receiver);
+    check_prepared(prepared_with_receiver);
+}
+
+BOOST_AUTO_TEST_CASE(is_token_function_valid_call) {
+    function_call token_fun_call{.func = functions::function_name::native_function("token"), .args = {}};
+    BOOST_REQUIRE_EQUAL(is_token_function(token_fun_call), true);
+}
+
+BOOST_AUTO_TEST_CASE(is_token_function_invalid_call) {
+    function_call token_fun_call{.func = functions::function_name::native_function("invalid_function"), .args = {}};
+    BOOST_REQUIRE_EQUAL(is_token_function(token_fun_call), false);
+}
+
+BOOST_AUTO_TEST_CASE(is_token_function_valid_call_with_keyspace) {
+    function_call token_fun_call{.func = functions::function_name("system", "token"), .args = {}};
+    BOOST_REQUIRE_EQUAL(is_token_function(token_fun_call), true);
+}
+
+BOOST_AUTO_TEST_CASE(is_token_function_invalid_call_with_keyspace) {
+    function_call token_fun_call{.func = functions::function_name("system", "invalid_token"),
+                                                       .args = {}};
+    BOOST_REQUIRE_EQUAL(is_token_function(token_fun_call), false);
+}
+
+BOOST_AUTO_TEST_CASE(is_token_function_invalid_call_with_invalid_keyspace) {
+    function_call token_fun_call{
+        .func = functions::function_name("invalid_keyspace", "token"), .args = {}};
+    BOOST_REQUIRE_EQUAL(is_token_function(token_fun_call), false);
+}
+
+BOOST_AUTO_TEST_CASE(is_token_function_prepared_token) {
+    schema_ptr table_schema = make_three_pk_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    function_call token_fun{
+        .func = functions::function_name::native_function("token"),
+        .args = {make_int_untyped("123"), make_int_untyped("443"), make_bind_variable(0, int32_type)}};
+
+    expression prepared = prepare_expression(token_fun, db, "test_ks", table_schema.get(), nullptr);
+
+    BOOST_REQUIRE_EQUAL(is_token_function(prepared), true);
+}
+
+BOOST_AUTO_TEST_CASE(is_token_function_prepared_nontoken) {
+    schema_ptr table_schema = make_three_pk_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    function_call now_fun{.func = functions::function_name::native_function("now"), .args = {}};
+
+    expression prepared = prepare_expression(now_fun, db, "test_ks", table_schema.get(), nullptr);
+
+    BOOST_REQUIRE_EQUAL(is_token_function(prepared), false);
+}
+
+// Test the function expr::is_partition_token_for_schema
+BOOST_AUTO_TEST_CASE(is_partition_token_for_schema_test) {
+    schema_ptr schema1 = make_simple_test_schema();  // partition key: (pk)
+    schema_ptr schema2 = make_three_pk_schema();     // partition key: (pk1, pk2, pk3)
+    schema_ptr schema3 = make_three_pk_schema();     // partition key: (pk1, pk2, pk3)
+
+    auto [db1, db1_data] = make_data_dictionary_database(schema1);
+    auto [db2, db2_data] = make_data_dictionary_database(schema2);
+    auto [db3, db3_data] = make_data_dictionary_database(schema3);
+
+    // Prepare token(pk)
+    expression unprepared_token_one_pk =
+        function_call{.func = functions::function_name::native_function("token"), .args = {make_column("pk")}};
+    expression prepared_token_one_pk =
+        prepare_expression(unprepared_token_one_pk, db1, "test_ks", schema1.get(), nullptr);
+
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_one_pk, *schema1), true);
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_one_pk, *schema2), false);
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_one_pk, *schema3), false);
+
+    // Prepare token(pk1, pk2, pk3)
+    expression unprepared_token_three_pk =
+        function_call{.func = functions::function_name::native_function("token"),
+                      .args = {make_column("pk1"), make_column("pk2"), make_column("pk3")}};
+    expression prepared_token_three_pk =
+        prepare_expression(unprepared_token_three_pk, db2, "test_ks", schema2.get(), nullptr);
+
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_one_pk, *schema1), true);
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_one_pk, *schema2), false);
+
+    // Same columns, but different schema!
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_one_pk, *schema3), false);
+
+    // Try preparing token(pk1, pk2), fail
+    expression unprepared_token_two_pk = function_call{.func = functions::function_name::native_function("token"),
+                                                       .args = {make_column("pk1"), make_column("pk2")}};
+    BOOST_REQUIRE_THROW(prepare_expression(unprepared_token_two_pk, db2, "test_ks", schema2.get(), nullptr),
+                        exceptions::invalid_request_exception);
+
+    // Prepare token(pk1, pk3, pk2) - wrong order of pk columns
+    expression unprepared_token_pk1_pk3_pk2 =
+        function_call{.func = functions::function_name::native_function("token"),
+                      .args = {make_column("pk1"), make_column("pk3"), make_column("pk2")}};
+    expression prepared_token_pk1_pk3_pk2 =
+        prepare_expression(unprepared_token_pk1_pk3_pk2, db2, "test_ks", schema2.get(), nullptr);
+
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_pk1_pk3_pk2, *schema1), false);
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_pk1_pk3_pk2, *schema2), false);
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_pk1_pk3_pk2, *schema3), false);
+
+    // Prepare token(pk1, pk1, pk3) - duplicate column
+    expression unprepared_token_pk1_pk1_pk2 =
+        function_call{.func = functions::function_name::native_function("token"),
+                      .args = {make_column("pk1"), make_column("pk1"), make_column("pk3")}};
+    expression prepared_token_pk1_pk1_pk2 =
+        prepare_expression(unprepared_token_pk1_pk1_pk2, db2, "test_ks", schema2.get(), nullptr);
+
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_pk1_pk1_pk2, *schema1), false);
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_pk1_pk1_pk2, *schema2), false);
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_pk1_pk1_pk2, *schema3), false);
+
+    // Prepare token(ck)
+    expression unprepared_token_ck =
+        function_call{.func = functions::function_name::native_function("token"), .args = {make_column("ck")}};
+    expression prepared_token_ck = prepare_expression(unprepared_token_ck, db1, "test_ks", schema1.get(), nullptr);
+
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_ck, *schema1), false);
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_ck, *schema2), false);
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_ck, *schema3), false);
+
+    // Prepare token(1, 2, ?) - not a partition token
+    // The bind variable is there to prevent the prepared expression from turning into an expr::constant
+    expression unprepared_token_other =
+        function_call{.func = functions::function_name::native_function("token"),
+                      .args = {make_int_untyped("1"), make_int_untyped("2"), make_bind_variable(0, int32_type)}};
+
+    expression prepared_token_other =
+        prepare_expression(unprepared_token_other, db2, "test_ks", schema2.get(), nullptr);
+
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_other, *schema1), false);
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_other, *schema2), false);
+    BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_other, *schema3), false);
 }

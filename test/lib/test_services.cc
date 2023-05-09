@@ -9,12 +9,15 @@
 #include "test/lib/scylla_tests_cmdline_options.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/sstable_test_env.hh"
+#include "test/lib/cql_test_env.hh"
+#include "test/lib/test_utils.hh"
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
 #include "dht/i_partitioner.hh"
 #include "gms/feature_service.hh"
 #include "repair/row_level.hh"
 #include "replica/compaction_group.hh"
+#include "utils/overloaded_functor.hh"
 #include <boost/program_options.hpp>
 #include <iostream>
 #include <seastar/util/defer.hh>
@@ -48,6 +51,7 @@ class table_for_tests::table_state : public compaction::table_state {
     tombstone_gc_state _tombstone_gc_state;
     mutable compaction_backlog_tracker _backlog_tracker;
     compaction::compaction_strategy_state _compaction_strategy_state;
+    std::string _group_id;
 private:
     replica::table& table() const noexcept {
         return *_data.cf;
@@ -59,6 +63,7 @@ public:
             , _tombstone_gc_state(nullptr)
             , _backlog_tracker(get_compaction_strategy().make_backlog_tracker())
             , _compaction_strategy_state(compaction::compaction_strategy_state::make(get_compaction_strategy()))
+            , _group_id("table_for_tests::table_state")
     {
     }
     const schema_ptr& schema() const noexcept override {
@@ -116,9 +121,12 @@ public:
     compaction_backlog_tracker& get_backlog_tracker() override {
         return _backlog_tracker;
     }
+    const std::string& get_group_id() const noexcept override {
+        return _group_id;
+    }
 };
 
-table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir)
+table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, schema_ptr s, std::optional<sstring> datadir, data_dictionary::storage_options storage)
     : _data(make_lw_shared<data>())
 {
     _data->s = s ? s : make_default_schema();
@@ -132,6 +140,7 @@ table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, s
     _data->cf->mark_ready_for_writes();
     _data->table_s = std::make_unique<table_state>(*_data, sstables_manager);
     _data->cm.add(*_data->table_s);
+    _data->storage = std::move(storage);
 }
 
 compaction::table_state& table_for_tests::as_table_state() noexcept {
@@ -153,14 +162,64 @@ std::unique_ptr<db::config> make_db_config(sstring temp_dir) {
     return cfg;
 }
 
+std::unordered_map<sstring, s3::endpoint_config_ptr> make_storage_options_config(const data_dictionary::storage_options& so) {
+    std::unordered_map<sstring, s3::endpoint_config_ptr> cfg;
+    std::visit(overloaded_functor {
+        [] (const data_dictionary::storage_options::local& loc) mutable -> void {
+        },
+        [&cfg] (const data_dictionary::storage_options::s3& os) mutable -> void {
+            cfg[os.endpoint] = make_lw_shared<s3::endpoint_config>(s3::endpoint_config {
+                .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
+            });
+        }
+    }, so.value);
+    return cfg;
+}
+
 test_env::impl::impl(test_env_config cfg)
     : dir()
     , db_config(make_db_config(dir.path().native()))
     , dir_sem(1)
     , feature_service(gms::feature_config_from_db_config(*db_config))
-    , mgr(cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler, *db_config, feature_service, cache_tracker, memory::stats().total_memory(), dir_sem)
+    , mgr(cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler, *db_config, feature_service, cache_tracker, memory::stats().total_memory(), dir_sem, make_storage_options_config(cfg.storage))
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env")
+    , storage(std::move(cfg.storage))
 { }
+
+future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, test_env_config cfg) {
+    if (!cfg.storage.is_local_type()) {
+        struct test_env_with_cql {
+            noncopyable_function<void(test_env&)> func;
+            test_env_config cfg;
+            test_env_with_cql(noncopyable_function<void(test_env&)> fn, test_env_config c) : func(std::move(fn)), cfg(std::move(c)) {}
+        };
+        auto wrap = std::make_shared<test_env_with_cql>(std::move(func), std::move(cfg));
+        auto db_cfg = make_shared<db::config>();
+        db_cfg->experimental_features({db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS});
+        return do_with_cql_env_thread([wrap = std::move(wrap)] (auto& cql_env) mutable {
+            test_env env(std::move(wrap->cfg));
+            auto close_env = defer([&] { env.stop().get(); });
+            env.manager().plug_system_keyspace(cql_env.get_system_keyspace().local());
+            auto unplu = defer([&env] { env.manager().unplug_system_keyspace(); });
+            wrap->func(env);
+        }, std::move(db_cfg));
+    }
+
+    return seastar::async([func = std::move(func), cfg = std::move(cfg)] () mutable {
+        test_env env(std::move(cfg));
+        auto close_env = defer([&] { env.stop().get(); });
+        func(env);
+    });
+}
+
+data_dictionary::storage_options make_test_object_storage_options() {
+    data_dictionary::storage_options ret;
+    ret.value = data_dictionary::storage_options::s3 {
+        .bucket = tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"),
+        .endpoint = tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"),
+    };
+    return ret;
+}
 
 }
 

@@ -453,7 +453,7 @@ protected:
         };
         setup_new_compaction(descriptor.run_identifier);
 
-        cmlog.info0("User initiated compaction started on behalf of {}.{}", t->schema()->ks_name(), t->schema()->cf_name());
+        cmlog.info0("User initiated compaction started on behalf of {}", *t);
 
         // Now that the sstables for major compaction are registered
         // and the user_initiated_backlog_tracker is set up
@@ -533,8 +533,8 @@ compaction_manager::compaction_reenabler::compaction_reenabler(compaction_manage
     , _holder(_compaction_state.gate.hold())
 {
     _compaction_state.compaction_disabled_counter++;
-    cmlog.debug("Temporarily disabled compaction for {}.{}. compaction_disabled_counter={}",
-            _table->schema()->ks_name(), _table->schema()->cf_name(), _compaction_state.compaction_disabled_counter);
+    cmlog.debug("Temporarily disabled compaction for {}. compaction_disabled_counter={}",
+            t, _compaction_state.compaction_disabled_counter);
 }
 
 compaction_manager::compaction_reenabler::compaction_reenabler(compaction_reenabler&& o) noexcept
@@ -547,13 +547,12 @@ compaction_manager::compaction_reenabler::compaction_reenabler(compaction_reenab
 compaction_manager::compaction_reenabler::~compaction_reenabler() {
     // submit compaction request if we're the last holder of the gate which is still opened.
     if (_table && --_compaction_state.compaction_disabled_counter == 0 && !_compaction_state.gate.is_closed()) {
-        cmlog.debug("Reenabling compaction for {}.{}",
-                _table->schema()->ks_name(), _table->schema()->cf_name());
+        cmlog.debug("Reenabling compaction for {}", *_table);
         try {
             _cm.submit(*_table);
         } catch (...) {
-            cmlog.warn("compaction_reenabler could not reenable compaction for {}.{}: {}",
-                    _table->schema()->ks_name(), _table->schema()->cf_name(), std::current_exception());
+            cmlog.warn("compaction_reenabler could not reenable compaction for {}: {}",
+                    *_table, std::current_exception());
         }
     }
 }
@@ -606,8 +605,7 @@ compaction::compaction_state::~compaction_state() {
 
 std::string compaction_task_executor::describe() const {
     auto* t = _compacting_table;
-    auto s = t->schema();
-    return fmt::format("{} task {} for table {}.{} [{}]", _description, fmt::ptr(this), s->ks_name(), s->cf_name(), fmt::ptr(t));
+    return fmt::format("{} task {} for table {} [{}]", _description, fmt::ptr(this), *t, fmt::ptr(t));
 }
 
 compaction_task_executor::~compaction_task_executor() {
@@ -844,8 +842,7 @@ future<> compaction_manager::postponed_compactions_reevaluation() {
                 if (!_compaction_state.contains(t)) {
                     continue;
                 }
-                auto s = t->schema();
-                cmlog.debug("resubmitting postponed compaction for table {}.{} [{}]", s->ks_name(), s->cf_name(), fmt::ptr(t));
+                cmlog.debug("resubmitting postponed compaction for table {} [{}]", *t, fmt::ptr(t));
                 submit(*t);
                 co_await coroutine::maybe_yield();
             }
@@ -894,7 +891,7 @@ future<> compaction_manager::stop_ongoing_compactions(sstring reason, table_stat
         if (cmlog.is_enabled(level)) {
             std::string scope = "";
             if (t) {
-                scope = fmt::format(" for table {}.{}", t->schema()->ks_name(), t->schema()->cf_name());
+                scope = fmt::format(" for table {}", *t);
             }
             if (type_opt) {
                 scope += fmt::format(" {} type={}", scope.size() ? "and" : "for", *type_opt);
@@ -1037,8 +1034,8 @@ protected:
                 co_return std::nullopt;
             }
             if (!_cm.can_register_compaction(t, weight, descriptor.fan_in())) {
-                cmlog.debug("Refused compaction job ({} sstable(s)) of weight {} for {}.{}, postponing it...",
-                    descriptor.sstables.size(), weight, t.schema()->ks_name(), t.schema()->cf_name());
+                cmlog.debug("Refused compaction job ({} sstable(s)) of weight {} for {}, postponing it...",
+                    descriptor.sstables.size(), weight, t);
                 switch_state(state::postponed);
                 _cm.postpone_compaction_for_table(&t);
                 co_return std::nullopt;
@@ -1048,8 +1045,8 @@ protected:
             auto release_exhausted = [&compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
                 compacting.release_compacting(exhausted_sstables);
             };
-            cmlog.debug("Accepted compaction job: task={} ({} sstable(s)) of weight {} for {}.{}",
-                fmt::ptr(this), descriptor.sstables.size(), weight, t.schema()->ks_name(), t.schema()->cf_name());
+            cmlog.debug("Accepted compaction job: task={} ({} sstable(s)) of weight {} for {}",
+                fmt::ptr(this), descriptor.sstables.size(), weight, t);
 
             setup_new_compaction(descriptor.run_identifier);
             std::exception_ptr ex;
@@ -1109,8 +1106,7 @@ bool compaction_manager::can_perform_regular_compaction(table_state& t) {
 future<> compaction_manager::maybe_wait_for_sstable_count_reduction(table_state& t) {
     auto schema = t.schema();
     if (!can_perform_regular_compaction(t)) {
-        cmlog.trace("maybe_wait_for_sstable_count_reduction in {}.{}: cannot perform regular compaction",
-                schema->ks_name(), schema->cf_name());
+        cmlog.trace("maybe_wait_for_sstable_count_reduction in {}: cannot perform regular compaction", t);
         co_return;
     }
     auto num_runs_for_compaction = [&, this] {
@@ -1123,8 +1119,8 @@ future<> compaction_manager::maybe_wait_for_sstable_count_reduction(table_state&
     const auto threshold = size_t(std::max(schema->max_compaction_threshold(), 32));
     auto count = num_runs_for_compaction();
     if (count <= threshold) {
-        cmlog.trace("No need to wait for sstable count reduction in {}.{}: {} <= {}",
-                schema->ks_name(), schema->cf_name(), count, threshold);
+        cmlog.trace("No need to wait for sstable count reduction in {}: {} <= {}",
+                t, count, threshold);
         co_return;
     }
     // Reduce the chances of falling into an endless wait, if compaction
@@ -1142,8 +1138,8 @@ future<> compaction_manager::maybe_wait_for_sstable_count_reduction(table_state&
     }
     auto end = db_clock::now();
     auto elapsed_ms = (end - start) / 1ms;
-    cmlog.warn("Waited {}ms for compaction of {}.{} to catch up on {} sstable runs",
-            elapsed_ms, schema->ks_name(), schema->cf_name(), count);
+    cmlog.warn("Waited {}ms for compaction of {} to catch up on {} sstable runs",
+            elapsed_ms, t, count);
 }
 
 namespace compaction {
@@ -1264,12 +1260,16 @@ protected:
             std::exception_ptr ex;
             try {
                 table_state& t = *_compacting_table;
-                auto maintenance_sstables = t.maintenance_sstable_set().all();
-                cmlog.info("Starting off-strategy compaction for {}.{}, {} candidates were found",
-                        t.schema()->ks_name(), t.schema()->cf_name(), maintenance_sstables->size());
+                auto size = t.maintenance_sstable_set().size();
+                if (!size) {
+                    cmlog.debug("Skipping off-strategy compaction for {}, No candidates were found", t);
+                    finish_compaction();
+                    co_return std::nullopt;
+                }
+                cmlog.info("Starting off-strategy compaction for {}, {} candidates were found", t, size);
                 co_await run_offstrategy_compaction(_compaction_data);
                 finish_compaction();
-                cmlog.info("Done with off-strategy compaction for {}.{}", t.schema()->ks_name(), t.schema()->cf_name());
+                cmlog.info("Done with off-strategy compaction for {}", t);
                 co_return std::nullopt;
             } catch (...) {
                 ex = std::current_exception();
@@ -1580,15 +1580,20 @@ bool needs_cleanup(const sstables::shared_sstable& sst,
     return true;
 }
 
-bool compaction_manager::update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, owned_ranges_ptr owned_ranges_ptr) {
+bool compaction_manager::update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges) {
     auto& cs = get_compaction_state(&t);
-    if (owned_ranges_ptr && needs_cleanup(sst, *owned_ranges_ptr)) {
+    if (needs_cleanup(sst, sorted_owned_ranges)) {
         cs.sstables_requiring_cleanup.insert(sst);
         return true;
     } else {
         cs.sstables_requiring_cleanup.erase(sst);
         return false;
     }
+}
+
+bool compaction_manager::erase_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst) {
+    auto& cs = get_compaction_state(&t);
+    return cs.sstables_requiring_cleanup.erase(sst);
 }
 
 bool compaction_manager::requires_cleanup(table_state& t, const sstables::shared_sstable& sst) const {
@@ -1603,8 +1608,7 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
         });
     };
     if (check_for_cleanup()) {
-        throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}.{}",
-            t.schema()->ks_name(), t.schema()->cf_name()));
+        throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}", t));
     }
 
     if (sorted_owned_ranges->empty()) {
@@ -1616,7 +1620,7 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
         return seastar::async([this, &t, sorted_owned_ranges = std::move(sorted_owned_ranges)] {
             auto update_sstables_cleanup_state = [&] (const sstables::sstable_set& set) {
                 set.for_each_sstable([&] (const sstables::shared_sstable& sst) {
-                    update_sstable_cleanup_state(t, sst, sorted_owned_ranges);
+                    update_sstable_cleanup_state(t, sst, *sorted_owned_ranges);
                     seastar::thread::maybe_yield();
                 });
             };
@@ -1701,8 +1705,7 @@ compaction::compaction_state::compaction_state(table_state& t)
 void compaction_manager::add(table_state& t) {
     auto [_, inserted] = _compaction_state.try_emplace(&t, t);
     if (!inserted) {
-        auto s = t.schema();
-        on_internal_error(cmlog, format("compaction_state for table {}.{} [{}] already exists", s->ks_name(), s->cf_name(), fmt::ptr(&t)));
+        on_internal_error(cmlog, format("compaction_state for table {} [{}] already exists", t, fmt::ptr(&t)));
     }
 }
 

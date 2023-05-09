@@ -23,6 +23,8 @@
 #include "locator/host_id.hh"
 #include "gms/inet_address.hh"
 #include "db/hints/host_filter.hh"
+#include "utils/updateable_value.hh"
+#include "utils/s3/creds.hh"
 
 namespace seastar {
 class file;
@@ -414,6 +416,7 @@ public:
     named_value<uint64_t> wasm_udf_total_fuel;
     named_value<size_t> wasm_udf_memory_limit;
     named_value<sstring> relabel_config_file;
+    named_value<sstring> object_storage_config_file;
     // wasm_udf_reserved_memory is static because the options in db::config
     // are parsed using seastar::app_template, while this option is used for
     // configuring the Seastar memory subsystem.
@@ -426,6 +429,7 @@ public:
     const db::extensions& extensions() const;
 
     locator::host_id host_id;
+    utils::updateable_value<std::unordered_map<sstring, s3::endpoint_config>> object_storage_config;
 
     static const sstring default_tls_priority;
 private:

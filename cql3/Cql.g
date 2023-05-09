@@ -1773,7 +1773,12 @@ relation returns [expression e]
     : name=cident type=relationType t=term { $e = binary_operator(unresolved_identifier{std::move(name)}, type, std::move(t)); }
 
     | K_TOKEN l=tupleOfIdentifiers type=relationType t=term
-        { $e = binary_operator(token{std::move(l.elements)}, type, std::move(t)); }
+        {
+          $e = binary_operator(
+            function_call{functions::function_name::native_function("token"), std::move(l.elements)},
+            type,
+            std::move(t));
+        }
     | name=cident K_IS K_NOT K_NULL {
           $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IS_NOT, make_untyped_null()); }
     | name=cident K_IN marker1=marker

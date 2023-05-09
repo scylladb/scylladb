@@ -240,17 +240,8 @@ public:
         bool operator==(iterator_type x) const {
             return _i == x._i;
         }
-        bool operator<(iterator_type x) const {
-            return _i < x._i;
-        }
-        bool operator<=(iterator_type x) const {
-            return _i <= x._i;
-        }
-        bool operator>(iterator_type x) const {
-            return _i > x._i;
-        }
-        bool operator>=(iterator_type x) const {
-            return _i >= x._i;
+        std::strong_ordering operator<=>(iterator_type x) const {
+            return _i <=> x._i;
         }
         friend class chunked_managed_vector;
     };

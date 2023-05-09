@@ -142,7 +142,8 @@ void trace_state::build_parameters_map() {
     params_values& vals = *_params_ptr;
 
     if (vals.batchlog_endpoints) {
-        params_map.emplace("batch_endpoints", join(sstring(","),  *vals.batchlog_endpoints | boost::adaptors::transformed([](gms::inet_address ep) {return seastar::format("/{}", ep);})));
+        auto batch_endpoints = fmt::format("{}", fmt::join(*vals.batchlog_endpoints | boost::adaptors::transformed([](gms::inet_address ep) {return seastar::format("/{}", ep);}), ","));
+        params_map.emplace("batch_endpoints", std::move(batch_endpoints));
     }
 
     if (vals.cl) {

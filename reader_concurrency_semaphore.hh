@@ -100,8 +100,8 @@ public:
         uint64_t reads_admitted_immediately = 0;
         // Total number of reads enqueued because ready_list wasn't empty
         uint64_t reads_queued_because_ready_list = 0;
-        // Total number of reads enqueued because there are used but unblocked permits
-        uint64_t reads_queued_because_used_permits = 0;
+        // Total number of reads enqueued because there are permits who need CPU to make progress
+        uint64_t reads_queued_because_need_cpu_permits = 0;
         // Total number of reads enqueued because there weren't enough memory resources
         uint64_t reads_queued_because_memory_resources = 0;
         // Total number of reads enqueued because there weren't enough count resources
@@ -112,10 +112,10 @@ public:
         uint64_t total_permits = 0;
         // Current number of permits.
         uint64_t current_permits = 0;
-        // Current number of used permits.
-        uint64_t used_permits = 0;
-        // Current number of blocked permits.
-        uint64_t blocked_permits = 0;
+        // Current number permits needing CPU to make progress.
+        uint64_t need_cpu_permits = 0;
+        // Current number of permits awaiting I/O or an operation running on a remote shard.
+        uint64_t awaits_permits = 0;
         // Current number of reads reading from the disk.
         uint64_t disk_reads = 0;
         // The number of sstables read currently.
@@ -201,7 +201,7 @@ private:
 
     bool has_available_units(const resources& r) const;
 
-    bool all_used_permits_are_stalled() const;
+    bool all_need_cpu_permits_are_awaiting() const;
 
     [[nodiscard]] std::exception_ptr check_queue_size(std::string_view queue_name);
 
@@ -218,7 +218,7 @@ private:
     // A return value of can_admit::maybe means admission might be possible if
     // some of the inactive readers are evicted.
     enum class can_admit { no, maybe, yes };
-    enum class reason { all_ok = 0, ready_list, used_permits, memory_resources, count_resources };
+    enum class reason { all_ok = 0, ready_list, need_cpu_permits, memory_resources, count_resources };
     struct admit_result { can_admit decision; reason why; };
     admit_result can_admit_read(const reader_permit::impl& permit) const noexcept;
 
@@ -241,11 +241,11 @@ private:
     void on_permit_created(reader_permit::impl&);
     void on_permit_destroyed(reader_permit::impl&) noexcept;
 
-    void on_permit_used() noexcept;
-    void on_permit_unused() noexcept;
+    void on_permit_need_cpu() noexcept;
+    void on_permit_not_need_cpu() noexcept;
 
-    void on_permit_blocked() noexcept;
-    void on_permit_unblocked() noexcept;
+    void on_permit_awaits() noexcept;
+    void on_permit_not_awaits() noexcept;
 
     std::runtime_error stopped_exception();
 

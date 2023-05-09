@@ -85,7 +85,7 @@ private:
     uint64_t _query_cnt[(size_t)source_selector::SIZE]
             [(size_t)ks_selector::SIZE]
             [(size_t)cond_selector::SIZE]
-            [statements::statement_type::MAX_VALUE + 1] = {0ul};
+            [statements::statement_type::MAX_VALUE + 1] = {};
 };
 
 }

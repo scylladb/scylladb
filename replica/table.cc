@@ -67,7 +67,7 @@ static seastar::metrics::label keyspace_label("ks");
 using namespace std::chrono_literals;
 
 void table::update_sstables_known_generation(std::optional<sstables::generation_type> generation) {
-    auto gen = generation.value_or(sstables::generation_type(0)).value();
+    auto gen = generation.value_or(sstables::generation_type(0)).as_int();
     if (_sstable_generation_generator) {
         _sstable_generation_generator->update_known_generation(gen);
     } else {
@@ -521,8 +521,10 @@ std::vector<std::unique_ptr<compaction_group>> table::make_compaction_groups() {
     auto&& ranges = dht::split_token_range_msb(_x_log2_compaction_groups);
     ret.reserve(ranges.size());
     tlogger.debug("Created {} compaction groups for {}.{}", ranges.size(), _schema->ks_name(), _schema->cf_name());
+    size_t i = 0;
     for (auto&& range : ranges) {
-        ret.emplace_back(std::make_unique<compaction_group>(*this, std::move(range)));
+        auto group_id = fmt::format("{}/{}", i++, ranges.size());
+        ret.emplace_back(std::make_unique<compaction_group>(*this, std::move(group_id), std::move(range)));
     }
     return ret;
 }
@@ -1481,9 +1483,10 @@ table::make_memtable_list(compaction_group& cg) {
     return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager, _stats, _config.memory_compaction_scheduling_group);
 }
 
-compaction_group::compaction_group(table& t, dht::token_range token_range)
+compaction_group::compaction_group(table& t, std::string group_id, dht::token_range token_range)
     : _t(t)
     , _table_state(std::make_unique<table_state>(t, *this))
+    , _group_id(std::move(group_id))
     , _token_range(std::move(token_range))
     , _compaction_strategy_state(compaction::compaction_strategy_state::make(_t._compaction_strategy))
     , _memtables(_t._config.enable_disk_writes ? _t.make_memtable_list(*this) : _t.make_memory_only_memtable_list())
@@ -1913,7 +1916,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
             remove_sstable_from_backlog_tracker(r.cg.get_backlog_tracker(), r.sst);
         }
         co_await sstables::sstable_directory::delete_atomically({r.sst});
-        update_sstable_cleanup_state(r.sst, {});
+        erase_sstable_cleanup_state(r.sst);
     });
     co_return p->rp;
 }
@@ -2798,6 +2801,9 @@ public:
     compaction_backlog_tracker& get_backlog_tracker() override {
         return _t._compaction_manager.get_backlog_tracker(*this);
     }
+    const std::string& get_group_id() const noexcept override {
+        return _cg.get_group_id();
+    }
 };
 
 compaction_backlog_tracker& compaction_group::get_backlog_tracker() {
@@ -2825,10 +2831,16 @@ table::as_data_dictionary() const {
     return _impl.wrap(*this);
 }
 
-bool table::update_sstable_cleanup_state(const sstables::shared_sstable& sst, compaction::owned_ranges_ptr owned_ranges_ptr) {
+bool table::update_sstable_cleanup_state(const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges) {
     // FIXME: it's possible that the sstable belongs to multiple compaction_groups
     auto& cg = compaction_group_for_sstable(sst);
-    return get_compaction_manager().update_sstable_cleanup_state(cg.as_table_state(), sst, std::move(owned_ranges_ptr));
+    return get_compaction_manager().update_sstable_cleanup_state(cg.as_table_state(), sst, sorted_owned_ranges);
+}
+
+bool table::erase_sstable_cleanup_state(const sstables::shared_sstable& sst) {
+    // FIXME: it's possible that the sstable belongs to multiple compaction_groups
+    auto& cg = compaction_group_for_sstable(sst);
+    return get_compaction_manager().erase_sstable_cleanup_state(cg.as_table_state(), sst);
 }
 
 bool table::requires_cleanup(const sstables::shared_sstable& sst) const {

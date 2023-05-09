@@ -7,10 +7,11 @@
 Test consistency of schema changes with topology changes.
 """
 import logging
+import pytest
 import time
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier
 
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ async def get_current_group0_config(manager: ManagerClient, srv: ServerInfo) -> 
      """
     assert manager.cql
     host = (await wait_for_cql_and_get_hosts(manager.cql, [srv], time.time() + 60))[0]
+    await read_barrier(manager.cql, host)
     group0_id = (await manager.cql.run_async(
         "select value from system.scylla_local where key = 'raft_group0_id'",
         host=host))[0].value

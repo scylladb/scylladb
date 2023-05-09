@@ -23,7 +23,7 @@
 #include "db/cache_tracker.hh"
 #include "locator/host_id.hh"
 #include "reader_concurrency_semaphore.hh"
-
+#include "utils/s3/creds.hh"
 #include <boost/intrusive/list.hpp>
 
 namespace db {
@@ -41,6 +41,7 @@ namespace sstables {
 class directory_semaphore;
 using schema_ptr = lw_shared_ptr<const schema>;
 using shareable_components_ptr = lw_shared_ptr<shareable_components>;
+using object_storage_config = std::unordered_map<sstring, s3::endpoint_config_ptr>;
 
 static constexpr size_t default_sstable_buffer_size = 128 * 1024;
 
@@ -73,9 +74,10 @@ private:
     reader_concurrency_semaphore _sstable_metadata_concurrency_sem;
     directory_semaphore& _dir_semaphore;
     seastar::shared_ptr<db::system_keyspace> _sys_ks;
+    object_storage_config _object_storage_config;
 
 public:
-    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem);
+    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem, object_storage_config oscfg = {});
     virtual ~sstables_manager();
 
     // Constructs a shared sstable
@@ -90,6 +92,12 @@ public:
             size_t buffer_size = default_sstable_buffer_size);
 
     std::unique_ptr<sstable_directory::components_lister> get_components_lister(const data_dictionary::storage_options& storage, std::filesystem::path dir);
+
+    s3::endpoint_config_ptr get_endpoint_config(sstring endpoint) const {
+        return _object_storage_config.at(endpoint);
+    }
+
+    void update_object_storage_config(object_storage_config cfg);
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
     const db::config& config() const { return _db_config; }

@@ -173,24 +173,19 @@ public:
 
     // Used to create synthetic sstables for testing leveled compaction strategy.
     void set_values_for_leveled_strategy(uint64_t fake_data_size, uint32_t sstable_level, int64_t max_timestamp, const partition_key& first_key, const partition_key& last_key) {
-        _sst->_data_file_size = fake_data_size;
-        _sst->_bytes_on_disk = fake_data_size;
         // Create a synthetic stats metadata
         stats_metadata stats = {};
         // leveled strategy sorts sstables by age using max_timestamp, let's set it to 0.
         stats.max_timestamp = max_timestamp;
         stats.sstable_level = sstable_level;
-        _sst->_components->statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
-        _sst->_components->summary.first_key.value = sstables::key::from_partition_key(*_sst->_schema, first_key).get_bytes();
-        _sst->_components->summary.last_key.value = sstables::key::from_partition_key(*_sst->_schema, last_key).get_bytes();
-        _sst->set_first_and_last_keys();
-        _sst->_run_identifier = run_id::create_random_id();
-        _sst->_shards.push_back(this_shard_id());
+
+        set_values(first_key, last_key, std::move(stats), fake_data_size);
     }
 
     void set_values(const partition_key& first_key, const partition_key& last_key, stats_metadata stats, uint64_t data_file_size = 1) {
         _sst->_data_file_size = data_file_size;
-        _sst->_bytes_on_disk = data_file_size;
+        _sst->_index_file_size = std::max(1UL, uint64_t(data_file_size * 0.1));
+        _sst->_metadata_size_on_disk = std::max(1UL, uint64_t(data_file_size * 0.01));
         // scylla component must be present for a sstable to be considered fully expired.
         _sst->_recognized_components.insert(component_type::Scylla);
         _sst->_components->statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
@@ -213,8 +208,8 @@ public:
         return remove_file(_sst->filename(c));
     }
 
-    const sstring filename(component_type c) const {
-        return _sst->filename(c);
+    fs::path filename(component_type c) const {
+        return fs::path(_sst->filename(c));
     }
 
     void set_shards(std::vector<unsigned> shards) {
@@ -228,10 +223,6 @@ public:
     future<> move_to_new_dir(sstring new_dir, generation_type new_generation) {
         co_await _sst->_storage->move(*_sst, std::move(new_dir), new_generation, nullptr);
         _sst->_generation = std::move(new_generation);
-    }
-
-    static fs::path filename(const sstable& sst, component_type c) {
-        return fs::path(sst.filename(c));
     }
 
     sstring storage_prefix() const {

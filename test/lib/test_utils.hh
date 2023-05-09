@@ -11,7 +11,7 @@
 #include <source_location>
 #include "utils/source_location-compat.hh"
 #include <string>
-
+#include <boost/test/unit_test.hpp>
 #include <fmt/format.h>
 
 // Thread safe alternatives to BOOST_REQUIRE_*, BOOST_CHECK_* and BOOST_FAIL().
@@ -54,5 +54,7 @@ inline std::string getenv_safe(std::string_view name) {
     }
     return std::string(v);
 }
+
+extern boost::test_tools::assertion_result has_scylla_test_env(boost::unit_test::test_unit_id);
 
 }

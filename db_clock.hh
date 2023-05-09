@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <ratio>
 #include <type_traits>
+#include <fmt/chrono.h>
 
 // the database clock follows Java - 1ms granularity, 64-bit counter, 1970 epoch
 
@@ -54,4 +55,11 @@ gc_clock::time_point to_gc_clock(db_clock::time_point tp) noexcept {
 }
 
 /* For debugging and log messages. */
-std::ostream& operator<<(std::ostream&, db_clock::time_point);
+template <>
+struct fmt::formatter<db_clock::time_point> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const db_clock::time_point& tp, FormatContext& ctx) const {
+        auto t = db_clock::to_time_t(tp);
+        return fmt::format_to(ctx.out(), "{:%Y/%m/%d %T}", fmt::gmtime(t));
+    }
+};

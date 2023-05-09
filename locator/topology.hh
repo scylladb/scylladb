@@ -51,8 +51,8 @@ public:
     };
 
 private:
-    const topology* _topology;
-    host_id _host_id;
+    const locator::topology* _topology;
+    locator::host_id _host_id;
     inet_address _endpoint;
     endpoint_dc_rack _dc_rack;
     state _state;
@@ -67,11 +67,11 @@ public:
     node(const node&) = delete;
     node(node&&) = delete;
 
-    const topology* topology() const noexcept {
+    const locator::topology* topology() const noexcept {
         return _topology;
     }
 
-    const host_id& host_id() const noexcept {
+    const locator::host_id& host_id() const noexcept {
         return _host_id;
     }
 

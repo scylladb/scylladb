@@ -20,7 +20,7 @@ namespace sstables {
 logging::logger smlogger("sstables_manager");
 
 sstables_manager::sstables_manager(
-    db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct, size_t available_memory, directory_semaphore& dir_sem)
+    db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct, size_t available_memory, directory_semaphore& dir_sem, object_storage_config oscfg)
     : _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat), _cache_tracker(ct)
     , _sstable_metadata_concurrency_sem(
         max_count_sstable_metadata_concurrent_reads,
@@ -30,6 +30,7 @@ sstables_manager::sstables_manager(
         utils::updateable_value(std::numeric_limits<uint32_t>::max()),
         utils::updateable_value(std::numeric_limits<uint32_t>::max()))
     , _dir_semaphore(dir_sem)
+    , _object_storage_config(std::move(oscfg))
 {
 }
 
@@ -37,6 +38,11 @@ sstables_manager::~sstables_manager() {
     assert(_closing);
     assert(_active.empty());
     assert(_undergoing_close.empty());
+}
+
+void sstables_manager::update_object_storage_config(object_storage_config oscfg) {
+    // FIXME -- entries grabbed by sstables' storages are not yet updated
+    _object_storage_config = std::move(oscfg);
 }
 
 const locator::host_id& sstables_manager::get_local_host_id() const {

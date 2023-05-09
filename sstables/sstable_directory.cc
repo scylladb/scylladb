@@ -73,7 +73,7 @@ sstable_directory::sstable_directory(sstables_manager& manager,
 {}
 
 void sstable_directory::filesystem_components_lister::handle(sstables::entry_descriptor desc, fs::path filename) {
-    if ((generation_value(desc.generation) % smp::count) != this_shard_id()) {
+    if ((desc.generation.as_int() % smp::count) != this_shard_id()) {
         return;
     }
 
@@ -265,7 +265,8 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
 
     // _descriptors is everything with a TOC. So after we remove this, what's left is
     // SSTables for which a TOC was not found.
-    co_await directory.parallel_for_each_restricted(_state->descriptors, [this, flags, &directory] (std::pair<const generation_type, sstables::entry_descriptor>& t) {
+    auto descriptors = std::move(_state->descriptors);
+    co_await directory.parallel_for_each_restricted(descriptors, [this, flags, &directory] (std::pair<const generation_type, sstables::entry_descriptor>& t) {
         auto& desc = std::get<1>(t);
         _state->generations_found.erase(desc.generation);
         // This will try to pre-load this file and throw an exception if it is invalid
@@ -292,7 +293,7 @@ future<> sstable_directory::system_keyspace_components_lister::process(sstable_d
             // FIXME -- handle
             return make_ready_future<>();
         }
-        if ((generation_value(desc.generation) % smp::count) != this_shard_id()) {
+        if ((desc.generation.as_int() % smp::count) != this_shard_id()) {
             return make_ready_future<>();
         }
 
@@ -339,7 +340,7 @@ future<shared_sstable> sstable_directory::load_foreign_sstable(foreign_sstable_o
 
 future<>
 sstable_directory::load_foreign_sstables(sstable_entry_descriptor_vector info_vec) {
-    return parallel_for_each_restricted(info_vec, [this] (const sstables::entry_descriptor& info) {
+    co_await parallel_for_each_restricted(info_vec, [this] (const sstables::entry_descriptor& info) {
         return load_sstable(info).then([this] (auto sst) {
             _unshared_local_sstables.push_back(sst);
             return make_ready_future<>();
@@ -412,19 +413,29 @@ sstable_directory::remove_unshared_sstables(std::vector<sstables::shared_sstable
 
 future<>
 sstable_directory::do_for_each_sstable(std::function<future<>(sstables::shared_sstable)> func) {
-    return parallel_for_each_restricted(_unshared_local_sstables, std::move(func));
+    auto sstables = std::move(_unshared_local_sstables);
+    co_await parallel_for_each_restricted(sstables, std::move(func));
 }
 
-template <typename Container, typename Func>
-requires std::is_invocable_r_v<future<>, Func, typename std::decay_t<Container>::value_type&>
 future<>
-sstable_directory::parallel_for_each_restricted(Container&& C, Func&& func) {
-    return do_with(std::move(C), std::move(func), [this] (Container& c, Func& func) mutable {
-      return max_concurrent_for_each(c, _manager.dir_semaphore()._concurrency, [this, &func] (auto& el) mutable {
-        return with_semaphore(_manager.dir_semaphore()._sem, 1, [&func,  el = std::move(el)] () mutable {
-            return func(el);
-        });
-      });
+sstable_directory::filter_sstables(std::function<future<bool>(sstables::shared_sstable)> func) {
+    std::vector<sstables::shared_sstable> filtered;
+    co_await parallel_for_each_restricted(_unshared_local_sstables, [func = std::move(func), &filtered] (sstables::shared_sstable sst) -> future<> {
+        auto keep = co_await func(sst);
+        if (keep) {
+            filtered.emplace_back(sst);
+        }
+    });
+    _unshared_local_sstables = std::move(filtered);
+}
+
+template <std::ranges::range Container, typename Func>
+requires std::is_invocable_r_v<future<>, Func, typename std::ranges::range_value_t<Container>&>
+future<>
+sstable_directory::parallel_for_each_restricted(Container& c, Func func) {
+    co_await max_concurrent_for_each(c, _manager.dir_semaphore()._concurrency, [&] (auto& el) -> future<>{
+        auto units = co_await get_units(_manager.dir_semaphore()._sem, 1);
+        co_await func(el);
     });
 }
 
@@ -562,7 +573,7 @@ highest_generation_seen(sharded<sstables::sstable_directory>& directory) {
             return sstables::generation_type(0);
         }
     });
-    co_return highest.value() ? std::make_optional(highest): std::nullopt;
+    co_return highest.as_int() ? std::make_optional(highest) : std::nullopt;
 }
 
 }

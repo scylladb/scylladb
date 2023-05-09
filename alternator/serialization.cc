@@ -50,6 +50,115 @@ type_representation represent_type(alternator_type atype) {
     return it->second;
 }
 
+// Get the magnitude and precision of a big_decimal - as these concepts are
+// defined by DynamoDB - to allow us to enforce limits on those as explained
+// in ssue #6794. The "magnitude" of 9e123 is 123 and of -9e-123 is -123,
+// the "precision" of 12.34e56 is the number of significant digits - 4.
+//
+// Unfortunately it turned out to be quite difficult to take a big_decimal and
+// calculate its magnitude and precision from its scale() and unscaled_value().
+// So in the following ugly implementation we calculate them from the string
+// representation instead. We assume the number was already parsed
+// sucessfully to a big_decimal to it follows its syntax rules.
+//
+// FIXME: rewrite this function to take a big_decimal, not a string.
+// Maybe a snippet like this can help:
+// boost::multiprecision::cpp_int digits = boost::multiprecision::log10(num.unscaled_value().convert_to<boost::multiprecision::mpf_float_50>()).convert_to<boost::multiprecision::cpp_int>() + 1;
+
+
+internal::magnitude_and_precision internal::get_magnitude_and_precision(std::string_view s) {
+    size_t e_or_end = s.find_first_of("eE");
+    std::string_view base = s.substr(0, e_or_end);
+    if (s[0]=='-' || s[0]=='+') {
+        base = base.substr(1);
+    }
+    int magnitude = 0;
+    int precision = 0;
+    size_t dot_or_end = base.find_first_of(".");
+    size_t nonzero = base.find_first_not_of("0");
+    if (dot_or_end != std::string_view::npos) {
+        if (nonzero == dot_or_end) {
+            // 0.000031 => magnitude = -5 (like 3.1e-5), precision = 2.
+            std::string_view fraction = base.substr(dot_or_end + 1);
+            size_t nonzero2 = fraction.find_first_not_of("0");
+            if (nonzero2 != std::string_view::npos) {
+                magnitude = -nonzero2 - 1;
+                precision = fraction.size() - nonzero2;
+            }
+        } else {
+            // 000123.45678 => magnitude = 2, precision = 8.
+            magnitude = dot_or_end - nonzero - 1;
+            precision = base.size() - nonzero - 1;
+        }
+        // trailing zeros don't count to precision, e.g., precision
+        // of 1000.0, 1.0 or 1.0000 are just 1.
+        size_t last_significant = base.find_last_not_of(".0");
+        if (last_significant == std::string_view::npos) {
+            precision = 0;
+        } else if (last_significant < dot_or_end) {
+            // e.g., 1000.00 reduce 5 = 7 - (0+1) - 1 from precision
+            precision -= base.size() - last_significant - 2;
+        } else {
+            // e.g., 1235.60 reduce 5 = 7 - (5+1) from precision
+            precision -= base.size() - last_significant - 1;
+        }
+    } else if (nonzero == std::string_view::npos) {
+        // all-zero integer 000000
+        magnitude = 0;
+        precision = 0;
+    } else {
+        magnitude = base.size() - 1 - nonzero;
+        precision = base.size() - nonzero;
+        // trailing zeros don't count to precision, e.g., precision
+        // of 1000 is just 1.
+        size_t last_significant = base.find_last_not_of("0");
+        if (last_significant == std::string_view::npos) {
+            precision = 0;
+        } else {
+            // e.g., 1000 reduce 3 = 4 - (0+1)
+            precision -= base.size() - last_significant - 1;
+        }
+    }
+    if (precision && e_or_end != std::string_view::npos) {
+        std::string_view exponent = s.substr(e_or_end + 1);
+        if (exponent.size() > 4) {
+            // don't even bother atoi(), exponent is too large
+            magnitude = exponent[0]=='-' ? -9999 : 9999;
+        } else {
+            try {
+                magnitude += boost::lexical_cast<int32_t>(exponent);
+            } catch (...) {
+                magnitude = 9999;
+            }
+        }
+    }
+    return magnitude_and_precision {magnitude, precision};
+}
+
+// Parse a number read from user input, validating that it has a valid
+// numeric format and also in the allowed magnitude and precision ranges
+// (see issue #6794). Throws an api_error::validation if the validation
+// failed.
+static big_decimal parse_and_validate_number(std::string_view s) {
+    try {
+        big_decimal ret(s);
+        auto [magnitude, precision] = internal::get_magnitude_and_precision(s);
+        if (magnitude > 125) {
+            throw api_error::validation(format("Number overflow: {}. Attempting to store a number with magnitude larger than supported range.", s));
+        }
+        if (magnitude < -130) {
+            throw api_error::validation(format("Number underflow: {}. Attempting to store a number with magnitude lower than supported range.", s));
+        }
+        if (precision > 38) {
+            throw api_error::validation(format("Number too precise: {}. Attempting to store a number with more significant digits than supported.", s));
+        }
+        return ret;
+    } catch (const marshal_exception& e) {
+        throw api_error::validation(format("The parameter cannot be converted to a numeric value: {}", s));
+    }
+
+}
+
 struct from_json_visitor {
     const rjson::value& v;
     bytes_ostream& bo;
@@ -67,11 +176,7 @@ struct from_json_visitor {
         bo.write(boolean_type->decompose(v.GetBool()));
     }
     void operator()(const decimal_type_impl& t) const {
-        try {
-            bo.write(t.from_string(rjson::to_string_view(v)));
-        } catch (const marshal_exception& e) {
-            throw api_error::validation(format("The parameter cannot be converted to a numeric value: {}", v));
-        }
+        bo.write(decimal_type->decompose(parse_and_validate_number(rjson::to_string_view(v))));
     }
     // default
     void operator()(const abstract_type& t) const {
@@ -203,6 +308,8 @@ bytes get_key_from_typed_value(const rjson::value& key_typed_value, const column
         // FIXME: it's difficult at this point to get information if value was provided
         // in request or comes from the storage, for now we assume it's user's fault.
         return *unwrap_bytes(value, true);
+    } else if (column.type == decimal_type) {
+        return decimal_type->decompose(parse_and_validate_number(rjson::to_string_view(value)));
     } else {
         return column.type->from_string(value_view);
     }
@@ -295,16 +402,13 @@ big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic) {
     if (it->name != "N") {
         throw api_error::validation(format("{}: expected number, found type '{}'", diagnostic, it->name));
     }
-    try {
-        if (!it->value.IsString()) {
-            // We shouldn't reach here. Callers normally validate their input
-            // earlier with validate_value().
-            throw api_error::validation(format("{}: improperly formatted number constant", diagnostic));
-        }
-        return big_decimal(rjson::to_string_view(it->value));
-    } catch (const marshal_exception& e) {
-        throw api_error::validation(format("The parameter cannot be converted to a numeric value: {}", it->value));
+    if (!it->value.IsString()) {
+        // We shouldn't reach here. Callers normally validate their input
+        // earlier with validate_value().
+        throw api_error::validation(format("{}: improperly formatted number constant", diagnostic));
     }
+    big_decimal ret = parse_and_validate_number(rjson::to_string_view(it->value));
+    return ret;
 }
 
 std::optional<big_decimal> try_unwrap_number(const rjson::value& v) {
@@ -316,8 +420,8 @@ std::optional<big_decimal> try_unwrap_number(const rjson::value& v) {
         return std::nullopt;
     }
     try {
-        return big_decimal(rjson::to_string_view(it->value));
-    } catch (const marshal_exception& e) {
+        return parse_and_validate_number(rjson::to_string_view(it->value));
+    } catch (api_error&) {
         return std::nullopt;
     }
 }

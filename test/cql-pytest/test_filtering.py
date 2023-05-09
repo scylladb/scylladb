@@ -399,12 +399,14 @@ def test_filter_and_fetch_size(cql, test_keyspace, use_index, driver_bug_1):
 # Reproduces #13468
 def test_filter_token(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'pk int, ck int, x int, PRIMARY KEY (pk, ck)') as table:
-        with pytest.raises(InvalidRequest, match='duplicate partition key'):
+        with pytest.raises(InvalidRequest, match='Invalid number of arguments'):
             cql.execute(f'SELECT pk FROM {table} WHERE token(pk, pk) = 0')
     with new_test_table(cql, test_keyspace, 'pk int, ck int, x int, PRIMARY KEY ((pk, ck))') as table:
-        with pytest.raises(InvalidRequest, match='all partition key components'):
+        with pytest.raises(InvalidRequest, match='duplicate partition key'):
+            cql.execute(f'SELECT pk FROM {table} WHERE token(pk, pk) = 0')
+        with pytest.raises(InvalidRequest, match='Invalid number of arguments'):
             cql.execute(f'SELECT pk FROM {table} WHERE token(x) = 0')
-        with pytest.raises(InvalidRequest, match='all partition key components'):
+        with pytest.raises(InvalidRequest, match='Invalid number of arguments'):
             cql.execute(f'SELECT pk FROM {table} WHERE token(pk) = 0')
         with pytest.raises(InvalidRequest, match='partition key order'):
             cql.execute(f'SELECT pk FROM {table} WHERE token(ck, pk) = 0')

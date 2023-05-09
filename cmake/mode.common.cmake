@@ -1,9 +1,7 @@
 set(disabled_warnings
   c++11-narrowing
   mismatched-tags
-  missing-braces
   overloaded-virtual
-  parentheses-equality
   unsupported-friend)
 include(CheckCXXCompilerFlag)
 foreach(warning ${disabled_warnings})
@@ -13,7 +11,11 @@ foreach(warning ${disabled_warnings})
   endif()
 endforeach()
 list(TRANSFORM _supported_warnings PREPEND "-Wno-")
-string(JOIN " " CMAKE_CXX_FLAGS "-Wall" "-Werror" ${_supported_warnings})
+string(JOIN " " CMAKE_CXX_FLAGS
+  "-Wall"
+  "-Werror"
+  "-Wno-error=deprecated-declarations"
+  ${_supported_warnings})
 
 function(default_target_arch arch)
   set(x86_instruction_sets i386 i686 x86_64)

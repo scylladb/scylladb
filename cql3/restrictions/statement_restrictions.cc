@@ -88,7 +88,8 @@ void with_current_binary_operator(
 static std::vector<expr::expression> extract_partition_range(
         const expr::expression& where_clause, schema_ptr schema) {
     using namespace expr;
-    struct {
+    struct extract_partition_range_visitor {
+        schema_ptr table_schema;
         std::optional<expression> tokens;
         std::unordered_map<const column_definition*, expression> single_column;
         const binary_operator* current_binary_operator = nullptr;
@@ -106,7 +107,11 @@ static std::vector<expr::expression> extract_partition_range(
             current_binary_operator = nullptr;
         }
 
-        void operator()(const token&) {
+        void operator()(const function_call& token_fun_call) {
+            if (!is_partition_token_for_schema(token_fun_call, *table_schema)) {
+                on_internal_error(rlogger, "extract_partition_range(function_call)");
+            }
+
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (tokens) {
                     tokens = make_conjunction(std::move(*tokens), b);
@@ -159,10 +164,6 @@ static std::vector<expr::expression> extract_partition_range(
             on_internal_error(rlogger, "extract_partition_range(column_mutation_attribute)");
         }
 
-        void operator()(const function_call&) {
-            on_internal_error(rlogger, "extract_partition_range(function_call)");
-        }
-
         void operator()(const cast&) {
             on_internal_error(rlogger, "extract_partition_range(cast)");
         }
@@ -186,7 +187,12 @@ static std::vector<expr::expression> extract_partition_range(
         void operator()(const usertype_constructor&) {
             on_internal_error(rlogger, "extract_partition_range(usertype_constructor)");
         }
-    } v;
+    };
+
+    extract_partition_range_visitor v {
+        .table_schema = schema
+    };
+
     expr::visit(v, where_clause);
     if (v.tokens) {
         return {std::move(*v.tokens)};
@@ -207,6 +213,7 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
     /// Collects all clustering-column restrictions from an expression.  Presumes the expression only uses
     /// conjunction to combine subexpressions.
     struct visitor {
+        schema_ptr table_schema;
         std::vector<expression> multi; ///< All multi-column restrictions.
         /// All single-clustering-column restrictions, grouped by column.  Each value is either an atom or a
         /// conjunction of atoms.
@@ -266,8 +273,13 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
             });
         }
 
-        void operator()(const token&) {
-            // A token cannot be a clustering prefix restriction
+        void operator()(const function_call& fun_call) {
+            if (is_partition_token_for_schema(fun_call, *table_schema)) {
+                // A token cannot be a clustering prefix restriction
+                return;
+            }
+
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(function_call)");
         }
 
         void operator()(const constant&) {}
@@ -278,10 +290,6 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
 
         void operator()(const column_mutation_attribute&) {
             on_internal_error(rlogger, "extract_clustering_prefix_restrictions(column_mutation_attribute)");
-        }
-
-        void operator()(const function_call&) {
-            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(function_call)");
         }
 
         void operator()(const cast&) {
@@ -307,7 +315,11 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
         void operator()(const usertype_constructor&) {
             on_internal_error(rlogger, "extract_clustering_prefix_restrictions(usertype_constructor)");
         }
-    } v;
+    };
+    visitor v {
+        .table_schema = schema
+    };
+
     expr::visit(v, where_clause);
 
     if (!v.multi.empty()) {
@@ -358,7 +370,7 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         }
     }
     if (_where.has_value()) {
-        if (!has_token(_partition_key_restrictions)) {
+        if (!has_token_restrictions()) {
             _single_column_partition_key_restrictions = expr::get_single_column_restrictions_map(_partition_key_restrictions);
         }
         if (!expr::contains_multi_column_restriction(_clustering_columns_restrictions)) {
@@ -488,7 +500,7 @@ std::pair<std::optional<secondary_index::index>, expr::expression> statement_res
     for (const auto& index : sim.list_indexes()) {
         auto cdef = _schema->get_column_definition(to_bytes(index.target_column()));
         for (const expr::expression& restriction : index_restrictions()) {
-            if (has_token(restriction) || contains_multi_column_restriction(restriction)) {
+            if (has_partition_token(restriction, *_schema) || contains_multi_column_restriction(restriction)) {
                 continue;
             }
 
@@ -516,7 +528,8 @@ bool statement_restrictions::has_eq_restriction_on_column(const column_definitio
 std::vector<const column_definition*> statement_restrictions::get_column_defs_for_filtering(data_dictionary::database db) const {
     std::vector<const column_definition*> column_defs_for_filtering;
     if (need_filtering()) {
-        auto& sim = db.find_column_family(_schema).get_index_manager();
+        auto cf = db.find_column_family(_schema);
+        auto& sim = cf.get_index_manager();
         auto opt_idx = std::get<0>(find_idx(sim));
         auto column_uses_indexing = [&opt_idx] (const column_definition* cdef, const expr::expression* single_col_restr) {
             return opt_idx && single_col_restr && is_supported_by(*single_col_restr, *opt_idx);
@@ -566,7 +579,7 @@ void statement_restrictions::add_restriction(const expr::binary_operator& restr,
     } else if (expr::is_multi_column(restr)) {
         // Multi column restrictions are only allowed on clustering columns
         add_multi_column_clustering_key_restriction(restr);
-    } else if (has_token(restr)) {
+    } else if (has_partition_token(restr, *_schema)) {
         // Token always restricts the partition key
         add_token_partition_key_restriction(restr);
     } else if (expr::is_single_column_restriction(restr)) {
@@ -610,7 +623,7 @@ void statement_restrictions::add_single_column_parition_key_restriction(const ex
                 "Only EQ and IN relation are supported on the partition key "
                 "(unless you use the token() function or allow filtering)");
     }
-    if (has_token(_partition_key_restrictions)) {
+    if (has_token_restrictions()) {
         throw exceptions::invalid_request_exception(
                 format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
                        fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
@@ -625,7 +638,7 @@ void statement_restrictions::add_single_column_parition_key_restriction(const ex
 }
 
 void statement_restrictions::add_token_partition_key_restriction(const expr::binary_operator& restr) {
-    if (!partition_key_restrictions_is_empty() && !has_token(_partition_key_restrictions)) {
+    if (!partition_key_restrictions_is_empty() && !has_token_restrictions()) {
         throw exceptions::invalid_request_exception(
                 format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
                         fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
@@ -736,7 +749,7 @@ void statement_restrictions::process_partition_key_restrictions(bool for_view, b
     // - Is it queriable without 2ndary index, which is always more efficient
     // If a component of the partition key is restricted by a relation, all preceding
     // components must have a EQ. Only the last partition key component can be in IN relation.
-    if (has_token(_partition_key_restrictions)) {
+    if (has_token_restrictions()) {
         _is_key_range = true;
     } else if (expr::is_empty_restriction(_partition_key_restrictions)) {
         _is_key_range = true;
@@ -775,7 +788,7 @@ size_t statement_restrictions::partition_key_restrictions_size() const {
 
 bool statement_restrictions::pk_restrictions_need_filtering() const {
      return !expr::is_empty_restriction(_partition_key_restrictions)
-         && !has_token(_partition_key_restrictions)
+         && !has_token_restrictions()
          && (has_partition_key_unrestricted_components() || expr::has_slice_or_needs_filtering(_partition_key_restrictions));
 }
 
@@ -886,7 +899,7 @@ bounds_slice statement_restrictions::get_clustering_slice() const {
 bool statement_restrictions::parition_key_restrictions_have_supporting_index(const secondary_index::secondary_index_manager& index_manager,
                                       expr::allow_local_index allow_local) const {
     // Token restrictions can't be supported by an index
-    if (has_token(_partition_key_restrictions)) {
+    if (has_token_restrictions()) {
         return false;
     }
 
@@ -926,8 +939,10 @@ namespace {
 using namespace expr;
 
 /// Computes partition-key ranges from token atoms in ex.
-dht::partition_range_vector partition_ranges_from_token(const expr::expression& ex, const query_options& options) {
-    auto values = possible_lhs_values(nullptr, ex, options);
+dht::partition_range_vector partition_ranges_from_token(const expr::expression& ex,
+                                                        const query_options& options,
+                                                        const schema& table_schema) {
+    auto values = possible_partition_token_values(ex, options, table_schema);
     if (values == expr::value_set(expr::value_list{})) {
         return {};
     }
@@ -975,7 +990,7 @@ dht::partition_range_vector partition_ranges_from_singles(
     for (const auto& e : expressions) {
         if (const auto arbitrary_binop = find_binop(e, [] (const binary_operator&) { return true; })) {
             if (auto cv = expr::as_if<expr::column_value>(&arbitrary_binop->lhs)) {
-                const value_set vals = possible_lhs_values(cv->col, e, options);
+                const value_set vals = possible_column_values(cv->col, e, options);
                 if (auto lst = std::get_if<value_list>(&vals)) {
                     if (lst->empty()) {
                         return {};
@@ -1004,7 +1019,7 @@ dht::partition_range_vector partition_ranges_from_EQs(
     std::vector<managed_bytes> pk_value(schema.partition_key_size());
     for (const auto& e : eq_expressions) {
         const auto col = expr::get_subscripted_column(find(e, oper_t::EQ)->lhs).col;
-        const auto vals = std::get<value_list>(possible_lhs_values(col, e, options));
+        const auto vals = std::get<value_list>(possible_column_values(col, e, options));
         if (vals.empty()) { // Case of C=1 AND C=2.
             return {};
         }
@@ -1019,13 +1034,13 @@ dht::partition_range_vector statement_restrictions::get_partition_key_ranges(con
     if (_partition_range_restrictions.empty()) {
         return {dht::partition_range::make_open_ended_both_sides()};
     }
-    if (has_token(_partition_range_restrictions[0])) {
+    if (has_partition_token(_partition_range_restrictions[0], *_schema)) {
         if (_partition_range_restrictions.size() != 1) {
             on_internal_error(
                     rlogger,
                     format("Unexpected size of token restrictions: {}", _partition_range_restrictions.size()));
         }
-        return partition_ranges_from_token(_partition_range_restrictions[0], options);
+        return partition_ranges_from_token(_partition_range_restrictions[0], options, *_schema);
     } else if (_partition_range_is_simple) {
         // Special case to avoid extra allocations required for a Cartesian product.
         return partition_ranges_from_EQs(_partition_range_restrictions, options, *_schema);
@@ -1233,10 +1248,6 @@ struct multi_column_range_accumulator {
         on_internal_error(rlogger, "Subscript encountered outside binary operator");
     }
 
-    void operator()(const token&) {
-        on_internal_error(rlogger, "Token encountered outside binary operator");
-    }
-
     void operator()(const unresolved_identifier&) {
         on_internal_error(rlogger, "Unresolved identifier encountered outside binary operator");
     }
@@ -1340,7 +1351,7 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
     size_t product_size = 1;
     std::vector<std::vector<managed_bytes>> prior_column_values; // Equality values of columns seen so far.
     for (size_t i = 0; i < single_column_restrictions.size(); ++i) {
-        auto values = possible_lhs_values(
+        auto values = possible_column_values(
                 &schema.clustering_column_at(i), // This should be the LHS of restrictions[i].
                 single_column_restrictions[i],
                 options);
@@ -1410,10 +1421,10 @@ static std::vector<query::clustering_range> get_index_v1_token_range_clustering_
         const column_definition& token_column,
         const expression& token_restriction) {
 
-    // A workaround in order to make possible_lhs_values work properly.
-    // possible_lhs_values looks at the column type and uses this type's comparator.
+    // A workaround in order to make possible_column_values work properly.
+    // possible_column_values looks at the column type and uses this type's comparator.
     // This is a problem because when using blob's comparator, -4 is greater than 4.
-    // This makes possible_lhs_values think that an expression like token(p) > -4 and token(p) < 4
+    // This makes possible_column_values think that an expression like token(p) > -4 and token(p) < 4
     // is impossible to fulfill.
     // Create a fake token column with the type set to bigint, translate the restriction to use this column
     // and use this restriction to calculate possible lhs values.
@@ -1422,7 +1433,7 @@ static std::vector<query::clustering_range> get_index_v1_token_range_clustering_
     expression new_token_restrictions = replace_column_def(token_restriction, &token_column_bigint);
 
     std::variant<value_list, nonwrapping_range<managed_bytes>> values =
-        possible_lhs_values(&token_column_bigint, new_token_restrictions, options);
+        possible_column_values(&token_column_bigint, new_token_restrictions, options);
 
     return std::visit(overloaded_functor {
         [](const value_list& list) {
@@ -1690,7 +1701,7 @@ bool token_known(const statement_restrictions& r) {
 bool statement_restrictions::need_filtering() const {
     using namespace expr;
 
-    if (_uses_secondary_indexing && has_token(_partition_key_restrictions)) {
+    if (_uses_secondary_indexing && has_token_restrictions()) {
         // If there is a token(p1, p2) restriction, no p1, p2 restrictions are allowed in the query.
         // All other restrictions must be on clustering or regular columns.
         int64_t non_pk_restrictions_count = clustering_columns_restrictions_size();
@@ -1787,11 +1798,11 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
 
     const column_definition* token_column = &idx_tbl_schema.clustering_column_at(0);
 
-    if (has_token(_partition_key_restrictions)) {
+    if (has_token_restrictions()) {
         // When there is a token(p1, p2) >/</= ? restriction, it is not allowed to have restrictions on p1 or p2.
         // This means that p1 and p2 can have many different values (token is a hash, can have collisions).
         // Clustering prefix ends after token_restriction, all further restrictions have to be filtered.
-        expr::expression token_restriction = replace_token(_partition_key_restrictions, token_column);
+        expr::expression token_restriction = replace_partition_token(_partition_key_restrictions, token_column, *_schema);
         _idx_tbl_ck_prefix = std::vector{std::move(token_restriction)};
 
         return;
@@ -1899,7 +1910,7 @@ std::vector<query::clustering_range> statement_restrictions::get_global_index_cl
     std::vector<managed_bytes> pk_value(_schema->partition_key_size());
     for (const auto& e : _partition_range_restrictions) {
         const auto col = expr::as<column_value>(find(e, oper_t::EQ)->lhs).col;
-        const auto vals = std::get<value_list>(possible_lhs_values(col, e, options));
+        const auto vals = std::get<value_list>(possible_column_values(col, e, options));
         if (vals.empty()) { // Case of C=1 AND C=2.
             return {};
         }
