@@ -39,6 +39,12 @@ struct raft_group_not_found: public raft::error {
     {}
 };
 
+struct raft_destination_id_not_correct: public raft::error {
+    raft_destination_id_not_correct(raft::server_id my_id, raft::server_id dst_id)
+            : raft::error(format("Got message for server {}, but my id is {}", dst_id, my_id))
+    {}
+};
+
 // An entry in the group registry
 struct raft_server_for_group {
     raft::group_id gid;
