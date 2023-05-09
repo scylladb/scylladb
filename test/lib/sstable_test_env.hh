@@ -148,10 +148,6 @@ public:
             sstable::version_types version, sstable::format_types f = sstable::format_types::big) {
         return reusable_sst(std::move(schema), _impl->dir.path().native(), std::move(generation), std::move(version), std::move(f));
     }
-    future<shared_sstable> reusable_sst(schema_ptr schema, sstables::generation_type::int_t gen_value,
-            sstable::version_types version, sstable::format_types f = sstable::format_types::big) {
-        return reusable_sst(std::move(schema), sstables::generation_type(gen_value), std::move(version), std::move(f));
-    }
 
     future<shared_sstable> reusable_sst(schema_ptr schema, shared_sstable sst) {
         return reusable_sst(std::move(schema), sst->get_storage().prefix(), sst->generation(), sst->get_version());

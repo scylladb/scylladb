@@ -175,7 +175,7 @@ SEASTAR_TEST_CASE(missing_summary_first_last_sane) {
 
 static future<sstable_ptr> do_write_sst(test_env& env, schema_ptr schema, sstring load_dir, sstring write_dir, sstables::generation_type generation) {
     return env.reusable_sst(std::move(schema), load_dir, generation).then([write_dir, generation] (sstable_ptr sst) mutable {
-        sstable_generation_generator gen(generation.value());
+        sstable_generation_generator gen{generation.as_int()};
         sstables::test(sst).change_generation_number(gen());
         sstables::test(sst).change_dir(write_dir);
         auto fut = sstables::test(sst).store();
