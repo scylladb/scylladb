@@ -275,62 +275,63 @@ std::vector<view_ptr> keyspace_metadata::views() const {
             | boost::adaptors::transformed([] (auto&& s) { return view_ptr(s); }));
 }
 
+storage_options::local storage_options::local::from_map(const std::map<sstring, sstring>& values) {
+    if (!values.empty()) {
+        throw std::runtime_error("Local storage does not accept any custom options");
+    }
+    return {};
+}
+
+std::map<sstring, sstring> storage_options::local::to_map() const {
+    return {};
+}
+
+storage_options::s3 storage_options::s3::from_map(const std::map<sstring, sstring>& values) {
+    s3 options;
+    const std::array<std::pair<sstring, sstring*>, 2> allowed_options {
+        std::make_pair("bucket", &options.bucket),
+        std::make_pair("endpoint", &options.endpoint),
+    };
+    for (auto& option : allowed_options) {
+        if (auto it = values.find(option.first); it != values.end()) {
+            *option.second = it->second;
+        } else {
+            throw std::runtime_error(format("Missing S3 option: {}", option.first));
+        }
+    }
+    if (values.size() > allowed_options.size()) {
+        throw std::runtime_error(format("Extraneous options for S3: {}; allowed: {}",
+            boost::algorithm::join(values | boost::adaptors::map_keys, ","),
+            boost::algorithm::join(allowed_options | boost::adaptors::map_keys, ",")));
+    }
+    return options;
+}
+
+std::map<sstring, sstring> storage_options::s3::to_map() const {
+    return {{"bucket", bucket},
+            {"endpoint", endpoint}};
+}
+
 bool storage_options::is_local_type() const noexcept {
     return std::holds_alternative<local>(value);
 }
 
 storage_options::value_type storage_options::from_map(std::string_view type, std::map<sstring, sstring> values) {
-    if (type == "LOCAL") {
-        if (!values.empty()) {
-            throw std::runtime_error("Local storage does not accept any custom options");
-        }
-        return local{};
+    if (type == local::name) {
+        return local::from_map(values);
     }
-    if (type == "S3") {
-        s3 options;
-        const std::array<std::pair<sstring, sstring*>, 2> allowed_options {
-            std::make_pair("bucket", &options.bucket),
-            std::make_pair("endpoint", &options.endpoint),
-        };
-        for (auto& option : allowed_options) {
-            if (auto it = values.find(option.first); it != values.end()) {
-                *option.second = it->second;
-            } else {
-                throw std::runtime_error(format("Missing S3 option: {}", option.first));
-            }
-        }
-        if (values.size() > allowed_options.size()) {
-            throw std::runtime_error(format("Extraneous options for S3: {}; allowed: {}",
-                    boost::algorithm::join(values | boost::adaptors::map_keys, ","),
-                    boost::algorithm::join(allowed_options | boost::adaptors::map_keys, ",")));
-        }
-        return options;
+    if (type == s3::name) {
+        return s3::from_map(values);
     }
     throw std::runtime_error(format("Unknown storage type: {}", type));
 }
 
 std::string_view storage_options::type_string() const {
-    return std::visit(overloaded_functor {
-        [] (const storage_options::local&) {
-            return "LOCAL";
-        },
-        [] (const storage_options::s3&) {
-            return "S3";
-        }
-    }, value);
+    return std::visit([] (auto& opt) { return opt.name; }, value);
 }
 
 std::map<sstring, sstring> storage_options::to_map() const {
-    std::map<sstring, sstring> ret;
-    std::visit(overloaded_functor {
-        [] (const storage_options::local&) {
-        },
-        [&ret] (const storage_options::s3& v) {
-            ret.emplace("bucket", v.bucket);
-            ret.emplace("endpoint", v.endpoint);
-        }
-    }, value);
-    return ret;
+    return std::visit([] (auto& opt) { return opt.to_map(); }, value);
 }
 
 bool storage_options::can_update_to(const storage_options& new_options) {

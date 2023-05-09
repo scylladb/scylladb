@@ -17,12 +17,19 @@ namespace data_dictionary {
 
 struct storage_options {
     struct local {
+        static constexpr std::string_view name = "LOCAL";
+
+        static local from_map(const std::map<sstring, sstring>&);
+        std::map<sstring, sstring> to_map() const;
         bool operator==(const local&) const = default;
     };
     struct s3 {
         sstring bucket;
         sstring endpoint;
+        static constexpr std::string_view name = "S3";
 
+        static s3 from_map(const std::map<sstring, sstring>&);
+        std::map<sstring, sstring> to_map() const;
         bool operator==(const s3&) const = default;
     };
     using value_type = std::variant<local, s3>;
