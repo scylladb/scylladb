@@ -772,6 +772,9 @@ public:
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
     future<const_mutation_partition_ptr> find_partition_slow(schema_ptr, reader_permit permit, const partition_key& key) const;
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
+    shard_id shard_of(const mutation& m) const {
+        return shard_of(m.token());
+    }
     shard_id shard_of(dht::token t) const {
         return _erm ? _erm->shard_of(*_schema, t)
                     : dht::shard_of(*_schema, t); // for tests.

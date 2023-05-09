@@ -178,10 +178,6 @@ public:
     // Range tombstones will be trimmed to the boundaries of the clustering ranges.
     mutation sliced(const query::clustering_row_ranges&) const;
 
-    unsigned shard_of() const {
-        return dht::shard_of(*schema(), token());
-    }
-
     // Returns a mutation which contains the same writes but in a minimal form.
     // Drops data covered by tombstones.
     // Does not drop expired tombstones.

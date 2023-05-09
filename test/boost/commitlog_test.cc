@@ -613,9 +613,10 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
         auto& table = db.find_column_family("ks", "t");
         auto& cl = *table.commitlog();
         auto s = table.schema();
+        auto& sharder = table.get_effective_replication_map()->get_sharder(*table.schema());
         auto memtables = table.active_memtables();
 
-        auto add_entry = [&cl, s] (const partition_key& key) mutable {
+        auto add_entry = [&cl, s, &sharder] (const partition_key& key) mutable {
             auto md = tests::data_model::mutation_description(key.explode());
             md.add_clustered_cell({}, "v", to_bytes("val"));
             auto m = md.build(s);
@@ -623,7 +624,7 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
             auto fm = freeze(m);
             commitlog_entry_writer cew(s, fm, db::commitlog::force_sync::yes);
             cl.add_entry(m.column_family_id(), cew, db::no_timeout).get();
-            return m.shard_of();
+            return sharder.shard_of(m.token());
         };
 
         const auto shard = add_entry(partition_key::make_empty());
