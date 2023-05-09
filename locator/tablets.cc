@@ -105,6 +105,23 @@ void tablet_map::set_tablet_transition_info(tablet_id id, tablet_transition_info
     _transitions.insert_or_assign(id, std::move(info));
 }
 
+std::optional<shard_id> tablet_map::get_shard(tablet_id tid, host_id host) const {
+    auto&& info = get_tablet_info(tid);
+
+    for (auto&& r : info.replicas) {
+        if (r.host == host) {
+            return r.shard;
+        }
+    }
+
+    auto tinfo = get_tablet_transition_info(tid);
+    if (tinfo && tinfo->pending_replica.host == host) {
+        return tinfo->pending_replica.shard;
+    }
+
+    return std::nullopt;
+}
+
 future<> tablet_map::clear_gently() {
     return utils::clear_gently(_tablets);
 }

@@ -212,6 +212,57 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
     }, tablet_cql_test_config());
 }
 
+SEASTAR_TEST_CASE(test_get_shard) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+
+        auto table1 = table_id(utils::UUID_gen::get_time_UUID());
+
+        tablet_metadata tm;
+        tablet_id tid;
+        tablet_id tid1;
+
+        {
+            tablet_map tmap(2);
+            tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                    tablet_replica {h3, 5},
+                }
+            });
+            tid1 = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid1, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 2},
+                    tablet_replica {h3, 1},
+                }
+            });
+            tmap.set_tablet_transition_info(tid, tablet_transition_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                    tablet_replica {h2, 3},
+                },
+                tablet_replica {h2, 3}
+            });
+            tm.set_tablet_map(table1, std::move(tmap));
+        }
+
+        auto&& tmap = tm.get_tablet_map(table1);
+
+        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid1, h1), std::make_optional(shard_id(2)));
+        BOOST_REQUIRE(!tmap.get_shard(tid1, h2));
+        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid1, h3), std::make_optional(shard_id(1)));
+
+        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid, h1), std::make_optional(shard_id(0)));
+        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid, h2), std::make_optional(shard_id(3)));
+        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid, h3), std::make_optional(shard_id(5)));
+
+    }, tablet_cql_test_config());
+}
+
 SEASTAR_TEST_CASE(test_large_tablet_metadata) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         tablet_metadata tm;
