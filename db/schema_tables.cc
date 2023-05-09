@@ -1970,6 +1970,7 @@ static future<> merge_functions(distributed<service::storage_proxy>& proxy, sche
             auto arg_types = read_arg_types(db, *val, name.keyspace);
             drop_cached_func(db, *val);
             cql3::functions::functions::remove_function(name, arg_types);
+            co_await db.get_notifier().drop_function(name, arg_types);
         }
         for (const auto& val : diff.altered) {
             drop_cached_func(db, *val);
@@ -1982,7 +1983,7 @@ static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, sch
         schema_result scylla_before, schema_result scylla_after) {
     auto diff = diff_aggregates_rows(before, after, scylla_before, scylla_after);
 
-    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) {
+    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db)-> future<> {
         for (const auto& val : diff.created) {
             cql3::functions::functions::add_function(create_aggregate(db, *val.first, val.second));
         }
@@ -1991,6 +1992,7 @@ static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, sch
                 val.first->get_nonnull<sstring>("keyspace_name"), val.first->get_nonnull<sstring>("aggregate_name")};
             auto arg_types = read_arg_types(db, *val.first, name.keyspace);
             cql3::functions::functions::remove_function(name, arg_types);
+            co_await db.get_notifier().drop_aggregate(name, arg_types);
         }
     });
 }
