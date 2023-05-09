@@ -59,7 +59,8 @@ private:
     // The map between the existing node to be replaced and the replacing node
     std::unordered_map<inet_address, inet_address> _replacing_endpoints;
 
-    std::unordered_map<sstring, boost::icl::interval_map<token, std::unordered_set<inet_address>>> _pending_ranges_interval_map;
+    using ring_mapping = boost::icl::interval_map<token, std::unordered_set<inet_address>>;
+    std::unordered_map<sstring, ring_mapping> _pending_ranges_interval_map;
 
     std::vector<token> _sorted_tokens;
 
@@ -226,51 +227,22 @@ public:
     static boost::icl::interval<token>::interval_type range_to_interval(range<dht::token> r);
     static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
-private:
-    void set_pending_ranges(const sstring& keyspace_name, std::unordered_multimap<range<token>, inet_address> new_pending_ranges, can_yield);
-
 public:
     bool has_pending_ranges(sstring keyspace_name, inet_address endpoint) const;
 
-     /**
-     * Calculate pending ranges according to bootsrapping and leaving nodes. Reasoning is:
-     *
-     * (1) When in doubt, it is better to write too much to a node than too little. That is, if
-     * there are multiple nodes moving, calculate the biggest ranges a node could have. Cleaning
-     * up unneeded data afterwards is better than missing writes during movement.
-     * (2) When a node leaves, ranges for other nodes can only grow (a node might get additional
-     * ranges, but it will not lose any of its current ranges as a result of a leave). Therefore
-     * we will first remove _all_ leaving tokens for the sake of calculation and then check what
-     * ranges would go where if all nodes are to leave. This way we get the biggest possible
-     * ranges with regard current leave operations, covering all subsets of possible final range
-     * values.
-     * (3) When a node bootstraps, ranges of other nodes can only get smaller. Without doing
-     * complex calculations to see if multiple bootstraps overlap, we simply base calculations
-     * on the same token ring used before (reflecting situation after all leave operations have
-     * completed). Bootstrapping nodes will be added and removed one by one to that metadata and
-     * checked what their ranges would be. This will give us the biggest possible ranges the
-     * node could have. It might be that other bootstraps make our actual final ranges smaller,
-     * but it does not matter as we can clean up the data afterwards.
-     *
-     * NOTE: This is heavy and ineffective operation. This will be done only once when a node
-     * changes state in the cluster, so it should be manageable.
-     */
+    /**
+    * Calculate pending ranges according to bootstrapping, leaving and replacing nodes.
+    *
+    * We construct an updated version of the token_metadata by incorporating
+    * all proposed modifications (join, bootstrap, and replace operations).
+    * Subsequently, for each token range, we compare the outcomes of the calculate_natural_endpoints
+    * function applied to both the previous and the new token_metadata.
+    * Endpoints present in the updated version but absent in the original one
+    * ought to be appended to the pending_ranges.
+    */
     future<> update_pending_ranges(
             const token_metadata& unpimplified_this,
             const abstract_replication_strategy& strategy, const sstring& keyspace_name, dc_rack_fn& get_dc_rack);
-    void calculate_pending_ranges_for_leaving(
-        const token_metadata& unpimplified_this,
-        const abstract_replication_strategy& strategy,
-        std::unordered_multimap<range<token>, inet_address>& new_pending_ranges,
-        mutable_token_metadata_ptr all_left_metadata) const;
-    void calculate_pending_ranges_for_bootstrap(
-        const abstract_replication_strategy& strategy,
-        std::unordered_multimap<range<token>, inet_address>& new_pending_ranges,
-        mutable_token_metadata_ptr all_left_metadata, dc_rack_fn& get_dc_rack) const;
-    void calculate_pending_ranges_for_replacing(
-        const token_metadata& unpimplified_this,
-        const abstract_replication_strategy& strategy,
-        std::unordered_multimap<range<token>, inet_address>& new_pending_ranges) const;
 public:
 
     token get_predecessor(token t) const;
@@ -723,41 +695,6 @@ token_metadata_impl::interval_to_range(boost::icl::interval<token>::interval_typ
     return range<dht::token>({{i.lower(), start_inclusive}}, {{i.upper(), end_inclusive}});
 }
 
-void token_metadata_impl::set_pending_ranges(const sstring& keyspace_name,
-        std::unordered_multimap<range<token>, inet_address> new_pending_ranges,
-        can_yield can_yield) {
-    if (new_pending_ranges.empty()) {
-        _pending_ranges_interval_map.erase(keyspace_name);
-        return;
-    }
-    std::unordered_map<range<token>, std::unordered_set<inet_address>> map;
-    std::unordered_set<inet_address> endpoints;
-    for (const auto& x : new_pending_ranges) {
-        if (can_yield) {
-            seastar::thread::maybe_yield();
-        }
-        map[x.first].emplace(x.second);
-        auto ins = endpoints.emplace(x.second);
-        if (ins.second) { // insertion took place, i.e. -- new endpoint
-            if (!_topology.has_endpoint(x.second)) {
-                on_internal_error(tlogger, format("token_metadata_impl: {} must be member or pending to set pending tokens", x.second));
-            }
-        }
-    }
-
-    // construct a interval map to speed up the search
-    boost::icl::interval_map<token, std::unordered_set<inet_address>> interval_map;
-    for (auto& m : map) {
-        if (can_yield) {
-            seastar::thread::maybe_yield();
-        }
-        interval_map +=
-                std::make_pair(range_to_interval(m.first), std::move(m.second));
-    }
-    _pending_ranges_interval_map[keyspace_name] = std::move(interval_map);
-}
-
-
 bool
 token_metadata_impl::has_pending_ranges(sstring keyspace_name, inet_address endpoint) const {
     const auto it = _pending_ranges_interval_map.find(keyspace_name);
@@ -773,96 +710,6 @@ token_metadata_impl::has_pending_ranges(sstring keyspace_name, inet_address endp
     return false;
 }
 
-// Called from a seastar thread
-void token_metadata_impl::calculate_pending_ranges_for_leaving(
-        const token_metadata& unpimplified_this,
-        const abstract_replication_strategy& strategy,
-        std::unordered_multimap<range<token>, inet_address>& new_pending_ranges,
-        mutable_token_metadata_ptr all_left_metadata) const {
-    if (_leaving_endpoints.empty()) {
-        return;
-    }
-    // get all ranges that will be affected by leaving nodes
-    std::unordered_set<range<token>> affected_ranges;
-    for (auto endpoint : _leaving_endpoints) {
-        auto r = strategy.get_ranges(endpoint, unpimplified_this).get0();
-        for (const dht::token_range& x : r) {
-            affected_ranges.emplace(x);
-        }
-    }
-    // for each of those ranges, find what new nodes will be responsible for the range when
-    // all leaving nodes are gone.
-    auto metadata = token_metadata(clone_only_token_map().get0());
-    auto affected_ranges_size = affected_ranges.size();
-    tlogger.debug("In calculate_pending_ranges: affected_ranges.size={} stars", affected_ranges_size);
-    for (const auto& r : affected_ranges) {
-        auto t = r.end() ? r.end()->value() : dht::maximum_token();
-        auto current_endpoints = strategy.calculate_natural_endpoints(t, metadata).get0();
-        auto new_endpoints = strategy.calculate_natural_endpoints(t, *all_left_metadata).get0();
-        for (auto ep : new_endpoints) {
-          if (!current_endpoints.contains(ep)) {
-            new_pending_ranges.emplace(r, ep);
-          }
-        }
-        seastar::thread::maybe_yield();
-    }
-    metadata.clear_gently().get();
-    tlogger.debug("In calculate_pending_ranges: affected_ranges.size={} ends", affected_ranges_size);
-}
-
-// Called from a seastar thread
-void token_metadata_impl::calculate_pending_ranges_for_replacing(
-        const token_metadata& unpimplified_this,
-        const abstract_replication_strategy& strategy,
-        std::unordered_multimap<range<token>, inet_address>& new_pending_ranges) const {
-    if (_replacing_endpoints.empty()) {
-        return;
-    }
-    for (const auto& node : _replacing_endpoints) {
-        auto existing_node = node.first;
-        auto replacing_node = node.second;
-        auto address_ranges = strategy.get_ranges(existing_node, unpimplified_this).get0();
-        for (const dht::token_range& x : address_ranges) {
-            seastar::thread::maybe_yield();
-            tlogger.debug("Node {} replaces {} for range {}", replacing_node, existing_node, x);
-            new_pending_ranges.emplace(x, replacing_node);
-        }
-    }
-}
-
-// Called from a seastar thread
-void token_metadata_impl::calculate_pending_ranges_for_bootstrap(
-        const abstract_replication_strategy& strategy,
-        std::unordered_multimap<range<token>, inet_address>& new_pending_ranges,
-        mutable_token_metadata_ptr all_left_metadata, dc_rack_fn& get_dc_rack) const {
-    // For each of the bootstrapping nodes, simply add and remove them one by one to
-    // allLeftMetadata and check in between what their ranges would be.
-    std::unordered_multimap<inet_address, token> bootstrap_addresses;
-    for (auto& x : _bootstrap_tokens) {
-        bootstrap_addresses.emplace(x.second, x.first);
-    }
-
-    // TODO: share code with unordered_multimap_to_unordered_map
-    std::unordered_map<inet_address, std::unordered_set<token>> tmp;
-    for (auto& x : bootstrap_addresses) {
-        auto& addr = x.first;
-        auto& t = x.second;
-        tmp[addr].insert(t);
-    }
-    for (auto& x : tmp) {
-        auto& endpoint = x.first;
-        auto& tokens = x.second;
-        all_left_metadata->update_topology(endpoint, get_dc_rack(endpoint), node::state::joining);
-        all_left_metadata->update_normal_tokens(tokens, endpoint).get();
-        auto address_ranges = strategy.get_ranges(endpoint, *all_left_metadata).get0();
-        for (const dht::token_range& x : address_ranges) {
-            new_pending_ranges.emplace(x, endpoint);
-        }
-        all_left_metadata->_impl->remove_endpoint(endpoint);
-    }
-    all_left_metadata->_impl->sort_tokens();
-}
-
 future<> token_metadata_impl::update_pending_ranges(
         const token_metadata& unpimplified_this,
         const abstract_replication_strategy& strategy, const sstring& keyspace_name, dc_rack_fn& get_dc_rack) {
@@ -870,25 +717,127 @@ future<> token_metadata_impl::update_pending_ranges(
         keyspace_name, _bootstrap_tokens, _leaving_endpoints, _replacing_endpoints);
     if (_bootstrap_tokens.empty() && _leaving_endpoints.empty() && _replacing_endpoints.empty()) {
         tlogger.debug("No bootstrapping, leaving nodes, replacing nodes -> empty pending ranges for {}", keyspace_name);
-        set_pending_ranges(keyspace_name, std::unordered_multimap<range<token>, inet_address>(), can_yield::no);
+        _pending_ranges_interval_map.erase(keyspace_name);
         return make_ready_future<>();
     }
 
     return async([this, &unpimplified_this, &strategy, keyspace_name, &get_dc_rack] () mutable {
-        std::unordered_multimap<range<token>, inet_address> new_pending_ranges;
-        calculate_pending_ranges_for_replacing(unpimplified_this, strategy, new_pending_ranges);
-        // Copy of metadata reflecting the situation after all leave operations are finished.
-        auto all_left_metadata = make_token_metadata_ptr(clone_after_all_left().get0());
-        calculate_pending_ranges_for_leaving(unpimplified_this, strategy, new_pending_ranges, all_left_metadata);
-        // At this stage newPendingRanges has been updated according to leave operations. We can
-        // now continue the calculation by checking bootstrapping nodes.
-        calculate_pending_ranges_for_bootstrap(strategy, new_pending_ranges, all_left_metadata, get_dc_rack);
-        all_left_metadata->clear_gently().get();
+        // true if there is a node replaced with the same IP
+        bool replace_with_same_endpoint = false;
+        // new_token_metadata incorporates all the changes from leaving, bootstrapping and replacing
+        const auto new_token_metadata = token_metadata(std::invoke([&]() -> std::unique_ptr<token_metadata_impl> {
+            auto result = clone_only_token_map(false).get0();
 
-        // At this stage newPendingRanges has been updated according to leaving and bootstrapping nodes.
-        set_pending_ranges(keyspace_name, std::move(new_pending_ranges), can_yield::yes);
+            // construct new_normal_tokens based on _bootstrap_tokens and _replacing_endpoints
+            std::unordered_map<inet_address, std::unordered_set<token>> new_normal_tokens;
+            if (!_replacing_endpoints.empty()) {
+                for (const auto& [token, inet_address]: _token_to_endpoint_map) {
+                    const auto it = _replacing_endpoints.find(inet_address);
+                    if (it == _replacing_endpoints.end()) {
+                        continue;
+                    }
+                    new_normal_tokens[it->second].insert(token);
+                }
+                for (const auto& [replace_from, replace_to]: _replacing_endpoints) {
+                    if (replace_from == replace_to) {
+                        replace_with_same_endpoint = true;
+                    } else {
+                        result->remove_endpoint(replace_from);
+                    }
+                }
+            }
+            for (const auto& [token, inet_address]: _bootstrap_tokens) {
+                new_normal_tokens[inet_address].insert(token);
+            }
+            // apply new_normal_tokens
+            for (auto& [endpoint, tokens]: new_normal_tokens) {
+                result->update_topology(endpoint, get_dc_rack(endpoint), node::state::normal);
+                result->update_normal_tokens(std::move(tokens), endpoint).get();
+            }
+            // apply leaving endpoints
+            for (const auto& endpoint: _leaving_endpoints) {
+                result->remove_endpoint(endpoint);
+            }
+            result->sort_tokens();
+            return result;
+        }));
+
+        // We require a distinct token_metadata instance when replace_from equals replace_to,
+        // as it ensures the node is included in pending_ranges.
+        // Otherwise, the node would be excluded from both pending_ranges and
+        // get_natural_endpoints_without_node_being_replaced,
+        // causing the coordinator to overlook it entirely.
+        const token_metadata* base_token_metadata;
+        std::optional<token_metadata> self_copy;
+        if (replace_with_same_endpoint) {
+            self_copy = token_metadata(std::invoke([&]() -> std::unique_ptr<token_metadata_impl> {
+                auto result = clone_only_token_map(false).get0();
+                for (const auto& [replace_from, replace_to]: _replacing_endpoints) {
+                    if (replace_from == replace_to) {
+                        result->remove_endpoint(replace_from);
+                    }
+                }
+                result->sort_tokens();
+                return result;
+            }));
+            base_token_metadata = &*self_copy;
+        } else {
+            base_token_metadata = &unpimplified_this;
+        }
+
+        // merge tokens from token_to_endpoint and bootstrap_tokens,
+        // preserving tokens of leaving endpoints
+        const auto tokens = std::invoke([&]() -> std::vector<dht::token> {
+            auto tokens = std::vector<dht::token>();
+            tokens.reserve(sorted_tokens().size() + get_bootstrap_tokens().size());
+            tokens.resize(sorted_tokens().size());
+            std::copy(begin(sorted_tokens()), end(sorted_tokens()), begin(tokens));
+            for (const auto& p: get_bootstrap_tokens()) {
+                tokens.push_back(p.first);
+            }
+            std::sort(begin(tokens), end(tokens));
+            return tokens;
+        });
+
+        _pending_ranges_interval_map[keyspace_name] = std::invoke([&]() -> ring_mapping {
+            ring_mapping pending_ranges;
+            for (size_t i = 0, size = tokens.size(); i < size; ++i) {
+                seastar::thread::maybe_yield();
+
+                const auto token = tokens[i];
+
+                const auto old_endpoints = strategy.calculate_natural_endpoints(token, *base_token_metadata).get0();
+                const auto new_endpoints = strategy.calculate_natural_endpoints(token, new_token_metadata).get0();
+
+                auto add_mapping = [&](ring_mapping& target, std::unordered_set<inet_address>&& endpoints) {
+                    using interval = ring_mapping::interval_type;
+                    if (i == 0) {
+                        target += std::make_pair(
+                            interval::open(tokens.back(), dht::maximum_token()),
+                            endpoints);
+                        target += std::make_pair(
+                            interval::left_open(dht::minimum_token(), token),
+                            std::move(endpoints));
+                    } else {
+                        target += std::make_pair(
+                            interval::left_open(tokens[i - 1], token),
+                            std::move(endpoints));
+                    }
+                };
+
+                std::unordered_set<inet_address> pending_endpoints;
+                for (const auto& e: new_endpoints) {
+                    if (!old_endpoints.contains(e)) {
+                        pending_endpoints.insert(e);
+                    }
+                }
+                if (!pending_endpoints.empty()) {
+                    add_mapping(pending_ranges, std::move(pending_endpoints));
+                }
+            }
+            return pending_ranges;
+        });
     });
-
 }
 
 size_t token_metadata_impl::count_normal_token_owners() const {

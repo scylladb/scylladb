@@ -245,27 +245,14 @@ public:
 
     bool has_pending_ranges(sstring keyspace_name, inet_address endpoint) const;
      /**
-     * Calculate pending ranges according to bootsrapping and leaving nodes. Reasoning is:
+     * Calculate pending ranges according to bootstrapping, leaving and replacing nodes.
      *
-     * (1) When in doubt, it is better to write too much to a node than too little. That is, if
-     * there are multiple nodes moving, calculate the biggest ranges a node could have. Cleaning
-     * up unneeded data afterwards is better than missing writes during movement.
-     * (2) When a node leaves, ranges for other nodes can only grow (a node might get additional
-     * ranges, but it will not lose any of its current ranges as a result of a leave). Therefore
-     * we will first remove _all_ leaving tokens for the sake of calculation and then check what
-     * ranges would go where if all nodes are to leave. This way we get the biggest possible
-     * ranges with regard current leave operations, covering all subsets of possible final range
-     * values.
-     * (3) When a node bootstraps, ranges of other nodes can only get smaller. Without doing
-     * complex calculations to see if multiple bootstraps overlap, we simply base calculations
-     * on the same token ring used before (reflecting situation after all leave operations have
-     * completed). Bootstrapping nodes will be added and removed one by one to that metadata and
-     * checked what their ranges would be. This will give us the biggest possible ranges the
-     * node could have. It might be that other bootstraps make our actual final ranges smaller,
-     * but it does not matter as we can clean up the data afterwards.
-     *
-     * NOTE: This is heavy and ineffective operation. This will be done only once when a node
-     * changes state in the cluster, so it should be manageable.
+     * We construct an updated version of the token_metadata by incorporating
+     * all proposed modifications (join, bootstrap, and replace operations).
+     * Subsequently, for each token range, we compare the outcomes of the calculate_natural_endpoints
+     * function applied to both the previous and the new token_metadata.
+     * Endpoints present in the updated version but absent in the original one
+     * ought to be appended to the pending_ranges.
      */
     future<> update_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name, dc_rack_fn& get_dc_rack);
 
