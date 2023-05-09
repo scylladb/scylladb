@@ -25,6 +25,11 @@ class user_type_impl;
 using user_type = seastar::shared_ptr<const user_type_impl>;
 class schema;
 using schema_ptr = seastar::lw_shared_ptr<const schema>;
+class abstract_type;
+using data_type = seastar::shared_ptr<const abstract_type>;
+namespace db::functions {
+class function_name;
+}
 
 #include "timestamp.hh"
 
@@ -130,6 +135,8 @@ public:
     future<> drop_column_family(const schema_ptr& cfm);
     future<> drop_user_type(const user_type& type);
     future<> drop_view(const view_ptr& view);
+    future<> drop_function(const db::functions::function_name& fun_name, const std::vector<data_type>& arg_types);
+    future<> drop_aggregate(const db::functions::function_name& fun_name, const std::vector<data_type>& arg_types);
 
     void before_create_column_family(const schema&, std::vector<mutation>&, api::timestamp_type);
     void before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>&, api::timestamp_type);

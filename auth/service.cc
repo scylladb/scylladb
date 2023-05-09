@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include "auth/resource.hh"
 #include "auth/service.hh"
 
 #include <algorithm>
@@ -20,6 +21,7 @@
 #include "auth/allow_all_authorizer.hh"
 #include "auth/common.hh"
 #include "auth/role_or_anonymous.hh"
+#include "cql3/functions/function_name.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
@@ -76,6 +78,12 @@ private:
         }).handle_exception([] (std::exception_ptr e) {
             log.error("Unexpected exception while revoking all permissions on dropped keyspace: {}", e);
         });
+        (void)_authorizer.revoke_all(
+            auth::make_functions_resource(ks_name)).handle_exception_type([](const unsupported_authorization_operation&) {
+            // Nothing.
+        }).handle_exception([] (std::exception_ptr e) {
+            log.error("Unexpected exception while revoking all permissions on functions in dropped keyspace: {}", e);
+        });
     }
 
     void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {
@@ -90,8 +98,22 @@ private:
     }
 
     void on_drop_user_type(const sstring& ks_name, const sstring& type_name) override {}
-    void on_drop_function(const sstring& ks_name, const sstring& function_name) override {}
-    void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
+    void on_drop_function(const sstring& ks_name, const sstring& function_name) override {
+        (void)_authorizer.revoke_all(
+            auth::make_functions_resource(ks_name, function_name)).handle_exception_type([](const unsupported_authorization_operation&) {
+            // Nothing.
+        }).handle_exception([] (std::exception_ptr e) {
+            log.error("Unexpected exception while revoking all permissions on dropped function: {}", e);
+        });
+    }
+    void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {
+        (void)_authorizer.revoke_all(
+            auth::make_functions_resource(ks_name, aggregate_name)).handle_exception_type([](const unsupported_authorization_operation&) {
+            // Nothing.
+        }).handle_exception([] (std::exception_ptr e) {
+            log.error("Unexpected exception while revoking all permissions on dropped aggregate: {}", e);
+        });
+    }
     void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
 };
 

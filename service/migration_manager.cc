@@ -12,6 +12,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include "auth/resource.hh"
 #include "schema/schema_registry.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
@@ -31,6 +32,7 @@
 #include "db/system_keyspace.hh"
 #include "cql3/functions/user_aggregate.hh"
 #include "cql3/functions/user_function.hh"
+#include "cql3/functions/function_name.hh"
 
 namespace service {
 
@@ -573,6 +575,34 @@ future<> migration_notifier::drop_view(const view_ptr& view) {
                 listener->on_drop_view(ks_name, view_name);
             } catch (...) {
                 mlogger.warn("Drop view notification failed {}.{}: {}", ks_name, view_name, std::current_exception());
+            }
+        });
+    });
+}
+
+future<> migration_notifier::drop_function(const db::functions::function_name& fun_name, const std::vector<data_type>& arg_types) {
+    return seastar::async([this, &fun_name, &arg_types] {
+        auto&& ks_name = fun_name.keyspace;
+        auto&& sig = auth::encode_signature(fun_name.name, arg_types);
+        _listeners.thread_for_each([&ks_name, &sig] (migration_listener* listener) {
+            try {
+                listener->on_drop_function(ks_name, sig);
+            } catch (...) {
+                mlogger.warn("Drop function notification failed {}.{}: {}", ks_name, sig, std::current_exception());
+            }
+        });
+    });
+}
+
+future<> migration_notifier::drop_aggregate(const db::functions::function_name& fun_name, const std::vector<data_type>& arg_types) {
+    return seastar::async([this, &fun_name, &arg_types] {
+        auto&& ks_name = fun_name.keyspace;
+        auto&& sig = auth::encode_signature(fun_name.name, arg_types);
+        _listeners.thread_for_each([&ks_name, &sig] (migration_listener* listener) {
+            try {
+                listener->on_drop_aggregate(ks_name, sig);
+            } catch (...) {
+                mlogger.warn("Drop aggregate notification failed {}.{}: {}", ks_name, sig, std::current_exception());
             }
         });
     });
