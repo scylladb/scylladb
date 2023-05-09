@@ -17,13 +17,13 @@ namespace data_dictionary {
 
 struct storage_options {
     struct local {
-        friend auto operator<=>(const local&, const local&) = default;
+        bool operator==(const local&) const = default;
     };
     struct s3 {
         sstring bucket;
         sstring endpoint;
 
-        friend auto operator<=>(const s3&, const s3&) = default;
+        bool operator==(const s3&) const = default;
     };
     using value_type = std::variant<local, s3>;
     value_type value = local{};
