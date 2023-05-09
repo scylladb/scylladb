@@ -127,8 +127,7 @@ def test_grant_revoke_data_permissions(cql, test_keyspace):
 # Test that permissions for user-defined functions are serialized in a Cassandra-compatible way
 def test_udf_permissions_serialization(cql):
     schema = "a int primary key"
-    user = "cassandra"
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace, new_user(cql) as user:
         with new_test_table(cql, keyspace, schema) as table:
             # Creating a bilingual function makes this test case work for both Scylla and Cassandra
             div_body_lua = "(b bigint, i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return b//i'"
@@ -150,7 +149,7 @@ def test_udf_permissions_serialization(cql):
                     for permission in permissions:
                         cql.execute(f"GRANT {permission} ON {resource} TO {user}")
 
-                permissions = {row.resource: row.permissions for row in cql.execute(f"SELECT * FROM system_auth.role_permissions")}
+                permissions = {row.resource: row.permissions for row in cql.execute(f"SELECT * FROM system_auth.role_permissions WHERE role = '{user}'")}
                 assert permissions['functions'] == set(['ALTER', 'AUTHORIZE', 'CREATE', 'DROP', 'EXECUTE'])
                 assert permissions[f'functions/{keyspace}'] == set(['ALTER', 'AUTHORIZE', 'CREATE', 'DROP', 'EXECUTE'])
                 assert permissions[f'functions/{keyspace}/{div_fun}[org.apache.cassandra.db.marshal.LongType^org.apache.cassandra.db.marshal.Int32Type]'] == set(['ALTER', 'AUTHORIZE', 'DROP', 'EXECUTE'])
@@ -227,7 +226,6 @@ def test_drop_udf_with_same_name(cql):
                 eventually_authorized(lambda: user_session.execute(f"DROP FUNCTION {keyspace}.{fun}"))
 
 # Test that permissions set for user-defined functions are enforced
-# Tests for ALTER are separate, because they are qualified as cassandra_bug
 def test_grant_revoke_udf_permissions(cql):
     schema = "a int primary key, b list<int>"
     user = "cassandra"
@@ -271,40 +269,19 @@ def test_grant_revoke_udf_permissions(cql):
                     for resource in [f'function {keyspace}.{fun}(int, list<int>)', f'all functions in keyspace {keyspace}', 'all functions']:
                         check_enforced(cql, username, permission='AUTHORIZE', resource=resource, function=grant_idempotent)
 
-# This test case is artificially extracted from the one above,
-# because it's qualified as cassandra_bug - the documentation quotes that ALTER is needed on
-# functions if the definition is replaced (CREATE OR REPLACE FUNCTION (...)),
-# and yet it's not enforced
-def test_grant_revoke_alter_udf_permissions(cassandra_bug, cql):
-    schema = "a int primary key"
-    user = "cassandra"
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
-        with new_test_table(cql, keyspace, schema) as table:
-            fun_body_lua = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
-            fun_body_java = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
-            fun_body = fun_body_lua
-            try:
-                with new_function(cql, keyspace, fun_body) as fun:
-                    pass
-            except:
-                fun_body = fun_body_java
-            with new_user(cql) as username:
-                with new_session(cql, username) as user_session:
-                    fun = "fun42"
-
                     grant(cql, 'ALTER', 'ALL FUNCTIONS', username)
                     check_enforced(cql, username, permission='CREATE', resource=f'all functions in keyspace {keyspace}',
-                            function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
+                            function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{unique_name()} {fun_body}"))
                     check_enforced(cql, username, permission='CREATE', resource='all functions',
-                            function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
+                            function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{unique_name()} {fun_body}"))
                     revoke(cql, 'ALTER', 'ALL FUNCTIONS', username)
 
-                    grant(cql, 'CREATE', 'ALL FUNCTIONS', username)
+                    cql.execute(f"CREATE FUNCTION IF NOT EXISTS {keyspace}.{fun} {fun_body}")
                     check_enforced(cql, username, permission='ALTER', resource=f'all functions in keyspace {keyspace}',
                             function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
                     check_enforced(cql, username, permission='ALTER', resource='all functions',
                             function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}")) 
-                    check_enforced(cql, username, permission='ALTER', resource=f'FUNCTION {keyspace}.{fun}(int)',
+                    check_enforced(cql, username, permission='ALTER', resource=f'FUNCTION {keyspace}.{fun}(int, list<int>)',
                             function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
 
 # Test that granting permissions on non-existent UDFs fails
@@ -370,7 +347,6 @@ def test_grant_revoke_uda_permissions(cql):
                         check_enforced(cql, username, permission='CREATE', resource='all functions',
                                 function=create_aggr_idempotent)
 
-                        grant(cql, 'CREATE', 'ALL FUNCTIONS', username)
                         cql.execute(f"CREATE AGGREGATE IF NOT EXISTS {keyspace}.{custom_avg} {custom_avg_body}")
                         check_enforced(cql, username, permission='ALTER', resource=f'all functions in keyspace {keyspace}',
                                 function=lambda: user_session.execute(f"CREATE OR REPLACE AGGREGATE {keyspace}.{custom_avg} {custom_avg_body}"))
