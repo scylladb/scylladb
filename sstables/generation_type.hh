@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <charconv>
 #include <chrono>
 #include <fmt/core.h>
 #include <cstdint>
@@ -16,26 +17,48 @@
 #include <iostream>
 #include <type_traits>
 #include <boost/range/adaptors.hpp>
+#include <seastar/core/on_internal_error.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/core/sstring.hh>
 #include "types/types.hh"
 #include "utils/UUID_gen.hh"
+#include "log.hh"
 
 namespace sstables {
+
+extern logging::logger sstlog;
 
 class generation_type {
 public:
     using int_t = int64_t;
 
 private:
-    int_t _value;
+    utils::UUID _value;
+
+    explicit constexpr generation_type(utils::UUID value) noexcept
+        : _value(value) {}
 
 public:
     generation_type() = delete;
 
-    explicit constexpr generation_type(int_t value) noexcept: _value(value) {}
+    // use zero as the timestamp to differentiate from the regular timeuuid,
+    // and use the least_sig_bits to encode the value of generation identifier.
+    explicit constexpr generation_type(int_t value) noexcept
+        : _value(utils::UUID_gen::create_time(std::chrono::milliseconds::zero()), value) {}
     constexpr int_t as_int() const noexcept {
-	return _value;
+        if (_value.timestamp() != 0) {
+            on_internal_error(sstlog, "UUID generation used as an int");
+        }
+        return _value.get_least_significant_bits();
+    }
+    static generation_type from_string(const std::string& s) {
+        int64_t int_value;
+        if (auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), int_value);
+            ec == std::errc() && ptr == s.data() + s.size()) {
+            return generation_type(int_value);
+        } else {
+            throw std::invalid_argument(fmt::format("invalid UUID: {}", s));
+        }
     }
     // convert to data_value
     //
@@ -50,23 +73,16 @@ public:
     // timeuuid from a timeuuid converted from a bigint -- we just use zero
     // for its timestamp of the latter.
     explicit operator data_value() const noexcept {
-        // use zero as the timestamp to differentiate from the regular timeuuid,
-        // and use the least_sig_bits to encode the value of generation identifier.
-        return data_value(
-            utils::UUID(
-                utils::UUID_gen::create_time(std::chrono::milliseconds::zero()),
-                _value));
+        return _value;
     }
     static generation_type from_uuid(utils::UUID value) {
-        // if the value of generation_type should be an int64_t, its timestamp
-        // must be zero, and the least significant bits is used to encode the
-        // value of the int64_t.
+        // if the encoded value is an int64_t, the UUID's timestamp must be
+        // zero, and the least significant bits is used to encode the value
+        // of the int64_t.
         assert(value.timestamp() == 0);
-        return generation_type(value.get_least_significant_bits());
+        return generation_type(value);
     }
-
-    constexpr bool operator==(const generation_type& other) const noexcept { return _value == other._value; }
-    constexpr std::strong_ordering operator<=>(const generation_type& other) const noexcept { return _value <=> other._value; }
+    std::strong_ordering operator<=>(const generation_type& other) const noexcept = default;
 };
 
 constexpr generation_type generation_from_value(generation_type::int_t value) {
@@ -112,7 +128,7 @@ public:
         // each shard has its own "namespace" so we increment the generation id
         // by smp::count to avoid name confliction of sstables
         _last_generation += seastar::smp::count;
-        return sstables::generation_from_value(_last_generation);
+        return generation_type(_last_generation);
     }
 };
 
