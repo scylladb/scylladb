@@ -77,7 +77,7 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
     }
     case tombstone_gc_mode::immediate: {
         dblog.trace("Get gc_before for ks={}, table={}, range={}, mode=immediate", s->ks_name(), s->cf_name(), range);
-        return {gc_clock::time_point::max(), gc_clock::time_point::max(), knows_entire_range};
+        return {query_time, query_time, knows_entire_range};
     }
     case tombstone_gc_mode::repair: {
         const std::chrono::seconds& propagation_delay = options.propagation_delay_in_seconds();
@@ -135,7 +135,7 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, con
         return gc_clock::time_point::min();
     case tombstone_gc_mode::immediate:
         dblog.trace("Get gc_before for ks={}, table={}, dk={}, mode=immediate", s->ks_name(), s->cf_name(), dk);
-        return gc_clock::time_point::max();
+        return query_time;
     case tombstone_gc_mode::repair:
         const std::chrono::seconds& propagation_delay = options.propagation_delay_in_seconds();
         auto gc_before = gc_clock::time_point::min();
