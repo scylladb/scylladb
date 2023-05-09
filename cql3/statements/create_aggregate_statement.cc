@@ -90,6 +90,22 @@ create_aggregate_statement::prepare_schema_mutations(query_processor& qp, api::t
     co_return std::make_pair(std::move(ret), std::move(m));
 }
 
+seastar::future<> create_aggregate_statement::check_access(query_processor &qp, const service::client_state &state) const {
+    co_await create_function_statement_base::check_access(qp, state);
+    auto&& ks = _name.has_keyspace() ? _name.keyspace : state.get_keyspace();
+    create_arg_types(qp);
+    std::vector<data_type> sfunc_args = _arg_types;
+    data_type stype = prepare_type(qp, *_stype);
+    sfunc_args.insert(sfunc_args.begin(), stype);
+    co_await state.has_function_access(qp.db(), ks, auth::encode_signature(_sfunc,sfunc_args), auth::permission::EXECUTE);
+    if (_rfunc) {
+        co_await state.has_function_access(qp.db(), ks, auth::encode_signature(*_rfunc,{stype, stype}), auth::permission::EXECUTE);
+    }
+    if (_ffunc) {
+        co_await state.has_function_access(qp.db(), ks, auth::encode_signature(*_ffunc,{stype}), auth::permission::EXECUTE);
+    }
+}
+
 create_aggregate_statement::create_aggregate_statement(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> arg_types,
             sstring sfunc, shared_ptr<cql3_type::raw> stype, std::optional<sstring> rfunc, std::optional<sstring> ffunc, std::optional<expr::expression> ival, bool or_replace, bool if_not_exists)
         : create_function_statement_base(std::move(name), std::move(arg_types), or_replace, if_not_exists)

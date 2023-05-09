@@ -348,6 +348,8 @@ def test_grant_revoke_uda_permissions(scylla_only, cql):
                         def create_aggr_idempotent():
                             user_session.execute(f"CREATE AGGREGATE IF NOT EXISTS {keyspace}.{custom_avg} {custom_avg_body}")
                             cql.execute(f"DROP AGGREGATE IF EXISTS {keyspace}.{custom_avg}(bigint)")
+                        grant(cql, 'EXECUTE', f'function {keyspace}.{avg_partial}(tuple<bigint, bigint>, bigint)', username)
+                        grant(cql, 'EXECUTE', f'function {keyspace}.{div_fun}(tuple<bigint, bigint>)', username)
                         check_enforced(cql, username, permission='CREATE', resource=f'all functions in keyspace {keyspace}',
                                 function=create_aggr_idempotent)
                         check_enforced(cql, username, permission='CREATE', resource='all functions',
