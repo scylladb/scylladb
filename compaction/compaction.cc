@@ -1673,7 +1673,7 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
     auto schema = table_s.schema();
     auto permit = table_s.make_compaction_reader_permit();
 
-    uint64_t validation_errors;
+    uint64_t validation_errors = 0;
 
     for (const auto& sst : descriptor.sstables) {
         clogger.info("Scrubbing in validate mode {}", sst->get_filename());
