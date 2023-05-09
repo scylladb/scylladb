@@ -196,26 +196,23 @@ static future<bool> same_file(sstring path1, sstring path2) noexcept {
 
 // support replay of link by considering link_file EEXIST error as successful when the newpath is hard linked to oldpath.
 future<> idempotent_link_file(sstring oldpath, sstring newpath) noexcept {
-    return do_with(std::move(oldpath), std::move(newpath), [] (const sstring& oldpath, const sstring& newpath) {
-        return link_file(oldpath, newpath).handle_exception([&] (std::exception_ptr eptr) mutable {
-            try {
-                std::rethrow_exception(eptr);
-            } catch (const std::system_error& ex) {
-                if (ex.code().value() != EEXIST) {
-                    throw;
-                }
-            }
-            return same_file(oldpath, newpath).then_wrapped([eptr = std::move(eptr)] (future<bool> fut) mutable {
-                if (!fut.failed()) {
-                    auto same = fut.get0();
-                    if (same) {
-                        return make_ready_future<>();
-                    }
-                }
-                return make_exception_future<>(eptr);
-            });
-        });
-    });
+    bool exists = false;
+    std::exception_ptr ex;
+    try {
+        co_await link_file(oldpath, newpath);
+    } catch (const std::system_error& e) {
+        ex = std::current_exception();
+        exists = (e.code().value() == EEXIST);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    if (!ex) {
+        co_return;
+    }
+    if (exists && (co_await same_file(oldpath, newpath))) {
+        co_return;
+    }
+    co_await coroutine::return_exception_ptr(std::move(ex));
 }
 
 // Check is the operation is replayed, possibly when moving sstables
