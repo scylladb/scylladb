@@ -1244,6 +1244,16 @@ static lw_shared_ptr<column_specification> get_lhs_receiver(const expression& pr
             return make_lw_shared<column_specification>(schema.ks_name(), schema.cf_name(), std::move(identifier), std::move(tuple_type));
         },
         [&](const function_call& fun_call) -> lw_shared_ptr<column_specification> {
+            // In case of an expression like `token(p1, p2, p3) = ?` the receiver name should be "partition key token".
+            // This is required for compatibality with the java driver, it breaks with a receiver name like "token(p1, p2, p3)".
+            if (is_partition_token_for_schema(fun_call, schema)) {
+                return make_lw_shared<column_specification>(
+                    schema.ks_name(),
+                    schema.cf_name(),
+                    ::make_shared<column_identifier>("partition key token", true),
+                    long_type);
+            }
+
             data_type return_type = std::visit(
                     overloaded_functor{
                         [](const shared_ptr<db::functions::function>& fun) -> data_type { return fun->return_type(); },
