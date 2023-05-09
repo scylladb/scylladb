@@ -203,6 +203,8 @@ public:
 
     sstring full_name() const;
 
+    const mutation_fragment_stream_validator& validator() const { return  _validator; }
+
     bool operator()(const dht::decorated_key& dk);
     bool operator()(mutation_fragment_v2::kind kind, position_in_partition_view pos, std::optional<tombstone> new_current_tombstone);
     bool operator()(mutation_fragment::kind kind, position_in_partition_view pos);
