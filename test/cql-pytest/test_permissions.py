@@ -429,3 +429,24 @@ def test_udf_permissions_no_args(cql):
                     with pytest.raises(SyntaxException):
                         nonexistent_func = unique_name()
                         user_session.execute(f'GRANT SELECT ON FUNCTION {keyspace}.{nonexistent_func}() TO cassandra')
+
+# Test that the create permission can't be granted on a single function. Similarly to how we handle Roles and Tables,
+# we do not allow permissions on non-existent Functions, so the CREATE permission on a specific function is meaningless,
+# because granting it would only be allowed if the function was already created before.
+# Reproduces #13822
+def test_create_on_single_function(cql):
+    schema = "a int primary key"
+    user = "cassandra"
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+        with new_test_table(cql, keyspace, schema) as table:
+            fun_body_lua = f"(a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return a + b;'"
+            fun_body_java = f"(a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return a + b;'"
+            fun_body = fun_body_lua
+            try:
+                with new_function(cql, keyspace, fun_body):
+                    pass
+            except:
+                fun_body = fun_body_java
+            with new_function(cql, keyspace, fun_body) as fun:
+                with pytest.raises(SyntaxException):
+                    grant(cql, 'CREATE', f'FUNCTION {keyspace}.{fun}(int, int)', user)

@@ -79,6 +79,13 @@ static permission_set applicable_permissions(const service_level_resource_view &
 }
 
 static permission_set applicable_permissions(const functions_resource_view& fv) {
+    if (fv.function_name() || fv.function_signature()) {
+        return permission_set::of<
+                permission::ALTER,
+                permission::DROP,
+                permission::AUTHORIZE,
+                permission::EXECUTE>();
+    }
     return permission_set::of<
             permission::CREATE,
             permission::ALTER,
