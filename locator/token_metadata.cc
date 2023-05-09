@@ -61,14 +61,16 @@ private:
 
     using ring_mapping = boost::icl::interval_map<token, std::unordered_set<inet_address>>;
     // For each keyspace, migration_info contains ranges of tokens and
-    // corresponding replicas to which writes will be directed:
+    // corresponding replicas to which writes or reads will be directed:
     //   - pending_endpoints - will be appended to normal endpoints for writes;
+    //   - read_endpoints - will completely replace normal endpoints for reads.
     // This data structure is filled only during data migration between nodes
     // when they are added or removed from the cluster.
     // During normal operation, token mapping to nodes is
     // implemented in the effective_replication_map.
     struct migration_info {
         ring_mapping pending_endpoints;
+        ring_mapping read_endpoints;
     };
     std::unordered_map<sstring, migration_info> _keyspace_to_migration_info;
 
@@ -77,6 +79,8 @@ private:
     tablet_metadata _tablets;
 
     topology _topology;
+
+    std::optional<service::topology::transition_state> _topology_transition_state;
 
     long _ring_version = 0;
     static thread_local long _static_ring_version;
@@ -282,6 +286,12 @@ public:
     // returns empty vector if keyspace_name not found.
     inet_address_vector_topology_change pending_endpoints_for(const token& token, const sstring& keyspace_name) const;
 
+    std::optional<inet_address_vector_replica_set> endpoints_for_reading(const token& token, const sstring& keyspace_name) const;
+
+    void set_topology_transition_state(std::optional<service::topology::transition_state> state) {
+        _topology_transition_state = state;
+    }
+
 public:
     /** @return an endpoint to token multimap representation of tokenToEndpointMap (a copy) */
     std::multimap<inet_address, token> get_endpoint_to_token_map_for_reading() const;
@@ -371,6 +381,7 @@ future<std::unique_ptr<token_metadata_impl>> token_metadata_impl::clone_only_tok
         co_await coroutine::maybe_yield();
     }
     ret->_tablets = _tablets;
+    ret->_topology_transition_state =_topology_transition_state;
     co_return ret;
 }
 
@@ -824,7 +835,7 @@ future<> token_metadata_impl::update_pending_ranges(
                 const auto token = tokens[i];
 
                 const auto old_endpoints = strategy.calculate_natural_endpoints(token, *base_token_metadata).get0();
-                const auto new_endpoints = strategy.calculate_natural_endpoints(token, new_token_metadata).get0();
+                auto new_endpoints = strategy.calculate_natural_endpoints(token, new_token_metadata).get0();
 
                 auto add_mapping = [&](ring_mapping& target, std::unordered_set<inet_address>&& endpoints) {
                     using interval = ring_mapping::interval_type;
@@ -850,6 +861,14 @@ future<> token_metadata_impl::update_pending_ranges(
                 }
                 if (!pending_endpoints.empty()) {
                     add_mapping(migration_info.pending_endpoints, std::move(pending_endpoints));
+                }
+
+                // in order not to waste memory, we update read_endpoints only if the
+                // new endpoints differs from the old one
+                if (_topology_transition_state == service::topology::transition_state::write_both_read_new &&
+                    new_endpoints.get_vector() != old_endpoints.get_vector())
+                {
+                    add_mapping(migration_info.read_endpoints, std::move(new_endpoints).extract_set());
                 }
             }
             return migration_info;
@@ -926,6 +945,14 @@ inet_address_vector_topology_change token_metadata_impl::pending_endpoints_for(c
         endpoints = inet_address_vector_topology_change(pending_endpoints->begin(), pending_endpoints->end());
     }
     return endpoints;
+}
+
+std::optional<inet_address_vector_replica_set> token_metadata_impl::endpoints_for_reading(const token& token, const sstring& keyspace_name) const {
+    const auto* endpoints = maybe_migration_endpoints(endpoints_field::read_endpoints, token, keyspace_name);
+    if (endpoints == nullptr) {
+        return std::nullopt;
+    }
+    return inet_address_vector_replica_set(endpoints->begin(), endpoints->end());
 }
 
 std::map<token, inet_address> token_metadata_impl::get_normal_and_bootstrapping_token_to_endpoint_map() const {
@@ -1223,6 +1250,16 @@ token_metadata::count_normal_token_owners() const {
 inet_address_vector_topology_change
 token_metadata::pending_endpoints_for(const token& token, const sstring& keyspace_name) const {
     return _impl->pending_endpoints_for(token, keyspace_name);
+}
+
+std::optional<inet_address_vector_replica_set>
+token_metadata::endpoints_for_reading(const token& token, const sstring& keyspace_name) const {
+    return _impl->endpoints_for_reading(token, keyspace_name);
+}
+
+void
+token_metadata::set_topology_transition_state(std::optional<service::topology::transition_state> state) {
+    _impl->set_topology_transition_state(state);
 }
 
 std::multimap<inet_address, token>

@@ -28,6 +28,7 @@
 
 #include "locator/types.hh"
 #include "locator/topology.hh"
+#include "service/topology_state_machine.hh"
 
 // forward declaration since replica/database.hh includes this file
 namespace replica {
@@ -266,6 +267,16 @@ public:
 
     // returns empty vector if keyspace_name not found.
     inet_address_vector_topology_change pending_endpoints_for(const token& token, const sstring& keyspace_name) const;
+
+    // This function returns a list of nodes to which a read request should be directed.
+    // Returns not null only during topology changes, if _topology_change_stage == read_new and
+    // new set of replicas differs from the old one.
+    std::optional<inet_address_vector_replica_set> endpoints_for_reading(const token& token, const sstring& keyspace_name) const;
+
+    // updates the current topology_transition_state of this instance,
+    // this value is preserved in all clone functions,
+    // by default it's not set
+    void set_topology_transition_state(std::optional<service::topology::transition_state> state);
 
     /** @return an endpoint to token multimap representation of tokenToEndpointMap (a copy) */
     std::multimap<inet_address, token> get_endpoint_to_token_map_for_reading() const;
