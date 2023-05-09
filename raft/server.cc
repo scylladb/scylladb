@@ -39,12 +39,12 @@ struct active_read {
 };
 
 struct awaited_index {
-    promise<> promise;
+    seastar::promise<> promise;
     optimized_optional<abort_source::subscription> abort;
 };
 
 struct awaited_conf_change {
-    promise<> promise;
+    seastar::promise<> promise;
     optimized_optional<abort_source::subscription> abort;
 };
 

@@ -226,7 +226,7 @@ minio_download_jobs() {
     cfile=$(mktemp)
     echo $(curl -s "$(minio_server_url).sha256sum" | cut -f1 -d' ') "${MINIO_BINARIES_DIR}/minio" > $cfile
     echo $(curl -s "$(minio_client_url).sha256sum" | cut -f1 -d' ') "${MINIO_BINARIES_DIR}/mc" >> $cfile
-    sha256sum -c $cfile | fgrep FAILED | sed \
+    sha256sum -c $cfile | grep -F FAILED | sed \
         -e 's/:.*$//g' \
         -e "s#${MINIO_BINARIES_DIR}/minio#$(minio_server_url) -o ${MINIO_BINARIES_DIR}/minio#" \
         -e "s#${MINIO_BINARIES_DIR}/mc#$(minio_client_url) -o ${MINIO_BINARIES_DIR}/mc#"

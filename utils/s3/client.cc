@@ -6,14 +6,25 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <memory>
 #include <rapidxml.h>
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/classification.hpp>
+#include <boost/range/adaptor/map.hpp>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/seastar.hh>
+#include <seastar/core/shared_future.hh>
+#include <seastar/coroutine/all.hh>
+#include <seastar/net/dns.hh>
+#include <seastar/net/tls.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/http/request.hh>
 #include "utils/s3/client.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/chunked_vector.hh"
+#include "utils/aws_sigv4.hh"
+#include "db_clock.hh"
 #include "log.hh"
 
 namespace utils {
@@ -38,26 +49,153 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-client::client(socket_address addr, private_tag)
-        : _addr(std::move(addr))
-        , _host(to_sstring(_addr))
-        , _http(_addr)
+class dns_connection_factory : public http::experimental::connection_factory {
+protected:
+    std::string _host;
+    int _port;
+    struct state {
+        bool initialized = false;
+        socket_address addr;
+        ::shared_ptr<tls::certificate_credentials> creds;
+    };
+    lw_shared_ptr<state> _state;
+    shared_future<> _done;
+
+    future<> initialize(bool use_https) {
+        auto state = _state;
+
+        co_await coroutine::all(
+            [state, host = _host, port = _port] () -> future<> {
+                auto hent = co_await net::dns::get_host_by_name(host, net::inet_address::family::INET);
+                state->addr = socket_address(hent.addr_list.front(), port);
+            },
+            [state, use_https] () -> future<> {
+                if (use_https) {
+                    tls::credentials_builder cbuild;
+                    co_await cbuild.set_system_trust();
+                    state->creds = cbuild.build_certificate_credentials();
+                }
+            }
+        );
+
+        state->initialized = true;
+        s3l.debug("Initialized factory, address={} tls={}", state->addr, state->creds == nullptr ? "no" : "yes");
+    }
+
+public:
+    dns_connection_factory(std::string host, int port, bool use_https)
+        : _host(std::move(host))
+        , _port(port)
+        , _state(make_lw_shared<state>())
+        , _done(initialize(use_https))
+    {
+    }
+
+    virtual future<connected_socket> make() override {
+        if (!_state->initialized) {
+            s3l.debug("Waiting for factory to initialize");
+            co_await _done.get_future();
+        }
+
+        if (_state->creds) {
+            s3l.debug("Making new HTTPS connection addr={} host={}", _state->addr, _host);
+            co_return co_await tls::connect(_state->creds, _state->addr, _host);
+        } else {
+            s3l.debug("Making new HTTP connection");
+            co_return co_await seastar::connect(_state->addr, {}, transport::TCP);
+        }
+    }
+};
+
+client::client(std::string host, endpoint_config_ptr cfg, private_tag)
+        : _host(std::move(host))
+        , _cfg(std::move(cfg))
+        , _http(std::make_unique<dns_connection_factory>(_host, _cfg->port, _cfg->use_https))
 {
 }
 
-shared_ptr<client> client::make(socket_address addr) {
-    return seastar::make_shared<client>(std::move(addr), private_tag{});
+shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg) {
+    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), private_tag{});
+}
+
+void client::authorize(http::request& req) {
+    if (!_cfg->aws) {
+        return;
+    }
+
+    auto time_point_str = utils::aws::format_time_point(db_clock::now());
+    auto time_point_st = time_point_str.substr(0, 8);
+    req._headers["x-amz-date"] = time_point_str;
+    req._headers["x-amz-content-sha256"] = "UNSIGNED-PAYLOAD";
+    std::map<std::string_view, std::string_view> signed_headers;
+    sstring signed_headers_list = "";
+    // AWS requires all x-... and Host: headers to be signed
+    signed_headers["host"] = req._headers["Host"];
+    for (const auto& h : req._headers) {
+        if (h.first[0] == 'x' && h.first[1] == '-') {
+            signed_headers[h.first] = h.second;
+        }
+    }
+    unsigned header_nr = signed_headers.size();
+    for (const auto& h : signed_headers) {
+        signed_headers_list += format("{}{}", h.first, header_nr == 1 ? "" : ";");
+        header_nr--;
+    }
+    sstring query_string = "";
+    std::map<std::string_view, std::string_view> query_parameters;
+    for (const auto& q : req.query_parameters) {
+        query_parameters[q.first] = q.second;
+    }
+    unsigned query_nr = query_parameters.size();
+    for (const auto& q : query_parameters) {
+        query_string += format("{}={}{}", q.first, q.second, query_nr == 1 ? "" : "&");
+        query_nr--;
+    }
+    auto sig = utils::aws::get_signature(_cfg->aws->key, _cfg->aws->secret, _host, req._url, req._method,
+        utils::aws::omit_datestamp_expiration_check,
+        signed_headers_list, signed_headers,
+        utils::aws::unsigned_content,
+        _cfg->aws->region, "s3", query_string);
+    req._headers["Authorization"] = format("AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}", _cfg->aws->key, time_point_st, _cfg->aws->region, signed_headers_list, sig);
+}
+
+future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler) {
+    s3l.trace("HEAD {}", object_name);
+    auto req = http::request::make("HEAD", _host, object_name);
+    authorize(req);
+    return _http.make_request(std::move(req), std::move(handler));
 }
 
 future<uint64_t> client::get_object_size(sstring object_name) {
-    s3l.trace("HEAD {}", object_name);
-    auto req = http::request::make("HEAD", _host, object_name);
     uint64_t len = 0;
-    co_await _http.make_request(std::move(req), [&len] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+    co_await get_object_header(std::move(object_name), [&len] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         len = rep.content_length;
         return make_ready_future<>(); // it's HEAD with no body
     });
     co_return len;
+}
+
+// TODO: possibly move this to seastar's http subsystem.
+static std::time_t parse_http_last_modified_time(const sstring& object_name, sstring last_modified) {
+    std::tm tm = {0};
+
+    // format conforms to HTTP-date, defined in the specification (RFC 7231).
+    if (strptime(last_modified.c_str(), "%a, %d %b %Y %H:%M:%S %Z", &tm) == nullptr) {
+        s3l.warn("Unable to parse {} as Last-Modified for {}", last_modified, object_name);
+    } else {
+        s3l.trace("Successfully parsed {} as Last-modified for {}", last_modified, object_name);
+    }
+    return std::mktime(&tm);
+}
+
+future<client::stats> client::get_object_stats(sstring object_name) {
+    struct stats st{};
+    co_await get_object_header(object_name, [&] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+        st.size = rep.content_length;
+        st.last_modified = parse_http_last_modified_time(object_name, rep.get_header("Last-Modified"));
+        return make_ready_future<>();
+    });
+    co_return st;
 }
 
 future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name, std::optional<range> range) {
@@ -74,6 +212,7 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
 
     size_t off = 0;
     std::optional<temporary_buffer<char>> ret;
+    authorize(req);
     co_await _http.make_request(std::move(req), [&off, &ret, &object_name] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         auto in = std::move(in_);
         ret = temporary_buffer<char>(rep.content_length);
@@ -114,6 +253,7 @@ future<> client::put_object(sstring object_name, temporary_buffer<char> buf) {
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
     });
+    authorize(req);
     co_await _http.make_request(std::move(req), ignore_reply);
 }
 
@@ -137,12 +277,14 @@ future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
     });
+    authorize(req);
     co_await _http.make_request(std::move(req), ignore_reply);
 }
 
 future<> client::delete_object(sstring object_name) {
     s3l.trace("DELETE {}", object_name);
     auto req = http::request::make("DELETE", _host, object_name);
+    authorize(req);
     co_await _http.make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
 }
 
@@ -222,16 +364,16 @@ future<> client::upload_sink::do_flush() {
 }
 
 sstring parse_multipart_upload_id(sstring& body) {
-    rapidxml::xml_document<> doc;
+    auto doc = std::make_unique<rapidxml::xml_document<>>();
     try {
-        doc.parse<0>(body.data());
+        doc->parse<0>(body.data());
     } catch (const rapidxml::parse_error& e) {
         s3l.warn("cannot parse initiate multipart upload response: {}", e.what());
         // The caller is supposed to check the upload-id to be empty
         // and handle the error the way it prefers
         return "";
     }
-    auto root_node = doc.first_node("InitiateMultipartUploadResult");
+    auto root_node = doc->first_node("InitiateMultipartUploadResult");
     auto uploadid_node = root_node->first_node("UploadId");
     return uploadid_node->value();
 }
@@ -290,6 +432,7 @@ future<> client::upload_sink::start_upload() {
     s3l.trace("POST uploads {}", _object_name);
     auto rep = http::request::make("POST", _client->_host, _object_name);
     rep.query_parameters["uploads"] = "";
+    _client->authorize(rep);
     co_await _http.make_request(std::move(rep), [this] (const http::reply& rep, input_stream<char>&& in_) -> future<> {
         auto in = std::move(in_);
         auto body = co_await util::read_entire_stream_contiguous(in);
@@ -332,6 +475,7 @@ future<> client::upload_sink::upload_part(unsigned part_number, memory_data_sink
     //
     // In case part upload goes wrong and doesn't happen, the _part_etags[part]
     // is not set, so the finalize_upload() sees it and aborts the whole thing.
+    _client->authorize(req);
     auto units = co_await get_units(_flush_sem, 1);
     (void)_http.make_request(std::move(req), [this, part_number] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         auto etag = rep.get_header("ETag");
@@ -348,6 +492,7 @@ future<> client::upload_sink::abort_upload() {
     s3l.trace("DELETE upload {}", _upload_id);
     auto req = http::request::make("DELETE", _client->_host, _object_name);
     req.query_parameters["uploadId"] = std::exchange(_upload_id, ""); // now upload_started() returns false
+    _client->authorize(req);
     co_await _http.make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
 }
 
@@ -373,6 +518,7 @@ future<> client::upload_sink::finalize_upload() {
     req.write_body("xml", parts_xml_len, [this] (output_stream<char>&& out) -> future<> {
         return dump_multipart_upload_parts(std::move(out), _part_etags);
     });
+    _client->authorize(req);
     co_await _http.make_request(std::move(req), ignore_reply);
 }
 
@@ -416,26 +562,29 @@ public:
     virtual future<> discard(uint64_t offset, uint64_t length) override { return make_ready_future<>(); }
 
     class readable_file_handle_impl final : public file_handle_impl {
-        socket_address _addr;
+        std::string _host;
+        endpoint_config_ptr _cfg;
         sstring _object_name;
 
     public:
-        readable_file_handle_impl(socket_address addr, sstring object_name)
-                : _addr(std::move(addr))
+        readable_file_handle_impl(std::string host, endpoint_config_ptr cfg, sstring object_name)
+                : _host(std::move(host))
+                , _cfg(std::move(cfg))
                 , _object_name(std::move(object_name))
         {}
 
         virtual std::unique_ptr<file_handle_impl> clone() const override {
-            return std::make_unique<readable_file_handle_impl>(_addr, _object_name);
+            return std::make_unique<readable_file_handle_impl>(_host, _cfg, _object_name);
         }
 
         virtual shared_ptr<file_impl> to_file() && override {
-            return make_shared<readable_file>(client::make(std::move(_addr)), std::move(_object_name));
+            auto client = seastar::make_shared<s3::client>(std::move(_host), std::move(_cfg), client::private_tag{});
+            return make_shared<readable_file>(std::move(client), std::move(_object_name));
         }
     };
 
     virtual std::unique_ptr<file_handle_impl> dup() override {
-        return std::make_unique<readable_file_handle_impl>(_client->_addr, _object_name);
+        return std::make_unique<readable_file_handle_impl>(_client->_host, _client->_cfg, _object_name);
     }
 
     virtual future<uint64_t> size(void) override {
@@ -443,13 +592,16 @@ public:
     }
 
     virtual future<struct stat> stat(void) override {
-        auto size = co_await _client->get_object_size(_object_name);
+        auto object_stats = co_await _client->get_object_stats(_object_name);
         struct stat ret {};
         ret.st_nlink = 1;
         ret.st_mode = S_IFREG | S_IRUSR | S_IRGRP | S_IROTH;
-        ret.st_size = size;
+        ret.st_size = object_stats.size;
         ret.st_blksize = 1 << 10; // huh?
-        ret.st_blocks = size >> 9;
+        ret.st_blocks = object_stats.size >> 9;
+        // objects are immutable on S3, therefore we can use Last-Modified to set both st_mtime and st_ctime
+        ret.st_mtime = object_stats.last_modified;
+        ret.st_ctime = object_stats.last_modified;
         co_return ret;
     }
 

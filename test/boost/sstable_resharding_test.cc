@@ -19,6 +19,7 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"
+#include "test/lib/test_utils.hh"
 #include "service/storage_proxy.hh"
 #include "db/config.hh"
 
@@ -46,9 +47,7 @@ static future<> assert_sstable_computes_correct_owners(test_env& env, const ssta
 }
 
 // Must be called in a seastar thread.
-void run_sstable_resharding_test() {
-    test_env env;
-    auto close_env = defer([&] { env.stop().get(); });
+void run_sstable_resharding_test(sstables::test_env& env) {
   for (const auto version : writable_sstable_versions) {
     auto s = get_schema();
     auto cf = env.make_table_for_tests(s);
@@ -85,8 +84,17 @@ void run_sstable_resharding_test() {
     // for a shard that owns the shared input sstable.
     sstables::test(sst).set_shards(boost::copy_range<std::vector<unsigned>>(boost::irange(0u, smp::count)));
 
-    auto filter_fname = sstables::test(sst).filename(component_type::Filter);
-    uint64_t bloom_filter_size_before = file_size(filter_fname).get0();
+    auto filter_size = [&env] (shared_sstable sst) -> uint64_t {
+        if (!env.get_storage_options().is_local_type()) {
+            // FIXME -- use s3::client::get_object_stats() when it appears
+            return 0;
+        }
+
+        auto filter_fname = sstables::test(sst).filename(component_type::Filter);
+        return file_size(filter_fname.native()).get0();
+    };
+
+    uint64_t bloom_filter_size_before = filter_size(sst);
 
     auto descriptor = sstables::compaction_descriptor({sst}, default_priority_class(), 0, std::numeric_limits<uint64_t>::max());
     descriptor.options = sstables::compaction_type_options::make_reshard();
@@ -101,6 +109,8 @@ void run_sstable_resharding_test() {
     };
     auto cdata = compaction_manager::create_compaction_data();
     auto res = sstables::compact_sstables(std::move(descriptor), cdata, cf.as_table_state()).get0();
+    sst->destroy().get();
+
     auto new_sstables = std::move(res.new_sstables);
     BOOST_REQUIRE(new_sstables.size() == smp::count);
 
@@ -108,9 +118,8 @@ void run_sstable_resharding_test() {
     std::unordered_set<shard_id> processed_shards;
 
     for (auto& sstable : new_sstables) {
-        auto new_sst = env.reusable_sst(s, generation_value(sstable->generation()), version).get0();
-        filter_fname = sstables::test(new_sst).filename(component_type::Filter);
-        bloom_filter_size_after += file_size(filter_fname).get0();
+        auto new_sst = env.reusable_sst(s, sstable->generation(), version).get0();
+        bloom_filter_size_after += filter_size(new_sst);
         auto shards = new_sst->get_shards_for_this_sstable();
         BOOST_REQUIRE(shards.size() == 1); // check sstable is unshared.
         auto shard = shards.front();
@@ -123,15 +132,22 @@ void run_sstable_resharding_test() {
             rd.produces(muts[shard][k]);
         }
         rd.produces_end_of_stream();
+        new_sst->destroy().get();
     }
     BOOST_REQUIRE_CLOSE_FRACTION(float(bloom_filter_size_before), float(bloom_filter_size_after), 0.1);
   }
 }
 
 SEASTAR_TEST_CASE(sstable_resharding_test) {
-    return seastar::async([] {
-        run_sstable_resharding_test();
+    return sstables::test_env::do_with_async([] (auto& env) {
+        run_sstable_resharding_test(env);
     });
+}
+
+SEASTAR_TEST_CASE(sstable_resharding_over_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+    return sstables::test_env::do_with_async([] (auto& env) {
+        run_sstable_resharding_test(env);
+    }, test_env_config{ .storage = make_test_object_storage_options() });
 }
 
 SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
@@ -180,7 +196,7 @@ SEASTAR_TEST_CASE(sstable_is_shared_correctness) {
             BOOST_REQUIRE(!sst->is_shared());
 
             auto all_shards_s = get_schema(smp::count, cfg->murmur3_partitioner_ignore_msb_bits());
-            sst = env.reusable_sst(all_shards_s, generation_value(sst->generation()), version).get0();
+            sst = env.reusable_sst(all_shards_s, sst->generation(), version).get0();
             BOOST_REQUIRE(smp::count == 1 || sst->is_shared());
             BOOST_REQUIRE(sst->get_shards_for_this_sstable().size() == smp::count);
             assert_sstable_computes_correct_owners(env, sst).get();

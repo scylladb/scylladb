@@ -76,8 +76,8 @@ class reader_permit {
 
 public:
     class resource_units;
-    class used_guard;
-    class blocked_guard;
+    class need_cpu_guard;
+    class awaits_guard;
 
     enum class state {
         waiting_for_admission,
@@ -106,13 +106,13 @@ private:
     reader_permit::impl& operator*() { return *_impl; }
     reader_permit::impl* operator->() { return _impl.get(); }
 
-    void mark_used() noexcept;
+    void mark_need_cpu() noexcept;
 
-    void mark_unused() noexcept;
+    void mark_not_need_cpu() noexcept;
 
-    void mark_blocked() noexcept;
+    void mark_awaits() noexcept;
 
-    void mark_unblocked() noexcept;
+    void mark_not_awaits() noexcept;
 
     operator bool() const { return bool(_impl); }
 
@@ -207,53 +207,53 @@ public:
 
 std::ostream& operator<<(std::ostream& os, reader_permit::state s);
 
-/// Mark a permit as used.
+/// Mark a permit as needing CPU.
 ///
-/// Conceptually, a permit is considered used, when at least one reader
+/// Conceptually, a permit is considered as needing CPU, when at least one reader
 /// associated with it has an ongoing foreground operation initiated by
 /// its consumer. E.g. a pending `fill_buffer()` call.
-/// This class is an RAII used marker meant to be used by keeping it alive
-/// until the reader is used.
-class reader_permit::used_guard {
+/// This class is an RAII need_cpu marker meant to be used by keeping it alive
+/// while the reader is in need of CPU.
+class reader_permit::need_cpu_guard {
     reader_permit_opt _permit;
 public:
-    explicit used_guard(reader_permit permit) noexcept : _permit(std::move(permit)) {
-        _permit->mark_used();
+    explicit need_cpu_guard(reader_permit permit) noexcept : _permit(std::move(permit)) {
+        _permit->mark_need_cpu();
     }
-    used_guard(used_guard&&) noexcept = default;
-    used_guard(const used_guard&) = delete;
-    ~used_guard() {
+    need_cpu_guard(need_cpu_guard&&) noexcept = default;
+    need_cpu_guard(const need_cpu_guard&) = delete;
+    ~need_cpu_guard() {
         if (_permit) {
-            _permit->mark_unused();
+            _permit->mark_not_need_cpu();
         }
     }
-    used_guard& operator=(used_guard&&) = delete;
-    used_guard& operator=(const used_guard&) = delete;
+    need_cpu_guard& operator=(need_cpu_guard&&) = delete;
+    need_cpu_guard& operator=(const need_cpu_guard&) = delete;
 };
 
-/// Mark a permit as blocked.
+/// Mark a permit as awaiting I/O or an operation running on a remote shard.
 ///
-/// Conceptually, a permit is considered blocked, when at least one reader
+/// Conceptually, a permit is considered awaiting, when at least one reader
 /// associated with it is waiting on I/O or a remote shard as part of a
 /// foreground operation initiated by its consumer. E.g. an sstable reader
 /// waiting on a disk read as part of its `fill_buffer()` call.
-/// This class is an RAII block marker meant to be used by keeping it alive
-/// until said block resolves.
-class reader_permit::blocked_guard {
+/// This class is an RAII awaits marker meant to be used by keeping it alive
+/// until said awaited event completes.
+class reader_permit::awaits_guard {
     reader_permit_opt _permit;
 public:
-    explicit blocked_guard(reader_permit permit) noexcept : _permit(std::move(permit)) {
-        _permit->mark_blocked();
+    explicit awaits_guard(reader_permit permit) noexcept : _permit(std::move(permit)) {
+        _permit->mark_awaits();
     }
-    blocked_guard(blocked_guard&&) noexcept = default;
-    blocked_guard(const blocked_guard&) = delete;
-    ~blocked_guard() {
+    awaits_guard(awaits_guard&&) noexcept = default;
+    awaits_guard(const awaits_guard&) = delete;
+    ~awaits_guard() {
         if (_permit) {
-            _permit->mark_unblocked();
+            _permit->mark_not_awaits();
         }
     }
-    blocked_guard& operator=(blocked_guard&&) = delete;
-    blocked_guard& operator=(const blocked_guard&) = delete;
+    awaits_guard& operator=(awaits_guard&&) = delete;
+    awaits_guard& operator=(const awaits_guard&) = delete;
 };
 
 template <typename Char>

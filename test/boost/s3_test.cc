@@ -8,6 +8,8 @@
 
 
 #include <boost/test/unit_test.hpp>
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/classification.hpp>
 #include <seastar/core/thread.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/file.hh>
@@ -18,6 +20,38 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
 #include "utils/s3/client.hh"
+#include "utils/s3/creds.hh"
+#include "gc_clock.hh"
+
+// The test can be run on real AWS-S3 bucket. For that, create a bucket with
+// permissive enough policy and then run the test with AWS_S3_EXTRA env set
+// to key:secret:region string. E.g. like this
+//
+//   export S3_SERVER_ADDRESS_FOR_TEST=s3.us-east-2.amazonaws.com
+//   export S3_SERVER_PORT_FOR_TEST=443
+//   export S3_PUBLIC_BUCKET_FOR_TEST=xemul
+//   export AWS_S3_EXTRA="${aws_key}:${aws_secret}:us-east-2"
+
+s3::endpoint_config_ptr make_minio_config() {
+    s3::endpoint_config cfg = {
+        .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
+    };
+    auto extra = ::getenv("AWS_S3_EXTRA");
+    if (extra) {
+        std::vector<std::string> items;
+        boost::split(items, extra, boost::is_any_of(":"));
+        if (items.size() != 3) {
+            throw std::runtime_error("Invalid endpoint format, expected host:port");
+        }
+        testlog.info("Adding AWS configuration to endpoint");
+        cfg.use_https = true;
+        cfg.aws.emplace();
+        cfg.aws->key = items[0];
+        cfg.aws->secret = items[1];
+        cfg.aws->region = items[2];
+    }
+    return make_lw_shared<s3::endpoint_config>(std::move(cfg));
+}
 
 /*
  * Tests below expect minio server to be running on localhost
@@ -26,11 +60,10 @@
  */
 
 SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
-    const ipv4_addr s3_server(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), 9000);
     const sstring name(fmt::format("/{}/testobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
-    auto cln = s3::client::make(s3_server);
+    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config());
 
     testlog.info("Put object {}\n", name);
     temporary_buffer<char> data = sstring("1234567890").release();
@@ -39,6 +72,12 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
     testlog.info("Get object size\n");
     size_t sz = cln->get_object_size(name).get0();
     BOOST_REQUIRE_EQUAL(sz, 10);
+
+    testlog.info("Get object stats\n");
+    s3::client::stats st = cln->get_object_stats(name).get0();
+    BOOST_REQUIRE_EQUAL(st.size, 10);
+    // forgive timezone difference as minio server is GMT by default
+    BOOST_REQUIRE(std::difftime(st.last_modified, gc_clock::to_time_t(gc_clock::now())) < 24*3600);
 
     testlog.info("Get object content\n");
     temporary_buffer<char> res = cln->get_object_contiguous(name).get0();
@@ -59,11 +98,10 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload) {
-    const ipv4_addr s3_server(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), 9000);
     const sstring name(fmt::format("/{}/testlargeobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
-    auto cln = s3::client::make(s3_server);
+    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config());
 
     testlog.info("Upload object\n");
     auto out = output_stream<char>(cln->make_upload_sink(name));
@@ -110,11 +148,10 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
-    const ipv4_addr s3_server(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), 9000);
     const sstring name(fmt::format("/{}/testroobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
-    auto cln = s3::client::make(s3_server);
+    auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config());
 
     testlog.info("Put object {}\n", name);
     temporary_buffer<char> data = sstring("1234567890ABCDEF").release();

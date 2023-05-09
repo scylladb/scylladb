@@ -64,7 +64,7 @@ public:
     { }
 
     sstable_assertions(test_env& env, shared_sstable sst)
-        : sstable_assertions(env, sst->get_schema(), env.tempdir().path().native(), sst->get_version(), sst->generation().value())
+        : sstable_assertions(env, sst->get_schema(), env.tempdir().path().native(), sst->get_version(), sst->generation().as_int())
     {}
 
     test_env& get_env() {

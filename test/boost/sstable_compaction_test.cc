@@ -2184,7 +2184,8 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
     }, test_cfg);
 }
 
-SEASTAR_THREAD_TEST_CASE(scrub_validate_mode_validate_reader_test) {
+SEASTAR_TEST_CASE(sstable_validate_test) {
+  return test_env::do_with_async([] (test_env& env) {
     auto schema = schema_builder("ks", get_name())
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("ck", int32_type, column_kind::clustering_key)
@@ -2194,6 +2195,8 @@ SEASTAR_THREAD_TEST_CASE(scrub_validate_mode_validate_reader_test) {
     auto permit = semaphore.make_permit();
 
     std::deque<mutation_fragment_v2> frags;
+
+    abort_source abort;
 
     const auto ts = api::timestamp_type{1};
     auto local_keys = tests::generate_partition_keys(5, schema);
@@ -2224,7 +2227,25 @@ SEASTAR_THREAD_TEST_CASE(scrub_validate_mode_validate_reader_test) {
                 clustering_row(clustering_key::from_single_value(*schema, int32_type->decompose(data_value(int(i)))), {}, {}, std::move(r)));
     };
 
+    auto make_sst = [&] (std::deque<mutation_fragment_v2> frags) {
+        auto rd = make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags));
+        auto config = env.manager().configure_writer();
+        config.validation_level = mutation_fragment_stream_validation_level::partition_region; // this test violates key order on purpose
+        auto sst = env.make_sstable(schema);
+        sst->write_components(std::move(rd), local_keys.size(), schema, config, encoding_stats{}).get();
+        sst->load().get();
+        return sst;
+    };
+
     auto info = make_lw_shared<compaction_data>();
+
+    struct error_handler {
+        uint64_t& count;
+        void operator()(sstring what) {
+            ++count;
+            testlog.trace("validation error: ", what);
+        }
+    };
 
     BOOST_TEST_MESSAGE("valid");
     {
@@ -2236,8 +2257,11 @@ SEASTAR_THREAD_TEST_CASE(scrub_validate_mode_validate_reader_test) {
         frags.emplace_back(make_partition_start(2));
         frags.emplace_back(make_partition_end());
 
-        const auto errors = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        uint64_t count = 0;
+        auto sst = make_sst(std::move(frags));
+        const auto errors = sst->validate(permit, default_priority_class(), abort, error_handler{count}).get();
         BOOST_REQUIRE_EQUAL(errors, 0);
+        BOOST_REQUIRE_EQUAL(errors, count);
     }
 
     BOOST_TEST_MESSAGE("out-of-order clustering row");
@@ -2247,52 +2271,31 @@ SEASTAR_THREAD_TEST_CASE(scrub_validate_mode_validate_reader_test) {
         frags.emplace_back(make_clustering_row(0));
         frags.emplace_back(make_partition_end());
 
-        const auto errors = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        uint64_t count = 0;
+        auto sst = make_sst(std::move(frags));
+        const auto errors = sst->validate(permit, default_priority_class(), abort, error_handler{count}).get();
         BOOST_REQUIRE_NE(errors, 0);
-    }
-
-    BOOST_TEST_MESSAGE("out-of-order static row");
-    {
-        frags.emplace_back(make_partition_start(0));
-        frags.emplace_back(make_clustering_row(0));
-        frags.emplace_back(make_static_row());
-        frags.emplace_back(make_partition_end());
-
-        const auto errors = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
-        BOOST_REQUIRE_NE(errors, 0);
-    }
-
-    BOOST_TEST_MESSAGE("out-of-order partition start");
-    {
-        frags.emplace_back(make_partition_start(0));
-        frags.emplace_back(make_clustering_row(1));
-        frags.emplace_back(make_partition_start(2));
-        frags.emplace_back(make_partition_end());
-
-        const auto errors = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
-        BOOST_REQUIRE_NE(errors, 0);
+        BOOST_REQUIRE_EQUAL(errors, count);
     }
 
     BOOST_TEST_MESSAGE("out-of-order partition");
     {
+        frags.emplace_back(make_partition_start(0));
+        frags.emplace_back(make_clustering_row(0));
+        frags.emplace_back(make_partition_end());
         frags.emplace_back(make_partition_start(2));
         frags.emplace_back(make_clustering_row(0));
         frags.emplace_back(make_partition_end());
-        frags.emplace_back(make_partition_start(0));
+        frags.emplace_back(make_partition_start(1));
         frags.emplace_back(make_partition_end());
 
-        const auto errors = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
+        uint64_t count = 0;
+        auto sst = make_sst(std::move(frags));
+        const auto errors = sst->validate(permit, default_priority_class(), abort, error_handler{count}).get();
         BOOST_REQUIRE_NE(errors, 0);
+        BOOST_REQUIRE_EQUAL(errors, count);
     }
-
-    BOOST_TEST_MESSAGE("missing end-of-partition at EOS");
-    {
-        frags.emplace_back(make_partition_start(0));
-        frags.emplace_back(make_clustering_row(0));
-
-        const auto errors = scrub_validate_mode_validate_reader(make_flat_mutation_reader_from_fragments(schema, permit, std::move(frags)), *info).get();
-        BOOST_REQUIRE_NE(errors, 0);
-    }
+  });
 }
 
 SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
@@ -2894,7 +2897,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
             BOOST_REQUIRE(*expected_sst == old_sstables.front()->generation());
             expected_sst++;
             // check that previously released sstables were already closed
-            if (generation_value(old_sstables.front()->generation()) % 4 == 0) {
+            if (auto v = old_sstables.front()->generation().as_int(); v % 4 == 0) {
                 // Due to performance reasons, sstables are not released immediately, but in batches.
                 // At the time of writing, mutation_reader_merger releases it's sstable references
                 // in batches of 4. That's why we only perform this check every 4th sstable. 
@@ -3081,7 +3084,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
 
         sstable_writer_config sst_cfg = env.manager().configure_writer();
         sst_cfg.run_identifier = partial_sstable_run_identifier;
-        auto partial_sstable_run_sst = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), { std::move(mut) }), sst_cfg);
+        auto partial_sstable_run_sst = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), std::move(mut)), sst_cfg);
 
         column_family_test(cf).add_sstable(partial_sstable_run_sst).get();
         column_family_test::update_sstables_known_generation(*cf, partial_sstable_run_sst->generation());
@@ -3718,9 +3721,8 @@ SEASTAR_TEST_CASE(lcs_reshape_test) {
     });
 }
 
-SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
-    return test_env::do_with_async([] (test_env& env) {
-      auto test_interposer_on_flush = [&] (bool split_during_flush) {
+future<> test_twcs_interposer_on_memtable_flush(bool split_during_flush) {
+    return test_env::do_with_async([split_during_flush] (test_env& env) {
         auto builder = schema_builder("tests", "test_twcs_interposer_on_flush")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("cl", int32_type, column_kind::clustering_key)
@@ -3748,7 +3750,6 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
             return m;
         };
 
-        auto _ = env.tempdir().make_sweeper();
         auto cf = env.make_table_for_tests(s);
         auto close_cf = deferred_stop(cf);
         cf->start();
@@ -3766,11 +3767,15 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush) {
         auto expected_ssts = (split_during_flush) ? target_windows_span : 1;
         testlog.info("split_during_flush={}, actual={}, expected={}", split_during_flush, cf->get_sstables()->size(), expected_ssts);
         assert_table_sstable_count(cf, expected_ssts);
-      };
-
-      test_interposer_on_flush(true);
-      test_interposer_on_flush(false);
   });
+}
+
+SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush_split) {
+    return test_twcs_interposer_on_memtable_flush(true);
+}
+
+SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush_no_split) {
+    return test_twcs_interposer_on_memtable_flush(false);
 }
 
 SEASTAR_TEST_CASE(test_twcs_compaction_across_buckets) {

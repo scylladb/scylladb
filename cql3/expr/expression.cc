@@ -66,24 +66,6 @@ expression::operator=(const expression& o) {
     return *this;
 }
 
-token::token(std::vector<expression> args_in)
-    : args(std::move(args_in)) {
-}
-
-token::token(const std::vector<const column_definition*>& col_defs) {
-    args.reserve(col_defs.size());
-    for (const column_definition* col_def : col_defs) {
-        args.push_back(column_value(col_def));
-    }
-}
-
-token::token(const std::vector<::shared_ptr<column_identifier_raw>>& cols) {
-    args.reserve(cols.size());
-    for(const ::shared_ptr<column_identifier_raw>& col : cols) {
-        args.push_back(unresolved_identifier{col});
-    }
-}
-
 binary_operator::binary_operator(expression lhs, oper_t op, expression rhs, comparison_order order)
             : lhs(std::move(lhs))
             , op(op)
@@ -560,89 +542,11 @@ value_set intersection(value_set a, value_set b, const abstract_type* type) {
     return std::visit(intersection_visitor{type}, std::move(a), std::move(b));
 }
 
-bool is_satisfied_by(const binary_operator& opr, const evaluation_inputs& inputs) {
-    if (is<token>(opr.lhs)) {
-        // The RHS value was already used to ensure we fetch only rows in the specified
-        // token range. It is impossible for any fetched row not to match now.
-        // When token restrictions are present we forbid all other restrictions on partition key.
-        // This means that the partition range is defined solely by restrictions on token.
-        // When is_satisifed_by is used by filtering we can be sure that the token restrictions
-        // are fulfilled. In the future it will be possible to evaluate() a token,
-        // and we will be able to get rid of this risky if.
-        return true;
-    }
-
-    raw_value binop_eval_result = evaluate(opr, inputs);
-
-    if (binop_eval_result.is_null()) {
-        return false;
-    }
-    if (binop_eval_result.is_empty_value()) {
-        on_internal_error(expr_logger, format("is_satisfied_by: binary operator evaluated to EMPTY_VALUE: {}", opr));
-    }
-
-    return binop_eval_result.view().deserialize<bool>(*boolean_type);
-}
-
 } // anonymous namespace
 
 bool is_satisfied_by(const expression& restr, const evaluation_inputs& inputs) {
-    return expr::visit(overloaded_functor{
-            [] (const constant& constant_val) {
-                std::optional<bool> bool_val = get_bool_value(constant_val);
-                if (bool_val.has_value()) {
-                    return *bool_val;
-                }
-
-                on_internal_error(expr_logger,
-                    "is_satisfied_by: a constant that is not a bool value cannot serve as a restriction by itself");
-            },
-            [&] (const conjunction& conj) {
-                return boost::algorithm::all_of(conj.children, [&] (const expression& c) {
-                    return is_satisfied_by(c, inputs);
-                });
-            },
-            [&] (const binary_operator& opr) { return is_satisfied_by(opr, inputs); },
-            [] (const column_value&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a column cannot serve as a restriction by itself");
-            },
-            [] (const subscript&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a subscript cannot serve as a restriction by itself");
-            },
-            [] (const token&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: the token function cannot serve as a restriction by itself");
-            },
-            [] (const unresolved_identifier&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: an unresolved identifier cannot serve as a restriction");
-            },
-            [] (const column_mutation_attribute&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: the writetime/ttl cannot serve as a restriction by itself");
-            },
-            [] (const function_call&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a function call cannot serve as a restriction by itself");
-            },
-            [] (const cast&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a a type cast cannot serve as a restriction by itself");
-            },
-            [] (const field_selection&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a field selection cannot serve as a restriction by itself");
-            },
-            [] (const bind_variable&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a bind variable cannot serve as a restriction by itself");
-            },
-            [] (const untyped_constant&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: an untyped constant cannot serve as a restriction by itself");
-            },
-            [] (const tuple_constructor&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a tuple constructor cannot serve as a restriction by itself");
-            },
-            [] (const collection_constructor&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a collection constructor cannot serve as a restriction by itself");
-            },
-            [] (const usertype_constructor&) -> bool {
-                on_internal_error(expr_logger, "is_satisfied_by: a user type constructor cannot serve as a restriction by itself");
-            },
-        }, restr);
+    static auto true_value = managed_bytes_opt(data_value(true).serialize_nonnull());
+    return evaluate(restr, inputs).to_managed_bytes_opt() == true_value;
 }
 
 namespace {
@@ -763,7 +667,15 @@ nonwrapping_range<clustering_key_prefix> to_range(oper_t op, const clustering_ke
     return to_range<const clustering_key_prefix&>(op, val);
 }
 
-value_set possible_lhs_values(const column_definition* cdef, const expression& expr, const query_options& options) {
+// When cdef == nullptr it finds possible token values instead of column values.
+// When finding token values the table_schema_opt argument has to point to a valid schema,
+// but it isn't used when finding values for column.
+// The schema is needed to find out whether a call to token() function represents
+// the partition token.
+static value_set possible_lhs_values(const column_definition* cdef,
+                                        const expression& expr,
+                                        const query_options& options,
+                                        const schema* table_schema_opt) {
     const auto type = cdef ? &cdef->type->without_reversed() : long_type.get();
     return expr::visit(overloaded_functor{
             [] (const constant& constant_val) {
@@ -779,7 +691,7 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                 return boost::accumulate(conj.children, unbounded_value_set,
                         [&] (const value_set& acc, const expression& child) {
                             return intersection(
-                                    std::move(acc), possible_lhs_values(cdef, child, options), type);
+                                    std::move(acc), possible_lhs_values(cdef, child, options, table_schema_opt), type);
                         });
             },
             [&] (const binary_operator& oper) -> value_set {
@@ -859,7 +771,11 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                             }
                             return unbounded_value_set;
                         },
-                        [&] (token) -> value_set {
+                        [&] (const function_call& token_fun_call) -> value_set {
+                            if (!is_partition_token_for_schema(token_fun_call, *table_schema_opt)) {
+                                on_internal_error(expr_logger, "possible_lhs_values: function calls are not supported as the LHS of a binary expression");
+                            }
+
                             if (cdef) {
                                 return unbounded_value_set;
                             }
@@ -901,9 +817,6 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                         [] (const column_mutation_attribute&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: writetime/ttl are not supported as the LHS of a binary expression");
                         },
-                        [] (const function_call&) -> value_set {
-                            on_internal_error(expr_logger, "possible_lhs_values: function calls are not supported as the LHS of a binary expression");
-                        },
                         [] (const cast&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: typecasts are not supported as the LHS of a binary expression");
                         },
@@ -930,11 +843,8 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
             [] (const subscript&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: a subscript cannot serve as a restriction by itself");
             },
-            [] (const token&) -> value_set {
-                on_internal_error(expr_logger, "possible_lhs_values: the token function cannot serve as a restriction by itself");
-            },
             [] (const unresolved_identifier&) -> value_set {
-                on_internal_error(expr_logger, "is_satisfied_by: an unresolved identifier cannot serve as a restriction");
+                on_internal_error(expr_logger, "possible_lhs_values: an unresolved identifier cannot serve as a restriction");
             },
             [] (const column_mutation_attribute&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: the writetime/ttl functions cannot serve as a restriction by itself");
@@ -964,6 +874,14 @@ value_set possible_lhs_values(const column_definition* cdef, const expression& e
                 on_internal_error(expr_logger, "possible_lhs_values: a user type constructor cannot serve as a restriction by itself");
             },
         }, expr);
+}
+
+value_set possible_column_values(const column_definition* col, const expression& e, const query_options& options) {
+    return possible_lhs_values(col, e, options, nullptr);
+}
+
+value_set possible_partition_token_values(const expression& e, const query_options& options, const schema& table_schema) {
+    return possible_lhs_values(nullptr, e, options, &table_schema);
 }
 
 nonwrapping_range<managed_bytes> to_range(const value_set& s) {
@@ -1013,7 +931,7 @@ secondary_index::index::supports_expression_v is_supported_by_helper(const expre
                             // We don't use index table for multi-column restrictions, as it cannot avoid filtering.
                             return index::supports_expression_v::from_bool(false);
                         },
-                        [&] (const token&) { return index::supports_expression_v::from_bool(false); },
+                        [&] (const function_call&) { return index::supports_expression_v::from_bool(false); },
                         [&] (const subscript& s) -> ret_t {
                             const column_value& col = get_subscripted_column(s);
                             return idx.supports_subscript_expression(*col.col, oper.op);
@@ -1032,9 +950,6 @@ secondary_index::index::supports_expression_v is_supported_by_helper(const expre
                         },
                         [&] (const column_mutation_attribute&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: writetime/ttl are not supported as the LHS of a binary expression");
-                        },
-                        [&] (const function_call&) -> ret_t {
-                            on_internal_error(expr_logger, "is_supported_by: function calls are not supported as the LHS of a binary expression");
                         },
                         [&] (const cast&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: typecasts are not supported as the LHS of a binary expression");
@@ -1159,9 +1074,6 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                     }
                 }
             },
-            [&] (const token& t) {
-                fmt::print(os, "token({})", fmt::join(t.args | transformed(to_printer), ", "));
-            },
             [&] (const column_value& col) {
                 fmt::print(os, "{}", cql3::util::maybe_quote(col.col->name_as_text()));
             },
@@ -1181,14 +1093,18 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                         to_printer(cma.column));
             },
             [&] (const function_call& fc)  {
-                std::visit(overloaded_functor{
-                    [&] (const functions::function_name& named) {
-                        fmt::print(os, "{}({})", named, fmt::join(fc.args | transformed(to_printer), ", "));
-                    },
-                    [&] (const shared_ptr<functions::function>& anon) {
-                        fmt::print(os, "<anonymous function>({})", fmt::join(fc.args | transformed(to_printer), ", "));
-                    },
-                }, fc.func);
+                if (is_token_function(fc)) {
+                    fmt::print(os, "token({})", fmt::join(fc.args | transformed(to_printer), ", "));
+                } else {
+                    std::visit(overloaded_functor{
+                        [&] (const functions::function_name& named) {
+                            fmt::print(os, "{}({})", named, fmt::join(fc.args | transformed(to_printer), ", "));
+                        },
+                        [&] (const shared_ptr<functions::function>& anon) {
+                            fmt::print(os, "<anonymous function>({})", fmt::join(fc.args | transformed(to_printer), ", "));
+                        },
+                    }, fc.func);
+                }
             },
             [&] (const cast& c)  {
                 std::visit(overloaded_functor{
@@ -1363,9 +1279,9 @@ expression replace_column_def(const expression& expr, const column_definition* n
     });
 }
 
-expression replace_token(const expression& expr, const column_definition* new_cdef) {
+expression replace_partition_token(const expression& expr, const column_definition* new_cdef, const schema& table_schema) {
     return search_and_replace(expr, [&] (const expression& expr) -> std::optional<expression> {
-        if (expr::is<token>(expr)) {
+        if (is_partition_token_for_schema(expr, table_schema)) {
             return column_value{new_cdef};
         } else {
             return std::nullopt;
@@ -1434,14 +1350,6 @@ bool recurse_until(const expression& e, const noncopyable_function<bool (const e
             [&] (const usertype_constructor& c) {
                 for (auto& [k, v] : c.elements) {
                     if (auto found = recurse_until(v, predicate_fun)) {
-                        return found;
-                    }
-                }
-                return false;
-            },
-            [&] (const token& tok) {
-                for (auto& a : tok.args) {
-                    if (auto found = recurse_until(a, predicate_fun)) {
                         return found;
                     }
                 }
@@ -1522,13 +1430,6 @@ expression search_and_replace(const expression& e,
                         .type = s.type,
                     };
                 },
-                [&](const token& tok) -> expression {
-                    return token {
-                        boost::copy_range<std::vector<expression>>(
-                            tok.args | boost::adaptors::transformed(recurse)
-                        )
-                    };
-                },
                 [&] (LeafExpression auto const& e) -> expression {
                     return e;
                 },
@@ -1603,7 +1504,6 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
             }
         }
 
-        void operator()(const token&) {}
         void operator()(const unresolved_identifier&) {}
         void operator()(const column_mutation_attribute&) {}
         void operator()(const function_call&) {}
@@ -1766,9 +1666,6 @@ cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
         },
         [&](const conjunction& conj) -> cql3::raw_value {
             return evaluate(conj, inputs);
-        },
-        [](const token&) -> cql3::raw_value {
-            on_internal_error(expr_logger, "Can't evaluate token");
         },
         [](const unresolved_identifier&) -> cql3::raw_value {
             on_internal_error(expr_logger, "Can't evaluate unresolved_identifier");
@@ -2309,11 +2206,6 @@ void fill_prepare_context(expression& e, prepare_context& ctx) {
                 fill_prepare_context(child, ctx);
             }
         },
-        [&](token& tok) {
-            for (expression& arg : tok.args) {
-                fill_prepare_context(arg, ctx);
-            }
-        },
         [](unresolved_identifier&) {},
         [&](column_mutation_attribute& a) {
             fill_prepare_context(a.column, ctx);
@@ -2362,9 +2254,6 @@ type_of(const expression& e) {
         },
         [] (const column_value& e) {
             return e.col->type;
-        },
-        [] (const token& e) {
-            return long_type;
         },
         [] (const unresolved_identifier& e) -> data_type {
             on_internal_error(expr_logger, "evaluating type of unresolved_identifier");
@@ -2546,7 +2435,7 @@ sstring get_columns_in_commons(const expression& a, const expression& b) {
 }
 
 bytes_opt value_for(const column_definition& cdef, const expression& e, const query_options& options) {
-    value_set possible_vals = possible_lhs_values(&cdef, e, options);
+    value_set possible_vals = possible_column_values(&cdef, e, options);
     return std::visit(overloaded_functor {
         [&](const value_list& val_list) -> bytes_opt {
             if (val_list.empty()) {
@@ -2690,5 +2579,69 @@ adjust_for_collection_as_maps(const expression& e) {
     });
 }
 
+bool is_token_function(const function_call& fun_call) {
+    static thread_local const functions::function_name token_function_name =
+        functions::function_name::native_function("token");
+
+    // Check that function name is "token"
+    const functions::function_name& fun_name =
+        std::visit(overloaded_functor{[](const functions::function_name& fname) { return fname; },
+                                      [](const shared_ptr<functions::function>& fun) { return fun->name(); }},
+                   fun_call.func);
+
+    return fun_name.has_keyspace() ? fun_name == token_function_name : fun_name.name == token_function_name.name;
+}
+
+bool is_token_function(const expression& e) {
+    const function_call* fun_call = as_if<function_call>(&e);
+    if (fun_call == nullptr) {
+        return false;
+    }
+
+    return is_token_function(*fun_call);
+}
+
+bool is_partition_token_for_schema(const function_call& fun_call, const schema& table_schema) {
+    if (!is_token_function(fun_call)) {
+        return false;
+    }
+
+    if (fun_call.args.size() != table_schema.partition_key_size()) {
+        return false;
+    }
+
+    auto arguments_iter = fun_call.args.begin();
+    for (const column_definition& partition_key_col : table_schema.partition_key_columns()) {
+        const expression& cur_argument = *arguments_iter;
+
+        const column_value* cur_col = as_if<column_value>(&cur_argument);
+        if (cur_col == nullptr) {
+            // A sanity check that we didn't call the function on an unprepared expression.
+            if (is<unresolved_identifier>(cur_argument)) {
+                on_internal_error(expr_logger,
+                                  format("called is_partition_token with unprepared expression: {}", fun_call));
+            }
+
+            return false;
+        }
+
+        if (cur_col->col != &partition_key_col) {
+            return false;
+        }
+
+        arguments_iter++;
+    }
+
+    return true;
+}
+
+bool is_partition_token_for_schema(const expression& maybe_token, const schema& table_schema) {
+    const function_call* fun_call = as_if<function_call>(&maybe_token);
+    if (fun_call == nullptr) {
+        return false;
+    }
+
+    return is_partition_token_for_schema(*fun_call, table_schema);
+}
 } // namespace expr
 } // namespace cql3

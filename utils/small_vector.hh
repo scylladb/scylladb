@@ -19,6 +19,9 @@
 #include <memory>
 #include <stdexcept>
 #include <malloc.h>
+#include <iostream>
+
+#include "utils/to_string.hh"
 
 namespace utils {
 
@@ -463,17 +466,7 @@ public:
 
 template <typename T, size_t N>
 std::ostream& operator<<(std::ostream& os, const utils::small_vector<T, N>& v) {
-    os << "{";
-    bool first = true;
-    for (auto&& e : v) {
-        if (!first) {
-            os << ", ";
-        }
-        first = false;
-        os << e;
-    }
-    os << "}";
-    return os;
+    return utils::format_range(os, v);
 }
 
 }

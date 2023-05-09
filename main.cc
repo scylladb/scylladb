@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <yaml-cpp/yaml.h>
 
 #include <seastar/util/closeable.hh>
 #include "tasks/task_manager.hh"
@@ -148,6 +149,72 @@ public:
     sharded<abort_source>& as_sharded_abort_source() { return _abort_sources; }
 };
 
+struct object_storage_endpoint_param {
+    sstring endpoint;
+    s3::endpoint_config config;
+};
+
+namespace YAML {
+template<>
+struct convert<::object_storage_endpoint_param> {
+    static bool decode(const Node& node, ::object_storage_endpoint_param& ep) {
+        ep.endpoint = node["name"].as<std::string>();
+        ep.config.port = node["port"].as<unsigned>();
+        ep.config.use_https = node["https"] && node["https"].as<bool>();
+        if (node["aws_region"]) {
+            ep.config.aws.emplace();
+            ep.config.aws->region = node["aws_region"].as<std::string>();
+            ep.config.aws->key = node["aws_key"].as<std::string>();
+            ep.config.aws->secret = node["aws_secret"].as<std::string>();
+        }
+        return true;
+    }
+};
+}
+
+static future<> read_object_storage_config(db::config& db_cfg) {
+    sstring cfg_name;
+    if (!db_cfg.object_storage_config_file().empty()) {
+        cfg_name = db_cfg.object_storage_config_file();
+    } else {
+        cfg_name = db::config::get_conf_sub("object_storage.yaml").native();
+        if (!co_await file_accessible(cfg_name, access_flags::exists)) {
+            co_return;
+        }
+    }
+
+    auto cfg_file = co_await open_file_dma(cfg_name, open_flags::ro);
+    sstring data;
+    std::exception_ptr ex;
+
+    try {
+        auto sz = co_await cfg_file.size();
+        data = seastar::to_sstring(co_await cfg_file.dma_read_exactly<char>(0, sz));
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await cfg_file.close();
+    if (ex) {
+        co_await coroutine::return_exception_ptr(ex);
+    }
+
+    std::unordered_map<sstring, s3::endpoint_config> cfg;
+    YAML::Node doc = YAML::Load(data.c_str());
+    for (auto&& section : doc) {
+        auto sec_name = section.first.as<std::string>();
+        if (sec_name != "endpoints") {
+            co_await coroutine::return_exception(std::runtime_error(fmt::format("While parsing object_storage config: section {} currently unsupported.", sec_name)));
+        }
+
+        auto endpoints = section.second.as<std::vector<object_storage_endpoint_param>>();
+        for (auto&& ep : endpoints) {
+            cfg[ep.endpoint] = std::move(ep.config);
+        }
+    }
+
+    db_cfg.object_storage_config = std::move(cfg);
+}
+
 static future<>
 read_config(bpo::variables_map& opts, db::config& cfg) {
     sstring file;
@@ -164,6 +231,8 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
                 level = log_level::error;
             }
             startlog.log(level, "{} : {}", msg, opt);
+        }).then([&cfg] {
+            return read_object_storage_config(cfg);
         });
     }).handle_exception([file](auto ep) {
         startlog.error("Could not read configuration file {}: {}", file, ep);
@@ -977,6 +1046,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 fd.stop().get();
             });
 
+            raft_gr.start(cfg->consistent_cluster_management(),
+                std::ref(raft_address_map), std::ref(messaging), std::ref(gossiper), std::ref(fd)).get();
+
+            // group0 client exists only on shard 0.
+            // The client has to be created before `stop_raft` since during
+            // destruction it has to exist until raft_gr.stop() completes.
+            service::raft_group0_client group0_client{raft_gr.local(), sys_ks.local()};
+
+            service::raft_group0 group0_service{
+                    stop_signal.as_local_abort_source(), raft_gr.local(), messaging,
+                    gossiper.local(), feature_service.local(), sys_ks.local(), group0_client};
+
             supervisor::notify("initializing storage service");
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
@@ -1125,14 +1206,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
-
-            raft_gr.start(cfg->consistent_cluster_management(),
-                std::ref(raft_address_map), std::ref(messaging), std::ref(gossiper), std::ref(fd)).get();
-
-            // group0 client exists only on shard 0.
-            // The client has to be created before `stop_raft` since during
-            // destruction it has to exist until raft_gr.stop() completes.
-            service::raft_group0_client group0_client{raft_gr.local(), sys_ks.local()};
 
             supervisor::notify("starting migration manager");
             debug::the_migration_manager = &mm;
@@ -1499,9 +1572,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
              */
             db.local().enable_autocompaction_toggle();
 
-            service::raft_group0 group0_service{
-                    stop_signal.as_local_abort_source(), raft_gr.local(), messaging,
-                    gossiper.local(), qp.local(), mm.local(), feature_service.local(), sys_ks.local(), group0_client, ss.local(), cdc_generation_service.local()};
             group0_service.start().get();
             auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
                 group0_service.abort().get();
@@ -1514,7 +1584,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ss.local().join_cluster(cdc_generation_service.local(), sys_dist_ks, proxy, group0_service);
+                return ss.local().join_cluster(cdc_generation_service.local(), sys_dist_ks, proxy, group0_service, qp.local());
             }).get();
 
             sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {

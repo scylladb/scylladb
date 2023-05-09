@@ -11,6 +11,7 @@
 #include <seastar/core/thread.hh>
 
 #include "auth/service.hh"
+#include "db/system_keyspace.hh"
 #include "permission_altering_statement.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_aggregate.hh"
@@ -49,15 +50,10 @@ future<> cql3::statements::permission_altering_statement::check_access(query_pro
 
     return state.ensure_exists(_resource).then([this, &state] {
         if (_resource.kind() == auth::resource_kind::functions) {
-            // Even if the function exists, it may be a builtin function, in which case we disallow altering permissions on it.
+            // Even if the resource exists, it may be a builtin function or all builtin functions, in which case we disallow altering permissions on it.
             auth::functions_resource_view v(_resource);
-            if (v.function_signature()) {
-                // If the resource has a signature, it is a specific funciton and not "all functions"
-                auto [name, function_args] = auth::decode_signature(*v.function_signature());
-                auto fun = cql3::functions::functions::find(db::functions::function_name{sstring(*v.keyspace()), name}, function_args);
-                if (fun->is_native()) {
-                    return make_exception_future<>(exceptions::invalid_request_exception("Altering permissions on builtin functions is not supported"));
-                }
+            if (v.keyspace() && *v.keyspace() == db::system_keyspace::NAME) {
+                return make_exception_future<>(exceptions::invalid_request_exception("Altering permissions on builtin functions is not supported"));
             }
         }
         // check that the user has AUTHORIZE permission on the resource or its parents, otherwise reject

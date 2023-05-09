@@ -825,7 +825,7 @@ operator<<(std::ostream& os, const mutation_partition_v2::printer& p) {
             os << indent << indent << indent << "tombstone: " << row.deleted_at() << ",\n";
         }
         if (re.range_tombstone()) {
-            fmt::print("{:6}rt: {},\n", "", re.range_tombstone());
+            fmt::print(os, "{:6}rt: {},\n", "", re.range_tombstone());
         }
 
         position_in_partition pip(re.position());

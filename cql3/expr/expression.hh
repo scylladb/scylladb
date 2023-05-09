@@ -70,7 +70,6 @@ struct binary_operator;
 struct conjunction;
 struct column_value;
 struct subscript;
-struct token;
 struct unresolved_identifier;
 struct column_mutation_attribute;
 struct function_call;
@@ -89,7 +88,6 @@ concept ExpressionElement
         || std::same_as<T, binary_operator>
         || std::same_as<T, column_value>
         || std::same_as<T, subscript>
-        || std::same_as<T, token>
         || std::same_as<T, unresolved_identifier>
         || std::same_as<T, column_mutation_attribute>
         || std::same_as<T, function_call>
@@ -109,7 +107,6 @@ concept invocable_on_expression
         && std::invocable<Func, binary_operator>
         && std::invocable<Func, column_value>
         && std::invocable<Func, subscript>
-        && std::invocable<Func, token>
         && std::invocable<Func, unresolved_identifier>
         && std::invocable<Func, column_mutation_attribute>
         && std::invocable<Func, function_call>
@@ -129,7 +126,6 @@ concept invocable_on_expression_ref
         && std::invocable<Func, binary_operator&>
         && std::invocable<Func, column_value&>
         && std::invocable<Func, subscript&>
-        && std::invocable<Func, token&>
         && std::invocable<Func, unresolved_identifier&>
         && std::invocable<Func, column_mutation_attribute&>
         && std::invocable<Func, function_call&>
@@ -228,18 +224,6 @@ const column_value& get_subscripted_column(const subscript&);
 /// Gets the column_definition* out of expression that can be a column_value or subscript
 /// Only columns can be subscripted in CQL, so we can expect that the subscripted expression is a column_value.
 const column_value& get_subscripted_column(const expression&);
-
-/// Represents token(c1, c2) function on LHS of an operator relation.
-/// args contains arguments to the token function.
-struct token {
-    std::vector<expression> args;
-
-    explicit token(std::vector<expression>);
-    explicit token(const std::vector<const column_definition*>&);
-    explicit token(const std::vector<::shared_ptr<column_identifier_raw>>&);
-
-    friend bool operator==(const token&, const token&) = default;
-};
 
 enum class oper_t { EQ, NEQ, LT, LTE, GTE, GT, IN, CONTAINS, CONTAINS_KEY, IS_NOT, LIKE };
 
@@ -429,7 +413,7 @@ struct usertype_constructor {
 // now that all expression types are fully defined, we can define expression::impl
 struct expression::impl final {
     using variant_type = std::variant<
-            conjunction, binary_operator, column_value, token, unresolved_identifier,
+            conjunction, binary_operator, column_value, unresolved_identifier,
             column_mutation_attribute, function_call, cast, field_selection,
             bind_variable, untyped_constant, constant, tuple_constructor, collection_constructor,
             usertype_constructor, subscript>;
@@ -510,8 +494,8 @@ using value_list = std::vector<managed_bytes>; // Sorted and deduped using value
 /// never singular and never has start > end.  Universal set is a nonwrapping_range with both bounds null.
 using value_set = std::variant<value_list, nonwrapping_range<managed_bytes>>;
 
-/// A set of all column values that would satisfy an expression.  If column is null, a set of all token values
-/// that satisfy.
+/// A set of all column values that would satisfy an expression. The _token_values variant finds
+/// matching values for the partition token function call instead of the column.
 ///
 /// An expression restricts possible values of a column or token:
 /// - `A>5` restricts A from below
@@ -521,7 +505,8 @@ using value_set = std::variant<value_list, nonwrapping_range<managed_bytes>>;
 /// - `A=1 AND A<=0` restricts A to an empty list; no value is able to satisfy the expression
 /// - `A>=NULL` also restricts A to an empty list; all comparisons to NULL are false
 /// - an expression without A "restricts" A to unbounded range
-extern value_set possible_lhs_values(const column_definition*, const expression&, const query_options&);
+extern value_set possible_column_values(const column_definition*, const expression&, const query_options&);
+extern value_set possible_partition_token_values(const expression&, const query_options&, const schema& table_schema);
 
 /// Turns value_set into a range, unless it's a multi-valued list (in which case this throws).
 extern nonwrapping_range<managed_bytes> to_range(const value_set&);
@@ -642,8 +627,21 @@ inline bool is_multi_column(const binary_operator& op) {
     return expr::is<tuple_constructor>(op.lhs);
 }
 
-inline bool has_token(const expression& e) {
-    return find_binop(e, [] (const binary_operator& o) { return expr::is<token>(o.lhs); });
+// Check whether the given expression represents
+// a call to the token() function.
+bool is_token_function(const function_call&);
+bool is_token_function(const expression&);
+
+bool is_partition_token_for_schema(const function_call&, const schema&);
+bool is_partition_token_for_schema(const expression&, const schema&);
+
+/// Check whether the expression contains a binary_operator whose LHS is a call to the token
+/// function representing a partition key token.
+/// Examples:
+/// For expression: "token(p1, p2, p3) < 123 AND c = 2" returns true
+/// For expression: "p1 = token(1, 2, 3) AND c = 2" return false
+inline bool has_partition_token(const expression& e, const schema& table_schema) {
+    return find_binop(e, [&] (const binary_operator& o) { return is_partition_token_for_schema(o.lhs, table_schema); });
 }
 
 inline bool has_slice_or_needs_filtering(const expression& e) {
@@ -689,7 +687,8 @@ extern expression replace_column_def(const expression&, const column_definition*
 
 // Replaces all occurences of token(p1, p2) on the left hand side with the given colum.
 // For example this changes token(p1, p2) < token(1, 2) to my_column_name < token(1, 2).
-extern expression replace_token(const expression&, const column_definition*);
+// Schema is needed to find out which calls to token() describe the partition token.
+extern expression replace_partition_token(const expression&, const column_definition*, const schema&);
 
 // Recursively copies e and returns it. Calls replace_candidate() on all nodes. If it returns nullopt,
 // continue with the copying. If it returns an expression, that expression replaces the current node.

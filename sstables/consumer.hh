@@ -473,7 +473,7 @@ protected:
     sstables::reader_position_tracker _stream_position;
     // remaining length of input to read (if <0, continue until end of file).
     uint64_t _remain;
-    std::optional<reader_permit::blocked_guard> _blocked_guard;
+    std::optional<reader_permit::awaits_guard> _awaits_guard;
     bool _first_invoke = true;
 public:
     using read_status = data_consumer::read_status;
@@ -503,11 +503,11 @@ public:
     }
 
     void mark_blocked() {
-        _blocked_guard.emplace(_permit);
+        _awaits_guard.emplace(_permit);
     }
 
     void mark_unblocked() {
-        _blocked_guard.reset();
+        _awaits_guard.reset();
     }
 
     data_consumer::processing_result skip(temporary_buffer<char>& data, uint32_t len) {
@@ -612,7 +612,7 @@ public:
         _remain = end - _stream_position.position;
 
         primitive_consumer::reset();
-        reader_permit::blocked_guard _{_permit};
+        reader_permit::awaits_guard _{_permit};
         co_await _input.skip(n);
     }
 

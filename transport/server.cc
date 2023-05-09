@@ -201,7 +201,7 @@ void cql_sg_stats::register_metrics()
 {
     namespace sm = seastar::metrics;
     std::vector<sm::metric_definition> transport_metrics;
-    auto& cur_sg_name = current_scheduling_group().name();
+    auto cur_sg_name = current_scheduling_group().name();
 
     for (uint8_t i = 0; i < static_cast<uint8_t>(cql_binary_opcode::OPCODES_COUNT); ++i) {
         cql_binary_opcode opcode = cql_binary_opcode{i};

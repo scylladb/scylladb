@@ -75,6 +75,8 @@ class mutation;
 class frozen_mutation;
 class reconcilable_result;
 
+namespace s3 { struct endpoint_config; }
+
 namespace service {
 class storage_proxy;
 class storage_service;
@@ -1121,7 +1123,11 @@ public:
     future<> parallel_foreach_table_state(std::function<future<>(compaction::table_state&)> action);
 
     // Add sst to or remove it from the sstables_requiring_cleanup set.
-    bool update_sstable_cleanup_state(const sstables::shared_sstable& sst, compaction::owned_ranges_ptr owned_ranges_ptr);
+    bool update_sstable_cleanup_state(const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges);
+
+    // Uncoditionally erase sst from `sstables_requiring_cleanup`
+    // Returns true iff sst was found and erased.
+    bool erase_sstable_cleanup_state(const sstables::shared_sstable& sst);
 
     // Returns true if the sstable requries cleanup.
     bool requires_cleanup(const sstables::shared_sstable& sst) const;
@@ -1381,6 +1387,14 @@ private:
 
     serialized_action _update_memtable_flush_static_shares_action;
     utils::observer<float> _memtable_flush_static_shares_observer;
+
+    struct object_storage_config_updater {
+        serialized_action action;
+        utils::observer<std::unordered_map<sstring, s3::endpoint_config>> observer;
+        object_storage_config_updater(database&);
+    };
+
+    std::unique_ptr<object_storage_config_updater> _object_storage_config_updater;
 
 public:
     data_dictionary::database as_data_dictionary() const;

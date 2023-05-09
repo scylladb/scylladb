@@ -60,6 +60,7 @@
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/test_utils.hh"
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
 #include "test/lib/random_schema.hh"
@@ -274,7 +275,7 @@ SEASTAR_TEST_CASE(datafile_generation_15) {
     return sstable_compression_test(compressor::deflate);
 }
 
-SEASTAR_TEST_CASE(datafile_generation_16) {
+future<> test_datafile_generation_16(test_env_config cfg) {
     return test_env::do_with_async([] (test_env& env) {
         auto s = uncompressed_schema();
 
@@ -293,7 +294,16 @@ SEASTAR_TEST_CASE(datafile_generation_16) {
         auto sst = make_sstable_containing(env.make_sstable(s), mtp);
         // Not crashing is enough
         BOOST_REQUIRE(sst);
-    });
+        sst->destroy().get();
+    }, std::move(cfg));
+}
+
+SEASTAR_TEST_CASE(datafile_generation_16) {
+    return test_datafile_generation_16({});
+}
+
+SEASTAR_TEST_CASE(datafile_generation_16_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+    return test_datafile_generation_16(test_env_config{ .storage = make_test_object_storage_options() });
 }
 
 // mutation_reader for sstable keeping all the required objects alive.
@@ -1761,7 +1771,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
         for (auto&& mf : fragments) {
             mut.apply(mf);
         }
-        auto sst = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(table.schema(), std::move(permit), { std::move(mut) }), cfg, version);
+        auto sst = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(table.schema(), std::move(permit), std::move(mut)), cfg, version);
         auto ms = as_mutation_source(sst);
 
         for (uint32_t i = 3; i < seq; i++) {
@@ -2502,7 +2512,7 @@ SEASTAR_TEST_CASE(sstable_run_identifier_correctness) {
 
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.run_identifier = sstables::run_id::create_random_id();
-        auto sst = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), { std::move(mut) }), cfg);
+        auto sst = make_sstable_easy(env, make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), std::move(mut)), cfg);
 
         BOOST_REQUIRE(sst->run_identifier() == cfg.run_identifier);
     });
@@ -2679,7 +2689,7 @@ SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
         for (const auto version : writable_sstable_versions) {
             testlog.info("version={}", version);
 
-            auto mr = make_flat_mutation_reader_from_mutations_v2(ss.schema(), env.make_reader_permit(), {mut});
+            auto mr = make_flat_mutation_reader_from_mutations_v2(ss.schema(), env.make_reader_permit(), mut);
             sstable_writer_config cfg = env.manager().configure_writer();
             auto sst = make_sstable_easy(env, std::move(mr), cfg, version, 0);
 
@@ -2782,13 +2792,13 @@ SEASTAR_TEST_CASE(test_sstable_origin) {
             }
 
             // Test empty sstable_origin.
-            auto mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), {mut});
+            auto mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), mut);
             sstable_writer_config cfg = env.manager().configure_writer("");
             auto sst = make_sstable_easy(env, std::move(mr), cfg, version, 0);
             BOOST_REQUIRE_EQUAL(sst->get_origin(), "");
 
             // Test that a random sstable_origin is stored and retrieved properly.
-            mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), {mut});
+            mr = make_flat_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), mut);
             sstring origin = fmt::format("test-{}", tests::random::get_sstring());
             cfg = env.manager().configure_writer(origin);
             sst = make_sstable_easy(env, std::move(mr), cfg, version, 0);
@@ -2812,7 +2822,7 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
         set2->insert(sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key(), 0));
         set2->insert(sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key(), 0));
 
-        BOOST_REQUIRE(boost::accumulate(*compound->all() | boost::adaptors::transformed([] (const sstables::shared_sstable& sst) { return generation_value(sst->generation()); }), unsigned(0)) == 6);
+        BOOST_REQUIRE(boost::accumulate(*compound->all() | boost::adaptors::transformed([] (const sstables::shared_sstable& sst) { return sst->generation().as_int(); }), unsigned(0)) == 6);
         {
             unsigned found = 0;
             for (auto sstables = compound->all(); [[maybe_unused]] auto& sst : *sstables) {
@@ -2913,7 +2923,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 valid = sstables::validate_checksums(sst, permit, default_priority_class()).get();
                 BOOST_REQUIRE(valid);
 
-                auto sst_file = open_file_dma(test::filename(*sst, sstables::component_type::Data).native(), open_flags::wo).get();
+                auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::wo).get();
                 auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
 
                 testlog.info("Validating corrupted {}", sst->get_filename());
@@ -2952,7 +2962,7 @@ SEASTAR_TEST_CASE(partial_sstable_deletion_test) {
         auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut1)});
 
         // Rename TOC into TMP toc, to stress deletion path for partial files
-        rename_file(test::filename(*sst, sstables::component_type::TOC).native(), test::filename(*sst, sstables::component_type::TemporaryTOC).native()).get();
+        rename_file(test(sst).filename(sstables::component_type::TOC).native(), test(sst).filename(sstables::component_type::TemporaryTOC).native()).get();
 
         sst->unlink().get();
     });
@@ -3142,5 +3152,40 @@ SEASTAR_TEST_CASE(find_first_position_in_partition_from_sstable_test) {
                 }
             }
         }
+    });
+}
+
+SEASTAR_TEST_CASE(test_sstable_bytes_on_disk_correctness) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto random_spec = tests::make_random_schema_specification(
+                get_name(),
+                std::uniform_int_distribution<size_t>(1, 4),
+                std::uniform_int_distribution<size_t>(2, 4),
+                std::uniform_int_distribution<size_t>(2, 8),
+                std::uniform_int_distribution<size_t>(2, 8));
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto schema = random_schema.schema();
+
+        testlog.info("Random schema:\n{}", random_schema.cql());
+
+        const auto muts = tests::generate_random_mutations(random_schema, 20).get();
+
+        auto sst = make_sstable_containing(env.make_sstable(schema), muts);
+
+        auto get_bytes_on_disk_from_storage = [&] (const sstables::shared_sstable& sst) {
+            uint64_t bytes_on_disk = 0;
+            auto& underlying_storage = const_cast<sstable::storage&>(sst->get_storage());
+            for (auto& component_type : sstables::test(sst).get_components()) {
+                file f = underlying_storage.open_component(*sst, component_type, open_flags::ro, file_open_options{}, true).get0();
+                bytes_on_disk += f.size().get0();
+            }
+            return bytes_on_disk;
+        };
+
+        auto expected_bytes_on_disk = get_bytes_on_disk_from_storage(sst);
+
+        testlog.info("expected={}, actual={}", expected_bytes_on_disk, sst->bytes_on_disk());
+
+        BOOST_REQUIRE(sst->bytes_on_disk() == expected_bytes_on_disk);
     });
 }

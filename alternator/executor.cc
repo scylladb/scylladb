@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <regex>
-
 #include "utils/base64.hh"
 
 #include <seastar/core/sleep.hh>

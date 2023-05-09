@@ -248,20 +248,17 @@ Error from server: code=2200 [Invalid query] message="Expected 2 elements in val
 > 
 > -- missing values --
 > SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND;
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:64  : syntax error...
-">
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:64 : Syntax error">
 > 
 > -- not tuple  --
 > SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND 45;
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:65 missing '(' at '<missing '">
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:65 : Missing '('">
 > 
 > -- just wrong  --
 > SELECT * FROM foo WHERE a=0 SCYLLA_CLUSTERING_BOUND AND (b, c) > (0, 1);
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:28  : syntax error...
-">
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:28 : Syntax error">
 > SELECT * FROM foo WHERE a=0 AND (b, c) > (0, 1) SCYLLA_CLUSTERING_BOUND;
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:48  : syntax error...
-">
+<Error from server: code=2000 [Syntax error in CQL query] message="line 1:48 : Syntax error">
 > 
 > -- mixing apples and make_count_rows_function
 > SELECT * FROM foo WHERE a=0 AND (b, c) > SCYLLA_CLUSTERING_BOUND(2, 0)  AND (b, c) < (1, 1);

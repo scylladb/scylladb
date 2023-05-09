@@ -817,17 +817,38 @@ cast_prepare_expression(const cast& c, data_dictionary::database db, const sstri
 
 std::optional<expression>
 prepare_function_call(const expr::function_call& fc, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
-    if (!receiver) {
-        // TODO: It is possible to infer the type of a function call if there is only one overload, or if all overloads return the same type
-        return std::nullopt;
+    // Try to extract a column family name from the available information.
+    // Most functions can be prepared without information about the column family, usually just the keyspace is enough.
+    // One exception is the token() function - in order to prepare system.token() we have to know the partition key of the table,
+    // which can only be known when the column family is known.
+    // In cases when someone calls prepare_function_call on a token() function without a known column_family, an exception is thrown by functions::get.
+    std::optional<std::string_view> cf_name;
+    if (schema_opt != nullptr) {
+        cf_name = std::string_view(schema_opt->cf_name());
+    } else if (receiver.get() != nullptr) {
+        cf_name = receiver->cf_name;
     }
+
+    // Prepare the arguments that can be prepared without a receiver.
+    // Prepared expressions have a known type, which helps with finding the right function.
+    std::vector<expression> partially_prepared_args;
+    for (const expression& argument : fc.args) {
+        std::optional<expression> prepared_arg_opt = try_prepare_expression(argument, db, keyspace, schema_opt, nullptr);
+        if (prepared_arg_opt.has_value()) {
+            partially_prepared_args.emplace_back(*prepared_arg_opt);
+        } else {
+            partially_prepared_args.push_back(argument);
+        }
+    }
+
     auto&& fun = std::visit(overloaded_functor{
         [] (const shared_ptr<functions::function>& func) {
             return func;
         },
         [&] (const functions::function_name& name) {
-            auto args = boost::copy_range<std::vector<::shared_ptr<assignment_testable>>>(fc.args | boost::adaptors::transformed(expr::as_assignment_testable));
-            auto fun = functions::functions::get(db, keyspace, name, args, receiver->ks_name, receiver->cf_name, receiver.get());
+            auto args = boost::copy_range<std::vector<::shared_ptr<assignment_testable>>>(
+                    partially_prepared_args | boost::adaptors::transformed(expr::as_assignment_testable));
+            auto fun = functions::functions::get(db, keyspace, name, args, keyspace, cf_name, receiver.get());
             if (!fun) {
                 throw exceptions::invalid_request_exception(format("Unknown function {} called", name));
             }
@@ -843,7 +864,7 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
 
     // Functions.get() will complain if no function "name" type check with the provided arguments.
     // We still have to validate that the return type matches however
-    if (!receiver->type->is_value_compatible_with(*scalar_fun->return_type())) {
+    if (receiver && !receiver->type->is_value_compatible_with(*scalar_fun->return_type())) {
         throw exceptions::invalid_request_exception(format("Type error: cannot assign result of function {} (type {}) to {} (type {})",
                                                     fun->name(), fun->return_type()->as_cql3_type(),
                                                     receiver->name, receiver->type->as_cql3_type()));
@@ -855,11 +876,11 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
     }
 
     std::vector<expr::expression> parameters;
-    parameters.reserve(fc.args.size());
+    parameters.reserve(partially_prepared_args.size());
     bool all_terminal = true;
-    for (size_t i = 0; i < fc.args.size(); ++i) {
-        expr::expression e = prepare_expression(fc.args[i], db, keyspace, schema_opt,
-                                                functions::functions::make_arg_spec(receiver->ks_name, receiver->cf_name, *scalar_fun, i));
+    for (size_t i = 0; i < partially_prepared_args.size(); ++i) {
+        expr::expression e = prepare_expression(partially_prepared_args[i], db, keyspace, schema_opt,
+                                                functions::functions::make_arg_spec(keyspace, cf_name, *scalar_fun, i));
         if (!expr::is<expr::constant>(e)) {
             all_terminal = false;
         }
@@ -905,6 +926,17 @@ test_assignment_function_call(const cql3::expr::function_call& fc, data_dictiona
         }
     } catch (exceptions::invalid_request_exception& e) {
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+    }
+}
+
+static assignment_testable::test_result expression_test_assignment(const data_type& expr_type,
+                                                                   const column_specification& receiver) {
+    if (receiver.type->underlying_type() == expr_type->underlying_type()) {
+        return assignment_testable::test_result::EXACT_MATCH;
+    } else if (receiver.type->is_value_compatible_with(*expr_type)) {
+        return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+    } else {
+        return assignment_testable::test_result::NOT_ASSIGNABLE;
     }
 }
 
@@ -958,8 +990,20 @@ std::optional<expression> prepare_conjunction(const conjunction& conj,
 std::optional<expression>
 try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
     return expr::visit(overloaded_functor{
-        [] (const constant&) -> std::optional<expression> {
-            on_internal_error(expr_logger, "Can't prepare constant_value, it should not appear in parser output");
+        [&] (const constant& value) -> std::optional<expression> {
+            if (receiver && !is_assignable(expression_test_assignment(value.type, *receiver))) {
+                throw exceptions::invalid_request_exception(
+                    format("cannot assign a constant {:user} of type {} to receiver {} of type {}", value,
+                           value.type->as_cql3_type(), receiver->name, receiver->type->as_cql3_type()));
+            }
+
+            constant result = value;
+            if (receiver) {
+                // The receiver might have a different type from the constant, but this is allowed if the types are compatible.
+                // In such case the type is implictly converted to receiver type.
+                result.type = receiver->type;
+            }
+            return result;
         },
         [&] (const binary_operator& binop) -> std::optional<expression> {
             if (receiver.get() != nullptr && &receiver->type->without_reversed() != boolean_type.get()) {
@@ -1013,24 +1057,6 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
                 .type = static_cast<const collection_type_impl&>(sub_col_type).value_comparator(),
             };
         },
-        [&] (const token& tk) -> std::optional<expression> {
-            if (!schema_opt) {
-                throw exceptions::invalid_request_exception("cannot process token() function without schema");
-            }
-
-            std::vector<expression> prepared_token_args;
-            prepared_token_args.reserve(tk.args.size());
-
-            for (const expression& arg : tk.args) {
-                auto prepared_arg_opt = try_prepare_expression(arg, db, keyspace, schema_opt, receiver);
-                if (!prepared_arg_opt) {
-                    return std::nullopt;
-                }
-                prepared_token_args.emplace_back(std::move(*prepared_arg_opt));
-            }
-
-            return token(std::move(prepared_token_args));
-        },
         [&] (const unresolved_identifier& unin) -> std::optional<expression> {
             if (!schema_opt) {
                 throw exceptions::invalid_request_exception(fmt::format("Cannot resolve column {} without schema", unin.ident->to_cql_string()));
@@ -1076,9 +1102,8 @@ assignment_testable::test_result
 test_assignment(const expression& expr, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) {
     using test_result = assignment_testable::test_result;
     return expr::visit(overloaded_functor{
-        [&] (const constant&) -> test_result {
-            // constants shouldn't appear in parser output, only untyped_constants
-            on_internal_error(expr_logger, "constants are not yet reachable via test_assignment()");
+        [&] (const constant& value) -> test_result {
+            return expression_test_assignment(value.type, receiver);
         },
         [&] (const binary_operator&) -> test_result {
             on_internal_error(expr_logger, "binary_operators are not yet reachable via test_assignment()");
@@ -1086,14 +1111,11 @@ test_assignment(const expression& expr, data_dictionary::database db, const sstr
         [&] (const conjunction&) -> test_result {
             on_internal_error(expr_logger, "conjunctions are not yet reachable via test_assignment()");
         },
-        [&] (const column_value&) -> test_result {
-            on_internal_error(expr_logger, "column_values are not yet reachable via test_assignment()");
+        [&] (const column_value& col_val) -> test_result {
+            return expression_test_assignment(col_val.col->type, receiver);
         },
         [&] (const subscript&) -> test_result {
             on_internal_error(expr_logger, "subscripts are not yet reachable via test_assignment()");
-        },
-        [&] (const token&) -> test_result {
-            on_internal_error(expr_logger, "tokens are not yet reachable via test_assignment()");
         },
         [&] (const unresolved_identifier&) -> test_result {
             on_internal_error(expr_logger, "unresolved_identifiers are not yet reachable via test_assignment()");
@@ -1221,11 +1243,20 @@ static lw_shared_ptr<column_specification> get_lhs_receiver(const expression& pr
             data_type tuple_type = tuple_type_impl::get_instance(tuple_types);
             return make_lw_shared<column_specification>(schema.ks_name(), schema.cf_name(), std::move(identifier), std::move(tuple_type));
         },
-        [&](const token& col_val) -> lw_shared_ptr<column_specification> {
-            return make_lw_shared<column_specification>(schema.ks_name(),
-                                                        schema.cf_name(),
-                                                        ::make_shared<column_identifier>("partition key token", true),
-                                                        dht::token::get_token_validator());
+        [&](const function_call& fun_call) -> lw_shared_ptr<column_specification> {
+            data_type return_type = std::visit(
+                    overloaded_functor{
+                        [](const shared_ptr<db::functions::function>& fun) -> data_type { return fun->return_type(); },
+                        [&](const functions::function_name&) -> data_type {
+                            on_internal_error(expr_logger,
+                                              format("get_lhs_receiver: unprepared function call {:debug}", fun_call));
+                        }},
+                    fun_call.func);
+
+            return make_lw_shared<column_specification>(
+                schema.ks_name(), schema.cf_name(),
+                ::make_shared<column_identifier>(format("{:user}", fun_call), true),
+                return_type);
         },
         [](const auto& other) -> lw_shared_ptr<column_specification> {
             on_internal_error(expr_logger, format("get_lhs_receiver: unexpected expression: {}", other));

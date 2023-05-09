@@ -53,6 +53,8 @@
 #include <stdexcept>
 #include <malloc.h>
 
+#include "utils/to_string.hh"
+
 namespace utils {
 
 struct chunked_vector_free_deleter {
@@ -104,6 +106,8 @@ public:
     chunked_vector(chunked_vector&& x) noexcept;
     template <typename Iterator>
     chunked_vector(Iterator begin, Iterator end);
+    template <std::ranges::range Range>
+    chunked_vector(const Range& r) : chunked_vector(r.begin(), r.end()) {}
     explicit chunked_vector(size_t n, const T& value = T());
     ~chunked_vector();
     chunked_vector& operator=(const chunked_vector& x);
@@ -490,6 +494,11 @@ chunked_vector<T, max_contiguous_allocation>::clear() {
         pop_back();
     }
     shrink_to_fit();
+}
+
+template <typename T, size_t max_contiguous_allocation>
+std::ostream& operator<<(std::ostream& os, const chunked_vector<T, max_contiguous_allocation>& v) {
+    return utils::format_range(os, v);
 }
 
 }
