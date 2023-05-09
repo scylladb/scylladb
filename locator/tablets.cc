@@ -202,6 +202,7 @@ size_t tablet_metadata::external_memory_usage() const {
 
 class tablet_effective_replication_map : public effective_replication_map {
     table_id _table;
+    tablet_sharder _sharder;
 private:
     gms::inet_address get_endpoint_for_host_id(host_id host) const {
         auto endpoint_opt = _tmptr->get_endpoint_for_host_id(host);
@@ -228,6 +229,7 @@ public:
                                      size_t replication_factor)
             : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
             , _table(table)
+            , _sharder(*_tmptr, table)
     { }
 
     virtual ~tablet_effective_replication_map() = default;
@@ -300,6 +302,10 @@ public:
             }
         };
         return std::make_unique<splitter>(_tmptr, get_tablet_map());
+    }
+
+    const dht::sharder& get_sharder(const schema& s) const override {
+        return _sharder;
     }
 };
 
