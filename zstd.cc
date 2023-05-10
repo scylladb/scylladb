@@ -16,8 +16,8 @@
 #include "compress.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/class_registrator.hh"
-#include "utils/reusable_buffer.hh"
-#include <concepts>
+#include "utils/managed_bytes.hh"
+#include "bytes_ostream.hh"
 
 static const sstring COMPRESSION_LEVEL = "compression_level";
 static const sstring COMPRESSOR_NAME = compressor::namespace_prefix + "ZstdCompressor";
@@ -42,6 +42,10 @@ public:
     size_t compress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress_max_size(size_t input_len) const override;
+
+    size_t uncompress(bytes_source& in, bytes_ostream&) const override;
+
+    size_t compress(bytes_source& in, bytes_ostream&) const override;
 
     ptr_type replace(const opt_getter&) const override;
 
@@ -132,6 +136,82 @@ size_t zstd_processor::compress(const char* input, size_t input_len, char* outpu
     }
     return ret;
 }
+
+template<typename Func, typename... Args>
+static size_t z_checked(std::string_view what, Func&& f, Args ...args) {
+    auto ret = f(args...);
+    if (ZSTD_isError(ret)) {
+        throw std::runtime_error(fmt::format("ZSTD {} failure: {}", what, ZSTD_getErrorName(ret)));
+    }
+    return ret;
+}
+
+size_t zstd_processor::uncompress(bytes_source& in, bytes_ostream& os) const {
+    z_checked("decompression", ZSTD_initDStream, _dctx.get());
+
+    size_t off = os.size_bytes();
+    ZSTD_outBuffer output = { nullptr, 0, 0 };
+
+    while (!in.empty()) {
+        auto frag = in.next();
+        auto size = frag.size();
+
+        ZSTD_inBuffer input = { frag.data(), size, 0 };
+
+        while (input.pos < input.size) {
+            if (output.pos == output.size) {
+                auto need = ZSTD_DStreamOutSize();
+                output.dst = os.write_place_holder(need);
+                output.size = need;
+                output.pos = 0;
+            }
+
+            z_checked("decompression", ZSTD_decompressStream, _dctx.get(), &output, &input);
+        }
+    }
+
+    os.remove_suffix(output.size - output.pos);
+    return os.size_bytes() - off;
+}
+
+size_t zstd_processor::compress(bytes_source& in, bytes_ostream& os) const {
+    z_checked("compression", ZSTD_initCStream, _cctx.get(), _compression_level);
+
+    size_t off = os.size_bytes();
+    ZSTD_outBuffer output = { nullptr, 0, 0 };
+
+    while (!in.empty()) {
+        auto frag = in.next();
+        auto size = frag.size();
+
+        ZSTD_inBuffer input = { frag.data(), size, 0 };
+        ZSTD_EndDirective mode = in.size() == size ? ZSTD_e_end : ZSTD_e_continue;
+
+        for (;;) {
+            if (output.pos == output.size) {
+                auto need = std::min(ZSTD_CStreamOutSize(), ZSTD_compressBound(input.size - input.pos));
+                output.dst = os.write_place_holder(need);
+                output.size = need;
+                output.pos = 0;
+            }
+
+            auto n = z_checked("compression", ZSTD_compressStream2, _cctx.get(), &output, &input, mode);
+
+            // if last chunk, we are finished when compress returns 0
+            if (mode == ZSTD_e_end && n == 0) {
+                break;
+            }
+            // else we are done whenever input is consumed
+            if (mode == ZSTD_e_continue && input.pos == input.size) {
+                break;
+            }
+        }
+    }
+
+    os.remove_suffix(output.size - output.pos);
+    return os.size_bytes() - off;
+}
+
 
 size_t zstd_processor::compress_max_size(size_t input_len) const {
     return ZSTD_compressBound(input_len);
