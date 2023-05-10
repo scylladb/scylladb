@@ -5089,10 +5089,10 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     speculative_retry::type retry_type = schema->speculative_retry().get_type();
     std::optional<gms::inet_address> extra_replica;
 
-    inet_address_vector_replica_set all_replicas = get_live_sorted_endpoints(*erm, token);
+    inet_address_vector_replica_set all_replicas = get_endpoints_for_reading(schema->ks_name(), *erm, token);
     // Check for a non-local read before heat-weighted load balancing
     // reordering of endpoints happens. The local endpoint, if
-    // present, is always first in the list, as get_live_sorted_endpoints()
+    // present, is always first in the list, as get_endpoints_for_reading()
     // orders the list by proximity to the local endpoint.
     is_read_non_local |= !all_replicas.empty() && all_replicas.front() != utils::fb_utilities::get_broadcast_address();
 
@@ -5403,7 +5403,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     auto& gossiper = _remote->gossiper();
     while (i != ranges.end()) {
         dht::partition_range& range = *i;
-        inet_address_vector_replica_set live_endpoints = get_live_sorted_endpoints(*erm, end_token(range));
+        inet_address_vector_replica_set live_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(range));
         inet_address_vector_replica_set merged_preferred_replicas = preferred_replicas_for_range(*i);
         inet_address_vector_replica_set filtered_endpoints = filter_for_query(cl, *erm, live_endpoints, merged_preferred_replicas, gossiper, pcf);
         std::vector<dht::token_range> merged_ranges{to_token_range(range)};
@@ -5416,7 +5416,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         {
             const auto current_range_preferred_replicas = preferred_replicas_for_range(*i);
             dht::partition_range& next_range = *i;
-            inet_address_vector_replica_set next_endpoints = get_live_sorted_endpoints(*erm, end_token(next_range));
+            inet_address_vector_replica_set next_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(next_range));
             inet_address_vector_replica_set next_filtered_endpoints = filter_for_query(cl, *erm, next_endpoints, current_range_preferred_replicas, gossiper, pcf);
 
             // Origin has this to say here:
@@ -6005,10 +6005,15 @@ void storage_proxy::sort_endpoints_by_proximity(const locator::topology& topo, i
     }
 }
 
-inet_address_vector_replica_set storage_proxy::get_live_sorted_endpoints(const locator::effective_replication_map& erm, const dht::token& token) const {
-    auto eps = get_live_endpoints(erm, token);
-    sort_endpoints_by_proximity(erm.get_topology(), eps);
-    return eps;
+inet_address_vector_replica_set storage_proxy::get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const {
+    auto endpoints = erm.get_token_metadata_ptr()->endpoints_for_reading(token, ks_name);
+    if (!endpoints) {
+        endpoints = erm.get_natural_endpoints_without_node_being_replaced(token);
+    }
+    auto it = boost::range::remove_if(*endpoints, std::not_fn(std::bind_front(&storage_proxy::is_alive, this)));
+    endpoints->erase(it, endpoints->end());
+    sort_endpoints_by_proximity(erm.get_topology(), *endpoints);
+    return std::move(*endpoints);
 }
 
 bool storage_proxy::is_alive(const gms::inet_address& ep) const {

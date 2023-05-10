@@ -201,6 +201,8 @@ add_scylla_test(map_difference_test
   KIND BOOST)
 add_scylla_test(network_topology_strategy_test
   KIND SEASTAR)
+add_scylla_test(token_metadata_test
+  KIND SEASTAR)
 add_scylla_test(nonwrapping_range_test
   KIND BOOST)
 add_scylla_test(observable_test

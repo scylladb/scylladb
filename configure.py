@@ -435,6 +435,7 @@ scylla_tests = set([
     'test/boost/mutation_writer_test',
     'test/boost/mvcc_test',
     'test/boost/network_topology_strategy_test',
+    'test/boost/token_metadata_test',
     'test/boost/tablets_test',
     'test/boost/nonwrapping_range_test',
     'test/boost/observable_test',
