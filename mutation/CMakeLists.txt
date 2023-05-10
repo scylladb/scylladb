@@ -6,6 +6,7 @@ target_sources(mutation
     frozen_mutation.cc
     mutation.cc
     mutation_fragment.cc
+    mutation_fragment_stream_validator.cc
     mutation_partition.cc
     mutation_partition_serializer.cc
     mutation_partition_v2.cc
