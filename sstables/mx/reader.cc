@@ -2176,6 +2176,7 @@ future<uint64_t> validate(
         co_await idx_reader->close();
     }
 
+    co_await context->close();
     co_return consumer.error_count();
 }
 
