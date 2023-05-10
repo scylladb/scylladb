@@ -75,6 +75,10 @@ struct topology {
 
     std::optional<transition_state> tstate;
 
+    using version_t = int64_t;
+    static constexpr version_t initial_version = 1;
+    version_t version = initial_version;
+
     // Nodes that are normal members of the ring
     std::unordered_map<raft::server_id, replica_state> normal_nodes;
     // Nodes that are left

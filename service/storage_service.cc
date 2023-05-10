@@ -345,6 +345,8 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
     co_await mutate_token_metadata(seastar::coroutine::lambda([this, &id2ip, &am] (mutable_token_metadata_ptr tmptr) -> future<> {
         co_await tmptr->clear_gently(); // drop previous state
 
+        tmptr->set_version(_topology_state_machine._topology.version);
+
         auto add_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
             locator::host_id host_id{id.uuid()};
             auto ip = co_await id2ip(id);
@@ -532,6 +534,7 @@ class topology_mutation_builder {
 public:
     topology_mutation_builder(api::timestamp_type ts);
     topology_mutation_builder& set_transition_state(topology::transition_state);
+    topology_mutation_builder& set_version(topology::version_t);
     topology_mutation_builder& set_current_cdc_generation_id(const cdc::generation_id_v2&);
     topology_mutation_builder& set_new_cdc_generation_data_uuid(const utils::UUID& value);
     topology_mutation_builder& set_global_topology_request(global_topology_request);
@@ -622,6 +625,11 @@ canonical_mutation topology_node_mutation_builder::build() {
 
 topology_mutation_builder& topology_mutation_builder::set_transition_state(topology::transition_state value) {
     _m.set_static_cell("transition_state", ::format("{}", value), _ts);
+    return *this;
+}
+
+topology_mutation_builder& topology_mutation_builder::set_version(topology::version_t value) {
+    _m.set_static_cell("version", value, _ts);
     return *this;
 }
 

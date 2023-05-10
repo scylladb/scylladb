@@ -72,6 +72,12 @@ private:
     long _ring_version = 0;
     static thread_local long _static_ring_version;
 
+    // Zero means that token_metadata versions are not supported,
+    // this will be used in RPC handling to decide whether we
+    // need to apply fencing or not.
+    // The initial valid version is 1;
+    token_metadata::version_t _version = 0;
+
     // Note: if any member is added to this class
     // clone_async() must be updated to copy that member.
 
@@ -278,6 +284,22 @@ public:
         tlogger.debug("ring_version={}", _ring_version);
     }
 
+    token_metadata::version_t get_version() const {
+        return _version;
+    }
+    void set_version(token_metadata::version_t version) {
+        if (version <= 0) {
+            on_internal_error(tlogger,
+                format("token_metadata_impl::set_version: invalid new version {}", version));
+        }
+        if (version < _version) {
+            on_internal_error(tlogger,
+                format("token_metadata_impl::set_version: new version can't be smaller than the previous one, "
+                       "new version {}, previous version {}", version, _version));
+        }
+        _version = version;
+    }
+
     friend class token_metadata;
 };
 
@@ -328,6 +350,7 @@ future<std::unique_ptr<token_metadata_impl>> token_metadata_impl::clone_async() 
     ret->_leaving_endpoints = _leaving_endpoints;
     ret->_replacing_endpoints = _replacing_endpoints;
     ret->_ring_version = _ring_version;
+    ret->_version = _version;
     co_return ret;
 }
 
@@ -1133,6 +1156,15 @@ token_metadata::get_ring_version() const {
 void
 token_metadata::invalidate_cached_rings() {
     _impl->invalidate_cached_rings();
+}
+
+auto
+token_metadata::get_version() const -> version_t {
+    return _impl->get_version();
+}
+void
+token_metadata::set_version(version_t version) {
+    _impl->set_version(version);
 }
 
 void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {

@@ -25,6 +25,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sharded.hh>
+#include "service/topology_state_machine.hh"
 
 #include "locator/types.hh"
 #include "locator/topology.hh"
@@ -78,6 +79,7 @@ public:
         topology::config topo_cfg;
     };
     using inet_address = gms::inet_address;
+    using version_t = service::topology::version_t;
 private:
     friend class token_metadata_ring_splitter;
     class tokens_iterator {
@@ -274,6 +276,9 @@ public:
 
     long get_ring_version() const;
     void invalidate_cached_rings();
+
+    version_t get_version() const;
+    void set_version(version_t version);
 
     friend class token_metadata_impl;
 };
