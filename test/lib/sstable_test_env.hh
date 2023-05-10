@@ -158,7 +158,7 @@ public:
     }
 
     // looks up the sstable in the given dir
-    future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type generation);
+    future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type generation = sstables::generation_type{1});
     future<shared_sstable> reusable_sst(schema_ptr schema, sstring dir, sstables::generation_type::int_t gen_value) {
         return reusable_sst(std::move(schema), std::move(dir), sstables::generation_type(gen_value));
     }

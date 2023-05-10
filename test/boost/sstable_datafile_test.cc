@@ -1927,12 +1927,12 @@ static void copy_directory(fs::path src_dir, fs::path dst_dir) {
 SEASTAR_TEST_CASE(test_unknown_component) {
     return test_env::do_with_async([] (test_env& env) {
         copy_directory("test/resource/sstables/unknown_component", std::string(env.tempdir().path().string()) + "/unknown_component");
-        auto sstp = env.reusable_sst(uncompressed_schema(), env.tempdir().path().string() + "/unknown_component", 1).get0();
+        auto sstp = env.reusable_sst(uncompressed_schema(), env.tempdir().path().string() + "/unknown_component").get0();
         test::create_links(*sstp, env.tempdir().path().string()).get();
         // check that create_links() moved unknown component to new dir
         BOOST_REQUIRE(file_exists(env.tempdir().path().string() + "/la-1-big-UNKNOWN.txt").get0());
 
-        sstp = env.reusable_sst(uncompressed_schema(), 1).get0();
+        sstp = env.reusable_sst(uncompressed_schema(), generation_type{1}).get0();
         sstables::sstable_directory::delete_atomically({sstp}).get();
         // assure unknown component is deleted
         BOOST_REQUIRE(!file_exists(env.tempdir().path().string() + "/la-1-big-UNKNOWN.txt").get0());
@@ -2119,7 +2119,7 @@ SEASTAR_TEST_CASE(sstable_bad_tombstone_histogram_test) {
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", int32_type);
         auto s = builder.build();
-        auto sst = env.reusable_sst(s, "test/resource/sstables/bad_tombstone_histogram", 1).get0();
+        auto sst = env.reusable_sst(s, "test/resource/sstables/bad_tombstone_histogram").get0();
         auto histogram = sst->get_stats_metadata().estimated_tombstone_drop_time;
         BOOST_REQUIRE(histogram.max_bin_size == sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE);
         // check that bad histogram was discarded

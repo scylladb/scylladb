@@ -43,7 +43,7 @@ using namespace std::chrono_literals;
 
 SEASTAR_TEST_CASE(nonexistent_key) {
   return test_env::do_with_async([] (test_env& env) {
-    env.reusable_sst(uncompressed_schema(), uncompressed_dir(), 1).then([&env] (auto sstp) {
+    env.reusable_sst(uncompressed_schema(), uncompressed_dir()).then([&env] (auto sstp) {
         return do_with(dht::partition_range::make_singular(make_dkey(uncompressed_schema(), "invalid_key")), [&env, sstp] (auto& pr) {
             auto s = uncompressed_schema();
             return with_closeable(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()), [sstp, s] (auto& rd) {
@@ -58,7 +58,7 @@ SEASTAR_TEST_CASE(nonexistent_key) {
 }
 
 future<> test_no_clustered(sstables::test_env& env, bytes&& key, std::unordered_map<bytes, data_value> &&map) {
-    return env.reusable_sst(uncompressed_schema(), uncompressed_dir(), 1).then([&env, k = std::move(key), map = std::move(map)] (auto sstp) mutable {
+    return env.reusable_sst(uncompressed_schema(), uncompressed_dir()).then([&env, k = std::move(key), map = std::move(map)] (auto sstp) mutable {
         return do_with(dht::partition_range::make_singular(make_dkey(uncompressed_schema(), std::move(k))), [&env, sstp, map = std::move(map)] (auto& pr) {
             auto s = uncompressed_schema();
             return with_closeable(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()), [sstp, s, map = std::move(map)] (auto& rd) mutable {
@@ -331,7 +331,7 @@ SEASTAR_TEST_CASE(complex_sst3_k2) {
 }
 
 future<> test_range_reads(sstables::test_env& env, const dht::token& min, const dht::token& max, std::vector<bytes>& expected) {
-    return env.reusable_sst(uncompressed_schema(), uncompressed_dir(), 1).then([&env, min, max, &expected] (auto sstp) mutable {
+    return env.reusable_sst(uncompressed_schema(), uncompressed_dir()).then([&env, min, max, &expected] (auto sstp) mutable {
         auto s = uncompressed_schema();
         auto count = make_lw_shared<size_t>(0);
         auto expected_size = expected.size();
@@ -439,7 +439,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
 
 SEASTAR_TEST_CASE(compact_storage_sparse_read) {
   return test_env::do_with_async([] (test_env& env) {
-    env.reusable_sst(compact_sparse_schema(), "test/resource/sstables/compact_sparse", 1).then([&env] (auto sstp) {
+    env.reusable_sst(compact_sparse_schema(), "test/resource/sstables/compact_sparse").then([&env] (auto sstp) {
         return do_with(dht::partition_range::make_singular(make_dkey(compact_sparse_schema(), "first_row")), [&env, sstp] (auto& pr) {
             auto s = compact_sparse_schema();
             return with_closeable(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()), [sstp, s] (auto& rd) {
@@ -459,7 +459,7 @@ SEASTAR_TEST_CASE(compact_storage_sparse_read) {
 
 SEASTAR_TEST_CASE(compact_storage_simple_dense_read) {
   return test_env::do_with_async([] (test_env& env) {
-    env.reusable_sst(compact_simple_dense_schema(), "test/resource/sstables/compact_simple_dense", 1).then([&env] (auto sstp) {
+    env.reusable_sst(compact_simple_dense_schema(), "test/resource/sstables/compact_simple_dense").then([&env] (auto sstp) {
         return do_with(dht::partition_range::make_singular(make_dkey(compact_simple_dense_schema(), "first_row")), [&env, sstp] (auto& pr) {
             auto s = compact_simple_dense_schema();
             return with_closeable(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()), [sstp, s] (auto& rd) {
@@ -481,7 +481,7 @@ SEASTAR_TEST_CASE(compact_storage_simple_dense_read) {
 
 SEASTAR_TEST_CASE(compact_storage_dense_read) {
   return test_env::do_with_async([] (test_env& env) {
-    env.reusable_sst(compact_dense_schema(), "test/resource/sstables/compact_dense", 1).then([&env] (auto sstp) {
+    env.reusable_sst(compact_dense_schema(), "test/resource/sstables/compact_dense").then([&env] (auto sstp) {
         return do_with(dht::partition_range::make_singular(make_dkey(compact_dense_schema(), "first_row")), [&env, sstp] (auto& pr) {
             auto s = compact_dense_schema();
             return with_closeable(sstp->make_reader(s, env.make_reader_permit(), pr, s->full_slice()), [sstp, s] (auto& rd) {
@@ -507,7 +507,7 @@ SEASTAR_TEST_CASE(compact_storage_dense_read) {
 // Make sure we don't regress on that.
 SEASTAR_TEST_CASE(broken_ranges_collection) {
   return test_env::do_with_async([] (test_env& env) {
-    env.reusable_sst(peers_schema(), "test/resource/sstables/broken_ranges", 2).then([&env] (auto sstp) {
+    env.reusable_sst(peers_schema(), "test/resource/sstables/broken_ranges", generation_type{2}).then([&env] (auto sstp) {
         auto s = peers_schema();
         return with_closeable(sstp->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), query::full_partition_range), [s] (auto& reader) {
           return repeat([s, &reader] {
