@@ -229,6 +229,16 @@ public:
     bool has_node(inet_address id) const noexcept;
 
     /**
+     * Stores current DC/rack assignment for host_id
+     *
+     * Adds or updates a node with given host_id and inet_address (optional when updating, mandatory for new nodes)
+     */
+    const node* add_or_update_endpoint(host_id id, std::optional<inet_address> ep,
+                                       std::optional<endpoint_dc_rack> opt_dr,
+                                       std::optional<node::state> opt_st,
+                                       std::optional<shard_id> shard_count = std::nullopt);
+
+    /**
      * Stores current DC/rack assignment for ep
      *
      * Adds or updates a node with given endpoint

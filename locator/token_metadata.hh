@@ -131,6 +131,12 @@ public:
     const std::unordered_map<token, inet_address>& get_bootstrap_tokens() const;
 
     /**
+     * Update or add endpoint given its host_id, inet_address and endpoint_dc_rack.
+     */
+    void update_topology(host_id host_id, inet_address ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st = std::nullopt,
+                         std::optional<shard_id> shard_count = std::nullopt);
+
+    /**
      * Update or add endpoint given its inet_address and endpoint_dc_rack.
      */
     void update_topology(inet_address ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st = std::nullopt,

@@ -118,6 +118,10 @@ public:
         return _bootstrap_tokens;
     }
 
+    void update_topology(host_id id, inet_address ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count = std::nullopt) {
+        _topology.add_or_update_endpoint(id, ep, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
+    }
+
     void update_topology(inet_address ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count = std::nullopt) {
         _topology.add_or_update_endpoint(ep, std::nullopt, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
     }
@@ -930,6 +934,11 @@ token_metadata::get_leaving_endpoints() const {
 const std::unordered_map<token, inet_address>&
 token_metadata::get_bootstrap_tokens() const {
     return _impl->get_bootstrap_tokens();
+}
+
+void
+token_metadata::update_topology(host_id host_id, inet_address ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count) {
+    _impl->update_topology(host_id, ep, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
 }
 
 void

@@ -317,7 +317,11 @@ void topology::index_node(const node* node) {
     if (node->endpoint()) {
         auto eit = _nodes_by_endpoint.find(node->endpoint());
         if (eit != _nodes_by_endpoint.end()) {
-            if (eit->second->is_leaving() || eit->second->left()) {
+            // When replacing a node with the same address (and different host_id),
+            // erase the existing entry before emplacing the indexed `node` below.
+            if (eit->second->host_id() != node->host_id() && eit->second->host_id() && node->host_id()) {
+                _nodes_by_endpoint.erase(eit);
+            } else if (eit->second->is_leaving() || eit->second->left()) {
                 _nodes_by_endpoint.erase(node->endpoint());
             } else if (!node->is_leaving() && !node->left()) {
                 if (node->host_id()) {
@@ -436,6 +440,29 @@ const node* topology::find_node(node::idx_type idx) const noexcept {
         return nullptr;
     }
     return _nodes.at(idx).get();
+}
+
+const node* topology::add_or_update_endpoint(host_id id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count)
+{
+    if (tlogger.is_enabled(log_level::trace)) {
+        tlogger.trace("topology[{}]: add_or_update_endpoint: host_id={} ep={} dc={} rack={} state={}, shards={}, at {}", fmt::ptr(this),
+            id, opt_ep.value_or(inet_address{}), opt_dr.value_or(endpoint_dc_rack{}).dc, opt_dr.value_or(endpoint_dc_rack{}).rack, opt_st.value_or(node::state::none), shard_count,
+            current_backtrace());
+    }
+    auto n = find_node(id);
+    if (n) {
+        return update_node(make_mutable(n), std::nullopt, std::move(opt_ep), std::move(opt_dr), std::move(opt_st), std::move(shard_count));
+    } else if (opt_ep && (n = find_node(*opt_ep)) && (n->host_id() == id || !n->host_id())) {
+        return update_node(make_mutable(n), std::move(id), std::nullopt, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
+    } else {
+        if (!opt_ep) {
+            on_internal_error(tlogger, format("add_or_update_endpoint: host_id={}: opt_ep must be engaged", id));
+        }
+        return add_node(id, *opt_ep,
+                        opt_dr.value_or(endpoint_dc_rack::default_location),
+                        opt_st.value_or(node::state::normal),
+                        shard_count.value_or(0));
+    }
 }
 
 const node* topology::add_or_update_endpoint(inet_address ep, std::optional<host_id> opt_id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count)
