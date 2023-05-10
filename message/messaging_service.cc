@@ -632,9 +632,9 @@ messaging_service::initial_scheduling_info() const {
     sched_infos.reserve(sched_infos.size() +
         _scheduling_config.statement_tenants.size() * PER_TENANT_CONNECTION_COUNT);
     for (const auto& tenant : _scheduling_config.statement_tenants) {
-        sched_infos.push_back({ tenant.sched_group, "statement:" + tenant.name });
-        sched_infos.push_back({ tenant.sched_group, "statement-ack:" + tenant.name });
-        sched_infos.push_back({ tenant.sched_group, "forward:" + tenant.name });
+        for (auto&& connection_prefix : _connection_types_prefix) {
+            sched_infos.push_back({ tenant.sched_group, sstring(connection_prefix) + tenant.name });
+        }
     }
 
     assert(sched_infos.size() == PER_SHARD_CONNECTION_COUNT +
