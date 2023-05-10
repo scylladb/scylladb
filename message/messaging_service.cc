@@ -286,6 +286,26 @@ bool messaging_service::is_same_rack(inet_address addr) const {
     return topo.get_rack(addr) == topo.get_rack();
 }
 
+future<> messaging_service::ban_host(locator::host_id id) {
+    return container().invoke_on_all([id] (messaging_service& ms) {
+        if (ms._banned_hosts.contains(id) || ms.is_shutting_down()) {
+            return;
+        }
+
+        ms._banned_hosts.insert(id);
+        auto [start, end] = ms._host_connections.equal_range(id);
+        for (auto it = start; it != end; ++it) {
+            auto& conn_ref = it->second;
+            conn_ref.server.abort_connection(conn_ref.conn_id);
+        }
+        ms._host_connections.erase(start, end);
+    });
+}
+
+bool messaging_service::is_host_banned(locator::host_id id) {
+    return _banned_hosts.contains(id);
+}
+
 void messaging_service::do_start_listen() {
     bool listen_to_bc = _cfg.listen_on_broadcast_address && _cfg.ip != utils::fb_utilities::get_broadcast_address();
     rpc::server_options so;
@@ -397,6 +417,10 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
     register_handler(this, messaging_verb::CLIENT_ID, [this] (rpc::client_info& ci, gms::inet_address broadcast_address, uint32_t src_cpu_id, rpc::optional<uint64_t> max_result_size, rpc::optional<utils::UUID> host_id) {
         if (host_id) {
             auto peer_host_id = locator::host_id(*host_id);
+            if (is_host_banned(peer_host_id)) {
+                ci.server.abort_connection(ci.conn_id);
+                return rpc::no_wait;
+            }
             ci.attach_auxiliary("host_id", peer_host_id);
             _host_connections.emplace(peer_host_id, connection_ref {
                 .server = ci.server,
