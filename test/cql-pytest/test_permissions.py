@@ -418,3 +418,6 @@ def test_udf_permissions_no_args(cql):
                     grant(cql, 'SELECT', table, username)
                     check_enforced(cql, username, permission='EXECUTE', resource=f'function {keyspace}.{fun}()',
                             function=lambda: user_session.execute(f'SELECT {keyspace}.{fun}() FROM {table}'))
+                    with pytest.raises(SyntaxException):
+                        nonexistent_func = unique_name()
+                        user_session.execute(f'GRANT SELECT ON FUNCTION {keyspace}.{nonexistent_func}() TO cassandra')

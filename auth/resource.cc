@@ -292,7 +292,7 @@ std::optional<std::vector<std::string_view>> functions_resource_view::function_a
 
     std::vector<std::string_view> parts;
     if (_resource._parts[3] == "") {
-        return {};
+        return parts;
     }
     for (size_t i = 3; i < _resource._parts.size(); i++) {
         parts.push_back(_resource._parts[i]);
