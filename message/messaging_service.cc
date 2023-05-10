@@ -660,6 +660,14 @@ messaging_service::scheduling_group_for_isolation_cookie(const sstring& isolatio
             return info.sched_group;
         }
     }
+    // Check for the case of the client using a connection class we don't
+    // recognize, but we know its a tenant, not a system connection.
+    // Fall-back to the default tenant in this case.
+    for (auto&& connection_prefix : _connection_types_prefix) {
+        if (isolation_cookie.find(connection_prefix.data()) == 0) {
+            return _scheduling_config.statement_tenants.front().sched_group;
+        }
+    }
     // Client is using a new connection class that the server doesn't recognize yet.
     // Assume it's important, after server upgrade we'll recognize it.
     return default_scheduling_group();
