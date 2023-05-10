@@ -325,7 +325,7 @@ Storage: each instance can support  maximum of 24 local SSD of 375 GB partitions
 Microsoft Azure
 ---------------
 
-The `Lsv2-series <https://azure.microsoft.com/en-us/blog/announcing-the-general-availability-of-lsv2-series-azure-virtual-machines/>`_  features high throughput, low latency, and directly mapped local NVMe storage. The Lsv2 VMs run on the AMD EPYCTM 7551 processor with an all-core boost of 2.55GHz.
+The `Lsv3-series <https://learn.microsoft.com/en-us/azure/virtual-machines/lsv3-series/>`_  of Azure Virtual Machines (Azure VMs) features high-throughput, low latency, directly mapped local NVMe storage. These VMs run on the 3rd Generation Intel® Xeon® Platinum 8370C (Ice Lake) processor in a hyper-threaded configuration.
 
 
 .. list-table::
@@ -336,32 +336,32 @@ The `Lsv2-series <https://azure.microsoft.com/en-us/blog/announcing-the-general-
      - vCPU
      - Mem (GB)
      - Storage
-   * - L8s_v2
+   * - Standard_L8s_v3
      - 8
      - 64
      - 1 x 1.92 TB
-   * - L16s_v2
+   * - Standard_L16s_v3
      - 16
      - 128
      - 2 x 1.92 TB
-   * - L32s_v2
+   * - Standard_L32s_v3
      - 32
      - 256
      - 4 x 1.92 TB
-   * - L48s_v2
+   * - Standard_L48s_v3
      - 48
      - 384
      - 6 x 1.92 TB     
-   * - L64s_v2
+   * - Standard_L64s_v3
      - 64
      - 512
      - 8 x  1.92 TB
-   * - L80s_v2
+   * - Standard_L80s_v3
      - 80
      - 640
      - 10 x 1.92 TB
        
-More on Azure Lsv2 instances `here <https://azure.microsoft.com/en-us/blog/announcing-the-general-availability-of-lsv2-series-azure-virtual-machines/>`_
+More on Azure Lsv3 instances `here <https://learn.microsoft.com/en-us/azure/virtual-machines/lsv3-series/>`_
 
 Oracle Cloud Infrastructure (OCI)
 ----------------------------------------
