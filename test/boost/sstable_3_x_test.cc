@@ -4586,8 +4586,8 @@ static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst, reader
                                           tracing::trace_state_ptr(), use_caching::yes);
 }
 
-shared_sstable make_test_sstable(test_env& env, schema_ptr schema, const sstring& table_name, sstables::generation_type::int_t gen = 1) {
-    return env.reusable_sst(schema, get_read_index_test_path(table_name), gen).get0();
+shared_sstable make_test_sstable(test_env& env, schema_ptr schema, const sstring& table_name) {
+    return env.reusable_sst(schema, get_read_index_test_path(table_name), sstables::generation_type{1}).get0();
 }
 
 /*
