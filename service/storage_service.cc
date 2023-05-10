@@ -458,23 +458,8 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
     }
 }
 
-future<> storage_service::topology_transition(storage_proxy& proxy, cdc::generation_service& cdc_gen_svc, gms::inet_address from, std::vector<canonical_mutation> cms) {
+future<> storage_service::topology_transition(cdc::generation_service& cdc_gen_svc) {
     assert(this_shard_id() == 0);
-    // write new state into persistent storage
-    std::vector<mutation> mutations;
-    mutations.reserve(cms.size());
-    try {
-        for (const auto& cm : cms) {
-            auto& tbl = _db.local().find_column_family(cm.column_family_id());
-            mutations.emplace_back(cm.to_mutation(tbl.schema()));
-        }
-    } catch (replica::no_such_column_family& e) {
-        slogger.error("Error while applying topology mutations from {}: {}", from, e);
-        throw std::runtime_error(::format("Error while applying topology mutations: {}", e));
-    }
-
-    co_await proxy.mutate_locally(std::move(mutations), tracing::trace_state_ptr());
-
     co_await topology_state_load(cdc_gen_svc); // reload new state
 
     _topology_state_machine.event.signal();

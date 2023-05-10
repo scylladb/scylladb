@@ -39,6 +39,7 @@
 #include <boost/range/algorithm/transform.hpp>
 #include <optional>
 #include "db/config.hh"
+#include "replica/database.hh"
 
 namespace service {
 
@@ -58,6 +59,22 @@ static mutation extract_history_mutation(std::vector<canonical_mutation>& muts, 
 
 static mutation convert_history_mutation(canonical_mutation m, const data_dictionary::database db) {
     return m.to_mutation(db.find_schema(db::system_keyspace::NAME, db::system_keyspace::GROUP0_HISTORY));
+}
+
+static future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_address from, std::vector<canonical_mutation> cms) {
+    std::vector<mutation> mutations;
+    mutations.reserve(cms.size());
+    try {
+        for (const auto& cm : cms) {
+            auto& tbl = proxy.local_db().find_column_family(cm.column_family_id());
+            mutations.emplace_back(cm.to_mutation(tbl.schema()));
+        }
+    } catch (replica::no_such_column_family& e) {
+        slogger.error("Error while applying mutations from {}: {}", from, e);
+        throw std::runtime_error(::format("Error while applying mutations: {}", e));
+    }
+
+    co_await proxy.mutate_locally(std::move(mutations), tracing::trace_state_ptr());
 }
 
 future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
@@ -186,7 +203,8 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
                 sm._client.set_query_result(cmd.new_state_id, std::move(result));
             },
             [&] (topology_change& chng) -> future<> {
-            return sm._ss.topology_transition(sm._sp, sm._cdc_gen_svc, cmd.creator_addr, std::move(chng.mutations));
+                co_await write_mutations_to_database(sm._sp, cmd.creator_addr, std::move(chng.mutations));
+                co_await sm._ss.topology_transition(sm._cdc_gen_svc);
             }
             ), cmd.change);
 
