@@ -60,14 +60,14 @@ future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutatio
     auto to_update = all_types.find(_name.get_user_type_name());
     // Shouldn't happen, unless we race with a drop
     if (to_update == all_types.end()) {
-        throw exceptions::invalid_request_exception(format("No user type named {} exists.", _name.to_string()));
+        throw exceptions::invalid_request_exception(format("No user type named {} exists.", _name.to_cql_string()));
     }
 
     for (auto&& schema : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
         for (auto&& column : schema->partition_key_columns()) {
             if (column.type->references_user_type(_name.get_keyspace(), _name.get_user_type_name())) {
                 throw exceptions::invalid_request_exception(format("Cannot add new field to type {} because it is used in the partition key column {} of table {}.{}",
-                    _name.to_string(), column.name_as_text(), schema->ks_name(), schema->cf_name()));
+                    _name.to_cql_string(), column.name_as_text(), schema->ks_name(), schema->cf_name()));
             }
         }
     }
@@ -134,7 +134,7 @@ user_type alter_type_statement::add_or_alter::do_add(data_dictionary::database d
 {
     if (to_update->idx_of_field(_field_name->name())) {
         throw exceptions::invalid_request_exception(format("Cannot add new field {} to type {}: a field of the same name already exists",
-            _field_name->to_string(), _name.to_string()));
+            _field_name->to_string(), _name.to_cql_string()));
     }
 
     if (to_update->size() == max_udt_fields) {
@@ -147,7 +147,7 @@ user_type alter_type_statement::add_or_alter::do_add(data_dictionary::database d
     auto&& add_type = _field_type->prepare(db, keyspace()).get_type();
     if (add_type->references_user_type(to_update->_keyspace, to_update->_name)) {
         throw exceptions::invalid_request_exception(format("Cannot add new field {} of type {} to type {} as this would create a circular reference",
-                    *_field_name, *_field_type, _name.to_string()));
+                    *_field_name, *_field_type, _name.to_cql_string()));
     }
     new_types.push_back(std::move(add_type));
     return user_type_impl::get_instance(to_update->_keyspace, to_update->_name, std::move(new_names), std::move(new_types), to_update->is_multi_cell());
@@ -157,7 +157,7 @@ user_type alter_type_statement::add_or_alter::do_alter(data_dictionary::database
 {
     auto idx = to_update->idx_of_field(_field_name->name());
     if (!idx) {
-        throw exceptions::invalid_request_exception(format("Unknown field {} in type {}", _field_name->to_string(), _name.to_string()));
+        throw exceptions::invalid_request_exception(format("Unknown field {} in type {}", _field_name->to_string(), _name.to_cql_string()));
     }
 
     auto previous = to_update->field_types()[*idx];
@@ -194,7 +194,7 @@ user_type alter_type_statement::renames::make_updated_type(data_dictionary::data
         auto&& from = rename.first;
         auto idx = to_update->idx_of_field(from->name());
         if (!idx) {
-            throw exceptions::invalid_request_exception(format("Unknown field {} in type {}", from->to_string(), _name.to_string()));
+            throw exceptions::invalid_request_exception(format("Unknown field {} in type {}", from->to_string(), _name.to_cql_string()));
         }
         new_names[*idx] = rename.second->name();
     }

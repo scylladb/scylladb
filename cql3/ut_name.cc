@@ -39,8 +39,8 @@ sstring ut_name::get_string_type_name() const
     return _ut_name->to_string();
 }
 
-sstring ut_name::to_string() const {
-    return (has_keyspace() ? (_ks_name.value() + ".") : "") + _ut_name->to_string();
+sstring ut_name::to_cql_string() const {
+    return (has_keyspace() ? (_ks_name.value() + ".") : "") + _ut_name->to_cql_string();
 }
 
 }

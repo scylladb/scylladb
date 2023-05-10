@@ -134,7 +134,7 @@ future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<
                 _name.get_string_type_name());
         } else {
             if (!_if_not_exists) {
-                co_await coroutine::return_exception(exceptions::invalid_request_exception(format("A user type of name {} already exists", _name.to_string())));
+                co_await coroutine::return_exception(exceptions::invalid_request_exception(format("A user type of name {} already exists", _name.to_cql_string())));
             }
         }
     } catch (data_dictionary::no_such_keyspace& e) {

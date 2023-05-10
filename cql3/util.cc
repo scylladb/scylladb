@@ -88,6 +88,11 @@ void do_with_parser_impl(const sstring_view& cql, noncopyable_function<void (cql
     ucontext_t uc;
     auto r = getcontext(&uc);
     assert(r == 0);
+    if (stack.get() <= (char*)&uc && (char*)&uc < stack.get() + stack_size) {
+        // We are already running on the large stack, so just call the
+        // parser directly.
+        return do_with_parser_impl_impl(cql, std::move(f));
+    }
     uc.uc_stack.ss_sp = stack.get();
     uc.uc_stack.ss_size = stack_size;
     uc.uc_link = nullptr;
