@@ -1048,7 +1048,8 @@ class topology_coordinator {
         // with many large mutations.
         // See `system_distributed_keyspace::insert_cdc_generation` for inspiration how it
         // was done when the mutations were stored in a regular distributed table.
-        const size_t mutation_size_threshold = 2'000'000;
+        const size_t max_command_size = _raft.max_command_size();
+        const size_t mutation_size_threshold = max_command_size / 2;
         auto gen_mutations = co_await cdc::get_cdc_generation_mutations(
             gen_table_schema, gen_uuid, gen_desc, mutation_size_threshold, guard.write_timestamp());
 
