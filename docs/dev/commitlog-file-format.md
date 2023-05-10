@@ -114,3 +114,30 @@ the file is not fully written/prematurely ended. Both cases can mean data loss, 
 how writing is done as well as OS and hardware.
 
 ```
+
+Version 3
+---------
+Version 3 of the format is identical to version 2 except it adds N fields of metadata string pairs to the 
+file header.
+
+```
+
+        Segment file header
+
+        magic           : uint32_t - ('S'<<24) |('C'<< 16) | ('L' << 8) | 'C';
+        version         : uint32_t - same as descriptor
+        id              : uint64_t - same as descriptor
+        metadata_size   : uint32_t - total byte size of metadata, including this size marker.
+        {
+                key     : uint32_t - string length
+                          <bytes>  - string data
+                value   : uint32_t - string length
+                          <bytes>  - string data
+        } * N
+
+        crc             : uint32_t - CRC32 of version, low 32 of id, high 32 of id, meta size and each string size + bytes 
+
+```
+
+The metadata pairs can contain anything, but as of this writing the only recognized info is the compressor tag ("COMP":"<class>") pair.
+If set, all data entries in the segment file are assumed compressed using this compressor.
