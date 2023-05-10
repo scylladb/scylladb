@@ -340,6 +340,13 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
         if (_gossiper.get_live_members().contains(ip) || _gossiper.get_unreachable_members().contains(ip)) {
             co_await remove_endpoint(ip);
         }
+
+        // FIXME: when removing a node from the cluster through `removenode`, we should ban it early,
+        // at the beginning of the removal process (so it doesn't disrupt us in the middle of the process).
+        // The node is only included in `left_nodes` at the end of the process.
+        //
+        // However if we do that, we need to also implement unbanning a node and do it if `removenode` is aborted.
+        co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
     }
 
     co_await mutate_token_metadata(seastar::coroutine::lambda([this, &id2ip, &am] (mutable_token_metadata_ptr tmptr) -> future<> {
