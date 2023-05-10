@@ -117,29 +117,36 @@ public:
     truncate_exception(std::exception_ptr ep);
 };
 
+// Base class for various request timeout exceptions
 class request_timeout_exception : public cassandra_exception {
+public:
+    request_timeout_exception(exception_code code, sstring msg) : cassandra_exception(code, std::move(msg)) {}
+};
+
+// Timeout during read/write - didn't receive enough responses from remote nodes to fulfill the consistency requirement.
+class read_write_timeout_exception : public request_timeout_exception {
 public:
     db::consistency_level consistency;
     int32_t received;
     int32_t block_for;
 
-    request_timeout_exception(exception_code code, const sstring& ks, const sstring& cf, db::consistency_level consistency, int32_t received, int32_t block_for) noexcept;
+    read_write_timeout_exception(exception_code code, const sstring& ks, const sstring& cf, db::consistency_level consistency, int32_t received, int32_t block_for) noexcept;
 };
 
-class read_timeout_exception : public request_timeout_exception {
+class read_timeout_exception : public read_write_timeout_exception {
 public:
     bool data_present;
 
     read_timeout_exception(const sstring& ks, const sstring& cf, db::consistency_level consistency, int32_t received, int32_t block_for, bool data_present) noexcept
-        : request_timeout_exception{exception_code::READ_TIMEOUT, ks, cf, consistency, received, block_for}
+        : read_write_timeout_exception{exception_code::READ_TIMEOUT, ks, cf, consistency, received, block_for}
         , data_present{data_present}
     { }
 };
 
-struct mutation_write_timeout_exception : public request_timeout_exception {
+struct mutation_write_timeout_exception : public read_write_timeout_exception {
     db::write_type type;
     mutation_write_timeout_exception(const sstring& ks, const sstring& cf, db::consistency_level consistency, int32_t received, int32_t block_for, db::write_type type) noexcept :
-        request_timeout_exception(exception_code::WRITE_TIMEOUT, ks, cf, consistency, received, block_for)
+        read_write_timeout_exception(exception_code::WRITE_TIMEOUT, ks, cf, consistency, received, block_for)
         , type{std::move(type)}
     { }
 };
