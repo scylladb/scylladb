@@ -265,7 +265,7 @@ private:
     inet_address get_broadcast_address() const {
         return utils::fb_utilities::get_broadcast_address();
     }
-    const locator::host_id& my_host_id() const {
+    locator::host_id get_host_id() const {
         return utils::fb_utilities::get_host_id();
     }
     /* This abstraction maintains the token/endpoint metadata information */

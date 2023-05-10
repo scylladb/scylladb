@@ -386,9 +386,8 @@ future<> storage_service::topology_state_load() {
         tmptr->set_version(_topology_state_machine._topology.version);
 
         auto update_topology = [&] (locator::host_id id, inet_address ip, const replica_state& rs) {
-            tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack},
+            tmptr->update_topology(id, ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack},
                                    to_topology_node_state(rs.state), rs.shard_count);
-            tmptr->update_host_id(id, ip);
         };
 
         auto add_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
@@ -2781,7 +2780,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
                 replacing_a_node_with_same_ip ? "the same" : "a different",
                 get_broadcast_address(), *replace_address);
-            tmptr->update_topology(*replace_address, std::move(ri->dc_rack), locator::node::state::being_replaced);
+            tmptr->update_topology(ri->host_id, *replace_address, std::move(ri->dc_rack), locator::node::state::being_replaced);
             co_await tmptr->update_normal_tokens(bootstrap_tokens, *replace_address);
             replaced_host_id = ri->host_id;
         }
@@ -2822,7 +2821,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore we update _token_metadata now, before gossip starts.
-        tmptr->update_topology(get_broadcast_address(), _snitch.local()->get_location(), locator::node::state::normal);
+        tmptr->update_topology(get_host_id(), get_broadcast_address(), _snitch.local()->get_location(), locator::node::state::normal);
         co_await tmptr->update_normal_tokens(my_tokens, get_broadcast_address());
 
         cdc_gen_id = co_await _sys_ks.local().get_cdc_generation_id();
@@ -2849,7 +2848,6 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
             auto replace_host_id = _gossiper.get_host_id(get_broadcast_address());
             slogger.info("Host {}/{} is replacing {}/{} using the same address", local_host_id, endpoint, replace_host_id, endpoint);
         }
-        tmptr->update_host_id(local_host_id, get_broadcast_address());
     }
 
     // Replicate the tokens early because once gossip runs other nodes
@@ -3135,7 +3133,7 @@ future<> storage_service::join_token_ring(sharded<db::system_distributed_keyspac
         // This node must know about its chosen tokens before other nodes do
         // since they may start sending writes to this node after it gossips status = NORMAL.
         // Therefore, in case we haven't updated _token_metadata with our tokens yet, do it now.
-        tmptr->update_topology(get_broadcast_address(), _snitch.local()->get_location(), locator::node::state::normal);
+        tmptr->update_topology(get_host_id(), get_broadcast_address(), _snitch.local()->get_location(), locator::node::state::normal);
         return tmptr->update_normal_tokens(bootstrap_tokens, get_broadcast_address());
     });
 
@@ -3274,7 +3272,7 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
                 slogger.debug("bootstrap: update pending ranges: endpoint={} bootstrap_tokens={}", get_broadcast_address(), bootstrap_tokens);
                 mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata_ptr tmptr) {
                     auto endpoint = get_broadcast_address();
-                    tmptr->update_topology(endpoint, _snitch.local()->get_location(), locator::node::state::bootstrapping);
+                    tmptr->update_topology(get_host_id(), endpoint, _snitch.local()->get_location(), locator::node::state::bootstrapping);
                     tmptr->add_bootstrap_tokens(bootstrap_tokens, endpoint);
                     return update_topology_change_info(std::move(tmptr), ::format("bootstrapping node {}", endpoint));
                 }).get();
@@ -3394,7 +3392,6 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint, gms::per
 
     tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::node::state::bootstrapping);
     tmptr->add_bootstrap_tokens(tokens, endpoint);
-    tmptr->update_host_id(_gossiper.get_host_id(endpoint), endpoint);
     co_await update_topology_change_info(tmptr, ::format("handle_state_bootstrap {}", endpoint));
     co_await replicate_to_all_cores(std::move(tmptr));
 }
@@ -3531,7 +3528,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
             do_notify_joined = true;
         }
 
-        tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::node::state::normal);
+        tmptr->update_topology(host_id, endpoint, get_dc_rack_for(endpoint), locator::node::state::normal);
         co_await tmptr->update_normal_tokens(owned_tokens, endpoint);
     }
 
@@ -3920,8 +3917,6 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
                 // entry has been mistakenly added, delete it
                 co_await _sys_ks.local().remove_endpoint(ep);
             } else {
-                tmptr->update_topology(ep, get_dc_rack(ep), locator::node::state::normal);
-                co_await tmptr->update_normal_tokens(tokens, ep);
                 locator::host_id host_id;
                 if (loaded_host_ids.contains(ep)) {
                     host_id = loaded_host_ids.at(ep);
@@ -3929,9 +3924,11 @@ future<> storage_service::join_cluster(sharded<db::system_distributed_keyspace>&
                         on_internal_error(slogger, format("Cannot load node {}: null host_id in system.peers table", ep));
                     }
                     tmptr->update_host_id(host_id, ep);
+                    tmptr->update_topology(host_id, ep, get_dc_rack(ep), locator::node::state::normal);
                 } else {
                     on_internal_error(slogger, format("Cannot load node {}: host_id not found", ep));
                 }
+                co_await tmptr->update_normal_tokens(tokens, ep);
                 loaded_endpoints.emplace(ep, host_id);
                 co_await _gossiper.add_saved_endpoint(ep, host_id);
             }
@@ -5840,9 +5837,9 @@ future<> storage_service::load_tablet_metadata() {
 future<> storage_service::snitch_reconfigured() {
     assert(this_shard_id() == 0);
     auto& snitch = _snitch.local();
-    co_await mutate_token_metadata([&snitch] (mutable_token_metadata_ptr tmptr) -> future<> {
+    co_await mutate_token_metadata([this, &snitch] (mutable_token_metadata_ptr tmptr) -> future<> {
         // re-read local rack and DC info
-        tmptr->update_topology(utils::fb_utilities::get_broadcast_address(), snitch->get_location());
+        tmptr->update_topology(get_host_id(), get_broadcast_address(), snitch->get_location());
         return make_ready_future<>();
     });
 
