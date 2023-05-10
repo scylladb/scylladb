@@ -316,6 +316,9 @@ private:
     std::vector<scheduling_info_for_connection_index> _scheduling_info_for_connection_index;
     std::vector<tenant_connection_index> _connection_index_for_tenant;
 
+    struct connection_ref;
+    std::unordered_multimap<locator::host_id, connection_ref> _host_connections;
+
     future<> shutdown_tls_server();
     future<> shutdown_nontls_server();
     future<> stop_tls_server();

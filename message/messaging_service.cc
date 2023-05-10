@@ -141,6 +141,14 @@ static rpc::multi_algo_compressor_factory compressor_factory {
 
 struct messaging_service::rpc_protocol_server_wrapper : public rpc_protocol::server { using rpc_protocol::server::server; };
 
+struct messaging_service::connection_ref {
+    // Refers to one of the servers in `messaging_service::_server` or `messaging_service::_server_tls`.
+    rpc::server& server;
+
+    // Refers to a connection inside `server`.
+    rpc::connection_id conn_id;
+};
+
 constexpr int32_t messaging_service::current_version;
 
 // Count of connection types that are not associated with any tenant
@@ -386,7 +394,15 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
         _connection_index_for_tenant.push_back({_scheduling_config.statement_tenants[i].sched_group, i});
     }
 
-    register_handler(this, messaging_verb::CLIENT_ID, [] (rpc::client_info& ci, gms::inet_address broadcast_address, uint32_t src_cpu_id, rpc::optional<uint64_t> max_result_size) {
+    register_handler(this, messaging_verb::CLIENT_ID, [this] (rpc::client_info& ci, gms::inet_address broadcast_address, uint32_t src_cpu_id, rpc::optional<uint64_t> max_result_size, rpc::optional<utils::UUID> host_id) {
+        if (host_id) {
+            auto peer_host_id = locator::host_id(*host_id);
+            ci.attach_auxiliary("host_id", peer_host_id);
+            _host_connections.emplace(peer_host_id, connection_ref {
+                .server = ci.server,
+                .conn_id = ci.conn_id,
+            });
+        }
         ci.attach_auxiliary("baddr", broadcast_address);
         ci.attach_auxiliary("src_cpu_id", src_cpu_id);
         ci.attach_auxiliary("max_result_size", max_result_size.value_or(query::result_memory_limiter::maximum_result_size));
@@ -743,6 +759,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         find_and_remove_client(_clients[idx], id, [] (const auto&) { return true; });
     }
 
+    auto my_host_id = _cfg.id;
     auto broadcast_address = utils::fb_utilities::get_broadcast_address();
     bool listen_to_bc = _cfg.listen_on_broadcast_address && _cfg.ip != broadcast_address;
     auto laddr = socket_address(listen_to_bc ? broadcast_address : _cfg.ip, 0);
@@ -843,8 +860,11 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     it = res.first;
     uint32_t src_cpu_id = this_shard_id();
     // No reply is received, nothing to wait for.
-    (void)_rpc->make_client<rpc::no_wait_type(gms::inet_address, uint32_t, uint64_t)>(messaging_verb::CLIENT_ID)(*it->second.rpc_client, utils::fb_utilities::get_broadcast_address(), src_cpu_id,
-                                                                                                           query::result_memory_limiter::maximum_result_size).handle_exception([ms = shared_from_this(), remote_addr, verb] (std::exception_ptr ep) {
+    (void)_rpc->make_client<
+            rpc::no_wait_type(gms::inet_address, uint32_t, uint64_t, utils::UUID)>(messaging_verb::CLIENT_ID)(
+                *it->second.rpc_client, utils::fb_utilities::get_broadcast_address(), src_cpu_id,
+                query::result_memory_limiter::maximum_result_size, my_host_id.uuid())
+            .handle_exception([ms = shared_from_this(), remote_addr, verb] (std::exception_ptr ep) {
         mlogger.debug("Failed to send client id to {} for verb {}: {}", remote_addr, std::underlying_type_t<messaging_verb>(verb), ep);
     });
     return it->second.rpc_client;
