@@ -4913,6 +4913,34 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                     // we already did read barrier above
                     result.status = raft_topology_cmd_result::command_status::success;
                 break;
+                case raft_topology_cmd::command::barrier_and_drain: {
+                    const auto version = _topology_state_machine._topology.version;
+                    co_await container().invoke_on_all([version] (storage_service& ss) -> future<> {
+                        const auto current_version = ss._shared_token_metadata.get()->get_version();
+                        slogger.debug("Got raft_topology_cmd::barrier_and_drain, version {}, current version {}",
+                            version, current_version);
+
+                        // This shouldn't happen under normal operation, it's only plausible
+                        // if the topology change coordinator has
+                        // moved to another node and managed to update the topology
+                        // parallel to this method. The previous coordinator
+                        // should be inactive now, so it won't observe this
+                        // exception. By returning exception we aim
+                        // to reveal any other conditions where this may arise.
+                        if (current_version != version) {
+                            co_await coroutine::return_exception(std::runtime_error(
+                                ::format("raft topology: command::barrier_and_drain, the version has changed, "
+                                         "version {}, current_version {}, the topology change coordinator "
+                                         " had probably migrated to another node",
+                                    version, current_version)));
+                        }
+
+                        co_await ss._shared_token_metadata.stale_versions_in_use();
+                        slogger.debug("raft_topology_cmd::barrier_and_drain done");
+                    });
+                    result.status = raft_topology_cmd_result::command_status::success;
+                }
+                break;
                 case raft_topology_cmd::command::stream_ranges: {
                     const auto& rs = _topology_state_machine._topology.find(raft_server.id())->second;
                     auto tstate = _topology_state_machine._topology.tstate;

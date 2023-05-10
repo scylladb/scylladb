@@ -10,6 +10,7 @@ namespace service {
   struct raft_topology_cmd {
       enum class command: uint8_t {
           barrier,
+          barrier_and_drain,
           stream_ranges,
           fence_old_reads
       };

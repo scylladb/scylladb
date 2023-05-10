@@ -134,10 +134,11 @@ struct topology_state_machine {
 // Raft leader uses this command to drive bootstrap process on other nodes
 struct raft_topology_cmd {
       enum class command: uint16_t {
-          barrier,         // request to wait for the latest topology
-          stream_ranges,   // reqeust to stream data, return when streaming is
-                           // done
-          fence_old_reads  // wait for all reads started before to complete
+          barrier,              // request to wait for the latest topology
+          barrier_and_drain,    // same + drain requests which use previous versions
+          stream_ranges,        // reqeust to stream data, return when streaming is
+                                // done
+          fence_old_reads       // wait for all reads started before to complete
       };
       command cmd;
 };

@@ -77,6 +77,7 @@ private:
     // need to apply fencing or not.
     // The initial valid version is 1;
     token_metadata::version_t _version = 0;
+    token_metadata::version_tracker_t _version_tracker;
 
     // Note: if any member is added to this class
     // clone_async() must be updated to copy that member.
@@ -298,6 +299,9 @@ public:
                        "new version {}, previous version {}", version, _version));
         }
         _version = version;
+    }
+    void set_version_tracker(token_metadata::version_tracker_t tracker) {
+        _version_tracker = std::move(tracker);
     }
 
     friend class token_metadata;
@@ -1166,12 +1170,24 @@ void
 token_metadata::set_version(version_t version) {
     _impl->set_version(version);
 }
+void
+token_metadata::set_version_tracker(version_tracker_t tracker) {
+    _impl->set_version_tracker(std::move(tracker));
+}
 
 void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {
     if (_shared->get_ring_version() >= tmptr->get_ring_version()) {
-        on_internal_error(tlogger, format("shared_token_metadata: must not set non-increasing version: {} -> {}", _shared->get_ring_version(), tmptr->get_ring_version()));
+        on_internal_error(tlogger, format("shared_token_metadata: must not set non-increasing ring_version: {} -> {}", _shared->get_ring_version(), tmptr->get_ring_version()));
     }
+
+    if (_shared->get_version() > tmptr->get_version()) {
+        on_internal_error(tlogger, format("shared_token_metadata: must not set decreasing version: {} -> {}", _shared->get_version(), tmptr->get_version()));
+    } else if (_shared->get_version() < tmptr->get_version()) {
+        _stale_versions_in_use = _versions_barrier.advance_and_await();
+    }
+
     _shared = std::move(tmptr);
+    _shared->set_version_tracker(_versions_barrier.start());
 }
 
 future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_function<future<> (token_metadata&)> func) {
