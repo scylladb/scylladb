@@ -47,3 +47,6 @@ def test_offstrategy_keyspace_compaction_task(cql, this_dc, rest_api):
 
 def test_rewrite_sstables_keyspace_compaction_task(cql, this_dc, rest_api):
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("GET", f"storage_service/keyspace_upgrade_sstables/{keyspace}"))
+
+def test_scrub_sstables_compaction_task(cql, this_dc, rest_api):
+    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}"))
