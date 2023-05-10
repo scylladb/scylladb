@@ -2631,7 +2631,7 @@
                 "description":"File creation time"
             },
             "generation":{
-                "type":"long",
+                "type":"string",
                 "description":"SSTable generation"
             },
             "level":{
