@@ -53,16 +53,15 @@ std::ostream& operator<<(std::ostream& os, const result_message::rows& msg) {
     struct visitor {
         std::ostream& _os;
         void start_row() { _os << "{row: "; }
-        void accept_value(std::optional<query::result_bytes_view> value) {
+        void accept_value(managed_bytes_view_opt value) {
             if (!value) {
                 _os << " null";
                 return;
             }
             _os << " ";
-            using boost::range::for_each;
-            for_each(*value, [this] (bytes_view fragment) {
+            for (auto fragment : fragment_range(*value)) {
                 _os << fragment;
-            });
+            }
         }
         void end_row() { _os << "}"; }
     };

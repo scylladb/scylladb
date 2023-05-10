@@ -10,6 +10,7 @@
 
 #include "selection/selection.hh"
 #include "stats.hh"
+#include "utils/buffer_view-to-managed_bytes_view.hh"
 
 namespace cql3 {
 class untyped_result_set;
@@ -34,10 +35,10 @@ private:
     private:
         void accept_cell_value(const column_definition& def, query::result_row_view::iterator_type& i) {
             if (def.is_multi_cell()) {
-                _visitor.accept_value(i.next_collection_cell());
+                _visitor.accept_value(utils::buffer_view_to_managed_bytes_view(i.next_collection_cell()));
             } else {
                 auto cell = i.next_atomic_cell();
-                _visitor.accept_value(cell ? std::optional<query::result_bytes_view>(cell->value()) : std::optional<query::result_bytes_view>());
+                _visitor.accept_value(cell ? utils::buffer_view_to_managed_bytes_view(cell->value()) : managed_bytes_view_opt());
             }
         }
     public:
@@ -65,11 +66,11 @@ private:
             for (auto&& def : _selection.get_columns()) {
                 switch (def->kind) {
                 case column_kind::partition_key:
-                    _visitor.accept_value(query::result_bytes_view(bytes_view(_partition_key[def->component_index()])));
+                    _visitor.accept_value(bytes_view(_partition_key[def->component_index()]));
                     break;
                 case column_kind::clustering_key:
                     if (_clustering_key.size() > def->component_index()) {
-                        _visitor.accept_value(query::result_bytes_view(bytes_view(_clustering_key[def->component_index()])));
+                        _visitor.accept_value(bytes_view(_clustering_key[def->component_index()]));
                     } else {
                         _visitor.accept_value(std::nullopt);
                     }
@@ -92,7 +93,7 @@ private:
                 auto static_row_iterator = static_row.iterator();
                 for (auto&& def : _selection.get_columns()) {
                     if (def->is_partition_key()) {
-                        _visitor.accept_value(query::result_bytes_view(bytes_view(_partition_key[def->component_index()])));
+                        _visitor.accept_value(bytes_view(_partition_key[def->component_index()]));
                     } else if (def->is_static()) {
                         accept_cell_value(*def, static_row_iterator);
                     } else {

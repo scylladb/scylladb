@@ -241,7 +241,7 @@ static bool is_expired(const rjson::value& expiration_time, gc_clock::time_point
 // understands it is an expiration event - not a user-initiated deletion.
 static future<> expire_item(service::storage_proxy& proxy,
                             const service::query_state& qs,
-                            const std::vector<bytes_opt>& row,
+                            const std::vector<managed_bytes_opt>& row,
                             schema_ptr schema,
                             api::timestamp_type ts) {
     // Prepare the row key to delete
@@ -260,7 +260,7 @@ static future<> expire_item(service::storage_proxy& proxy,
             // FIXME: log or increment a metric if this happens.
             return make_ready_future<>();
         }
-        exploded_pk.push_back(*row_c);
+        exploded_pk.push_back(to_bytes(*row_c));
     }
     auto pk = partition_key::from_exploded(exploded_pk);
     mutation m(schema, pk);
@@ -280,7 +280,7 @@ static future<> expire_item(service::storage_proxy& proxy,
                 // FIXME: log or increment a metric if this happens.
                 return make_ready_future<>();
             }
-            exploded_ck.push_back(*row_c);
+            exploded_ck.push_back(to_bytes(*row_c));
         }
         auto ck = clustering_key::from_exploded(exploded_ck);
         m.partition().clustered_row(*schema, ck).apply(tombstone(ts, gc_clock::now()));
@@ -593,7 +593,7 @@ static future<> scan_table_ranges(
             continue;
         }
         for (const auto& row : rows) {
-            const bytes_opt& cell = row[*expiration_column];
+            const managed_bytes_opt& cell = row[*expiration_column];
             if (!cell) {
                 continue;
             }

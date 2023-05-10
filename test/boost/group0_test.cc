@@ -18,7 +18,7 @@
 #include "service/migration_manager.hh"
 #include "seastar/core/metrics_api.hh"
 
-static future<utils::chunked_vector<std::vector<bytes_opt>>> fetch_rows(cql_test_env& e, std::string_view cql) {
+static future<utils::chunked_vector<std::vector<managed_bytes_opt>>> fetch_rows(cql_test_env& e, std::string_view cql) {
     auto msg = co_await e.execute_cql(cql);
     auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
     BOOST_REQUIRE(rows);

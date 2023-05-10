@@ -129,14 +129,14 @@ public:
 };
 
 template<typename Visitor>
-concept ResultVisitor = requires(Visitor& visitor) {
+concept ResultVisitor = requires(Visitor& visitor, managed_bytes_view_opt val) {
     visitor.start_row();
-    visitor.accept_value(std::optional<query::result_bytes_view>());
+    visitor.accept_value(std::move(val));
     visitor.end_row();
 };
 
 class result_set {
-    using col_type = bytes_opt;
+    using col_type = managed_bytes_opt;
     using row_type = std::vector<col_type>;
     using rows_type = utils::chunked_vector<row_type>;
 
@@ -157,8 +157,10 @@ public:
     bool empty() const;
 
     void add_row(row_type row);
+    void add_row(std::vector<bytes_opt> row);
 
     void add_column_value(col_type value);
+    void add_column_value(bytes_opt value);
 
     void reverse();
 
@@ -187,7 +189,7 @@ public:
             visitor.start_row();
             for (auto i = 0u; i < column_count; i++) {
                 auto& cell = row[i];
-                visitor.accept_value(cell ? std::optional<query::result_bytes_view>(*cell) : std::optional<query::result_bytes_view>());
+                visitor.accept_value(cell ? managed_bytes_view_opt(*cell) : managed_bytes_view_opt());
             }
             visitor.end_row();
         }
@@ -204,12 +206,12 @@ public:
         : _result(std::move(mtd)) { }
 
     void start_row() { }
-    void accept_value(std::optional<query::result_bytes_view> value) {
+    void accept_value(managed_bytes_view_opt value) {
         if (!value) {
             _current_row.emplace_back();
             return;
         }
-        _current_row.emplace_back(value->linearize());
+        _current_row.emplace_back(value);
     }
     void end_row() {
         _result.add_row(std::exchange(_current_row, { }));

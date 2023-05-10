@@ -374,6 +374,12 @@ private:
     fragment_type _current_fragment = {};
     blob_storage* _next_fragments = nullptr;
     size_t _size = 0;
+private:
+    managed_bytes_basic_view(fragment_type current_fragment, blob_storage* next_fragments, size_t size)
+        : _current_fragment(current_fragment)
+        , _next_fragments(next_fragments)
+        , _size(size) {
+    }
 public:
     managed_bytes_basic_view() = default;
     managed_bytes_basic_view(const managed_bytes_basic_view&) = default;
@@ -436,7 +442,7 @@ public:
     bytes linearize() const {
         return linearized(*this);
     }
-    bool is_linearized() {
+    bool is_linearized() const {
         return _current_fragment.size() == _size;
     }
 
@@ -451,6 +457,22 @@ public:
         , _next_fragments(other._next_fragments)
         , _size(other._size)
     {}
+
+    template <std::invocable<bytes_view> Func>
+    std::invoke_result_t<Func, bytes_view> with_linearized(Func&& func) const {
+        bytes b;
+        auto bv = std::invoke([&] () -> bytes_view {
+            if (is_linearized()) {
+                return _current_fragment;
+            } else {
+                b = linearize();
+                return b;
+            }
+        });
+        return func(bv);
+    }
+
+    friend managed_bytes_basic_view<mutable_view::no> build_managed_bytes_view_from_internals(bytes_view current_fragment, blob_storage* next_fragment, size_t size);
 };
 static_assert(FragmentedView<managed_bytes_view>);
 static_assert(FragmentedMutableView<managed_bytes_mutable_view>);
@@ -465,10 +487,28 @@ inline bytes to_bytes(managed_bytes_view v) {
     return linearized(v);
 }
 
+/// Converts a possibly fragmented managed_bytes_opt to a
+/// linear bytes_opt.
+///
+/// \note copies data
+bytes_opt to_bytes_opt(const managed_bytes_opt&);
+
+/// Converts a linear bytes_opt to a possibly fragmented
+/// managed_bytes_opt.
+///
+/// \note copies data
+managed_bytes_opt to_managed_bytes_opt(const bytes_opt&);
+
 template<FragmentedView View>
 inline managed_bytes::managed_bytes(View v) : managed_bytes(initialized_later(), v.size_bytes()) {
     managed_bytes_mutable_view self(*this);
     write_fragmented(self, v);
+}
+
+inline
+managed_bytes_view
+build_managed_bytes_view_from_internals(bytes_view current_fragment, blob_storage* next_fragment, size_t size) {
+    return managed_bytes_view(current_fragment, next_fragment, size);
 }
 
 template<>

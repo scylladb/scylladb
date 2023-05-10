@@ -10,6 +10,23 @@
 
 #include "managed_bytes.hh"
 
+bytes_opt
+to_bytes_opt(const managed_bytes_opt& mbo) {
+    if (!mbo) {
+        return std::nullopt;
+    }
+    return mbo->with_linearized([] (bytes_view bv) {
+        return bytes_opt(bv);
+    });
+}
+
+managed_bytes_opt to_managed_bytes_opt(const bytes_opt& bo) {
+    if (!bo) {
+        return std::nullopt;
+    }
+    return managed_bytes(*bo);
+}
+
 std::unique_ptr<bytes_view::value_type[]>
 managed_bytes::do_linearize_pure() const {
     auto b = _u.ptr;

@@ -31,16 +31,17 @@ public:
         for (size_t i = 0; i < m; ++i) {
             auto&& s = _arg_selectors[i];
             s->add_input(rs);
-            _args[i + 1] = s->get_output();
+            _args[i + 1] = to_bytes_opt(s->get_output());
             s->reset();
         }
         _accumulator = _aggregate.aggregation_function->execute(_args);
     }
 
-    virtual bytes_opt get_output() override {
-        return _aggregate.state_to_result_function
+    virtual managed_bytes_opt get_output() override {
+        return to_managed_bytes_opt(
+               _aggregate.state_to_result_function
                 ? _aggregate.state_to_result_function->execute(std::span(&_accumulator, 1))
-                : std::move(_accumulator);
+                : std::move(_accumulator));
     }
 
     virtual void reset() override {

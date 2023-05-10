@@ -1178,7 +1178,7 @@ table_config read_config(cql_test_env& env, const sstring& name) {
     if (rs.size() < 1) {
         throw std::runtime_error("config not found. Did you run --populate ?");
     }
-    const std::vector<bytes_opt>& config_row = rs.rows()[0];
+    const std::vector<managed_bytes_opt>& config_row = rs.rows()[0];
     if (config_row.size() != 2) {
         throw std::runtime_error("config row has invalid size");
     }

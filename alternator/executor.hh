@@ -229,7 +229,7 @@ public:
         const std::optional<attrs_to_get>& attrs_to_get);
 
     static void describe_single_item(const cql3::selection::selection&,
-        const std::vector<bytes_opt>&,
+        const std::vector<managed_bytes_opt>&,
         const std::optional<attrs_to_get>&,
         rjson::value&,
         bool = false);

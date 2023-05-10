@@ -2396,6 +2396,14 @@ std::strong_ordering abstract_type::compare(managed_bytes_view v1, managed_bytes
     }
 }
 
+std::strong_ordering abstract_type::compare(managed_bytes_view v1, bytes_view v2) const {
+    return compare(v1, managed_bytes_view(v2));
+}
+
+std::strong_ordering abstract_type::compare(bytes_view v1, managed_bytes_view v2) const {
+    return compare(managed_bytes_view(v1), v2);
+}
+
 bool abstract_type::equal(bytes_view v1, bytes_view v2) const {
     return ::visit(*this, [&](const auto& t) {
         if (is_byte_order_equal_visitor{}(t)) {
@@ -2412,6 +2420,14 @@ bool abstract_type::equal(managed_bytes_view v1, managed_bytes_view v2) const {
         }
         return compare_visitor{v1, v2}(t) == 0;
     });
+}
+
+bool abstract_type::equal(managed_bytes_view v1, bytes_view v2) const {
+    return equal(v1, managed_bytes_view(v2));
+}
+
+bool abstract_type::equal(bytes_view v1, managed_bytes_view v2) const {
+    return equal(managed_bytes_view(v1), v2);
 }
 
 // Count number of ':' which are not preceded by '\'.

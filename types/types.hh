@@ -342,9 +342,12 @@ public:
     size_t hash(managed_bytes_view v) const;
     bool equal(bytes_view v1, bytes_view v2) const;
     bool equal(managed_bytes_view v1, managed_bytes_view v2) const;
+    bool equal(managed_bytes_view v1, bytes_view v2) const;
+    bool equal(bytes_view v1, managed_bytes_view v2) const;
     std::strong_ordering compare(bytes_view v1, bytes_view v2) const;
     std::strong_ordering compare(managed_bytes_view v1, managed_bytes_view v2) const;
-
+    std::strong_ordering compare(managed_bytes_view v1, bytes_view v2) const;
+    std::strong_ordering compare(bytes_view v1, managed_bytes_view v2) const;
 private:
     // Explicitly instantiated in .cc
     template <FragmentedView View> data_value deserialize_impl(View v) const;
@@ -358,6 +361,9 @@ public:
     }
     data_value deserialize(bytes_view v) const {
         return deserialize_impl(single_fragmented_view(v));
+    }
+    data_value deserialize(const managed_bytes& v) const {
+        return deserialize(managed_bytes_view(v));
     }
     template <FragmentedView View> data_value deserialize_value(View v) const {
         return deserialize(v);

@@ -57,7 +57,7 @@ rows_assertions
 rows_assertions::rows_assertions::is_null() {
     const auto& rs = _rows->rs().result_set();
     for (auto&& row : rs.rows()) {
-        for (const bytes_opt& v : row) {
+        for (const managed_bytes_opt& v : row) {
             if (v) {
                 fail(format("Expected null values. Found: {}\n", v));
             }
@@ -70,7 +70,7 @@ rows_assertions
 rows_assertions::rows_assertions::is_not_null() {
     const auto& rs = _rows->rs().result_set();
     for (auto&& row : rs.rows()) {
-        for (const bytes_opt& v : row) {
+        for (const managed_bytes_opt& v : row) {
             if (!v) {
                 fail(format("Expected non-null values. {}\n", fmt::to_string(row)));
             }
@@ -101,7 +101,7 @@ rows_assertions::with_column_types(std::initializer_list<data_type> column_types
 rows_assertions
 rows_assertions::with_row(std::initializer_list<bytes_opt> values) {
     const auto& rs = _rows->rs().result_set();
-    std::vector<bytes_opt> expected_row(values);
+    std::vector<managed_bytes_opt> expected_row = boost::copy_range<std::vector<managed_bytes_opt>>((values | boost::adaptors::transformed(to_managed_bytes_opt)));
     for (auto&& row : rs.rows()) {
         if (row == expected_row) {
             return {*this};
@@ -123,8 +123,9 @@ rows_assertions::with_rows(std::vector<std::vector<bytes_opt>> rows) {
             fail(format("Expected more rows ({:d}), got {:d}", rows.size(), rs.size()));
         }
         auto& actual = *actual_i;
+        auto expected_row = row | boost::adaptors::transformed(to_managed_bytes_opt);
         if (!std::equal(
-            std::begin(row), std::end(row),
+            std::begin(expected_row), std::end(expected_row),
             std::begin(actual), std::end(actual))) {
             fail(format("row {:d} differs, expected {} got {}", row_nr, fmt::to_string(row), fmt::to_string(actual)));
         }
@@ -144,10 +145,11 @@ rows_assertions::with_rows_ignore_order(std::vector<std::vector<bytes_opt>> rows
     const auto& rs = _rows->rs().result_set();
     auto& actual = rs.rows();
     for (auto&& expected : rows) {
+        auto expected_row = expected | boost::adaptors::transformed(to_managed_bytes_opt);
         auto found = std::find_if(std::begin(actual), std::end(actual), [&] (auto&& row) {
             return std::equal(
                     std::begin(row), std::end(row),
-                    std::begin(expected), std::end(expected));
+                    std::begin(expected_row), std::end(expected_row));
         });
         if (found == std::end(actual)) {
             fail(format("row {} not found in result set ({})", fmt::to_string(expected),

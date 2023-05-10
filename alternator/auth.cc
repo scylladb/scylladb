@@ -53,7 +53,7 @@ future<std::string> get_key_from_roles(service::storage_proxy& proxy, std::strin
     if (result_set->empty()) {
         co_await coroutine::return_exception(api_error::unrecognized_client(format("User not found: {}", username)));
     }
-    const bytes_opt& salted_hash = result_set->rows().front().front(); // We only asked for 1 row and 1 column
+    const managed_bytes_opt& salted_hash = result_set->rows().front().front(); // We only asked for 1 row and 1 column
     if (!salted_hash) {
         co_await coroutine::return_exception(api_error::unrecognized_client(format("No password found for user: {}", username)));
     }

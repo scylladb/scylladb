@@ -478,7 +478,7 @@ future<query::forward_result> forward_service::execute_on_this_shard(
             flogger.error("aggregation result column count does not match requested column count");
             throw std::runtime_error("aggregation result column count does not match requested column count");
         }
-        query::forward_result res = { .query_results = rows[0] };
+        query::forward_result res = { .query_results = boost::copy_range<std::vector<bytes_opt>>(rows[0] | boost::adaptors::transformed([] (const managed_bytes_opt& x) { return to_bytes_opt(x); })) };
 
         auto printer = seastar::value_of([&req, &res] {
             return query::forward_result::printer {

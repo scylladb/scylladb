@@ -119,7 +119,7 @@ strongly_consistent_select_statement::execute_without_checking_exception_message
     });
 
     if (query_result->value) {
-        result_set->add_row({ query_result->value });
+        result_set->add_row({ managed_bytes_opt(query_result->value) });
     }
 
     co_return ::make_shared<cql_transport::messages::result_message::rows>(cql3::result{std::move(result_set)});

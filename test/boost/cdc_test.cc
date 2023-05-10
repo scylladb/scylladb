@@ -372,7 +372,7 @@ static std::vector<std::vector<bytes_opt>> to_bytes(const cql_transport::message
     auto rs = rows.rs().result_set().rows();
     std::vector<std::vector<bytes_opt>> results;
     for (auto it = rs.begin(); it != rs.end(); ++it) {
-        results.push_back(*it);
+        results.push_back(boost::copy_range<std::vector<bytes_opt>>(*it | boost::adaptors::transformed([] (const managed_bytes_opt& x) { return to_bytes_opt(x); })));
     }
     return results;
 }

@@ -91,7 +91,7 @@ std::optional<View> read_tuple_element(View& v) {
 }
 
 template <FragmentedView View>
-bytes_opt get_nth_tuple_element(View v, size_t n) {
+managed_bytes_opt get_nth_tuple_element(View v, size_t n) {
     for (size_t i = 0; i < n; ++i) {
         if (v.empty()) {
             return std::nullopt;
@@ -103,7 +103,7 @@ bytes_opt get_nth_tuple_element(View v, size_t n) {
     }
     auto el = read_tuple_element(v);
     if (el) {
-        return linearized(*el);
+        return managed_bytes(*el);
     }
     return std::nullopt;
 }

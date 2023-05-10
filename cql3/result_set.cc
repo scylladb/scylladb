@@ -113,19 +113,32 @@ bool result_set::empty() const {
     return _rows.empty();
 }
 
-void result_set::add_row(std::vector<bytes_opt> row) {
+void result_set::add_row(std::vector<managed_bytes_opt> row) {
     assert(row.size() == _metadata->value_count());
     _rows.emplace_back(std::move(row));
 }
 
-void result_set::add_column_value(bytes_opt value) {
+void result_set::add_row(std::vector<bytes_opt> row) {
+    row_type new_row;
+    new_row.reserve(row.size());
+    for (auto& bo : row) {
+        new_row.emplace_back(bo ? managed_bytes_opt(*bo) : managed_bytes_opt());
+    }
+    add_row(std::move(new_row));
+}
+
+void result_set::add_column_value(managed_bytes_opt value) {
     if (_rows.empty() || _rows.back().size() == _metadata->value_count()) {
-        std::vector<bytes_opt> row;
+        std::vector<managed_bytes_opt> row;
         row.reserve(_metadata->value_count());
         _rows.emplace_back(std::move(row));
     }
 
     _rows.back().emplace_back(std::move(value));
+}
+
+void result_set::add_column_value(bytes_opt value) {
+    add_column_value(to_managed_bytes_opt(value));
 }
 
 void result_set::reverse() {
@@ -146,7 +159,7 @@ const metadata& result_set::get_metadata() const {
     return *_metadata;
 }
 
-const utils::chunked_vector<std::vector<bytes_opt>>& result_set::rows() const {
+const utils::chunked_vector<std::vector<managed_bytes_opt>>& result_set::rows() const {
     return _rows;
 }
 
