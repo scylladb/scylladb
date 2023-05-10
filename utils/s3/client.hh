@@ -54,6 +54,20 @@ public:
 
     void update_config(endpoint_config_ptr);
 
+    struct handle {
+        std::string _host;
+        endpoint_config_ptr _cfg;
+    public:
+        handle(const client& cln)
+                : _host(cln._host)
+                , _cfg(cln._cfg)
+        {}
+
+        shared_ptr<client> to_client() && {
+            return make(std::move(_host), std::move(_cfg));
+        }
+    };
+
     future<> close();
 };
 
