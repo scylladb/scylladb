@@ -889,6 +889,10 @@ public:
         _config.enable_incremental_backups = val;
     }
 
+    bool uses_static_sharding() const {
+        return !_erm || _erm->get_replication_strategy().is_vnode_based();
+    }
+
     /*!
      * \brief get sstables by key
      * Return a set of the sstables names that contain the given
