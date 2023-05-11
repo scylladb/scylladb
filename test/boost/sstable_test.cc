@@ -41,14 +41,14 @@ bytes as_bytes(const sstring& s) {
     return { reinterpret_cast<const int8_t*>(s.data()), s.size() };
 }
 
-future<> test_using_working_sst(schema_ptr s, sstring dir, sstables::generation_type::int_t gen) {
-    return test_env::do_with([s = std::move(s), dir = std::move(dir), gen] (test_env& env) {
-        return env.reusable_sst(std::move(s), std::move(dir), gen).discard_result();
+future<> test_using_working_sst(schema_ptr s, sstring dir) {
+    return test_env::do_with([s = std::move(s), dir = std::move(dir)] (test_env& env) {
+        return env.reusable_sst(std::move(s), std::move(dir)).discard_result();
     });
 }
 
 SEASTAR_TEST_CASE(uncompressed_data) {
-    return test_using_working_sst(uncompressed_schema(), uncompressed_dir(), 1);
+    return test_using_working_sst(uncompressed_schema(), uncompressed_dir());
 }
 
 static auto make_schema_for_compressed_sstable() {
@@ -57,11 +57,11 @@ static auto make_schema_for_compressed_sstable() {
 
 SEASTAR_TEST_CASE(compressed_data) {
     auto s = make_schema_for_compressed_sstable();
-    return test_using_working_sst(std::move(s), "test/resource/sstables/compressed", 1);
+    return test_using_working_sst(std::move(s), "test/resource/sstables/compressed");
 }
 
 SEASTAR_TEST_CASE(composite_index) {
-    return test_using_working_sst(composite_schema(), "test/resource/sstables/composite", 1);
+    return test_using_working_sst(composite_schema(), "test/resource/sstables/composite");
 }
 
 template<typename Func>
@@ -503,15 +503,15 @@ SEASTAR_TEST_CASE(statistics_rewrite) {
         auto generation_dir = (uncompressed_dir_copy / sstables::staging_dir).native();
         std::filesystem::create_directories(generation_dir);
 
-        auto sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir_copy.native(), 1).get0();
+        auto sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir_copy.native()).get0();
         test::create_links(*sstp, generation_dir).get();
         test_sstable_exists(generation_dir, 1, true).get();
 
-        sstp = env.reusable_sst(uncompressed_schema(), generation_dir, 1).get0();
+        sstp = env.reusable_sst(uncompressed_schema(), generation_dir).get0();
         // mutate_sstable_level results in statistics rewrite
         sstp->mutate_sstable_level(10).get();
 
-        sstp = env.reusable_sst(uncompressed_schema(), generation_dir, 1).get0();
+        sstp = env.reusable_sst(uncompressed_schema(), generation_dir).get0();
         BOOST_REQUIRE(sstp->get_sstable_level() == 10);
     });
 }
