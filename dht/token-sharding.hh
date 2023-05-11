@@ -28,6 +28,14 @@ struct shard_and_token {
     token token;
 };
 
+/**
+ * Describes mapping between token space of a given table and owning shards on the local node.
+ * The mapping reflected by this instance is constant for the lifetime of this sharder object.
+ * It is not guaranteed to be the same for different sharder instances, even within a single process lifetime.
+ *
+ * For vnode-based replication strategies, the mapping is constant for the lifetime of the local process even
+ * across different sharder instances.
+ */
 class sharder {
 protected:
     unsigned _shard_count;
