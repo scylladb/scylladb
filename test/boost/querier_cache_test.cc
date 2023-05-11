@@ -740,7 +740,7 @@ SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
         .no_drops()
         .resource_based_evictions();
 
-    resources.reset();
+    resources.reset_to_zero();
 
     fut.get();
 }

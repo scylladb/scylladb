@@ -161,7 +161,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_readmission_preserves
             }
             BOOST_REQUIRE(!fut.available());
 
-            consumed_resources.reset();
+            consumed_resources.reset_to_zero();
             fut.get();
         } else {
             if (permit->needs_readmission()) {
@@ -1519,7 +1519,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_request_memory_preser
         BOOST_REQUIRE(!units2_fut.available());
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_memory, ++reads_enqueued_for_memory);
 
-        sponge_units.reset();
+        sponge_units.reset_to_zero();
         auto units2 = units2_fut.get();
 
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 2);

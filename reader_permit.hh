@@ -73,6 +73,7 @@ class reader_concurrency_semaphore;
 /// should be held onto while the respective resources are in use.
 class reader_permit {
     friend class reader_concurrency_semaphore;
+    friend class tracking_allocator_base;
 
 public:
     class resource_units;
@@ -118,6 +119,10 @@ private:
 
     friend class optimized_optional<reader_permit>;
 
+    void consume(reader_resources res);
+
+    void signal(reader_resources res);
+
 public:
     ~reader_permit();
 
@@ -141,10 +146,6 @@ public:
 
     // Call only when needs_readmission() = true.
     future<> wait_readmission();
-
-    void consume(reader_resources res);
-
-    void signal(reader_resources res);
 
     resource_units consume_memory(size_t memory = 0);
 
@@ -200,7 +201,8 @@ public:
     resource_units& operator=(const resource_units&) = delete;
     resource_units& operator=(resource_units&&) noexcept;
     void add(resource_units&& o);
-    void reset(reader_resources res = {});
+    void reset_to(reader_resources res);
+    void reset_to_zero() noexcept;
     reader_permit permit() const { return _permit; }
     reader_resources resources() const { return _resources; }
 };
@@ -268,24 +270,35 @@ inline temporary_buffer<char> make_new_tracked_temporary_buffer(size_t size, rea
 
 file make_tracked_file(file f, reader_permit p);
 
+class tracking_allocator_base {
+    reader_permit _permit;
+protected:
+    tracking_allocator_base(reader_permit permit) noexcept : _permit(std::move(permit)) { }
+    void consume(size_t memory) {
+        _permit.consume(reader_resources::with_memory(memory));
+    }
+    void signal(size_t memory) {
+        _permit.signal(reader_resources::with_memory(memory));
+    }
+};
+
 template <typename T>
-class tracking_allocator {
+class tracking_allocator : public tracking_allocator_base {
 public:
     using value_type = T;
     using propagate_on_container_move_assignment = std::true_type;
     using is_always_equal = std::false_type;
 
 private:
-    reader_permit _permit;
     std::allocator<T> _alloc;
 
 public:
-    tracking_allocator(reader_permit permit) noexcept : _permit(std::move(permit)) { }
+    tracking_allocator(reader_permit permit) noexcept : tracking_allocator_base(std::move(permit)) { }
 
     T* allocate(size_t n) {
         auto p = _alloc.allocate(n);
         try {
-            _permit.consume(reader_resources::with_memory(n * sizeof(T)));
+            consume(n * sizeof(T));
         } catch (...) {
             _alloc.deallocate(p, n);
             throw;
@@ -295,7 +308,7 @@ public:
     void deallocate(T* p, size_t n) {
         _alloc.deallocate(p, n);
         if (n) {
-            _permit.signal(reader_resources::with_memory(n * sizeof(T)));
+            signal(n * sizeof(T));
         }
     }
 
