@@ -260,8 +260,7 @@ ring_position_range_vector_sharder::next(const schema& s) {
 }
 
 future<utils::chunked_vector<partition_range>>
-split_range_to_single_shard(const schema& s, const partition_range& pr, shard_id shard) {
-    const sharder& sharder = s.get_sharder();
+split_range_to_single_shard(const schema& s, const sharder& sharder, const partition_range& pr, shard_id shard) {
     auto next_shard = shard + 1 == sharder.shard_count() ? 0 : shard + 1;
     auto start_token = pr.start() ? pr.start()->value().token() : minimum_token();
     auto start_shard = sharder.shard_of(start_token);
@@ -376,9 +375,9 @@ dht::partition_range_vector to_partition_ranges(const dht::token_range_vector& r
 }
 
 std::map<unsigned, dht::partition_range_vector>
-split_range_to_shards(dht::partition_range pr, const schema& s) {
+split_range_to_shards(dht::partition_range pr, const schema& s, const sharder& raw_sharder) {
     std::map<unsigned, dht::partition_range_vector> ret;
-    auto sharder = dht::ring_position_range_sharder(s.get_sharder(), std::move(pr));
+    auto sharder = dht::ring_position_range_sharder(raw_sharder, std::move(pr));
     auto rprs = sharder.next(s);
     while (rprs) {
         ret[rprs->shard].emplace_back(rprs->ring_range);

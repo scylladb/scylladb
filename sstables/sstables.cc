@@ -1536,12 +1536,12 @@ populate_statistics_offsets(sstable_version_types v, statistics& s) {
 
 static
 sharding_metadata
-create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
+create_sharding_metadata(schema_ptr schema, const dht::sharder& sharder, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
     auto prange = dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
     auto sm = sharding_metadata();
-    auto&& ranges = dht::split_range_to_single_shard(*schema, prange, shard).get0();
+    auto&& ranges = dht::split_range_to_single_shard(*schema, sharder, prange, shard).get0();
     if (ranges.empty()) {
-        auto split_ranges_all_shards = dht::split_range_to_shards(prange, *schema);
+        auto split_ranges_all_shards = dht::split_range_to_shards(prange, *schema, sharder);
         sstlog.warn("create_sharding_metadata: range={} has no intersection with shard={} first_key={} last_key={} ranges_single_shard={} ranges_all_shards={}",
                 prange, shard, first_key, last_key, ranges, split_ranges_all_shards);
     }
@@ -1626,7 +1626,7 @@ sstable::write_scylla_metadata(shard_id shard, sstable_enabled_features features
         std::optional<scylla_metadata::large_data_stats> ld_stats, sstring origin) {
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
-    auto sm = create_sharding_metadata(_schema, first_key, last_key, shard);
+    auto sm = create_sharding_metadata(_schema, _schema->get_sharder(), first_key, last_key, shard);
 
     // sstable write may fail to generate empty metadata if mutation source has only data from other shard.
     // see https://github.com/scylladb/scylla/issues/2932 for details on how it can happen.
