@@ -176,12 +176,12 @@ std::unordered_map<sstring, s3::endpoint_config_ptr> make_storage_options_config
     return cfg;
 }
 
-test_env::impl::impl(test_env_config cfg)
+test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm)
     : dir()
     , db_config(make_db_config(dir.path().native()))
     , dir_sem(1)
     , feature_service(gms::feature_config_from_db_config(*db_config))
-    , mgr(cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler, *db_config, feature_service, cache_tracker, memory::stats().total_memory(), dir_sem, make_storage_options_config(cfg.storage))
+    , mgr(cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler, *db_config, feature_service, cache_tracker, memory::stats().total_memory(), dir_sem, sstm, make_storage_options_config(cfg.storage))
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env")
     , storage(std::move(cfg.storage))
 { }
@@ -197,7 +197,7 @@ future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, te
         auto db_cfg = make_shared<db::config>();
         db_cfg->experimental_features({db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS});
         return do_with_cql_env_thread([wrap = std::move(wrap)] (auto& cql_env) mutable {
-            test_env env(std::move(wrap->cfg));
+            test_env env(std::move(wrap->cfg), &cql_env.get_sstorage_manager().local());
             auto close_env = defer([&] { env.stop().get(); });
             env.manager().plug_system_keyspace(cql_env.get_system_keyspace().local());
             auto unplu = defer([&env] { env.manager().unplug_system_keyspace(); });

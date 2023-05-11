@@ -20,8 +20,9 @@ namespace sstables {
 logging::logger smlogger("sstables_manager");
 
 sstables_manager::sstables_manager(
-    db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct, size_t available_memory, directory_semaphore& dir_sem, object_storage_config oscfg)
-    : _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat), _cache_tracker(ct)
+    db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct, size_t available_memory, directory_semaphore& dir_sem, storage_manager* shared, object_storage_config oscfg)
+    : _storage(shared)
+    , _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat), _cache_tracker(ct)
     , _sstable_metadata_concurrency_sem(
         max_count_sstable_metadata_concurrent_reads,
         max_memory_sstable_metadata_concurrent_reads(available_memory),
@@ -38,6 +39,14 @@ sstables_manager::~sstables_manager() {
     assert(_closing);
     assert(_active.empty());
     assert(_undergoing_close.empty());
+}
+
+storage_manager::storage_manager(const db::config& cfg)
+{
+}
+
+future<> storage_manager::stop() {
+    co_return;
 }
 
 void sstables_manager::update_object_storage_config(object_storage_config oscfg) {

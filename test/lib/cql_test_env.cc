@@ -66,6 +66,7 @@
 #include "db/schema_tables.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
+#include "sstables/sstables_manager.hh"
 #include "init.hh"
 #include "utils/fb_utilities.hh"
 
@@ -131,6 +132,7 @@ public:
     static std::atomic<bool> active;
 private:
     sharded<replica::database>& _db;
+    sharded<sstables::storage_manager>& _sstm;
     sharded<service::storage_proxy>& _proxy;
     sharded<cql3::query_processor>& _qp;
     sharded<auth::service>& _auth_service;
@@ -186,6 +188,7 @@ private:
 public:
     single_node_cql_env(
             sharded<replica::database>& db,
+            sharded<sstables::storage_manager>& sstm,
             sharded<service::storage_proxy>& proxy,
             sharded<cql3::query_processor>& qp,
             sharded<auth::service>& auth_service,
@@ -200,6 +203,7 @@ public:
             sharded<service::raft_group_registry>& group0_registry,
             sharded<db::system_keyspace>& sys_ks)
             : _db(db)
+            , _sstm(sstm)
             , _proxy(proxy)
             , _qp(qp)
             , _auth_service(auth_service)
@@ -442,6 +446,10 @@ public:
         return _proxy;
     }
 
+    virtual sharded<sstables::storage_manager>& get_sstorage_manager() override {
+        return _sstm;
+    }
+
     virtual future<> refresh_client_state() override {
         return _core_local.invoke_on_all([] (core_local_state& state) {
             return state.client_state.maybe_update_per_service_level_params();
@@ -497,6 +505,7 @@ public:
             // FIXME: handle signals (SIGINT, SIGTERM) - request aborts
             auto stop_abort_sources = defer([&] { abort_sources.stop().get(); });
             sharded<compaction_manager> cm;
+            sharded<sstables::storage_manager> sstm;
             sharded<tasks::task_manager> task_manager;
             sharded<replica::database> db;
             debug::the_database = &db;
@@ -732,7 +741,10 @@ public:
             cm.start(std::move(get_cm_cfg), std::ref(abort_sources), std::ref(task_manager)).get();
             auto stop_cm = deferred_stop(cm);
 
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(cm), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
+            sstm.start(std::ref(*cfg)).get();
+            auto stop_sstm = deferred_stop(sstm);
+
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notif), std::ref(feature_service), std::ref(token_metadata), std::ref(cm), std::ref(sstm), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
             auto stop_db = defer([&db] {
                 db.stop().get();
             });
@@ -968,7 +980,7 @@ public:
 
             notify_set.notify_all(configurable::system_state::started).get();
 
-            single_node_cql_env env(db, proxy, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, group0_client, raft_gr, sys_ks);
+            single_node_cql_env env(db, sstm, proxy, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, group0_client, raft_gr, sys_ks);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 

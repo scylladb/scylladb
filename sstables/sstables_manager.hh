@@ -45,11 +45,18 @@ using object_storage_config = std::unordered_map<sstring, s3::endpoint_config_pt
 
 static constexpr size_t default_sstable_buffer_size = 128 * 1024;
 
+class storage_manager : public peering_sharded_service<storage_manager> {
+public:
+    storage_manager(const db::config&);
+    future<> stop();
+};
+
 class sstables_manager {
     using list_type = boost::intrusive::list<sstable,
             boost::intrusive::member_hook<sstable, sstable::manager_link_type, &sstable::_manager_link>,
             boost::intrusive::constant_time_size<false>>;
 private:
+    storage_manager* _storage;
     db::large_data_handler& _large_data_handler;
     const db::config& _db_config;
     gms::feature_service& _features;
@@ -77,7 +84,7 @@ private:
     object_storage_config _object_storage_config;
 
 public:
-    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem, object_storage_config oscfg = {});
+    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem, storage_manager* shared = nullptr, object_storage_config oscfg = {});
     virtual ~sstables_manager();
 
     // Constructs a shared sstable

@@ -64,7 +64,7 @@ class test_env {
         sstables::sstable_generation_generator gen{0};
         data_dictionary::storage_options storage;
 
-        impl(test_env_config cfg);
+        impl(test_env_config cfg, sstables::storage_manager* sstm);
         impl(impl&&) = delete;
         impl(const impl&) = delete;
 
@@ -75,7 +75,7 @@ class test_env {
     std::unique_ptr<impl> _impl;
 public:
 
-    explicit test_env(test_env_config cfg = {}) : _impl(std::make_unique<impl>(std::move(cfg))) { }
+    explicit test_env(test_env_config cfg = {}, sstables::storage_manager* sstm = nullptr) : _impl(std::make_unique<impl>(std::move(cfg), sstm)) { }
 
     future<> stop() {
         return _impl->mgr.close().finally([this] {
