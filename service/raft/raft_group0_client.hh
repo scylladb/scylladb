@@ -155,6 +155,11 @@ public:
     // the holder does not actually hold any lock.
     future<std::pair<rwlock::holder, group0_upgrade_state>> get_group0_upgrade_state();
 
+    // Returns true iff the upgrade state is `use_post_raft_procedures`
+    // The function does not take upgrade lock since after the state becomes
+    // `use_post_raft_procedures` it can never go back
+    bool using_raft();
+
     // Ensures that nobody holds any `rwlock::holder`s returned from `get_group0_upgrade_state()`
     // then changes the state to `s`.
     //
