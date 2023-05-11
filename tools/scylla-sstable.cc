@@ -251,7 +251,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
         data_dictionary::storage_options local;
         auto sst = sst_man.make_sstable(schema, local, dir_path.c_str(), ed.generation, ed.version, ed.format);
 
-        co_await sst->load(sstables::sstable_open_config{.load_first_and_last_position_metadata = false});
+        co_await sst->load(schema->get_sharder(), sstables::sstable_open_config{.load_first_and_last_position_metadata = false});
 
         sstables[i] = std::move(sst);
     }).get();

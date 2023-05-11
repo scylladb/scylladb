@@ -42,7 +42,7 @@ static schema_ptr get_schema(unsigned shard_count, unsigned sharding_ignore_msb_
 // Asserts that sstable::compute_owner_shards(...) produces correct results.
 static future<> assert_sstable_computes_correct_owners(test_env& env, const sstables::shared_sstable& base_sst) {
     auto sst = co_await env.reusable_sst(base_sst);
-    co_await sst->load_owner_shards();
+    co_await sst->load_owner_shards(sst->get_schema()->get_sharder());
     BOOST_REQUIRE_EQUAL(sst->get_shards_for_this_sstable(), base_sst->get_shards_for_this_sstable());
 }
 

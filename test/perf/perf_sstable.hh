@@ -180,7 +180,7 @@ public:
 
     future<> load_sstables(unsigned iterations) {
         _sst.push_back(_env.make_sstable(s, this->dir()));
-        return _sst.back()->load();
+        return _sst.back()->load(s->get_sharder());
     }
 
     using clk = std::chrono::steady_clock;

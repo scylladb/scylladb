@@ -198,13 +198,13 @@ public:
     // load all components from disk
     // this variant will be useful for testing purposes and also when loading
     // a new sstable from scratch for sharing its components.
-    future<> load(sstable_open_config cfg = {}) noexcept;
+    future<> load(const dht::sharder& sharder, sstable_open_config cfg = {}) noexcept;
     future<> open_data(sstable_open_config cfg = {}) noexcept;
     future<> update_info_for_opened_data(sstable_open_config cfg = {});
 
     // Load set of shards that own the SSTable, while reading the minimum
     // from disk to achieve that.
-    future<> load_owner_shards();
+    future<> load_owner_shards(const dht::sharder& sharder);
 
     // Call as the last method before the object is destroyed.
     // No other uses of the object can happen at this point.
@@ -671,7 +671,7 @@ private:
     std::optional<std::pair<uint64_t, uint64_t>> get_sample_indexes_for_range(const dht::token_range& range);
     std::optional<std::pair<uint64_t, uint64_t>> get_index_pages_for_range(const dht::token_range& range);
 
-    std::vector<unsigned> compute_shards_for_this_sstable() const;
+    std::vector<unsigned> compute_shards_for_this_sstable(const dht::sharder&) const;
     template <typename Components>
     static auto& get_mutable_serialization_header(Components& components) {
         auto entry = components.statistics.contents.find(metadata_type::Serialization);

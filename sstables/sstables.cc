@@ -1399,7 +1399,7 @@ void sstable::write_filter() {
 
 // This interface is only used during tests, snapshot loading and early initialization.
 // No need to set tunable priorities for it.
-future<> sstable::load(sstable_open_config cfg) noexcept {
+future<> sstable::load(const dht::sharder& sharder, sstable_open_config cfg) noexcept {
     co_await read_toc();
     // read scylla-meta after toc. Might need it to parse
     // rest (hint extensions)
@@ -1416,7 +1416,7 @@ future<> sstable::load(sstable_open_config cfg) noexcept {
     validate_partitioner();
     if (_shards.empty()) {
         set_first_and_last_keys();
-        _shards = compute_shards_for_this_sstable();
+        _shards = compute_shards_for_this_sstable(sharder);
     }
     co_await open_data(cfg);
 }
@@ -1444,7 +1444,7 @@ future<foreign_sstable_open_info> sstable::get_open_info() & {
 }
 
 future<>
-sstable::load_owner_shards() {
+sstable::load_owner_shards(const dht::sharder& sharder) {
     if (!_shards.empty()) {
         co_return;
     }
@@ -1472,7 +1472,7 @@ sstable::load_owner_shards() {
         set_first_and_last_keys();
     }
 
-    _shards = compute_shards_for_this_sstable();
+    _shards = compute_shards_for_this_sstable(sharder);
 }
 
 void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval) {
@@ -2731,7 +2731,7 @@ uint64_t sstable::estimated_keys_for_range(const dht::token_range& range) {
 }
 
 std::vector<unsigned>
-sstable::compute_shards_for_this_sstable() const {
+sstable::compute_shards_for_this_sstable(const dht::sharder& sharder_) const {
     std::unordered_set<unsigned> shards;
     dht::partition_range_vector token_ranges;
     const auto* sm = _components->scylla_metadata
@@ -2753,7 +2753,7 @@ sstable::compute_shards_for_this_sstable() const {
                 sm->token_ranges.elements
                 | boost::adaptors::transformed(disk_token_range_to_ring_position_range));
     }
-    auto sharder = dht::ring_position_range_vector_sharder(_schema->get_sharder(), std::move(token_ranges));
+    auto sharder = dht::ring_position_range_vector_sharder(sharder_, std::move(token_ranges));
     auto rpras = sharder.next(*_schema);
     while (rpras) {
         shards.insert(rpras->shard);

@@ -2114,7 +2114,7 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
                 }
             });
 
-            sst->load().get();
+            sst->load(sst->get_schema()->get_sharder()).get();
 
             testlog.info("Loaded sstable {}", sst->get_filename());
 
@@ -2214,7 +2214,7 @@ SEASTAR_TEST_CASE(sstable_validate_test) {
         config.validation_level = mutation_fragment_stream_validation_level::partition_region; // this test violates key order on purpose
         auto sst = env.make_sstable(schema);
         sst->write_components(std::move(rd), local_keys.size(), schema, config, encoding_stats{}).get();
-        sst->load().get();
+        sst->load(sst->get_schema()->get_sharder()).get();
         return sst;
     };
 
@@ -2308,7 +2308,7 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
 
             testlog.info("Writing sstable {}", sst->get_filename());
 
-            sst->load().get();
+            sst->load(sst->get_schema()->get_sharder()).get();
 
             testlog.info("Loaded sstable {}", sst->get_filename());
 
@@ -2399,7 +2399,7 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
                 }
             });
 
-            sst->load().get();
+            sst->load(sst->get_schema()->get_sharder()).get();
 
             testlog.info("Loaded sstable {}", sst->get_filename());
 
@@ -2505,7 +2505,7 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
                     }
                 });
 
-                sst->load().get();
+                sst->load(sst->get_schema()->get_sharder()).get();
 
                 testlog.info("Loaded sstable {}", sst->get_filename());
 
