@@ -425,8 +425,8 @@ class s3_storage : public sstables::storage {
     future<> ensure_remote_prefix(const sstable& sst);
 
 public:
-    s3_storage(sstring endpoint, s3::endpoint_config_ptr cfg, sstring bucket, sstring dir)
-        : _client(s3::client::make(std::move(endpoint), std::move(cfg)))
+    s3_storage(shared_ptr<s3::client> client, sstring bucket, sstring dir)
+        : _client(std::move(client))
         , _bucket(std::move(bucket))
         , _location(std::move(dir))
     {
@@ -442,7 +442,7 @@ public:
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
     virtual future<> destroy(const sstable& sst) override {
-        return _client->close();
+        return make_ready_future<>();
     }
 
     virtual sstring prefix() const override { return _location; }
@@ -527,7 +527,7 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
             return std::make_unique<sstables::filesystem_storage>(std::move(dir));
         },
         [dir, &manager] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstables::storage> {
-            return std::make_unique<sstables::s3_storage>(os.endpoint, manager.get_endpoint_config(os.endpoint), os.bucket, std::move(dir));
+            return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, std::move(dir));
         }
     }, s_opts.value);
 }

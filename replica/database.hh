@@ -93,6 +93,7 @@ namespace sstables {
 class sstable;
 class compaction_descriptor;
 class compaction_completion_desc;
+class storage_manager;
 class sstables_manager;
 class compaction_data;
 class sstable_set;
@@ -1388,14 +1389,6 @@ private:
     serialized_action _update_memtable_flush_static_shares_action;
     utils::observer<float> _memtable_flush_static_shares_observer;
 
-    struct object_storage_config_updater {
-        serialized_action action;
-        utils::observer<std::unordered_map<sstring, s3::endpoint_config>> observer;
-        object_storage_config_updater(database&);
-    };
-
-    std::unique_ptr<object_storage_config_updater> _object_storage_config_updater;
-
 public:
     data_dictionary::database as_data_dictionary() const;
     std::shared_ptr<data_dictionary::user_types_storage> as_user_types_storage() const noexcept;
@@ -1469,7 +1462,7 @@ public:
 
     future<> parse_system_tables(distributed<service::storage_proxy>&, sharded<db::system_keyspace>&);
     database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
-            compaction_manager& cm, sharded<sstables::directory_semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
+            compaction_manager& cm, sstables::storage_manager& sstm, sharded<sstables::directory_semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
     database(database&&) = delete;
     ~database();
 

@@ -93,6 +93,7 @@
 #include "db/per_partition_rate_limit_extension.hh"
 #include "lang/wasm_instance_cache.hh"
 #include "lang/wasm_alien_thread_runner.hh"
+#include "sstables/sstables_manager.hh"
 
 #include "service/raft/raft_address_map.hh"
 #include "service/raft/raft_group_registry.hh"
@@ -584,6 +585,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<service::migration_notifier> mm_notifier;
     sharded<service::endpoint_lifecycle_notifier> lifecycle_notifier;
     sharded<compaction_manager> cm;
+    sharded<sstables::storage_manager> sstm;
     distributed<replica::database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
     service::load_meter load_meter;
@@ -635,7 +637,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         tcp_syncookies_sanity();
         tcp_timestamps_sanity();
 
-        return seastar::async([&app, cfg, ext, &cm, &db, &qp, &bm, &proxy, &forward_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
+        return seastar::async([&app, cfg, ext, &cm, &sstm, &db, &qp, &bm, &proxy, &forward_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager] {
@@ -1130,10 +1132,15 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                cm.stop().get();
             });
 
+            sstm.start(std::ref(*cfg)).get();
+            auto stop_sstm = defer_verbose_shutdown("sstables storage manager", [&sstm] {
+                sstm.stop().get();
+            });
+
             supervisor::notify("starting database");
             debug::the_database = &db;
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
-                    std::ref(cm), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
+                    std::ref(cm), std::ref(sstm), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)
                 //return db.stop();

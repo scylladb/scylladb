@@ -28,6 +28,8 @@ class client : public enable_shared_from_this<client> {
     std::string _host;
     endpoint_config_ptr _cfg;
     http::experimental::client _http;
+    using global_factory = std::function<shared_ptr<client>(std::string)>;
+    global_factory _gf;
 
     struct private_tag {};
 
@@ -35,8 +37,8 @@ class client : public enable_shared_from_this<client> {
 
     future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler);
 public:
-    explicit client(std::string host, endpoint_config_ptr cfg, private_tag);
-    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg);
+    explicit client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag);
+    static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf = {});
 
     future<uint64_t> get_object_size(sstring object_name);
     struct stats {
@@ -51,6 +53,22 @@ public:
 
     file make_readable_file(sstring object_name);
     data_sink make_upload_sink(sstring object_name);
+
+    void update_config(endpoint_config_ptr);
+
+    struct handle {
+        std::string _host;
+        global_factory _gf;
+    public:
+        handle(const client& cln)
+                : _host(cln._host)
+                , _gf(cln._gf)
+        {}
+
+        shared_ptr<client> to_client() && {
+            return _gf(std::move(_host));
+        }
+    };
 
     future<> close();
 };

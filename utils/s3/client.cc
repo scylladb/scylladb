@@ -107,15 +107,23 @@ public:
     }
 };
 
-client::client(std::string host, endpoint_config_ptr cfg, private_tag)
+client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
         , _http(std::make_unique<dns_connection_factory>(_host, _cfg->port, _cfg->use_https))
+        , _gf(std::move(gf))
 {
 }
 
-shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg) {
-    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), private_tag{});
+void client::update_config(endpoint_config_ptr cfg) {
+    if (_cfg->port != cfg->port || _cfg->use_https != cfg->use_https) {
+        throw std::runtime_error("Updating port and/or https usage is not possible");
+    }
+    _cfg = std::move(cfg);
+}
+
+shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf) {
+    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), std::move(gf), private_tag{});
 }
 
 void client::authorize(http::request& req) {
@@ -562,29 +570,26 @@ public:
     virtual future<> discard(uint64_t offset, uint64_t length) override { return make_ready_future<>(); }
 
     class readable_file_handle_impl final : public file_handle_impl {
-        std::string _host;
-        endpoint_config_ptr _cfg;
+        client::handle _h;
         sstring _object_name;
 
     public:
-        readable_file_handle_impl(std::string host, endpoint_config_ptr cfg, sstring object_name)
-                : _host(std::move(host))
-                , _cfg(std::move(cfg))
+        readable_file_handle_impl(client::handle h, sstring object_name)
+                : _h(std::move(h))
                 , _object_name(std::move(object_name))
         {}
 
         virtual std::unique_ptr<file_handle_impl> clone() const override {
-            return std::make_unique<readable_file_handle_impl>(_host, _cfg, _object_name);
+            return std::make_unique<readable_file_handle_impl>(_h, _object_name);
         }
 
         virtual shared_ptr<file_impl> to_file() && override {
-            auto client = seastar::make_shared<s3::client>(std::move(_host), std::move(_cfg), client::private_tag{});
-            return make_shared<readable_file>(std::move(client), std::move(_object_name));
+            return make_shared<readable_file>(std::move(_h).to_client(), std::move(_object_name));
         }
     };
 
     virtual std::unique_ptr<file_handle_impl> dup() override {
-        return std::make_unique<readable_file_handle_impl>(_client->_host, _client->_cfg, _object_name);
+        return std::make_unique<readable_file_handle_impl>(client::handle(*_client), _object_name);
     }
 
     virtual future<uint64_t> size(void) override {

@@ -178,6 +178,8 @@ public:
 
     virtual sharded<service::storage_proxy>& get_storage_proxy() = 0;
 
+    virtual sharded<sstables::storage_manager>& get_sstorage_manager() = 0;
+
     data_dictionary::database data_dictionary();
 };
 
