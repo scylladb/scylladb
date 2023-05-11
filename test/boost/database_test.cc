@@ -69,11 +69,7 @@ static future<> apply_mutation(sharded<replica::database>& sharded_db, table_id 
 }
 
 future<> do_with_cql_env_and_compaction_groups(std::function<void(cql_test_env&)> func, cql_test_config cfg = {}, thread_attributes thread_attr = {}) {
-#ifdef SEASTAR_DEBUG
     std::vector<unsigned> x_log2_compaction_group_values = { 0 /* 1 CG */, 1 /* 2 CGs */ };
-#else
-    std::vector<unsigned> x_log2_compaction_group_values = { 0 /* 1 CG */, 1 /* 2 CGs */, 8 /* 256 CGs */ };
-#endif
     for (auto x_log2_compaction_groups : x_log2_compaction_group_values) {
         // clean the dir before running
         if (cfg.db_config->data_file_directories.is_set()) {
