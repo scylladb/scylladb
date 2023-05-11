@@ -52,6 +52,8 @@ public:
     file make_readable_file(sstring object_name);
     data_sink make_upload_sink(sstring object_name);
 
+    void update_config(endpoint_config_ptr);
+
     future<> close();
 };
 

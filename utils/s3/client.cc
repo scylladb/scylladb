@@ -114,6 +114,13 @@ client::client(std::string host, endpoint_config_ptr cfg, private_tag)
 {
 }
 
+void client::update_config(endpoint_config_ptr cfg) {
+    if (_cfg->port != cfg->port || _cfg->use_https != cfg->use_https) {
+        throw std::runtime_error("Updating port and/or https usage is not possible");
+    }
+    _cfg = std::move(cfg);
+}
+
 shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg) {
     return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), private_tag{});
 }
