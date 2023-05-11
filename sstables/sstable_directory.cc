@@ -175,11 +175,11 @@ sstable_directory::sort_sstable(sstables::entry_descriptor desc, process_flags f
             dirlog.trace("{} identified as a local unshared SSTable", sstable_filename(desc));
             _unshared_local_sstables.push_back(co_await load_sstable(std::move(desc), flags));
         } else {
-            dirlog.trace("{} identified as a remote unshared SSTable", sstable_filename(desc));
+            dirlog.trace("{} identified as a remote unshared SSTable, shard={}", sstable_filename(desc), shards[0]);
             _unshared_remote_sstables[shards[0]].push_back(std::move(desc));
         }
     } else {
-        dirlog.trace("{} identified as a shared SSTable", sstable_filename(desc));
+        dirlog.trace("{} identified as a shared SSTable, shards={}", sstable_filename(desc), shards);
         _shared_sstable_info.push_back(co_await get_open_info_for_this_sstable(desc));
     }
 }
