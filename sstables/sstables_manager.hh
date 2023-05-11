@@ -34,6 +34,8 @@ class config;
 
 }   // namespace db
 
+namespace s3 { class client; }
+
 namespace gms { class feature_service; }
 
 namespace sstables {
@@ -53,6 +55,7 @@ class storage_manager : public peering_sharded_service<storage_manager> {
 
     struct s3_endpoint {
         s3::endpoint_config_ptr cfg;
+        shared_ptr<s3::client> client;
         s3_endpoint(s3::endpoint_config_ptr c) noexcept : cfg(std::move(c)) {}
     };
 
@@ -63,9 +66,7 @@ class storage_manager : public peering_sharded_service<storage_manager> {
 
 public:
     storage_manager(const db::config&);
-    s3::endpoint_config_ptr get_endpoint_config(sstring endpoint) const {
-        return _s3_endpoints.at(endpoint).cfg;
-    }
+    shared_ptr<s3::client> get_endpoint_client(sstring endpoint);
     future<> stop();
 };
 
@@ -117,9 +118,9 @@ public:
 
     std::unique_ptr<sstable_directory::components_lister> get_components_lister(const data_dictionary::storage_options& storage, std::filesystem::path dir);
 
-    s3::endpoint_config_ptr get_endpoint_config(sstring endpoint) const {
+    shared_ptr<s3::client> get_endpoint_client(sstring endpoint) const {
         assert(_storage != nullptr);
-        return _storage->get_endpoint_config(std::move(endpoint));
+        return _storage->get_endpoint_client(std::move(endpoint));
     }
 
     virtual sstable_writer_config configure_writer(sstring origin) const;

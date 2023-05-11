@@ -14,6 +14,7 @@
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
 #include "db/system_keyspace.hh"
+#include "utils/s3/client.hh"
 
 namespace sstables {
 
@@ -52,6 +53,12 @@ future<> storage_manager::stop() {
     if (_config_updater) {
         co_await _config_updater->action.join();
     }
+
+    for (auto ep : _s3_endpoints) {
+        if (ep.second.client != nullptr) {
+            co_await ep.second.client->close();
+        }
+    }
 }
 
 void storage_manager::update_config(const db::config& cfg) {
@@ -64,6 +71,14 @@ void storage_manager::update_config(const db::config& cfg) {
             _s3_endpoints.emplace(std::make_pair(std::move(ep), make_lw_shared<s3::endpoint_config>(std::move(ecfg))));
         }
     }
+}
+
+shared_ptr<s3::client> storage_manager::get_endpoint_client(sstring endpoint) {
+    auto& ep = _s3_endpoints.at(endpoint);
+    if (ep.client == nullptr) {
+        ep.client = s3::client::make(endpoint, ep.cfg);
+    }
+    return ep.client;
 }
 
 storage_manager::config_updater::config_updater(const db::config& cfg, storage_manager& sstm)
