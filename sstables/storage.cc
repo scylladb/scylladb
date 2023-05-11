@@ -17,6 +17,7 @@
 #include <seastar/util/file.hh>
 
 #include "sstables/exceptions.hh"
+#include "sstables/sstable_directory.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_version.hh"
 #include "sstables/integrity_checked_file_impl.hh"

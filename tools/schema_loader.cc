@@ -31,6 +31,7 @@
 #include "readers/combined.hh"
 #include "replica/database.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/sstable_directory.hh"
 #include "types/list.hh"
 #include "data_dictionary/impl.hh"
 #include "data_dictionary/data_dictionary.hh"

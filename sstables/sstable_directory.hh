@@ -154,6 +154,8 @@ private:
 
     std::vector<sstables::shared_sstable> _unsorted_sstables;
 private:
+    std::unique_ptr<sstable_directory::components_lister> make_components_lister();
+
     future<> process_descriptor(sstables::entry_descriptor desc, process_flags flags);
     void validate(sstables::shared_sstable sst, process_flags flags) const;
     future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc, sstables::sstable_open_config cfg = {}) const;
