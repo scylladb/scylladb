@@ -1305,9 +1305,7 @@ future<> sstable::open_or_create_data(open_flags oflags, file_open_options optio
 future<> sstable::open_data(sstable_open_config cfg) noexcept {
     co_await open_or_create_data(open_flags::ro);
     co_await update_info_for_opened_data(cfg);
-    if (_shards.empty()) {
-        _shards = compute_shards_for_this_sstable();
-    }
+    assert(!_shards.empty());
     auto* sm = _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>();
     if (sm) {
         // Sharding information uses a lot of memory and once we're doing with this computation we will no longer use it.
@@ -1416,6 +1414,10 @@ future<> sstable::load(sstable_open_config cfg) noexcept {
     validate_min_max_metadata();
     validate_max_local_deletion_time();
     validate_partitioner();
+    if (_shards.empty()) {
+        set_first_and_last_keys();
+        _shards = compute_shards_for_this_sstable();
+    }
     co_await open_data(cfg);
 }
 
