@@ -41,7 +41,6 @@ namespace sstables {
 class directory_semaphore;
 using schema_ptr = lw_shared_ptr<const schema>;
 using shareable_components_ptr = lw_shared_ptr<shareable_components>;
-using object_storage_config = std::unordered_map<sstring, s3::endpoint_config_ptr>;
 
 static constexpr size_t default_sstable_buffer_size = 128 * 1024;
 
@@ -52,15 +51,20 @@ class storage_manager : public peering_sharded_service<storage_manager> {
         config_updater(const db::config& cfg, storage_manager&);
     };
 
-    object_storage_config _s3_config;
+    struct s3_endpoint {
+        s3::endpoint_config_ptr cfg;
+        s3_endpoint(s3::endpoint_config_ptr c) noexcept : cfg(std::move(c)) {}
+    };
+
+    std::unordered_map<sstring, s3_endpoint> _s3_endpoints;
     std::unique_ptr<config_updater> _config_updater;
 
-    void update_config(object_storage_config cfg);
+    void update_config(const db::config&);
 
 public:
     storage_manager(const db::config&);
     s3::endpoint_config_ptr get_endpoint_config(sstring endpoint) const {
-        return _s3_config.at(endpoint);
+        return _s3_endpoints.at(endpoint).cfg;
     }
     future<> stop();
 };

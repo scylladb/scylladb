@@ -40,18 +40,12 @@ sstables_manager::~sstables_manager() {
     assert(_undergoing_close.empty());
 }
 
-object_storage_config make_object_storage_config(const db::config& db_cfg) {
-    std::unordered_map<sstring, s3::endpoint_config_ptr> ret;
-    for (auto [ ep, cfg ] : db_cfg.object_storage_config()) {
-        ret[ep] = make_lw_shared<s3::endpoint_config>(std::move(cfg));
-    }
-    return ret;
-}
-
 storage_manager::storage_manager(const db::config& cfg)
-    : _s3_config(make_object_storage_config(cfg))
-    , _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)
+    : _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)
 {
+    for (auto [ep, ecfg] : cfg.object_storage_config()) {
+        _s3_endpoints.emplace(std::make_pair(std::move(ep), make_lw_shared<s3::endpoint_config>(std::move(ecfg))));
+    }
 }
 
 future<> storage_manager::stop() {
@@ -60,15 +54,22 @@ future<> storage_manager::stop() {
     }
 }
 
-void storage_manager::update_config(object_storage_config oscfg) {
+void storage_manager::update_config(const db::config& cfg) {
     // FIXME -- entries grabbed by sstables' storages are not yet updated
-    _s3_config = std::move(oscfg);
+    for (auto [ep, ecfg] : cfg.object_storage_config()) {
+        auto it = _s3_endpoints.find(ep);
+        if (it != _s3_endpoints.end()) {
+            it->second.cfg = std::move(ecfg);
+        } else {
+            _s3_endpoints.emplace(std::make_pair(std::move(ep), make_lw_shared<s3::endpoint_config>(std::move(ecfg))));
+        }
+    }
 }
 
 storage_manager::config_updater::config_updater(const db::config& cfg, storage_manager& sstm)
     : action([&sstm, &cfg] () mutable {
         return sstm.container().invoke_on_all([&cfg] (auto& sstm) {
-            sstm.update_config(make_object_storage_config(cfg));
+            sstm.update_config(cfg);
         });
     })
     , observer(cfg.object_storage_config.observe(action.make_observer()))
