@@ -155,33 +155,34 @@ future<> table_for_tests::stop() {
 
 namespace sstables {
 
-std::unique_ptr<db::config> make_db_config(sstring temp_dir) {
-    auto cfg = std::make_unique<db::config>();
-    cfg->data_file_directories.set({ temp_dir });
-    cfg->host_id = locator::host_id::create_random_id();
-    return cfg;
-}
-
-std::unordered_map<sstring, s3::endpoint_config_ptr> make_storage_options_config(const data_dictionary::storage_options& so) {
-    std::unordered_map<sstring, s3::endpoint_config_ptr> cfg;
+std::unordered_map<sstring, s3::endpoint_config> make_storage_options_config(const data_dictionary::storage_options& so) {
+    std::unordered_map<sstring, s3::endpoint_config> cfg;
     std::visit(overloaded_functor {
         [] (const data_dictionary::storage_options::local& loc) mutable -> void {
         },
         [&cfg] (const data_dictionary::storage_options::s3& os) mutable -> void {
-            cfg[os.endpoint] = make_lw_shared<s3::endpoint_config>(s3::endpoint_config {
+            cfg[os.endpoint] = s3::endpoint_config {
                 .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
-            });
+            };
         }
     }, so.value);
     return cfg;
 }
 
+std::unique_ptr<db::config> make_db_config(sstring temp_dir, const data_dictionary::storage_options so) {
+    auto cfg = std::make_unique<db::config>();
+    cfg->data_file_directories.set({ temp_dir });
+    cfg->host_id = locator::host_id::create_random_id();
+    cfg->object_storage_config = make_storage_options_config(so);
+    return cfg;
+}
+
 test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm)
     : dir()
-    , db_config(make_db_config(dir.path().native()))
+    , db_config(make_db_config(dir.path().native(), cfg.storage))
     , dir_sem(1)
     , feature_service(gms::feature_config_from_db_config(*db_config))
-    , mgr(cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler, *db_config, feature_service, cache_tracker, memory::stats().total_memory(), dir_sem, sstm, make_storage_options_config(cfg.storage))
+    , mgr(cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler, *db_config, feature_service, cache_tracker, memory::stats().total_memory(), dir_sem, sstm)
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env")
     , storage(std::move(cfg.storage))
 { }
@@ -196,6 +197,7 @@ future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, te
         auto wrap = std::make_shared<test_env_with_cql>(std::move(func), std::move(cfg));
         auto db_cfg = make_shared<db::config>();
         db_cfg->experimental_features({db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS});
+        db_cfg->object_storage_config = make_storage_options_config(wrap->cfg.storage);
         return do_with_cql_env_thread([wrap = std::move(wrap)] (auto& cql_env) mutable {
             test_env env(std::move(wrap->cfg), &cql_env.get_sstorage_manager().local());
             auto close_env = defer([&] { env.stop().get(); });

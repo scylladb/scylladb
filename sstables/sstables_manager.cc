@@ -20,7 +20,7 @@ namespace sstables {
 logging::logger smlogger("sstables_manager");
 
 sstables_manager::sstables_manager(
-    db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct, size_t available_memory, directory_semaphore& dir_sem, storage_manager* shared, object_storage_config oscfg)
+    db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker& ct, size_t available_memory, directory_semaphore& dir_sem, storage_manager* shared)
     : _storage(shared)
     , _large_data_handler(large_data_handler), _db_config(dbcfg), _features(feat), _cache_tracker(ct)
     , _sstable_metadata_concurrency_sem(
@@ -31,7 +31,6 @@ sstables_manager::sstables_manager(
         utils::updateable_value(std::numeric_limits<uint32_t>::max()),
         utils::updateable_value(std::numeric_limits<uint32_t>::max()))
     , _dir_semaphore(dir_sem)
-    , _object_storage_config(std::move(oscfg))
 {
 }
 
@@ -41,18 +40,39 @@ sstables_manager::~sstables_manager() {
     assert(_undergoing_close.empty());
 }
 
+object_storage_config make_object_storage_config(const db::config& db_cfg) {
+    std::unordered_map<sstring, s3::endpoint_config_ptr> ret;
+    for (auto [ ep, cfg ] : db_cfg.object_storage_config()) {
+        ret[ep] = make_lw_shared<s3::endpoint_config>(std::move(cfg));
+    }
+    return ret;
+}
+
 storage_manager::storage_manager(const db::config& cfg)
+    : _s3_config(make_object_storage_config(cfg))
+    , _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)
 {
 }
 
 future<> storage_manager::stop() {
-    co_return;
+    if (_config_updater) {
+        co_await _config_updater->action.join();
+    }
 }
 
-void sstables_manager::update_object_storage_config(object_storage_config oscfg) {
+void storage_manager::update_config(object_storage_config oscfg) {
     // FIXME -- entries grabbed by sstables' storages are not yet updated
-    _object_storage_config = std::move(oscfg);
+    _s3_config = std::move(oscfg);
 }
+
+storage_manager::config_updater::config_updater(const db::config& cfg, storage_manager& sstm)
+    : action([&sstm, &cfg] () mutable {
+        return sstm.container().invoke_on_all([&cfg] (auto& sstm) {
+            sstm.update_config(make_object_storage_config(cfg));
+        });
+    })
+    , observer(cfg.object_storage_config.observe(action.make_observer()))
+{}
 
 const locator::host_id& sstables_manager::get_local_host_id() const {
     return _db_config.host_id;

@@ -46,8 +46,22 @@ using object_storage_config = std::unordered_map<sstring, s3::endpoint_config_pt
 static constexpr size_t default_sstable_buffer_size = 128 * 1024;
 
 class storage_manager : public peering_sharded_service<storage_manager> {
+    struct config_updater {
+        serialized_action action;
+        utils::observer<std::unordered_map<sstring, s3::endpoint_config>> observer;
+        config_updater(const db::config& cfg, storage_manager&);
+    };
+
+    object_storage_config _s3_config;
+    std::unique_ptr<config_updater> _config_updater;
+
+    void update_config(object_storage_config cfg);
+
 public:
     storage_manager(const db::config&);
+    s3::endpoint_config_ptr get_endpoint_config(sstring endpoint) const {
+        return _s3_config.at(endpoint);
+    }
     future<> stop();
 };
 
@@ -81,10 +95,9 @@ private:
     reader_concurrency_semaphore _sstable_metadata_concurrency_sem;
     directory_semaphore& _dir_semaphore;
     seastar::shared_ptr<db::system_keyspace> _sys_ks;
-    object_storage_config _object_storage_config;
 
 public:
-    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem, storage_manager* shared = nullptr, object_storage_config oscfg = {});
+    explicit sstables_manager(db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem, storage_manager* shared = nullptr);
     virtual ~sstables_manager();
 
     // Constructs a shared sstable
@@ -101,10 +114,9 @@ public:
     std::unique_ptr<sstable_directory::components_lister> get_components_lister(const data_dictionary::storage_options& storage, std::filesystem::path dir);
 
     s3::endpoint_config_ptr get_endpoint_config(sstring endpoint) const {
-        return _object_storage_config.at(endpoint);
+        assert(_storage != nullptr);
+        return _storage->get_endpoint_config(std::move(endpoint));
     }
-
-    void update_object_storage_config(object_storage_config cfg);
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
     const db::config& config() const { return _db_config; }
