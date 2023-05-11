@@ -1624,11 +1624,12 @@ sstable::read_scylla_metadata() noexcept {
 }
 
 void
-sstable::write_scylla_metadata(shard_id shard, sstable_enabled_features features, struct run_identifier identifier,
+sstable::write_scylla_metadata(shard_id shard, const dht::sharder& sharder, sstable_enabled_features features, struct run_identifier identifier,
         std::optional<scylla_metadata::large_data_stats> ld_stats, sstring origin) {
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
-    auto sm = create_sharding_metadata(_schema, _schema->get_sharder(), first_key, last_key, shard);
+
+    auto sm = create_sharding_metadata(_schema, sharder, first_key, last_key, shard);
 
     // sstable write may fail to generate empty metadata if mutation source has only data from other shard.
     // see https://github.com/scylladb/scylla/issues/2932 for details on how it can happen.
