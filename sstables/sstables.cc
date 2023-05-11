@@ -801,10 +801,10 @@ future<> sstable::read_toc() noexcept {
     }
 
     try {
-    co_await do_read_simple(component_type::TOC, [&] (version_types v, file f) -> future<> {
-        auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
+        co_await do_read_simple(component_type::TOC, [&] (version_types v, file f) -> future<> {
+            auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
-        size_t size = co_await f.dma_read(0, bufptr.get(), 4096);
+            size_t size = co_await f.dma_read(0, bufptr.get(), 4096);
             // This file is supposed to be very small. Theoretically we should check its size,
             // but if we so much as read a whole page from it, there is definitely something fishy
             // going on - and this simplifies the code.
@@ -832,13 +832,13 @@ future<> sstable::read_toc() noexcept {
             if (!_recognized_components.size()) {
                 throw malformed_sstable_exception("Empty TOC", filename(component_type::TOC));
             }
-    });
-        } catch (std::system_error& e) {
-            if (e.code() == std::error_code(ENOENT, std::system_category())) {
-                throw malformed_sstable_exception(filename(component_type::TOC) + ": file not found");
-            }
-            throw;
+        });
+    } catch (std::system_error& e) {
+        if (e.code() == std::error_code(ENOENT, std::system_category())) {
+            throw malformed_sstable_exception(filename(component_type::TOC) + ": file not found");
         }
+        throw;
+    }
 }
 
 void sstable::generate_toc() {
