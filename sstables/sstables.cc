@@ -797,20 +797,19 @@ static inline sstring parent_path(const sstring& fname) {
 // at once
 future<> sstable::read_toc() noexcept {
     if (_recognized_components.size()) {
-        return make_ready_future<>();
+        co_return;
     }
 
-    return do_read_simple(component_type::TOC, [&] (version_types v, file f) -> future<> {
-        auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
-        auto buf = bufptr.get();
+    try {
+        co_await do_read_simple(component_type::TOC, [&] (version_types v, file f) -> future<> {
+            auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
-        auto fut = f.dma_read(0, buf, 4096);
-        return std::move(fut).then([this, f = std::move(f), bufptr = std::move(bufptr)] (size_t size) mutable {
+            size_t size = co_await f.dma_read(0, bufptr.get(), 4096);
             // This file is supposed to be very small. Theoretically we should check its size,
             // but if we so much as read a whole page from it, there is definitely something fishy
             // going on - and this simplifies the code.
             if (size >= 4096) {
-                return make_exception_future<>(malformed_sstable_exception("SSTable TOC too big: " + to_sstring(size) + " bytes", filename(component_type::TOC)));
+                throw malformed_sstable_exception("SSTable TOC too big: " + to_sstring(size) + " bytes", filename(component_type::TOC));
             }
 
             std::string_view buf(bufptr.get(), size);
@@ -831,22 +830,15 @@ future<> sstable::read_toc() noexcept {
                 }
             }
             if (!_recognized_components.size()) {
-                return make_exception_future<>(malformed_sstable_exception("Empty TOC", filename(component_type::TOC)));
+                throw malformed_sstable_exception("Empty TOC", filename(component_type::TOC));
             }
-            return make_ready_future<>();
         });
-    }).then_wrapped([this] (future<> f) {
-        try {
-            f.get();
-        } catch (std::system_error& e) {
-            if (e.code() == std::error_code(ENOENT, std::system_category())) {
-                return make_exception_future<>(malformed_sstable_exception(filename(component_type::TOC) + ": file not found"));
-            }
-            return make_exception_future<>(e);
+    } catch (std::system_error& e) {
+        if (e.code() == std::error_code(ENOENT, std::system_category())) {
+            throw malformed_sstable_exception(filename(component_type::TOC) + ": file not found");
         }
-        return make_ready_future<>();
-    });
-
+        throw;
+    }
 }
 
 void sstable::generate_toc() {
