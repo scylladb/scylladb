@@ -161,6 +161,16 @@ class ManagerClient():
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
         self._driver_update()
 
+    async def server_pause(self, server_id: ServerNum) -> None:
+        """Pause the specified server."""
+        logger.debug("ManagerClient pausing %s", server_id)
+        await self.client.get(f"/cluster/server/{server_id}/pause")
+
+    async def server_unpause(self, server_id: ServerNum) -> None:
+        """Unpause the specified server."""
+        logger.debug("ManagerClient unpausing %s", server_id)
+        await self.client.get(f"/cluster/server/{server_id}/unpause")
+
     async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None, config: Optional[dict[str, Any]] = None, start: bool = True) -> ServerInfo:
         """Add a new server"""
         try:

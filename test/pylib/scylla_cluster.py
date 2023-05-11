@@ -517,6 +517,16 @@ class ScyllaServer:
                 self.logger.info("gracefully stopped %s", self)
             self.cmd = None
 
+    def pause(self) -> None:
+        """Pause a running server."""
+        if self.cmd:
+            self.cmd.send_signal(signal.SIGSTOP)
+
+    def unpause(self) -> None:
+        """Unpause a paused server."""
+        if self.cmd:
+            self.cmd.send_signal(signal.SIGCONT)
+
     async def uninstall(self) -> None:
         """Clear all files left from a stopped server, including the
         data files and log files."""
@@ -850,6 +860,21 @@ class ScyllaCluster:
             return ret
         return await self.server_start(server_id)
 
+    def server_pause(self, server_id: ServerNum) -> None:
+        """Pause a running server process."""
+        self.logger.info("Cluster %s pausing server %s", self.name, server_id)
+        assert server_id in self.running
+        self.is_dirty = True
+        server = self.running[server_id]
+        server.pause()
+
+    def server_unpause(self, server_id: ServerNum) -> None:
+        """Unpause a paused server process."""
+        self.logger.info("Cluster %s unpausing server %s", self.name, server_id)
+        assert server_id in self.running
+        server = self.running[server_id]
+        server.unpause()
+
     def get_config(self, server_id: ServerNum) -> ActionReturn:
         """Get conf/scylla.yaml of the given server as a dictionary.
            Fails if the server cannot be found."""
@@ -1009,6 +1034,8 @@ class ScyllaClusterManager:
         add_get('/cluster/server/{server_id}/stop_gracefully', self._cluster_server_stop_gracefully)
         add_get('/cluster/server/{server_id}/start', self._cluster_server_start)
         add_get('/cluster/server/{server_id}/restart', self._cluster_server_restart)
+        add_get('/cluster/server/{server_id}/pause', self._cluster_server_pause)
+        add_get('/cluster/server/{server_id}/unpause', self._cluster_server_unpause)
         add_put('/cluster/addserver', self._cluster_server_add)
         add_put('/cluster/remove-node/{initiator}', self._cluster_remove_node)
         add_get('/cluster/decommission-node/{server_id}', self._cluster_decommission_node)
@@ -1105,6 +1132,20 @@ class ScyllaClusterManager:
         server_id = ServerNum(int(request.match_info["server_id"]))
         ret = await self.cluster.server_restart(server_id)
         return aiohttp.web.Response(status=200 if ret[0] else 500, text=ret[1])
+
+    async def _cluster_server_pause(self, request) -> aiohttp.web.Response:
+        """Pause the specified server."""
+        assert self.cluster
+        server_id = ServerNum(int(request.match_info["server_id"]))
+        self.cluster.server_pause(server_id)
+        return aiohttp.web.Response(status=200)
+
+    async def _cluster_server_unpause(self, request) -> aiohttp.web.Response:
+        """Pause the specified server."""
+        assert self.cluster
+        server_id = ServerNum(int(request.match_info["server_id"]))
+        self.cluster.server_unpause(server_id)
+        return aiohttp.web.Response(status=200)
 
     async def _cluster_server_add(self, request) -> aiohttp.web.Response:
         """Add a new server"""
