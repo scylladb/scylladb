@@ -797,10 +797,11 @@ static inline sstring parent_path(const sstring& fname) {
 // at once
 future<> sstable::read_toc() noexcept {
     if (_recognized_components.size()) {
-        return make_ready_future<>();
+        co_return;
     }
 
-    return do_read_simple(component_type::TOC, [&] (version_types v, file f) -> future<> {
+    try {
+    co_await do_read_simple(component_type::TOC, [&] (version_types v, file f) -> future<> {
         auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
         size_t size = co_await f.dma_read(0, bufptr.get(), 4096);
@@ -831,18 +832,13 @@ future<> sstable::read_toc() noexcept {
             if (!_recognized_components.size()) {
                 throw malformed_sstable_exception("Empty TOC", filename(component_type::TOC));
             }
-    }).then_wrapped([this] (future<> f) {
-        try {
-            f.get();
+    });
         } catch (std::system_error& e) {
             if (e.code() == std::error_code(ENOENT, std::system_category())) {
-                return make_exception_future<>(malformed_sstable_exception(filename(component_type::TOC) + ": file not found"));
+                throw malformed_sstable_exception(filename(component_type::TOC) + ": file not found");
             }
-            return make_exception_future<>(e);
+            throw;
         }
-        return make_ready_future<>();
-    });
-
 }
 
 void sstable::generate_toc() {
