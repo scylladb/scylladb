@@ -1592,6 +1592,9 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
     auto get_sstables = [this, &t, sorted_owned_ranges] () -> future<std::vector<sstables::shared_sstable>> {
         return seastar::async([this, &t, sorted_owned_ranges = std::move(sorted_owned_ranges)] {
             auto update_sstables_cleanup_state = [&] (const sstables::sstable_set& set) {
+                // Hold on to the sstable set since it may be overwritten
+                // while we yield in this loop.
+                auto set_holder = set.shared_from_this();
                 set.for_each_sstable([&] (const sstables::shared_sstable& sst) {
                     update_sstable_cleanup_state(t, sst, *sorted_owned_ranges);
                     seastar::thread::maybe_yield();
