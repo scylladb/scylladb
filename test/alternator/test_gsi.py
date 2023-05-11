@@ -367,6 +367,59 @@ def test_gsi_2(test_table_gsi_2):
     assert_index_query(test_table_gsi_2, 'hello', expected_items,
         KeyConditions={'x': {'AttributeValueList': [x2], 'ComparisonOperator': 'EQ'}})
 
+# The previous tests just need to create rows in the materialized view.
+# This test adds more elaborate operations which need to create new rows,
+# modify existing rows, and delete rows of the materialized view.
+# We use the schema test_table_gsi_2, and create, modify and delete the
+# attribute "x" (a regular attribute in the base table, a key in the GSI)
+# to cause all these different operations on the view rows, and check
+# various code paths in the view update code.
+def test_update_gsi_pk(test_table_gsi_2):
+    p = random_string()
+    x1 = random_string()
+    y = random_string()
+    z = random_string()
+
+    # Create a new GSI row (x1), see that it appears
+    test_table_gsi_2.put_item(Item={'p': p, 'x': x1, 'y': y, 'z': z})
+    assert_index_query(test_table_gsi_2, 'hello', [{'p': p, 'x': x1, 'y': y, 'z': z}],
+        KeyConditions={'x': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})
+
+    # Update only the unrelated attribute y. Should leave the same row in
+    # the GSI (x=x1), just with a modified y (and unmodified z)
+    y = random_string()
+    test_table_gsi_2.update_item(Key={'p': p}, AttributeUpdates={'y': {'Value': y, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_2, 'hello', [{'p': p, 'x': x1, 'y': y, 'z': z}],
+        KeyConditions={'x': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})
+
+    # Update the GSI's key attribute x to x2. The old row (x=x1) should
+    # disappear from the GSI, and the new row (x=x2) should appear, with the
+    # base row's "y" and "z" value that weren't changed in this update.
+    x2 = random_string()
+    test_table_gsi_2.update_item(Key={'p': p}, AttributeUpdates={'x': {'Value': x2, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_2, 'hello', [],
+        KeyConditions={'x': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_2, 'hello', [{'p': p, 'x': x2, 'y': y, 'z': z}],
+        KeyConditions={'x': {'AttributeValueList': [x2], 'ComparisonOperator': 'EQ'}})
+
+    # Delete only the attribute x from our base-table row. The row should
+    # remain in the table (with no x), but disappear from the view
+    test_table_gsi_2.update_item(Key={'p': p}, AttributeUpdates={'x': {'Action': 'DELETE'}})
+    assert test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'y': y, 'z': z}
+    assert_index_query(test_table_gsi_2, 'hello', [],
+        KeyConditions={'x': {'AttributeValueList': [x2], 'ComparisonOperator': 'EQ'}})
+
+    # Set x again to x1, see the view item re-appears in the view:
+    test_table_gsi_2.update_item(Key={'p': p}, AttributeUpdates={'x': {'Value': x1, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_2, 'hello', [{'p': p, 'x': x1, 'y': y, 'z': z}],
+        KeyConditions={'x': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})
+
+    # Delete the entire item in the base table, the view row should also
+    # disappear
+    test_table_gsi_2.delete_item(Key={'p': p})
+    assert_index_query(test_table_gsi_2, 'hello', [],
+        KeyConditions={'x': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})
+
 # Test that when a table has a GSI, if the indexed attribute is missing, the
 # item is added to the base table but not the index.
 def test_gsi_missing_attribute(test_table_gsi_2):
