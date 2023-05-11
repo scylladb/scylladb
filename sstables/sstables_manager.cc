@@ -78,7 +78,9 @@ void storage_manager::update_config(const db::config& cfg) {
 shared_ptr<s3::client> storage_manager::get_endpoint_client(sstring endpoint) {
     auto& ep = _s3_endpoints.at(endpoint);
     if (ep.client == nullptr) {
-        ep.client = s3::client::make(endpoint, ep.cfg);
+        ep.client = s3::client::make(endpoint, ep.cfg, [ &ct = container() ] (std::string ep) {
+            return ct.local().get_endpoint_client(ep);
+        });
     }
     return ep.client;
 }

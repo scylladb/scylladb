@@ -107,10 +107,11 @@ public:
     }
 };
 
-client::client(std::string host, endpoint_config_ptr cfg, private_tag)
+client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
         , _http(std::make_unique<dns_connection_factory>(_host, _cfg->port, _cfg->use_https))
+        , _gf(std::move(gf))
 {
 }
 
@@ -121,8 +122,8 @@ void client::update_config(endpoint_config_ptr cfg) {
     _cfg = std::move(cfg);
 }
 
-shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg) {
-    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), private_tag{});
+shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf) {
+    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), std::move(gf), private_tag{});
 }
 
 void client::authorize(http::request& req) {
