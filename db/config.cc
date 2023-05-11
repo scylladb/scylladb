@@ -87,6 +87,12 @@ printable_vector_to_json(const std::vector<T>& e) {
     return value_to_json(converted);
 }
 
+static
+json::json_return_type
+error_injection_list_to_json(const std::vector<db::config::error_injection_at_startup>& eil) {
+    return value_to_json("error_injection_list");
+}
+
 template <>
 const config_type config_type_for<bool> = config_type("bool", value_to_json<bool>);
 
@@ -139,6 +145,9 @@ const config_type config_type_for<enum_option<db::tri_mode_restriction_t>> = con
 
 template <>
 const config_type config_type_for<db::config::hinted_handoff_enabled_type> = config_type("hinted handoff enabled", hinted_handoff_enabled_to_json);
+
+template <>
+const config_type config_type_for<std::vector<db::config::error_injection_at_startup>> = config_type("error injection list", error_injection_list_to_json);
 
 }
 
@@ -231,6 +240,29 @@ public:
     }
 };
 
+template<>
+struct convert<db::config::error_injection_at_startup> {
+    static bool decode(const Node& node, db::config::error_injection_at_startup& rhs) {
+        rhs = db::config::error_injection_at_startup();
+        if (node.IsScalar()) {
+            rhs.name = node.as<sstring>();
+            return true;
+        } else if (node.IsMap()) {
+            for (auto& n : node) {
+                const auto key = n.first.as<sstring>();
+                if (key == "name") {
+                    rhs.name = n.second.as<sstring>();
+                } else if (key == "one_shot") {
+                    rhs.one_shot = n.second.as<bool>();
+                }
+            }
+            return !rhs.name.empty();
+        } else {
+            return false;
+        }
+    }
+};
+
 }
 
 #if defined(DEBUG)
@@ -247,6 +279,15 @@ public:
 
 #define str(x)  #x
 #define _mk_init(name, type, deflt, status, desc, ...)  , name(this, str(name), value_status::status, type(deflt), desc)
+
+#if defined(SCYLLA_ENABLE_ERROR_INJECTION)
+#define ENABLE_ERROR_INJECTION_OPTIONS true
+#else
+#define ENABLE_ERROR_INJECTION_OPTIONS false
+#endif
+
+static const db::config::value_status error_injection_value_status =
+        ENABLE_ERROR_INJECTION_OPTIONS ? db::config::value_status::Used : db::config::value_status::Unused;
 
 static db::tri_mode_restriction_t::mode strict_allow_filtering_default() {
     return db::tri_mode_restriction_t::mode::WARN; // TODO: make it TRUE after Scylla 4.6.
@@ -932,6 +973,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , relabel_config_file(this, "relabel_config_file", value_status::Used, "", "Optionally, read relabel config from file")
     , object_storage_config_file(this, "object_storage_config_file", value_status::Used, "", "Optionally, read object-storage endpoints config from file")
     , minimum_keyspace_rf(this, "minimum_keyspace_rf", liveness::LiveUpdate, value_status::Used, 0, "The minimum allowed replication factor when creating or altering a keyspace.")
+    , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")
     , default_log_level(this, "default_log_level", value_status::Used)
     , logger_log_level(this, "logger_log_level", value_status::Used)
     , log_to_stdout(this, "log_to_stdout", value_status::Used)
@@ -994,6 +1036,17 @@ std::istream& operator>>(std::istream& is, db::seed_provider_type& s) {
     // FIXME -- this operator is used, in particular, by boost lexical_cast<>
     // it's here just to make the code compile, but it's not yet called for real
     throw std::runtime_error("reading seed_provider_type from istream is not implemented");
+    return is;
+}
+
+std::ostream& operator<<(std::ostream& os, const error_injection_at_startup& eias) {
+    os << "error_injection_at_startup{name=" << eias.name << ", one_shot=" << eias.one_shot << "}";
+    return os;
+}
+
+std::istream& operator>>(std::istream& is, error_injection_at_startup& eias) {
+    eias = error_injection_at_startup();
+    is >> eias.name;
     return is;
 }
 

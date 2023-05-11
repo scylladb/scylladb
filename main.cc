@@ -38,6 +38,7 @@
 #include "db/hints/manager.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/view/view_builder.hh"
+#include "utils/error_injection.hh"
 #include "utils/runtime.hh"
 #include "log.hh"
 #include "utils/directories.hh"
@@ -239,6 +240,18 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
         return make_exception_future<>(ep);
     });
 }
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+static future<>
+enable_initial_error_injections(const db::config& cfg) {
+    return smp::invoke_on_all([&cfg] {
+        auto& injector = utils::get_local_injector();
+        for (const auto& inj : cfg.error_injections_at_startup()) {
+            injector.enable(inj.name, inj.one_shot);
+        }
+    });
+}
+#endif
 
 // Handles SIGHUP, using it to trigger re-reading of the configuration file. Should
 // only be constructed on shard 0.
@@ -653,6 +666,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+            enable_initial_error_injections(*cfg).get();
+#endif
             auto notify_set = configurable::init_all(opts, *cfg, *ext, service_set(
                 db, ss, mm, proxy, feature_service, messaging, qp, bm
             )).get0();

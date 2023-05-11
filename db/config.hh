@@ -66,6 +66,20 @@ struct seed_provider_type {
 std::ostream& operator<<(std::ostream& os, const db::seed_provider_type& s);
 inline std::istream& operator>>(std::istream& is, seed_provider_type&);
 
+// Describes a single error injection that should be enabled at startup.
+struct error_injection_at_startup {
+    sstring name;
+    bool one_shot = false;
+
+    bool operator==(const error_injection_at_startup& other) const {
+        return name == other.name
+            && one_shot == other.one_shot;
+    }
+};
+
+std::ostream& operator<<(std::ostream& os, const error_injection_at_startup&);
+std::istream& operator>>(std::istream& is, error_injection_at_startup&);
+
 }
 
 
@@ -141,6 +155,7 @@ public:
     using string_list = std::vector<sstring>;
     using seed_provider_type = db::seed_provider_type;
     using hinted_handoff_enabled_type = db::hints::host_filter;
+    using error_injection_at_startup = db::error_injection_at_startup;
 
     /*
      * All values and documentation taken from
@@ -430,6 +445,8 @@ public:
 
     locator::host_id host_id;
     utils::updateable_value<std::unordered_map<sstring, s3::endpoint_config>> object_storage_config;
+
+    named_value<std::vector<error_injection_at_startup>> error_injections_at_startup;
 
     static const sstring default_tls_priority;
 private:
