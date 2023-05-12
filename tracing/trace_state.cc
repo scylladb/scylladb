@@ -57,8 +57,7 @@ void trace_state::init_session_records(
     std::optional<utils::UUID> session_id,
     span_id parent_id) {
 
-    _records = make_lw_shared<one_session_records>(type, slow_query_ttl);
-    _records->session_id = session_id ? *session_id : utils::UUID_gen::get_time_UUID();
+    _records = make_lw_shared<one_session_records>(type, slow_query_ttl, session_id, parent_id);
 
     if (full_tracing()) {
         if (!log_slow_query()) {
@@ -69,9 +68,6 @@ void trace_state::init_session_records(
     } else {
         _records->ttl = slow_query_ttl;
     }
-
-    _records->my_span_id = span_id::make_span_id();
-    _records->parent_id = parent_id;
 }
 
 

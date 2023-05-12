@@ -240,7 +240,8 @@ public:
     span_id parent_id;
     span_id my_span_id;
 
-    one_session_records(trace_type type, std::chrono::seconds slow_query_rec_ttl);
+    one_session_records(trace_type type, std::chrono::seconds slow_query_rec_ttl,
+            std::optional<utils::UUID> session_id, span_id parent_id);
 
     /**
      * Consume a single record from the per-shard budget.
