@@ -45,7 +45,20 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, netw::me
 
 migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms,
             service::storage_proxy& storage_proxy, gms::gossiper& gossiper, service::raft_group0_client& group0_client, sharded<db::system_keyspace>& sysks) :
-        _notifier(notifier), _feat(feat), _messaging(ms), _storage_proxy(storage_proxy), _gossiper(gossiper), _group0_client(group0_client)
+          _notifier(notifier)
+        , _group0_barrier(this_shard_id() == 0 ?
+            std::function<future<>()>([this] () -> future<> {
+                // This will run raft barrier and will sync schema with the leader
+                (void)co_await start_group0_operation();
+            }) :
+            std::function<future<>()>([this] () -> future<> {
+                co_await container().invoke_on(0, [] (migration_manager& mm) -> future<> {
+                    // batch group0 raft barriers
+                    co_await mm._group0_barrier.trigger();
+                });
+            })
+        )
+        , _feat(feat), _messaging(ms), _storage_proxy(storage_proxy), _gossiper(gossiper), _group0_client(group0_client)
         , _sys_ks(sysks)
         , _schema_push([this] { return passive_announce(); })
         , _concurrent_ddl_retries{10}
@@ -76,6 +89,7 @@ future<> migration_manager::drain()
     } catch (...) {
         mlogger.error("schema_pull failed: {}", std::current_exception());
     }
+    co_await _group0_barrier.join();
     co_await _background_tasks.close();
 }
 
@@ -1137,20 +1151,37 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, netw::me
     });
 }
 
-future<schema_ptr> migration_manager::get_schema_for_read(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
-    return get_schema_for_write(v, dst, ms);
+future<schema_ptr> migration_manager::get_schema_for_read(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, abort_source* as) {
+    return get_schema_for_write(v, dst, ms, as);
 }
 
-future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms) {
+future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version v, netw::messaging_service::msg_addr dst, netw::messaging_service& ms, abort_source* as) {
     if (_as.abort_requested()) {
-        return make_exception_future<schema_ptr>(abort_requested_exception());
+        co_return coroutine::exception(std::make_exception_ptr(abort_requested_exception()));
     }
 
-    return get_schema_definition(v, dst, ms, _storage_proxy).then([this, dst] (schema_ptr s) {
-        return maybe_sync(s, dst).then([s] {
-            return s;
-        });
-    });
+    auto s = local_schema_registry().get_or_null(v);
+
+    if (s && s->is_synced()) {
+        co_return s;
+    }
+
+    if (_group0_client.using_raft()) {
+        // batch group0 raft barriers
+        co_await (as ? _group0_barrier.trigger(*as) : _group0_barrier.trigger());
+    }
+
+    s = co_await get_schema_definition(v, dst, ms, _storage_proxy);
+
+    if (_group0_client.using_raft()) {
+        // Mark entry as synced
+        co_await s->registry_entry()->maybe_sync([] { return make_ready_future<>(); });
+    } else {
+        // If raft is used the schema is synced already
+        co_await maybe_sync(s, dst);
+    }
+
+    co_return s;
 }
 
 future<> migration_manager::sync_schema(const replica::database& db, const std::vector<gms::inet_address>& nodes) {

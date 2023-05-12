@@ -359,12 +359,14 @@ public:
     }
 
 private:
-    future<schema_ptr> get_schema_for_read(table_schema_version v, netw::msg_addr from) {
-        return _mm->get_schema_for_read(std::move(v), std::move(from), _ms);
+    future<schema_ptr> get_schema_for_read(table_schema_version v, netw::msg_addr from, clock_type::time_point timeout) {
+        abort_on_expiry aoe(timeout);
+        co_return co_await _mm->get_schema_for_read(std::move(v), std::move(from), _ms, &aoe.abort_source());
     }
 
-    future<schema_ptr> get_schema_for_write(table_schema_version v, netw::msg_addr from) {
-        return _mm->get_schema_for_write(std::move(v), std::move(from), _ms);
+    future<schema_ptr> get_schema_for_write(table_schema_version v, netw::msg_addr from, clock_type::time_point timeout) {
+        abort_on_expiry aoe(timeout);
+        co_return co_await _mm->get_schema_for_write(std::move(v), std::move(from), _ms, &aoe.abort_source());
     }
 
     future<> handle_counter_mutation(
@@ -385,7 +387,7 @@ private:
             // Note: not a coroutine, since get_schema_for_write() rarely blocks.
             // FIXME: optimise for cases when all fms are in the same schema
             auto schema_version = fm.schema_version();
-            return get_schema_for_write(schema_version, std::move(src_addr)).then([&] (schema_ptr s) mutable {
+            return get_schema_for_write(schema_version, std::move(src_addr), timeout).then([&] (schema_ptr s) mutable {
                 mutations.emplace_back(frozen_mutation_and_schema { std::move(fm), std::move(s) });
             });
         });
@@ -436,7 +438,7 @@ private:
             [&] () -> future<> {
                 try {
                     // FIXME: get_schema_for_write() doesn't timeout
-                    schema_ptr s = co_await get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard});
+                    schema_ptr s = co_await get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard}, timeout);
                     // Note: blocks due to execution_stage in replica::database::apply()
                     co_await apply_fn(p, trace_state_ptr, std::move(s), m, timeout);
                     // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
@@ -594,7 +596,8 @@ private:
         auto cmd = make_lw_shared<query::read_command>(std::move(cmd1));
         p->get_stats().replica_data_reads++;
         auto src_ip = src_addr.addr;
-        schema_ptr s = co_await get_schema_for_read(cmd->schema_version, std::move(src_addr));
+        auto timeout = t ? *t : db::no_timeout;
+        schema_ptr s = co_await get_schema_for_read(cmd->schema_version, std::move(src_addr), timeout);
         auto pr2 = ::compat::unwrap(std::move(pr), *s);
         if (pr2.second) {
             // this function assumes singular queries but doesn't validate
@@ -603,7 +606,6 @@ private:
         query::result_options opts;
         opts.digest_algo = da;
         opts.request = da == query::digest_algorithm::none ? query::result_request::only_result : query::result_request::result_and_digest;
-        auto timeout = t ? *t : db::no_timeout;
         future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f = co_await coroutine::as_future(p->query_result_local(std::move(s), cmd, std::move(pr2.first), opts, trace_state_ptr, timeout, rate_limit_info));
         tracing::trace(trace_state_ptr, "read_data handling is done, sending a response to /{}", src_ip);
         co_return co_await encode_replica_exception_for_rpc(p->features(), std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<query::result>()), cache_temperature::invalid()); });
@@ -628,9 +630,9 @@ private:
         auto cmd = make_lw_shared<query::read_command>(std::move(cmd1));
         p->get_stats().replica_mutation_data_reads++;
         auto src_ip = src_addr.addr;
-        auto s = co_await get_schema_for_read(cmd->schema_version, std::move(src_addr));
-        unwrapped = ::compat::unwrap(std::move(pr), *s);
         auto timeout = t ? *t : db::no_timeout;
+        auto s = co_await get_schema_for_read(cmd->schema_version, std::move(src_addr), timeout);
+        unwrapped = ::compat::unwrap(std::move(pr), *s);
         future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f = co_await coroutine::as_future(p->query_mutations_locally(std::move(s), std::move(cmd), unwrapped, timeout, trace_state_ptr));
         tracing::trace(trace_state_ptr, "read_mutation_data handling is done, sending a response to /{}", src_ip);
         co_return co_await encode_replica_exception_for_rpc(p->features(), std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<reconcilable_result>()), cache_temperature::invalid()); });
@@ -657,13 +659,13 @@ private:
         auto cmd = make_lw_shared<query::read_command>(std::move(cmd1));
         p->get_stats().replica_digest_reads++;
         auto src_ip = src_addr.addr;
-        schema_ptr s = co_await get_schema_for_read(cmd->schema_version, std::move(src_addr));
+        auto timeout = t ? *t : db::no_timeout;
+        schema_ptr s = co_await get_schema_for_read(cmd->schema_version, std::move(src_addr), timeout);
         auto pr2 = ::compat::unwrap(std::move(pr), *s);
         if (pr2.second) {
             // this function assumes singular queries but doesn't validate
             throw std::runtime_error("READ_DIGEST called with wrapping range");
         }
-        auto timeout = t ? *t : db::no_timeout;
         future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> f = co_await coroutine::as_future(p->query_result_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da, rate_limit_info));
         tracing::trace(trace_state_ptr, "read_digest handling is done, sending a response to /{}", src_ip);
 
@@ -706,7 +708,7 @@ private:
             cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
         }
 
-        return get_schema_for_read(cmd.schema_version, src_addr).then([&sp = _sp, cmd = std::move(cmd), key = std::move(key), ballot,
+        return get_schema_for_read(cmd.schema_version, src_addr, *timeout).then([&sp = _sp, cmd = std::move(cmd), key = std::move(key), ballot,
                          only_digest, da, timeout, tr_state = std::move(tr_state), src_ip] (schema_ptr schema) mutable {
             dht::token token = dht::get_token(*schema, key);
             unsigned shard = dht::shard_of(*schema, token);
@@ -736,7 +738,7 @@ private:
             tracing::trace(tr_state, "paxos_accept: message received from /{} ballot {}", src_ip, proposal);
         }
 
-        auto f = get_schema_for_read(proposal.update.schema_version(), src_addr).then([&sp = _sp, tr_state = std::move(tr_state),
+        auto f = get_schema_for_read(proposal.update.schema_version(), src_addr, *timeout).then([&sp = _sp, tr_state = std::move(tr_state),
                                                               proposal = std::move(proposal), timeout] (schema_ptr schema) mutable {
             dht::token token = proposal.update.decorated_key(*schema).token();
             unsigned shard = dht::shard_of(*schema, token);
@@ -779,7 +781,7 @@ private:
 
         pruning++;
         auto d = defer([] { pruning--; });
-        return get_schema_for_read(schema_id, src_addr).then([&sp = _sp, key = std::move(key), ballot,
+        return get_schema_for_read(schema_id, src_addr, *timeout).then([&sp = _sp, key = std::move(key), ballot,
                          timeout, tr_state = std::move(tr_state), src_ip, d = std::move(d)] (schema_ptr schema) mutable {
             dht::token token = dht::get_token(*schema, key);
             unsigned shard = dht::shard_of(*schema, token);

@@ -13,6 +13,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/util/later.hh>
+#include <seastar/core/abort_source.hh>
 
 // An async action wrapper which ensures that at most one action
 // is running at any time.
@@ -44,13 +45,19 @@ public:
     //
     // When action is not currently running, it is started immediately if !later or
     // at some point in time soon after current fiber defers when later is true.
-    future<> trigger(bool later = false) {
+    future<> trigger(bool later = false, seastar::abort_source* as = nullptr) {
         if (_pending.valid()) {
-            return _pending;
+            return as ? _pending.get_future(*as) : _pending.get_future();
         }
         seastar::shared_promise<> pr;
         _pending = pr.get_shared_future();
         future<> ret = _pending;
+        std::optional<future<>> abortable;
+
+        if (as) {
+            abortable = _pending.get_future(*as);
+        }
+
         // run in background, synchronize using `ret`
         (void)_sem.wait().then([this, later] () mutable {
             if (later) {
@@ -66,9 +73,23 @@ public:
                 pr.set_value();
             }
         });
-        return ret.finally([this] {
+
+        ret = ret.finally([this] {
             _sem.signal();
         });
+
+        if (abortable) {
+            // exception will be delivered to each individual future as well
+            (void)std::move(ret).handle_exception([] (std::exception_ptr ep) {});
+            return std::move(*abortable);
+        }
+
+        return ret;
+    }
+
+    // Like trigger() but can be aborted
+    future<> trigger(seastar::abort_source& as) {
+        return trigger(false, &as);
     }
 
     // Like trigger(), but defers invocation of the action to allow for batching

@@ -105,7 +105,7 @@ public:
             sharded<service::migration_manager>& mm,
             gms::gossiper& gossiper);
 
-    future<> start();
+    future<> start(abort_source& as);
     future<> stop();
 
     semaphore& mutation_send_limiter() { return _mutation_send_limiter; }
@@ -177,7 +177,7 @@ private:
     void fail_sessions(inet_address endpoint);
     bool has_peer(inet_address endpoint) const;
 
-    void init_messaging_service_handler();
+    void init_messaging_service_handler(abort_source& as);
     future<> uninit_messaging_service_handler();
     future<> update_io_throughput(uint32_t value_mbs);
 

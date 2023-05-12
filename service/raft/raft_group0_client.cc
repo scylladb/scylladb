@@ -365,6 +365,12 @@ future<std::pair<rwlock::holder, group0_upgrade_state>> raft_group0_client::get_
     co_return std::pair{rwlock::holder{}, _upgrade_state};
 }
 
+bool raft_group0_client::using_raft() {
+    // No need to take upgrade log since after the state becomes use_post_raft_procedures
+    // it never goes back
+    return _upgrade_state == group0_upgrade_state::use_post_raft_procedures;
+}
+
 future<> raft_group0_client::set_group0_upgrade_state(group0_upgrade_state state) {
     // We could explicitly handle abort here but we assume that if someone holds the lock,
     // they will eventually finish (say, due to abort) and release it.

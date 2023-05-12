@@ -1450,7 +1450,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 stream_manager.invoke_on_all(&streaming::stream_manager::stop).get();
             });
 
-            stream_manager.invoke_on_all(&streaming::stream_manager::start).get();
+            stream_manager.invoke_on_all([&stop_signal] (streaming::stream_manager& sm) {
+                return sm.start(stop_signal.as_local_abort_source());
+            }).get();
 
             api::set_server_stream_manager(ctx, stream_manager).get();
             auto stop_stream_manager_api = defer_verbose_shutdown("stream manager api", [&ctx] {

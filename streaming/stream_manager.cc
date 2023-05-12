@@ -80,9 +80,9 @@ stream_manager::stream_manager(db::config& cfg,
     });
 }
 
-future<> stream_manager::start() {
+future<> stream_manager::start(abort_source& as) {
     _gossiper.register_(shared_from_this());
-    init_messaging_service_handler();
+    init_messaging_service_handler(as);
     return make_ready_future<>();
 }
 

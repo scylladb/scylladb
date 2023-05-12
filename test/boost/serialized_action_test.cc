@@ -14,6 +14,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include "utils/phased_barrier.hh"
 #include <seastar/core/timer.hh>
+#include <seastar/core/sleep.hh>
 
 using namespace std::chrono_literals;
 
@@ -130,6 +131,38 @@ SEASTAR_THREAD_TEST_CASE(test_serialized_action_exception) {
     BOOST_REQUIRE_THROW(t2.get(), expected_exception);
     BOOST_REQUIRE_THROW(t3.get(), expected_exception);
     BOOST_REQUIRE_EQUAL(count, 2);          // verify that `triggered_action` was called only once for t2 and t3.
+}
+
+SEASTAR_THREAD_TEST_CASE(test_serialized_action_abort) {
+    uint8_t c = 0;
+    promise<> p, pp;
+    future<> f = p.get_future();
+    serialized_action simple_action([&] {
+        BOOST_TEST_MESSAGE("action is running");
+        if (c++ == 0) {
+            p.set_value();
+            return pp.get_future();
+        }
+        return make_ready_future();
+    });
+
+    abort_source as;
+    auto f1 = simple_action.trigger(as);
+    f.get(); // wait for serialized action to trigger
+    auto f2 = simple_action.trigger(as);
+    auto f3 = simple_action.trigger(as);
+    auto f4 = simple_action.trigger();
+
+    as.request_abort();
+    pp.set_value(); // release first invocation
+    BOOST_TEST_MESSAGE("abort");
+    simple_action.join().get();
+
+    BOOST_REQUIRE_THROW(f1.get(), abort_requested_exception);
+    BOOST_REQUIRE_THROW(f2.get(), abort_requested_exception);
+    BOOST_REQUIRE_THROW(f3.get(), abort_requested_exception);
+    BOOST_REQUIRE_NO_THROW(f4.get());
+    BOOST_REQUIRE(c == 2);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_phased_barrier_reassignment) {
