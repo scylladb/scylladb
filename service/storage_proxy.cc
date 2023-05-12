@@ -93,6 +93,7 @@
 #include "utils/result_try.hh"
 #include "utils/error_injection.hh"
 #include "utils/exceptions.hh"
+#include "utils/tuple_utils.hh"
 #include "replica/exceptions.hh"
 #include "db/operation_type.hh"
 #include "locator/util.hh"
@@ -121,25 +122,18 @@ seastar::metrics::label_instance current_scheduling_group_label() {
 
 }
 
-template<typename... Elements>
-static future<rpc::tuple<Elements..., replica::exception_variant>> encode_replica_exception_for_rpc(
-        gms::feature_service& features, future<rpc::tuple<Elements...>>&& f, auto&& default_tuple_maker) {
-    using original_std_tuple_type = std::tuple<Elements...>;
-    using final_tuple_type = rpc::tuple<Elements..., replica::exception_variant>;
-
+template<typename ResultTuple, typename SourceTuple>
+static future<ResultTuple> encode_replica_exception_for_rpc(gms::feature_service& features, future<SourceTuple>&& f) {
     if (!f.failed()) {
-        return make_ready_future<final_tuple_type>(std::tuple_cat(original_std_tuple_type(f.get()), std::tuple<replica::exception_variant>(replica::exception_variant())));
+        return make_ready_future<ResultTuple>(utils::tuple_insert<ResultTuple>(f.get(), replica::exception_variant{}));
     }
-
     std::exception_ptr eptr = f.get_exception();
     if (features.typed_errors_in_read_rpc) {
-        replica::exception_variant ex = replica::try_encode_replica_exception(eptr);
-        if (ex) {
-            return make_ready_future<final_tuple_type>(std::tuple_cat(default_tuple_maker(), std::tuple<replica::exception_variant>(std::move(ex))));
+        if (auto ex = replica::try_encode_replica_exception(eptr); ex) {
+            return make_ready_future<ResultTuple>(utils::tuple_insert<ResultTuple>(SourceTuple{}, std::move(ex)));
         }
     }
-
-    return make_exception_future<final_tuple_type>(std::move(eptr));
+    return make_exception_future<ResultTuple>(std::move(eptr));
 }
 
 static bool only_me(const inet_address_vector_replica_set& replicas) {
@@ -637,7 +631,7 @@ private:
         opts.request = da == query::digest_algorithm::none ? query::result_request::only_result : query::result_request::result_and_digest;
         future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f = co_await coroutine::as_future(p->query_result_local(std::move(s), cmd, std::move(pr2.first), opts, trace_state_ptr, timeout, rate_limit_info));
         tracing::trace(trace_state_ptr, "read_data handling is done, sending a response to /{}", src_ip);
-        co_return co_await encode_replica_exception_for_rpc(p->features(), std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<query::result>()), cache_temperature::invalid()); });
+        co_return co_await encode_replica_exception_for_rpc<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature, replica::exception_variant>>(p->features(), std::move(f));
     }
 
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, replica::exception_variant>>
@@ -664,7 +658,7 @@ private:
         unwrapped = ::compat::unwrap(std::move(pr), *s);
         future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f = co_await coroutine::as_future(p->query_mutations_locally(std::move(s), std::move(cmd), unwrapped, timeout, trace_state_ptr));
         tracing::trace(trace_state_ptr, "read_mutation_data handling is done, sending a response to /{}", src_ip);
-        co_return co_await encode_replica_exception_for_rpc(p->features(), std::move(f), [] { return std::make_tuple(foreign_ptr(make_lw_shared<reconcilable_result>()), cache_temperature::invalid()); });
+        co_return co_await encode_replica_exception_for_rpc<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, replica::exception_variant>>(p->features(), std::move(f));
     }
 
     future<rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant, std::optional<full_position>>>
@@ -697,23 +691,7 @@ private:
         }
         future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> f = co_await coroutine::as_future(p->query_result_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da, rate_limit_info));
         tracing::trace(trace_state_ptr, "read_digest handling is done, sending a response to /{}", src_ip);
-
-        using final_tuple_type = rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant, std::optional<full_position>>;
-
-        if (!f.failed()) {
-            auto&& [d, t, c, p] = f.get();
-            co_return final_tuple_type(d, t, std::move(c), replica::exception_variant(), std::move(p));
-        }
-
-        std::exception_ptr eptr = f.get_exception();
-        if (p->features().typed_errors_in_read_rpc) {
-            replica::exception_variant ex = replica::try_encode_replica_exception(eptr);
-            if (ex) {
-                co_return final_tuple_type(std::tuple(query::result_digest(), api::missing_timestamp, cache_temperature::invalid(), replica::exception_variant(std::move(ex)), std::nullopt));
-            }
-        }
-
-        co_return coroutine::exception(std::move(eptr));
+        co_return co_await encode_replica_exception_for_rpc<rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant, std::optional<full_position>>>(p->features(), std::move(f));
     }
 
     future<> handle_truncate(rpc::opt_time_point timeout, sstring ksname, sstring cfname) {
