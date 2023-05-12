@@ -51,16 +51,6 @@ void trace_state::params_values_deleter::operator()(params_values* pv) {
     delete pv;
 }
 
-void trace_state::init_session_records(
-    trace_type type,
-    std::chrono::seconds slow_query_ttl,
-    std::optional<utils::UUID> session_id,
-    span_id parent_id) {
-
-    _records = make_lw_shared<one_session_records>(type, ttl_by_type(type, slow_query_ttl), slow_query_ttl, session_id, parent_id);
-}
-
-
 void trace_state::set_batchlog_endpoints(const inet_address_vector_replica_set& val) {
     _params_ptr->batchlog_endpoints.emplace(val);
 }
