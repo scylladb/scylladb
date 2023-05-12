@@ -69,6 +69,7 @@
 #include "sstables/generation_type.hh"
 #include "cdc/generation.hh"
 #include "replica/tablets.hh"
+#include "replica/query.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -3010,33 +3011,25 @@ future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
 system_keyspace::query_mutations(distributed<service::storage_proxy>& proxy, const sstring& ks_name, const sstring& cf_name) {
     replica::database& db = proxy.local().get_db().local();
     schema_ptr schema = db.find_schema(ks_name, cf_name);
-    auto slice = partition_slice_builder(*schema).build();
-    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.local().get_max_result_size(slice), query::tombstone_limit::max);
-    return proxy.local().query_mutations_locally(std::move(schema), std::move(cmd), query::full_partition_range, db::no_timeout)
-            .then([] (rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> rr_ht) { return std::get<0>(std::move(rr_ht)); });
+    return replica::query_mutations(proxy.local().get_db(), schema, query::full_partition_range, schema->full_slice(), db::no_timeout);
 }
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
 system_keyspace::query_mutations(distributed<service::storage_proxy>& proxy, const sstring& ks_name, const sstring& cf_name, const dht::partition_range& partition_range, query::clustering_range row_range) {
     auto& db = proxy.local().get_db().local();
     auto schema = db.find_schema(ks_name, cf_name);
-    auto slice = partition_slice_builder(*schema)
+    auto slice_ptr = std::make_unique<query::partition_slice>(partition_slice_builder(*schema)
         .with_range(std::move(row_range))
-        .build();
-    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.local().get_max_result_size(slice), query::tombstone_limit::max);
-    return proxy.local().query_mutations_locally(std::move(schema), std::move(cmd), partition_range, db::no_timeout)
-            .then([] (rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> rr_ht) { return std::get<0>(std::move(rr_ht)); });
+        .build());
+    return replica::query_mutations(proxy.local().get_db(), std::move(schema), partition_range, *slice_ptr, db::no_timeout).finally([slice_ptr = std::move(slice_ptr)] { });
 }
 
 future<lw_shared_ptr<query::result_set>>
 system_keyspace::query(distributed<service::storage_proxy>& proxy, const sstring& ks_name, const sstring& cf_name) {
     replica::database& db = proxy.local().get_db().local();
     schema_ptr schema = db.find_schema(ks_name, cf_name);
-    auto slice = partition_slice_builder(*schema).build();
-    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.local().get_max_result_size(slice), query::tombstone_limit::max);
-    return proxy.local().query(schema, cmd, {query::full_partition_range}, db::consistency_level::ONE,
-            {db::no_timeout, empty_service_permit(), service::client_state::for_internal_calls(), nullptr}).then([schema, cmd] (auto&& qr) {
-        return make_lw_shared<query::result_set>(query::result_set::from_raw_result(schema, cmd->slice, *qr.query_result));
+    return replica::query_data(proxy.local().get_db(), schema, query::full_partition_range, schema->full_slice(), db::no_timeout).then([schema] (auto&& qr) {
+        return make_lw_shared<query::result_set>(query::result_set::from_raw_result(schema, schema->full_slice(), *qr));
     });
 }
 
@@ -3045,14 +3038,13 @@ system_keyspace::query(distributed<service::storage_proxy>& proxy, const sstring
 {
     auto&& db = proxy.local().get_db().local();
     auto schema = db.find_schema(ks_name, cf_name);
-    auto slice = partition_slice_builder(*schema)
+    auto pr_ptr = std::make_unique<dht::partition_range>(dht::partition_range::make_singular(key));
+    auto slice_ptr = std::make_unique<query::partition_slice>(partition_slice_builder(*schema)
         .with_range(std::move(row_range))
-        .build();
-    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.local().get_max_result_size(slice), query::tombstone_limit::max);
-
-    return proxy.local().query(schema, cmd, {dht::partition_range::make_singular(key)}, db::consistency_level::ONE,
-            {db::no_timeout, empty_service_permit(), service::client_state::for_internal_calls(), nullptr}).then([schema, cmd] (auto&& qr) {
-        return make_lw_shared<query::result_set>(query::result_set::from_raw_result(schema, cmd->slice, *qr.query_result));
+        .build());
+    return replica::query_data(proxy.local().get_db(), schema, *pr_ptr, *slice_ptr, db::no_timeout).then(
+            [schema, pr_ptr = std::move(pr_ptr), slice_ptr = std::move(slice_ptr)] (auto&& qr) {
+        return make_lw_shared<query::result_set>(query::result_set::from_raw_result(schema, schema->full_slice(), *qr));
     });
 }
 
