@@ -57,17 +57,7 @@ void trace_state::init_session_records(
     std::optional<utils::UUID> session_id,
     span_id parent_id) {
 
-    _records = make_lw_shared<one_session_records>(type, slow_query_ttl, session_id, parent_id);
-
-    if (full_tracing()) {
-        if (!log_slow_query()) {
-            _records->ttl = ttl_by_type(type);
-        } else {
-            _records->ttl = std::max(ttl_by_type(type), slow_query_ttl);
-        }
-    } else {
-        _records->ttl = slow_query_ttl;
-    }
+    _records = make_lw_shared<one_session_records>(type, ttl_by_type(type, slow_query_ttl), slow_query_ttl, session_id, parent_id);
 }
 
 

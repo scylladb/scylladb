@@ -204,11 +204,12 @@ void tracing::set_trace_probability(double p) {
     tracing_logger.info("Setting tracing probability to {} (normalized {})", _trace_probability, _normalized_trace_probability);
 }
 
-one_session_records::one_session_records(trace_type type, std::chrono::seconds slow_query_rec_ttl,
+one_session_records::one_session_records(trace_type type, std::chrono::seconds slow_query_ttl, std::chrono::seconds slow_query_rec_ttl,
             std::optional<utils::UUID> session_id_, span_id parent_id_)
     : _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
     , session_id(session_id_ ? *session_id_ : utils::UUID_gen::get_time_UUID())
     , session_rec(type, slow_query_rec_ttl)
+    , ttl(slow_query_ttl)
     , backend_state_ptr(_local_tracing_ptr->allocate_backend_session_state())
     , budget_ptr(_local_tracing_ptr->get_cached_records_ptr())
     , parent_id(parent_id_)

@@ -229,6 +229,18 @@ private:
         std::optional<utils::UUID> session_id = std::nullopt,
         span_id parent_id = span_id::illegal_id);
 
+    std::chrono::seconds ttl_by_type(trace_type type, std::chrono::seconds slow_query_ttl) noexcept {
+        if (full_tracing()) {
+            if (!log_slow_query()) {
+                return ::tracing::ttl_by_type(type);
+            } else {
+                return std::max(::tracing::ttl_by_type(type), slow_query_ttl);
+            }
+        } else {
+            return slow_query_ttl;
+        }
+    }
+
     bool should_write_records() const {
         return full_tracing() || _records->do_log_slow_query;
     }
