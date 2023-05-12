@@ -48,6 +48,7 @@
 #include "service/storage_proxy.hh"
 #include "db/operation_type.hh"
 #include "db/view/view_update_generator.hh"
+#include "multishard_mutation_query.hh"
 
 #include "utils/human_readable.hh"
 #include "utils/fb_utilities.hh"
@@ -2879,3 +2880,54 @@ const timeout_config infinite_timeout_config = {
         // not really infinite, but long enough
         1h, 1h, 1h, 1h, 1h, 1h, 1h,
 };
+
+namespace replica {
+
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations(
+        sharded<database>& db,
+        schema_ptr s,
+        const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        db::timeout_clock::time_point timeout) {
+    auto max_size = db.local().get_unlimited_query_max_result_size();
+    auto max_res_size = query::max_result_size(max_size.soft_limit, max_size.hard_limit, query::result_memory_limiter::maximum_result_size);
+    auto cmd = query::read_command(s->id(), s->version(), ps, max_res_size, query::tombstone_limit::max);
+    if (pr.is_singular()) {
+        unsigned shard = dht::shard_of(*s, pr.start()->value().token());
+        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, &pr, timeout] (replica::database& db) mutable {
+            return db.query_mutations(gs, cmd, pr, {}, timeout).then([] (std::tuple<reconcilable_result, cache_temperature>&& res) {
+                return make_foreign(make_lw_shared<reconcilable_result>(std::move(std::get<0>(res))));
+            });
+        });
+    } else {
+        auto prs = dht::partition_range_vector{pr};
+        auto&& [res, _] = co_await query_mutations_on_all_shards(db, std::move(s), cmd, prs, {}, timeout);
+        co_return std::move(res);
+    }
+}
+
+future<foreign_ptr<lw_shared_ptr<query::result>>> query_data(
+        sharded<database>& db,
+        schema_ptr s,
+        const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        db::timeout_clock::time_point timeout) {
+    auto max_size = db.local().get_unlimited_query_max_result_size();
+    auto max_res_size = query::max_result_size(max_size.soft_limit, max_size.hard_limit, query::result_memory_limiter::maximum_result_size);
+    auto cmd = query::read_command(s->id(), s->version(), ps, max_res_size, query::tombstone_limit::max);
+    auto prs = dht::partition_range_vector{pr};
+    auto opts = query::result_options::only_result();
+    if (pr.is_singular()) {
+        unsigned shard = dht::shard_of(*s, pr.start()->value().token());
+        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, opts, &prs, timeout] (replica::database& db) mutable {
+            return db.query(gs, cmd, opts, prs, {}, timeout).then([] (std::tuple<lw_shared_ptr<query::result>, cache_temperature>&& res) {
+                return make_foreign(std::move(std::get<0>(res)));
+            });
+        });
+    } else {
+        auto&& [res, _] = co_await query_data_on_all_shards(db, std::move(s), cmd, prs, opts, {}, timeout);
+        co_return std::move(res);
+    }
+}
+
+} // namespace replica
