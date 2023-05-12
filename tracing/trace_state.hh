@@ -118,21 +118,18 @@ public:
     trace_state(trace_type type, trace_state_props_set props)
         : _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
         , _state_props(make_primary(props))
+        , _records(make_lw_shared<one_session_records>(type, ttl_by_type(type, _local_tracing_ptr->slow_query_record_ttl()), _local_tracing_ptr->slow_query_record_ttl()))
         , _slow_query_threshold(_local_tracing_ptr->slow_query_threshold())
     {
-        auto slow_query_ttl = _local_tracing_ptr->slow_query_record_ttl();
-        _records = make_lw_shared<one_session_records>(type, ttl_by_type(type, slow_query_ttl), slow_query_ttl);
     }
 
     trace_state(const trace_info& info)
         : _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
         , _state_props(make_secondary(info.state_props))
+        // inherit the slow query threshold and ttl from the coordinator
+        , _records(make_lw_shared<one_session_records>(info.type, ttl_by_type(info.type, std::chrono::seconds(info.slow_query_ttl_sec)), std::chrono::seconds(info.slow_query_ttl_sec), info.session_id, info.parent_id))
         , _slow_query_threshold(info.slow_query_threshold_us)
     {
-        // inherit the slow query threshold and ttl from the coordinator
-        auto slow_query_ttl = std::chrono::seconds(info.slow_query_ttl_sec);
-        _records = make_lw_shared<one_session_records>(info.type, ttl_by_type(info.type, slow_query_ttl), slow_query_ttl, info.session_id, info.parent_id);
-
         if (info.state_props.contains<trace_state_props::log_slow_query>() && info.start_ts_us > 0u) {
             _supplied_start_ts_us = info.start_ts_us;
         }
