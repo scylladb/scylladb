@@ -496,9 +496,16 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
         }).get();
 
         unsigned num_sstables = 10 * smp::count;
-        auto generation = 0;
+
+        sharded<sstables::sstable_generation_generator> sharded_gen;
+        sharded_gen.start(0).get();
+        auto stop_generator = deferred_stop(sharded_gen);
+
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
-            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation_type{generation++});
+            auto generation = sharded_gen.invoke_on(nr % smp::count, [] (auto& gen) {
+                return gen();
+            }).get();
+            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation);
         }
 
       with_sstable_directory(upload_path, e, [&] (sharded<sstables::sstable_directory>& sstdir) {
@@ -541,9 +548,17 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
         }).get();
 
         unsigned num_sstables = 10 * smp::count;
-        auto generation = 0;
+
+        sharded<sstables::sstable_generation_generator> sharded_gen;
+        sharded_gen.start(0).get();
+        auto stop_generator = deferred_stop(sharded_gen);
+
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
-            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation_type{generation++ * smp::count});
+            // always generate the generation on shard#0
+            auto generation = sharded_gen.invoke_on(0, [] (auto& gen) {
+                return gen();
+            }).get();
+            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation);
         }
 
       with_sstable_directory(upload_path, e, [&e, upload_path] (sharded<sstables::sstable_directory>& sstdir) {
@@ -586,9 +601,16 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
         }).get();
 
         unsigned num_sstables = (cf.schema()->max_compaction_threshold() + 1) * smp::count;
-        auto generation = 0;
+
+        sharded<sstables::sstable_generation_generator> sharded_gen;
+        sharded_gen.start(0).get();
+        auto stop_generator = deferred_stop(sharded_gen);
+
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
-            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation_type{generation++});
+            auto generation = sharded_gen.invoke_on(nr % smp::count, [] (auto& gen) {
+                return gen();
+            }).get();
+            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation);
         }
 
       with_sstable_directory(upload_path, e, [&, upload_path] (sharded<sstables::sstable_directory>& sstdir) {
