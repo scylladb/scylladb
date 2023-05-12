@@ -422,12 +422,21 @@ def test_update_gsi_pk(test_table_gsi_2):
 
 # Test that when a table has a GSI, if the indexed attribute is missing, the
 # item is added to the base table but not the index.
-def test_gsi_missing_attribute(test_table_gsi_2):
+@pytest.mark.parametrize('op', ['PutItem', 'UpdateItem', 'BatchWriteItem'])
+def test_gsi_missing_attribute(test_table_gsi_2, op):
     p1 = random_string()
     x1 = random_string()
-    test_table_gsi_2.put_item(Item={'p':  p1, 'x': x1})
     p2 = random_string()
-    test_table_gsi_2.put_item(Item={'p':  p2})
+    if op == 'PutItem':
+        test_table_gsi_2.put_item(Item={'p':  p1, 'x': x1})
+        test_table_gsi_2.put_item(Item={'p':  p2})
+    elif op == 'UpdateItem':
+        test_table_gsi_2.update_item(Key={'p':  p1}, AttributeUpdates={'x': {'Value': x1, 'Action': 'PUT'}})
+        test_table_gsi_2.update_item(Key={'p':  p2}, AttributeUpdates={})
+    elif op == 'BatchWriteItem':
+        with test_table_gsi_2.batch_writer() as batch:
+            batch.put_item(Item={'p':  p1, 'x': x1})
+            batch.put_item(Item={'p':  p2})
 
     # Both items are now in the base table:
     assert test_table_gsi_2.get_item(Key={'p':  p1}, ConsistentRead=True)['Item'] == {'p': p1, 'x': x1}
