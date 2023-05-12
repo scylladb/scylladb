@@ -63,15 +63,15 @@ public:
     };
 
 private:
+    shared_ptr<tracing> _local_tracing_ptr;
+    trace_state_props_set _state_props;
     lw_shared_ptr<one_session_records> _records;
     // Used for calculation of time passed since the beginning of a tracing
     // session till each tracing event. Secondary slow-query-logging sessions inherit `_start` from parents.
     elapsed_clock::time_point _start;
     std::optional<uint64_t> _supplied_start_ts_us; // Parent's `_start`, as microseconds from POSIX epoch.
     std::chrono::microseconds _slow_query_threshold;
-    trace_state_props_set _state_props;
     state _state = state::inactive;
-    shared_ptr<tracing> _local_tracing_ptr;
 
     struct params_values;
     struct params_values_deleter {
@@ -99,8 +99,8 @@ private:
 
 public:
     trace_state(trace_type type, trace_state_props_set props)
-        : _state_props(props)
-        , _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
+        : _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
+        , _state_props(props)
     {
         auto slow_query_ttl = _local_tracing_ptr->slow_query_record_ttl();
         if (!full_tracing() && !log_slow_query()) {
@@ -114,8 +114,8 @@ public:
     }
 
     trace_state(const trace_info& info)
-        : _state_props(info.state_props)
-        , _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
+        : _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
+        , _state_props(info.state_props)
     {
         // inherit the slow query threshold and ttl from the coordinator
         auto slow_query_ttl = std::chrono::seconds(info.slow_query_ttl_sec);
