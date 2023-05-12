@@ -481,6 +481,7 @@ protected:
     utils::observable<> _stop_request_observable;
 private:
     compaction_data& init_compaction_data(compaction_data& cdata, const compaction_descriptor& descriptor) const {
+        cdata.the_compaction = static_cast<const void *>(this);
         cdata.compaction_fan_in = descriptor.fan_in();
         return cdata;
     }

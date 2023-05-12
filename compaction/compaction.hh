@@ -63,6 +63,7 @@ struct compaction_info {
 };
 
 struct compaction_data {
+    const void* the_compaction = nullptr; // for debugging only. points to the compaction object.
     uint64_t total_partitions = 0;
     uint64_t total_keys_written = 0;
     sstring stop_requested;
