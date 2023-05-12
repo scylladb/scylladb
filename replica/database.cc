@@ -795,7 +795,7 @@ static future<>
 do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring cf_name, std::function<future<> (db::schema_tables::schema_result_value_type&)> func) {
     using namespace db::schema_tables;
 
-    auto rs = co_await db::system_keyspace::query(proxy, db::schema_tables::NAME, cf_name);
+    auto rs = co_await db::system_keyspace::query(proxy.local().get_db(), db::schema_tables::NAME, cf_name);
     auto names = std::set<sstring>();
     for (auto& r : rs->rows()) {
         auto keyspace_name = r.template get_nonnull<sstring>("keyspace_name");

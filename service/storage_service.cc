@@ -5004,6 +5004,8 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
                co_return raft_topology_snapshot{};
             }
 
+            auto& db = proxy.local().get_db();
+
             std::vector<canonical_mutation> topology_mutations;
             std::optional<cdc::generation_id_v2> curr_cdc_gen_id;
             {
@@ -5011,7 +5013,7 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
                 // might be useful if multiple nodes are trying to pull concurrently.
                 auto read_apply_mutex_holder = co_await ss._group0->client().hold_read_apply_mutex();
                 auto rs = co_await db::system_keyspace::query_mutations(
-                    proxy, db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
+                    db, db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
                 auto s = ss._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
                 topology_mutations.reserve(rs->partitions().size());
                 boost::range::transform(
@@ -5041,7 +5043,7 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
                 auto key = dht::decorate_key(*s, partition_key::from_singular(*s, curr_cdc_gen_id->id));
                 auto partition_range = dht::partition_range::make_singular(key);
                 auto rs = co_await db::system_keyspace::query_mutations(
-                    proxy, db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3, partition_range);
+                    db, db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3, partition_range);
                 if (rs->partitions().size() != 1) {
                     on_internal_error(slogger, ::format(
                         "pull_raft_topology_snapshot: expected a single partition in CDC generation query,"
