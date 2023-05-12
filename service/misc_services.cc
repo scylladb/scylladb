@@ -68,10 +68,6 @@ double load_meter::get_load() const {
     return bytes;
 }
 
-sstring load_meter::get_load_string() const {
-    return format("{:f}", get_load());
-}
-
 void load_broadcaster::start_broadcasting() {
     _done = make_ready_future<>();
 
