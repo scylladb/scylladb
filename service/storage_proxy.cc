@@ -257,9 +257,10 @@ public:
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
     send_read_mutation_data(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
-            const query::read_command& cmd, const dht::partition_range& pr) {
+            const query::read_command& cmd, const dht::partition_range& pr,
+            fencing_token fence) {
         tracing::trace(tr_state, "read_mutation_data: sending a message to /{}", addr.addr);
-        auto&& [result, hit_rate, opt_exception] = co_await ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_ms, addr, timeout, cmd, pr);
+        auto&& [result, hit_rate, opt_exception] = co_await ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_ms, addr, timeout, cmd, pr, fence);
         if (opt_exception.has_value() && *opt_exception) {
             co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
         }
@@ -272,10 +273,11 @@ public:
     send_read_data(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
             const query::read_command& cmd, const dht::partition_range& pr,
-            query::digest_algorithm digest_algo, db::per_partition_rate_limit::info rate_limit_info) {
+            query::digest_algorithm digest_algo, db::per_partition_rate_limit::info rate_limit_info,
+            fencing_token fence) {
         tracing::trace(tr_state, "read_data: sending a message to /{}", addr.addr);
         auto&& [result, hit_rate, opt_exception] =
-            co_await ser::storage_proxy_rpc_verbs::send_read_data(&_ms, addr, timeout, cmd, pr, digest_algo, rate_limit_info);
+            co_await ser::storage_proxy_rpc_verbs::send_read_data(&_ms, addr, timeout, cmd, pr, digest_algo, rate_limit_info, fence);
         if (opt_exception.has_value() && *opt_exception) {
             co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
         }
@@ -288,10 +290,11 @@ public:
     send_read_digest(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
             const query::read_command& cmd, const dht::partition_range& pr,
-            query::digest_algorithm digest_algo, db::per_partition_rate_limit::info rate_limit_info) {
+            query::digest_algorithm digest_algo, db::per_partition_rate_limit::info rate_limit_info,
+            fencing_token fence) {
         tracing::trace(tr_state, "read_digest: sending a message to /{}", addr.addr);
         auto&& [d, t, hit_rate, opt_exception, opt_last_pos] =
-            co_await ser::storage_proxy_rpc_verbs::send_read_digest(&_ms, addr, timeout, cmd, pr, digest_algo, rate_limit_info);
+            co_await ser::storage_proxy_rpc_verbs::send_read_digest(&_ms, addr, timeout, cmd, pr, digest_algo, rate_limit_info, fence);
         if (opt_exception.has_value() && *opt_exception) {
             co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
         }
@@ -619,7 +622,8 @@ private:
     future<Result> handle_read(const rpc::client_info& cinfo, rpc::opt_time_point t,
         query::read_command cmd1, ::compat::wrapping_partition_range pr,
         rpc::optional<query::digest_algorithm> oda,
-        rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt)
+        rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt,
+        rpc::optional<service::fencing_token> fence_opt)
     {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
@@ -643,7 +647,7 @@ private:
         auto timeout = t ? *t : db::no_timeout;
         schema_ptr s = co_await get_schema_for_read(cmd->schema_version, std::move(src_addr), timeout);
         auto pr2 = ::compat::unwrap(std::move(pr), *s);
-        auto f = co_await coroutine::as_future(std::invoke([&]() {
+        auto do_query = [&]() {
             if constexpr (verb == read_verb::read_data) {
                 if (pr2.second) {
                     // this function assumes singular queries but doesn't validate
@@ -669,8 +673,23 @@ private:
             } else {
                 static_assert(verb == static_cast<read_verb>(-1), "Unsupported verb");
             }
-        }));
+        };
+        auto to_future = [&](replica::stale_topology_exception e) {
+            return make_exception_future<typename decltype(do_query())::value_type>(std::move(e));
+        };
+        const auto fence = fence_opt.value_or(fencing_token{});
+
+        if (auto stale = _sp.apply_fence(fence, src_ip)) {
+            co_return co_await encode_replica_exception_for_rpc<Result>(p->features(), to_future(std::move(*stale)));
+        }
+
+        auto f = co_await coroutine::as_future(do_query());
         tracing::trace(trace_state_ptr, "{} handling is done, sending a response to /{}", verb, src_ip);
+
+        if (auto stale = _sp.apply_fence(fence, src_ip)) {
+            co_return co_await encode_replica_exception_for_rpc<Result>(p->features(), to_future(std::move(*stale)));
+        }
+
         co_return co_await encode_replica_exception_for_rpc<Result>(p->features(), std::move(f));
     }
 
@@ -679,17 +698,19 @@ private:
             const rpc::client_info& cinfo, rpc::opt_time_point t,
             query::read_command cmd1, ::compat::wrapping_partition_range pr,
             rpc::optional<query::digest_algorithm> oda,
-            rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
+            rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt,
+            rpc::optional<service::fencing_token> fence) {
         return handle_read<read_data_result_t, read_verb::read_data>(cinfo, t, std::move(cmd1),
-            std::move(pr), oda, rate_limit_info_opt);
+            std::move(pr), oda, rate_limit_info_opt, fence);
     }
 
     using read_mutation_data_result_t = rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature, replica::exception_variant>;
     future<read_mutation_data_result_t> handle_read_mutation_data(
             const rpc::client_info& cinfo, rpc::opt_time_point t,
-            query::read_command cmd1, ::compat::wrapping_partition_range pr) {
+            query::read_command cmd1, ::compat::wrapping_partition_range pr,
+            rpc::optional<service::fencing_token> fence) {
         return handle_read<read_mutation_data_result_t, read_verb::read_mutation_data>(cinfo, t, std::move(cmd1),
-            std::move(pr), std::nullopt, std::nullopt);
+            std::move(pr), std::nullopt, std::nullopt, fence);
     }
 
     using read_digest_result_t = rpc::tuple<query::result_digest, long, cache_temperature, replica::exception_variant, std::optional<full_position>>;
@@ -697,9 +718,10 @@ private:
             const rpc::client_info& cinfo, rpc::opt_time_point t,
             query::read_command cmd1, ::compat::wrapping_partition_range pr,
             rpc::optional<query::digest_algorithm> oda,
-            rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt) {
+            rpc::optional<db::per_partition_rate_limit::info> rate_limit_info_opt,
+            rpc::optional<service::fencing_token> fence) {
         return handle_read<read_digest_result_t, read_verb::read_digest>(cinfo, t, std::move(cmd1),
-            std::move(pr), oda, rate_limit_info_opt);
+            std::move(pr), oda, rate_limit_info_opt, fence);
     }
 
     future<> handle_truncate(rpc::opt_time_point timeout, sstring ksname, sstring cfname) {
@@ -4705,6 +4727,10 @@ private:
         return _effective_replication_map_ptr->get_topology();
     }
 
+    fencing_token get_fence() const {
+        return {_effective_replication_map_ptr->get_token_metadata().get_version()};
+    }
+
 public:
     abstract_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy,
             locator::effective_replication_map_ptr ermp,
@@ -4735,9 +4761,11 @@ protected:
         ++_proxy->get_stats().mutation_data_read_attempts.get_ep_stat(get_topology(), ep);
         if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
-            return _proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state);
+            return _proxy->apply_fence(_proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state), get_fence(), utils::fb_utilities::get_broadcast_address());
         } else {
-            return _proxy->remote().send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout, _trace_state, *cmd, _partition_range);
+            return _proxy->remote().send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout,
+                _trace_state, *cmd, _partition_range,
+                get_fence());
         }
     }
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> make_data_request(gms::inet_address ep, clock_type::time_point timeout, bool want_digest) {
@@ -4747,20 +4775,24 @@ protected:
                   : query::result_options{query::result_request::only_result, query::digest_algorithm::none};
         if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_data: querying locally");
-            return _proxy->query_result_local(_schema, _cmd, _partition_range, opts, _trace_state, timeout, adjust_rate_limit_for_local_operation(_rate_limit_info));
+            return _proxy->apply_fence(_proxy->query_result_local(_schema, _cmd, _partition_range, opts, _trace_state, timeout, adjust_rate_limit_for_local_operation(_rate_limit_info)), get_fence(), utils::fb_utilities::get_broadcast_address());
         } else {
-            return _proxy->remote().send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout, _trace_state, *_cmd, _partition_range, opts.digest_algo, _rate_limit_info);
+            return _proxy->remote().send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout,
+                _trace_state, *_cmd, _partition_range, opts.digest_algo, _rate_limit_info,
+                get_fence());
         }
     }
     future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->get_stats().digest_read_attempts.get_ep_stat(get_topology(), ep);
         if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_digest: querying locally");
-            return _proxy->query_result_local_digest(_schema, _cmd, _partition_range, _trace_state,
-                        timeout, digest_algorithm(*_proxy), adjust_rate_limit_for_local_operation(_rate_limit_info));
+            return _proxy->apply_fence(_proxy->query_result_local_digest(_schema, _cmd, _partition_range, _trace_state,
+                        timeout, digest_algorithm(*_proxy), adjust_rate_limit_for_local_operation(_rate_limit_info)), get_fence(), utils::fb_utilities::get_broadcast_address());
         } else {
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
-            return _proxy->remote().send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout, _trace_state, *_cmd, _partition_range, digest_algorithm(*_proxy), _rate_limit_info);
+            return _proxy->remote().send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout,
+                _trace_state, *_cmd, _partition_range, digest_algorithm(*_proxy), _rate_limit_info,
+                get_fence());
         }
     }
     void make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
