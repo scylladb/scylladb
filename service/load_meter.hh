@@ -28,7 +28,6 @@ private:
 
     /** raw load value */
     double get_load() const;
-    sstring get_load_string() const;
 
 public:
     future<std::map<sstring, double>> get_load_map();
