@@ -1933,3 +1933,28 @@ def test_gsi_and_lsi_same_key(dynamodb):
             KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}, 'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
         assert_index_query(table, 'gsi', [item],
             KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+
+# Check that any type besides S(tring), B(ytes) or N(umber)s is *not* NOT
+# allowed as the type of a GSI key attribute. We don't check here that these
+# three types *are* allowed, because we already checked this in other tests
+# (see test_gsi_6_*).
+def test_gsi_invalid_key_types(dynamodb):
+    # The following are all the types that DynamoDB supports, as documented in
+    # https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.LowLevelAPI.html
+    # also the non-existent type "junk" yields the same error message.
+    for key_type in ['BOOL', 'NULL', 'M', 'L', 'SS', 'NS', 'BS', 'junk']:
+        # DynamDB's and Alternator's error messages are different, but both
+        # include the invalid type's name in single quotes.
+        with pytest.raises(ClientError, match=f"ValidationException.*'{key_type}'"):
+            with new_test_table(dynamodb,
+                KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+                AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'x', 'AttributeType': key_type },
+                ],
+                GlobalSecondaryIndexes=[{
+                    'IndexName': 'gsi',
+                    'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                }]) as table:
+                pass
