@@ -25,3 +25,9 @@ set(CMAKE_STATIC_LINKER_FLAGS_RELEASE
   "-Wl,--gc-sections")
 
 set(stack_usage_threshold_in_KB 13)
+
+include(CheckIPOSupported)
+check_ipo_supported(RESULT lto_supported OUTPUT error)
+if(ipo_supported)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+endif()
