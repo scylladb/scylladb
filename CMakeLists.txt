@@ -184,12 +184,25 @@ target_link_libraries(scylla PRIVATE
 # Force SHA1 build-id generation
 set(default_linker_flags "-Wl,--build-id=sha1")
 include(CheckLinkerFlag)
-foreach(linker "lld" "gold")
+set(Scylla_USE_LINKER
+    ""
+    CACHE
+    STRING
+    "Use specified linker instead of the default one")
+if(Scylla_USE_LINKER)
+    set(linkers "${Scylla_USE_LINKER}")
+else()
+    set(linkers "lld" "gold")
+endif()
+
+foreach(linker ${linkers})
     set(linker_flag "-fuse-ld=${linker}")
     check_linker_flag(CXX ${linker_flag} "CXX_LINKER_HAVE_${linker}")
     if(CXX_LINKER_HAVE_${linker})
         string(APPEND default_linker_flags " ${linker_flag}")
         break()
+    elseif(Scylla_USE_LINKER)
+        message(FATAL_ERROR "${Scylla_USE_LINKER} is not supported.")
     endif()
 endforeach()
 
