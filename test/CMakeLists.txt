@@ -50,6 +50,12 @@ function(add_scylla_test name)
   list(APPEND scylla_tests "${dirname}/${name}")
   set(scylla_tests "${scylla_tests}" PARENT_SCOPE)
 
+  if(Scylla_ENABLE_LTO)
+    # The runtime benefits of LTO don't outweight the compile time costs for tests.
+    target_link_options(${name} PRIVATE
+      $<$<CONFIG:RelWithDebInfo>:-fno-lto>)
+  endif()
+
   target_include_directories(${name}
     PRIVATE
       ${CMAKE_SOURCE_DIR})

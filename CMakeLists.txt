@@ -22,6 +22,8 @@ if(DEFINED CMAKE_BUILD_TYPE)
     endif()
 endif(DEFINED CMAKE_BUILD_TYPE)
 
+option(Scylla_ENABLE_LTO "Turn on link-time optimization for the 'release' mode." ON)
+
 include(mode.common)
 get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(is_multi_config)
@@ -42,6 +44,7 @@ else()
 endif()
 
 include(limit_jobs)
+
 # Configure Seastar compile options to align with Scylla
 set(CMAKE_CXX_STANDARD "23" CACHE INTERNAL "")
 set(CMAKE_CXX_EXTENSIONS ON CACHE INTERNAL "")
@@ -101,6 +104,10 @@ else()
 endif()
 
 set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
+
+if(Scylla_ENABLE_LTO)
+    list(APPEND absl_cxx_flags $<$<CONFIG:RelWithDebInfo>:${CMAKE_CXX_COMPILE_OPTIONS_IPO};-ffat-lto-objects>)
+endif()
 
 find_package(Sanitizers QUIET)
 list(APPEND absl_cxx_flags
@@ -322,6 +329,13 @@ set(scylla_libs
     utils)
 target_link_libraries(scylla PRIVATE
     ${scylla_libs})
+
+if(Scylla_ENABLE_LTO)
+  include(enable_lto)
+  foreach(target scylla ${scylla_libs})
+    enable_lto(${target})
+  endforeach()
+endif()
 
 target_link_libraries(scylla PRIVATE
     Seastar::seastar
