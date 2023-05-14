@@ -73,6 +73,8 @@ struct table_for_tests {
     future<> stop_and_keep_alive() {
         return stop().finally([cf = *this] {});
     }
+
+    void set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept;
 };
 
 dht::token create_token_from_key(const dht::i_partitioner&, sstring key);
