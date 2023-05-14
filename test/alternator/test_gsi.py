@@ -693,6 +693,120 @@ def test_11801_variant4(test_table_gsi_3):
         KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
                        'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
 
+# An additional test for the case that two non-key attributes in the base
+# table become keys of the view. In this test we try to cover all the
+# cases of an update modifying, not modifying, or deleting, one of the two
+# attributes, and checking which view rows are changed/deleted/inserted.
+def test_gsi_3_long(test_table_gsi_3):
+    p = random_string()
+    a = random_string()
+    b = random_string()
+    z = random_string()
+    test_table_gsi_3.put_item(Item={'p': p, 'a': a, 'b': b, 'z': z})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a, 'b': b, 'z': z}],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    # Change z, the existing view row changes:
+    z2 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'z': {'Value': z2, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a, 'b': b, 'z': z2}],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    # Change a, the original row (a,b) is deleted, a new one (a2, b) created
+    a2 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': a2, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a2, 'b': b, 'z': z2}],
+        KeyConditions={'a': {'AttributeValueList': [a2], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    # Change b, the original row (a2, b) is deleted, a new one (a2, b2) created
+    b2 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'b': {'Value': b2, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a2], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a2, 'b': b2, 'z': z2}],
+        KeyConditions={'a': {'AttributeValueList': [a2], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b2], 'ComparisonOperator': 'EQ'}})
+    # Change both a and b, the old row (a2, b2) is deleted, a new one
+    # (a3, b3) is created
+    a3 = random_string()
+    b3 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': a3, 'Action': 'PUT'}, 'b': {'Value': b3, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a2], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b2], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a3, 'b': b3, 'z': z2}],
+        KeyConditions={'a': {'AttributeValueList': [a3], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b3], 'ComparisonOperator': 'EQ'}})
+    # Delete attribute a and at the same time change b to b4. This is *not* the
+    # same as just not setting a (as we checked above). In this case, the
+    # old row should be deleted, but no new view row is created.
+    b4 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Action': 'DELETE'}, 'b': {'Value': b4, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a3], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b3], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a3], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b4], 'ComparisonOperator': 'EQ'}})
+    # Set "a" again (to a4), and the view row (a4, b4) appears
+    a4 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': a4, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a4, 'b': b4, 'z': z2}],
+        KeyConditions={'a': {'AttributeValueList': [a4], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b4], 'ComparisonOperator': 'EQ'}})
+    # Similar to above, but for second column: Delete attribute b and at the
+    # same time change a to a5. the old row should be deleted, but no new
+    # view row is created.
+    a5 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'b': {'Action': 'DELETE'}, 'a': {'Value': a5, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a4], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b4], 'ComparisonOperator': 'EQ'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a5], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b4], 'ComparisonOperator': 'EQ'}})
+    # Set "b" again (to b5), and the view row (a5, b5) appears
+    b5 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'b': {'Value': b5, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a5, 'b': b5, 'z': z2}],
+        KeyConditions={'a': {'AttributeValueList': [a5], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b5], 'ComparisonOperator': 'EQ'}})
+    # Now unset both a and b. The view row disappears, and setting only a,
+    # or only b, doesn't bring it back.
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Action': 'DELETE'}, 'b': {'Action': 'DELETE'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a5], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b5], 'ComparisonOperator': 'EQ'}})
+    a6 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': a6, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a6], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b5], 'ComparisonOperator': 'EQ'}})
+    b6 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'b': {'Value': b6, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a6, 'b': b6, 'z': z2}],
+        KeyConditions={'a': {'AttributeValueList': [a6], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b6], 'ComparisonOperator': 'EQ'}})
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Action': 'DELETE'}, 'b': {'Action': 'DELETE'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a6], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b6], 'ComparisonOperator': 'EQ'}})
+    b7 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'b': {'Value': b7, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [],
+        KeyConditions={'a': {'AttributeValueList': [a6], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b7], 'ComparisonOperator': 'EQ'}})
+    a7 = random_string()
+    test_table_gsi_3.update_item(Key={'p': p}, AttributeUpdates={'a': {'Value': a7, 'Action': 'PUT'}})
+    assert_index_query(test_table_gsi_3, 'hello', [{'p': p, 'a': a7, 'b': b7, 'z': z2}],
+        KeyConditions={'a': {'AttributeValueList': [a7], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b7], 'ComparisonOperator': 'EQ'}})
+
+
 # Test that when a table has a GSI, if the indexed attribute is missing, the
 # item is added to the base table but not the index.
 # This is the same feature we already tested in test_gsi_missing_attribute()
