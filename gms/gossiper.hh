@@ -493,8 +493,6 @@ public:
 
     std::set<gms::inet_address> get_nodes_with_host_id(locator::host_id host_id) const;
 
-    std::optional<endpoint_state> get_state_for_version_bigger_than(inet_address for_endpoint, version_type version) const;
-
     /**
      * determine which endpoint started up earlier
      */
@@ -540,6 +538,8 @@ private:
      * Must be called under lock_endpoint.
      */
     future<> handle_major_state_change(inet_address ep, endpoint_state eps, permit_id);
+
+    std::optional<endpoint_state> get_state_for_version_bigger_than(inet_address for_endpoint, const endpoint_state& ep_state, version_type version) const;
 
 public:
     bool is_alive(inet_address ep) const;
