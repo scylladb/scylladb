@@ -1604,32 +1604,31 @@ std::set<gms::inet_address> gossiper::get_nodes_with_host_id(locator::host_id ho
 
 std::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_address for_endpoint, const endpoint_state& eps, version_type version) const {
     std::optional<endpoint_state> reqd_endpoint_state;
-    // FIXME: indentation
-        /*
-             * Here we try to include the Heart Beat state only if it is
-             * greater than the version passed in. It might happen that
-             * the heart beat version maybe lesser than the version passed
-             * in and some application state has a version that is greater
-             * than the version passed in. In this case we also send the old
-             * heart beat and throw it away on the receiver if it is redundant.
-            */
-        auto local_hb_version = eps.get_heart_beat_state().get_heart_beat_version();
-        if (local_hb_version > version) {
-            reqd_endpoint_state.emplace(eps.get_heart_beat_state());
-            logger.trace("local heartbeat version {} greater than {} for {}", local_hb_version, version, for_endpoint);
-        }
-        /* Accumulate all application states whose versions are greater than "version" variable */
-        for (auto& entry : eps.get_application_state_map()) {
-            auto& value = entry.second;
-            if (value.version() > version) {
-                if (!reqd_endpoint_state) {
-                    reqd_endpoint_state.emplace(eps.get_heart_beat_state());
-                }
-                auto& key = entry.first;
-                logger.trace("Adding state of {}, {}: {}" , for_endpoint, key, value.value());
-                reqd_endpoint_state->add_application_state(key, value);
+    /*
+     * Here we try to include the Heart Beat state only if it is
+     * greater than the version passed in. It might happen that
+     * the heart beat version maybe lesser than the version passed
+     * in and some application state has a version that is greater
+     * than the version passed in. In this case we also send the old
+     * heart beat and throw it away on the receiver if it is redundant.
+     */
+    auto local_hb_version = eps.get_heart_beat_state().get_heart_beat_version();
+    if (local_hb_version > version) {
+        reqd_endpoint_state.emplace(eps.get_heart_beat_state());
+        logger.trace("local heartbeat version {} greater than {} for {}", local_hb_version, version, for_endpoint);
+    }
+    /* Accumulate all application states whose versions are greater than "version" variable */
+    for (auto& entry : eps.get_application_state_map()) {
+        auto& value = entry.second;
+        if (value.version() > version) {
+            if (!reqd_endpoint_state) {
+                reqd_endpoint_state.emplace(eps.get_heart_beat_state());
             }
+            auto& key = entry.first;
+            logger.trace("Adding state of {}, {}: {}" , for_endpoint, key, value.value());
+            reqd_endpoint_state->add_application_state(key, value);
         }
+    }
     return reqd_endpoint_state;
 }
 
