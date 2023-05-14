@@ -117,6 +117,10 @@ private:
     future<gossip_get_endpoint_states_response> handle_get_endpoint_states_msg(gossip_get_endpoint_states_request request);
     static constexpr uint32_t _default_cpuid = 0;
     msg_addr get_msg_addr(inet_address to) const noexcept;
+    netw::msg_addr get_msg_addr(const endpoint_id& node) const noexcept {
+        return get_msg_addr(node.addr);
+    }
+
     void do_sort(utils::chunked_vector<gossip_digest>& g_digest_list) const;
     timer<lowres_clock> _scheduled_gossip_task;
     bool _enabled = false;
@@ -199,11 +203,14 @@ public:
     future<endpoint_permit> lock_endpoint(inet_address, permit_id pid, seastar::compat::source_location l = seastar::compat::source_location::current());
 
 private:
-    void permit_internal_error(const inet_address& addr, permit_id pid);
-    void verify_permit(const inet_address& addr, permit_id pid) {
+    void permit_internal_error(const endpoint_id& addr, permit_id pid);
+    void verify_permit(const endpoint_id& node, permit_id pid) {
         if (!pid) {
-            permit_internal_error(addr, pid);
+            permit_internal_error(node, pid);
         }
+    }
+    void verify_permit(const inet_address& addr, permit_id pid) {
+        verify_permit(get_endpoint_id(addr), pid);
     }
 
     /* map where key is the endpoint and value is the state associated with the endpoint */
@@ -316,10 +323,7 @@ private:
     // Replicates given endpoint_state to all other shards.
     // The state state doesn't have to be kept alive around until completes.
     // Must be called under lock_endpoint.
-    future<> replicate(endpoint_id node, endpoint_state ep_state, permit_id pid) {
-        return replicate(node.addr, std::move(ep_state), std::move(pid));
-    }
-    future<> replicate(inet_address, endpoint_state, permit_id);
+    future<> replicate(endpoint_id node, endpoint_state ep_state, permit_id pid);
 public:
     explicit gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, service::raft_address_map& address_map, const db::config& cfg, gossip_config gcfg);
 
@@ -365,7 +369,7 @@ private:
     /**
      * @param endpoint end point that is convicted.
      */
-    future<> convict(inet_address endpoint);
+    future<> convict(endpoint_id node);
 
     /**
      * Removes the endpoint from gossip completely
@@ -374,7 +378,7 @@ private:
      *
      * Must be called under lock_endpoint.
      */
-    future<> evict_from_membership(inet_address endpoint, permit_id);
+    future<> evict_from_membership(endpoint_id endpoint, permit_id);
 public:
     /**
      * Removes the endpoint from Gossip but retains endpoint state
@@ -434,10 +438,10 @@ public:
     future<generation_type> get_current_generation_number(inet_address endpoint) const;
     future<version_type> get_current_heart_beat_version(inet_address endpoint) const;
 
-    bool is_gossip_only_member(const endpoint_id& node) const {
-        return is_gossip_only_member(node.addr);
+    bool is_gossip_only_member(const endpoint_id& node) const;
+    bool is_gossip_only_member(inet_address addr) const {
+        return is_gossip_only_member(get_endpoint_id(addr));
     }
-    bool is_gossip_only_member(inet_address endpoint) const;
 
     bool is_safe_for_bootstrap() const;
     bool is_safe_for_restart() const;
@@ -571,18 +575,15 @@ private:
 
     void update_timestamp_for_nodes(const std::map<inet_address, endpoint_state>& map);
 
-    void mark_alive(endpoint_id node) {
-        mark_alive(node.addr);
-    }
-    void mark_alive(inet_address addr);
+    void mark_alive(const endpoint_id& node);
 
-    future<> real_mark_alive(inet_address addr);
+    future<> real_mark_alive(endpoint_id node);
 
     // Must be called under lock_endpoint.
-    future<> mark_dead(inet_address addr, endpoint_state_ptr local_state, permit_id);
+    future<> mark_dead(endpoint_id node, endpoint_state_ptr local_state, permit_id);
 
     // Must be called under lock_endpoint.
-    future<> mark_as_shutdown(const inet_address& endpoint, permit_id);
+    future<> mark_as_shutdown(endpoint_id node, permit_id);
 
     /**
      * This method is called whenever there is a "big" change in ep state (a generation change for a known node).
@@ -594,7 +595,7 @@ private:
      */
     future<> handle_major_state_change(endpoint_id node, endpoint_state eps, permit_id);
 
-    std::optional<endpoint_state> get_state_for_version_bigger_than(inet_address for_endpoint, const endpoint_state& ep_state, version_type version) const;
+    std::optional<endpoint_state> get_state_for_version_bigger_than(endpoint_id node, const endpoint_state& ep_state, version_type version) const;
 
 public:
     bool is_alive(const endpoint_id& node) const {
@@ -747,6 +748,7 @@ public:
 public:
     bool is_seed(const inet_address& endpoint) const;
 
+    bool is_shutdown(const endpoint_state& ep_state) const;
     bool is_shutdown(const endpoint_id& node) const {
         return is_shutdown(node.addr);
     }
@@ -779,10 +781,10 @@ public:
     void force_newer_generation();
 public:
     std::string_view get_gossip_status(const endpoint_state& ep_state) const noexcept;
-    std::string_view get_gossip_status(const endpoint_id& node) const noexcept {
-        return get_gossip_status(node.addr);
+    std::string_view get_gossip_status(const endpoint_id& node) const noexcept;
+    std::string_view get_gossip_status(const inet_address& addr) const noexcept {
+        return get_gossip_status(get_endpoint_id(addr));
     }
-    std::string_view get_gossip_status(const inet_address& endpoint) const noexcept;
 public:
     future<> wait_for_gossip_to_settle() const;
     future<> wait_for_range_setup() const;
