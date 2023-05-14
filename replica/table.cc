@@ -2293,6 +2293,14 @@ table::disable_auto_compaction() {
     });
 }
 
+void table::set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept {
+    _tombstone_gc_enabled = tombstone_gc_enabled;
+    tlogger.info0("Tombstone GC was {} for {}.{}", tombstone_gc_enabled ? "enabled" : "disabled", _schema->ks_name(), _schema->cf_name());
+    if (_tombstone_gc_enabled) {
+        trigger_compaction();
+    }
+}
+
 flat_mutation_reader_v2
 table::make_reader_v2_excluding_sstables(schema_ptr s,
         reader_permit permit,
@@ -2528,6 +2536,10 @@ public:
     }
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return _t.is_auto_compaction_disabled_by_user();
+    }
+
+    bool tombstone_gc_enabled() const noexcept override {
+        return _t._tombstone_gc_enabled;
     }
 };
 

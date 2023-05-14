@@ -438,6 +438,68 @@
          ]
       },
       {
+         "path":"/column_family/tombstone_gc/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Check if tombstone GC is enabled for a given table",
+               "type":"boolean",
+               "nickname":"get_tombstone_gc",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The table name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Enable tombstone GC for a given table",
+               "type":"void",
+               "nickname":"enable_tombstone_gc",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The table name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Disable tombstone GC for a given table",
+               "type":"void",
+               "nickname":"disable_tombstone_gc",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The table name in keyspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/column_family/estimate_keys/{name}",
          "operations":[
             {

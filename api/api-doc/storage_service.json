@@ -2111,6 +2111,65 @@
          ]
       },
       {
+         "path":"/storage_service/tombstone_gc/{keyspace}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Enable tombstone GC",
+               "type":"void",
+               "nickname":"enable_tombstone_gc",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Comma-separated column family names",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Disable tombstone GC",
+               "type":"void",
+               "nickname":"disable_tombstone_gc",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Comma-separated column family names",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/deliver_hints",
          "operations":[
             {

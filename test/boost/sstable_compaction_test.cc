@@ -179,6 +179,10 @@ public:
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return false;
     }
+
+    bool tombstone_gc_enabled() const noexcept override {
+        return _t->as_table_state().tombstone_gc_enabled();
+    }
 };
 
 static std::unique_ptr<table_state> make_table_state_for_test(column_family_for_tests& t, test_env& env) {
@@ -5197,5 +5201,100 @@ SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
 
         BOOST_REQUIRE(sstables_closed == sstables_nr);
         BOOST_REQUIRE(sstables_closed_during_cleanup >= sstables_nr / 2);
+    });
+}
+
+SEASTAR_TEST_CASE(tombstone_gc_disabled_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto builder = schema_builder("tests", "tombstone_purge")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        builder.set_gc_grace_seconds(0);
+        auto s = builder.build();
+
+        auto tmp = tmpdir();
+        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)] () {
+            return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
+        };
+
+        auto compact = [&, s] (bool tombstone_gc_enabled, bool update_tomb_gc_during_compaction, std::vector<shared_sstable> all) -> std::vector<shared_sstable> {
+            column_family_for_tests t(env.manager(), s, tmp.path().string());
+            auto stop = deferred_stop(t);
+            std::function<shared_sstable()> my_sst_gen = sst_gen;
+            if (update_tomb_gc_during_compaction) {
+                // update tombstone_gc setting after compaction was initialized,
+                // when it creates the first output SSTable, to stress the
+                // ability of tombstone gc update taking immediate effect
+                // even on ongoing compactions.
+                my_sst_gen = [&] () -> sstables::shared_sstable {
+                    t->set_tombstone_gc_enabled(tombstone_gc_enabled);
+                    return sst_gen();
+                };
+            } else {
+                t->set_tombstone_gc_enabled(tombstone_gc_enabled);
+            }
+            for (auto& sst : all) {
+                column_family_test(t).add_sstable(sst);
+            }
+            return compact_sstables(t.get_compaction_manager(), sstables::compaction_descriptor(all, default_priority_class()), *t, my_sst_gen).get0().new_sstables;
+        };
+
+        auto next_timestamp = [] {
+            static thread_local api::timestamp_type next = 1;
+            return next++;
+        };
+
+        auto make_insert = [&] (partition_key key) {
+            mutation m(s, key);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), next_timestamp());
+            return m;
+        };
+
+        auto make_delete = [&] (partition_key key) {
+            mutation m(s, key);
+            tombstone tomb(next_timestamp(), gc_clock::now());
+            m.partition().apply(tomb);
+            return m;
+        };
+
+        auto alpha = partition_key::from_exploded(*s, {to_bytes("alpha")});
+        auto beta = partition_key::from_exploded(*s, {to_bytes("beta")});
+
+        auto perform_tombstone_gc_test = [&] (bool tombstone_gc_enabled) {
+            auto mut1 = make_insert(alpha);
+            auto mut2 = make_delete(alpha);
+            auto mut3 = make_insert(beta);
+
+            auto sst1 = make_sstable_containing(sst_gen, {mut1});
+            auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3});
+
+            forward_jump_clocks(std::chrono::seconds(1));
+
+            auto do_perform_tombstone_gc_test = [&] (bool update_tomb_gc_during_compaction) {
+                auto result = compact(tombstone_gc_enabled, update_tomb_gc_during_compaction, {sst1, sst2});
+                BOOST_REQUIRE_EQUAL(1, result.size());
+
+                std::set<mutation, mutation_decorated_key_less_comparator> sorted_mut;
+                sorted_mut.insert(mut2);
+                sorted_mut.insert(mut3);
+
+                auto r = assert_that(sstable_reader(result[0], s, env.make_reader_permit()));
+                for (auto&& mut: sorted_mut) {
+                    bool is_tombstone = bool(mut.partition().partition_tombstone());
+                    // if tombstone compaction is enabled, expired tombstone is purged
+                    if (is_tombstone && tombstone_gc_enabled) {
+                        continue;
+                    }
+                    r.produces(mut);
+                }
+                r.produces_end_of_stream();
+            };
+
+            do_perform_tombstone_gc_test(false);
+            do_perform_tombstone_gc_test(true);
+        };
+
+        perform_tombstone_gc_test(false);
+        perform_tombstone_gc_test(true);
     });
 }
