@@ -42,61 +42,79 @@ def test_storage_service_keyspaces(cql, this_dc, rest_api):
         assert keyspace in resp.json()
 
 
-def test_storage_service_auto_compaction_keyspace(cql, this_dc, rest_api):
+def do_test_storage_service_attribute_api_keyspace(cql, this_dc, rest_api, api_name):
     keyspace = new_keyspace(cql, this_dc)
     # test empty keyspace
-    resp = rest_api.send("DELETE", f"storage_service/auto_compaction/{keyspace}")
+    resp = rest_api.send("DELETE", f"storage_service/{api_name}/{keyspace}")
     resp.raise_for_status()
 
-    resp = rest_api.send("POST", f"storage_service/auto_compaction/{keyspace}")
+    resp = rest_api.send("POST", f"storage_service/{api_name}/{keyspace}")
     resp.raise_for_status()
 
     # test non-empty keyspace
     with new_test_table(cql, keyspace, "a int, PRIMARY KEY (a)") as t:
-        resp = rest_api.send("DELETE", f"storage_service/auto_compaction/{keyspace}")
+        resp = rest_api.send("DELETE", f"storage_service/{api_name}/{keyspace}")
         resp.raise_for_status()
 
-        resp = rest_api.send("POST", f"storage_service/auto_compaction/{keyspace}")
+        resp = rest_api.send("POST", f"storage_service/{api_name}/{keyspace}")
         resp.raise_for_status()
 
         # non-existing keyspace
-        resp = rest_api.send("POST", f"storage_service/auto_compaction/XXX")
+        resp = rest_api.send("POST", f"storage_service/{api_name}/XXX")
+        assert resp.status_code == requests.codes.bad_request
+
+    cql.execute(f"DROP KEYSPACE {keyspace}")
+
+def test_storage_service_auto_compaction_keyspace(cql, this_dc, rest_api):
+    do_test_storage_service_attribute_api_keyspace(cql, this_dc, rest_api, "auto_compaction")
+
+def test_storage_service_tombstone_gc_keyspace(cql, this_dc, rest_api):
+    do_test_storage_service_attribute_api_keyspace(cql, this_dc, rest_api, "tombstone_gc")
+
+def do_test_storage_service_attribute_api_table(cql, this_dc, rest_api, api_name):
+    keyspace = new_keyspace(cql, this_dc)
+    with new_test_table(cql, keyspace, "a int, PRIMARY KEY (a)") as t:
+        test_table = t.split('.')[1]
+        resp = rest_api.send("DELETE", f"storage_service/{api_name}/{keyspace}", { "cf": test_table })
+        resp.raise_for_status()
+
+        resp = rest_api.send("POST", f"storage_service/{api_name}/{keyspace}", { "cf": test_table })
+        resp.raise_for_status()
+
+        # non-existing table
+        resp = rest_api.send("POST", f"storage_service/{api_name}/{keyspace}", { "cf": "XXX" })
         assert resp.status_code == requests.codes.bad_request
 
     cql.execute(f"DROP KEYSPACE {keyspace}")
 
 def test_storage_service_auto_compaction_table(cql, this_dc, rest_api):
-    keyspace = new_keyspace(cql, this_dc)
-    with new_test_table(cql, keyspace, "a int, PRIMARY KEY (a)") as t:
-        test_table = t.split('.')[1]
-        resp = rest_api.send("DELETE", f"storage_service/auto_compaction/{keyspace}", { "cf": test_table })
-        resp.raise_for_status()
+    do_test_storage_service_attribute_api_table(cql, this_dc, rest_api, "auto_compaction")
 
-        resp = rest_api.send("POST", f"storage_service/auto_compaction/{keyspace}", { "cf": test_table })
-        resp.raise_for_status()
+def test_storage_service_tombstone_gc_table(cql, this_dc, rest_api):
+    do_test_storage_service_attribute_api_table(cql, this_dc, rest_api, "tombstone_gc")
 
-        # non-existing table
-        resp = rest_api.send("POST", f"storage_service/auto_compaction/{keyspace}", { "cf": "XXX" })
-        assert resp.status_code == requests.codes.bad_request
-
-    cql.execute(f"DROP KEYSPACE {keyspace}")
-
-def test_storage_service_auto_compaction_tables(cql, this_dc, rest_api):
+def do_test_storage_service_attribute_api_tables(cql, this_dc, rest_api, api_name):
     keyspace = new_keyspace(cql, this_dc)
     with new_test_table(cql, keyspace, "a int, PRIMARY KEY (a)") as t0:
         with new_test_table(cql, keyspace, "a int, PRIMARY KEY (a)") as t1:
             test_tables = [t0.split('.')[1], t1.split('.')[1]]
-            resp = rest_api.send("DELETE", f"storage_service/auto_compaction/{keyspace}", { "cf": f"{test_tables[0]},{test_tables[1]}" })
+            resp = rest_api.send("DELETE", f"storage_service/{api_name}/{keyspace}", { "cf": f"{test_tables[0]},{test_tables[1]}" })
             resp.raise_for_status()
 
-            resp = rest_api.send("POST", f"storage_service/auto_compaction/{keyspace}", { "cf": f"{test_tables[0]},{test_tables[1]}" })
+            resp = rest_api.send("POST", f"storage_service/{api_name}/{keyspace}", { "cf": f"{test_tables[0]},{test_tables[1]}" })
             resp.raise_for_status()
 
             # non-existing table
-            resp = rest_api.send("POST", f"storage_service/auto_compaction/{keyspace}", { "cf": f"{test_tables[0]},XXX" })
+            resp = rest_api.send("POST", f"storage_service/{api_name}/{keyspace}", { "cf": f"{test_tables[0]},XXX" })
             assert resp.status_code == requests.codes.bad_request
 
     cql.execute(f"DROP KEYSPACE {keyspace}")
+
+def test_storage_service_auto_compaction_tables(cql, this_dc, rest_api):
+    do_test_storage_service_attribute_api_tables(cql, this_dc, rest_api, "auto_compaction")
+
+def test_storage_service_tombstone_gc_tables(cql, this_dc, rest_api):
+    do_test_storage_service_attribute_api_tables(cql, this_dc, rest_api, "tombstone_gc")
 
 def test_storage_service_keyspace_offstrategy_compaction(cql, this_dc, rest_api):
     keyspace = new_keyspace(cql, this_dc)

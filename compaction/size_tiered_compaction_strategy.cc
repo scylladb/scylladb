@@ -164,6 +164,10 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_
         return sstables::compaction_descriptor(std::move(most_interesting), service::get_local_compaction_priority());
     }
 
+    if (!table_s.tombstone_gc_enabled()) {
+        return compaction_descriptor();
+    }
+
     // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
     // ratio is greater than threshold.
     // prefer oldest sstables from biggest size tiers because they will be easier to satisfy conditions for

@@ -445,6 +445,7 @@ private:
     sstables::sstables_manager& _sstables_manager;
     secondary_index::secondary_index_manager _index_manager;
     bool _compaction_disabled_by_user = false;
+    bool _tombstone_gc_enabled = true;
     utils::phased_barrier _flush_barrier;
     std::vector<view_ptr> _views;
 
@@ -966,6 +967,13 @@ public:
 
     void enable_auto_compaction();
     future<> disable_auto_compaction();
+
+    void set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept;
+
+    bool tombstone_gc_enabled() const noexcept {
+        return _tombstone_gc_enabled;
+    }
+
     bool is_auto_compaction_disabled_by_user() const {
       return _compaction_disabled_by_user;
     }
