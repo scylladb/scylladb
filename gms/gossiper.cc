@@ -50,7 +50,7 @@ namespace gms {
 
 using clk = gossiper::clk;
 
-static logging::logger logger("gossip");
+logging::logger logger("gossip");
 
 constexpr std::chrono::milliseconds gossiper::INTERVAL;
 constexpr std::chrono::hours gossiper::A_VERY_LONG_TIME;
@@ -592,6 +592,7 @@ future<> gossiper::do_apply_state_locally(gms::inet_address addr, endpoint_state
         auto remote_generation = remote_state.get_heart_beat_state().get_generation();
 
         if (!local_host_id) {
+            on_internal_error_noexcept(logger, fmt::format("Node {} has null HOST_ID application state", node));
             if (!remote_host_id) {
                 logger.warn("Node {} sent null host_id in remote state", addr);
             } else {
@@ -1292,6 +1293,19 @@ void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g
 }
 
 future<> gossiper::replicate(endpoint_id node, endpoint_state es, permit_id pid) {
+    if (!node.host_id) {
+        on_internal_error(logger, format("replicate: node {} has null host_id", node));
+    }
+    if (!node.addr) {
+        on_internal_error(logger, format("replicate: node {} has null address", node));
+    }
+    auto* host_id_state = es.get_application_state_ptr(application_state::HOST_ID);
+    if (!host_id_state) {
+        logger.warn("gossiper::replicate {}: HOST_ID application state is missing from endpoint_state, at {}", node, current_backtrace());
+        es.add_application_state(application_state::HOST_ID, versioned_value::host_id(node.host_id));
+    } else if (utils::UUID(host_id_state->value()) != node.host_id.uuid()) {
+        on_internal_error(logger, format("replicate: node {} has mismatching host_id={} in endpoint_state", node, host_id_state->value()));
+    }
     verify_permit(node, pid);
     // First pass: replicate the new endpoint_state on all shards.
     // Use foreign_ptr<std::unique_ptr> to ensure destroy on remote shards on exception
