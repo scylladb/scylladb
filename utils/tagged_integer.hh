@@ -69,11 +69,11 @@ public:
         return tagged_tagged_integer(_value - o._value);
     }
 
-    tagged_tagged_integer& operator+=(const tagged_tagged_integer& o) const {
+    tagged_tagged_integer& operator+=(const tagged_tagged_integer& o) {
         _value += o._value;
         return *this;
     }
-    tagged_tagged_integer& operator-=(const tagged_tagged_integer& o) const {
+    tagged_tagged_integer& operator-=(const tagged_tagged_integer& o) {
         _value -= o._value;
         return *this;
     }
