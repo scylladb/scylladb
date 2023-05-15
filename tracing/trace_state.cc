@@ -51,32 +51,6 @@ void trace_state::params_values_deleter::operator()(params_values* pv) {
     delete pv;
 }
 
-void trace_state::init_session_records(
-    trace_type type,
-    std::chrono::seconds slow_query_ttl,
-    std::optional<utils::UUID> session_id,
-    span_id parent_id) {
-
-    _records = make_lw_shared<one_session_records>();
-    _records->session_id = session_id ? *session_id : utils::UUID_gen::get_time_UUID();
-
-    if (full_tracing()) {
-        if (!log_slow_query()) {
-            _records->ttl = ttl_by_type(type);
-        } else {
-            _records->ttl = std::max(ttl_by_type(type), slow_query_ttl);
-        }
-    } else {
-        _records->ttl = slow_query_ttl;
-    }
-
-    _records->session_rec.command = type;
-    _records->session_rec.slow_query_record_ttl = slow_query_ttl;
-    _records->my_span_id = span_id::make_span_id();
-    _records->parent_id = parent_id;
-}
-
-
 void trace_state::set_batchlog_endpoints(const inet_address_vector_replica_set& val) {
     _params_ptr->batchlog_endpoints.emplace(val);
 }

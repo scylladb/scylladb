@@ -201,9 +201,12 @@ private:
     bool _consumed = false;
 
 public:
-    session_record()
+    session_record(trace_type cmd, std::chrono::seconds ttl)
         : username("<unauthenticated request>")
-        , elapsed(-1) {}
+        , command(cmd)
+        , elapsed(-1)
+        , slow_query_record_ttl(ttl)
+    {}
 
     bool ready() const {
         return elapsed.count() >= 0 && !_consumed;
@@ -237,7 +240,8 @@ public:
     span_id parent_id;
     span_id my_span_id;
 
-    one_session_records();
+    one_session_records(trace_type type, std::chrono::seconds slow_query_ttl, std::chrono::seconds slow_query_rec_ttl,
+            std::optional<utils::UUID> session_id = std::nullopt, span_id parent_id = span_id::illegal_id);
 
     /**
      * Consume a single record from the per-shard budget.

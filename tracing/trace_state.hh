@@ -63,15 +63,15 @@ public:
     };
 
 private:
+    shared_ptr<tracing> _local_tracing_ptr;
+    trace_state_props_set _state_props;
     lw_shared_ptr<one_session_records> _records;
     // Used for calculation of time passed since the beginning of a tracing
     // session till each tracing event. Secondary slow-query-logging sessions inherit `_start` from parents.
     elapsed_clock::time_point _start;
     std::optional<uint64_t> _supplied_start_ts_us; // Parent's `_start`, as microseconds from POSIX epoch.
     std::chrono::microseconds _slow_query_threshold;
-    trace_state_props_set _state_props;
     state _state = state::inactive;
-    shared_ptr<tracing> _local_tracing_ptr;
 
     struct params_values;
     struct params_values_deleter {
@@ -97,38 +97,39 @@ private:
         }
     } _params_ptr;
 
-public:
-    trace_state(trace_type type, trace_state_props_set props)
-        : _state_props(props)
-        , _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
-    {
-        if (!full_tracing() && !log_slow_query()) {
+    static trace_state_props_set make_primary(trace_state_props_set props) {
+        if (!props.contains(trace_state_props::full_tracing) && !props.contains(trace_state_props::log_slow_query)) {
             throw std::logic_error("A primary session has to be created for either full tracing or a slow query logging");
         }
-
-        // This is a primary session
-        _state_props.set(trace_state_props::primary);
-
-        init_session_records(type, _local_tracing_ptr->slow_query_record_ttl());
-        _slow_query_threshold = _local_tracing_ptr->slow_query_threshold();
+        props.set(trace_state_props::primary);
+        return props;
     }
 
-    trace_state(const trace_info& info)
-        : _state_props(info.state_props)
-        , _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
-    {
-        // This is a secondary session
-        _state_props.remove(trace_state_props::primary);
-
+    static trace_state_props_set make_secondary(trace_state_props_set props) noexcept {
+        props.remove(trace_state_props::primary);
         // Default a secondary session to a full tracing.
         // We may get both zeroes for a full_tracing and a log_slow_query if a
         // primary session is created with an older server version.
-        _state_props.set_if<trace_state_props::full_tracing>(!full_tracing() && !log_slow_query());
+        props.set_if<trace_state_props::full_tracing>(!props.contains(trace_state_props::full_tracing) && !props.contains(trace_state_props::log_slow_query));
+        return props;
+    }
 
+public:
+    trace_state(trace_type type, trace_state_props_set props)
+        : _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
+        , _state_props(make_primary(props))
+        , _records(make_lw_shared<one_session_records>(type, ttl_by_type(type, _local_tracing_ptr->slow_query_record_ttl()), _local_tracing_ptr->slow_query_record_ttl()))
+        , _slow_query_threshold(_local_tracing_ptr->slow_query_threshold())
+    {
+    }
+
+    trace_state(const trace_info& info)
+        : _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
+        , _state_props(make_secondary(info.state_props))
         // inherit the slow query threshold and ttl from the coordinator
-        init_session_records(info.type, std::chrono::seconds(info.slow_query_ttl_sec), info.session_id, info.parent_id);
-        _slow_query_threshold = std::chrono::microseconds(info.slow_query_threshold_us);
-
+        , _records(make_lw_shared<one_session_records>(info.type, ttl_by_type(info.type, std::chrono::seconds(info.slow_query_ttl_sec)), std::chrono::seconds(info.slow_query_ttl_sec), info.session_id, info.parent_id))
+        , _slow_query_threshold(info.slow_query_threshold_us)
+    {
         if (info.state_props.contains<trace_state_props::log_slow_query>() && info.start_ts_us > 0u) {
             _supplied_start_ts_us = info.start_ts_us;
         }
@@ -225,9 +226,17 @@ private:
         return log_slow_query() && e > _slow_query_threshold;
     }
 
-    void init_session_records(trace_type type, std::chrono::seconds slow_query_ttl,
-        std::optional<utils::UUID> session_id = std::nullopt,
-        span_id parent_id = span_id::illegal_id);
+    std::chrono::seconds ttl_by_type(trace_type type, std::chrono::seconds slow_query_ttl) noexcept {
+        if (full_tracing()) {
+            if (!log_slow_query()) {
+                return ::tracing::ttl_by_type(type);
+            } else {
+                return std::max(::tracing::ttl_by_type(type), slow_query_ttl);
+            }
+        } else {
+            return slow_query_ttl;
+        }
+    }
 
     bool should_write_records() const {
         return full_tracing() || _records->do_log_slow_query;
