@@ -1339,9 +1339,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // 3. need to check if it depends on any of the above steps
             sys_ks.local().setup(snitch, messaging).get();
 
-            supervisor::notify("loading tablet metadata");
-            ss.local().load_tablet_metadata().get();
-
             supervisor::notify("starting schema commit log");
 
             // Check there is no truncation record for schema tables.
@@ -1382,6 +1379,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
 
             db::schema_tables::recalculate_schema_version(sys_ks, proxy, feature_service.local()).get();
+
+            supervisor::notify("loading tablet metadata");
+            ss.local().load_tablet_metadata().get();
 
             supervisor::notify("loading non-system sstables");
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
