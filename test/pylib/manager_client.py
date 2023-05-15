@@ -44,10 +44,6 @@ class ManagerClient():
         self.client = UnixRESTClient(sock_path)
         self.api = ScyllaRESTAPIClient()
 
-    async def stop(self):
-        """Close driver"""
-        self.driver_close()
-
     async def driver_connect(self, server: Optional[ServerInfo] = None) -> None:
         """Connect to cluster"""
         if self.con_gen is not None:
