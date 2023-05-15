@@ -430,6 +430,7 @@ class token_ranges_owned_by_this_shard {
     size_t _range_idx;
     size_t _end_idx;
     std::optional<dht::selective_token_range_sharder> _intersecter;
+    locator::effective_replication_map_ptr _erm;
 public:
     token_ranges_owned_by_this_shard(replica::database& db, gms::gossiper& g, schema_ptr s)
         :  _s(s)
@@ -437,6 +438,7 @@ public:
                 g, utils::fb_utilities::get_broadcast_address())
         , _range_idx(random_offset(0, _token_ranges.size() - 1))
         , _end_idx(_range_idx + _token_ranges.size())
+        , _erm(s->table().get_effective_replication_map())
     {
         tlogger.debug("Generating token ranges starting from base range {} of {}", _range_idx, _token_ranges.size());
     }
@@ -469,7 +471,7 @@ public:
                     return std::nullopt;
                 }
             }
-            _intersecter.emplace(_s->get_sharder(), _token_ranges[_range_idx % _token_ranges.size()], this_shard_id());
+            _intersecter.emplace(_erm->get_sharder(*_s), _token_ranges[_range_idx % _token_ranges.size()], this_shard_id());
         }
     }
 
