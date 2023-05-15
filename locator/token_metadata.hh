@@ -28,7 +28,6 @@
 
 #include "locator/types.hh"
 #include "locator/topology.hh"
-#include "service/topology_state_machine.hh"
 
 // forward declaration since replica/database.hh includes this file
 namespace replica {
@@ -273,10 +272,13 @@ public:
     // new set of replicas differs from the old one.
     std::optional<inet_address_vector_replica_set> endpoints_for_reading(const token& token, const sstring& keyspace_name) const;
 
-    // updates the current topology_transition_state of this instance,
-    // this value is preserved in all clone functions,
-    // by default it's not set
-    void set_topology_transition_state(std::optional<service::topology::transition_state> state);
+    // Updates the read_new flag, switching read requests from
+    // the old endpoints to the new ones during topology changes:
+    // read_new_t::no - no read_endpoints will be stored on update_pending_ranges, all reads goes to normal endpoints;
+    // read_new_t::yes - triggers update_pending_ranges to compute and store new ranges for read requests.
+    // The value is preserved in all clone functions, the default is read_new_t::no.
+    using read_new_t = bool_class<class read_new_tag>;
+    void set_read_new(read_new_t value);
 
     /** @return an endpoint to token multimap representation of tokenToEndpointMap (a copy) */
     std::multimap<inet_address, token> get_endpoint_to_token_map_for_reading() const;

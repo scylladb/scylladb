@@ -360,7 +360,19 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
             co_await add_normal_node(id, rs);
         }
 
-        tmptr->set_topology_transition_state(_topology_state_machine._topology.tstate);
+        tmptr->set_read_new(std::invoke([](std::optional<topology::transition_state> state) {
+            using read_new_t = locator::token_metadata::read_new_t;
+            if (!state.has_value()) {
+                return read_new_t::no;
+            }
+            switch (*state) {
+                case topology::transition_state::commit_cdc_generation:
+                case topology::transition_state::write_both_read_old:
+                    return read_new_t::no;
+                case topology::transition_state::write_both_read_new:
+                    return read_new_t::yes;
+            }
+        }, _topology_state_machine._topology.tstate));
 
         for (const auto& [id, rs]: _topology_state_machine._topology.transition_nodes) {
             locator::host_id host_id{id.uuid()};

@@ -234,7 +234,7 @@ SEASTAR_THREAD_TEST_CASE(test_endpoints_for_reading_when_bootstrap_with_replicas
     token_metadata.update_pending_ranges(replication_strategy, ks_name, get_dc_rack_fn).get();
     check_no_endpoints(2);
 
-    token_metadata.set_topology_transition_state(service::topology::transition_state::write_both_read_new);
+    token_metadata.set_read_new(locator::token_metadata::read_new_t::yes);
     token_metadata.update_pending_ranges(replication_strategy, ks_name, get_dc_rack_fn).get();
 
     check_endpoints(2, {e3, e1});

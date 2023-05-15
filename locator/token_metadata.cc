@@ -80,7 +80,7 @@ private:
 
     topology _topology;
 
-    std::optional<service::topology::transition_state> _topology_transition_state;
+    token_metadata::read_new_t _read_new = token_metadata::read_new_t::no;
 
     long _ring_version = 0;
     static thread_local long _static_ring_version;
@@ -288,8 +288,8 @@ public:
 
     std::optional<inet_address_vector_replica_set> endpoints_for_reading(const token& token, const sstring& keyspace_name) const;
 
-    void set_topology_transition_state(std::optional<service::topology::transition_state> state) {
-        _topology_transition_state = state;
+    void set_read_new(token_metadata::read_new_t read_new) {
+        _read_new = read_new;
     }
 
 public:
@@ -381,7 +381,7 @@ future<std::unique_ptr<token_metadata_impl>> token_metadata_impl::clone_only_tok
         co_await coroutine::maybe_yield();
     }
     ret->_tablets = _tablets;
-    ret->_topology_transition_state =_topology_transition_state;
+    ret->_read_new = _read_new;
     co_return ret;
 }
 
@@ -865,7 +865,7 @@ future<> token_metadata_impl::update_pending_ranges(
 
                 // in order not to waste memory, we update read_endpoints only if the
                 // new endpoints differs from the old one
-                if (_topology_transition_state == service::topology::transition_state::write_both_read_new &&
+                if (_read_new == token_metadata::read_new_t::yes &&
                     new_endpoints.get_vector() != old_endpoints.get_vector())
                 {
                     add_mapping(migration_info.read_endpoints, std::move(new_endpoints).extract_set());
@@ -1258,8 +1258,8 @@ token_metadata::endpoints_for_reading(const token& token, const sstring& keyspac
 }
 
 void
-token_metadata::set_topology_transition_state(std::optional<service::topology::transition_state> state) {
-    _impl->set_topology_transition_state(state);
+token_metadata::set_read_new(read_new_t read_new) {
+    _impl->set_read_new(read_new);
 }
 
 std::multimap<inet_address, token>
