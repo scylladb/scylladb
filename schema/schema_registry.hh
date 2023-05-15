@@ -14,6 +14,7 @@
 #include <seastar/core/shared_future.hh>
 #include "schema_fwd.hh"
 #include "frozen_schema.hh"
+#include "replica/database.hh"
 
 namespace db {
 class schema_ctxt;
@@ -63,6 +64,7 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
     // valid when state == LOADED
     // This is != nullptr when there is an alive schema_ptr associated with this entry.
     const ::schema* _schema = nullptr;
+    weak_ptr<replica::table> _table;
 
     enum class sync_state { NOT_SYNCED, SYNCING, SYNCED };
     sync_state _sync_state;
@@ -89,6 +91,11 @@ public:
     frozen_schema frozen() const;
     // Can be called from other shards
     table_schema_version version() const { return _version; }
+
+    // Returns a pointer to the table if local database contains the table referenced by the schema object.
+    // The table pointer is set even if the schema version of this object is different from the current schema of the table.
+    replica::table* table() const { return _table.get(); }
+    void set_table(weak_ptr<replica::table> table) { _table = std::move(table); }
 public:
     // Called by class schema
     void detach_schema() noexcept;
@@ -110,7 +117,8 @@ class schema_registry {
     // Duration for which unused entries are kept alive to avoid
     // too frequent re-requests and syncs. Default is 1 second.
     schema_registry_entry::erase_clock::duration grace_period() const;
-
+private:
+    void attach_table(schema_registry_entry&) noexcept;
 public:
     ~schema_registry();
     // workaround to this object being magically appearing from nowhere.

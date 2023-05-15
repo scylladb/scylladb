@@ -46,6 +46,7 @@ class options;
 
 namespace replica {
 class database;
+class table;
 }
 
 using column_count_type = uint32_t;
@@ -826,6 +827,14 @@ public:
     static void set_default_partitioner(const sstring& class_name, unsigned ignore_msb = 0);
     const dht::i_partitioner& get_partitioner() const;
     const dht::sharder& get_sharder() const;
+
+    // Returns a pointer to the table if the local database has a table which this object references by id().
+    // The table pointer is not guaranteed to be stable, schema_ptr doesn't keep the table alive.
+    replica::table* maybe_table() const;
+
+    // Like maybe_table() but throws replica::no_such_column_family if the table is not set.
+    replica::table& table() const;
+
     bool has_custom_partitioner() const;
 
     const column_definition* get_column_definition(const bytes& name) const;

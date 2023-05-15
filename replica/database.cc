@@ -1000,6 +1000,7 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     }
     ks.add_or_update_column_family(schema);
     cf->start();
+    schema->registry_entry()->set_table(cf->weak_from_this());
     _column_families.emplace(uuid, std::move(cf));
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
     if (schema->is_view()) {

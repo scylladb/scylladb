@@ -352,7 +352,8 @@ struct table_stats {
 
 using storage_options = data_dictionary::storage_options;
 
-class table : public enable_lw_shared_from_this<table> {
+class table : public enable_lw_shared_from_this<table>
+            , public weakly_referencable<table> {
 public:
     struct config {
         std::vector<sstring> all_datadirs;

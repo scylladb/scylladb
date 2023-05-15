@@ -155,6 +155,21 @@ const dht::sharder& schema::get_sharder() const {
     return _raw._sharder.get();
 }
 
+replica::table* schema::maybe_table() const {
+    if (_registry_entry) {
+        return _registry_entry->table();
+    }
+    return nullptr;
+}
+
+replica::table& schema::table() const {
+    auto t = maybe_table();
+    if (!t) {
+        seastar::throw_with_backtrace<replica::no_such_column_family>(id());
+    }
+    return *t;
+}
+
 bool schema::has_custom_partitioner() const {
     return _raw._partitioner.get().name() != default_partitioner_name;
 }
