@@ -8,6 +8,7 @@ import pytest
 from cassandra.protocol import InvalidRequest, ReadFailure                         # type: ignore
 
 from test.topology.util import wait_for_token_ring_and_group0_consistency
+from test.pylib.util import get_available_host, read_barrier
 
 
 # Simple test of schema helper
@@ -26,8 +27,11 @@ async def test_new_table(manager, random_tables):
     pk_col = table.columns[0]
     ck_col = table.columns[1]
     vals = [pk_col.val(1), ck_col.val(1)]
+    # Issue a read barrier on some node and then keep using that node to do the queries.
+    host = await get_available_host(cql, time.time() + 60)
+    await read_barrier(cql, host)
     res = await cql.run_async(f"SELECT * FROM {table} WHERE {pk_col}=%s AND {ck_col}=%s",
-                              parameters=vals)
+                              parameters=vals, host=host)
     assert len(res) == 1
     assert list(res[0])[:2] == vals
     await random_tables.drop_table(table)
@@ -62,8 +66,12 @@ async def test_new_table_insert_one(manager, random_tables):
     pk_col = table.columns[0]
     ck_col = table.columns[1]
     vals = [pk_col.val(1), ck_col.val(1)]
+
+    # Issue a read barrier on some node and then keep using that node to do the queries.
+    host = await get_available_host(cql, time.time() + 60)
+    await read_barrier(cql, host)
     res = await cql.run_async(f"SELECT * FROM {table} WHERE pk=%s AND {ck_col}=%s",
-                              parameters=vals)
+                              parameters=vals, host=host)
     assert len(res) == 1
     assert list(res[0])[:2] == vals
 
@@ -76,12 +84,17 @@ async def test_drop_column(manager, random_tables):
     table = await random_tables.add_table(ncolumns=5)
     await table.insert_seq()
     await table.drop_column()
+    # Issue a read barrier on some node and then keep using that node to do the queries.
+    host = await get_available_host(cql, time.time() + 60)
+    await read_barrier(cql, host)
     res = (await cql.run_async(f"SELECT * FROM {table} WHERE pk=%s",
-                               parameters=[table.columns[0].val(1)]))[0]
+                               parameters=[table.columns[0].val(1)], host=host))[0]
     assert len(res) == 4
     await table.drop_column()
+    host = await get_available_host(cql, time.time() + 60)
+    await read_barrier(cql, host)
     res = (await cql.run_async(f"SELECT * FROM {table} WHERE pk=%s",
-                               parameters=[table.columns[0].val(1)]))[0]
+                               parameters=[table.columns[0].val(1)], host=host))[0]
     assert len(res) == 3
     await random_tables.verify_schema(table)
 
