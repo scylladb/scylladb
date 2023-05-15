@@ -213,11 +213,11 @@ BOOST_AUTO_TEST_CASE(test_vector_format) {
 BOOST_AUTO_TEST_CASE(test_string_format) {
     seastar::sstring sstring = "foo";
     auto formatted = fmt::format("{}", sstring);
-    BOOST_REQUIRE_EQUAL(formatted, sstring);
+    BOOST_REQUIRE_EQUAL(seastar::sstring(formatted), sstring);
 
     std::string std_string = "foo";
     formatted = fmt::format("{}", std_string);
-    BOOST_REQUIRE_EQUAL(formatted, std_string);
+    BOOST_REQUIRE_EQUAL(seastar::sstring(formatted), std_string);
 
     std::string_view std_string_view = std_string;
     formatted = fmt::format("{}", std_string_view);
@@ -228,7 +228,7 @@ BOOST_AUTO_TEST_CASE(test_bytes_format) {
     auto b = to_bytes("f0");
     auto formatted = fmt::format("{}", b);
     auto expected = to_hex(b);
-    BOOST_REQUIRE_EQUAL(formatted, expected);
+    BOOST_REQUIRE_EQUAL(seastar::sstring(formatted), expected);
 }
 
 BOOST_AUTO_TEST_CASE(test_optional_string_format) {
