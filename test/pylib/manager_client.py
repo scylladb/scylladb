@@ -272,7 +272,7 @@ class ManagerClient():
             alive_nodes = await self.api.get_alive_endpoints(server_ip)
             if len(alive_nodes) > count:
                 return True
-        await wait_for(_sees_min_others, time() + interval, period=.1)
+        await wait_for(_sees_min_others, time() + interval, period=.5)
 
     async def server_sees_other_server(self, server_ip: IPAddress, other_ip: IPAddress,
                                        interval: float = 45.):
@@ -281,7 +281,7 @@ class ManagerClient():
             alive_nodes = await self.api.get_alive_endpoints(server_ip)
             if other_ip in alive_nodes:
                 return True
-        await wait_for(_sees_another_server, time() + interval, period=.1)
+        await wait_for(_sees_another_server, time() + interval, period=.5)
 
     async def server_not_sees_other_server(self, server_ip: IPAddress, other_ip: IPAddress,
                                            interval: float = 45.):
@@ -290,4 +290,4 @@ class ManagerClient():
             alive_nodes = await self.api.get_alive_endpoints(server_ip)
             if not other_ip in alive_nodes:
                 return True
-        await wait_for(_not_sees_another_server, time() + interval, period=.1)
+        await wait_for(_not_sees_another_server, time() + interval, period=.5)
