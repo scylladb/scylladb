@@ -2486,6 +2486,11 @@ private:
                 }
                 rlogger.debug("Called master.get_sync_boundary for node {} sb={}, combined_csum={}, row_size={}, zero_rows={}, skipped_sync_boundary={}",
                     node, res.boundary, res.row_buf_combined_csum, res.row_buf_size, _zero_rows, _skipped_sync_boundary);
+            }).handle_exception([this, node] (std::exception_ptr ep) {
+                auto s = _cf.schema();
+                rlogger.warn("repair[{}]: get_sync_boundary: got error from node={}, keyspace={}, table={}, range={}, error={}",
+                        _shard_task.global_repair_id.uuid(), node, s->ks_name(), s->cf_name(), _range, ep);
+                return make_exception_future<>(std::move(ep));
             });
         }).get();
         rlogger.debug("sync_boundaries nr={}, combined_hashes nr={}",
@@ -2544,6 +2549,12 @@ private:
                 master.all_nodes()[idx].state = repair_state::get_combined_row_hash_finished;
                 rlogger.debug("Calling master.get_combined_row_hash for node {}, got combined_hash={}", master.all_nodes()[idx].node, resp);
                 combined_hashes[idx]= std::move(resp);
+            }).handle_exception([this, &master, idx] (std::exception_ptr ep) {
+                auto& node = master.all_nodes()[idx].node;
+                auto s = _cf.schema();
+                rlogger.warn("repair[{}]: get_combined_row_hash: got error from node={}, keyspace={}, table={}, range={}, error={}",
+                        _shard_task.global_repair_id.uuid(), node, s->ks_name(), s->cf_name(), _range, ep);
+                return make_exception_future<>(std::move(ep));
             });
         }).get();
 
@@ -2565,6 +2576,7 @@ private:
         for (unsigned node_idx = 0; node_idx < _all_live_peer_nodes.size(); node_idx++) {
             auto& ns = master.all_nodes()[node_idx + 1];
             auto& node = _all_live_peer_nodes[node_idx];
+          try {
             // Here is an optimization to avoid transferring full rows hashes,
             // if remote and local node, has the same combined_hashes.
             // For example:
@@ -2639,6 +2651,12 @@ private:
                 ns.state = repair_state::get_row_diff_finished;
             }
             rlogger.debug("After get_row_diff node {}, hash_sets={}", master.myip(), master.working_row_hashes().get0().size());
+          } catch (...) {
+            auto s = _cf.schema();
+            rlogger.warn("repair[{}]: get_row_diff: got error from node={}, keyspace={}, table={}, range={}, error={}",
+                    _shard_task.global_repair_id.uuid(), node, s->ks_name(), s->cf_name(), _range, std::current_exception());
+            throw;
+          }
         }
         master.flush_rows_in_working_row_buf();
         return op_status::next_step;
@@ -2660,15 +2678,27 @@ private:
             auto needs_all_rows = repair_meta::needs_all_rows_t(master.peer_row_hash_sets(idx).empty());
             auto& set_diff = set_diffs[idx];
             rlogger.debug("Calling master.put_row_diff to node {}, set_diff={}, needs_all_rows={}", _all_live_peer_nodes[idx], set_diff.size(), needs_all_rows);
+            auto& node = master.all_nodes()[idx].node;
             if (master.use_rpc_stream()) {
                 ns.state = repair_state::put_row_diff_with_rpc_stream_started;
                 return master.put_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], idx).then([&ns] {
                     ns.state = repair_state::put_row_diff_with_rpc_stream_finished;
+                }).handle_exception([this, &node] (std::exception_ptr ep) {
+                    auto s = _cf.schema();
+                    rlogger.warn("repair[{}]: put_row_diff: got error from node={}, keyspace={}, table={}, range={}, error={}",
+                            _shard_task.global_repair_id.uuid(), node, s->ks_name(), s->cf_name(), _range, ep);
+                    return make_exception_future<>(std::move(ep));
                 });
+
             } else {
                 ns.state = repair_state::put_row_diff_finished;
                 return master.put_row_diff(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx]).then([&ns] {
                     ns.state = repair_state::put_row_diff_finished;
+                }).handle_exception([this, &node] (std::exception_ptr ep) {
+                    auto s = _cf.schema();
+                    rlogger.warn("repair[{}]: put_row_diff: got error from node={}, keyspace={}, table={}, range={}, error={}",
+                            _shard_task.global_repair_id.uuid(), node, s->ks_name(), s->cf_name(), _range, ep);
+                    return make_exception_future<>(std::move(ep));
                 });
             }
         }).get();
