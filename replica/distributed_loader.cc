@@ -252,9 +252,12 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
     auto& t = table.as_table_state();
     co_await coroutine::parallel_for_each(buckets, [&] (std::vector<sstables::shared_sstable>& sstlist) mutable {
         return table.get_compaction_manager().run_custom_job(table.as_table_state(), sstables::compaction_type::Reshard, "Reshard compaction", [&] (sstables::compaction_data& info) -> future<> {
+            auto erm = table.get_effective_replication_map(); // keep alive around compaction.
+
             sstables::compaction_descriptor desc(sstlist);
             desc.options = sstables::compaction_type_options::make_reshard();
             desc.creator = creator;
+            desc.sharder = &erm->get_sharder(*table.schema());
             desc.owned_ranges = owned_ranges_ptr;
 
             auto result = co_await sstables::compact_sstables(std::move(desc), info, t);

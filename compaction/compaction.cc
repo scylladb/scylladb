@@ -54,6 +54,7 @@
 #include "readers/compacting.hh"
 #include "tombstone_gc.hh"
 #include "keys.hh"
+#include "replica/database.hh"
 
 namespace sstables {
 
@@ -478,6 +479,8 @@ protected:
     std::unordered_set<shared_sstable> _compacting_for_max_purgeable_func;
     // optional owned_ranges vector for cleanup;
     owned_ranges_ptr _owned_ranges = {};
+    // required for reshard compaction.
+    const dht::sharder* _sharder = nullptr;
     std::optional<dht::incremental_owned_ranges_checker> _owned_ranges_checker;
     // Garbage collected sstables that are sealed but were not added to SSTable set yet.
     std::vector<shared_sstable> _unused_garbage_collected_sstables;
@@ -507,6 +510,7 @@ protected:
         , _selector(_sstable_set ? _sstable_set->make_incremental_selector() : std::optional<sstable_set::incremental_selector>{})
         , _compacting_for_max_purgeable_func(std::unordered_set<shared_sstable>(_sstables.begin(), _sstables.end()))
         , _owned_ranges(std::move(descriptor.owned_ranges))
+        , _sharder(descriptor.sharder)
         , _owned_ranges_checker(_owned_ranges ? std::optional<dht::incremental_owned_ranges_checker>(*_owned_ranges) : std::nullopt)
     {
         for (auto& sst : _sstables) {
@@ -1593,7 +1597,7 @@ public:
     }
 
     compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
-        auto shard = dht::shard_of(*_schema, dk.token());
+        auto shard = _sharder->shard_of(dk.token());
         auto sst = _sstable_creator(shard);
         setup_new_sstable(sst);
 

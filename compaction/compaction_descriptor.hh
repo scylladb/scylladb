@@ -151,6 +151,8 @@ struct compaction_descriptor {
     compaction_type_options options = compaction_type_options::make_regular();
     // If engaged, compaction will cleanup the input sstables by skipping non-owned ranges.
     compaction::owned_ranges_ptr owned_ranges;
+    // Required for reshard compaction.
+    const dht::sharder* sharder;
 
     compaction_sstable_creator_fn creator;
     compaction_sstable_replacer_fn replacer;
