@@ -2026,7 +2026,12 @@ public:
         };
 
         auto keyspace_names = boost::copy_range<std::vector<decorated_keyspace_name>>(
-                _db.get_keyspaces() | boost::adaptors::transformed([this] (auto&& e) {
+            _db.get_keyspaces()
+                | boost::adaptors::filtered([] (auto&& e) {
+                      auto&& rs = e.second.get_replication_strategy();
+                      return rs.is_vnode_based();
+                  })
+                | boost::adaptors::transformed([this] (auto&& e) {
                     return decorated_keyspace_name{e.first, make_partition_key(e.first)};
         }));
 
