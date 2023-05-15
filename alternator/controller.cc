@@ -76,13 +76,16 @@ future<> controller::start_server() {
         _ssg = create_smp_service_group(c).get0();
 
         rmw_operation::set_default_write_isolation(_config.alternator_write_isolation());
-        executor::set_default_timeout(std::chrono::milliseconds(_config.alternator_timeout_in_ms()));
 
         net::inet_address addr = utils::resolve(_config.alternator_address, family).get0();
 
         auto get_cdc_metadata = [] (cdc::generation_service& svc) { return std::ref(svc.get_cdc_metadata()); };
-
-        _executor.start(std::ref(_gossiper), std::ref(_proxy), std::ref(_mm), std::ref(_sys_dist_ks), sharded_parameter(get_cdc_metadata, std::ref(_cdc_gen_svc)), _ssg.value()).get();
+        auto get_timeout_in_ms = [] (const db::config& cfg) -> utils::updateable_value<uint32_t> {
+            return cfg.alternator_timeout_in_ms;
+        };
+        _executor.start(std::ref(_gossiper), std::ref(_proxy), std::ref(_mm), std::ref(_sys_dist_ks),
+                        sharded_parameter(get_cdc_metadata, std::ref(_cdc_gen_svc)), _ssg.value(),
+                        sharded_parameter(get_timeout_in_ms, std::ref(_config))).get();
         _server.start(std::ref(_executor), std::ref(_proxy), std::ref(_gossiper), std::ref(_auth_service), std::ref(_sl_controller)).get();
         // Note: from this point on, if start_server() throws for any reason,
         // it must first call stop_server() to stop the executor and server
