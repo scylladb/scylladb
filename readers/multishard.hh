@@ -13,6 +13,7 @@
 #include "readers/flat_mutation_reader_v2.hh"
 #include "tracing/trace_state.hh"
 #include "seastarx.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 /// Reader lifecycle policy for the mulitshard combining reader.
 ///
@@ -123,6 +124,7 @@ public:
 flat_mutation_reader_v2 make_multishard_combining_reader_v2(
         shared_ptr<reader_lifecycle_policy_v2> lifecycle_policy,
         schema_ptr schema,
+        locator::effective_replication_map_ptr erm,
         reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
