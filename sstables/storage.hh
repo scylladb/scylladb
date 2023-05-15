@@ -16,6 +16,7 @@
 
 #include "data_dictionary/storage_options.hh"
 #include "seastarx.hh"
+#include "sstables/shared_sstable.hh"
 #include "sstables/component_type.hh"
 #include "sstables/generation_type.hh"
 
@@ -58,6 +59,7 @@ public:
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) = 0;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) = 0;
     virtual future<> destroy(const sstable& sst) = 0;
+    virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const = 0;
 
     virtual sstring prefix() const  = 0;
 };

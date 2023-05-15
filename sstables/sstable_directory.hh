@@ -257,7 +257,7 @@ public:
     // until all shards agree it can be deleted.
     //
     // This function only solves the second problem for now.
-    static future<> delete_atomically(std::vector<shared_sstable> ssts);
+    static future<> delete_with_pending_deletion_log(std::vector<shared_sstable> ssts);
     static future<> replay_pending_delete_log(std::filesystem::path log_file);
 
     static bool compare_sstable_storage_prefix(const sstring& a, const sstring& b) noexcept;

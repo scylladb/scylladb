@@ -154,6 +154,8 @@ public:
         return *_sys_ks;
     }
 
+    future<> delete_atomically(std::vector<shared_sstable> ssts);
+
 private:
     void add(sstable* sst);
     // Transition the sstable to the "inactive" state. It has no
