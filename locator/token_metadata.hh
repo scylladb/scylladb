@@ -69,6 +69,7 @@ struct host_id_or_endpoint {
 };
 
 class token_metadata_impl;
+struct topology_change_info;
 
 class token_metadata final {
     std::unique_ptr<token_metadata_impl> _impl;
@@ -256,6 +257,10 @@ public:
      */
     future<> update_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name, dc_rack_fn& get_dc_rack);
 
+    future<> update_topology_change_info(dc_rack_fn& get_dc_rack);
+
+    const std::optional<topology_change_info>& get_topology_change_info() const;
+
     token get_predecessor(token t) const;
 
     const std::unordered_set<inet_address>& get_all_endpoints() const;
@@ -292,6 +297,19 @@ public:
     void invalidate_cached_rings();
 
     friend class token_metadata_impl;
+};
+
+struct topology_change_info {
+    token_metadata target_token_metadata;
+    std::optional<token_metadata> base_token_metadata;
+    std::vector<dht::token> all_tokens;
+    token_metadata::read_new_t read_new;
+
+    topology_change_info(token_metadata target_token_metadata_,
+        std::optional<token_metadata> base_token_metadata_,
+        std::vector<dht::token> all_tokens_,
+        token_metadata::read_new_t read_new_);
+    future<> clear_gently();
 };
 
 using token_metadata_ptr = lw_shared_ptr<const token_metadata>;
