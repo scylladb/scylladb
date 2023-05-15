@@ -709,7 +709,7 @@ mutation_partition::append_clustered_row(const schema& s, position_in_partition_
     const auto cmp = rows_entry::tri_compare(s);
     auto i = _rows.end();
     if (!_rows.empty() && (cmp(*std::prev(i), pos) >= 0)) {
-        throw std::runtime_error(format("mutation_partition::append_clustered_row(): cannot append clustering row with key {} to the partition"
+        on_internal_error(mplog, format("mutation_partition::append_clustered_row(): cannot append clustering row with key {} to the partition"
                 ", last clustering row is equal or greater: {}", pos, std::prev(i)->position()));
     }
     auto e = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(s, pos, dummy, continuous));
