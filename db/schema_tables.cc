@@ -1495,7 +1495,7 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         return replica::database::drop_table_on_all_shards(db, s.ks_name(), s.cf_name());
     });
 
-    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
+    co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
         // In order to avoid possible races we first create the tables and only then the views.
         // That way if a view seeks information about its base table it's guarantied to find it.
         co_await max_concurrent_for_each(tables_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
