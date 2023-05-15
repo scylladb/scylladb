@@ -215,6 +215,7 @@ private:
 
     /* map where key is the endpoint and value is the state associated with the endpoint */
     std::unordered_map<inet_address, endpoint_state_ptr> _endpoint_state_map;
+    std::unordered_map<locator::host_id, endpoint_state_ptr> _endpoint_state_map_by_host_id;
     // Used for serializing changes to _endpoint_state_map and running of associated change listeners.
     endpoint_locks_map _endpoint_locks;
 
@@ -480,9 +481,10 @@ public:
     // Otherwise, returns a null ptr.
     // The endpoint_state is immutable (except for its update_timestamp), guaranteed not to change while
     // the endpoint_state_ptr is held.
-    endpoint_state_ptr get_endpoint_state_ptr(inet_address ep) const noexcept;
-    endpoint_state_ptr get_endpoint_state_ptr(endpoint_id node) const noexcept {
-        return get_endpoint_state_ptr(node.addr);
+    endpoint_state_ptr get_endpoint_state_ptr(locator::host_id host_id) const noexcept;
+    endpoint_state_ptr get_endpoint_state_ptr(inet_address addr) const noexcept;
+    endpoint_state_ptr get_endpoint_state_ptr(const endpoint_id& node) const noexcept {
+        return get_endpoint_state_ptr(node.host_id);
     }
 
     const versioned_value* get_application_state_ptr(inet_address endpoint, application_state appstate) const noexcept {
@@ -556,21 +558,23 @@ public:
      */
     sstring get_rpc_address(const inet_address& endpoint) const;
 private:
+    endpoint_state& insert_endpoint_state(const endpoint_id& node, endpoint_state_ptr eps);
     // FIXME: for now, allow modifying the endpoint_state's heartbeat_state in place
     // Gets or creates endpoint_state for this node
-    endpoint_state& get_or_create_endpoint_state(inet_address ep);
+    endpoint_state& get_or_create_endpoint_state(const endpoint_id& node);
     endpoint_state& my_endpoint_state() {
-        return get_or_create_endpoint_state(get_broadcast_address());
+        return get_or_create_endpoint_state(my_endpoint_id());
     }
 
     // Use with care, as the endpoint_state_ptr in the endpoint_state_map is considered
     // immutable, with one exception - the update_timestamp.
     void update_timestamp(const endpoint_state_ptr& eps) noexcept;
 
-    const endpoint_state& get_endpoint_state(endpoint_id node) const {
-        return get_endpoint_state(node.addr);
-    }
+    const endpoint_state& get_endpoint_state(locator::host_id host_id) const;
     const endpoint_state& get_endpoint_state(inet_address ep) const;
+    const endpoint_state& get_endpoint_state(const endpoint_id& node) const {
+        return get_endpoint_state(node.host_id);
+    }
 
     void update_timestamp_for_nodes(const std::map<inet_address, endpoint_state>& map);
 
