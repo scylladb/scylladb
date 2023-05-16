@@ -85,16 +85,16 @@ class MinioServer:
         try:
             self.log_to_file(f'Configuring access to {self.address}:{self.port}')
             try:
-                subprocess.check_call(['mc', '-C', self.mcdir, 'config', 'host', 'rm', 'local'], stdout=self.log_file, stderr=self.log_file)
+                subprocess.check_call(['mc', '--debug', '-C', self.mcdir, 'config', 'host', 'rm', 'local'], stdout=self.log_file, stderr=self.log_file)
             except:
                 self.log_to_file('Failed to remove local alias, ignoring')
                 pass
 
-            subprocess.check_call(['mc', '-C', self.mcdir, 'config', 'host', 'add', 'local', f'http://{self.address}:{self.port}', self.default_user, self.default_pass], stdout=self.log_file, stderr=self.log_file)
+            subprocess.check_call(['mc', '--debug', '-C', self.mcdir, 'config', 'host', 'add', 'local', f'http://{self.address}:{self.port}', self.default_user, self.default_pass], stdout=self.log_file, stderr=self.log_file)
 
             self.log_to_file(f'Configuring bucket {self.bucket_name}')
-            subprocess.check_call(['mc', '-C', self.mcdir, 'mb', f'local/{self.bucket_name}'], stdout=self.log_file, stderr=self.log_file)
-            subprocess.check_call(['mc', '-C', self.mcdir, 'anonymous', 'set', 'public', f'local/{self.bucket_name}'], stdout=self.log_file, stderr=self.log_file)
+            subprocess.check_call(['mc', '--debug', '-C', self.mcdir, 'mb', f'local/{self.bucket_name}'], stdout=self.log_file, stderr=self.log_file)
+            subprocess.check_call(['mc', '--debug', '-C', self.mcdir, 'anonymous', 'set', 'public', f'local/{self.bucket_name}'], stdout=self.log_file, stderr=self.log_file)
         except Exception as e:
             self.logger.info(f'MC failed: {e}')
             await self.stop()
