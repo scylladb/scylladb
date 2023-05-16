@@ -38,7 +38,7 @@ schema_altering_statement::schema_altering_statement(cf_name name, timeout_confi
 {
 }
 
-future<> schema_altering_statement::grant_permissions_to_creator(const service::client_state&) const {
+future<> schema_altering_statement::grant_permissions_to_creator(query_processor& qp, const service::client_state&) const {
     return make_ready_future<>();
 }
 
@@ -119,10 +119,10 @@ schema_altering_statement::execute(query_processor& qp, service::query_state& st
         }
     }
 
-    return execute0(qp, state, options).then([this, &state, internal](::shared_ptr<messages::result_message> result) {
+    return execute0(qp, state, options).then([this, &qp, &state, internal](::shared_ptr<messages::result_message> result) {
         auto permissions_granted_fut = internal
                 ? make_ready_future<>()
-                : grant_permissions_to_creator(state.get_client_state());
+                : grant_permissions_to_creator(qp, state.get_client_state());
         return permissions_granted_fut.then([result = std::move(result)] {
            return result;
         });
