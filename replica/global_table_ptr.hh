@@ -28,5 +28,6 @@ public:
 };
 
 future<global_table_ptr> get_table_on_all_shards(sharded<database>& db, table_id uuid);
+future<global_table_ptr> get_table_on_all_shards(sharded<database>& db, sstring ks_name, sstring cf_name);
 
 } // replica namespace

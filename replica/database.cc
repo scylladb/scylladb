@@ -1056,6 +1056,11 @@ void global_table_ptr::assign(table& t) {
 table* global_table_ptr::operator->() const noexcept { return &*_p[this_shard_id()]; }
 table& global_table_ptr::operator*() const noexcept { return *_p[this_shard_id()]; }
 
+future<global_table_ptr> get_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name) {
+    auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
+    return get_table_on_all_shards(sharded_db, std::move(uuid));
+}
+
 future<global_table_ptr> get_table_on_all_shards(sharded<database>& sharded_db, table_id uuid) {
     global_table_ptr table_shards;
     co_await sharded_db.invoke_on_all([&] (auto& db) {
