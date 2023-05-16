@@ -11,6 +11,7 @@
 #include "utils/fb_utilities.hh"
 #include "locator/token_metadata.hh"
 #include "locator/simple_strategy.hh"
+#include "locator/everywhere_replication_strategy.hh"
 
 using namespace locator;
 
@@ -66,6 +67,26 @@ SEASTAR_THREAD_TEST_CASE(test_pending_and_read_endpoints_for_bootstrap_first_nod
         auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "1"}});
         BOOST_REQUIRE_EQUAL(erm->get_endpoints_for_reading(t1), inet_address_vector_replica_set{e1});
     }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_pending_and_read_endpoints_for_everywhere_strategy) {
+    const auto e1 = inet_address("192.168.0.1");
+    const auto e2 = inet_address("192.168.0.2");
+    const auto t1 = dht::token::from_int64(10);
+    const auto t2 = dht::token::from_int64(20);
+
+    auto token_metadata = create_token_metadata(e1);
+    token_metadata->update_topology(e1, get_dc_rack(e1));
+    token_metadata->update_topology(e2, get_dc_rack(e2));
+    token_metadata->update_normal_tokens({t1}, e1).get();
+    token_metadata->add_bootstrap_token(t2, e2);
+    token_metadata->set_read_new(token_metadata::read_new_t::yes);
+
+    auto erm = create_erm<everywhere_replication_strategy>(token_metadata);
+    BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(t2),
+        inet_address_vector_topology_change{e2});
+    BOOST_REQUIRE_EQUAL(erm->get_endpoints_for_reading(t2),
+        (inet_address_vector_replica_set{e2, e1}));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_second_node) {
