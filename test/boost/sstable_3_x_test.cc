@@ -5514,3 +5514,26 @@ SEASTAR_TEST_CASE(test_legacy_udt_in_collection_table) {
     assert_that(sst.make_reader()).produces(mut).produces_end_of_stream();
   });
 }
+
+SEASTAR_TEST_CASE(test_compression_premature_eof) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto stable_dir = "./test/resource/sstables/compression-premature-eof";
+        sstable_assertions sst(env, ZSTD_MULTIPLE_CHUNKS_SCHEMA, stable_dir);
+        sst.load();
+
+        auto to_key = [] (int key) {
+            auto bytes = int32_type->decompose(int32_t(key));
+            auto pk = partition_key::from_single_value(*ZSTD_MULTIPLE_CHUNKS_SCHEMA, bytes);
+            return dht::decorate_key(*ZSTD_MULTIPLE_CHUNKS_SCHEMA, pk);
+        };
+
+        flat_reader_assertions_v2 assertions(sst.make_reader());
+        try {
+            assertions.produces_partition_start(to_key(0));
+            BOOST_FAIL("produces_partition_start unexpectedly");
+        } catch (const sstables::malformed_sstable_exception& e) {
+            std::string what = e.what();
+            BOOST_REQUIRE(what.find("compressed reader hit premature end-of-file") != std::string::npos);
+        }
+    });
+}
