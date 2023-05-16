@@ -126,6 +126,11 @@ public:
     gms::feature secondary_indexes_on_static_columns { *this, "SECONDARY_INDEXES_ON_STATIC_COLUMNS"sv };
     gms::feature tablets { *this, "TABLETS"sv };
 
+    // A feature just for use in tests. It must not be advertised unless
+    // the "features_enable_test_feature" injection is enabled.
+    // This feature MUST NOT be advertised in release mode!
+    gms::feature test_only_feature { *this, "TEST_ONLY_FEATURE"sv };
+
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
