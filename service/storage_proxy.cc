@@ -750,7 +750,7 @@ private:
         return get_schema_for_read(cmd.schema_version, src_addr, *timeout).then([&sp = _sp, cmd = std::move(cmd), key = std::move(key), ballot,
                          only_digest, da, timeout, tr_state = std::move(tr_state), src_ip] (schema_ptr schema) mutable {
             dht::token token = dht::get_token(*schema, key);
-            unsigned shard = dht::shard_of(*schema, token);
+            unsigned shard = schema->table().shard_of(token);
             bool local = shard == this_shard_id();
             sp.get_stats().replica_cross_shard_ops += !local;
             return sp.container().invoke_on(shard, sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
@@ -780,7 +780,7 @@ private:
         auto f = get_schema_for_read(proposal.update.schema_version(), src_addr, *timeout).then([&sp = _sp, tr_state = std::move(tr_state),
                                                               proposal = std::move(proposal), timeout] (schema_ptr schema) mutable {
             dht::token token = proposal.update.decorated_key(*schema).token();
-            unsigned shard = dht::shard_of(*schema, token);
+            unsigned shard = schema->table().shard_of(token);
             bool local = shard == this_shard_id();
             sp.get_stats().replica_cross_shard_ops += !local;
             return sp.container().invoke_on(shard, sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
@@ -823,7 +823,7 @@ private:
         return get_schema_for_read(schema_id, src_addr, *timeout).then([&sp = _sp, key = std::move(key), ballot,
                          timeout, tr_state = std::move(tr_state), src_ip, d = std::move(d)] (schema_ptr schema) mutable {
             dht::token token = dht::get_token(*schema, key);
-            unsigned shard = dht::shard_of(*schema, token);
+            unsigned shard = schema->table().shard_of(token);
             bool local = shard == this_shard_id();
             sp.get_stats().replica_cross_shard_ops += !local;
             return smp::submit_to(shard, sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
@@ -862,7 +862,7 @@ const dht::token& end_token(const dht::partition_range& r) {
 }
 
 unsigned storage_proxy::cas_shard(const schema& s, dht::token token) {
-    return dht::shard_of(s, token);
+    return s.table().shard_of(token);
 }
 
 static uint32_t random_variable_for_rate_limit() {

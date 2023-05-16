@@ -1589,7 +1589,7 @@ public:
     // Apply mutations atomically.
     // On restart, either all mutations will be replayed or none of them.
     // All mutations must belong to the same commitlog domain.
-    // All mutations must be owned by the current shard (in terms of dht::shard_of).
+    // All mutations must be owned by the current shard.
     // Mutations may be partially visible to reads during the call.
     // Mutations may be partially visible to reads until restart on exception (FIXME).
     future<> apply(const std::vector<frozen_mutation>&, db::timeout_clock::time_point timeout);

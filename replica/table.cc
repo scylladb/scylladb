@@ -102,7 +102,7 @@ table::make_sstable_reader(schema_ptr s,
     // regardless of what the fwd_mr parameter says.
     if (pr.is_singular() && pr.start()->value().has_key()) {
         const dht::ring_position& pos = pr.start()->value();
-        if (dht::shard_of(*s, pos.token()) != this_shard_id()) {
+        if (_erm->shard_of(*s, pos.token()) != this_shard_id()) {
             return make_empty_flat_reader_v2(s, std::move(permit)); // range doesn't belong to this shard
         }
 

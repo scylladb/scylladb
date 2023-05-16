@@ -24,7 +24,7 @@ SEASTAR_TEST_CASE(test_internal_operation_filtering) {
 
         auto pk = partition_key::from_singular(*sptr, int32_t(0));
 
-        unsigned local_shard = dht::shard_of(*sptr, dht::get_token(*sptr, pk.view()));
+        unsigned local_shard = sptr->table().shard_of(dht::get_token(*sptr, pk.view()));
         unsigned foreign_shard = (local_shard + 1) % smp::count;
         
         auto run_writes = [&qp, &db, pk] (db::allow_per_partition_rate_limit allow_limit) -> future<> {

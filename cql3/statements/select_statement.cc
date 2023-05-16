@@ -401,7 +401,7 @@ select_statement::do_execute(query_processor& qp,
              throw exceptions::invalid_request_exception(
                      "SERIAL/LOCAL_SERIAL consistency may only be requested for one partition at a time");
         }
-        unsigned shard = dht::shard_of(*_schema, key_ranges[0].start()->value().as_decorated_key().token());
+        unsigned shard = _schema->table().shard_of(key_ranges[0].start()->value().as_decorated_key().token());
         if (this_shard_id() != shard) {
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                     qp.bounce_to_shard(shard, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()))

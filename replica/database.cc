@@ -1939,7 +1939,7 @@ future<> database::do_apply_many(const std::vector<frozen_mutation>& muts, db::t
                               first_cf.schema()->ks_name(), first_cf.schema()->cf_name()));
         }
 
-        auto m_shard = dht::shard_of(*s, dht::get_token(*s, muts[i].key()));
+        auto m_shard = cf.shard_of(dht::get_token(*s, muts[i].key()));
         if (!shard) {
             if (this_shard_id() != m_shard) {
                 on_internal_error(dblog, format("Must call apply() on the owning shard ({} != {})", this_shard_id(), m_shard));
