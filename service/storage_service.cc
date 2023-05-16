@@ -1817,7 +1817,7 @@ std::unordered_set<gms::inet_address> storage_service::parse_node_list(sstring c
 future<std::unordered_set<gms::inet_address>> storage_service::get_nodes_to_sync_with(
         const std::unordered_set<gms::inet_address>& ignore_nodes) {
     std::unordered_set<gms::inet_address> result;
-    for (const auto& [node, _] :_gossiper.get_endpoint_states()) {
+    for (const auto& node :_gossiper.get_endpoints()) {
         co_await coroutine::maybe_yield();
         slogger.info("Check node={}, status={}", node, _gossiper.get_gossip_status(node));
         if (node != get_broadcast_address() &&
@@ -2812,12 +2812,11 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
                 // Raft is responsible for consistency, so in case it is enable no need to check here
                 !_raft_topology_change_enabled) {
                 found_bootstrapping_node = false;
-                for (auto& x : _gossiper.get_endpoint_states()) {
-                    auto state = _gossiper.get_gossip_status(x.second);
+                for (const auto& addr : _gossiper.get_endpoints()) {
+                    auto state = _gossiper.get_gossip_status(addr);
                     if (state == sstring(versioned_value::STATUS_UNKNOWN)) {
-                        throw std::runtime_error(::format("Node {} has gossip status=UNKNOWN. Try fixing it before adding new node to the cluster.", x.first));
+                        throw std::runtime_error(::format("Node {} has gossip status=UNKNOWN. Try fixing it before adding new node to the cluster.", addr));
                     }
-                    auto addr = x.first;
                     slogger.debug("Checking bootstrapping/leaving/moving nodes: node={}, status={} (check_for_endpoint_collision)", addr, state);
                     if (state == sstring(versioned_value::STATUS_BOOTSTRAPPING) ||
                         state == sstring(versioned_value::STATUS_LEAVING) ||
