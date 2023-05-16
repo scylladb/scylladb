@@ -1347,6 +1347,7 @@ private:
 
     flat_hash_map<sstring, keyspace> _keyspaces;
     std::unordered_map<table_id, lw_shared_ptr<column_family>> _column_families;
+    std::unordered_map<sstring, lw_shared_ptr<column_family>> _disposed_column_families;
     using ks_cf_to_uuid_t =
         flat_hash_map<std::pair<sstring, sstring>, table_id, utils::tuple_hash, string_pair_eq>;
     ks_cf_to_uuid_t _ks_cf_to_uuid;
@@ -1439,6 +1440,7 @@ private:
     void update_write_metrics_for_timed_out_write();
     future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, bool is_bootstrap, system_keyspace system);
     void remove(const table&) noexcept;
+    void clean_disposed_column_families();
 public:
     static table_schema_version empty_version;
 

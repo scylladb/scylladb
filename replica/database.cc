@@ -979,6 +979,21 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     // avoid self-reporting
     auto& sst_manager = is_system_table(*schema) ? get_system_sstables_manager() : get_user_sstables_manager();
     lw_shared_ptr<column_family> cf;
+    // the checks have to go first, We can create a table object only after we ensure it wouldn't be duplicated
+    auto uuid = schema->id();
+    if (_column_families.contains(uuid)) {
+        throw std::invalid_argument("UUID " + uuid.to_sstring() + " already mapped");
+    }
+    clean_disposed_column_families();
+    if (_disposed_column_families.contains(schema->ks_name() + "." + schema->cf_name())) {
+        throw std::invalid_argument("UUID " + uuid.to_sstring() + " hasn't been deleted yet");
+    }
+    auto kscf = std::make_pair(schema->ks_name(), schema->cf_name());
+    if (_ks_cf_to_uuid.contains(kscf)) {
+        throw std::invalid_argument("Column family " + schema->cf_name() + " exists");
+    }
+    ks.add_or_update_column_family(schema);
+
     if (cfg.enable_commitlog && _commitlog) {
         db::commitlog& cl = schema->static_props().use_schema_commitlog && _uses_schema_commitlog
                 ? *_schema_commitlog
@@ -989,15 +1004,6 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     }
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
-    auto uuid = schema->id();
-    if (_column_families.contains(uuid)) {
-        throw std::invalid_argument("UUID " + uuid.to_sstring() + " already mapped");
-    }
-    auto kscf = std::make_pair(schema->ks_name(), schema->cf_name());
-    if (_ks_cf_to_uuid.contains(kscf)) {
-        throw std::invalid_argument("Column family " + schema->cf_name() + " exists");
-    }
-    ks.add_or_update_column_family(schema);
     cf->start();
     _column_families.emplace(uuid, std::move(cf));
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
@@ -1031,10 +1037,29 @@ bool database::update_column_family(schema_ptr new_schema) {
     return columns_changed;
 }
 
+void database::clean_disposed_column_families() {
+    dblog.info("clean_disposed_column_families");
+    for (auto it = _disposed_column_families.cbegin(); it != _disposed_column_families.cend(); /* no increment */ ) {
+        dblog.info("clean_disposed_column_families: {}", it->first );
+        if (it->second.use_count() == 1) {
+            dblog.info("clean_disposed_column_families: removing {}", it->first );
+            _disposed_column_families.erase(it++);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void database::remove(const table& cf) noexcept {
     auto s = cf.schema();
     auto& ks = find_keyspace(s->ks_name());
+    auto lw_table_shared_ptr = _column_families.find(s->id());
+    _disposed_column_families[s->ks_name() + "." + s->cf_name()] = lw_table_shared_ptr->second;
     _column_families.erase(s->id());
+    clean_disposed_column_families();
+//    Just FYI - below commented out code causes scylla to stall
+//    while (lw_table_shared_ptr.use_count() > 0)
+//        sleep(1);
     ks.metadata()->remove_column_family(s);
     _ks_cf_to_uuid.erase(std::make_pair(s->ks_name(), s->cf_name()));
     if (s->is_view()) {
