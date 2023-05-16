@@ -33,21 +33,25 @@ namespace {
             }
         });
     }
+
+    template <typename Strategy>
+    mutable_vnode_erm_ptr create_erm(mutable_token_metadata_ptr tmptr, replication_strategy_config_options opts = {}) {
+        dc_rack_fn get_dc_rack_fn = get_dc_rack;
+        tmptr->update_topology_change_info(get_dc_rack_fn).get();
+        auto strategy = seastar::make_shared<Strategy>(std::move(opts));
+        return calculate_effective_replication_map(std::move(strategy), std::move(tmptr)).get0();
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_first_node) {
-    dc_rack_fn get_dc_rack_fn = get_dc_rack;
-
     const auto e1 = inet_address("192.168.0.1");
     const auto t1 = dht::token::from_int64(1);
+
     auto token_metadata = create_token_metadata(e1);
     token_metadata->update_topology(e1, get_dc_rack(e1));
-    const auto replication_strategy = seastar::make_shared<simple_strategy>(replication_strategy_config_options {
-        {"replication_factor", "1"}
-    });
     token_metadata->add_bootstrap_token(t1, e1);
-    token_metadata->update_topology_change_info(get_dc_rack_fn).get();
-    auto erm = calculate_effective_replication_map(replication_strategy, token_metadata).get0();
+
+    auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "1"}});
     BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(dht::token::from_int64(0)),
         inet_address_vector_topology_change{e1});
     BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(dht::token::from_int64(1)),
@@ -57,22 +61,18 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_first_node) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_second_node) {
-    dc_rack_fn get_dc_rack_fn = get_dc_rack;
-
     const auto e1 = inet_address("192.168.0.1");
     const auto t1 = dht::token::from_int64(1);
     const auto e2 = inet_address("192.168.0.2");
     const auto t2 = dht::token::from_int64(100);
+
     auto token_metadata = create_token_metadata(e1);
     token_metadata->update_topology(e1, get_dc_rack(e1));
     token_metadata->update_topology(e2, get_dc_rack(e2));
-    const auto replication_strategy = seastar::make_shared<simple_strategy>(replication_strategy_config_options {
-        {"replication_factor", "1"}
-    });
     token_metadata->update_normal_tokens({t1}, e1).get();
     token_metadata->add_bootstrap_token(t2, e2);
-    token_metadata->update_topology_change_info(get_dc_rack_fn).get();
-    auto erm = calculate_effective_replication_map(replication_strategy, token_metadata).get0();
+
+    auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "1"}});
     BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(dht::token::from_int64(0)),
         inet_address_vector_topology_change{});
     BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(dht::token::from_int64(1)),
@@ -86,8 +86,6 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_second_node) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_with_replicas) {
-    dc_rack_fn get_dc_rack_fn = get_dc_rack;
-
     const auto t1 = dht::token::from_int64(1);
     const auto t10 = dht::token::from_int64(10);
     const auto t100 = dht::token::from_int64(100);
@@ -95,18 +93,16 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_with_replicas) {
     const auto e1 = inet_address("192.168.0.1");
     const auto e2 = inet_address("192.168.0.2");
     const auto e3 = inet_address("192.168.0.3");
+
     auto token_metadata = create_token_metadata(e1);
     token_metadata->update_topology(e1, get_dc_rack(e1));
     token_metadata->update_topology(e2, get_dc_rack(e2));
     token_metadata->update_topology(e3, get_dc_rack(e3));
-    const auto replication_strategy = seastar::make_shared<simple_strategy>(replication_strategy_config_options {
-        {"replication_factor", "2"}
-    });
     token_metadata->update_normal_tokens({t1, t1000}, e2).get();
     token_metadata->update_normal_tokens({t10}, e3).get();
     token_metadata->add_bootstrap_token(t100, e1);
-    token_metadata->update_topology_change_info(get_dc_rack_fn).get();
-    auto erm = calculate_effective_replication_map(replication_strategy, token_metadata).get0();
+
+    auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "2"}});
     BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(dht::token::from_int64(1)),
         inet_address_vector_topology_change{});
     BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(dht::token::from_int64(2)),
@@ -120,8 +116,6 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_with_replicas) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_leave_with_replicas) {
-    dc_rack_fn get_dc_rack_fn = get_dc_rack;
-
     const auto t1 = dht::token::from_int64(1);
     const auto t10 = dht::token::from_int64(10);
     const auto t100 = dht::token::from_int64(100);
@@ -129,19 +123,17 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_leave_with_replicas) {
     const auto e1 = inet_address("192.168.0.1");
     const auto e2 = inet_address("192.168.0.2");
     const auto e3 = inet_address("192.168.0.3");
+
     auto token_metadata = create_token_metadata(e1);
     token_metadata->update_topology(e1, get_dc_rack(e1));
     token_metadata->update_topology(e2, get_dc_rack(e2));
     token_metadata->update_topology(e3, get_dc_rack(e3));
-    const auto replication_strategy = seastar::make_shared<simple_strategy>(replication_strategy_config_options {
-        {"replication_factor", "2"}
-    });
     token_metadata->update_normal_tokens({t1, t1000}, e2).get();
     token_metadata->update_normal_tokens({t10}, e3).get();
     token_metadata->update_normal_tokens({t100}, e1).get();
     token_metadata->add_leaving_endpoint(e1);
-    token_metadata->update_topology_change_info(get_dc_rack_fn).get();
-    auto erm = calculate_effective_replication_map(replication_strategy, token_metadata).get0();
+
+    auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "2"}});
     BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(dht::token::from_int64(1)),
         inet_address_vector_topology_change{});
     BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(dht::token::from_int64(2)),
@@ -155,8 +147,6 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_leave_with_replicas) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_replace_with_replicas) {
-    dc_rack_fn get_dc_rack_fn = get_dc_rack;
-
     const auto t1 = dht::token::from_int64(1);
     const auto t10 = dht::token::from_int64(10);
     const auto t100 = dht::token::from_int64(100);
@@ -165,20 +155,18 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_replace_with_replicas) {
     const auto e2 = inet_address("192.168.0.2");
     const auto e3 = inet_address("192.168.0.3");
     const auto e4 = inet_address("192.168.0.4");
+
     auto token_metadata = create_token_metadata(e1);
     token_metadata->update_topology(e1, get_dc_rack(e1));
     token_metadata->update_topology(e2, get_dc_rack(e2));
     token_metadata->update_topology(e3, get_dc_rack(e3));
     token_metadata->update_topology(e4, get_dc_rack(e4));
-    const auto replication_strategy = seastar::make_shared<simple_strategy>(replication_strategy_config_options {
-        {"replication_factor", "2"}
-    });
     token_metadata->update_normal_tokens({t1000}, e1).get();
     token_metadata->update_normal_tokens({t1, t100}, e2).get();
     token_metadata->update_normal_tokens({t10}, e3).get();
     token_metadata->add_replacing_endpoint(e3, e4);
-    token_metadata->update_topology_change_info(get_dc_rack_fn).get();
-    auto erm = calculate_effective_replication_map(replication_strategy, token_metadata).get0();
+
+    auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "2"}});
     BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(dht::token::from_int64(100)),
         inet_address_vector_topology_change{});
     BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(dht::token::from_int64(1000)),
@@ -196,8 +184,6 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_replace_with_replicas) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_endpoints_for_reading_when_bootstrap_with_replicas) {
-    dc_rack_fn get_dc_rack_fn = get_dc_rack;
-
     const auto t1 = dht::token::from_int64(1);
     const auto t10 = dht::token::from_int64(10);
     const auto t100 = dht::token::from_int64(100);
@@ -205,13 +191,11 @@ SEASTAR_THREAD_TEST_CASE(test_endpoints_for_reading_when_bootstrap_with_replicas
     const auto e1 = inet_address("192.168.0.1");
     const auto e2 = inet_address("192.168.0.2");
     const auto e3 = inet_address("192.168.0.3");
+
     auto token_metadata = create_token_metadata(e1);
     token_metadata->update_topology(e1, get_dc_rack(e1));
     token_metadata->update_topology(e2, get_dc_rack(e2));
     token_metadata->update_topology(e3, get_dc_rack(e3));
-    const auto replication_strategy = seastar::make_shared<simple_strategy>(replication_strategy_config_options {
-        {"replication_factor", "2"}
-    });
     token_metadata->update_normal_tokens({t1, t1000}, e2).get();
     token_metadata->update_normal_tokens({t10}, e3).get();
     token_metadata->add_bootstrap_token(t100, e1);
@@ -238,15 +222,13 @@ SEASTAR_THREAD_TEST_CASE(test_endpoints_for_reading_when_bootstrap_with_replicas
     };
 
     {
-        token_metadata->update_topology_change_info(get_dc_rack_fn).get();
-        auto erm = calculate_effective_replication_map(replication_strategy, token_metadata).get0();
+        auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "2"}});
         check_no_endpoints(erm, 2);
     }
 
     {
         token_metadata->set_read_new(locator::token_metadata::read_new_t::yes);
-        token_metadata->update_topology_change_info(get_dc_rack_fn).get();
-        auto erm = calculate_effective_replication_map(replication_strategy, token_metadata).get0();
+        auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "2"}});
 
         check_endpoints(erm, 2, {e3, e1});
         check_endpoints(erm, 10, {e3, e1});
@@ -259,19 +241,15 @@ SEASTAR_THREAD_TEST_CASE(test_endpoints_for_reading_when_bootstrap_with_replicas
 }
 
 SEASTAR_THREAD_TEST_CASE(test_replace_node_with_same_endpoint) {
-    dc_rack_fn get_dc_rack_fn = get_dc_rack;
-
     const auto t1 = dht::token::from_int64(1);
     const auto e1 = inet_address("192.168.0.1");
+
     auto token_metadata = create_token_metadata(e1);
     token_metadata->update_topology(e1, get_dc_rack(e1));
-    const auto replication_strategy = seastar::make_shared<simple_strategy>(replication_strategy_config_options {
-        {"replication_factor", "2"}
-    });
     token_metadata->update_normal_tokens({t1}, e1).get();
     token_metadata->add_replacing_endpoint(e1, e1);
-    token_metadata->update_topology_change_info(get_dc_rack_fn).get();
-    auto erm = calculate_effective_replication_map(replication_strategy, token_metadata).get0();
+
+    auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "2"}});
     BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(dht::token::from_int64(1)),
         inet_address_vector_topology_change{e1});
     BOOST_REQUIRE_EQUAL(token_metadata->get_endpoint(t1), e1);
