@@ -132,6 +132,7 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 /opt/scylladb/scyllatop/*
 /opt/scylladb/bin/*
 /opt/scylladb/libreloc/*
+/opt/scylladb/libreloc/.*.hmac
 /opt/scylladb/libexec/*
 %{_prefix}/lib/scylla/*
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/

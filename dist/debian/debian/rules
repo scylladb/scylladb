@@ -11,6 +11,8 @@ endif
 
 product := $(subst -server,,$(DEB_SOURCE))
 
+libreloc_list := $(shell find scylla/libreloc/ -maxdepth 1 -type f -not -name .*.hmac -and -not -name gnutls.config -printf '-X%f ')
+libexec_list := $(shell find scylla/libexec/ -maxdepth 1 -type f -not -name scylla -and -not -name iotune -printf '-X%f ')
 override_dh_auto_configure:
 
 override_dh_auto_build:
@@ -38,7 +40,7 @@ endif
 override_dh_strip:
 	# The binaries (ethtool...patchelf) don't pass dh_strip after going through patchelf. Since they are
 	# already stripped, nothing is lost if we exclude them, so that's what we do.
-	dh_strip -Xlibprotobuf.so.15 -Xld.so -Xethtool -Xgawk -Xgzip -Xhwloc-calc -Xhwloc-distrib -Xifconfig -Xlscpu -Xnetstat -Xpatchelf --dbg-package=$(product)-server-dbg
+	dh_strip $(libreloc_list) $(libexec_list) --dbg-package=$(product)-server-dbg
 	find $(CURDIR)/debian/$(product)-server-dbg/usr/lib/debug/.build-id/ -name "*.debug" -exec objcopy --decompress-debug-sections {} \;
 
 override_dh_makeshlibs:
