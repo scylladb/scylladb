@@ -28,7 +28,7 @@ void virtual_table::set_cell(row& cr, const bytes& column_name, data_value value
 }
 
 bool virtual_table::this_shard_owns(const dht::decorated_key& dk) const {
-    return dht::shard_of(*_s, dk.token()) == this_shard_id();
+    return dht::static_shard_of(*_s, dk.token()) == this_shard_id();
 }
 
 bool virtual_table::contains_key(const dht::partition_range& pr, const dht::decorated_key& dk) const {

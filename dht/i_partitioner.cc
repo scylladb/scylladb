@@ -182,7 +182,7 @@ std::ostream& operator<<(std::ostream& out, const i_partitioner& p) {
     return out << "}";
 }
 
-unsigned shard_of(const schema& s, const token& t) {
+unsigned static_shard_of(const schema& s, const token& t) {
     return s.get_sharder().shard_of(t);
 }
 

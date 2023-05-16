@@ -38,7 +38,7 @@ public:
     {}
 
     future<> consume(partition_start&& ps) {
-        _current_shard = dht::shard_of(*_schema, ps.key().token());
+        _current_shard = dht::static_shard_of(*_schema, ps.key().token()); // FIXME: Use table sharder
         if (!_shards[_current_shard]) {
             _shards[_current_shard] = shard_writer(_schema, _permit, _consumer);
         }

@@ -620,7 +620,10 @@ public:
 };
 std::ostream& operator<<(std::ostream& out, partition_ranges_view v);
 
-unsigned shard_of(const schema&, const token&);
+// Returns the owning shard number for vnode-based replication strategies.
+// Use table::shard_of() for the general case.
+unsigned static_shard_of(const schema&, const token&);
+
 inline decorated_key decorate_key(const schema& s, const partition_key& key) {
     return s.get_partitioner().decorate_key(s, key);
 }

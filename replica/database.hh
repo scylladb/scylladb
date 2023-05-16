@@ -777,7 +777,7 @@ public:
     }
     shard_id shard_of(dht::token t) const {
         return _erm ? _erm->shard_of(*_schema, t)
-                    : dht::shard_of(*_schema, t); // for tests.
+                    : dht::static_shard_of(*_schema, t); // for tests.
     }
     // Applies given mutation to this column family
     // The mutation is always upgraded to current schema.

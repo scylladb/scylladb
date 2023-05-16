@@ -100,7 +100,7 @@ static generated_table create_test_table(
             keys.emplace_back(mut.decorated_key());
             compacted_frozen_mutations.emplace_back(freeze(mut.compacted()));
             (void)with_gate(write_gate, [&] {
-                return smp::submit_to(dht::shard_of(*schema, mut.decorated_key().token()), [&env, gs = global_schema_ptr(schema), mut = freeze(mut)] () mutable {
+                return smp::submit_to(dht::static_shard_of(*schema, mut.decorated_key().token()), [&env, gs = global_schema_ptr(schema), mut = freeze(mut)] () mutable {
                     return env.local_db().apply(gs.get(), std::move(mut), {}, db::commitlog_force_sync::no, db::no_timeout);
                 });
             });
