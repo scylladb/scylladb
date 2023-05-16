@@ -43,7 +43,7 @@ namespace {
     }
 }
 
-SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_first_node) {
+SEASTAR_THREAD_TEST_CASE(test_pending_and_read_endpoints_for_bootstrap_first_node) {
     const auto e1 = inet_address("192.168.0.1");
     const auto t1 = dht::token::from_int64(1);
 
@@ -51,13 +51,21 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_first_node) {
     token_metadata->update_topology(e1, get_dc_rack(e1));
     token_metadata->add_bootstrap_token(t1, e1);
 
-    auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "1"}});
-    BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(dht::token::from_int64(0)),
-        inet_address_vector_topology_change{e1});
-    BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(dht::token::from_int64(1)),
-        inet_address_vector_topology_change{e1});
-    BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(dht::token::from_int64(2)),
-        inet_address_vector_topology_change{e1});
+    {
+        auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "1"}});
+        BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(dht::token::from_int64(0)),
+            inet_address_vector_topology_change{e1});
+        BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(dht::token::from_int64(1)),
+            inet_address_vector_topology_change{e1});
+        BOOST_REQUIRE_EQUAL(erm->get_pending_endpoints(dht::token::from_int64(2)),
+            inet_address_vector_topology_change{e1});
+        BOOST_REQUIRE(!erm->get_endpoints_for_reading(t1).has_value());
+    }
+    {
+        token_metadata->set_read_new(token_metadata::read_new_t::yes);
+        auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "1"}});
+        BOOST_REQUIRE_EQUAL(erm->get_endpoints_for_reading(t1), inet_address_vector_replica_set{e1});
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_second_node) {
