@@ -47,6 +47,7 @@
 #include "utils/lister.hh"
 #include "dht/token.hh"
 #include "dht/i_partitioner.hh"
+#include "replica/global_table_ptr.hh"
 
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm.hpp>
@@ -1682,11 +1683,11 @@ future<> table::write_schema_as_cql(database& db, sstring dir) const {
 
 // Runs the orchestration code on an arbitrary shard to balance the load.
 future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name) {
-    auto jsondir = table_shards[this_shard_id()]->_config.datadir + "/snapshots/" + name;
+    auto jsondir = table_shards->_config.datadir + "/snapshots/" + name;
     auto orchestrator = std::hash<sstring>()(jsondir) % smp::count;
 
     co_await smp::submit_to(orchestrator, [&] () -> future<> {
-        auto& t = *table_shards[this_shard_id()];
+        auto& t = *table_shards;
         auto s = t.schema();
         tlogger.debug("Taking snapshot of {}.{}: directory={}", s->ks_name(), s->cf_name(), jsondir);
 
@@ -1695,7 +1696,7 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
 
         co_await coroutine::parallel_for_each(boost::irange(0u, smp::count), [&] (unsigned shard) -> future<> {
             file_sets.emplace_back(co_await smp::submit_to(shard, [&] {
-                return table_shards[this_shard_id()]->take_snapshot(sharded_db.local(), jsondir);
+                return table_shards->take_snapshot(sharded_db.local(), jsondir);
             }));
         });
 

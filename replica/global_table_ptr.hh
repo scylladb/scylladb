@@ -16,7 +16,17 @@ namespace replica {
 class database;
 class table;
 
-using global_table_ptr = std::vector<foreign_ptr<lw_shared_ptr<table>>>;
+class global_table_ptr {
+    std::vector<foreign_ptr<lw_shared_ptr<table>>> _p;
+public:
+    global_table_ptr();
+    global_table_ptr(global_table_ptr&&) noexcept;
+    ~global_table_ptr();
+    void assign(table& t);
+    table* operator->() const noexcept;
+    table& operator*() const noexcept;
+};
+
 future<global_table_ptr> get_table_on_all_shards(sharded<database>& db, table_id uuid);
 
 } // replica namespace

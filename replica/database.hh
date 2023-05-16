@@ -66,7 +66,6 @@
 #include "compaction/compaction_fwd.hh"
 #include "utils/disk-error-handler.hh"
 #include "rust/wasmtime_bindings.hh"
-#include "replica/global_table_ptr.hh" // temporary -- replace with fwd decl
 
 class cell_locker;
 class cell_locker_stats;
@@ -140,6 +139,7 @@ extern logging::logger dblog;
 namespace replica {
 
 using shared_memtable = lw_shared_ptr<memtable>;
+class global_table_ptr;
 
 // We could just add all memtables, regardless of types, to a single list, and
 // then filter them out when we read them. Here's why I have chosen not to do
