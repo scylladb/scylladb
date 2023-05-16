@@ -45,6 +45,11 @@ class MinioServer:
         finally:
             s.close()
 
+    def log_to_file(self, str):
+        self.log_file.write(str.encode())
+        self.log_file.write('\n'.encode())
+        self.log_file.flush()
+
     async def start(self):
         if self.srv_exe is None:
             self.logger.info("Minio not installed, get it from https://dl.minio.io/server/minio/release/linux-amd64/minio and put into PATH")
@@ -78,15 +83,18 @@ class MinioServer:
             await asyncio.sleep(0.1)
 
         try:
-            self.logger.info(f'Configuring bucket {self.bucket_name}')
+            self.log_to_file(f'Configuring access to {self.address}:{self.port}')
             try:
-                subprocess.check_call(['mc', '-C', self.mcdir, 'config', 'host', 'rm', 'local'], stdout=self.log_file, stderr=self.log_file)
+                subprocess.check_call(['mc', '--debug', '-C', self.mcdir, 'config', 'host', 'rm', 'local'], stdout=self.log_file, stderr=self.log_file)
             except:
+                self.log_to_file('Failed to remove local alias, ignoring')
                 pass
 
-            subprocess.check_call(['mc', '-C', self.mcdir, 'config', 'host', 'add', 'local', f'http://{self.address}:{self.port}', self.default_user, self.default_pass], stdout=self.log_file, stderr=self.log_file)
-            subprocess.check_call(['mc', '-C', self.mcdir, 'mb', f'local/{self.bucket_name}'], stdout=self.log_file, stderr=self.log_file)
-            subprocess.check_call(['mc', '-C', self.mcdir, 'anonymous', 'set', 'public', f'local/{self.bucket_name}'], stdout=self.log_file, stderr=self.log_file)
+            subprocess.check_call(['mc', '--debug', '-C', self.mcdir, 'config', 'host', 'add', 'local', f'http://{self.address}:{self.port}', self.default_user, self.default_pass], stdout=self.log_file, stderr=self.log_file)
+
+            self.log_to_file(f'Configuring bucket {self.bucket_name}')
+            subprocess.check_call(['mc', '--debug', '-C', self.mcdir, 'mb', f'local/{self.bucket_name}'], stdout=self.log_file, stderr=self.log_file)
+            subprocess.check_call(['mc', '--debug', '-C', self.mcdir, 'anonymous', 'set', 'public', f'local/{self.bucket_name}'], stdout=self.log_file, stderr=self.log_file)
         except Exception as e:
             self.logger.info(f'MC failed: {e}')
             await self.stop()
