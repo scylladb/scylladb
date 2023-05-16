@@ -702,21 +702,24 @@ future<> gossiper::do_status_check() {
 
     auto now = this->now();
 
-    for (auto it = _endpoint_state_map.begin(); it != _endpoint_state_map.end();) {
-        auto endpoint = it->first;
-        auto& ep_state = it->second;
-        it++;
-
-        bool is_alive = ep_state.is_alive();
+    for (const auto& endpoint : get_endpoints()) {
         if (endpoint == get_broadcast_address()) {
             continue;
         }
+        auto eps = get_endpoint_state_for_endpoint_ptr(endpoint);
+        if (!eps) {
+            continue;
+        }
+        auto& ep_state = *eps;
+        bool is_alive = ep_state.is_alive();
+        auto update_timestamp = ep_state.get_update_timestamp();
+        // ep_state cannot be used after yielding
 
         // check if this is a fat client. fat clients are removed automatically from
         // gossip after FatClientTimeout.  Do not remove dead states here.
         if (is_gossip_only_member(endpoint)
             && !_just_removed_endpoints.contains(endpoint)
-            && ((now - ep_state.get_update_timestamp()) > fat_client_timeout)) {
+            && ((now - update_timestamp) > fat_client_timeout)) {
             logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
             co_await remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
             co_await evict_from_membership(endpoint); // can get rid of the state immediately
@@ -1379,6 +1382,10 @@ future<> gossiper::reset_endpoint_state_map() {
 
 const std::unordered_map<inet_address, endpoint_state>& gms::gossiper::get_endpoint_states() const noexcept {
     return _endpoint_state_map;
+}
+
+std::vector<inet_address> gossiper::get_endpoints() const {
+    return boost::copy_range<std::vector<inet_address>>(_endpoint_state_map | boost::adaptors::map_keys);
 }
 
 bool gossiper::uses_host_id(inet_address endpoint) const {
