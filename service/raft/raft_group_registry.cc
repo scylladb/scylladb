@@ -403,6 +403,10 @@ raft::server& raft_group_registry::group0() {
     return get_server(*_group0_id);
 }
 
+bool raft_group_registry::has_group0() {
+    return bool(_group0_id);
+}
+
 future<> raft_group_registry::start_server_for_group(raft_server_for_group new_grp) {
     auto gid = new_grp.gid;
 

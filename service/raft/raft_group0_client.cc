@@ -368,7 +368,7 @@ future<std::pair<rwlock::holder, group0_upgrade_state>> raft_group0_client::get_
 bool raft_group0_client::using_raft() {
     // No need to take upgrade log since after the state becomes use_post_raft_procedures
     // it never goes back
-    return _upgrade_state == group0_upgrade_state::use_post_raft_procedures;
+    return _raft_gr.has_group0() && _upgrade_state == group0_upgrade_state::use_post_raft_procedures;
 }
 
 future<> raft_group0_client::set_group0_upgrade_state(group0_upgrade_state state) {
