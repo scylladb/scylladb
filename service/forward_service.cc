@@ -272,11 +272,25 @@ public:
 
         _forwarder._stats.requests_dispatched_to_other_nodes += 1;
 
+        // Check for a shutdown request before sending a forward_request to
+        // another node. During the drain process, the messaging service is shut
+        // down early (but not earlier than the forward_service::shutdown
+        // invocation), so by performing this check, we can prevent hanging on
+        // the RPC call.
+        if (_forwarder._shutdown) {
+            return make_exception_future<query::forward_result>(std::runtime_error("forward_service is shutting down"));
+        }
+
         // Try to send this forward_request to another node.
         return do_with(id, req, [this] (netw::msg_addr& id, query::forward_request& req) -> future<query::forward_result> {
             return ser::forward_request_rpc_verbs::send_forward_request(
                 &_forwarder._messaging, id, req, _tr_info
             ).handle_exception_type([this, &req, &id] (rpc::closed_error& e) -> future<query::forward_result> {
+                if (_forwarder._shutdown) {
+                    // Do not retry if shutting down.
+                    return make_exception_future<query::forward_result>(e);
+                }
+
                 // In case of forwarding failure, retry using super-coordinator as a coordinator
                 flogger.warn("retrying forward_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
                 tracing::trace(_tr_state, "retrying forward_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
@@ -289,6 +303,11 @@ public:
 
 locator::token_metadata_ptr forward_service::get_token_metadata_ptr() const noexcept {
     return _shared_token_metadata.get();
+}
+
+future<> forward_service::shutdown() {
+    _shutdown = true;
+    return make_ready_future<>();
 }
 
 future<> forward_service::stop() {
@@ -461,6 +480,16 @@ future<query::forward_result> forward_service::execute_on_this_shard(
 
         // Execute query.
         while (!pager->is_exhausted()) {
+            // It is necessary to check for a shutdown request before each
+            // fetch_page operation. During the drain process, the messaging
+            // service is shut down early (but not earlier than the
+            // forward_service::shutdown invocation), so by performing this
+            // check, we can prevent hanging on the RPC call (which can be made
+            // during fetching a page).
+            if (_shutdown) {
+                throw std::runtime_error("forward_service is shutting down");
+            }
+
             co_await pager->fetch_page(rs_builder, DEFAULT_INTERNAL_PAGING_SIZE, now, timeout);
         }
 

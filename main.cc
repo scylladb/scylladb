@@ -1710,6 +1710,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 ss.local().drain_on_shutdown().get();
             });
 
+            // Signal shutdown to the forward service before draining the messaging service.
+            auto shutdown_forward_service = defer_verbose_shutdown("forward service", [&forward_service] {
+                forward_service.invoke_on_all(&service::forward_service::shutdown).get();
+            });
+
             auto drain_view_builder = defer_verbose_shutdown("view builder ops", [cfg] {
                 if (cfg->view_building()) {
                     view_builder.invoke_on_all(&db::view::view_builder::drain).get();
