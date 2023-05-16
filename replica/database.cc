@@ -1041,14 +1041,12 @@ future<> database::detach_column_family(table& cf) {
 future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> database::get_table_on_all_shards(sharded<database>& sharded_db, table_id uuid) {
     std::vector<foreign_ptr<lw_shared_ptr<table>>> table_shards;
     table_shards.resize(smp::count);
-    co_await coroutine::parallel_for_each(boost::irange(0u, smp::count), [&] (unsigned shard) -> future<> {
-        table_shards[shard] = co_await smp::submit_to(shard, [&] {
-            try {
-                return make_foreign(sharded_db.local()._column_families.at(uuid));
-            } catch (std::out_of_range&) {
-                on_internal_error(dblog, fmt::format("Table UUID={} not found", uuid));
-            }
-        });
+    co_await sharded_db.invoke_on_all([&] (auto& db) {
+        try {
+            table_shards[this_shard_id()] = make_foreign(db.find_column_family(uuid).shared_from_this());
+        } catch (no_such_column_family&) {
+            on_internal_error(dblog, fmt::format("Table UUID={} not found", uuid));
+        }
     });
     co_return table_shards;
 }
