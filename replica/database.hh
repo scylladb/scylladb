@@ -1682,8 +1682,6 @@ public:
 private:
     future<> detach_column_family(table& cf);
 
-    static future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> get_table_on_all_shards(sharded<database>& db, table_id uuid);
-
     struct table_truncate_state;
 
     static future<> truncate_table_on_all_shards(sharded<database>& db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt);

@@ -69,6 +69,7 @@
 #include "tombstone_gc.hh"
 
 #include "replica/data_dictionary_impl.hh"
+#include "replica/global_table_ptr.hh"
 #include "replica/exceptions.hh"
 #include "readers/multi_range.hh"
 #include "readers/multishard.hh"
@@ -1038,7 +1039,7 @@ future<> database::detach_column_family(table& cf) {
     }
 }
 
-future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> database::get_table_on_all_shards(sharded<database>& sharded_db, table_id uuid) {
+future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> get_table_on_all_shards(sharded<database>& sharded_db, table_id uuid) {
     std::vector<foreign_ptr<lw_shared_ptr<table>>> table_shards;
     table_shards.resize(smp::count);
     co_await sharded_db.invoke_on_all([&] (auto& db) {
