@@ -69,11 +69,11 @@ public:
         return tagged_tagged_integer(_value - o._value);
     }
 
-    tagged_tagged_integer& operator+=(const tagged_tagged_integer& o) const {
+    tagged_tagged_integer& operator+=(const tagged_tagged_integer& o) {
         _value += o._value;
         return *this;
     }
-    tagged_tagged_integer& operator-=(const tagged_tagged_integer& o) const {
+    tagged_tagged_integer& operator-=(const tagged_tagged_integer& o) {
         _value -= o._value;
         return *this;
     }
@@ -97,5 +97,20 @@ template <typename Final, typename Tag, std::integral ValueType>
 [[maybe_unused]] ostream& operator<<(ostream& s, const utils::tagged_tagged_integer<Final, Tag, ValueType>& x) {
     return s << x.value();
 }
+
+template <typename Final, typename Tag, std::integral ValueType>
+struct numeric_limits<utils::tagged_tagged_integer<Final, Tag, ValueType>> : public numeric_limits<ValueType> {
+    using tagged_tagged_integer_t = utils::tagged_tagged_integer<Final, Tag, ValueType>;
+    using value_limits = numeric_limits<ValueType>;
+    static_assert(numeric_limits<ValueType>::is_specialized && numeric_limits<ValueType>::is_bounded);
+
+    static constexpr tagged_tagged_integer_t min() {
+        return tagged_tagged_integer_t(value_limits::min());
+    }
+
+    static constexpr tagged_tagged_integer_t max() {
+        return tagged_tagged_integer_t(value_limits::max());
+    }
+};
 
 } // namespace std

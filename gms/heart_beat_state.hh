@@ -58,6 +58,7 @@ public:
     }
 
     void force_highest_possible_version_unsafe() noexcept {
+        static_assert(std::numeric_limits<version_type>::is_bounded);
         _version = std::numeric_limits<version_type>::max();
     }
 
