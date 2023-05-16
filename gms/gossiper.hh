@@ -399,6 +399,8 @@ public:
 
     const std::unordered_map<inet_address, endpoint_state>& get_endpoint_states() const noexcept;
 
+    std::vector<inet_address> get_endpoints() const;
+
     bool uses_host_id(inet_address endpoint) const;
 
     locator::host_id get_host_id(inet_address endpoint) const;
