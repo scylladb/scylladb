@@ -16,6 +16,7 @@ namespace replica {
 class database;
 class table;
 
-future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> get_table_on_all_shards(sharded<database>& db, table_id uuid);
+using global_table_ptr = std::vector<foreign_ptr<lw_shared_ptr<table>>>;
+future<global_table_ptr> get_table_on_all_shards(sharded<database>& db, table_id uuid);
 
 } // replica namespace

@@ -66,6 +66,7 @@
 #include "compaction/compaction_fwd.hh"
 #include "utils/disk-error-handler.hh"
 #include "rust/wasmtime_bindings.hh"
+#include "replica/global_table_ptr.hh" // temporary -- replace with fwd decl
 
 class cell_locker;
 class cell_locker_stats;
@@ -855,7 +856,7 @@ private:
     static future<> seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets);
 
 public:
-    static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>& table_shards, sstring name);
+    static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name);
 
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
 
@@ -1684,7 +1685,7 @@ private:
 
     struct table_truncate_state;
 
-    static future<> truncate_table_on_all_shards(sharded<database>& db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
+    static future<> truncate_table_on_all_shards(sharded<database>& db, const global_table_ptr&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
     future<> truncate(column_family& cf, const table_truncate_state&, db_clock::time_point truncated_at);
 public:
     /** Truncates the given column family */

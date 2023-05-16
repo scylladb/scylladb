@@ -1039,8 +1039,8 @@ future<> database::detach_column_family(table& cf) {
     }
 }
 
-future<std::vector<foreign_ptr<lw_shared_ptr<table>>>> get_table_on_all_shards(sharded<database>& sharded_db, table_id uuid) {
-    std::vector<foreign_ptr<lw_shared_ptr<table>>> table_shards;
+future<global_table_ptr> get_table_on_all_shards(sharded<database>& sharded_db, table_id uuid) {
+    global_table_ptr table_shards;
     table_shards.resize(smp::count);
     co_await sharded_db.invoke_on_all([&] (auto& db) {
         try {
@@ -2359,7 +2359,7 @@ struct database::table_truncate_state {
     bool did_flush;
 };
 
-future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, const std::vector<foreign_ptr<lw_shared_ptr<table>>>& table_shards, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
+future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
     auto& cf = *table_shards[this_shard_id()];
     auto s = cf.schema();
 
