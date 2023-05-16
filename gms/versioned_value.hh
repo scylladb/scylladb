@@ -20,6 +20,7 @@
 #include "version.hh"
 #include "cdc/generation_id.hh"
 #include <unordered_set>
+#include "utils/error_injection.hh"
 
 namespace gms {
 
@@ -215,6 +216,11 @@ public:
     }
 
     static versioned_value supported_features(const std::set<std::string_view>& features) {
+        if (utils::get_local_injector().enter("gossiper_censor_test_only_feature")) {
+            std::set<std::string_view> censored_features = features;
+            censored_features.erase(std::string_view("TEST_ONLY_FEATURE"));
+            return versioned_value(fmt::to_string(fmt::join(censored_features, ",")));
+        }
         return versioned_value(fmt::to_string(fmt::join(features, ",")));
     }
 
