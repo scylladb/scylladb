@@ -345,6 +345,24 @@ def test_filter_cluster_key(cql, test_keyspace):
         rows = cql.execute(stmt)
         assert_rows(rows, [1, 1])
 
+# Reproduces #8627:
+# Reproduced #13548:
+# Insert a string with > 64K characters (reproducing issue #8627 - see other tests reproducing it),
+# which causes the view builder to never finish.
+# If Scylla is run with `--enable-keyspace-column-family-metrics 1` cmd line param,
+# and we immediately recreate the table (drop and create),
+# an "old" table's object in memory won't get deallocated before the "new" table's object is created,
+# which raised a seastar::metrics::double_registration exception
+def test_instant_table_recreation(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v text') as table:
+        insert_statement = cql.prepare(f'INSERT INTO {table} (p,v) VALUES (?, ?)')
+        big_string = 'x'*66536
+        cql.execute(insert_statement, [0, big_string])
+        cql.execute(f"CREATE INDEX ON {table}(v)")
+    # going out of scope DROPs the above table. Create another table with the same name:
+    with new_test_table(cql, test_keyspace, 'p int primary key, v text') as table:
+        pass
+
 # Selecting *only* an indexed clustering key does not require filtering, it's
 # a full-index scan (the amount of output is proportional to the read).
 # Additionally, with unnecessary parentheses the query also works, and isn't

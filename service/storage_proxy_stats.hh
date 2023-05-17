@@ -111,6 +111,7 @@ struct write_stats {
     uint64_t cas_coordinator_dropped_prune = 0;
     uint64_t cas_replica_dropped_prune = 0;
 
+    seastar::metrics::metric_groups _metrics;
 
     std::chrono::microseconds last_mv_flow_control_delay; // delay added for MV flow control in the last request
 public:
@@ -119,8 +120,6 @@ public:
 
     void register_stats();
     void register_split_metrics_local();
-protected:
-    seastar::metrics::metric_groups _metrics;
 };
 
 struct stats : public write_stats {

@@ -1021,6 +1021,11 @@ void table::set_metrics() {
     }
 }
 
+void table::deregister_metrics() {
+    _metrics.clear();
+    _view_stats._metrics.clear();
+}
+
 size_t compaction_group::live_sstable_count() const noexcept {
     return _main_sstables->size() + _maintenance_sstables->size();
 }
