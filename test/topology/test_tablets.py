@@ -67,6 +67,9 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
     for s in servers:
         manager.server_restart(s, wait_others=2)
 
+    manager.driver_close()
+    await manager.driver_connect(server=servers[0])
+
     await asyncio.gather(*[manager.cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, 3);", execution_profile='whitelist')
                            for k in keys])
 
