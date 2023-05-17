@@ -66,8 +66,8 @@ public:
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
     virtual future<> destroy(const sstable& sst) override { return make_ready_future<>(); }
-    virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const override {
-        return sstable_directory::delete_with_pending_deletion_log;
+    virtual future<> atomic_delete(std::vector<shared_sstable> sstables) const override {
+        return sstable_directory::delete_with_pending_deletion_log(std::move(sstables));
     }
 
     virtual sstring prefix() const override { return dir; }
@@ -450,8 +450,8 @@ public:
     virtual future<> destroy(const sstable& sst) override {
         return make_ready_future<>();
     }
-    virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const override {
-        return delete_with_system_keyspace;
+    virtual future<> atomic_delete(std::vector<shared_sstable> sstables) const override {
+        return delete_with_system_keyspace(std::move(sstables));
     }
 
     virtual sstring prefix() const override { return _location; }

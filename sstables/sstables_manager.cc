@@ -166,8 +166,8 @@ future<> sstables_manager::delete_atomically(std::vector<shared_sstable> ssts) {
     // in the same storage so it's OK to get the deleter from the
     // front element. The deleter implementation is welcome to check
     // that sstables from the vector really live in it.
-    auto deleter = ssts.front()->get_storage().atomic_deleter();
-    co_await deleter(std::move(ssts));
+    auto first_sstable = ssts.front();
+    co_await first_sstable->get_storage().atomic_delete(std::move(ssts));
 }
 
 future<> sstables_manager::close() {
