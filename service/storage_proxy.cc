@@ -454,51 +454,51 @@ private:
             errors.count += (forward.size() + 1);
             errors.local = std::move(*stale);
         } else {
-        co_await coroutine::all(
-            [&] () -> future<> {
-                try {
-                    // FIXME: get_schema_for_write() doesn't timeout
-                    schema_ptr s = co_await get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard}, timeout);
-                    // Note: blocks due to execution_stage in replica::database::apply()
-                    co_await apply_fn(p, trace_state_ptr, std::move(s), m, timeout, fence);
-                    // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
-                    // lots of unsent responses, which can OOM our shard.
-                    //
-                    // Usually we will return immediately, since this work only involves appending data to the connection
-                    // send buffer.
-                    auto f = co_await coroutine::as_future(send_mutation_done(netw::messaging_service::msg_addr{reply_to, shard}, trace_state_ptr,
-                            shard, response_id, p->get_view_update_backlog()));
-                    f.ignore_ready_future();
-                } catch (...) {
-                    std::exception_ptr eptr = std::current_exception();
-                    errors.count++;
-                    errors.local = replica::try_encode_replica_exception(eptr);
-                    seastar::log_level l = seastar::log_level::warn;
-                    if (is_timeout_exception(eptr) || std::holds_alternative<replica::rate_limit_exception>(errors.local.reason)) {
-                        // ignore timeouts and rate limit exceptions so that logs are not flooded.
-                        // database's total_writes_timedout or total_writes_rate_limited counter was incremented.
-                        l = seastar::log_level::debug;
-                    }
-                    slogger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
-                }
-            },
-            [&] {
-                // Note: not a coroutine, since often nothing needs to be forwarded and this returns a ready future
-                return parallel_for_each(forward.begin(), forward.end(), [&] (gms::inet_address forward) {
-                    // Note: not a coroutine, since forward_fn() typically returns a ready future
-                    tracing::trace(trace_state_ptr, "Forwarding a mutation to /{}", forward);
-                    return forward_fn(p, netw::messaging_service::msg_addr{forward, 0}, timeout, m, reply_to, shard, response_id,
-                                        tracing::make_trace_info(trace_state_ptr), fence)
-                            .then_wrapped([&] (future<> f) {
-                        if (f.failed()) {
-                            ++p->get_stats().forwarding_errors;
-                            errors.count++;
-                        };
+            co_await coroutine::all(
+                [&] () -> future<> {
+                    try {
+                        // FIXME: get_schema_for_write() doesn't timeout
+                        schema_ptr s = co_await get_schema_for_write(schema_version, netw::messaging_service::msg_addr{reply_to, shard}, timeout);
+                        // Note: blocks due to execution_stage in replica::database::apply()
+                        co_await apply_fn(p, trace_state_ptr, std::move(s), m, timeout, fence);
+                        // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
+                        // lots of unsent responses, which can OOM our shard.
+                        //
+                        // Usually we will return immediately, since this work only involves appending data to the connection
+                        // send buffer.
+                        auto f = co_await coroutine::as_future(send_mutation_done(netw::messaging_service::msg_addr{reply_to, shard}, trace_state_ptr,
+                                shard, response_id, p->get_view_update_backlog()));
                         f.ignore_ready_future();
+                    } catch (...) {
+                        std::exception_ptr eptr = std::current_exception();
+                        errors.count++;
+                        errors.local = replica::try_encode_replica_exception(eptr);
+                        seastar::log_level l = seastar::log_level::warn;
+                        if (is_timeout_exception(eptr) || std::holds_alternative<replica::rate_limit_exception>(errors.local.reason)) {
+                            // ignore timeouts and rate limit exceptions so that logs are not flooded.
+                            // database's total_writes_timedout or total_writes_rate_limited counter was incremented.
+                            l = seastar::log_level::debug;
+                        }
+                        slogger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
+                    }
+                },
+                [&] {
+                    // Note: not a coroutine, since often nothing needs to be forwarded and this returns a ready future
+                    return parallel_for_each(forward.begin(), forward.end(), [&] (gms::inet_address forward) {
+                        // Note: not a coroutine, since forward_fn() typically returns a ready future
+                        tracing::trace(trace_state_ptr, "Forwarding a mutation to /{}", forward);
+                        return forward_fn(p, netw::messaging_service::msg_addr{forward, 0}, timeout, m, reply_to, shard, response_id,
+                                            tracing::make_trace_info(trace_state_ptr), fence)
+                                .then_wrapped([&] (future<> f) {
+                            if (f.failed()) {
+                                ++p->get_stats().forwarding_errors;
+                                errors.count++;
+                            };
+                            f.ignore_ready_future();
+                        });
                     });
-                });
-            }
-        );
+                }
+            );
         }
         // ignore results, since we'll be returning them via MUTATION_DONE/MUTATION_FAILURE verbs
         if (errors.count) {
