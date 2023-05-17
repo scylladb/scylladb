@@ -65,7 +65,7 @@ std::unique_ptr<prepared_statement> create_function_statement::prepare(data_dict
     return std::make_unique<prepared_statement>(make_shared<create_function_statement>(*this));
 }
 
-future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 create_function_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
@@ -77,7 +77,7 @@ create_function_statement::prepare_schema_mutations(query_processor& qp, api::ti
         ret = create_schema_change(*func, true);
     }
 
-    co_return std::make_pair(std::move(ret), std::move(m));
+    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
 }
 
 create_function_statement::create_function_statement(functions::function_name name, sstring language, sstring body,

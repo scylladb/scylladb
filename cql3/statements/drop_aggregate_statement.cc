@@ -23,7 +23,7 @@ std::unique_ptr<prepared_statement> drop_aggregate_statement::prepare(data_dicti
     return std::make_unique<prepared_statement>(make_shared<drop_aggregate_statement>(*this));
 }
 
-future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 drop_aggregate_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
@@ -38,7 +38,7 @@ drop_aggregate_statement::prepare_schema_mutations(query_processor& qp, api::tim
         ret = create_schema_change(*func, false);
     }
 
-    co_return std::make_pair(std::move(ret), std::move(m));
+    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
 }
 
 drop_aggregate_statement::drop_aggregate_statement(functions::function_name name,

@@ -72,7 +72,7 @@ schema_ptr drop_index_statement::make_drop_idex_schema(query_processor& qp) cons
     return builder.build();
 }
 
-future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 drop_index_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
@@ -88,7 +88,7 @@ drop_index_statement::prepare_schema_mutations(query_processor& qp, api::timesta
                                                  cfm->cf_name());
     }
 
-    co_return std::make_pair(std::move(ret), std::move(m));
+    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
