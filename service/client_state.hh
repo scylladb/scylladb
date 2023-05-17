@@ -40,7 +40,7 @@ namespace service {
 /**
  * State related to a client connection.
  */
-class client_state : private qos::qos_configuration_change_subscriber {
+class client_state : private qos::qos_configuration_change_subscriber, private auth::role_configuration_change_subscriber {
 public:
     enum class auth_state : uint8_t {
         UNINITIALIZED, AUTHENTICATION, READY
@@ -348,13 +348,20 @@ public:
     future<> has_functions_access(data_dictionary::database db, const sstring& ks, auth::permission p) const;
     future<> has_function_access(data_dictionary::database db, const sstring& ks, const sstring& function_signature, auth::permission p) const;
 public:
-    void register_service_level_subscriber();
+    void register_service_level_params_updater();
 private:
     virtual future<> on_before_service_level_add(qos::service_level_options slo, qos::service_level_info sl_info) override;
     virtual future<> on_after_service_level_add(qos::service_level_options slo, qos::service_level_info sl_info) override;
     virtual future<> on_after_service_level_remove(qos::service_level_info sl_info) override;
     virtual future<> on_before_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) override;
     virtual future<> on_after_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) override;
+
+    virtual future<> on_attribute_set(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value) override;
+    virtual future<> on_attribute_removed(std::string_view role_name, std::string_view attribute_name) override;
+    virtual future<> on_role_granted(std::string_view grantee_name, std::string_view role_name) override;
+    virtual future<> on_role_revoked(std::string_view revokee_name, std::string_view role_name) override;
+
+    future<> update_when_contains_role(std::string_view role_name);
 private:
     future<> has_access(data_dictionary::database db, const sstring& keyspace, auth::command_desc) const;
 public:

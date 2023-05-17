@@ -917,7 +917,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_au
                 return client_state.maybe_update_per_service_level_params();
             });
             f = f.then([&client_state] {
-                client_state.register_service_level_subscriber();
+                client_state.register_service_level_params_updater();
                 return make_ready_future<>();
             });
             return f.then([this, stream, challenge = std::move(challenge), trace_state]() mutable {
