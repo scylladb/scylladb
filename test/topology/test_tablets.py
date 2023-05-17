@@ -58,8 +58,8 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
     await asyncio.gather(*[manager.cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, 2);", execution_profile='whitelist')
                            for k in keys])
 
-    rows = manager.cql.execute("SELECT * FROM test.test;")
-    assert len(list(rows)) == len(keys)
+    rows = manager.cql.execute("SELECT * FROM test.test;").all()
+    assert len(rows) == len(keys)
     for r in rows:
         assert r.c == 2
 
@@ -73,8 +73,8 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
     await asyncio.gather(*[manager.cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, 3);", execution_profile='whitelist')
                            for k in keys])
 
-    rows = manager.cql.execute("SELECT * FROM test.test;")
-    assert len(list(rows)) == len(keys)
+    rows = manager.cql.execute("SELECT * FROM test.test;").all()
+    assert len(rows) == len(keys)
     for r in rows:
         assert r.c == 3
 
@@ -94,8 +94,8 @@ async def test_scans(manager: ManagerClient):
     rows = manager.cql.execute("SELECT count(*) FROM test.test;")
     assert rows.one().count == len(keys)
 
-    rows = manager.cql.execute("SELECT * FROM test.test;")
-    assert len(list(rows)) == len(keys)
+    rows = manager.cql.execute("SELECT * FROM test.test;").all()
+    assert len(rows) == len(keys)
     for r in rows:
         assert r.c == r.pk
 
