@@ -168,7 +168,7 @@ std::ostream& operator<<(std::ostream& os, pretty_printed_throughput tp) {
 }
 
 static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_s, sstable_set::incremental_selector& selector,
-        const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk) {
+        const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk, uint64_t& bloom_filter_checks) {
     if (!table_s.tombstone_gc_enabled()) [[unlikely]] {
         return api::min_timestamp;
     }
@@ -183,6 +183,7 @@ static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_
             hk = sstables::sstable::make_hashed_key(*table_s.schema(), dk.key());
         }
         if (sst->filter_has_key(*hk)) {
+            bloom_filter_checks++;
             timestamp = std::min(timestamp, sst->get_stats_metadata().min_timestamp);
         }
     }
@@ -463,6 +464,7 @@ protected:
     uint64_t _start_size = 0;
     uint64_t _end_size = 0;
     uint64_t _estimated_partitions = 0;
+    uint64_t _bloom_filter_checks = 0;
     db::replay_position _rp;
     encoding_stats_collector _stats_collector;
     bool _can_split_large_partition = false;
@@ -785,6 +787,7 @@ protected:
                 .ended_at = ended_at,
                 .start_size = _start_size,
                 .end_size = _end_size,
+                .bloom_filter_checks = _bloom_filter_checks,
             },
         };
 
@@ -825,7 +828,7 @@ private:
             };
         }
         return [this] (const dht::decorated_key& dk) {
-            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk);
+            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks);
         };
     }
 
