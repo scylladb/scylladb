@@ -1534,7 +1534,11 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                 rs.get_metrics().removenode_total_ranges = nr_ranges_total;
             }).get();
         }
-        rlogger.info("{}: started with keyspaces={}, leaving_node={}", op, ks_erms | boost::adaptors::map_keys, leaving_node);
+        auto get_ignore_nodes = [ops] () -> std::list<gms::inet_address>& {
+            static std::list<gms::inet_address> no_ignore_nodes;
+            return ops ? ops->ignore_nodes : no_ignore_nodes;
+        };
+        rlogger.info("{}: started with keyspaces={}, leaving_node={}, ignore_nodes={}", op, ks_erms | boost::adaptors::map_keys, leaving_node, get_ignore_nodes());
         for (const auto& [keyspace_name, erm] : ks_erms) {
             if (!db.has_keyspace(keyspace_name)) {
                 rlogger.info("{}: keyspace={} does not exist any more, ignoring it", op, keyspace_name);
@@ -1651,10 +1655,8 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                 neighbors_set.erase(myip);
                 neighbors_set.erase(leaving_node);
                 // Remove nodes in ignore_nodes
-                if (ops) {
-                    for (const auto& node : ops->ignore_nodes) {
-                        neighbors_set.erase(node);
-                    }
+                for (const auto& node : get_ignore_nodes()) {
+                    neighbors_set.erase(node);
                 }
                 auto neighbors = boost::copy_range<std::vector<gms::inet_address>>(neighbors_set |
                     boost::adaptors::filtered([&local_dc, &topology] (const gms::inet_address& node) {
@@ -1716,7 +1718,7 @@ future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmpt
     });
 }
 
-future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason, std::list<gms::inet_address> ignore_nodes) {
+future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_ptr tmptr, sstring op, sstring source_dc, streaming::stream_reason reason, std::unordered_set<gms::inet_address> ignore_nodes) {
     assert(this_shard_id() == 0);
     return seastar::async([this, tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason, ignore_nodes = std::move(ignore_nodes)] () mutable {
         auto& db = get_db().local();
@@ -1767,7 +1769,7 @@ future<> repair_service::do_rebuild_replace_with_repair(locator::token_metadata_
                         if (node == myip) {
                             return false;
                         }
-                        if (std::find(ignore_nodes.begin(), ignore_nodes.end(), node) != ignore_nodes.end()) {
+                        if (ignore_nodes.contains(node)) {
                             return false;
                         }
                         return source_dc.empty() ? true : topology.get_datacenter(node) == source_dc;
@@ -1816,7 +1818,7 @@ future<> repair_service::rebuild_with_repair(locator::token_metadata_ptr tmptr, 
     });
 }
 
-future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens, std::list<gms::inet_address> ignore_nodes) {
+future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens, std::unordered_set<gms::inet_address> ignore_nodes) {
     assert(this_shard_id() == 0);
     auto cloned_tm = co_await tmptr->clone_async();
     auto op = sstring("replace_with_repair");
@@ -1829,6 +1831,40 @@ future<> repair_service::replace_with_repair(locator::token_metadata_ptr tmptr, 
     cloned_tmptr->update_topology(utils::fb_utilities::get_broadcast_address(), _sys_ks.local().local_dc_rack());
     co_await cloned_tmptr->update_normal_tokens(replacing_tokens, utils::fb_utilities::get_broadcast_address());
     co_return co_await do_rebuild_replace_with_repair(std::move(cloned_tmptr), std::move(op), std::move(source_dc), reason, std::move(ignore_nodes));
+}
+
+node_ops_cmd_category categorize_node_ops_cmd(node_ops_cmd cmd) noexcept {
+    switch (cmd) {
+    case node_ops_cmd::removenode_prepare:
+    case node_ops_cmd::replace_prepare:
+    case node_ops_cmd::decommission_prepare:
+    case node_ops_cmd::bootstrap_prepare:
+        return node_ops_cmd_category::prepare;
+
+    case node_ops_cmd::removenode_heartbeat:
+    case node_ops_cmd::replace_heartbeat:
+    case node_ops_cmd::decommission_heartbeat:
+    case node_ops_cmd::bootstrap_heartbeat:
+        return node_ops_cmd_category::heartbeat;
+
+    case node_ops_cmd::removenode_sync_data:
+        return node_ops_cmd_category::sync_data;
+
+    case node_ops_cmd::removenode_abort:
+    case node_ops_cmd::replace_abort:
+    case node_ops_cmd::decommission_abort:
+    case node_ops_cmd::bootstrap_abort:
+        return node_ops_cmd_category::abort;
+
+    case node_ops_cmd::removenode_done:
+    case node_ops_cmd::replace_done:
+    case node_ops_cmd::decommission_done:
+    case node_ops_cmd::bootstrap_done:
+        return node_ops_cmd_category::done;
+
+    default:
+        return node_ops_cmd_category::other;
+    }
 }
 
 std::ostream& operator<<(std::ostream& out, node_ops_cmd cmd) {
@@ -1878,4 +1914,9 @@ std::ostream& operator<<(std::ostream& out, node_ops_cmd cmd) {
         default:
             return out << "unknown cmd (" << static_cast<std::underlying_type_t<node_ops_cmd>>(cmd) << ")";
     }
+}
+
+std::ostream& operator<<(std::ostream& out, const node_ops_cmd_request& req) {
+    return out << fmt::format("{}[{}]: ignore_nodes={}, leaving_nodes={}, replace_nodes={}, bootstrap_nodes={}, repair_tables={}",
+            req.cmd, req.ops_uuid, req.ignore_nodes, req.leaving_nodes, req.replace_nodes, req.bootstrap_nodes, req.repair_tables);
 }

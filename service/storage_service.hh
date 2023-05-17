@@ -99,12 +99,13 @@ class node_ops_meta_data {
     std::function<void ()> _signal;
     shared_ptr<node_ops_info> _ops;
     seastar::timer<lowres_clock> _watchdog;
-    std::chrono::seconds _watchdog_interval{120};
+    std::chrono::seconds _watchdog_interval;
 public:
     explicit node_ops_meta_data(
             node_ops_id ops_uuid,
             gms::inet_address coordinator,
             std::list<gms::inet_address> ignore_nodes,
+            std::chrono::seconds watchdog_interval,
             std::function<future<> ()> abort_func,
             std::function<void ()> signal_func);
     shared_ptr<node_ops_info> get_ops_info();
@@ -113,6 +114,8 @@ public:
     void update_watchdog();
     void cancel_watchdog();
 };
+
+struct node_ops_ctl;
 
 /**
  * This abstraction contains the token/identifier of this node
@@ -161,10 +164,12 @@ private:
     seastar::condition_variable _node_ops_abort_cond;
     named_semaphore _node_ops_abort_sem{1, named_semaphore_exception_factory{"node_ops_abort_sem"}};
     future<> _node_ops_abort_thread;
+    void node_ops_insert(node_ops_id, gms::inet_address coordinator, std::list<inet_address> ignore_nodes,
+                         std::function<future<>()> abort_func);
     future<> node_ops_update_heartbeat(node_ops_id ops_uuid);
     future<> node_ops_done(node_ops_id ops_uuid);
     future<> node_ops_abort(node_ops_id ops_uuid);
-    void node_ops_singal_abort(std::optional<node_ops_id> ops_uuid);
+    void node_ops_signal_abort(std::optional<node_ops_id> ops_uuid);
     future<> node_ops_abort_thread();
 public:
     storage_service(abort_source& as, distributed<replica::database>& db,
@@ -230,6 +235,15 @@ private:
         return _batchlog_manager;
     }
 
+    const gms::gossiper& gossiper() const noexcept {
+        return _gossiper;
+    };
+
+    gms::gossiper& gossiper() noexcept {
+        return _gossiper;
+    };
+
+    friend struct node_ops_ctl;
 public:
 
     locator::effective_replication_map_factory& get_erm_factory() noexcept {
@@ -697,6 +711,7 @@ public:
     future<node_ops_cmd_response> node_ops_cmd_handler(gms::inet_address coordinator, node_ops_cmd_request req);
     void node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req);
     future<> node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, node_ops_id uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done);
+    void on_node_ops_registered(node_ops_id);
 
     future<mode> get_operation_mode();
 
@@ -759,6 +774,11 @@ private:
 public:
     future<bool> is_cleanup_allowed(sstring keyspace);
     bool is_repair_based_node_ops_enabled(streaming::stream_reason reason);
+
+private:
+    std::unordered_set<gms::inet_address> _normal_state_handled_on_boot;
+    bool is_normal_state_handled_on_boot(gms::inet_address);
+    future<> wait_for_normal_state_handled_on_boot(const std::unordered_set<gms::inet_address>& nodes, sstring ops, node_ops_id uuid);
 };
 
 }
