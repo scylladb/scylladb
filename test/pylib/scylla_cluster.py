@@ -96,6 +96,7 @@ def make_scylla_conf(workdir: pathlib.Path, host_addr: str, seed_addrs: List[str
         'request_timeout_in_ms': 300000,
 
         'strict_allow_filtering': True,
+        'strict_is_not_null_in_views': True,
 
         'permissions_update_interval_in_ms': 100,
         'permissions_validity_in_ms': 100,

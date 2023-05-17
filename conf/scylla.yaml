@@ -573,3 +573,20 @@ force_schema_commit_log: true
 # A cluster not using Raft can be 'upgraded' to use Raft. Refer to the aforementioned
 # documentation, section 'Enabling Raft in ScyllaDB 5.2 and further', for the procedure.
 consistent_cluster_management: true
+
+# In materialized views, restrictions are allowed only on the view's primary key columns.
+# In old versions Scylla mistakenly allowed IS NOT NULL restrictions on columns which were not part
+# of the view's primary key. These invalid restrictions were ignored.
+# This option controls the behavior when someone tries to create a view with such invalid IS NOT NULL restrictions.
+#
+# Can be true, false, or warn.
+# * `true`: IS NOT NULL is allowed only on the view's primary key columns,
+#           trying to use it on other columns will cause an error, as it should.
+# * `false`: Scylla accepts IS NOT NULL restrictions on regular columns, but they're silently ignored.
+#            It's useful for backwards compatibility.
+# * `warn`: The same as false, but there's a warning about invalid view restrictions.
+#
+# To preserve backwards compatibility on old clusters, Scylla's default setting is `warn`.
+# New clusters have this option set to `true` by scylla.yaml (which overrides the default `warn`)
+# to make sure that trying to create an invalid view causes an error.
+strict_is_not_null_in_views: true
