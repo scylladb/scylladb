@@ -285,6 +285,8 @@ add_scylla_test(stall_free_test
   KIND SEASTAR)
 add_scylla_test(storage_proxy_test
   KIND SEASTAR)
+add_scylla_test(string_format_test
+  KIND BOOST)
 add_scylla_test(summary_test
   KIND BOOST)
 add_scylla_test(top_k_test
