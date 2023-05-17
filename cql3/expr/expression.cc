@@ -1017,7 +1017,7 @@ std::ostream& operator<<(std::ostream& os, const column_value& cv) {
 std::ostream& operator<<(std::ostream& os, const expression& expr) {
     expression::printer pr {
         .expr_to_print = expr,
-        .debug_mode = true
+        .debug_mode = false
     };
 
     return os << pr;

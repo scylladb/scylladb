@@ -828,12 +828,12 @@ bool has_only_eq_binops(const expression&);
 } // namespace cql3
 
 /// Custom formatter for an expression. Use {:user} for user-oriented
-/// output, {:debug} for debug-oriented output. Debug is the default.
+/// output, {:debug} for debug-oriented output. User is the default.
 ///
 /// Required for fmt::join() to work on expression.
 template <>
 class fmt::formatter<cql3::expr::expression> {
-    bool _debug = true;
+    bool _debug = false;
 private:
     constexpr static bool try_match_and_advance(format_parse_context& ctx, std::string_view s) {
         auto [ctx_end, s_end] = std::ranges::mismatch(ctx, s);
