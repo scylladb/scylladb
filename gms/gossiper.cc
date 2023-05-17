@@ -2234,7 +2234,7 @@ bool gossiper::is_alive(inet_address ep) const {
     if (ep == get_broadcast_address()) {
         return true;
     }
-    auto* eps = get_endpoint_state_for_endpoint_ptr(std::move(ep));
+    auto* eps = get_endpoint_state_for_endpoint_ptr(ep);
     // we could assert not-null, but having isAlive fail screws a node over so badly that
     // it's worth being defensive here so minor bugs don't cause disproportionate
     // badness.  (See CASSANDRA-1463 for an example).
