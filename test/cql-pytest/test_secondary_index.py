@@ -287,6 +287,23 @@ def test_too_large_indexed_collection_value(cql, test_keyspace):
         with pytest.raises(InvalidRequest, match='size'):
             cql.execute(f"INSERT INTO {table}(p,c,m) VALUES (0,1,{{'{big}': 'hi'}})")
 
+# Reproduces #13548:
+# Create a huge index on a table and immediately recreate the table (drop and create)
+# With `--enable-keyspace-column-family-metrics 1` cmd line param, this should slow down the view builder
+# (which is busy building the index), enough to get rid of the first table object from the `database` object
+# but also allow for creating another table with the same name, which raises a double-metrics-registration exception
+@pytest.mark.xfail(reason="issue #13548")
+def test_too_large_indexed_value_build(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v text') as table:
+        insert_statement = cql.prepare(f'INSERT INTO {table} (p,v) VALUES (?, ?)')
+        big_string = 'x'*665360
+        cql.execute(insert_statement, [0, big_string])
+        cql.execute(f"CREATE INDEX ON {table}(v)")
+    # going out of scope DROPs the above table
+    with new_test_table(cql, test_keyspace, 'p int primary key, v text') as table:
+        pass
+
+
 # Reproduces #8627:
 # Same as test_too_large_indexed_value above, just check adding an index
 # to a table with pre-existing data. The background index-building process
