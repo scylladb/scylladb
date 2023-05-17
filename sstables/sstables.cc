@@ -1446,6 +1446,7 @@ future<foreign_sstable_open_info> sstable::get_open_info() & {
 future<>
 sstable::load_owner_shards(const dht::sharder& sharder) {
     if (!_shards.empty()) {
+        sstlog.trace("{}: shards={}", get_filename(), _shards);
         co_return;
     }
     co_await read_scylla_metadata();
@@ -1473,6 +1474,7 @@ sstable::load_owner_shards(const dht::sharder& sharder) {
     }
 
     _shards = compute_shards_for_this_sstable(sharder);
+    sstlog.trace("{}: shards={}", get_filename(), _shards);
 }
 
 void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval) {
@@ -2753,6 +2755,7 @@ sstable::compute_shards_for_this_sstable(const dht::sharder& sharder_) const {
                 sm->token_ranges.elements
                 | boost::adaptors::transformed(disk_token_range_to_ring_position_range));
     }
+    sstlog.trace("{}: token_ranges={}", get_filename(), token_ranges);
     auto sharder = dht::ring_position_range_vector_sharder(sharder_, std::move(token_ranges));
     auto rpras = sharder.next(*_schema);
     while (rpras) {
