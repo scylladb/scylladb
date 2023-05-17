@@ -51,6 +51,8 @@ public:
     time_window_compaction_strategy_options(time_window_compaction_strategy_options&&);
     time_window_compaction_strategy_options(const std::map<sstring, sstring>& options);
 
+    static void validate(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
+
     std::chrono::seconds get_sstable_window_size() const { return sstable_window_size; }
 
     friend class time_window_compaction_strategy;

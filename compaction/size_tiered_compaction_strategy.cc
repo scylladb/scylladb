@@ -38,6 +38,13 @@ size_tiered_compaction_strategy_options::size_tiered_compaction_strategy_options
     cold_reads_to_omit = DEFAULT_COLD_READS_TO_OMIT;
 }
 
+// options is a map of compaction strategy options and their values.
+// unchecked_options is an analogical map from which already checked options are deleted.
+// This helps making sure that only allowed options are being set.
+void size_tiered_compaction_strategy_options::validate(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+
+}
+
 std::vector<std::pair<sstables::shared_sstable, uint64_t>>
 size_tiered_compaction_strategy::create_sstable_and_length_pairs(const std::vector<sstables::shared_sstable>& sstables) {
 

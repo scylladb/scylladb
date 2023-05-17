@@ -91,6 +91,13 @@ time_window_compaction_strategy_options::time_window_compaction_strategy_options
 
 time_window_compaction_strategy_options::time_window_compaction_strategy_options(const time_window_compaction_strategy_options&) = default;
 
+// options is a map of compaction strategy options and their values.
+// unchecked_options is an analogical map from which already checked options are deleted.
+// This helps making sure that only allowed options are being set.
+void time_window_compaction_strategy_options::validate(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+
+}
+
 class classify_by_timestamp {
     time_window_compaction_strategy_options _options;
     std::vector<int64_t> _known_windows;

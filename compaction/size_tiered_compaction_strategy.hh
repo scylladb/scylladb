@@ -81,6 +81,8 @@ public:
         return uncheckedOptions;
     }
 #endif
+    static void validate(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
+
     friend class size_tiered_compaction_strategy;
 };
 
