@@ -23,6 +23,7 @@
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/util.hh"
 #include "cql3/untyped_result_set.hh"
+#include "cql3/query_backend.hh"
 #include "db/config.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "utils/hashers.hh"
@@ -36,6 +37,87 @@ using namespace cql_transport::messages;
 logging::logger log("query_processor");
 logging::logger prep_cache_log("prepared_statements_cache");
 logging::logger authorized_prepared_statements_cache_log("authorized_prepared_statements_cache");
+
+class query_backend::impl {
+    std::string _name;
+    data_dictionary::database _db;
+    service::forward_service* _fwd_service;
+    service::migration_manager* _mm;
+    service::raft_group0_client* _rgc;
+    wasmtime::Engine* _wasm_engine;
+    wasm::instance_cache* _wasm_ic;
+    wasm::alien_thread_runner* _wasm_atr;
+    service::storage_proxy& _proxy;
+
+    void check(const void* ptr, const char* func) {
+        if (!ptr) {
+            throw std::runtime_error(fmt::format("bad function call: query backend {} does not support calling {}()", _name, func));
+        }
+    }
+public:
+    impl(std::string name, data_dictionary::database db, service::forward_service* fwd_service, service::migration_manager* mm, service::raft_group0_client* rgc,
+            wasmtime::Engine* wasm_engine, wasm::instance_cache* wasm_ic, wasm::alien_thread_runner* wasm_atr, service::storage_proxy& proxy)
+        : _name(std::move(name))
+        , _db(db)
+        , _fwd_service(fwd_service)
+        , _mm(mm)
+        , _rgc(rgc)
+        , _wasm_engine(wasm_engine)
+        , _wasm_ic(wasm_ic)
+        , _wasm_atr(wasm_atr)
+        , _proxy(proxy)
+    { }
+
+    data_dictionary::database db() {
+        return _db;
+    }
+    service::forward_service& forwarder() {
+        check(_fwd_service, __FUNCTION__);
+        return *_fwd_service;
+    }
+    service::migration_manager& get_migration_manager() {
+        check(_mm, __FUNCTION__);
+        return *_mm;
+    }
+    service::raft_group0_client& get_group0_client() {
+        check(_rgc, __FUNCTION__);
+        return *_rgc;
+    }
+    wasmtime::Engine& wasm_engine() {
+        check(_wasm_engine, __FUNCTION__);
+        return *_wasm_engine;
+    }
+    wasm::instance_cache& wasm_instance_cache() {
+        check(_wasm_ic, __FUNCTION__);
+        return *_wasm_ic;
+    }
+    wasm::alien_thread_runner& alien_runner() {
+        check(_wasm_atr, __FUNCTION__);
+        return *_wasm_atr;
+    }
+
+    service::storage_proxy& proxy() {
+        return _proxy;
+    }
+
+    virtual shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) = 0;
+};
+
+query_backend::query_backend(shared_ptr<impl> impl) : _impl(std::move(impl)) { }
+query_backend::~query_backend() = default;
+
+data_dictionary::database query_backend::db() { return _impl->db(); }
+service::forward_service& query_backend::forwarder() { return _impl->forwarder(); }
+service::migration_manager& query_backend::get_migration_manager() { return _impl->get_migration_manager(); }
+service::raft_group0_client& query_backend::get_group0_client() { return _impl->get_group0_client(); }
+wasmtime::Engine& query_backend::wasm_engine() { return _impl->wasm_engine(); }
+wasm::instance_cache& query_backend::wasm_instance_cache() { return _impl->wasm_instance_cache(); }
+wasm::alien_thread_runner& query_backend::alien_runner() { return _impl->alien_runner(); }
+service::storage_proxy& query_backend::proxy() { return _impl->proxy(); }
+
+shared_ptr<cql_transport::messages::result_message> query_backend::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) {
+    return _impl->bounce_to_shard(shard, std::move(cached_fn_calls));
+}
 
 const sstring query_processor::CQL_VERSION = "3.3.1";
 
