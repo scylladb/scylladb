@@ -591,8 +591,10 @@ void repair::shard_repair_task_impl::check_failed_ranges() {
     rlogger.info("repair[{}]: stats: repair_reason={}, keyspace={}, tables={}, ranges_nr={}, {}",
         global_repair_id.uuid(), _reason, _status.keyspace, table_names(), ranges.size(), _stats.get_stats());
     if (nr_failed_ranges) {
-        rlogger.warn("repair[{}]: failed - {} out of {} ranges failed", global_repair_id.uuid(), nr_failed_ranges, ranges_size());
-        throw std::runtime_error(format("repair[{}] on failed to repair {} out of {} ranges", global_repair_id.uuid(), nr_failed_ranges, ranges_size()));
+        auto msg = format("repair[{}]: {} out of {} ranges failed, keyspace={}, tables={}, repair_reason={}, nodes_down_during_repair={}",
+                global_repair_id.uuid(), nr_failed_ranges, ranges_size(), _status.keyspace, table_names(), _reason, nodes_down);
+        rlogger.warn("{}", msg);
+        throw std::runtime_error(msg);
     } else {
         if (dropped_tables.size()) {
             rlogger.warn("repair[{}]: completed successfully, keyspace={}, ignoring dropped tables={}", global_repair_id.uuid(), _status.keyspace, dropped_tables);
@@ -630,6 +632,7 @@ future<> repair::shard_repair_task_impl::repair_range(const dht::token_range& ra
         auto it = std::find(live_neighbors.begin(), live_neighbors.end(), node);
         if (it == live_neighbors.end()) {
             nr_failed_ranges++;
+            nodes_down.insert(node);
             auto status = format("failed: mandatory neighbor={} is not alive", node);
             rlogger.error("repair[{}]: Repair {} out of {} ranges, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
                     global_repair_id.uuid(), ranges_index, ranges_size(), _status.keyspace, table_names(), range, neighbors, live_neighbors, status);
@@ -641,7 +644,13 @@ future<> repair::shard_repair_task_impl::repair_range(const dht::token_range& ra
     }
     if (live_neighbors.size() != neighbors.size()) {
         nr_failed_ranges++;
-        auto status = live_neighbors.empty() ? "skipped" : "partial";
+        std::unordered_set<gms::inet_address> live_neighbors_set(live_neighbors.begin(), live_neighbors.end());
+        for (auto& node : neighbors) {
+            if (!live_neighbors_set.contains(node)) {
+                nodes_down.insert(node);
+            }
+        }
+        auto status = live_neighbors.empty() ? "skipped_no_live_peers" : "partial";
         rlogger.warn("repair[{}]: Repair {} out of {} ranges, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
                 global_repair_id.uuid(), ranges_index, ranges_size(), _status.keyspace, table_names(), range, neighbors, live_neighbors, status);
         if (live_neighbors.empty()) {
