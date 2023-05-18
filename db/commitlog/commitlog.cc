@@ -35,6 +35,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/switch_to.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/util/defer.hh>
 
@@ -96,9 +97,10 @@ public:
     virtual void release_cf_count(const cf_id_type&) = 0;
 };
 
-db::commitlog::config db::commitlog::config::from_db_config(const db::config& cfg, size_t shard_available_memory) {
+db::commitlog::config db::commitlog::config::from_db_config(const db::config& cfg, seastar::scheduling_group sg, size_t shard_available_memory) {
     config c;
 
+    c.sched_group = std::move(sg);
     c.commit_log_location = cfg.commitlog_directory();
     c.metrics_category_name = "commitlog";
     c.commitlog_total_space_in_mb = cfg.commitlog_total_space_in_mb() >= 0 ? cfg.commitlog_total_space_in_mb() : (shard_available_memory * smp::count) >> 20;
@@ -1031,6 +1033,8 @@ public:
                 }
             });
 
+            co_await coroutine::switch_to(_segment_manager->cfg.sched_group);
+
             for (;;) {
                 auto current = *view.begin();
                 try {
@@ -1501,7 +1505,7 @@ future<> db::commitlog::segment_manager::init() {
     clogger.trace("Delaying timer loop {} ms", delay);
     // We need to wait until we have scanned all other segments to actually start serving new
     // segments. We are ready now
-    _reserve_replenisher = replenish_reserve();
+    _reserve_replenisher = with_scheduling_group(cfg.sched_group, [this] { return replenish_reserve(); });
     arm(delay);
 }
 

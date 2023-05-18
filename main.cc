@@ -924,6 +924,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
             dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
             dbcfg.gossip_scheduling_group = make_sched_group("gossip", 1000);
+            dbcfg.commitlog_scheduling_group = make_sched_group("commitlog", 1000);
             dbcfg.available_memory = memory::stats().total_memory();
 
             netw::messaging_service::config mscfg;
