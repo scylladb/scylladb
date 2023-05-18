@@ -113,12 +113,12 @@ async def get_available_host(cql: Session, deadline: float) -> Host:
 
 
 async def read_barrier(cql: Session, host: Host):
-    """To issue a read barrier it is sufficient to attempt altering
-       a non-existing table: in order to validate the DDL the node needs to sync
-       with the leader and fetch latest group 0 state.
+    """To issue a read barrier it is sufficient to attempt dropping a
+    non-existing table. We need to use `if exists`, otherwise the statement
+    would fail on prepare/validate step which happens before a read barrier is
+    performed.
     """
-    with pytest.raises(InvalidRequest, match="nosuch"):
-        await cql.run_async("alter table nosuchkeyspace.nosuchtable with comment=''", host = host)
+    await cql.run_async("drop table if exists nosuchkeyspace.nosuchtable", host = host)
 
 
 unique_name.last_ms = 0
