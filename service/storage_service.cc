@@ -336,6 +336,12 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
             // Save tokens, not needed for raft topology management, but needed by legacy
             // Also ip -> id mapping is needed for address map recreation on reboot
             if (!utils::fb_utilities::is_me(ip)) {
+                // Some state that is used to fill in 'peeers' table is still propagated over gossiper.
+                // Populate the table with the state from the gossiper here since storage_service::on_change()
+                // (which is called each time gossiper state changes) may have skipped it because the tokens
+                // for the node were not in the 'normal' state yet
+                co_await update_peer_info(ip);
+                // And then amend with the info from raft
                 co_await _sys_ks.local().update_tokens(ip, rs.ring.value().tokens);
                 co_await _sys_ks.local().update_peer_info(ip, "data_center", rs.datacenter);
                 co_await _sys_ks.local().update_peer_info(ip, "rack", rs.rack);
