@@ -292,6 +292,22 @@ SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_sourc
     test_database(run_mutation_source_tests_reverse);
 }
 
+static void require_exist(const sstring& filename, bool should) {
+    auto exists = file_exists(filename).get();
+    BOOST_REQUIRE_EQUAL(exists, should);
+}
+
+static void touch_dir(const sstring& dirname) {
+    recursive_touch_directory(dirname).get();
+    require_exist(dirname, true);
+}
+
+static void touch_file(const sstring& filename) {
+    auto f = open_file_dma(filename, open_flags::create).get0();
+    f.close().get();
+    require_exist(filename, true);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
     using sst = sstables::sstable;
 
@@ -305,22 +321,6 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
     sstring ks = "system";
     sstring cf = "peers-37f71aca7dc2383ba70672528af04d4f";
     sstring sst_dir = (data_dir.path() / std::string_view(ks) / std::string_view(cf)).string();
-
-    auto require_exist = [] (const sstring& name, bool should_exist) {
-        auto exists = file_exists(name).get0();
-        BOOST_REQUIRE(exists == should_exist);
-    };
-
-    auto touch_dir = [&require_exist] (const sstring& dir_name) {
-        recursive_touch_directory(dir_name).get();
-        require_exist(dir_name, true);
-    };
-
-    auto touch_file = [&require_exist] (const sstring& file_name) {
-        auto f = open_file_dma(file_name, open_flags::create).get0();
-        f.close().get();
-        require_exist(file_name, true);
-    };
 
     auto temp_sst_dir_2 = fmt::format("{}/{}{}", sst_dir, generation_from_value(2), tempdir_extension);
     touch_dir(temp_sst_dir_2);
@@ -336,7 +336,7 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
     temp_file_name = sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), sst::format_types::big, component_type::Data);
     touch_file(temp_file_name);
 
-    do_with_cql_env_and_compaction_groups([&sst_dir, &ks, &cf, &require_exist, &temp_sst_dir_2, &temp_sst_dir_3] (cql_test_env& e) {
+    do_with_cql_env_and_compaction_groups([&sst_dir, &ks, &cf, &temp_sst_dir_2, &temp_sst_dir_3] (cql_test_env& e) {
         require_exist(temp_sst_dir_2, false);
         require_exist(temp_sst_dir_3, false);
 
@@ -360,27 +360,7 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
     sstring sst_dir = (data_dir.path() / std::string_view(ks) / std::string_view(cf)).string();
     sstring pending_delete_dir = sst_dir + "/" + sstables::pending_delete_dir;
 
-    auto require_exist = [] (const sstring& name, bool should_exist) {
-        auto exists = file_exists(name).get0();
-        if (should_exist) {
-            BOOST_REQUIRE(exists);
-        } else {
-            BOOST_REQUIRE(!exists);
-        }
-    };
-
-    auto touch_dir = [&require_exist] (const sstring& dir_name) {
-        recursive_touch_directory(dir_name).get();
-        require_exist(dir_name, true);
-    };
-
-    auto touch_file = [&require_exist] (const sstring& file_name) {
-        auto f = open_file_dma(file_name, open_flags::create).get0();
-        f.close().get();
-        require_exist(file_name, true);
-    };
-
-    auto write_file = [&require_exist] (const sstring& file_name, const sstring& text) {
+    auto write_file = [] (const sstring& file_name, const sstring& text) {
         auto f = open_file_dma(file_name, open_flags::wo | open_flags::create | open_flags::truncate).get0();
         auto os = make_file_output_stream(f, file_output_stream_options{}).get0();
         os.write(text).get();
