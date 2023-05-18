@@ -353,19 +353,19 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_forward_progress) {
 }
 
 class dummy_file_impl : public file_impl {
-    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, const io_priority_class& pc) override {
+    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent*) override {
         return make_ready_future<size_t>(0);
     }
 
-    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override {
+    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, io_intent*) override {
         return make_ready_future<size_t>(0);
     }
 
-    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, const io_priority_class& pc) override {
+    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent*) override {
         return make_ready_future<size_t>(0);
     }
 
-    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override {
+    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent*) override {
         return make_ready_future<size_t>(0);
     }
 
@@ -401,7 +401,7 @@ class dummy_file_impl : public file_impl {
         throw_with_backtrace<std::bad_function_call>();
     }
 
-    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) override {
+    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent*) override {
         temporary_buffer<uint8_t> buf(range_size);
 
         memset(buf.get_write(), 0xff, buf.size());

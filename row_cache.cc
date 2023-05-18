@@ -44,7 +44,7 @@ static schema_ptr to_query_domain(const query::partition_slice& slice, schema_pt
 flat_mutation_reader_v2
 row_cache::create_underlying_reader(read_context& ctx, mutation_source& src, const dht::partition_range& pr) {
     schema_ptr entry_schema = to_query_domain(ctx.slice(), _schema);
-    auto reader = src.make_reader_v2(entry_schema, ctx.permit(), pr, ctx.slice(), ctx.pc(), ctx.trace_state(), streamed_mutation::forwarding::yes);
+    auto reader = src.make_reader_v2(entry_schema, ctx.permit(), pr, ctx.slice(), ctx.trace_state(), streamed_mutation::forwarding::yes);
     ctx.on_underlying_created();
     return reader;
 }
@@ -725,13 +725,12 @@ row_cache::make_reader_opt(schema_ptr s,
                        reader_permit permit,
                        const dht::partition_range& range,
                        const query::partition_slice& slice,
-                       const io_priority_class& pc,
                        tracing::trace_state_ptr trace_state,
                        streamed_mutation::forwarding fwd,
                        mutation_reader::forwarding fwd_mr)
 {
     auto make_context = [&] {
-        return std::make_unique<read_context>(*this, s, std::move(permit), range, slice, pc, trace_state, fwd_mr);
+        return std::make_unique<read_context>(*this, s, std::move(permit), range, slice, trace_state, fwd_mr);
     };
 
     if (query::is_single_partition(range) && !fwd_mr) {

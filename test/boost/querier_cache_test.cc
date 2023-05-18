@@ -8,7 +8,6 @@
 
 #include "querier.hh"
 #include "mutation_query.hh"
-#include "service/priority_manager.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/random_utils.hh"
@@ -109,7 +108,6 @@ private:
             _sem.make_tracking_only_permit(_s.schema().get(), "make-querier", db::no_timeout, {}),
             range,
             _s.schema()->full_slice(),
-            service::get_local_sstable_query_read_priority(),
             nullptr);
     }
 

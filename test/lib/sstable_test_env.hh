@@ -135,7 +135,7 @@ public:
             sstable::version_types version, sstable::format_types f = sstable::format_types::big) {
         auto sst = make_sstable(std::move(schema), dir, generation, version, f);
         sstable_open_config cfg { .load_first_and_last_position_metadata = true };
-        return sst->load(default_priority_class(), cfg).then([sst = std::move(sst)] {
+        return sst->load(cfg).then([sst = std::move(sst)] {
             return make_ready_future<shared_sstable>(std::move(sst));
         });
     }

@@ -799,7 +799,6 @@ static test_result scan_rows_with_stride(replica::column_family& cf, clustered_d
         semaphore.make_permit(),
         query::full_partition_range,
         cf.schema()->full_slice(),
-        default_priority_class(),
         nullptr,
         n_skip ? streamed_mutation::forwarding::yes : streamed_mutation::forwarding::no);
     auto close_rd = deferred_close(rd);
@@ -870,7 +869,6 @@ static test_result slice_rows(replica::column_family& cf, clustered_ds& ds, int 
         semaphore.make_permit(),
         query::full_partition_range,
         cf.schema()->full_slice(),
-        default_priority_class(),
         nullptr,
         streamed_mutation::forwarding::yes);
     auto close_rd = deferred_close(rd);
@@ -930,7 +928,7 @@ static test_result test_slicing_using_restrictions(replica::column_family& cf, c
         }))
         .build();
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
-    auto rd = cf.make_reader_v2(cf.schema(), semaphore.make_permit(), pr, slice, default_priority_class(), nullptr,
+    auto rd = cf.make_reader_v2(cf.schema(), semaphore.make_permit(), pr, slice, nullptr,
                              streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     auto close_rd = deferred_close(rd);
 
@@ -940,7 +938,7 @@ static test_result test_slicing_using_restrictions(replica::column_family& cf, c
 static test_result slice_rows_single_key(replica::column_family& cf, clustered_ds& ds, int offset = 0, int n_read = 1) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
-    auto rd = cf.make_reader_v2(cf.schema(), semaphore.make_permit(), pr, cf.schema()->full_slice(), default_priority_class(), nullptr, streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
+    auto rd = cf.make_reader_v2(cf.schema(), semaphore.make_permit(), pr, cf.schema()->full_slice(), nullptr, streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
     auto close_rd = deferred_close(rd);
 
     metrics_snapshot before;
@@ -1129,7 +1127,6 @@ static test_result test_forwarding_with_restriction(replica::column_family& cf, 
         semaphore.make_permit(),
         pr,
         slice,
-        default_priority_class(),
         nullptr,
         streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
     auto close_rd = deferred_close(rd);

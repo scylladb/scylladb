@@ -155,8 +155,6 @@ struct compaction_descriptor {
     compaction_sstable_creator_fn creator;
     compaction_sstable_replacer_fn replacer;
 
-    ::io_priority_class io_priority = default_priority_class();
-
     // Denotes if this compaction task is comprised solely of completely expired SSTables
     sstables::has_only_fully_expired has_only_fully_expired = has_only_fully_expired::no;
 
@@ -166,7 +164,6 @@ struct compaction_descriptor {
     static constexpr uint64_t default_max_sstable_bytes = std::numeric_limits<uint64_t>::max();
 
     explicit compaction_descriptor(std::vector<sstables::shared_sstable> sstables,
-                                   ::io_priority_class io_priority,
                                    int level = default_level,
                                    uint64_t max_sstable_bytes = default_max_sstable_bytes,
                                    run_id run_identifier = run_id::create_random_id(),
@@ -178,18 +175,15 @@ struct compaction_descriptor {
         , run_identifier(run_identifier)
         , options(options)
         , owned_ranges(std::move(owned_ranges_))
-        , io_priority(io_priority)
     {}
 
     explicit compaction_descriptor(sstables::has_only_fully_expired has_only_fully_expired,
-                                   std::vector<sstables::shared_sstable> sstables,
-                                   ::io_priority_class io_priority)
+                                   std::vector<sstables::shared_sstable> sstables)
         : sstables(std::move(sstables))
         , level(default_level)
         , max_sstable_bytes(default_max_sstable_bytes)
         , run_identifier(run_id::create_random_id())
         , options(compaction_type_options::make_regular())
-        , io_priority(io_priority)
         , has_only_fully_expired(has_only_fully_expired)
     {}
 

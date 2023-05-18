@@ -69,11 +69,10 @@ SEASTAR_THREAD_TEST_CASE(test_streaming_vt_as_mutation_source) {
                 reader_permit permit,
                 const dht::partition_range& pr,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding stream_fwd,
                 mutation_reader::forwarding) {
-            return ms.make_reader_v2(s, permit, pr, slice, pc, trace_state, stream_fwd, mutation_reader::forwarding::no);
+            return ms.make_reader_v2(s, permit, pr, slice, trace_state, stream_fwd, mutation_reader::forwarding::no);
         });
     }, false /* with_partition_range_forwarding */);
 }

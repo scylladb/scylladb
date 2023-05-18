@@ -774,7 +774,7 @@ compaction_manager::~compaction_manager() {
 
 future<> compaction_manager::update_throughput(uint32_t value_mbs) {
     uint64_t bps = ((uint64_t)(value_mbs != 0 ? value_mbs : std::numeric_limits<uint32_t>::max())) << 20;
-    return compaction_sg().io.update_bandwidth(bps).then_wrapped([value_mbs] (auto f) {
+    return compaction_sg().cpu.update_io_bandwidth(bps).then_wrapped([value_mbs] (auto f) {
         if (f.failed()) {
             cmlog.warn("Couldn't update compaction bandwidth: {}", f.get_exception());
         } else if (value_mbs != 0) {
@@ -1186,8 +1186,7 @@ private:
         });
 
         auto get_next_job = [&] () -> std::optional<sstables::compaction_descriptor> {
-            auto& iop = service::get_local_streaming_priority(); // run reshape in maintenance mode
-            auto desc = t.get_compaction_strategy().get_reshaping_job(reshape_candidates, t.schema(), iop, sstables::reshape_mode::strict);
+            auto desc = t.get_compaction_strategy().get_reshaping_job(reshape_candidates, t.schema(), sstables::reshape_mode::strict);
             return desc.sstables.size() ? std::make_optional(std::move(desc)) : std::nullopt;
         };
 
@@ -1341,7 +1340,7 @@ private:
             auto sstable_level = sst->get_sstable_level();
             auto run_identifier = sst->run_identifier();
             // FIXME: this compaction should run with maintenance priority.
-            auto descriptor = sstables::compaction_descriptor({ sst }, service::get_local_compaction_priority(),
+            auto descriptor = sstables::compaction_descriptor({ sst },
                 sstable_level, sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, _options, _owned_ranges_ptr);
 
             // Releases reference to cleaned sstable such that respective used disk space can be freed.
@@ -1439,7 +1438,6 @@ private:
         try {
             auto desc = sstables::compaction_descriptor(
                     { sst },
-                    _cm.maintenance_sg().io,
                     sst->get_sstable_level(),
                     sstables::compaction_descriptor::default_max_sstable_bytes,
                     sst->run_identifier(),

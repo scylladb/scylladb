@@ -10,7 +10,6 @@
 #include <boost/range/adaptor/map.hpp>
 #include "replica/database.hh"
 #include "view_update_generator.hh"
-#include "service/priority_manager.hh"
 #include "utils/error_injection.hh"
 #include "db/view/view_updating_consumer.hh"
 #include "sstables/sstables.hh"
@@ -147,11 +146,10 @@ future<> view_update_generator::start() {
                                 reader_permit permit,
                                 const dht::partition_range& pr,
                                 const query::partition_slice& ps,
-                                const io_priority_class& pc,
                                 tracing::trace_state_ptr ts,
                                 streamed_mutation::forwarding fwd_ms,
                                 mutation_reader::forwarding fwd_mr) {
-                        return ssts->make_range_sstable_reader(s, std::move(permit), pr, ps, pc, std::move(ts), fwd_ms, fwd_mr, *_progress_tracker);
+                        return ssts->make_range_sstable_reader(s, std::move(permit), pr, ps, std::move(ts), fwd_ms, fwd_mr, *_progress_tracker);
                     });
                     auto [staging_sstable_reader, staging_sstable_reader_handle] = make_manually_paused_evictable_reader_v2(
                             std::move(ms),
@@ -159,7 +157,6 @@ future<> view_update_generator::start() {
                             permit,
                             query::full_partition_range,
                             s->full_slice(),
-                            service::get_local_streaming_priority(),
                             nullptr,
                             ::mutation_reader::forwarding::no);
                     auto close_sr = deferred_close(staging_sstable_reader);

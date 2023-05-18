@@ -43,7 +43,6 @@
 #include "replica/database.hh"
 #include "partition_slice_builder.hh"
 #include "schema/schema_registry.hh"
-#include "service/priority_manager.hh"
 #include "utils/ranges.hh"
 #include "mutation/mutation_rebuilder.hh"
 
@@ -739,7 +738,6 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
                 list_permit,
                 query::full_partition_range,
                 s.schema()->full_slice(),
-                seastar::default_priority_class(),
                 nullptr,
                 streamed_mutation::forwarding::no,
                 mutation_reader::forwarding::no));
@@ -753,7 +751,6 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
             env.make_reader_permit(),
             query::full_partition_range,
             s.schema()->full_slice(),
-            seastar::default_priority_class(),
             nullptr,
             streamed_mutation::forwarding::no,
             mutation_reader::forwarding::no);
@@ -1021,7 +1018,7 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
             readers.push_back(ds.make_reader_v2(s,
                 permit,
                 reader_ranges.back(),
-                s->full_slice(), default_priority_class(), nullptr,
+                s->full_slice(), nullptr,
                 streamed_mutation::forwarding::yes,
                 mutation_reader::forwarding::yes));
         }
@@ -1119,9 +1116,9 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
         // Check fast_forward_to()
         {
             auto permit = env.make_reader_permit();
-            readers.push_back(ds1.make_reader_v2(s, permit, query::full_partition_range, s->full_slice(), default_priority_class(),
+            readers.push_back(ds1.make_reader_v2(s, permit, query::full_partition_range, s->full_slice(),
                 nullptr, streamed_mutation::forwarding::yes));
-            readers.push_back(ds2.make_reader_v2(s, permit, query::full_partition_range, s->full_slice(), default_priority_class(),
+            readers.push_back(ds2.make_reader_v2(s, permit, query::full_partition_range, s->full_slice(),
                 nullptr, streamed_mutation::forwarding::yes));
 
             auto rd = mutation_fragment_v1_stream(make_combined_reader(s, permit, std::move(readers),
@@ -1221,7 +1218,6 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
                     reader_permit permit,
                     const dht::partition_range& range,
                     const query::partition_slice& slice,
-                    const io_priority_class& pc,
                     tracing::trace_state_ptr trace_state,
                     streamed_mutation::forwarding fwd_sm,
                     mutation_reader::forwarding fwd_mr) {
@@ -1231,7 +1227,6 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
                             make_reader_permit(env),
                             range,
                             slice,
-                            pc,
                             trace_state.get(),
                             fwd_sm,
                             fwd_mr)));
@@ -1245,11 +1240,10 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
                     reader_permit permit,
                     const dht::partition_range& range,
                     const query::partition_slice& slice,
-                    const io_priority_class& pc,
                     tracing::trace_state_ptr trace_state,
                     streamed_mutation::forwarding fwd_sm,
                     mutation_reader::forwarding fwd_mr) {
-                return (*reader_factory_ptr)(std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd_sm, fwd_mr);
+                return (*reader_factory_ptr)(std::move(s), std::move(permit), range, slice, std::move(trace_state), fwd_sm, fwd_mr);
             });
         };
 
@@ -1606,7 +1600,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
                 reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr) {
             shards_touched[this_shard_id()] = true;
@@ -1618,8 +1611,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
                     s.schema(),
                     make_reader_permit(env),
                     query::full_partition_range,
-                    s.schema()->full_slice(),
-                    service::get_local_sstable_query_read_priority()))
+                    s.schema()->full_slice()))
                 .produces_end_of_stream();
 
         for (unsigned i = 0; i < smp::count; ++i) {
@@ -1867,7 +1859,6 @@ multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(s
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding) mutable {
         const auto shard = this_shard_id();
@@ -1888,7 +1879,7 @@ multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(s
 
     auto sharder = std::make_unique<dummy_sharder>(s.schema()->get_sharder(), std::move(pkeys_by_tokens));
     auto reader = make_multishard_combining_reader_v2_for_tests(*sharder, seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
-            s.schema(), permit, *pr, s.schema()->full_slice(), service::get_local_sstable_query_read_priority());
+            s.schema(), permit, *pr, s.schema()->full_slice());
 
     return {std::move(reader), std::move(sharder), std::move(remote_controls), std::move(pr)};
 }
@@ -1911,7 +1902,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_custom_shard_number) {
                 reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr) {
             shards_touched[this_shard_id()] = true;
@@ -1924,8 +1914,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_custom_shard_number) {
                 s.schema(),
                 make_reader_permit(env),
                 query::full_partition_range,
-                s.schema()->full_slice(),
-                service::get_local_sstable_query_read_priority()))
+                s.schema()->full_slice()))
             .produces_end_of_stream();
 
         for (unsigned i = 0; i < no_shards; ++i) {
@@ -1952,7 +1941,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
                 reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr) {
             shards_touched[this_shard_id()] = true;
@@ -1991,8 +1979,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
                 s.schema(),
                 make_reader_permit(env),
                 pr,
-                s.schema()->full_slice(),
-                service::get_local_sstable_query_read_priority()))
+                s.schema()->full_slice()))
             .produces_end_of_stream();
 
         for (unsigned i = 0; i < smp::count; ++i) {
@@ -2196,7 +2183,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
                 reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr) {
             auto& table = db->local().find_column_family(schema);
@@ -2205,7 +2191,6 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
                     std::move(permit),
                     range,
                     slice,
-                    service::get_local_sstable_query_read_priority(),
                     std::move(trace_state),
                     streamed_mutation::forwarding::no,
                     fwd_mr);
@@ -2217,8 +2202,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
                 schema,
                 make_reader_permit(env),
                 query::full_partition_range,
-                schema->full_slice(),
-                service::get_local_sstable_query_read_priority());
+                schema->full_slice());
 
         reader.set_max_buffer_size(max_buffer_size);
 
@@ -2284,16 +2268,15 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
                 reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr) mutable {
             auto& table = db->local().find_column_family(s);
-            return table.as_mutation_source().make_reader_v2(std::move(s), std::move(permit), range, slice, pc, std::move(trace_state),
+            return table.as_mutation_source().make_reader_v2(std::move(s), std::move(permit), range, slice, std::move(trace_state),
                     streamed_mutation::forwarding::no, fwd_mr);
         };
         auto reference_reader = make_filtering_reader(
                 make_multishard_combining_reader_v2(seastar::make_shared<test_reader_lifecycle_policy>(std::move(reader_factory)),
-                    schema, make_reader_permit(env), partition_range, schema->full_slice(), service::get_local_sstable_query_read_priority()),
+                    schema, make_reader_permit(env), partition_range, schema->full_slice()),
                 [&remote_partitioner] (const dht::decorated_key& pkey) {
                     return remote_partitioner.shard_of(pkey.token()) == 0;
                 });
@@ -2531,11 +2514,10 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_as_mutation_source) {
                     reader_permit permit,
                     const dht::partition_range& range,
                     const query::partition_slice& slice,
-                    const io_priority_class& pc,
                     tracing::trace_state_ptr trace_state,
                     streamed_mutation::forwarding fwd_sm,
                     mutation_reader::forwarding fwd_mr) mutable {
-                auto source = mt->make_flat_reader(s, std::move(permit), range, slice, pc, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
+                auto source = mt->make_flat_reader(s, std::move(permit), range, slice, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
                 if (fwd_sm == streamed_mutation::forwarding::yes) {
                     source = make_forwardable(std::move(source));
                 }
@@ -2659,11 +2641,10 @@ SEASTAR_THREAD_TEST_CASE(test_auto_paused_evictable_reader_is_mutation_source) {
                 reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) mutable {
-            auto mr = make_auto_paused_evictable_reader_v2(mt->as_data_source(), std::move(s), permit, range, slice, pc, std::move(trace_state), fwd_mr);
+            auto mr = make_auto_paused_evictable_reader_v2(mt->as_data_source(), std::move(s), permit, range, slice, std::move(trace_state), fwd_mr);
             if (fwd_sm == streamed_mutation::forwarding::yes) {
                 return make_forwardable(std::move(mr));
             }
@@ -2693,11 +2674,10 @@ SEASTAR_THREAD_TEST_CASE(test_manual_paused_evictable_reader_is_mutation_source)
                 reader_permit permit,
                 const dht::partition_range& pr,
                 const query::partition_slice& ps,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr)
             : impl(std::move(query_schema), std::move(permit)), _reader(nullptr) {
-            std::tie(_reader, _handle) = make_manually_paused_evictable_reader_v2(mt.as_data_source(), _schema, _permit, pr, ps, pc,
+            std::tie(_reader, _handle) = make_manually_paused_evictable_reader_v2(mt.as_data_source(), _schema, _permit, pr, ps,
                     std::move(trace_state), fwd_mr);
         }
         virtual future<> fill_buffer() override {
@@ -2741,11 +2721,10 @@ SEASTAR_THREAD_TEST_CASE(test_manual_paused_evictable_reader_is_mutation_source)
                 reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) mutable {
-            auto mr = make_flat_mutation_reader_v2<maybe_pausing_reader>(*mt, s, std::move(permit), range, slice, pc, std::move(trace_state), fwd_mr);
+            auto mr = make_flat_mutation_reader_v2<maybe_pausing_reader>(*mt, s, std::move(permit), range, slice, std::move(trace_state), fwd_mr);
             if (fwd_sm == streamed_mutation::forwarding::yes) {
                 return make_forwardable(std::move(mr));
             }
@@ -2803,7 +2782,6 @@ flat_mutation_reader_v2 create_evictable_reader_and_evict_after_first_buffer(
                 reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) {
@@ -2826,7 +2804,6 @@ flat_mutation_reader_v2 create_evictable_reader_and_evict_after_first_buffer(
             permit,
             prange,
             slice,
-            seastar::default_priority_class(),
             nullptr,
             mutation_reader::forwarding::yes);
 
@@ -3208,7 +3185,6 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_recreate_before_fast_forward_to) 
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            const io_priority_class& pc,
             tracing::trace_state_ptr tr,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) {
@@ -3229,7 +3205,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_recreate_before_fast_forward_to) 
 
     auto pr0 = dht::partition_range::make({pkeys[0], true}, {pkeys[3], true});
     auto [reader, handle] = make_manually_paused_evictable_reader_v2(std::move(ms), s.schema(), permit, pr0, s.schema()->full_slice(),
-            seastar::default_priority_class(), {}, mutation_reader::forwarding::yes);
+            {}, mutation_reader::forwarding::yes);
 
     auto reader_assert = assert_that(std::move(reader));
     reader_assert.produces(pkeys[0]);
@@ -3513,7 +3489,6 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_non_monotonic_positions) {
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd_sm,
             mutation_reader::forwarding fwd_mr) {
@@ -3521,7 +3496,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_non_monotonic_positions) {
         reader.set_max_buffer_size(1);
         return reader;
     });
-    auto reader = make_auto_paused_evictable_reader_v2(std::move(ms), schema, permit, prange, schema->full_slice(), seastar::default_priority_class(),
+    auto reader = make_auto_paused_evictable_reader_v2(std::move(ms), schema, permit, prange, schema->full_slice(),
             nullptr, mutation_reader::forwarding::no);
     auto close_reader = deferred_close(reader);
 
@@ -3591,7 +3566,6 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_clear_tombstone_in_discontinued_p
                 reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) mutable {
@@ -3602,7 +3576,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_clear_tombstone_in_discontinued_p
             return reader;
         });
         auto reader = make_auto_paused_evictable_reader_v2(std::move(ms), schema, permit, prange, schema->full_slice(),
-                seastar::default_priority_class(), nullptr, mutation_reader::forwarding::no);
+                nullptr, mutation_reader::forwarding::no);
         auto close_reader = deferred_close(reader);
 
         reader.fill_buffer().get();
@@ -3661,7 +3635,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_next_pos_is_partition_start) {
         return rd;
     });
 
-    auto [rd, handle] = make_manually_paused_evictable_reader_v2(ms, schema, permit, prange, schema->full_slice(), default_priority_class(), {},
+    auto [rd, handle] = make_manually_paused_evictable_reader_v2(ms, schema, permit, prange, schema->full_slice(), {},
             mutation_reader::forwarding::no);
     auto stop_rd = deferred_close(rd);
     rd.set_max_buffer_size(max_buf_size);
@@ -3871,7 +3845,7 @@ static future<> do_test_clustering_order_merger_sstable_set(bool reversed) {
         auto q = sst_set.make_position_reader_queue(
             [query_schema, &pr, &query_slice, fwd, permit] (sstable& sst) {
                 return sst.make_reader(query_schema, permit, pr,
-                                          query_slice, seastar::default_priority_class(), nullptr, fwd);
+                                          query_slice, nullptr, fwd);
             },
             [included_gens] (const sstable& sst) { return included_gens.contains(sst.generation()); },
             pk.key(), query_schema, permit, fwd, reversed);
@@ -4133,7 +4107,6 @@ SEASTAR_THREAD_TEST_CASE(clustering_combined_reader_mutation_source_test) {
                 reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) {
@@ -4213,7 +4186,6 @@ SEASTAR_THREAD_TEST_CASE(test_generating_reader_v1) {
                 reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) {
@@ -4236,7 +4208,6 @@ SEASTAR_THREAD_TEST_CASE(test_generating_reader_v2) {
                 reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) {

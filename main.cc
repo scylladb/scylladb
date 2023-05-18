@@ -1137,8 +1137,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // we need the getter since updateable_value is not shard-safe (#7316)
             auto get_cm_cfg = sharded_parameter([&] {
                 return compaction_manager::config {
-                    .compaction_sched_group = compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group, service::get_local_compaction_priority()},
-                    .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group, service::get_local_streaming_priority()},
+                    .compaction_sched_group = compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group},
+                    .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group},
                     .available_memory = dbcfg.available_memory,
                     .static_shares = cfg->compaction_static_shares,
                     .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,

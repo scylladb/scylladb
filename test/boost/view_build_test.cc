@@ -25,7 +25,6 @@
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/sstable_utils.hh"
 #include "schema/schema_builder.hh"
-#include "service/priority_manager.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/data_model.hh"
 #include "test/lib/log.hh"
@@ -843,7 +842,6 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
                 permit,
                 query::full_partition_range,
                 schema->full_slice(),
-                service::get_local_streaming_priority(),
                 nullptr,
                 ::mutation_reader::forwarding::no);
         auto& staging_reader = std::get<0>(p);

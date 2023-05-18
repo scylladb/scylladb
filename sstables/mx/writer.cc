@@ -749,8 +749,8 @@ public:
 
     writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
         const sstable_writer_config& cfg, encoding_stats enc_stats,
-        const io_priority_class& pc, shard_id shard = this_shard_id())
-        : sstable_writer::writer_impl(sst, s, pc, cfg)
+        shard_id shard = this_shard_id())
+        : sstable_writer::writer_impl(sst, s, cfg)
         , _enc_stats(enc_stats)
         , _shard(shard)
         , _tmp_bufs(_sst.sstable_buffer_size)
@@ -788,7 +788,7 @@ public:
         // exactly what callers used to do anyway.
         estimated_partitions = std::max(uint64_t(1), estimated_partitions);
 
-        _sst.open_sstable(_pc);
+        _sst.open_sstable();
         _sst.create_data().get();
         _compression_enabled = !_sst.has_component(component_type::CRC);
         init_file_writers();
@@ -874,7 +874,7 @@ void writer::maybe_add_pi_block() {
 }
 
 void writer::init_file_writers() {
-    auto out = _sst._storage->make_data_or_index_sink(_sst, component_type::Data, _pc).get0();
+    auto out = _sst._storage->make_data_or_index_sink(_sst, component_type::Data).get0();
 
     if (!_compression_enabled) {
         _data_writer = std::make_unique<crc32_checksummed_file_writer>(std::move(out), _sst.sstable_buffer_size, _sst.filename(component_type::Data));
@@ -886,7 +886,7 @@ void writer::init_file_writers() {
                 _schema.get_compressor_params()), _sst.filename(component_type::Data));
     }
 
-    out = _sst._storage->make_data_or_index_sink(_sst, component_type::Index, _pc).get0();
+    out = _sst._storage->make_data_or_index_sink(_sst, component_type::Index).get0();
     _index_writer = std::make_unique<file_writer>(output_stream<char>(std::move(out)), _sst.filename(component_type::Index));
 }
 
@@ -1456,10 +1456,10 @@ void writer::consume_end_of_stream() {
         _sst._schema->get_partitioner().name(), _schema.bloom_filter_fp_chance(),
         _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key(), _enc_stats);
     close_data_writer();
-    _sst.write_summary(_pc);
-    _sst.write_filter(_pc);
-    _sst.write_statistics(_pc);
-    _sst.write_compression(_pc);
+    _sst.write_summary();
+    _sst.write_filter();
+    _sst.write_statistics();
+    _sst.write_compression();
     auto features = sstable_enabled_features::all();
     run_identifier identifier{_run_identifier};
     std::optional<scylla_metadata::large_data_stats> ld_stats(scylla_metadata::large_data_stats{
@@ -1471,7 +1471,7 @@ void writer::consume_end_of_stream() {
             { large_data_type::elements_in_collection, std::move(_elements_in_collection_entry) },
         }
     });
-    _sst.write_scylla_metadata(_pc, _shard, std::move(features), std::move(identifier), std::move(ld_stats), _cfg.origin);
+    _sst.write_scylla_metadata(_shard, std::move(features), std::move(identifier), std::move(ld_stats), _cfg.origin);
     _sst.seal_sstable(_cfg.backup).get();
 }
 
@@ -1480,9 +1480,8 @@ std::unique_ptr<sstable_writer::writer_impl> make_writer(sstable& sst,
         uint64_t estimated_partitions,
         const sstable_writer_config& cfg,
         encoding_stats enc_stats,
-        const io_priority_class& pc,
         shard_id shard) {
-    return std::make_unique<writer>(sst, s, estimated_partitions, cfg, enc_stats, pc, shard);
+    return std::make_unique<writer>(sst, s, estimated_partitions, cfg, enc_stats, shard);
 }
 
 }

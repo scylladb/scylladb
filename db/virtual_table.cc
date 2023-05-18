@@ -40,7 +40,6 @@ mutation_source memtable_filling_virtual_table::as_mutation_source() {
         reader_permit permit,
         const dht::partition_range& range,
         const query::partition_slice& slice,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr) {
@@ -54,15 +53,15 @@ mutation_source memtable_filling_virtual_table::as_mutation_source() {
 
         auto units = make_lw_shared<my_units>(permit.consume_memory(0));
 
-        auto populate = [this, mt = make_lw_shared<replica::memtable>(schema()), s, units, range, slice, pc, trace_state, fwd, fwd_mr] () mutable {
+        auto populate = [this, mt = make_lw_shared<replica::memtable>(schema()), s, units, range, slice, trace_state, fwd, fwd_mr] () mutable {
             auto mutation_sink = [units, mt] (mutation m) mutable {
                 mt->apply(m);
                 units->units.add(units->units.permit().consume_memory(mt->occupancy().used_space() - units->memory_used));
                 units->memory_used = mt->occupancy().used_space();
             };
 
-            return execute(mutation_sink).then([this, mt, s, units, &range, &slice, &pc, &trace_state, &fwd, &fwd_mr] () {
-                auto rd = mt->as_data_source().make_reader_v2(s, units->units.permit(), range, slice, pc, trace_state, fwd, fwd_mr);
+            return execute(mutation_sink).then([this, mt, s, units, &range, &slice, &trace_state, &fwd, &fwd_mr] () {
+                auto rd = mt->as_data_source().make_reader_v2(s, units->units.permit(), range, slice, trace_state, fwd, fwd_mr);
 
                 if (!_shard_aware) {
                     rd = make_filtering_reader(std::move(rd), [this] (const dht::decorated_key& dk) -> bool {
@@ -84,7 +83,6 @@ mutation_source streaming_virtual_table::as_mutation_source() {
         reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& query_slice,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr) {

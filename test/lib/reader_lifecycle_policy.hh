@@ -19,7 +19,6 @@ class test_reader_lifecycle_policy
             reader_permit,
             const dht::partition_range&,
             const query::partition_slice&,
-            const io_priority_class&,
             tracing::trace_state_ptr,
             mutation_reader::forwarding)>;
 
@@ -50,7 +49,6 @@ public:
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr) override {
         const auto shard = this_shard_id();
@@ -60,7 +58,7 @@ public:
         } else {
             _contexts[shard] = make_foreign(std::make_unique<reader_context>(range, slice));
         }
-        return _factory_function(std::move(schema), std::move(permit), *_contexts[shard]->range, *_contexts[shard]->slice, pc, std::move(trace_state), fwd_mr);
+        return _factory_function(std::move(schema), std::move(permit), *_contexts[shard]->range, *_contexts[shard]->slice, std::move(trace_state), fwd_mr);
     }
     virtual const dht::partition_range* get_read_range() const override {
         const auto shard = this_shard_id();

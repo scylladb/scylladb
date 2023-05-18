@@ -25,7 +25,6 @@
 
 #include "dht/sharder.hh"
 #include "schema/schema_registry.hh"
-#include "service/priority_manager.hh"
 #include "readers/forwardable_v2.hh"
 
 // It has to be a container that does not invalidate pointers
@@ -66,7 +65,6 @@ static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer
                 reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) mutable {
@@ -75,10 +73,9 @@ static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer
                     reader_permit permit,
                     const dht::partition_range& range,
                     const query::partition_slice& slice,
-                    const io_priority_class& pc,
                     tracing::trace_state_ptr trace_state,
                     mutation_reader::forwarding fwd_mr) {
-                    auto reader = remote_memtables->at(this_shard_id())->make_flat_reader(s, std::move(permit), range, slice, pc, std::move(trace_state),
+                    auto reader = remote_memtables->at(this_shard_id())->make_flat_reader(s, std::move(permit), range, slice, std::move(trace_state),
                             streamed_mutation::forwarding::no, fwd_mr);
                     if (single_fragment_buffer) {
                         reader.set_max_buffer_size(1);
@@ -88,7 +85,7 @@ static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer
 
             auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), evict_paused_readers);
             auto mr = make_multishard_combining_reader_v2_for_tests(keep_alive_sharder.back(), std::move(lifecycle_policy), s,
-                    std::move(permit), range, slice, pc, trace_state, fwd_mr);
+                    std::move(permit), range, slice, trace_state, fwd_mr);
             if (fwd_sm == streamed_mutation::forwarding::yes) {
                 return make_forwardable(std::move(mr));
             }

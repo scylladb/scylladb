@@ -31,7 +31,6 @@
 #include "readers/from_mutations_v2.hh"
 #include "mutation/mutation_rebuilder.hh"
 #include "readers/mutation_source.hh"
-#include "service/priority_manager.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -54,7 +53,7 @@ struct mutation_less_cmp {
 };
 static mutation_source make_source(std::vector<mutation> mutations) {
     return mutation_source([mutations = std::move(mutations)] (schema_ptr s, reader_permit permit, const dht::partition_range& range, const query::partition_slice& slice,
-            const io_priority_class& pc, tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
+            tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
         assert(range.is_full()); // slicing not implemented yet
         for (auto&& m : mutations) {
             if (slice.options.contains(query::partition_slice::option::reversed)) {
@@ -85,7 +84,7 @@ query::result_set to_result_set(const reconcilable_result& r, schema_ptr s, cons
 static reconcilable_result mutation_query(schema_ptr s, reader_permit permit, const mutation_source& source, const dht::partition_range& range,
         const query::partition_slice& slice, uint64_t row_limit, uint32_t partition_limit, gc_clock::time_point query_time) {
 
-    auto querier = query::querier(source, s, std::move(permit), range, slice, service::get_local_sstable_query_read_priority(), {});
+    auto querier = query::querier(source, s, std::move(permit), range, slice, {});
     auto close_querier = deferred_close(querier);
     auto table_schema = slice.options.contains(query::partition_slice::option::reversed) ? s->make_reversed() : s;
     auto rrb = reconcilable_result_builder(*table_schema, slice, make_accounter());
@@ -539,7 +538,7 @@ SEASTAR_TEST_CASE(test_partition_limit) {
 
 static void data_query(schema_ptr s, reader_permit permit, const mutation_source& source, const dht::partition_range& range,
         const query::partition_slice& slice, query::result::builder& builder) {
-    auto querier = query::querier(source, s, std::move(permit), range, slice, service::get_local_sstable_query_read_priority(), {});
+    auto querier = query::querier(source, s, std::move(permit), range, slice, {});
     auto close_querier = deferred_close(querier);
     auto qrb = query_result_builder(*s, builder);
     querier.consume_page(std::move(qrb), std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(), gc_clock::now()).get();

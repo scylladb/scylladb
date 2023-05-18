@@ -13,7 +13,6 @@
 #include "compaction/compaction_descriptor.hh"
 #include "gc_clock.hh"
 #include "compaction_weight_registration.hh"
-#include "service/priority_manager.hh"
 #include "utils/UUID.hh"
 #include "table_state.hh"
 #include <seastar/core/thread.hh>

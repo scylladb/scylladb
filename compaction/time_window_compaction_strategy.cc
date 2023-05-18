@@ -138,7 +138,7 @@ reader_consumer_v2 time_window_compaction_strategy::make_interposer_consumer(con
 }
 
 compaction_descriptor
-time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) const {
+time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_mode mode) const {
     std::vector<shared_sstable> single_window;
     std::vector<shared_sstable> multi_window;
 
@@ -192,7 +192,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
             });
             multi_window.resize(max_sstables);
         }
-        compaction_descriptor desc(std::move(multi_window), iop);
+        compaction_descriptor desc(std::move(multi_window));
         desc.options = compaction_type_options::make_reshape();
         return desc;
     }
@@ -211,14 +211,14 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
             }
             // reuse STCS reshape logic which will only compact similar-sized files, to increase overall efficiency
             // when reshaping time buckets containing a huge amount of files
-            auto desc = size_tiered_compaction_strategy(_stcs_options).get_reshaping_job(std::move(ssts), schema, iop, mode);
+            auto desc = size_tiered_compaction_strategy(_stcs_options).get_reshaping_job(std::move(ssts), schema, mode);
             if (!desc.sstables.empty()) {
                 return desc;
             }
         }
     }
     if (!single_window.empty()) {
-        compaction_descriptor desc(std::move(single_window), iop);
+        compaction_descriptor desc(std::move(single_window));
         desc.options = compaction_type_options::make_reshape();
         return desc;
     }
@@ -244,7 +244,7 @@ time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_
         auto expired = table_s.fully_expired_sstables(candidates, compaction_time);
         if (!expired.empty()) {
             clogger.debug("[{}] Going to compact {} expired sstables", fmt::ptr(this), expired.size());
-            return compaction_descriptor(has_only_fully_expired::yes, std::vector<shared_sstable>(expired.begin(), expired.end()), service::get_local_compaction_priority());
+            return compaction_descriptor(has_only_fully_expired::yes, std::vector<shared_sstable>(expired.begin(), expired.end()));
         }
         // Keep checking for fully_expired_sstables until we don't find
         // any among the candidates, meaning they are either already compacted
@@ -256,7 +256,7 @@ time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_
 
     auto compaction_candidates = get_next_non_expired_sstables(table_s, control, std::move(candidates), compaction_time);
     clogger.debug("[{}] Going to compact {} non-expired sstables", fmt::ptr(this), compaction_candidates.size());
-    return compaction_descriptor(std::move(compaction_candidates), service::get_local_compaction_priority());
+    return compaction_descriptor(std::move(compaction_candidates));
 }
 
 time_window_compaction_strategy::bucket_compaction_mode

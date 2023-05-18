@@ -23,7 +23,6 @@
 #include "streaming/stream_state.hh"
 #include "streaming/stream_session_state.hh"
 #include "streaming/stream_exception.hh"
-#include "service/priority_manager.hh"
 #include "service/migration_manager.hh"
 #include "query-request.hh"
 #include "schema/schema_registry.hh"

@@ -79,13 +79,13 @@ public:
         _sst->read_toc().get();
     }
     void read_summary() {
-        _sst->read_summary(default_priority_class()).get();
+        _sst->read_summary().get();
     }
     void read_filter() {
-        _sst->read_filter(default_priority_class()).get();
+        _sst->read_filter().get();
     }
     void read_statistics() {
-        _sst->read_statistics(default_priority_class()).get();
+        _sst->read_statistics().get();
     }
     void load() {
         _sst->load().get();
@@ -109,7 +109,6 @@ public:
     flat_mutation_reader_v2 make_reader(
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            const io_priority_class& pc = default_priority_class(),
             tracing::trace_state_ptr trace_state = {},
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
@@ -118,7 +117,6 @@ public:
                                  _env.make_reader_permit(),
                                  range,
                                  slice,
-                                 pc,
                                  std::move(trace_state),
                                  fwd,
                                  fwd_mr,
@@ -273,7 +271,6 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
     {
         auto r = assert_that(sst.make_reader(query::full_partition_range,
                                                       UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA->full_slice(),
-                                                      default_priority_class(),
                                                       tracing::trace_state_ptr(),
                                                       streamed_mutation::forwarding::yes));
         r.produces_partition_start(to_key(1))
@@ -321,7 +318,6 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
             .build();
         auto r = assert_that(sst.make_reader(query::full_partition_range,
                                                       slice,
-                                                      default_priority_class(),
                                                       tracing::trace_state_ptr(),
                                                       streamed_mutation::forwarding::yes));
 
@@ -537,7 +533,6 @@ SEASTAR_TEST_CASE(test_uncompressed_skip_using_index_rows) {
     {
         auto rd = sst.make_reader(query::full_partition_range,
                                            UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA->full_slice(),
-                                           default_priority_class(),
                                            tracing::trace_state_ptr(),
                                            streamed_mutation::forwarding::yes);
         rd.set_max_buffer_size(1);
@@ -577,7 +572,6 @@ SEASTAR_TEST_CASE(test_uncompressed_skip_using_index_rows) {
             .build();
         auto rd = sst.make_reader(query::full_partition_range,
                                                       slice,
-                                                      default_priority_class(),
                                                       tracing::trace_state_ptr(),
                                                       streamed_mutation::forwarding::yes);
         rd.set_max_buffer_size(1);
@@ -754,7 +748,6 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
     {
         auto r = make_assertions(sst.make_reader(query::full_partition_range,
                                            UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA->full_slice(),
-                                           default_priority_class(),
                                            tracing::trace_state_ptr(),
                                            streamed_mutation::forwarding::yes));
         std::array<int32_t, 2> rt_deletion_times {1534898600, 1534899416};
@@ -874,7 +867,6 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
 
         auto r = make_assertions(sst.make_reader(query::full_partition_range,
                                                       slice,
-                                                      default_priority_class(),
                                                       tracing::trace_state_ptr(),
                                                       streamed_mutation::forwarding::yes));
 
@@ -1050,7 +1042,6 @@ SEASTAR_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read) {
     {
         auto r = make_assertions(sst.make_reader(query::full_partition_range,
                                            UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA->full_slice(),
-                                           default_priority_class(),
                                            tracing::trace_state_ptr(),
                                            streamed_mutation::forwarding::yes))
                  .ignore_deletion_time();
@@ -1113,7 +1104,6 @@ SEASTAR_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read) {
 
         auto r = make_assertions(sst.make_reader(query::full_partition_range,
                                                       slice,
-                                                      default_priority_class(),
                                                       tracing::trace_state_ptr(),
                                                       streamed_mutation::forwarding::yes))
                  .ignore_deletion_time();
@@ -3037,7 +3027,7 @@ static flat_mutation_reader_v2 compacted_sstable_reader(test_env& env, schema_pt
     auto sstables = open_sstables(env, s, format("test/resource/sstables/3.x/uncompressed/{}", table_name), generations);
     sstables::shared_sstable compacted_sst;
 
-    auto desc = sstables::compaction_descriptor(std::move(sstables), default_priority_class());
+    auto desc = sstables::compaction_descriptor(std::move(sstables));
     desc.creator = [&] (shard_id dummy) {
         compacted_sst = env.make_sstable(s);
         return compacted_sst;
@@ -4780,7 +4770,6 @@ SEASTAR_TEST_CASE(test_uncompressed_read_two_rows_fast_forwarding) {
 
     auto r = assert_that(sst.make_reader(query::full_partition_range,
                                          s->full_slice(),
-                                         default_priority_class(),
                                          tracing::trace_state_ptr(),
                                          streamed_mutation::forwarding::yes));
     r.produces_partition_start(to_pkey(0))

@@ -690,8 +690,8 @@ public:
     {
     }
 
-    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, const io_priority_class& pc) override { unsupported(); }
-    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override { unsupported(); }
+    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent*) override { unsupported(); }
+    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, io_intent*) override { unsupported(); }
     virtual future<> truncate(uint64_t length) override { unsupported(); }
     virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) override { unsupported(); }
 
@@ -740,13 +740,13 @@ public:
         co_return ret;
     }
 
-    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, const io_priority_class& pc) override {
+    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent*) override {
         auto buf = co_await _client->get_object_contiguous(_object_name, range{ pos, len });
         std::copy_n(buf.get(), buf.size(), reinterpret_cast<uint8_t*>(buffer));
         co_return buf.size();
     }
 
-    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override {
+    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent*) override {
         auto buf = co_await _client->get_object_contiguous(_object_name, range{ pos, utils::iovec_len(iov) });
         uint64_t off = 0;
         for (auto& v : iov) {
@@ -760,7 +760,7 @@ public:
         co_return off;
     }
 
-    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) override {
+    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent*) override {
         auto buf = co_await _client->get_object_contiguous(_object_name, range{ offset, range_size });
         co_return temporary_buffer<uint8_t>(reinterpret_cast<uint8_t*>(buf.get_write()), buf.size(), buf.release());
     }

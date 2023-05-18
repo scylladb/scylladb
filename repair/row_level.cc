@@ -20,7 +20,6 @@
 #include "utils/xx_hasher.hh"
 #include "utils/UUID.hh"
 #include "utils/hash.hh"
-#include "service/priority_manager.hh"
 #include "replica/database.hh"
 #include <seastar/util/bool_class.hh>
 #include <seastar/core/metrics_registration.hh>
@@ -291,7 +290,6 @@ private:
                         reader_permit permit,
                         const dht::partition_range& pr,
                         const query::partition_slice& ps,
-                        const io_priority_class& pc,
                         tracing::trace_state_ptr,
                         streamed_mutation::forwarding,
                         mutation_reader::forwarding fwd_mr) {
@@ -304,7 +302,6 @@ private:
                     _permit,
                     _range,
                     _schema->full_slice(),
-                    service::get_local_streaming_priority(),
                     {},
                     mutation_reader::forwarding::no);
             return rd;

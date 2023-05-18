@@ -236,11 +236,10 @@ public:
                                              reader_permit permit,
                                              const dht::partition_range& range,
                                              const query::partition_slice& slice,
-                                             const io_priority_class& pc = default_priority_class(),
                                              tracing::trace_state_ptr trace_state_ptr = nullptr,
                                              streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
                                              mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) {
-        if (auto reader_opt = make_flat_reader_opt(s, permit, range, slice, pc, std::move(trace_state_ptr), fwd, fwd_mr)) {
+        if (auto reader_opt = make_flat_reader_opt(s, permit, range, slice, std::move(trace_state_ptr), fwd, fwd_mr)) {
             return std::move(*reader_opt);
         }
         [[unlikely]] return make_empty_flat_reader_v2(std::move(s), std::move(permit));
@@ -251,7 +250,6 @@ public:
                                           reader_permit permit,
                                           const dht::partition_range& range,
                                           const query::partition_slice& slice,
-                                          const io_priority_class& pc = default_priority_class(),
                                           tracing::trace_state_ptr trace_state_ptr = nullptr,
                                           streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
                                           mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
@@ -263,7 +261,7 @@ public:
         return make_flat_reader(s, std::move(permit), range, full_slice);
     }
 
-    flat_mutation_reader_v2 make_flush_reader(schema_ptr, reader_permit permit, const io_priority_class& pc = default_priority_class());
+    flat_mutation_reader_v2 make_flush_reader(schema_ptr, reader_permit permit);
 
     mutation_source as_data_source();
 

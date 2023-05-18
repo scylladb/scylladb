@@ -159,7 +159,6 @@ private:
 private:
     future<cached_page::ptr_type> get_page_ptr(page_idx_type idx,
             page_count_type read_ahead,
-            const io_priority_class& pc,
             tracing::trace_state_ptr trace_state) {
         auto i = _cache.lower_bound(idx);
         if (i != _cache.end() && i->idx == idx) {
@@ -173,7 +172,7 @@ private:
         size_t size = (idx + read_ahead) > _last_page
                 ? (_last_page_size + (_last_page - idx) * page_size)
                 : read_ahead * page_size;
-        return _file.dma_read_exactly<char>(idx * page_size, size, pc)
+        return _file.dma_read_exactly<char>(idx * page_size, size)
             .then([this, idx] (temporary_buffer<char>&& buf) mutable {
                 cached_page::ptr_type first_page;
                 while (buf.size()) {
@@ -202,9 +201,8 @@ private:
     }
     future<temporary_buffer<char>> get_page(page_idx_type idx,
                                             page_count_type count,
-                                            const io_priority_class& pc,
                                             tracing::trace_state_ptr trace_state) {
-        return get_page_ptr(idx, count, pc, std::move(trace_state)).then([] (cached_page::ptr_type cp) {
+        return get_page_ptr(idx, count, std::move(trace_state)).then([] (cached_page::ptr_type cp) {
             return cp->get_buf();
         });
     }
@@ -238,7 +236,6 @@ public:
     // Single-user.
     class stream {
         cached_file* _cached_file;
-        const io_priority_class* _pc;
         std::optional<reader_permit> _permit;
         page_idx_type _page_idx;
         offset_type _offset_in_page;
@@ -254,13 +251,11 @@ public:
         // Creates an empty stream.
         stream()
             : _cached_file(nullptr)
-            , _pc(nullptr)
         { }
 
-        stream(cached_file& cf, const io_priority_class& pc, std::optional<reader_permit> permit, tracing::trace_state_ptr trace_state,
+        stream(cached_file& cf, std::optional<reader_permit> permit, tracing::trace_state_ptr trace_state,
                 page_idx_type start_page, offset_type start_offset_in_page, offset_type size_hint)
             : _cached_file(&cf)
-            , _pc(&pc)
             , _permit(std::move(permit))
             , _page_idx(start_page)
             , _offset_in_page(start_offset_in_page)
@@ -279,7 +274,7 @@ public:
             auto units = get_page_units(_size_hint);
             page_count_type readahead = div_ceil(_size_hint, page_size);
             _size_hint = page_size;
-            return _cached_file->get_page(_page_idx, readahead, *_pc, _trace_state).then(
+            return _cached_file->get_page(_page_idx, readahead, _trace_state).then(
                     [units = std::move(units), this] (temporary_buffer<char> page) mutable {
                 if (_page_idx == _cached_file->_last_page) {
                     page.trim(_cached_file->_last_page_size);
@@ -307,7 +302,7 @@ public:
             auto units = get_page_units(_size_hint);
             page_count_type readahead = div_ceil(_size_hint, page_size);
             _size_hint = page_size;
-            return _cached_file->get_page_ptr(_page_idx, readahead, *_pc, _trace_state).then(
+            return _cached_file->get_page_ptr(_page_idx, readahead, _trace_state).then(
                     [this, units = std::move(units)] (cached_page::ptr_type page) mutable {
                 size_t size = _page_idx == _cached_file->_last_page
                         ? _cached_file->_last_page_size
@@ -416,7 +411,7 @@ public:
     /// \param pos The offset of the first byte to read, relative to the cached file area.
     /// \param permit Holds reader_permit under which returned buffers should be accounted.
     ///               When disengaged, no accounting is done.
-    stream read(offset_type global_pos, const io_priority_class& pc, std::optional<reader_permit> permit,
+    stream read(offset_type global_pos, std::optional<reader_permit> permit,
                 tracing::trace_state_ptr trace_state = {},
                 size_t size_hint = page_size) {
         if (global_pos >= _size) {
@@ -424,7 +419,7 @@ public:
         }
         auto offset = global_pos % page_size;
         auto page_idx = global_pos / page_size;
-        return stream(*this, pc, std::move(permit), std::move(trace_state), page_idx, offset, size_hint);
+        return stream(*this, std::move(permit), std::move(trace_state), page_idx, offset, size_hint);
     }
 
     /// \brief Returns the number of bytes in the area managed by this instance.
@@ -491,8 +486,8 @@ public:
     { }
 
     // unsupported
-    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, const io_priority_class& pc) override { unsupported(); }
-    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override { unsupported(); }
+    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent*) override { unsupported(); }
+    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, io_intent*) override { unsupported(); }
     virtual future<> flush(void) override { unsupported(); }
     virtual future<> truncate(uint64_t length) override { unsupported(); }
     virtual future<> discard(uint64_t offset, uint64_t length) override { unsupported(); }
@@ -505,8 +500,8 @@ public:
     virtual future<> close() override { return _cf.get_file().close(); }
     virtual std::unique_ptr<seastar::file_handle_impl> dup() override { return get_file_impl(_cf.get_file())->dup(); }
 
-    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t size, const io_priority_class& pc) override {
-        return do_with(_cf.read(offset, pc, std::nullopt, _trace_state, size), size, temporary_buffer<uint8_t>(),
+    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t size, io_intent* intent) override {
+        return do_with(_cf.read(offset, std::nullopt, _trace_state, size), size, temporary_buffer<uint8_t>(),
                 [this, size] (cached_file::stream& s, size_t& size_left, temporary_buffer<uint8_t>& result) {
             if (size_left == 0) {
                 return make_ready_future<temporary_buffer<uint8_t>>(std::move(result));
@@ -534,11 +529,11 @@ public:
         });
     }
 
-    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, const io_priority_class& pc) override {
+    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent*) override {
         unsupported(); // FIXME
     }
 
-    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override {
+    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent*) override {
         unsupported(); // FIXME
     }
 };

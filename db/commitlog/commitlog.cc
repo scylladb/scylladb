@@ -52,7 +52,6 @@
 #include "log.hh"
 #include "commitlog_entry.hh"
 #include "commitlog_extensions.hh"
-#include "service/priority_manager.hh"
 #include "serializer.hh"
 
 #include <boost/range/numeric.hpp>
@@ -281,8 +280,8 @@ public:
 
         // NOT overrides. Nothing virtual. Will rely on exact type
         template <typename CharType>
-        auto dma_write(uint64_t pos, const CharType* buffer, size_t len, const io_priority_class& pc = default_priority_class(), io_intent* intent = nullptr) noexcept;
-        auto dma_write(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc = default_priority_class(), io_intent* intent = nullptr) noexcept;
+        auto dma_write(uint64_t pos, const CharType* buffer, size_t len, io_intent* intent = nullptr) noexcept;
+        auto dma_write(uint64_t pos, std::vector<iovec> iov, io_intent* intent = nullptr) noexcept;
 
         auto truncate(uint64_t length) noexcept;
         auto allocate(uint64_t position, uint64_t length) noexcept;
@@ -577,15 +576,15 @@ auto db::commitlog::segment_manager::named_file::make_awaiter(future<Args...> f,
 }
 
 template <typename CharType>
-auto db::commitlog::segment_manager::named_file::dma_write(uint64_t pos, const CharType* buffer, size_t len, const io_priority_class& pc, io_intent* intent) noexcept {
-    return make_awaiter(file::dma_write(pos, buffer, len, pc, intent), [this, pos](size_t res) {
+auto db::commitlog::segment_manager::named_file::dma_write(uint64_t pos, const CharType* buffer, size_t len, io_intent* intent) noexcept {
+    return make_awaiter(file::dma_write(pos, buffer, len, intent), [this, pos](size_t res) {
         maybe_update_size(pos + res);
         return res;
     });
 }
 
-auto db::commitlog::segment_manager::named_file::dma_write(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc, io_intent* intent) noexcept {
-    return make_awaiter(file::dma_write(pos, std::move(iov), pc, intent), [this, pos](size_t res) {
+auto db::commitlog::segment_manager::named_file::dma_write(uint64_t pos, std::vector<iovec> iov, io_intent* intent) noexcept {
+    return make_awaiter(file::dma_write(pos, std::move(iov), intent), [this, pos](size_t res) {
         maybe_update_size(pos + res);
         return res;
     });
@@ -1023,8 +1022,6 @@ public:
                 co_return;
             }
 
-            auto&& priority_class = service::get_local_commitlog_priority();
-
             auto finally = defer([&] () noexcept {
                 _segment_manager->notify_memory_written(size);
                 _segment_manager->totals.buffer_list_bytes -= buf.size_bytes();
@@ -1038,7 +1035,7 @@ public:
             for (;;) {
                 auto current = *view.begin();
                 try {
-                    auto bytes = co_await _file.dma_write(off, current.data(), current.size(), priority_class);
+                    auto bytes = co_await _file.dma_write(off, current.data(), current.size());
                     _segment_manager->totals.bytes_written += bytes;
                     _segment_manager->totals.active_size_on_disk += bytes;
                     ++_segment_manager->totals.cycle_count;
@@ -1716,7 +1713,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                         v.emplace_back(iovec{ buf.get_write(), s});
                         m += s;
                     }
-                    auto s = co_await f.dma_write(max_size - rem, std::move(v), service::get_local_commitlog_priority());
+                    auto s = co_await f.dma_write(max_size - rem, std::move(v));
                     if (!s) [[unlikely]] {
                         on_internal_error(clogger, format("dma_write returned 0: max_size={} rem={} iovec.n={}", max_size, rem, n));
                     }
@@ -2551,14 +2548,13 @@ const db::commitlog::config& db::commitlog::active_config() const {
 // No commit_io_check needed in the log reader since the database will fail
 // on error at startup if required
 future<>
-db::commitlog::read_log_file(sstring filename, sstring pfx, seastar::io_priority_class read_io_prio_class, commit_load_reader_func next, position_type off, const db::extensions* exts) {
+db::commitlog::read_log_file(sstring filename, sstring pfx, commit_load_reader_func next, position_type off, const db::extensions* exts) {
     struct work {
     private:
-        file_input_stream_options make_file_input_stream_options(seastar::io_priority_class read_io_prio_class) {
+        file_input_stream_options make_file_input_stream_options() {
             file_input_stream_options fo;
             fo.buffer_size = db::commitlog::segment::default_size;
             fo.read_ahead = 10;
-            fo.io_priority_class = read_io_prio_class;
             return fo;
         }
     public:
@@ -2578,8 +2574,8 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, seastar::io_priority
         bool failed = false;
         fragmented_temporary_buffer::reader frag_reader;
 
-        work(file f, descriptor din, commit_load_reader_func fn, seastar::io_priority_class read_io_prio_class, position_type o = 0)
-                : f(f), d(din), func(std::move(fn)), fin(make_file_input_stream(f, 0, make_file_input_stream_options(read_io_prio_class))), start_off(o) {
+        work(file f, descriptor din, commit_load_reader_func fn, position_type o = 0)
+                : f(f), d(din), func(std::move(fn)), fin(make_file_input_stream(f, 0, make_file_input_stream_options())), start_off(o) {
         }
         work(work&&) = default;
 
@@ -2878,7 +2874,7 @@ db::commitlog::read_log_file(sstring filename, sstring pfx, seastar::io_priority
     f = make_checked_file(commit_error_handler, std::move(f));
 
     descriptor d(filename, pfx);
-    work w(std::move(f), d, std::move(next), read_io_prio_class, off);
+    work w(std::move(f), d, std::move(next), off);
 
     co_await w.read_file();
 }

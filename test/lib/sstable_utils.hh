@@ -60,7 +60,7 @@ public:
     }
 
     future<temporary_buffer<char>> data_read(reader_permit permit, uint64_t pos, size_t len) {
-        return _sst->data_read(pos, len, default_priority_class(), std::move(permit));
+        return _sst->data_read(pos, len, std::move(permit));
     }
 
     std::unique_ptr<index_reader> make_index_reader(reader_permit permit) {
@@ -101,7 +101,7 @@ public:
     }
 
     future<> read_statistics() {
-        return _sst->read_statistics(default_priority_class());
+        return _sst->read_statistics();
     }
 
     statistics& get_statistics() {
@@ -109,7 +109,7 @@ public:
     }
 
     future<> read_summary() noexcept {
-        return _sst->read_summary(default_priority_class());
+        return _sst->read_summary();
     }
 
     future<summary_entry&> read_summary_entry(size_t i) {
@@ -161,11 +161,11 @@ public:
         _sst->_recognized_components.erase(component_type::Index);
         _sst->_recognized_components.erase(component_type::Data);
         return seastar::async([sst = _sst] {
-            sst->open_sstable(default_priority_class());
-            sst->write_statistics(default_priority_class());
-            sst->write_compression(default_priority_class());
-            sst->write_filter(default_priority_class());
-            sst->write_summary(default_priority_class());
+            sst->open_sstable();
+            sst->write_statistics();
+            sst->write_compression();
+            sst->write_filter();
+            sst->write_summary();
             sst->seal_sstable(false).get();
         });
     }
@@ -199,7 +199,7 @@ public:
     void rewrite_toc_without_scylla_component() {
         _sst->_recognized_components.erase(component_type::Scylla);
         remove_file(_sst->filename(component_type::TOC)).get();
-        _sst->_storage->open(*_sst, default_priority_class());
+        _sst->_storage->open(*_sst);
         _sst->seal_sstable(false).get();
     }
 

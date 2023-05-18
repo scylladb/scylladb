@@ -33,7 +33,7 @@ public:
         return replica::distributed_loader::lock_table(dir, db, std::move(ks_name), std::move(cf_name));
     }
     static future<> reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
-        return replica::distributed_loader::reshard(dir, db, std::move(ks_name), std::move(table_name), std::move(creator), default_priority_class());
+        return replica::distributed_loader::reshard(dir, db, std::move(ks_name), std::move(table_name), std::move(creator));
     }
 };
 
@@ -159,8 +159,7 @@ static void with_sstable_directory(
     sstdir.start(seastar::sharded_parameter([&env_wrap] { return std::ref(env_wrap.get_manager()); }),
             seastar::sharded_parameter([] { return test_table_schema(); }),
             seastar::sharded_parameter([] { return make_lw_shared<data_dictionary::storage_options>(); }),
-            path.native(), default_priority_class(),
-            default_io_error_handler_gen()).get();
+            path.native(), default_io_error_handler_gen()).get();
 
     func(sstdir);
 }

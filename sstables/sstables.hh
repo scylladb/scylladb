@@ -196,13 +196,13 @@ public:
     // load all components from disk
     // this variant will be useful for testing purposes and also when loading
     // a new sstable from scratch for sharing its components.
-    future<> load(const io_priority_class& pc = default_priority_class(), sstable_open_config cfg = {}) noexcept;
+    future<> load(sstable_open_config cfg = {}) noexcept;
     future<> open_data(sstable_open_config cfg = {}) noexcept;
     future<> update_info_for_opened_data(sstable_open_config cfg = {});
 
     // Load set of shards that own the SSTable, while reading the minimum
     // from disk to achieve that.
-    future<> load_owner_shards(const io_priority_class& pc = default_priority_class());
+    future<> load_owner_shards();
 
     // Call as the last method before the object is destroyed.
     // No other uses of the object can happen at this point.
@@ -232,7 +232,6 @@ public:
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            const io_priority_class& pc = default_priority_class(),
             tracing::trace_state_ptr trace_state = {},
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
@@ -243,7 +242,6 @@ public:
     flat_mutation_reader_v2 make_crawling_reader(
             schema_ptr schema,
             reader_permit permit,
-            const io_priority_class& pc = default_priority_class(),
             tracing::trace_state_ptr trace_state = {},
             read_monitor& monitor = default_read_monitor());
 
@@ -255,14 +253,12 @@ public:
             uint64_t estimated_partitions,
             schema_ptr schema,
             const sstable_writer_config&,
-            encoding_stats stats,
-            const io_priority_class& pc = default_priority_class());
+            encoding_stats stats);
 
     sstable_writer get_writer(const schema& s,
         uint64_t estimated_partitions,
         const sstable_writer_config&,
         encoding_stats enc_stats,
-        const io_priority_class& pc = default_priority_class(),
         shard_id shard = this_shard_id());
 
     // Validates the content of the sstable.
@@ -272,7 +268,7 @@ public:
     // If aborted, either via the abort-source or via unrecoverable errors
     // (e.g. parse error), it will return with validation error count seen up to
     // the abort. In the latter case it will call the error-handler before doing so.
-    future<uint64_t> validate(reader_permit permit, const io_priority_class& pc, abort_source& abort,
+    future<uint64_t> validate(reader_permit permit, abort_source& abort,
             std::function<void(sstring)> error_handler);
 
     encoding_stats get_encoding_stats_for_compaction() const;
@@ -553,7 +549,7 @@ private:
     future<file> open_file(component_type, open_flags, file_open_options = {}) noexcept;
 
     template <component_type Type, typename T>
-    future<> read_simple(T& comp, const io_priority_class& pc);
+    future<> read_simple(T& comp);
     future<> do_read_simple(component_type type,
                             noncopyable_function<future<> (version_types, file&&, uint64_t sz)> read_component);
     // this variant closes the file on parse completion
@@ -561,10 +557,10 @@ private:
                             noncopyable_function<future<> (version_types, file)> read_component);
 
     template <component_type Type, typename T>
-    void write_simple(const T& comp, const io_priority_class& pc);
+    void write_simple(const T& comp);
     void do_write_simple(file_writer&& writer,
                          noncopyable_function<void (version_types, file_writer&)> write_component);
-    void do_write_simple(component_type type, const io_priority_class& pc,
+    void do_write_simple(component_type type,
             noncopyable_function<void (version_types version, file_writer& writer)> write_component,
             unsigned buffer_size);
 
@@ -578,31 +574,31 @@ private:
             open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
 
     void generate_toc();
-    void open_sstable(const io_priority_class& pc);
+    void open_sstable();
 
-    future<> read_compression(const io_priority_class& pc);
-    void write_compression(const io_priority_class& pc);
+    future<> read_compression();
+    void write_compression();
 
-    future<> read_scylla_metadata(const io_priority_class& pc) noexcept;
-    void write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features, run_identifier identifier,
+    future<> read_scylla_metadata() noexcept;
+    void write_scylla_metadata(shard_id shard, sstable_enabled_features features, run_identifier identifier,
             std::optional<scylla_metadata::large_data_stats> ld_stats, sstring origin);
 
-    future<> read_filter(const io_priority_class& pc, sstable_open_config cfg = {});
+    future<> read_filter(sstable_open_config cfg = {});
 
-    void write_filter(const io_priority_class& pc);
+    void write_filter();
 
-    future<> read_summary(const io_priority_class& pc) noexcept;
+    future<> read_summary() noexcept;
 
-    void write_summary(const io_priority_class& pc) {
-        write_simple<component_type::Summary>(_components->summary, pc);
+    void write_summary() {
+        write_simple<component_type::Summary>(_components->summary);
     }
 
     // To be called when we try to load an SSTable that lacks a Summary. Could
     // happen if old tools are being used.
-    future<> generate_summary(const io_priority_class& pc);
+    future<> generate_summary();
 
-    future<> read_statistics(const io_priority_class& pc);
-    void write_statistics(const io_priority_class& pc);
+    future<> read_statistics();
+    void write_statistics();
     // Rewrite statistics component by creating a temporary Statistics and
     // renaming it into place of existing one.
     void rewrite_statistics();
@@ -635,8 +631,7 @@ public:
     // If reversed is false, then the first position is actually the first row (can be the static one).
     // If reversed is true, then the first position is the last row (can be static if partition has a single static row).
     future<std::optional<position_in_partition>>
-    find_first_position_in_partition(reader_permit permit, const dht::decorated_key& key, bool reversed,
-            const io_priority_class& pc = default_priority_class());
+    find_first_position_in_partition(reader_permit permit, const dht::decorated_key& key, bool reversed);
 
     // Return an input_stream which reads exactly the specified byte range
     // from the data file (after uncompression, if the file is compressed).
@@ -650,7 +645,7 @@ public:
     // When created with `raw_stream::yes`, the sstable data file will be
     // streamed as-is, without decompressing (if compressed).
     using raw_stream = bool_class<class raw_stream_tag>;
-    input_stream<char> data_stream(uint64_t pos, size_t len, const io_priority_class& pc,
+    input_stream<char> data_stream(uint64_t pos, size_t len,
             reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history, raw_stream raw = raw_stream::no);
 
     // Read exactly the specific byte range from the data file (after
@@ -659,7 +654,7 @@ public:
     // determined using the index file).
     // This function is intended (and optimized for) random access, not
     // for iteration through all the rows.
-    future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, const io_priority_class& pc, reader_permit permit);
+    future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, reader_permit permit);
 
 private:
     future<summary_entry&> read_summary_entry(size_t i);

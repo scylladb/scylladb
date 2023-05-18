@@ -39,7 +39,6 @@ class backlog_controller {
 public:
     struct scheduling_group {
         seastar::scheduling_group cpu = default_scheduling_group();
-        seastar::io_priority_class io = default_priority_class();
     };
     future<> shutdown() {
         _update_timer.cancel();

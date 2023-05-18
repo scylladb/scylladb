@@ -14,10 +14,6 @@
 #include "tracing/trace_state.hh"
 #include "seastarx.hh"
 
-namespace seastar {
-class io_priority_class;
-}
-
 /// Reader lifecycle policy for the mulitshard combining reader.
 ///
 /// This policy is expected to make sure any additional resource the readers
@@ -53,7 +49,6 @@ public:
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr) = 0;
 
@@ -131,7 +126,6 @@ flat_mutation_reader_v2 make_multishard_combining_reader_v2(
         reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state = nullptr,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
 
@@ -142,7 +136,6 @@ flat_mutation_reader_v2 make_multishard_combining_reader_v2_for_tests(
         reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state = nullptr,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
 

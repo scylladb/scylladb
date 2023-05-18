@@ -42,7 +42,7 @@ compaction_descriptor sstable_run_based_compaction_strategy_for_tests::get_sstab
             v.insert(v.end(), run.all().begin(), run.all().end());
             return std::move(v);
         });
-        return sstables::compaction_descriptor(std::move(all), default_priority_class(), 0, static_fragment_size_for_run);
+        return sstables::compaction_descriptor(std::move(all), 0, static_fragment_size_for_run);
     }
     return sstables::compaction_descriptor();
 }

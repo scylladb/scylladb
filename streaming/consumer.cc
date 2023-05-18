@@ -11,7 +11,6 @@
 #include "consumer.hh"
 #include "replica/database.hh"
 #include "mutation/mutation_source_metadata.hh"
-#include "service/priority_manager.hh"
 #include "db/view/view_update_generator.hh"
 #include "db/view/view_update_checks.hh"
 #include "sstables/sstables.hh"
@@ -54,11 +53,10 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
                     });
                 }
                 schema_ptr s = reader.schema();
-                auto& pc = service::get_local_streaming_priority();
 
                 return sst->write_components(std::move(reader), adjusted_estimated_partitions, s,
                                              cf->get_sstables_manager().configure_writer(origin),
-                                             encoding_stats{}, pc).then([sst] {
+                                             encoding_stats{}).then([sst] {
                     return sst->open_data();
                 }).then([cf, sst, offstrategy, origin] {
                     if (offstrategy && sstables::repair_origin == origin) {

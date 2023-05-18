@@ -15,7 +15,6 @@
 #include "gms/inet_address.hh"
 #include "utils/fb_utilities.hh"
 #include "gms/gossiper.hh"
-#include "service/priority_manager.hh"
 #include "message/messaging_service.hh"
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
