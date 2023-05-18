@@ -53,6 +53,7 @@ Knowledge Base
   * :doc:`NTP configuration for Scylla </kb/ntp>` - Scylla depends on an accurate system clock. Learn to configure NTP for your data store and applications.
   * :doc:`Scylla and Spark integration </kb/scylla-and-spark-integration>` - How to run an example Spark application that uses Scylla to store data?
   * :doc:`Map CPUs to Scylla Shards </kb/map-cpu>` - Mapping between CPUs and Scylla shards
+  * :doc:`Customizing CPUSET </kb/customizing-cpuset>`
   * :doc:`Recreate RAID devices </kb/raid-device>` - How to recreate your RAID devices without running scylla-setup
   * :doc:`Configure Scylla Networking with Multiple NIC/IP Combinations </kb/yaml-address>` - examples for setting the different IP addresses in scylla.yaml
   * :doc:`Updating the Mode in perftune.yaml After a ScyllaDB Upgrade </kb/perftune-modes-sync>`
