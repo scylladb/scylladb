@@ -226,7 +226,7 @@ int main(int argc, char** argv) {
             cfg.max_flush_delay_in_ms = cfg.min_flush_delay_in_ms;
         }
 
-        db::commitlog::config cl_cfg = db::commitlog::config::from_db_config(*db_cfg,  memory::stats().total_memory());
+        db::commitlog::config cl_cfg = db::commitlog::config::from_db_config(*db_cfg, current_scheduling_group(), memory::stats().total_memory());
         tmpdir tmp;
         cl_cfg.commit_log_location = tmp.path().string();
 

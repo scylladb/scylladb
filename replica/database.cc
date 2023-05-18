@@ -866,7 +866,7 @@ database::init_commitlog() {
         return make_ready_future<>();
     }
 
-    return db::commitlog::create_commitlog(db::commitlog::config::from_db_config(_cfg, _dbcfg.available_memory)).then([this](db::commitlog&& log) {
+    return db::commitlog::create_commitlog(db::commitlog::config::from_db_config(_cfg, _dbcfg.commitlog_scheduling_group, _dbcfg.available_memory)).then([this](db::commitlog&& log) {
         _commitlog = std::make_unique<db::commitlog>(std::move(log));
         _commitlog->add_flush_handler([this](db::cf_id_type id, db::replay_position pos) {
             if (!_column_families.contains(id)) {
