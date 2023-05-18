@@ -22,7 +22,7 @@ class migration_manager;
 
 namespace cql3 {
 
-class query_processor;
+class query_backend;
 
 namespace statements {
 
@@ -34,14 +34,14 @@ public:
 
     virtual void prepare_keyspace(const service::client_state& state) override;
 
-    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
+    virtual future<> check_access(query_backend& qb, const service::client_state& state) const override;
 
-    virtual void validate(query_processor& qp, const service::client_state& state) const override;
+    virtual void validate(query_backend& qb, const service::client_state& state) const override;
 
     virtual const sstring& keyspace() const override;
 
 
-    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp, api::timestamp_type) const override;
+    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_backend& qb, api::timestamp_type) const override;
 
     class add_or_alter;
     class renames;

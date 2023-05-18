@@ -11,9 +11,10 @@
 #include <seastar/core/coroutine.hh>
 #include "cql3/statements/drop_table_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "service/client_state.hh"
 #include "mutation/mutation.hh"
 
 namespace cql3 {
@@ -26,11 +27,11 @@ drop_table_statement::drop_table_statement(cf_name cf_name, bool if_exists)
 {
 }
 
-future<> drop_table_statement::check_access(query_processor& qp, const service::client_state& state) const
+future<> drop_table_statement::check_access(query_backend& qb, const service::client_state& state) const
 {
     // invalid_request_exception is only thrown synchronously.
     try {
-        return state.has_column_family_access(qp.db(), keyspace(), column_family(), auth::permission::DROP);
+        return state.has_column_family_access(qb.db(), keyspace(), column_family(), auth::permission::DROP);
     } catch (exceptions::invalid_request_exception&) {
         if (!_if_exists) {
             throw;
@@ -39,18 +40,18 @@ future<> drop_table_statement::check_access(query_processor& qp, const service::
     }
 }
 
-void drop_table_statement::validate(query_processor&, const service::client_state& state) const
+void drop_table_statement::validate(query_backend&, const service::client_state& state) const
 {
     // validated in prepare_schema_mutations()
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-drop_table_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+drop_table_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
     try {
-        m = co_await qp.get_migration_manager().prepare_column_family_drop_announcement(keyspace(), column_family(), ts);
+        m = co_await qb.get_migration_manager().prepare_column_family_drop_announcement(keyspace(), column_family(), ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(

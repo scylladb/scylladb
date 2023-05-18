@@ -29,7 +29,7 @@
 #include "utils/UUID_gen.hh"
 #include "partition_slice_builder.hh"
 #include "cas_request.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "service/storage_proxy.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 
@@ -101,8 +101,8 @@ std::optional<gc_clock::duration> modification_statement::get_time_to_live(const
     return ttl ? std::make_optional<gc_clock::duration>(*ttl) : std::nullopt;
 }
 
-future<> modification_statement::check_access(query_processor& qp, const service::client_state& state) const {
-    const data_dictionary::database db = qp.db();
+future<> modification_statement::check_access(query_backend& qb, const service::client_state& state) const {
+    const data_dictionary::database db = qb.db();
     auto f = state.has_column_family_access(db, keyspace(), column_family(), auth::permission::MODIFY);
     if (has_conditions()) {
         f = f.then([this, &state, db] {
@@ -113,7 +113,7 @@ future<> modification_statement::check_access(query_processor& qp, const service
 }
 
 future<std::vector<mutation>>
-modification_statement::get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const {
+modification_statement::get_mutations(query_backend& qb, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const {
     auto cl = options.get_consistency();
     auto json_cache = maybe_prepare_json_cache(options);
     auto keys = build_partition_keys(options, json_cache);
@@ -127,9 +127,9 @@ modification_statement::get_mutations(query_processor& qp, const query_options& 
     }
 
     if (requires_read()) {
-        lw_shared_ptr<query::read_command> cmd = read_command(qp, ranges, cl);
+        lw_shared_ptr<query::read_command> cmd = read_command(qb, ranges, cl);
         // FIXME: ignoring "local"
-        f = qp.proxy().query(s, cmd, dht::partition_range_vector(keys), cl,
+        f = qb.proxy().query(s, cmd, dht::partition_range_vector(keys), cl,
                 {timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()}).then(
 
                 [this, cmd] (auto cqr) {
@@ -213,14 +213,14 @@ std::vector<mutation> modification_statement::apply_updates(
 }
 
 lw_shared_ptr<query::read_command>
-modification_statement::read_command(query_processor& qp, query::clustering_row_ranges ranges, db::consistency_level cl) const {
+modification_statement::read_command(query_backend& qb, query::clustering_row_ranges ranges, db::consistency_level cl) const {
     try {
         validate_for_read(cl);
     } catch (exceptions::invalid_request_exception& e) {
         throw exceptions::invalid_request_exception(format("Write operation require a read but consistency {} is not supported on reads", cl));
     }
     query::partition_slice ps(std::move(ranges), *s, columns_to_read(), update_parameters::options);
-    const auto max_result_size = qp.proxy().get_max_result_size(ps);
+    const auto max_result_size = qb.proxy().get_max_result_size(ps);
     return make_lw_shared<query::read_command>(s->id(), s->version(), std::move(ps), query::max_result_size(max_result_size), query::tombstone_limit::max);
 }
 
@@ -244,24 +244,24 @@ struct modification_statement_executor {
 static thread_local inheriting_concrete_execution_stage<
         future<::shared_ptr<cql_transport::messages::result_message>>,
         const modification_statement*,
-        query_processor&,
+        query_backend&,
         service::query_state&,
         const query_options&> modify_stage{"cql3_modification", modification_statement_executor::get()};
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
-    return execute_without_checking_exception_message(qp, qs, options)
+modification_statement::execute(query_backend& qb, service::query_state& qs, const query_options& options) const {
+    return execute_without_checking_exception_message(qb, qs, options)
             .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<cql_transport::messages::result_message>>);
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const {
-    cql3::util::validate_timestamp(qp.db().get_config(), options, attrs);
-    return modify_stage(this, seastar::ref(qp), seastar::ref(qs), seastar::cref(options));
+modification_statement::execute_without_checking_exception_message(query_backend& qb, service::query_state& qs, const query_options& options) const {
+    cql3::util::validate_timestamp(qb.db().get_config(), options, attrs);
+    return modify_stage(this, seastar::ref(qb), seastar::ref(qs), seastar::cref(options));
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
+modification_statement::do_execute(query_backend& qb, service::query_state& qs, const query_options& options) const {
     tracing::add_table_name(qs.get_trace_state(), keyspace(), column_family());
 
     inc_cql_stats(qs.get_client_state().is_internal());
@@ -269,10 +269,10 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     _restrictions->validate_primary_key(options);
 
     if (has_conditions()) {
-        return execute_with_condition(qp, qs, options);
+        return execute_with_condition(qb, qs, options);
     }
 
-    return execute_without_condition(qp, qs, options).then([] (coordinator_result<> res) {
+    return execute_without_condition(qb, qs, options).then([] (coordinator_result<> res) {
         if (!res) {
             return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
                     seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error()));
@@ -283,20 +283,20 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
 }
 
 future<coordinator_result<>>
-modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options) const {
+modification_statement::execute_without_condition(query_backend& qb, service::query_state& qs, const query_options& options) const {
     auto cl = options.get_consistency();
     auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
-    return get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs).then([this, cl, timeout, &qp, &qs] (auto mutations) {
+    return get_mutations(qb, options, timeout, false, options.get_timestamp(qs), qs).then([this, cl, timeout, &qb, &qs] (auto mutations) {
         if (mutations.empty()) {
             return make_ready_future<coordinator_result<>>(bo::success());
         }
         
-        return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), db::allow_per_partition_rate_limit::yes, this->is_raw_counter_shard_write());
+        return qb.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), db::allow_per_partition_rate_limit::yes, this->is_raw_counter_shard_write());
     });
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::execute_with_condition(query_processor& qp, service::query_state& qs, const query_options& options) const {
+modification_statement::execute_with_condition(query_backend& qb, service::query_state& qs, const query_options& options) const {
 
     auto cl_for_learn = options.get_consistency();
     auto cl_for_paxos = options.check_serial_consistency();
@@ -324,11 +324,11 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     auto shard = service::storage_proxy::cas_shard(*s, request->key()[0].start()->value().as_decorated_key().token());
     if (shard != this_shard_id()) {
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                qp.bounce_to_shard(shard, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()))
+                qb.bounce_to_shard(shard, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()))
             );
     }
 
-    return qp.proxy().cas(s, request, request->read_command(qp), request->key(),
+    return qb.proxy().cas(s, request, request->read_command(qb), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             cl_for_paxos, cl_for_learn, statement_timeout, cas_timeout).then([this, request] (bool is_applied) {
         return request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
@@ -586,7 +586,7 @@ modification_statement::prepare_conditions(data_dictionary::database db, const s
 }  // namespace raw
 
 void
-modification_statement::validate(query_processor&, const service::client_state& state) const {
+modification_statement::validate(query_backend&, const service::client_state& state) const {
     if (has_conditions() && attrs->is_timestamp_set()) {
         throw exceptions::invalid_request_exception("Cannot provide custom timestamp for conditional updates");
     }

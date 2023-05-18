@@ -10,7 +10,7 @@
 
 #include "cql3/statements/use_statement.hh"
 #include "cql3/statements/raw/use_statement.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "transport/messages/result_message.hh"
 #include "service/query_state.hh"
 
@@ -48,19 +48,19 @@ bool use_statement::depends_on(std::string_view ks_name, std::optional<std::stri
     return false;
 }
 
-future<> use_statement::check_access(query_processor& qp, const service::client_state& state) const
+future<> use_statement::check_access(query_backend& qb, const service::client_state& state) const
 {
     state.validate_login();
     return make_ready_future<>();
 }
 
-void use_statement::validate(query_processor&, const service::client_state& state) const
+void use_statement::validate(query_backend&, const service::client_state& state) const
 {
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-use_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
-    state.get_client_state().set_keyspace(qp.db().real_database(), _keyspace);
+use_statement::execute(query_backend& qb, service::query_state& state, const query_options& options) const {
+    state.get_client_state().set_keyspace(qb.db().real_database(), _keyspace);
     auto result =::make_shared<cql_transport::messages::result_message::set_keyspace>(_keyspace);
     return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(result);
 }

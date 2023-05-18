@@ -185,7 +185,7 @@ public:
         return *_alien_runner;
     }
 
-    query_backend get_backend() {
+    query_backend& backend() {
         return _backend;
     }
 

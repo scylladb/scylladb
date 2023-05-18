@@ -16,7 +16,7 @@
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_aggregate.hh"
 #include "cql3/functions/user_function.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "cql3/query_options.hh"
 #include "cql3/role_name.hh"
 #include "cql3/selection/selection.hh"
@@ -41,12 +41,12 @@ cql3::statements::permission_altering_statement::permission_altering_statement(
                 , _role_name(rn.to_string()) {
 }
 
-void cql3::statements::permission_altering_statement::validate(query_processor&, const service::client_state&) const {
+void cql3::statements::permission_altering_statement::validate(query_backend&, const service::client_state&) const {
 }
 
-future<> cql3::statements::permission_altering_statement::check_access(query_processor& qp, const service::client_state& state) const {
+future<> cql3::statements::permission_altering_statement::check_access(query_backend& qb, const service::client_state& state) const {
     state.ensure_not_anonymous();
-    maybe_correct_resource(_resource, state, qp);
+    maybe_correct_resource(_resource, state, qb);
 
     return state.ensure_exists(_resource).then([this, &state] {
         if (_resource.kind() == auth::resource_kind::functions) {

@@ -16,7 +16,7 @@
 
 namespace cql3 {
 
-class query_processor;
+class query_backend;
 
 namespace statements {
 
@@ -35,12 +35,12 @@ public:
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
-    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
+    virtual future<> check_access(query_backend& qb, const service::client_state& state) const override;
 
-    virtual void validate(query_processor&, const service::client_state& state) const override;
+    virtual void validate(query_backend&, const service::client_state& state) const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
+    execute(query_backend& qb, service::query_state& state, const query_options& options) const override;
 private:
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 };

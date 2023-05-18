@@ -12,9 +12,10 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "service/client_state.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "data_dictionary/user_types_metadata.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "cql3/column_identifier.hh"
 #include "mutation/mutation.hh"
 
@@ -41,9 +42,9 @@ void create_type_statement::add_definition(::shared_ptr<column_identifier> name,
     _column_types.emplace_back(type);
 }
 
-future<> create_type_statement::check_access(query_processor& qp, const service::client_state& state) const
+future<> create_type_statement::check_access(query_backend& qb, const service::client_state& state) const
 {
-    return state.has_keyspace_access(qp.db(), keyspace(), auth::permission::CREATE);
+    return state.has_keyspace_access(qb.db(), keyspace(), auth::permission::CREATE);
 }
 
 inline bool create_type_statement::type_exists_in(data_dictionary::keyspace ks) const
@@ -52,7 +53,7 @@ inline bool create_type_statement::type_exists_in(data_dictionary::keyspace ks) 
     return keyspace_types.contains(_name.get_user_type_name());
 }
 
-void create_type_statement::validate(query_processor& qp, const service::client_state& state) const
+void create_type_statement::validate(query_backend& qb, const service::client_state& state) const
 {
     if (_column_types.size() > max_udt_fields) {
         throw exceptions::invalid_request_exception(format("A user type cannot have more than {} fields", max_udt_fields));
@@ -104,8 +105,8 @@ user_type create_type_statement::create_type(data_dictionary::database db) const
         std::move(field_names), std::move(field_types), true /* multi cell */);
 }
 
-std::optional<user_type> create_type_statement::make_type(query_processor& qp) const {
-    data_dictionary::database db = qp.db();
+std::optional<user_type> create_type_statement::make_type(query_backend& qb) const {
+    data_dictionary::database db = qb.db();
     auto&& ks = db.find_keyspace(keyspace());
 
     // Can happen with if_not_exists
@@ -118,13 +119,13 @@ std::optional<user_type> create_type_statement::make_type(query_processor& qp) c
     return type;
 }
 
-future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> create_type_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> create_type_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
     try {
-        auto t = make_type(qp);
+        auto t = make_type(qb);
         if (t) {
-            m = co_await qp.get_migration_manager().prepare_new_type_announcement(*t, ts);
+            m = co_await qb.get_migration_manager().prepare_new_type_announcement(*t, ts);
             using namespace cql_transport;
 
             ret = ::make_shared<event::schema_change>(

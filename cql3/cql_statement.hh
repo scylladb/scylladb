@@ -32,7 +32,7 @@ class result_message;
 
 namespace cql3 {
 
-class query_processor;
+class query_backend;
 
 class metadata;
 seastar::shared_ptr<const metadata> make_empty_metadata();
@@ -59,7 +59,7 @@ public:
      *
      * @param state the current client state
      */
-    virtual seastar::future<> check_access(query_processor& qp, const service::client_state& state) const = 0;
+    virtual seastar::future<> check_access(query_backend& qb, const service::client_state& state) const = 0;
 
     /**
      * Perform additional validation required by the statment.
@@ -67,7 +67,7 @@ public:
      *
      * @param state the current client state
      */
-    virtual void validate(query_processor& qp, const service::client_state& state) const = 0;
+    virtual void validate(query_backend& qb, const service::client_state& state) const = 0;
 
     /**
      * Execute the statement and return the resulting result or null if there is no result.
@@ -79,7 +79,7 @@ public:
      * @param options options for this query (consistency, variables, pageSize, ...)
      */
     virtual seastar::future<seastar::shared_ptr<cql_transport::messages::result_message>>
-        execute(query_processor& qp, service::query_state& state, const query_options& options) const = 0;
+        execute(query_backend& qb, service::query_state& state, const query_options& options) const = 0;
 
     /**
      * Execute the statement and return the resulting result or null if there is no result.
@@ -91,8 +91,8 @@ public:
      * @param options options for this query (consistency, variables, pageSize, ...)
      */
     virtual seastar::future<seastar::shared_ptr<cql_transport::messages::result_message>>
-            execute_without_checking_exception_message(query_processor& qp, service::query_state& state, const query_options& options) const {
-        return execute(qp, state, options);
+            execute_without_checking_exception_message(query_backend& qb, service::query_state& state, const query_options& options) const {
+        return execute(qb, state, options);
     }
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const = 0;

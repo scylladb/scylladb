@@ -298,7 +298,7 @@ public:
         auto& qo = cql3::query_options::DEFAULT;
         auto timeout = db::timeout_clock::now() + qs->get_client_state().get_timeout_config().write_timeout;
 
-        return modif_stmt->get_mutations(local_qp(), qo, timeout, false, qo.get_timestamp(*qs), *qs)
+        return modif_stmt->get_mutations(local_qp().backend(), qo, timeout, false, qo.get_timestamp(*qs), *qs)
             .finally([qs, modif_stmt = std::move(modif_stmt)] {});
     }
 

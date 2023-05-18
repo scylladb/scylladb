@@ -34,15 +34,15 @@ std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::list_per
 }
 
 void cql3::statements::list_permissions_statement::validate(
-        query_processor& qp,
+        query_backend& qb,
         const service::client_state& state) const {
     // a check to ensure the existence of the user isn't being leaked by user existence check.
     state.ensure_not_anonymous();
 }
 
-future<> cql3::statements::list_permissions_statement::check_access(query_processor& qp, const service::client_state& state) const {
+future<> cql3::statements::list_permissions_statement::check_access(query_backend& qb, const service::client_state& state) const {
     if (_resource) {
-        maybe_correct_resource(*_resource, state, qp);
+        maybe_correct_resource(*_resource, state, qb);
         return state.ensure_exists(*_resource);
     }
 
@@ -76,7 +76,7 @@ future<> cql3::statements::list_permissions_statement::check_access(query_proces
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::list_permissions_statement::execute(
-        query_processor& qp,
+        query_backend& qb,
         service::query_state& state,
         const query_options& options) const {
     static auto make_column = [](sstring name) {

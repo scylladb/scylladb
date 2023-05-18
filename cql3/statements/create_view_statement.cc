@@ -27,7 +27,7 @@
 #include "cql3/selection/selectable_with_field_selection.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/writetime_or_ttl.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "cql3/util.hh"
 #include "schema/schema_builder.hh"
 #include "service/storage_proxy.hh"
@@ -60,11 +60,11 @@ create_view_statement::create_view_statement(
 {
 }
 
-future<> create_view_statement::check_access(query_processor& qp, const service::client_state& state) const {
-    return state.has_column_family_access(qp.db(), keyspace(), _base_name.get_column_family(), auth::permission::ALTER);
+future<> create_view_statement::check_access(query_backend& qb, const service::client_state& state) const {
+    return state.has_column_family_access(qb.db(), keyspace(), _base_name.get_column_family(), auth::permission::ALTER);
 }
 
-void create_view_statement::validate(query_processor& qp, const service::client_state& state) const {
+void create_view_statement::validate(query_backend& qb, const service::client_state& state) const {
 }
 
 static const column_definition* get_column_definition(const schema& schema, column_identifier::raw& identifier) {
@@ -338,12 +338,12 @@ view_ptr create_view_statement::prepare_view(data_dictionary::database db) const
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-create_view_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+create_view_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
-    auto definition = prepare_view(qp.db());
+    auto definition = prepare_view(qb.db());
     try {
-        m = co_await qp.get_migration_manager().prepare_new_view_announcement(std::move(definition), ts);
+        m = co_await qb.get_migration_manager().prepare_new_view_announcement(std::move(definition), ts);
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::CREATED,

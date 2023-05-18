@@ -12,7 +12,7 @@
 #include "timeout_config.hh"
 #include "service/pager/query_pagers.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "service/storage_proxy.hh"
 #include <boost/range/adaptors.hpp>
 #include <seastar/core/coroutine.hh>
@@ -51,7 +51,7 @@ static future<> delete_ghost_rows(dht::partition_range_vector partition_ranges, 
     }
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>> prune_materialized_view_statement::do_execute(query_processor& qp,
+future<::shared_ptr<cql_transport::messages::result_message>> prune_materialized_view_statement::do_execute(query_backend& qb,
                                                                                  service::query_state& state, const query_options& options) const {
     tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
 
@@ -65,7 +65,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> prune_materialized
     auto timeout_duration = get_timeout(state.get_client_state(), options);
     dht::partition_range_vector key_ranges = _restrictions->get_partition_key_ranges(options);
     std::vector<query::clustering_range> clustering_bounds = _restrictions->get_clustering_bounds(options);
-    return delete_ghost_rows(std::move(key_ranges), std::move(clustering_bounds), view_ptr(_schema), qp.proxy(), state, options, _stats, timeout_duration).then([] {
+    return delete_ghost_rows(std::move(key_ranges), std::move(clustering_bounds), view_ptr(_schema), qb.proxy(), state, options, _stats, timeout_duration).then([] {
         return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(::make_shared<cql_transport::messages::result_message::void_message>());
     });
 }

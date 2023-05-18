@@ -32,15 +32,15 @@ cql3::statements::list_service_level_attachments_statement::prepare(
     return std::make_unique<prepared_statement>(::make_shared<list_service_level_attachments_statement>(*this));
 }
 
-void list_service_level_attachments_statement::validate(query_processor &, const service::client_state &) const {
+void list_service_level_attachments_statement::validate(query_backend&, const service::client_state &) const {
 }
 
-future<> list_service_level_attachments_statement::check_access(query_processor& qp, const service::client_state &state) const {
+future<> list_service_level_attachments_statement::check_access(query_backend& qb, const service::client_state &state) const {
     return state.ensure_has_permission(auth::command_desc{.permission = auth::permission::DESCRIBE, .resource = auth::root_service_level_resource()});
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-list_service_level_attachments_statement::execute(query_processor& qp,
+list_service_level_attachments_statement::execute(query_backend& qb,
         service::query_state &state,
         const query_options &) const {
 

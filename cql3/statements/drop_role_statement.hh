@@ -18,7 +18,7 @@
 
 namespace cql3 {
 
-class query_processor;
+class query_backend;
 
 namespace statements {
 
@@ -33,12 +33,12 @@ public:
 
     std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
-    virtual void validate(query_processor&, const service::client_state&) const override;
+    virtual void validate(query_backend&, const service::client_state&) const override;
 
-    virtual future<> check_access(query_processor& qp, const service::client_state&) const override;
+    virtual future<> check_access(query_backend& qb, const service::client_state&) const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute(query_processor&, service::query_state&, const query_options&) const override;
+    execute(query_backend&, service::query_state&, const query_options&) const override;
 };
 
 }

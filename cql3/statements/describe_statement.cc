@@ -22,7 +22,7 @@
 #include "seastar/coroutine/maybe_yield.hh"
 #include "service/client_state.hh"
 #include "types/types.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/statements/raw/describe_statement.hh"
 #include "cql3/statements/describe_statement.hh"
@@ -147,11 +147,11 @@ bool is_index(const data_dictionary::database& db, const schema_ptr& schema) {
 
 
 
-description keyspace(replica::database& db, const lw_shared_ptr<keyspace_metadata>& ks, bool with_stmt = false) {
+description keyspace(replica::database& db, const lw_shared_ptr<data_dictionary::keyspace_metadata>& ks, bool with_stmt = false) {
     return (with_stmt) ? description(db, *ks, true) : description(db, *ks);
 }
 
-description type(replica::database& db, const lw_shared_ptr<keyspace_metadata>& ks, const sstring& name) {
+description type(replica::database& db, const lw_shared_ptr<data_dictionary::keyspace_metadata>& ks, const sstring& name) {
     auto udt_meta = ks->user_types();
     if (!udt_meta.has_type(to_bytes(name))) {
         throw exceptions::invalid_request_exception(format("Type '{}' not found in keyspace '{}'", name, ks->name()));
@@ -161,7 +161,7 @@ description type(replica::database& db, const lw_shared_ptr<keyspace_metadata>& 
     return description(db, *udt, true);
 }
 
-future<std::vector<description>> types(replica::database& db, const lw_shared_ptr<keyspace_metadata>& ks, bool with_stmt = false) {
+future<std::vector<description>> types(replica::database& db, const lw_shared_ptr<data_dictionary::keyspace_metadata>& ks, bool with_stmt = false) {
     auto user_types_map = ks->user_types().get_all_types();
     auto user_types = boost::copy_range<std::vector<shared_ptr<const keyspace_element>>>(user_types_map | boost::adaptors::transformed([] (const auto& e) {
         // return static_pointer_cast<const keyspace_element>(e.second);
@@ -273,7 +273,7 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
     co_return result;
 }
 
-future<std::vector<description>> tables(const data_dictionary::database& db, const lw_shared_ptr<keyspace_metadata>& ks, std::optional<bool> with_internals = std::nullopt) {
+future<std::vector<description>> tables(const data_dictionary::database& db, const lw_shared_ptr<data_dictionary::keyspace_metadata>& ks, std::optional<bool> with_internals = std::nullopt) {
     auto tables = ks->tables();
     boost::sort(tables, [] (const auto& a, const auto& b) {
         return a->cf_name() < b->cf_name();
@@ -305,7 +305,7 @@ future<std::vector<description>> tables(const data_dictionary::database& db, con
  *  @return `data_dictionary::keyspace_metadata` for specified keyspace name
  *  @throw `invalid_request_exception` if there is no such keyspace
  */
-lw_shared_ptr<keyspace_metadata> get_keyspace_metadata(const data_dictionary::database& db, const sstring& keyspace) {
+lw_shared_ptr<data_dictionary::keyspace_metadata> get_keyspace_metadata(const data_dictionary::database& db, const sstring& keyspace) {
     auto ks = db.try_find_keyspace(keyspace);
     if (!ks) {
         throw exceptions::invalid_request_exception(format("'{}' not found in keyspaces", keyspace));
@@ -419,22 +419,22 @@ uint32_t describe_statement::get_bound_terms() const { return 0; }
 
 bool describe_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const { return false; }
 
-future<> describe_statement::check_access(query_processor& qp, const service::client_state& state) const {
+future<> describe_statement::check_access(query_backend& qb, const service::client_state& state) const {
     state.validate_login();
     co_return;
 }
 
-void describe_statement::validate(query_processor&, const service::client_state& state) const {}
+void describe_statement::validate(query_backend&, const service::client_state& state) const {}
 
 seastar::shared_ptr<const metadata> describe_statement::get_result_metadata() const {
     return ::make_shared<const metadata>(get_column_specifications());
 }
 
 seastar::future<seastar::shared_ptr<cql_transport::messages::result_message>>
-describe_statement::execute(cql3::query_processor& qp, service::query_state& state, const query_options& options) const {
+describe_statement::execute(cql3::query_backend& qb, service::query_state& state, const query_options& options) const {
     auto& client_state = state.get_client_state();
 
-    auto descriptions = co_await describe(qp, client_state);
+    auto descriptions = co_await describe(qb, client_state);
     auto result = std::make_unique<result_set>(get_column_specifications(client_state));
 
     for (auto&& row: descriptions) {
@@ -506,9 +506,9 @@ future<bytes_opt> cluster_describe_statement::range_ownership(const service::sto
     )).serialize();
 }
 
-future<std::vector<std::vector<bytes_opt>>> cluster_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {   
-    auto db = qp.db();
-    auto& proxy = qp.proxy();
+future<std::vector<std::vector<bytes_opt>>> cluster_describe_statement::describe(cql3::query_backend& qb, const service::client_state& client_state) const {   
+    auto db = qb.db();
+    auto& proxy = qb.proxy();
 
     auto cluster = to_bytes(db.get_config().cluster_name());
     auto partitioner = to_bytes(db.get_config().partitioner());
@@ -544,8 +544,8 @@ std::vector<lw_shared_ptr<column_specification>> schema_describe_statement::get_
     return get_element_column_specifications();
 }
 
-future<std::vector<std::vector<bytes_opt>>> schema_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
-    auto db = qp.db();
+future<std::vector<std::vector<bytes_opt>>> schema_describe_statement::describe(cql3::query_backend& qb, const service::client_state& client_state) const {
+    auto db = qb.db();
 
     auto result = co_await std::visit(overloaded_functor{
         [&] (const schema_desc& config) -> future<std::vector<description>> {
@@ -590,8 +590,8 @@ std::vector<lw_shared_ptr<column_specification>> listing_describe_statement::get
 
 }
 
-future<std::vector<std::vector<bytes_opt>>> listing_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
-    auto db = qp.db();
+future<std::vector<std::vector<bytes_opt>>> listing_describe_statement::describe(cql3::query_backend& qb, const service::client_state& client_state) const {
+    auto db = qb.db();
     auto raw_ks = client_state.get_raw_keyspace();
 
     std::vector<sstring> keyspaces;
@@ -624,7 +624,7 @@ std::vector<lw_shared_ptr<column_specification>> element_describe_statement::get
     return get_element_column_specifications();
 }
 
-future<std::vector<std::vector<bytes_opt>>> element_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
+future<std::vector<std::vector<bytes_opt>>> element_describe_statement::describe(cql3::query_backend& qb, const service::client_state& client_state) const {
     auto ks = client_state.get_raw_keyspace();
     if (_keyspace) {
         ks = *_keyspace;
@@ -633,7 +633,7 @@ future<std::vector<std::vector<bytes_opt>>> element_describe_statement::describe
         throw exceptions::invalid_request_exception("No keyspace specified and no current keyspace");
     }
     
-    co_return serialize_descriptions(co_await describe_element(qp.db(), ks, _element, _name, _with_internals));
+    co_return serialize_descriptions(co_await describe_element(qb.db(), ks, _element, _name, _with_internals));
 }
 
 //GENERIC DESCRIBE STATEMENT
@@ -647,8 +647,8 @@ std::vector<lw_shared_ptr<column_specification>> generic_describe_statement::get
     return get_element_column_specifications();
 }
 
-future<std::vector<std::vector<bytes_opt>>> generic_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
-    auto db = qp.db();
+future<std::vector<std::vector<bytes_opt>>> generic_describe_statement::describe(cql3::query_backend& qb, const service::client_state& client_state) const {
+    auto db = qb.db();
     auto raw_ks = client_state.get_raw_keyspace();
     auto ks_name = (_keyspace) ? *_keyspace : raw_ks;
 

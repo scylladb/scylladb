@@ -37,17 +37,17 @@ public:
     strongly_consistent_modification_statement(uint32_t bound_terms, schema_ptr schema, broadcast_tables::prepared_update query);
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute(query_processor& qp, service::query_state& qs, const query_options& options) const override;
+    execute(query_backend& qb, service::query_state& qs, const query_options& options) const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const override;
+    execute_without_checking_exception_message(query_backend& qb, service::query_state& qs, const query_options& options) const override;
 
     virtual uint32_t get_bound_terms() const override;
 
-    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
+    virtual future<> check_access(query_backend& qb, const service::client_state& state) const override;
 
     // Validate before execute, using client state and current schema
-    void validate(query_processor&, const service::client_state& state) const override;
+    void validate(query_backend&, const service::client_state& state) const override;
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 };

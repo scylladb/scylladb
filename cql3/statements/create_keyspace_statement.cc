@@ -18,7 +18,7 @@
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "transport/messages/result_message.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "db/config.hh"
 #include "gms/feature_service.hh"
 
@@ -45,12 +45,12 @@ const sstring& create_keyspace_statement::keyspace() const
     return _name;
 }
 
-future<> create_keyspace_statement::check_access(query_processor& qp, const service::client_state& state) const
+future<> create_keyspace_statement::check_access(query_backend& qb, const service::client_state& state) const
 {
     return state.has_all_keyspaces_access(auth::permission::CREATE);
 }
 
-void create_keyspace_statement::validate(query_processor& qp, const service::client_state& state) const
+void create_keyspace_statement::validate(query_backend& qb, const service::client_state& state) const
 {
     std::string name;
     name.resize(_name.length());
@@ -77,7 +77,7 @@ void create_keyspace_statement::validate(query_processor& qp, const service::cli
     } catch (const std::runtime_error& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
-    if (!qp.proxy().features().keyspace_storage_options
+    if (!qb.proxy().features().keyspace_storage_options
             && _attrs->get_storage_options().type_string() != "LOCAL") {
         throw exceptions::invalid_request_exception("Keyspace storage options not supported in the cluster");
     }
@@ -93,14 +93,14 @@ void create_keyspace_statement::validate(query_processor& qp, const service::cli
 #endif
 }
 
-future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> create_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> create_keyspace_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
     using namespace cql_transport;
-    const auto& tm = *qp.proxy().get_token_metadata_ptr();
+    const auto& tm = *qb.proxy().get_token_metadata_ptr();
     ::shared_ptr<event::schema_change> ret;
     std::vector<mutation> m;
 
     try {
-        m = qp.get_migration_manager().prepare_new_keyspace_announcement(_attrs->as_ks_metadata(_name, tm), ts);
+        m = qb.get_migration_manager().prepare_new_keyspace_announcement(_attrs->as_ks_metadata(_name, tm), ts);
 
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::CREATED,
@@ -120,7 +120,7 @@ cql3::statements::create_keyspace_statement::prepare(data_dictionary::database d
     return std::make_unique<prepared_statement>(make_shared<create_keyspace_statement>(*this));
 }
 
-future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creator(query_processor& qp, const service::client_state& cs) const {
+future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creator(query_backend& qb, const service::client_state& cs) const {
     return do_with(auth::make_data_resource(keyspace()), auth::make_functions_resource(keyspace()), [&cs](const auth::resource& r, const auth::resource& fr) {
         return auth::grant_applicable_permissions(
                 *cs.get_auth_service(),
@@ -147,7 +147,7 @@ future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creat
 // errors (such as unknown replication strategy name or unknown options
 // to a known replication strategy) are done elsewhere.
 std::optional<sstring> check_restricted_replication_strategy(
-    query_processor& qp,
+    query_backend& qb,
     const sstring& keyspace,
     const ks_prop_defs& attrs)
 {
@@ -160,7 +160,7 @@ std::optional<sstring> check_restricted_replication_strategy(
     // may have in the future - multiple racks or DCs. So depending on how
     // protective we are configured, let's prevent it or allow with a warning:
     if (replication_strategy == "org.apache.cassandra.locator.SimpleStrategy") {
-        switch(qp.db().get_config().restrict_replication_simplestrategy()) {
+        switch(qb.db().get_config().restrict_replication_simplestrategy()) {
         case db::tri_mode_restriction_t::mode::TRUE:
             throw exceptions::configuration_exception(
                 "SimpleStrategy replication class is not recommended, and "
@@ -177,7 +177,7 @@ std::optional<sstring> check_restricted_replication_strategy(
         case db::tri_mode_restriction_t::mode::FALSE:
             // Scylla was configured to allow SimpleStrategy, but let's warn
             // if it's used on a cluster which *already* has multiple DCs:
-            if (qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenter_endpoints().size() > 1) {
+            if (qb.proxy().get_token_metadata_ptr()->get_topology().get_datacenter_endpoints().size() > 1) {
                 return "Using SimpleStrategy in a multi-datacenter environment is not recommended.";
             }
             break;
@@ -195,13 +195,13 @@ std::optional<sstring> check_restricted_replication_strategy(
     for (auto opt : attrs.get_replication_options()) {
         try {
             auto rf = std::stol(opt.second);
-            if (rf > 0 && rf < qp.proxy().data_dictionary().get_config().minimum_keyspace_rf()) {
+            if (rf > 0 && rf < qb.proxy().data_dictionary().get_config().minimum_keyspace_rf()) {
                 throw exceptions::configuration_exception(format(
                     "Replication factor {}={} is forbidden by the current "
                     "configuration setting of minimum_keyspace_rf={}. Please "
                     "increase replication factor, or lower minimum_keyspace_rf "
                     "set in the configuration.", opt.first, opt.second,
-                    qp.proxy().data_dictionary().get_config().minimum_keyspace_rf()));
+                    qb.proxy().data_dictionary().get_config().minimum_keyspace_rf()));
             }
         } catch (std::invalid_argument&) {
         } catch (std::out_of_range& ) {
@@ -211,9 +211,9 @@ std::optional<sstring> check_restricted_replication_strategy(
 }
 
 future<::shared_ptr<messages::result_message>>
-create_keyspace_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
-    std::optional<sstring> warning = check_restricted_replication_strategy(qp, keyspace(), *_attrs);
-    return schema_altering_statement::execute(qp, state, options).then([warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
+create_keyspace_statement::execute(query_backend& qb, service::query_state& state, const query_options& options) const {
+    std::optional<sstring> warning = check_restricted_replication_strategy(qb, keyspace(), *_attrs);
+    return schema_altering_statement::execute(qb, state, options).then([warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
         if (warning) {
             msg->add_warning(*warning);
             mylogger.warn("{}", *warning);

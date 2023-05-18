@@ -20,10 +20,10 @@ bool cql3::statements::authentication_statement::depends_on(std::string_view ks_
 }
 
 void cql3::statements::authentication_statement::validate(
-                query_processor&,
+                query_backend&,
                 const service::client_state& state) const {
 }
 
-future<> cql3::statements::authentication_statement::check_access(query_processor& qp, const service::client_state& state) const {
+future<> cql3::statements::authentication_statement::check_access(query_backend& qb, const service::client_state& state) const {
     return make_ready_future<>();
 }

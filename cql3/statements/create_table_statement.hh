@@ -28,7 +28,7 @@
 
 namespace cql3 {
 
-class query_processor;
+class query_backend;
 class cf_prop_defs;
 
 namespace statements {
@@ -68,19 +68,19 @@ public:
                            column_set_type static_columns,
                            const std::optional<table_id>& id);
 
-    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
+    virtual future<> check_access(query_backend& qb, const service::client_state& state) const override;
 
-    virtual void validate(query_processor&, const service::client_state& state) const override;
+    virtual void validate(query_backend&, const service::client_state& state) const override;
 
-    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp, api::timestamp_type) const override;
+    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_backend& qb, api::timestamp_type) const override;
 
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
-    virtual future<> grant_permissions_to_creator(query_processor& qp, const service::client_state&) const override;
+    virtual future<> grant_permissions_to_creator(query_backend& qb, const service::client_state&) const override;
 
     virtual future<::shared_ptr<messages::result_message>>
-    execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
+    execute(query_backend& qb, service::query_state& state, const query_options& options) const override;
 
     schema_ptr get_cf_meta_data(const data_dictionary::database) const;
 
@@ -129,7 +129,7 @@ public:
 };
 
 std::optional<sstring> check_restricted_table_properties(
-    query_processor& qp,
+    query_backend& qb,
     std::optional<schema_ptr> schema,
     const sstring& keyspace, const sstring& table,
     const cf_prop_defs& cfprops);

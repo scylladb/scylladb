@@ -13,8 +13,10 @@
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/cql_statement.hh"
 #include "data_dictionary/data_dictionary.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "service/storage_proxy.hh"
+#include "service/client_state.hh"
+#include "service/query_state.hh"
 #include <optional>
 #include "validation.hh"
 
@@ -76,12 +78,12 @@ bool truncate_statement::depends_on(std::string_view ks_name, std::optional<std:
     return false;
 }
 
-future<> truncate_statement::check_access(query_processor& qp, const service::client_state& state) const
+future<> truncate_statement::check_access(query_backend& qb, const service::client_state& state) const
 {
-    return state.has_column_family_access(qp.db(), keyspace(), column_family(), auth::permission::MODIFY);
+    return state.has_column_family_access(qb.db(), keyspace(), column_family(), auth::permission::MODIFY);
 }
 
-void truncate_statement::validate(query_processor&, const service::client_state& state) const
+void truncate_statement::validate(query_backend&, const service::client_state& state) const
 {
     warn(unimplemented::cause::VALIDATION);
 #if 0
@@ -90,13 +92,13 @@ void truncate_statement::validate(query_processor&, const service::client_state&
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-truncate_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const
+truncate_statement::execute(query_backend& qb, service::query_state& state, const query_options& options) const
 {
-    if (qp.db().find_schema(keyspace(), column_family())->is_view()) {
+    if (qb.db().find_schema(keyspace(), column_family())->is_view()) {
         throw exceptions::invalid_request_exception("Cannot TRUNCATE materialized view directly; must truncate base table instead");
     }
     auto timeout_in_ms = std::chrono::duration_cast<std::chrono::milliseconds>(get_timeout(state.get_client_state(), options));
-    return qp.proxy().truncate_blocking(keyspace(), column_family(), timeout_in_ms).handle_exception([](auto ep) {
+    return qb.proxy().truncate_blocking(keyspace(), column_family(), timeout_in_ms).handle_exception([](auto ep) {
         throw exceptions::truncate_exception(ep);
     }).then([] {
         return ::shared_ptr<cql_transport::messages::result_message>{};

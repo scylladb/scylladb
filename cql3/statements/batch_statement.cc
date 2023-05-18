@@ -15,8 +15,9 @@
 #include "data_dictionary/data_dictionary.hh"
 #include <seastar/core/execution_stage.hh>
 #include "cas_request.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "service/storage_proxy.hh"
+#include "transport/messages/result_message.hh"
 
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/algorithm/cxx11/all_of.hpp>
@@ -81,11 +82,11 @@ uint32_t batch_statement::get_bound_terms() const
     return _bound_terms;
 }
 
-future<> batch_statement::check_access(query_processor& qp, const service::client_state& state) const
+future<> batch_statement::check_access(query_backend& qb, const service::client_state& state) const
 {
-    return parallel_for_each(_statements.begin(), _statements.end(), [&qp, &state](auto&& s) {
+    return parallel_for_each(_statements.begin(), _statements.end(), [&qb, &state](auto&& s) {
         if (s.needs_authorization) {
-            return s.statement->check_access(qp, state);
+            return s.statement->check_access(qb, state);
         } else {
             return make_ready_future<>();
         }
@@ -145,10 +146,10 @@ void batch_statement::validate()
     }
 }
 
-void batch_statement::validate(query_processor& qp, const service::client_state& state) const
+void batch_statement::validate(query_backend& qb, const service::client_state& state) const
 {
     for (auto&& s : _statements) {
-        s.statement->validate(qp, state);
+        s.statement->validate(qb, state);
     }
 }
 
@@ -157,7 +158,7 @@ const std::vector<batch_statement::single_statement>& batch_statement::get_state
     return _statements;
 }
 
-future<std::vector<mutation>> batch_statement::get_mutations(query_processor& qp, const query_options& options,
+future<std::vector<mutation>> batch_statement::get_mutations(query_backend& qb, const query_options& options,
         db::timeout_clock::time_point timeout, bool local, api::timestamp_type now, service::query_state& query_state) const {
     // Do not process in parallel because operations like list append/prepend depend on execution order.
     using mutation_set_type = std::unordered_set<mutation, mutation_hash_by_key, mutation_equals_by_key>;
@@ -168,7 +169,7 @@ future<std::vector<mutation>> batch_statement::get_mutations(query_processor& qp
         statement->inc_cql_stats(query_state.get_client_state().is_internal());
         auto&& statement_options = options.for_statement(i);
         auto timestamp = _attrs->get_timestamp(now, statement_options);
-        auto more = co_await statement->get_mutations(qp, statement_options, timeout, local, timestamp, query_state);
+        auto more = co_await statement->get_mutations(qb, statement_options, timeout, local, timestamp, query_state);
 
         for (auto&& m : more) {
             // We want unordered_set::try_emplace(), but we don't have it
@@ -190,13 +191,13 @@ future<std::vector<mutation>> batch_statement::get_mutations(query_processor& qp
     co_return vresult;
 }
 
-void batch_statement::verify_batch_size(query_processor& qp, const std::vector<mutation>& mutations) {
+void batch_statement::verify_batch_size(query_backend& qb, const std::vector<mutation>& mutations) {
     if (mutations.size() <= 1) {
         return;     // We only warn for batch spanning multiple mutations
     }
 
-    size_t warn_threshold = qp.db().get_config().batch_size_warn_threshold_in_kb() * 1024;
-    size_t fail_threshold = qp.db().get_config().batch_size_fail_threshold_in_kb() * 1024;
+    size_t warn_threshold = qb.db().get_config().batch_size_warn_threshold_in_kb() * 1024;
+    size_t fail_threshold = qb.db().get_config().batch_size_fail_threshold_in_kb() * 1024;
 
     size_t size = 0;
     for (auto&m : mutations) {
@@ -227,27 +228,27 @@ struct batch_statement_executor {
 static thread_local inheriting_concrete_execution_stage<
         future<shared_ptr<cql_transport::messages::result_message>>,
         const batch_statement*,
-        query_processor&,
+        query_backend&,
         service::query_state&,
         const query_options&,
         bool,
         api::timestamp_type> batch_stage{"cql3_batch", batch_statement_executor::get()};
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute(
-        query_processor& qp, service::query_state& state, const query_options& options) const {
-    return execute_without_checking_exception_message(qp, state, options)
+        query_backend& qb, service::query_state& state, const query_options& options) const {
+    return execute_without_checking_exception_message(qb, state, options)
             .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<cql_transport::messages::result_message>>);
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_without_checking_exception_message(
-        query_processor& qp, service::query_state& state, const query_options& options) const {
-    cql3::util::validate_timestamp(qp.db().get_config(), options, _attrs);
-    return batch_stage(this, seastar::ref(qp), seastar::ref(state),
+        query_backend& qb, service::query_state& state, const query_options& options) const {
+    cql3::util::validate_timestamp(qb.db().get_config(), options, _attrs);
+    return batch_stage(this, seastar::ref(qb), seastar::ref(state),
                        seastar::cref(options), false, options.get_timestamp(state));
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_execute(
-        query_processor& qp,
+        query_backend& qb,
         service::query_state& query_state, const query_options& options,
         bool local, api::timestamp_type now) const
 {
@@ -265,16 +266,16 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
     if (_has_conditions) {
         ++_stats.cas_batches;
         _stats.statements_in_cas_batches += _statements.size();
-        return execute_with_conditions(qp, options, query_state);
+        return execute_with_conditions(qb, options, query_state);
     }
 
     ++_stats.batches;
     _stats.statements_in_batches += _statements.size();
 
     auto timeout = db::timeout_clock::now() + get_timeout(query_state.get_client_state(), options);
-    return get_mutations(qp, options, timeout, local, now, query_state).then([this, &qp, &options, timeout, tr_state = query_state.get_trace_state(),
+    return get_mutations(qb, options, timeout, local, now, query_state).then([this, &qb, &options, timeout, tr_state = query_state.get_trace_state(),
                                                                                                                                permit = query_state.get_permit()] (std::vector<mutation> ms) mutable {
-        return execute_without_conditions(qp, std::move(ms), options.get_consistency(), timeout, std::move(tr_state), std::move(permit));
+        return execute_without_conditions(qb, std::move(ms), options.get_consistency(), timeout, std::move(tr_state), std::move(permit));
     }).then([] (coordinator_result<> res) {
         if (!res) {
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
@@ -286,7 +287,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
 }
 
 future<coordinator_result<>> batch_statement::execute_without_conditions(
-        query_processor& qp,
+        query_backend& qb,
         std::vector<mutation> mutations,
         db::consistency_level cl,
         db::timeout_clock::time_point timeout,
@@ -304,7 +305,7 @@ future<coordinator_result<>> batch_statement::execute_without_conditions(
         }
     }));
 #endif
-    verify_batch_size(qp, mutations);
+    verify_batch_size(qb, mutations);
 
     bool mutate_atomic = true;
     if (_type != type::LOGGED) {
@@ -318,11 +319,11 @@ future<coordinator_result<>> batch_statement::execute_without_conditions(
             mutate_atomic = false;
         }
     }
-    return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, mutate_atomic, std::move(tr_state), std::move(permit), db::allow_per_partition_rate_limit::yes);
+    return qb.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, mutate_atomic, std::move(tr_state), std::move(permit), db::allow_per_partition_rate_limit::yes);
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_with_conditions(
-        query_processor& qp,
+        query_backend& qb,
         const query_options& options,
         service::query_state& qs) const {
 
@@ -370,11 +371,11 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
     auto shard = service::storage_proxy::cas_shard(*_statements[0].statement->s, request->key()[0].start()->value().as_decorated_key().token());
     if (shard != this_shard_id()) {
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                qp.bounce_to_shard(shard, std::move(cached_fn_calls))
+                qb.bounce_to_shard(shard, std::move(cached_fn_calls))
             );
     }
 
-    return qp.proxy().cas(schema, request, request->read_command(qp), request->key(),
+    return qb.proxy().cas(schema, request, request->read_command(qb), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             cl_for_paxos, cl_for_learn, batch_timeout, cas_timeout).then([this, request] (bool is_applied) {
         return request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);

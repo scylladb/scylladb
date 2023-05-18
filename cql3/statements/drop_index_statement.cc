@@ -17,8 +17,9 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "mutation/mutation.hh"
 #include "gms/feature_service.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "cql3/index_name.hh"
+#include "transport/messages/result_message.hh"
 
 namespace cql3 {
 
@@ -38,20 +39,20 @@ const sstring& drop_index_statement::column_family() const
             cf_statement::column_family();
 }
 
-future<> drop_index_statement::check_access(query_processor& qp, const service::client_state& state) const
+future<> drop_index_statement::check_access(query_backend& qb, const service::client_state& state) const
 {
-    auto cfm = lookup_indexed_table(qp);
+    auto cfm = lookup_indexed_table(qb);
     if (!cfm) {
         return make_ready_future<>();
     }
-    return state.has_column_family_access(qp.db(), cfm->ks_name(), cfm->cf_name(), auth::permission::ALTER);
+    return state.has_column_family_access(qb.db(), cfm->ks_name(), cfm->cf_name(), auth::permission::ALTER);
 }
 
-void drop_index_statement::validate(query_processor& qp, const service::client_state& state) const
+void drop_index_statement::validate(query_backend& qb, const service::client_state& state) const
 {
     // validated in lookup_indexed_table()
 
-    auto db = qp.db();
+    auto db = qb.db();
     if (db.has_keyspace(keyspace())) {
         auto schema = db.find_indexed_table(keyspace(), _index_name);
         if (schema) {
@@ -60,8 +61,8 @@ void drop_index_statement::validate(query_processor& qp, const service::client_s
     }
 }
 
-schema_ptr drop_index_statement::make_drop_idex_schema(query_processor& qp) const {
-    auto cfm = lookup_indexed_table(qp);
+schema_ptr drop_index_statement::make_drop_idex_schema(query_backend& qb) const {
+    auto cfm = lookup_indexed_table(qb);
     if (!cfm) {
         return nullptr;
     }
@@ -73,13 +74,13 @@ schema_ptr drop_index_statement::make_drop_idex_schema(query_processor& qp) cons
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-drop_index_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+drop_index_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
-    auto cfm = make_drop_idex_schema(qp);
+    auto cfm = make_drop_idex_schema(qb);
 
     if (cfm) {
-        m = co_await qp.get_migration_manager().prepare_column_family_update_announcement(cfm, false, {}, ts);
+        m = co_await qb.get_migration_manager().prepare_column_family_update_announcement(cfm, false, {}, ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(event::schema_change::change_type::UPDATED,
@@ -97,9 +98,9 @@ drop_index_statement::prepare(data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<drop_index_statement>(*this));
 }
 
-schema_ptr drop_index_statement::lookup_indexed_table(query_processor& qp) const
+schema_ptr drop_index_statement::lookup_indexed_table(query_backend& qb) const
 {
-    auto db = qp.db();
+    auto db = qb.db();
     if (!db.has_keyspace(keyspace())) {
         throw exceptions::keyspace_not_defined_exception(format("Keyspace {} does not exist", keyspace()));
     }

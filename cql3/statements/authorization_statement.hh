@@ -30,12 +30,12 @@ public:
 
     bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
-    future<> check_access(query_processor& qp, const service::client_state& state) const override;
+    future<> check_access(query_backend& qb, const service::client_state& state) const override;
 
-    void validate(query_processor&, const service::client_state& state) const override;
+    void validate(query_backend&, const service::client_state& state) const override;
 
 protected:
-    static void maybe_correct_resource(auth::resource&, const service::client_state&, query_processor&);
+    static void maybe_correct_resource(auth::resource&, const service::client_state&, query_backend&);
 };
 
 }

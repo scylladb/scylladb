@@ -9,13 +9,14 @@
 #include <seastar/core/coroutine.hh>
 #include "cql3/statements/alter_type_statement.hh"
 #include "cql3/statements/create_type_statement.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "cql3/column_identifier.hh"
 #include "prepared_statement.hh"
 #include "schema/schema_builder.hh"
 #include "mutation/mutation.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "service/client_state.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "boost/range/adaptor/map.hpp"
@@ -37,12 +38,12 @@ void alter_type_statement::prepare_keyspace(const service::client_state& state)
     }
 }
 
-future<> alter_type_statement::check_access(query_processor& qp, const service::client_state& state) const
+future<> alter_type_statement::check_access(query_backend& qb, const service::client_state& state) const
 {
-    return state.has_keyspace_access(qp.db(), keyspace(), auth::permission::ALTER);
+    return state.has_keyspace_access(qb.db(), keyspace(), auth::permission::ALTER);
 }
 
-void alter_type_statement::validate(query_processor& qp, const service::client_state& state) const
+void alter_type_statement::validate(query_backend& qb, const service::client_state& state) const
 {
     // Validation is left to announceMigration as it's easier to do it while constructing the updated type.
     // It doesn't really change anything anyway.
@@ -104,9 +105,9 @@ future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutatio
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-alter_type_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+alter_type_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
     try {
-        auto m = co_await prepare_announcement_mutations(qp.db(), qp.get_migration_manager(), ts);
+        auto m = co_await prepare_announcement_mutations(qb.db(), qb.get_migration_manager(), ts);
 
         using namespace cql_transport;
         auto ret = ::make_shared<event::schema_change>(

@@ -22,7 +22,7 @@ class mutation;
 
 namespace cql3 {
 
-class query_processor;
+class query_backend;
 
 namespace statements {
 
@@ -36,7 +36,7 @@ private:
     const bool _is_column_family_level;
 
     future<::shared_ptr<messages::result_message>>
-    execute0(query_processor& qp, service::query_state& state, const query_options& options) const;
+    execute0(query_backend& qb, service::query_state& state, const query_options& options) const;
 protected:
     explicit schema_altering_statement(timeout_config_selector timeout_selector = &timeout_config::other_timeout);
 
@@ -48,7 +48,7 @@ protected:
      *
      * By default, this function does nothing.
      */
-    virtual future<> grant_permissions_to_creator(query_processor& qp, const service::client_state&) const;
+    virtual future<> grant_permissions_to_creator(query_backend& qb, const service::client_state&) const;
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
@@ -56,10 +56,10 @@ protected:
 
     virtual void prepare_keyspace(const service::client_state& state) override;
 
-    virtual future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp, api::timestamp_type) const = 0;
+    virtual future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_backend& qb, api::timestamp_type) const = 0;
 
     virtual future<::shared_ptr<messages::result_message>>
-    execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
+    execute(query_backend& qb, service::query_state& state, const query_options& options) const override;
 };
 
 }

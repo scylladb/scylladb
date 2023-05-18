@@ -29,7 +29,7 @@ public:
                      std::unique_ptr<cql3::attributes> attrs) : primary_key_select_statement(schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit, per_partition_limit, stats, std::move(attrs)) {}
 
 private:
-    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_processor& qp,
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_backend& qb,
             service::query_state& state, const query_options& options) const override;
 };
 

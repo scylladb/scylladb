@@ -10,28 +10,29 @@
 #include "cql3/statements/create_aggregate_statement.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_aggregate.hh"
+#include "cql3/query_options.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "mutation/mutation.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "gms/feature_service.hh"
 
 namespace cql3 {
 
 namespace statements {
 
-seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement::create(query_processor& qp, db::functions::function* old) const {
-    if (!qp.proxy().features().user_defined_aggregates) {
+seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement::create(query_backend& qb, db::functions::function* old) const {
+    if (!qb.proxy().features().user_defined_aggregates) {
         throw exceptions::invalid_request_exception("Cluster does not support user-defined aggregates, upgrade the whole cluster in order to use UDA");
     }
     if (old && !dynamic_cast<functions::user_aggregate*>(old)) {
         throw exceptions::invalid_request_exception(format("Cannot replace '{}' which is not a user defined aggregate", *old));
     }
-    data_type state_type = prepare_type(qp, *_stype);
+    data_type state_type = prepare_type(qb, *_stype);
 
-    auto&& db = qp.db();
+    auto&& db = qb.db();
     std::vector<data_type> acc_types{state_type};
     acc_types.insert(acc_types.end(), _arg_types.begin(), _arg_types.end());
     auto state_func = dynamic_pointer_cast<functions::scalar_function>(functions::functions::find(functions::function_name{_name.keyspace, _sfunc}, acc_types));
@@ -44,7 +45,7 @@ seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement:
 
     ::shared_ptr<cql3::functions::scalar_function> reduce_func = nullptr;
     if (_rfunc) {
-        if (!qp.proxy().features().uda_native_parallelized_aggregation) {
+        if (!qb.proxy().features().uda_native_parallelized_aggregation) {
             throw exceptions::invalid_request_exception("Cluster does not support reduction function for user-defined aggregates, upgrade the whole cluster in order to define REDUCEFUNC for UDA");
         }
 
@@ -77,32 +78,32 @@ std::unique_ptr<prepared_statement> create_aggregate_statement::prepare(data_dic
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-create_aggregate_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+create_aggregate_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
-    auto aggregate = dynamic_pointer_cast<functions::user_aggregate>(co_await validate_while_executing(qp));
+    auto aggregate = dynamic_pointer_cast<functions::user_aggregate>(co_await validate_while_executing(qb));
     if (aggregate) {
-        m = co_await qp.get_migration_manager().prepare_new_aggregate_announcement(aggregate, ts);
+        m = co_await qb.get_migration_manager().prepare_new_aggregate_announcement(aggregate, ts);
         ret = create_schema_change(*aggregate, true);
     }
 
     co_return std::make_pair(std::move(ret), std::move(m));
 }
 
-seastar::future<> create_aggregate_statement::check_access(query_processor &qp, const service::client_state &state) const {
-    co_await create_function_statement_base::check_access(qp, state);
+seastar::future<> create_aggregate_statement::check_access(query_backend& qb, const service::client_state &state) const {
+    co_await create_function_statement_base::check_access(qb, state);
     auto&& ks = _name.has_keyspace() ? _name.keyspace : state.get_keyspace();
-    create_arg_types(qp);
+    create_arg_types(qb);
     std::vector<data_type> sfunc_args = _arg_types;
-    data_type stype = prepare_type(qp, *_stype);
+    data_type stype = prepare_type(qb, *_stype);
     sfunc_args.insert(sfunc_args.begin(), stype);
-    co_await state.has_function_access(qp.db(), ks, auth::encode_signature(_sfunc,sfunc_args), auth::permission::EXECUTE);
+    co_await state.has_function_access(qb.db(), ks, auth::encode_signature(_sfunc,sfunc_args), auth::permission::EXECUTE);
     if (_rfunc) {
-        co_await state.has_function_access(qp.db(), ks, auth::encode_signature(*_rfunc,{stype, stype}), auth::permission::EXECUTE);
+        co_await state.has_function_access(qb.db(), ks, auth::encode_signature(*_rfunc,{stype, stype}), auth::permission::EXECUTE);
     }
     if (_ffunc) {
-        co_await state.has_function_access(qp.db(), ks, auth::encode_signature(*_ffunc,{stype}), auth::permission::EXECUTE);
+        co_await state.has_function_access(qb.db(), ks, auth::encode_signature(*_ffunc,{stype}), auth::permission::EXECUTE);
     }
 }
 

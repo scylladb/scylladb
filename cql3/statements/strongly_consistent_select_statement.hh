@@ -45,7 +45,7 @@ public:
                      std::unique_ptr<cql3::attributes> attrs);
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-        execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const override;
+        execute_without_checking_exception_message(query_backend& qb, service::query_state& qs, const query_options& options) const override;
 };
 
 }

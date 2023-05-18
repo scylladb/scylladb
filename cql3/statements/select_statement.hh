@@ -26,7 +26,7 @@ namespace service {
 
 namespace cql3 {
 
-class query_processor;
+class query_backend;
 
 namespace selection {
     class selection;
@@ -86,7 +86,7 @@ private:
     future<shared_ptr<cql_transport::messages::result_message>> process_results_complex(foreign_ptr<lw_shared_ptr<query::result>> results,
         lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now) const;
 protected :
-    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_processor& qp,
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_backend& qb,
         service::query_state& state, const query_options& options) const;
     friend class select_statement_executor;
 public:
@@ -105,21 +105,21 @@ public:
 
     virtual ::shared_ptr<const cql3::metadata> get_result_metadata() const override;
     virtual uint32_t get_bound_terms() const override;
-    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
-    virtual void validate(query_processor&, const service::client_state& state) const override;
+    virtual future<> check_access(query_backend& qb, const service::client_state& state) const override;
+    virtual void validate(query_backend&, const service::client_state& state) const override;
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
-    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute(query_processor& qp,
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute(query_backend& qb,
         service::query_state& state, const query_options& options) const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-        execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const override;
+        execute_without_checking_exception_message(query_backend& qb, service::query_state& qs, const query_options& options) const override;
 
-    future<::shared_ptr<cql_transport::messages::result_message>> execute(query_processor& qp,
+    future<::shared_ptr<cql_transport::messages::result_message>> execute(query_backend& qb,
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
          const query_options& options, gc_clock::time_point now) const;
 
-    future<::shared_ptr<cql_transport::messages::result_message>> execute_without_checking_exception_message(query_processor& qp,
+    future<::shared_ptr<cql_transport::messages::result_message>> execute_without_checking_exception_message(query_backend& qb,
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
          const query_options& options, gc_clock::time_point now) const;
 
@@ -213,17 +213,17 @@ public:
                                    std::unique_ptr<cql3::attributes> attrs);
 
 private:
-    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_processor& qp,
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_backend& qb,
             service::query_state& state, const query_options& options) const override;
 
     lw_shared_ptr<const service::pager::paging_state> generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
             const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options) const;
 
-    future<coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>>> find_index_partition_ranges(query_processor& qp,
+    future<coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>>> find_index_partition_ranges(query_backend& qb,
                                                                     service::query_state& state,
                                                                     const query_options& options) const;
 
-    future<coordinator_result<std::tuple<std::vector<primary_key>, lw_shared_ptr<const service::pager::paging_state>>>> find_index_clustering_rows(query_processor& qp,
+    future<coordinator_result<std::tuple<std::vector<primary_key>, lw_shared_ptr<const service::pager::paging_state>>>> find_index_clustering_rows(query_backend& qb,
                                                                 service::query_state& state,
                                                                 const query_options& options) const;
 
@@ -237,12 +237,12 @@ private:
             lw_shared_ptr<const service::pager::paging_state> paging_state) const;
 
     lw_shared_ptr<query::read_command>
-    prepare_command_for_base_query(query_processor& qp, const query_options& options, service::query_state& state, gc_clock::time_point now,
+    prepare_command_for_base_query(query_backend& qb, const query_options& options, service::query_state& state, gc_clock::time_point now,
             bool use_paging) const;
 
     future<coordinator_result<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>>>
     do_execute_base_query(
-            query_processor& qp,
+            query_backend& qb,
             dht::partition_range_vector&& partition_ranges,
             service::query_state& state,
             const query_options& options,
@@ -250,7 +250,7 @@ private:
             lw_shared_ptr<const service::pager::paging_state> paging_state) const;
     future<shared_ptr<cql_transport::messages::result_message>>
     execute_base_query(
-            query_processor& qp,
+            query_backend& qb,
             dht::partition_range_vector&& partition_ranges,
             service::query_state& state,
             const query_options& options,
@@ -268,7 +268,7 @@ private:
     // Keys are ordered in token order (see #3423)
     future<coordinator_result<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>>>
     do_execute_base_query(
-            query_processor& qp,
+            query_backend& qb,
             std::vector<primary_key>&& primary_keys,
             service::query_state& state,
             const query_options& options,
@@ -276,7 +276,7 @@ private:
             lw_shared_ptr<const service::pager::paging_state> paging_state) const;
     future<shared_ptr<cql_transport::messages::result_message>>
     execute_base_query(
-            query_processor& qp,
+            query_backend& qb,
             std::vector<primary_key>&& primary_keys,
             service::query_state& state,
             const query_options& options,
@@ -289,7 +289,7 @@ private:
     }
 
     future<coordinator_result<::shared_ptr<cql_transport::messages::result_message::rows>>> read_posting_list(
-            query_processor& qp,
+            query_backend& qb,
             const query_options& options,
             uint64_t limit,
             service::query_state& state,

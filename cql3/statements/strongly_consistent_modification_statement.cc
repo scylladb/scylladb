@@ -21,8 +21,9 @@
 #include "cql3/attributes.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/operation.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "cql3/values.hh"
+#include "transport/messages/result_message.hh"
 #include "timeout_config.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "db/system_keyspace.hh"
@@ -44,8 +45,8 @@ strongly_consistent_modification_statement::strongly_consistent_modification_sta
 { }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-strongly_consistent_modification_statement::execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
-    return execute_without_checking_exception_message(qp, qs, options)
+strongly_consistent_modification_statement::execute(query_backend& qb, service::query_state& qs, const query_options& options) const {
+    return execute_without_checking_exception_message(qb, qs, options)
             .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<cql_transport::messages::result_message>>);
 }
 
@@ -64,13 +65,13 @@ evaluate_prepared(
 }
     
 future<::shared_ptr<cql_transport::messages::result_message>>
-strongly_consistent_modification_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const {
+strongly_consistent_modification_statement::execute_without_checking_exception_message(query_backend& qb, service::query_state& qs, const query_options& options) const {
         if (this_shard_id() != 0) {
         co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0, cql3::computed_function_values{});
     }
 
     auto result = co_await service::broadcast_tables::execute(
-        qp.get_group0_client(),
+        qb.get_group0_client(),
         { evaluate_prepared(_query, options) }
     );
     
@@ -109,8 +110,8 @@ uint32_t strongly_consistent_modification_statement::get_bound_terms() const {
     return _bound_terms;
 }
 
-future<> strongly_consistent_modification_statement::check_access(query_processor& qp, const service::client_state& state) const {
-    const data_dictionary::database db = qp.db();
+future<> strongly_consistent_modification_statement::check_access(query_backend& qb, const service::client_state& state) const {
+    const data_dictionary::database db = qb.db();
     auto f = state.has_column_family_access(db, _schema->ks_name(), _schema->cf_name(), auth::permission::MODIFY);
     if (_query.value_condition.has_value()) {
         f = f.then([this, &state, db] {
@@ -120,7 +121,7 @@ future<> strongly_consistent_modification_statement::check_access(query_processo
     return f;
 }
 
-void strongly_consistent_modification_statement::validate(query_processor&, const service::client_state& state) const {
+void strongly_consistent_modification_statement::validate(query_backend&, const service::client_state& state) const {
     // Nothing to do, all validation has been done by prepare().
 }
 

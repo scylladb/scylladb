@@ -15,7 +15,7 @@
 
 namespace cql3 {
 
-class query_processor;
+class query_backend;
 
 namespace functions {
     class user_aggregate;
@@ -25,10 +25,10 @@ namespace statements {
 
 class create_aggregate_statement final : public create_function_statement_base {
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
-    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp, api::timestamp_type) const override;
-    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
+    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_backend& qb, api::timestamp_type) const override;
+    virtual future<> check_access(query_backend& qb, const service::client_state& state) const override;
 
-    virtual seastar::future<shared_ptr<db::functions::function>> create(query_processor& qp, db::functions::function* old) const override;
+    virtual seastar::future<shared_ptr<db::functions::function>> create(query_backend& qb, db::functions::function* old) const override;
 
     sstring _sfunc;
     shared_ptr<cql3_type::raw> _stype;

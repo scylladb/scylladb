@@ -24,7 +24,7 @@ namespace statements {
 
 class function_statement : public schema_altering_statement {
 protected:
-    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
+    virtual future<> check_access(query_backend& qb, const service::client_state& state) const override;
     virtual void prepare_keyspace(const service::client_state& state) override;
     db::functions::function_name _name;
     std::vector<shared_ptr<cql3_type::raw>> _raw_arg_types;
@@ -32,18 +32,18 @@ protected:
     static shared_ptr<cql_transport::event::schema_change> create_schema_change(
             const db::functions::function& func, bool created);
     function_statement(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> raw_arg_types);
-    void create_arg_types(query_processor& qp) const;
-    data_type prepare_type(query_processor& qp, cql3_type::raw &t) const;
-    virtual seastar::future<shared_ptr<db::functions::function>> validate_while_executing(query_processor&) const = 0;
+    void create_arg_types(query_backend& qb) const;
+    data_type prepare_type(query_backend& qb, cql3_type::raw &t) const;
+    virtual seastar::future<shared_ptr<db::functions::function>> validate_while_executing(query_backend&) const = 0;
 };
 
 // common logic for creating UDF and UDA
 class create_function_statement_base : public function_statement {
 protected:
-    virtual void validate(query_processor& qp, const service::client_state& state) const override;
-    virtual seastar::future<shared_ptr<db::functions::function>> create(query_processor& qp, db::functions::function* old) const = 0;
-    virtual seastar::future<shared_ptr<db::functions::function>> validate_while_executing(query_processor&) const override;
-    virtual seastar::future<> grant_permissions_to_creator(query_processor& qp, const service::client_state& cs) const override;
+    virtual void validate(query_backend& qb, const service::client_state& state) const override;
+    virtual seastar::future<shared_ptr<db::functions::function>> create(query_backend& qb, db::functions::function* old) const = 0;
+    virtual seastar::future<shared_ptr<db::functions::function>> validate_while_executing(query_backend&) const override;
+    virtual seastar::future<> grant_permissions_to_creator(query_backend& qb, const service::client_state& cs) const override;
 
     bool _or_replace;
     bool _if_not_exists;
@@ -53,14 +53,14 @@ protected:
             bool or_replace, bool if_not_exists);
 
 public:
-    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
+    virtual future<> check_access(query_backend& qb, const service::client_state& state) const override;
 };
 
 // common logic for dropping UDF and UDA
 class drop_function_statement_base : public function_statement {
 protected:
-    virtual void validate(query_processor&, const service::client_state& state) const override;
-    virtual seastar::future<shared_ptr<db::functions::function>> validate_while_executing(query_processor&) const override;
+    virtual void validate(query_backend&, const service::client_state& state) const override;
+    virtual seastar::future<shared_ptr<db::functions::function>> validate_while_executing(query_backend&) const override;
 
     bool _args_present;
     bool _if_exists;
@@ -69,7 +69,7 @@ protected:
             bool args_present, bool if_exists);
 
 public:
-    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
+    virtual future<> check_access(query_backend& qb, const service::client_state& state) const override;
 };
 
 }

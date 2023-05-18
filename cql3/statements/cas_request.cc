@@ -16,7 +16,7 @@
 #include "transport/messages/result_message.hh"
 #include "types/map.hh"
 #include "service/storage_proxy.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 
 namespace cql3::statements {
 
@@ -56,7 +56,7 @@ std::optional<mutation> cas_request::apply_updates(api::timestamp_type ts) const
     return mutation_set;
 }
 
-lw_shared_ptr<query::read_command> cas_request::read_command(query_processor& qp) const {
+lw_shared_ptr<query::read_command> cas_request::read_command(query_backend& qb) const {
 
     column_set columns_to_read(_schema->all_columns_count());
     std::vector<query::clustering_range> ranges;
@@ -91,8 +91,8 @@ lw_shared_ptr<query::read_command> cas_request::read_command(query_processor& qp
     options.set(query::partition_slice::option::always_return_static_content);
     query::partition_slice ps(std::move(ranges), *_schema, columns_to_read, options);
     ps.set_partition_row_limit(max_rows);
-    return make_lw_shared<query::read_command>(_schema->id(), _schema->version(), std::move(ps), qp.proxy().get_max_result_size(ps),
-            query::tombstone_limit(qp.proxy().get_tombstone_limit()));
+    return make_lw_shared<query::read_command>(_schema->id(), _schema->version(), std::move(ps), qb.proxy().get_max_result_size(ps),
+            query::tombstone_limit(qb.proxy().get_tombstone_limit()));
 }
 
 bool cas_request::applies_to() const {

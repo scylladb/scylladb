@@ -12,7 +12,7 @@
 #include "transport/messages/result_message.hh"
 #include "service/client_state.hh"
 #include "auth/resource.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "exceptions/exceptions.hh"
 #include <boost/algorithm/string/join.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -29,15 +29,15 @@ bool cql3::statements::authorization_statement::depends_on(std::string_view ks_n
 }
 
 void cql3::statements::authorization_statement::validate(
-                query_processor&,
+                query_backend&,
                 const service::client_state& state) const {
 }
 
-future<> cql3::statements::authorization_statement::check_access(query_processor& qp, const service::client_state& state) const {
+future<> cql3::statements::authorization_statement::check_access(query_backend& qb, const service::client_state& state) const {
     return make_ready_future<>();
 }
 
-void cql3::statements::authorization_statement::maybe_correct_resource(auth::resource& resource, const service::client_state& state, query_processor& qp) {
+void cql3::statements::authorization_statement::maybe_correct_resource(auth::resource& resource, const service::client_state& state, query_backend& qb) {
     if (resource.kind() == auth::resource_kind::data) {
         const auto data_view = auth::data_resource_view(resource);
         const auto keyspace = data_view.keyspace();
@@ -54,7 +54,7 @@ void cql3::statements::authorization_statement::maybe_correct_resource(auth::res
             // This is an "ALL FUNCTIONS" resource.
             return;
         }
-        if (!qp.db().has_keyspace(*keyspace)) {
+        if (!qb.db().has_keyspace(*keyspace)) {
             throw exceptions::invalid_request_exception(format("{} doesn't exist.", resource));
         }
         if (functions_view.function_signature()) {
@@ -65,7 +65,7 @@ void cql3::statements::authorization_statement::maybe_correct_resource(auth::res
             // This is an "ALL FUNCTIONS IN KEYSPACE" resource.
             return;
         }
-        auto ks = qp.db().find_keyspace(*keyspace);
+        auto ks = qb.db().find_keyspace(*keyspace);
         const auto& utm = ks.user_types();
         auto function_name = *functions_view.function_name();
         auto function_args = functions_view.function_args();

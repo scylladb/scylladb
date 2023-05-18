@@ -14,7 +14,7 @@
 
 namespace cql3 {
 
-class query_processor;
+class query_backend;
 
 namespace statements {
 
@@ -24,7 +24,7 @@ public:
 
     std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
-    future<::shared_ptr<cql_transport::messages::result_message>> execute(query_processor&
+    future<::shared_ptr<cql_transport::messages::result_message>> execute(query_backend&
                     , service::query_state&
                     , const query_options&) const override;
 };

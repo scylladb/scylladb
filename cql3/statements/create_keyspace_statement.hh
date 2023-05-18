@@ -27,7 +27,7 @@ class keyspace_metadata;
 
 namespace cql3 {
 
-class query_processor;
+class query_backend;
 
 namespace statements {
 
@@ -52,7 +52,7 @@ public:
 
     virtual const sstring& keyspace() const override;
 
-    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
+    virtual future<> check_access(query_backend& qb, const service::client_state& state) const override;
 
     /**
      * The <code>CqlParser</code> only goes as far as extracting the keyword arguments
@@ -61,23 +61,23 @@ public:
      *
      * @throws InvalidRequestException if arguments are missing or unacceptable
      */
-    virtual void validate(query_processor&, const service::client_state& state) const override;
+    virtual void validate(query_backend&, const service::client_state& state) const override;
 
 
-    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp, api::timestamp_type) const override;
+    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_backend& qb, api::timestamp_type) const override;
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
-    virtual future<> grant_permissions_to_creator(query_processor& qp, const service::client_state&) const override;
+    virtual future<> grant_permissions_to_creator(query_backend& qb, const service::client_state&) const override;
 
     virtual future<::shared_ptr<messages::result_message>>
-    execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
+    execute(query_backend& qb, service::query_state& state, const query_options& options) const override;
 
     lw_shared_ptr<data_dictionary::keyspace_metadata> get_keyspace_metadata(const locator::token_metadata& tm);
 };
 
 std::optional<sstring> check_restricted_replication_strategy(
-    query_processor& qp,
+    query_backend& qb,
     const sstring& keyspace,
     const ks_prop_defs& attrs);
 

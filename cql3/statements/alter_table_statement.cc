@@ -22,8 +22,9 @@
 #include "view_info.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "db/view/view.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "cdc/cdc_extension.hh"
+#include "transport/messages/result_message.hh"
 
 namespace cql3 {
 
@@ -44,13 +45,13 @@ alter_table_statement::alter_table_statement(cf_name name,
 {
 }
 
-future<> alter_table_statement::check_access(query_processor& qp, const service::client_state& state) const {
+future<> alter_table_statement::check_access(query_backend& qb, const service::client_state& state) const {
     using cdt = auth::command_desc::type;
-    return state.has_column_family_access(qp.db(), keyspace(), column_family(), auth::permission::ALTER,
+    return state.has_column_family_access(qb.db(), keyspace(), column_family(), auth::permission::ALTER,
                                           _type == type::opts ? cdt::ALTER_WITH_OPTS : cdt::OTHER);
 }
 
-void alter_table_statement::validate(query_processor& qp, const service::client_state& state) const
+void alter_table_statement::validate(query_backend& qb, const service::client_state& state) const
 {
     // validated in prepare_schema_mutations()
 }
@@ -386,9 +387,9 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-alter_table_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
-  data_dictionary::database db = qp.db();
-  auto& mm = qp.get_migration_manager();
+alter_table_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
+  data_dictionary::database db = qb.db();
+  auto& mm = qb.get_migration_manager();
   auto [cfm, view_updates] = prepare_schema_update(db);
   auto m = co_await mm.prepare_column_family_update_announcement(cfm.build(), false, std::move(view_updates), ts);
 
@@ -408,10 +409,10 @@ cql3::statements::alter_table_statement::prepare(data_dictionary::database db, c
 }
 
 future<::shared_ptr<messages::result_message>>
-alter_table_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
-    auto s = validation::validate_column_family(qp.db(), keyspace(), column_family());
-    std::optional<sstring> warning = check_restricted_table_properties(qp, s, keyspace(), column_family(), *_properties);
-    return schema_altering_statement::execute(qp, state, options).then([warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
+alter_table_statement::execute(query_backend& qb, service::query_state& state, const query_options& options) const {
+    auto s = validation::validate_column_family(qb.db(), keyspace(), column_family());
+    std::optional<sstring> warning = check_restricted_table_properties(qb, s, keyspace(), column_family(), *_properties);
+    return schema_altering_statement::execute(qb, state, options).then([warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
         if (warning) {
             msg->add_warning(*warning);
             mylogger.warn("{}", *warning);

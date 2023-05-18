@@ -16,7 +16,7 @@
 #include "auth/role_manager.hh"
 #include "cql3/column_specification.hh"
 #include "cql3/column_identifier.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "cql3/statements/alter_role_statement.hh"
 #include "cql3/statements/create_role_statement.hh"
 #include "cql3/statements/drop_role_statement.hh"
@@ -52,7 +52,7 @@ static future<result_message_ptr> void_result_message() {
     return make_ready_future<result_message_ptr>(nullptr);
 }
 
-void validate_cluster_support(query_processor& qp) {
+void validate_cluster_support(query_backend& qb) {
 }
 
 //
@@ -64,7 +64,7 @@ std::unique_ptr<prepared_statement> create_role_statement::prepare(
     return std::make_unique<prepared_statement>(::make_shared<create_role_statement>(*this));
 }
 
-future<> create_role_statement::grant_permissions_to_creator(query_processor& qp, const service::client_state& cs) const {
+future<> create_role_statement::grant_permissions_to_creator(query_backend& qb, const service::client_state& cs) const {
     return do_with(auth::make_role_resource(_role), [&cs](const auth::resource& r) {
         return auth::grant_applicable_permissions(
                 *cs.get_auth_service(),
@@ -75,11 +75,11 @@ future<> create_role_statement::grant_permissions_to_creator(query_processor& qp
     });
 }
 
-void create_role_statement::validate(query_processor& qp, const service::client_state&) const {
-    validate_cluster_support(qp);
+void create_role_statement::validate(query_backend& qb, const service::client_state&) const {
+    validate_cluster_support(qb);
 }
 
-future<> create_role_statement::check_access(query_processor& qp, const service::client_state& state) const {
+future<> create_role_statement::check_access(query_backend& qb, const service::client_state& state) const {
     state.ensure_not_anonymous();
 
     return async([this, &state] {
@@ -94,7 +94,7 @@ future<> create_role_statement::check_access(query_processor& qp, const service:
 }
 
 future<result_message_ptr>
-create_role_statement::execute(query_processor& qp,
+create_role_statement::execute(query_backend& qb,
                                service::query_state& state,
                                const query_options&) const {
     auth::role_config config;
@@ -104,12 +104,12 @@ create_role_statement::execute(query_processor& qp,
     return do_with(
             std::move(config),
             extract_authentication_options(_options),
-            [this, &qp, &state](const auth::role_config& config, const auth::authentication_options& authen_options) {
+            [this, &qb, &state](const auth::role_config& config, const auth::authentication_options& authen_options) {
         const auto& cs = state.get_client_state();
         auto& as = *cs.get_auth_service();
 
-        return auth::create_role(as, _role, config, authen_options).then([this, &qp, &cs] {
-            return grant_permissions_to_creator(qp, cs);
+        return auth::create_role(as, _role, config, authen_options).then([this, &qb, &cs] {
+            return grant_permissions_to_creator(qb, cs);
         }).then([] {
             return void_result_message();
         }).handle_exception_type([this](const auth::role_already_exists& e) {
@@ -133,11 +133,11 @@ std::unique_ptr<prepared_statement> alter_role_statement::prepare(
     return std::make_unique<prepared_statement>(::make_shared<alter_role_statement>(*this));
 }
 
-void alter_role_statement::validate(query_processor& qp, const service::client_state&) const {
-    validate_cluster_support(qp);
+void alter_role_statement::validate(query_backend& qb, const service::client_state&) const {
+    validate_cluster_support(qb);
 }
 
-future<> alter_role_statement::check_access(query_processor& qp, const service::client_state& state) const {
+future<> alter_role_statement::check_access(query_backend& qb, const service::client_state& state) const {
     state.ensure_not_anonymous();
 
     return async([this, &state] {
@@ -184,7 +184,7 @@ future<> alter_role_statement::check_access(query_processor& qp, const service::
 }
 
 future<result_message_ptr>
-alter_role_statement::execute(query_processor&, service::query_state& state, const query_options&) const {
+alter_role_statement::execute(query_backend&, service::query_state& state, const query_options&) const {
     auth::role_config_update update;
     update.is_superuser = _options.is_superuser;
     update.can_login = _options.can_login;
@@ -214,15 +214,15 @@ std::unique_ptr<prepared_statement> drop_role_statement::prepare(
     return std::make_unique<prepared_statement>(::make_shared<drop_role_statement>(*this));
 }
 
-void drop_role_statement::validate(query_processor& qp, const service::client_state& state) const {
-    validate_cluster_support(qp);
+void drop_role_statement::validate(query_backend& qb, const service::client_state& state) const {
+    validate_cluster_support(qb);
 
     if (*state.user() == auth::authenticated_user(_role)) {
         throw request_validations::invalid_request("Cannot DROP primary role for current login.");
     }
 }
 
-future<> drop_role_statement::check_access(query_processor& qp, const service::client_state& state) const {
+future<> drop_role_statement::check_access(query_backend& qb, const service::client_state& state) const {
     state.ensure_not_anonymous();
 
     return async([this, &state] {
@@ -248,7 +248,7 @@ future<> drop_role_statement::check_access(query_processor& qp, const service::c
 }
 
 future<result_message_ptr>
-drop_role_statement::execute(query_processor&, service::query_state& state, const query_options&) const {
+drop_role_statement::execute(query_backend&, service::query_state& state, const query_options&) const {
     auto& as = *state.get_client_state().get_auth_service();
 
     return auth::drop_role(as, _role).then([] {
@@ -271,7 +271,7 @@ std::unique_ptr<prepared_statement> list_roles_statement::prepare(
     return std::make_unique<prepared_statement>(::make_shared<list_roles_statement>(*this));
 }
 
-future<> list_roles_statement::check_access(query_processor& qp, const service::client_state& state) const {
+future<> list_roles_statement::check_access(query_backend& qb, const service::client_state& state) const {
     state.ensure_not_anonymous();
 
     return async([this, &state] {
@@ -299,7 +299,7 @@ future<> list_roles_statement::check_access(query_processor& qp, const service::
 }
 
 future<result_message_ptr>
-list_roles_statement::execute(query_processor&, service::query_state& state, const query_options&) const {
+list_roles_statement::execute(query_backend&, service::query_state& state, const query_options&) const {
     static const sstring virtual_table_name("roles");
 
     static const auto make_column_spec = [](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
@@ -406,7 +406,7 @@ std::unique_ptr<prepared_statement> grant_role_statement::prepare(
     return std::make_unique<prepared_statement>(::make_shared<grant_role_statement>(*this));
 }
 
-future<> grant_role_statement::check_access(query_processor& qp, const service::client_state& state) const {
+future<> grant_role_statement::check_access(query_backend& qb, const service::client_state& state) const {
     state.ensure_not_anonymous();
 
     return do_with(auth::make_role_resource(_role), [&state](const auto& r) {
@@ -415,7 +415,7 @@ future<> grant_role_statement::check_access(query_processor& qp, const service::
 }
 
 future<result_message_ptr>
-grant_role_statement::execute(query_processor&, service::query_state& state, const query_options&) const {
+grant_role_statement::execute(query_backend&, service::query_state& state, const query_options&) const {
     auto& as = *state.get_client_state().get_auth_service();
 
     return as.underlying_role_manager().grant(_grantee, _role).then([] {
@@ -434,7 +434,7 @@ std::unique_ptr<prepared_statement> revoke_role_statement::prepare(
     return std::make_unique<prepared_statement>(::make_shared<revoke_role_statement>(*this));
 }
 
-future<> revoke_role_statement::check_access(query_processor& qp, const service::client_state& state) const {
+future<> revoke_role_statement::check_access(query_backend& qb, const service::client_state& state) const {
     state.ensure_not_anonymous();
 
     return do_with(auth::make_role_resource(_role), [&state](const auto& r) {
@@ -443,7 +443,7 @@ future<> revoke_role_statement::check_access(query_processor& qp, const service:
 }
 
 future<result_message_ptr> revoke_role_statement::execute(
-        query_processor&,
+        query_backend&,
         service::query_state& state,
         const query_options&) const {
     auto& rm = state.get_client_state().get_auth_service()->underlying_role_manager();

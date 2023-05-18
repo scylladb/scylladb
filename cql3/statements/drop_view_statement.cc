@@ -11,9 +11,10 @@
 #include <seastar/core/coroutine.hh>
 #include "cql3/statements/drop_view_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "service/client_state.hh"
 #include "view_info.hh"
 #include "data_dictionary/data_dictionary.hh"
 
@@ -27,10 +28,10 @@ drop_view_statement::drop_view_statement(cf_name view_name, bool if_exists)
 {
 }
 
-future<> drop_view_statement::check_access(query_processor& qp, const service::client_state& state) const
+future<> drop_view_statement::check_access(query_backend& qb, const service::client_state& state) const
 {
     try {
-        const data_dictionary::database db = qp.db();
+        const data_dictionary::database db = qb.db();
         auto&& s = db.find_schema(keyspace(), column_family());
         if (s->is_view()) {
             return state.has_column_family_access(db, keyspace(), s->view_info()->base_name(), auth::permission::ALTER);
@@ -41,18 +42,18 @@ future<> drop_view_statement::check_access(query_processor& qp, const service::c
     return make_ready_future<>();
 }
 
-void drop_view_statement::validate(query_processor&, const service::client_state& state) const
+void drop_view_statement::validate(query_backend&, const service::client_state& state) const
 {
     // validated in migration_manager::announce_view_drop()
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-drop_view_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+drop_view_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
     try {
-        m = co_await qp.get_migration_manager().prepare_view_drop_announcement(keyspace(), column_family(), ts);
+        m = co_await qb.get_migration_manager().prepare_view_drop_announcement(keyspace(), column_family(), ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(

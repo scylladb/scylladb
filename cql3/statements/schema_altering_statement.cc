@@ -13,7 +13,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "mutation/mutation.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "transport/messages/result_message.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/migration_manager.hh"
@@ -38,7 +38,7 @@ schema_altering_statement::schema_altering_statement(cf_name name, timeout_confi
 {
 }
 
-future<> schema_altering_statement::grant_permissions_to_creator(query_processor& qp, const service::client_state&) const {
+future<> schema_altering_statement::grant_permissions_to_creator(query_backend& qb, const service::client_state&) const {
     return make_ready_future<>();
 }
 
@@ -60,8 +60,8 @@ void schema_altering_statement::prepare_keyspace(const service::client_state& st
 }
 
 future<::shared_ptr<messages::result_message>>
-schema_altering_statement::execute0(query_processor& qp, service::query_state& state, const query_options& options) const {
-    auto& mm = qp.get_migration_manager();
+schema_altering_statement::execute0(query_backend& qb, service::query_state& state, const query_options& options) const {
+    auto& mm = qb.get_migration_manager();
     ::shared_ptr<cql_transport::event::schema_change> ce;
 
     if (this_shard_id() != 0) {
@@ -75,7 +75,7 @@ schema_altering_statement::execute0(query_processor& qp, service::query_state& s
         try {
             auto group0_guard = co_await mm.start_group0_operation();
 
-            auto [ret, m] = co_await prepare_schema_mutations(qp, group0_guard.write_timestamp());
+            auto [ret, m] = co_await prepare_schema_mutations(qb, group0_guard.write_timestamp());
 
             if (!m.empty()) {
                 auto description = format("CQL DDL statement: \"{}\"", raw_cql_statement);
@@ -104,11 +104,11 @@ schema_altering_statement::execute0(query_processor& qp, service::query_state& s
 }
 
 future<::shared_ptr<messages::result_message>>
-schema_altering_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
+schema_altering_statement::execute(query_backend& qb, service::query_state& state, const query_options& options) const {
     bool internal = state.get_client_state().is_internal();
     if (internal) {
         auto replication_type = locator::replication_strategy_type::everywhere_topology;
-        data_dictionary::database db = qp.db();
+        data_dictionary::database db = qb.db();
         if (_cf_name && _cf_name->has_keyspace()) {
            const auto& ks = db.find_keyspace(_cf_name->get_keyspace());
            replication_type = ks.get_replication_strategy().get_type();
@@ -119,10 +119,10 @@ schema_altering_statement::execute(query_processor& qp, service::query_state& st
         }
     }
 
-    return execute0(qp, state, options).then([this, &qp, &state, internal](::shared_ptr<messages::result_message> result) {
+    return execute0(qb, state, options).then([this, &qb, &state, internal](::shared_ptr<messages::result_message> result) {
         auto permissions_granted_fut = internal
                 ? make_ready_future<>()
-                : grant_permissions_to_creator(qp, state.get_client_state());
+                : grant_permissions_to_creator(qb, state.get_client_state());
         return permissions_granted_fut.then([result = std::move(result)] {
            return result;
         });

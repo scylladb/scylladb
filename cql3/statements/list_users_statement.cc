@@ -9,7 +9,7 @@
  */
 
 #include "list_users_statement.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "cql3/query_options.hh"
 #include "cql3/column_identifier.hh"
 #include "auth/common.hh"
@@ -20,16 +20,16 @@ std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::list_use
     return std::make_unique<prepared_statement>(::make_shared<list_users_statement>(*this));
 }
 
-void cql3::statements::list_users_statement::validate(query_processor& qp, const service::client_state& state) const {
+void cql3::statements::list_users_statement::validate(query_backend& qb, const service::client_state& state) const {
 }
 
-future<> cql3::statements::list_users_statement::check_access(query_processor& qp, const service::client_state& state) const {
+future<> cql3::statements::list_users_statement::check_access(query_backend& qb, const service::client_state& state) const {
     state.ensure_not_anonymous();
     return make_ready_future();
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-cql3::statements::list_users_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
+cql3::statements::list_users_statement::execute(query_backend& qb, service::query_state& state, const query_options& options) const {
     static const sstring virtual_table_name("users");
 
     static const auto make_column_spec = [](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {

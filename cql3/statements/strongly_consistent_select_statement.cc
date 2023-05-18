@@ -15,7 +15,7 @@
 #include <seastar/core/on_internal_error.hh>
 
 #include "cql3/restrictions/statement_restrictions.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "db/system_keyspace.hh"
 
@@ -93,13 +93,13 @@ evaluate_prepared(
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-strongly_consistent_select_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const {
+strongly_consistent_select_statement::execute_without_checking_exception_message(query_backend& qb, service::query_state& qs, const query_options& options) const {
     if (this_shard_id() != 0) {
         co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0, cql3::computed_function_values{});
     }
 
     auto result = co_await service::broadcast_tables::execute(
-        qp.get_group0_client(),
+        qb.get_group0_client(),
         { evaluate_prepared(_query, options) }
     );
     

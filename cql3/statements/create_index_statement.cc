@@ -15,15 +15,17 @@
 #include "validation.hh"
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
+#include "service/client_state.hh"
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"
 #include "request_validations.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "index/target_parser.hh"
 #include "gms/feature_service.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "cql3/index_name.hh"
 #include "cql3/statements/index_prop_defs.hh"
+#include "cql3/stats.hh"
 #include "index/secondary_index_manager.hh"
 #include "mutation/mutation.hh"
 
@@ -49,8 +51,8 @@ create_index_statement::create_index_statement(cf_name name,
 }
 
 future<>
-create_index_statement::check_access(query_processor& qp, const service::client_state& state) const {
-    return state.has_column_family_access(qp.db(), keyspace(), column_family(), auth::permission::ALTER);
+create_index_statement::check_access(query_backend& qb, const service::client_state& state) const {
+    return state.has_column_family_access(qb.db(), keyspace(), column_family(), auth::permission::ALTER);
 }
 
 static sstring target_type_name(index_target::target_type type) {
@@ -64,7 +66,7 @@ static sstring target_type_name(index_target::target_type type) {
 }
 
 void
-create_index_statement::validate(query_processor& qp, const service::client_state& state) const
+create_index_statement::validate(query_backend& qb, const service::client_state& state) const
 {
     if (_raw_targets.empty() && !_properties->is_custom) {
         throw exceptions::invalid_request_exception("Only CUSTOM indexes can be created without specifying a target column");
@@ -73,8 +75,8 @@ create_index_statement::validate(query_processor& qp, const service::client_stat
     _properties->validate();
 }
 
-std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_executing(query_processor& qp) const {
-    auto db = qp.db();
+std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_executing(query_backend& qb) const {
+    auto db = qb.db();
     auto schema = validation::validate_column_family(db, keyspace(), column_family());
 
     if (schema->is_counter()) {
@@ -327,10 +329,10 @@ void create_index_statement::validate_targets_for_multi_column_index(std::vector
     }
 }
 
-schema_ptr create_index_statement::build_index_schema(query_processor& qp) const {
-    auto targets = validate_while_executing(qp);
+schema_ptr create_index_statement::build_index_schema(query_backend& qb) const {
+    auto targets = validate_while_executing(qb);
 
-    data_dictionary::database db = qp.db();
+    data_dictionary::database db = qb.db();
     auto schema = db.find_schema(keyspace(), column_family());
 
     sstring accepted_name = _index_name;
@@ -376,15 +378,15 @@ schema_ptr create_index_statement::build_index_schema(query_processor& qp) const
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-create_index_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+create_index_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
     using namespace cql_transport;
-    auto schema = build_index_schema(qp);
+    auto schema = build_index_schema(qb);
 
     ::shared_ptr<event::schema_change> ret;
     std::vector<mutation> m;
 
     if (schema) {
-        m = co_await qp.get_migration_manager().prepare_column_family_update_announcement(std::move(schema), false, {}, ts);
+        m = co_await qb.get_migration_manager().prepare_column_family_update_announcement(std::move(schema), false, {}, ts);
 
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::UPDATED,

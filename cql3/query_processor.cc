@@ -627,7 +627,7 @@ query_processor::execute_direct_without_checking_exception_message(const sstring
             metrics.regularStatementsExecuted.inc();
 #endif
     tracing::trace(query_state.get_trace_state(), "Processing a statement");
-    return cql_statement->check_access(*this, query_state.get_client_state()).then(
+    return cql_statement->check_access(_backend, query_state.get_client_state()).then(
             [this, cql_statement, &query_state, &options, warnings = std::move(warnings)] () mutable {
         return process_authorized_statement(std::move(cql_statement), query_state, options).then(
                 [warnings = std::move(warnings)] (::shared_ptr<result_message> m) {
@@ -650,7 +650,7 @@ query_processor::execute_prepared_without_checking_exception_message(
     ::shared_ptr<cql_statement> statement = prepared->statement;
     future<> fut = make_ready_future<>();
     if (needs_authorization) {
-        fut = statement->check_access(*this, query_state.get_client_state()).then([this, &query_state, prepared = std::move(prepared), cache_key = std::move(cache_key)] () mutable {
+        fut = statement->check_access(_backend, query_state.get_client_state()).then([this, &query_state, prepared = std::move(prepared), cache_key = std::move(cache_key)] () mutable {
             return _authorized_prepared_cache.insert(*query_state.get_client_state().user(), std::move(cache_key), std::move(prepared)).handle_exception([] (auto eptr) {
                 log.error("failed to cache the entry: {}", eptr);
             });
@@ -669,9 +669,9 @@ query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> 
 
     ++_stats.queries_by_cl[size_t(options.get_consistency())];
 
-    statement->validate(*this, client_state);
+    statement->validate(_backend, client_state);
 
-    auto fut = statement->execute_without_checking_exception_message(*this, query_state, options);
+    auto fut = statement->execute_without_checking_exception_message(_backend, query_state, options);
 
     return fut.then([statement] (auto msg) {
         if (msg) {
@@ -823,7 +823,7 @@ statements::prepared_statement::checked_weak_ptr query_processor::prepare_intern
     if (p == nullptr) {
         auto np = parse_statement(query_string)->prepare(_db, _cql_stats);
         np->statement->raw_cql_statement = query_string;
-        np->statement->validate(*this, *_internal_state);
+        np->statement->validate(_backend, *_internal_state);
         p = std::move(np); // inserts it into map
     }
     return p->checked_weak_from_this();
@@ -873,7 +873,7 @@ future<> query_processor::for_each_cql_result(
 
 future<::shared_ptr<untyped_result_set>>
 query_processor::execute_paged_internal(::shared_ptr<internal_query_state> state) {
-    return state->p->statement->execute(*this, *_internal_state, *state->opts).then(
+    return state->p->statement->execute(_backend, *_internal_state, *state->opts).then(
             [state, this](::shared_ptr<cql_transport::messages::result_message> msg) mutable {
         class visitor : public result_message::visitor_base {
             ::shared_ptr<internal_query_state> _state;
@@ -933,7 +933,7 @@ query_processor::execute_internal(
     } else {
         auto p = parse_statement(query_string)->prepare(_db, _cql_stats);
         p->statement->raw_cql_statement = query_string;
-        p->statement->validate(*this, *_internal_state);
+        p->statement->validate(_backend, *_internal_state);
         auto checked_weak_ptr = p->checked_weak_from_this();
         return execute_with_params(std::move(checked_weak_ptr), cl, query_state, values).finally([p = std::move(p)] {});
     }
@@ -947,7 +947,7 @@ query_processor::execute_with_params(
         const std::initializer_list<data_value>& values) {
     auto opts = make_internal_options(p, values, cl);
     return do_with(std::move(opts), [this, &query_state, p = std::move(p)](auto & opts) {
-        return p->statement->execute(*this, query_state, opts).then([](auto msg) {
+        return p->statement->execute(_backend, query_state, opts).then([](auto msg) {
             return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
         });
     });
@@ -959,14 +959,14 @@ query_processor::execute_batch_without_checking_exception_message(
         service::query_state& query_state,
         query_options& options,
         std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries) {
-    return batch->check_access(*this, query_state.get_client_state()).then([this, &query_state, &options, batch, pending_authorization_entries = std::move(pending_authorization_entries)] () mutable {
+    return batch->check_access(_backend, query_state.get_client_state()).then([this, &query_state, &options, batch, pending_authorization_entries = std::move(pending_authorization_entries)] () mutable {
         return parallel_for_each(pending_authorization_entries, [this, &query_state] (auto& e) {
             return _authorized_prepared_cache.insert(*query_state.get_client_state().user(), e.first, std::move(e.second)).handle_exception([] (auto eptr) {
                 log.error("failed to cache the entry: {}", eptr);
             });
         }).then([this, &query_state, &options, batch] {
             batch->validate();
-            batch->validate(*this, query_state.get_client_state());
+            batch->validate(_backend, query_state.get_client_state());
             _stats.queries_by_cl[size_t(options.get_consistency())] += batch->get_statements().size();
             if (log.is_enabled(logging::log_level::trace)) {
                 std::ostringstream oss;
@@ -975,7 +975,7 @@ query_processor::execute_batch_without_checking_exception_message(
                 }
                 log.trace("execute_batch({}): {}", batch->get_statements().size(), oss.str());
             }
-            return batch->execute(*this, query_state, options);
+            return batch->execute(_backend, query_state, options);
         });
     });
 }

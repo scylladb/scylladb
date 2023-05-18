@@ -12,7 +12,7 @@
 #include "cql3/functions/user_aggregate.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "mutation/mutation.hh"
 
 namespace cql3 {
@@ -24,17 +24,17 @@ std::unique_ptr<prepared_statement> drop_aggregate_statement::prepare(data_dicti
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-drop_aggregate_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+drop_aggregate_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
-    auto func = co_await validate_while_executing(qp);
+    auto func = co_await validate_while_executing(qb);
     if (func) {
         auto user_aggr = dynamic_pointer_cast<functions::user_aggregate>(func);
         if (!user_aggr) {
             throw exceptions::invalid_request_exception(format("'{}' is not a user defined aggregate", func));
         }
-        m = co_await qp.get_migration_manager().prepare_aggregate_drop_announcement(user_aggr, ts);
+        m = co_await qb.get_migration_manager().prepare_aggregate_drop_announcement(user_aggr, ts);
         ret = create_schema_change(*func, false);
     }
 

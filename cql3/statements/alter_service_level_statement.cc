@@ -29,15 +29,15 @@ cql3::statements::alter_service_level_statement::prepare(
     return std::make_unique<prepared_statement>(::make_shared<alter_service_level_statement>(*this));
 }
 
-void alter_service_level_statement::validate(query_processor &, const service::client_state &) const {
+void alter_service_level_statement::validate(query_backend&, const service::client_state &) const {
 }
 
-future<> alter_service_level_statement::check_access(query_processor& qp, const service::client_state &state) const {
+future<> alter_service_level_statement::check_access(query_backend& qb, const service::client_state &state) const {
     return state.ensure_has_permission(auth::command_desc{.permission = auth::permission::ALTER, .resource = auth::root_service_level_resource()});
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-alter_service_level_statement::execute(query_processor& qp,
+alter_service_level_statement::execute(query_backend& qb,
         service::query_state &state,
         const query_options &) const {
     qos::service_level& sl = state.get_service_level_controller().get_service_level(_service_level);

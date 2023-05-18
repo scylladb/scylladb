@@ -18,7 +18,8 @@
 
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
+#include "service/client_state.hh"
 
 #include "auth/resource.hh"
 #include "auth/service.hh"
@@ -31,6 +32,7 @@
 #include "service/storage_proxy.hh"
 #include "db/config.hh"
 #include "compaction/time_window_compaction_strategy.hh"
+#include "transport/messages/result_message.hh"
 
 namespace cql3 {
 
@@ -52,11 +54,11 @@ create_table_statement::create_table_statement(cf_name name,
 {
 }
 
-future<> create_table_statement::check_access(query_processor& qp, const service::client_state& state) const {
-    return state.has_keyspace_access(qp.db(), keyspace(), auth::permission::CREATE);
+future<> create_table_statement::check_access(query_backend& qb, const service::client_state& state) const {
+    return state.has_keyspace_access(qb.db(), keyspace(), auth::permission::CREATE);
 }
 
-void create_table_statement::validate(query_processor&, const service::client_state& state) const {
+void create_table_statement::validate(query_backend&, const service::client_state& state) const {
     // validated in announceMigration()
 }
 
@@ -75,12 +77,12 @@ std::vector<column_definition> create_table_statement::get_columns() const
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-create_table_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+create_table_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
     try {
-        m = co_await qp.get_migration_manager().prepare_new_column_family_announcement(get_cf_meta_data(qp.db()), ts);
+        m = co_await qb.get_migration_manager().prepare_new_column_family_announcement(get_cf_meta_data(qb.db()), ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(
@@ -146,7 +148,7 @@ create_table_statement::prepare(data_dictionary::database db, cql_stats& stats) 
     abort();
 }
 
-future<> create_table_statement::grant_permissions_to_creator(query_processor& qp, const service::client_state& cs) const {
+future<> create_table_statement::grant_permissions_to_creator(query_backend& qb, const service::client_state& cs) const {
     return do_with(auth::make_data_resource(keyspace(), column_family()), [&cs](const auth::resource& r) {
         return auth::grant_applicable_permissions(
                 *cs.get_auth_service(),
@@ -426,7 +428,7 @@ void create_table_statement::raw_statement::add_column_alias(::shared_ptr<column
 // legal but restricted by the configuration. Checks for other of errors
 // in the table's options are done elsewhere.
 std::optional<sstring> check_restricted_table_properties(
-    query_processor& qp,
+    query_backend& qb,
     std::optional<schema_ptr> schema,
     const sstring& keyspace, const sstring& table,
     const cf_prop_defs& cfprops)
@@ -450,7 +452,7 @@ std::optional<sstring> check_restricted_table_properties(
     auto cs = (strategy) ? strategy : current_strategy;
 
     if (strategy && *strategy == sstables::compaction_strategy_type::date_tiered) {
-        switch(qp.db().get_config().restrict_dtcs()) {
+        switch(qb.db().get_config().restrict_dtcs()) {
         case db::tri_mode_restriction_t::mode::TRUE:
             throw exceptions::configuration_exception(
                 "DateTieredCompactionStrategy is deprecated, and "
@@ -471,7 +473,7 @@ std::optional<sstring> check_restricted_table_properties(
         std::map<sstring, sstring> options = (strategy) ? cfprops.get_compaction_type_options() : (*schema)->compaction_strategy_options();
         sstables::time_window_compaction_strategy_options twcs_options(options);
         long ttl = (cfprops.has_property(cf_prop_defs::KW_DEFAULT_TIME_TO_LIVE)) ? cfprops.get_default_time_to_live() : current_ttl.count();
-        auto max_windows = qp.db().get_config().twcs_max_window_count();
+        auto max_windows = qb.db().get_config().twcs_max_window_count();
 
         // It may happen that an user tries to update an unrelated table property. Allow the request through.
         if (!cfprops.has_property(cf_prop_defs::KW_DEFAULT_TIME_TO_LIVE) && !strategy) {
@@ -491,7 +493,7 @@ std::optional<sstring> check_restricted_table_properties(
                                                    "highly discouraged.", ttl, twcs_options.get_sstable_window_size().count(), window_count, max_windows));
             }
         } else {
-              switch (qp.db().get_config().restrict_twcs_without_default_ttl()) {
+              switch (qb.db().get_config().restrict_twcs_without_default_ttl()) {
               case db::tri_mode_restriction_t::mode::TRUE:
                   throw exceptions::configuration_exception(
                       "TimeWindowCompactionStrategy tables without a strict default_time_to_live setting "
@@ -511,9 +513,9 @@ std::optional<sstring> check_restricted_table_properties(
 }
 
 future<::shared_ptr<messages::result_message>>
-create_table_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
-    std::optional<sstring> warning = check_restricted_table_properties(qp, std::nullopt, keyspace(), column_family(), *_properties);
-    return schema_altering_statement::execute(qp, state, options).then([warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
+create_table_statement::execute(query_backend& qb, service::query_state& state, const query_options& options) const {
+    std::optional<sstring> warning = check_restricted_table_properties(qb, std::nullopt, keyspace(), column_family(), *_properties);
+    return schema_altering_statement::execute(qb, state, options).then([warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
         if (warning) {
             msg->add_warning(*warning);
             mylogger.warn("{}", *warning);

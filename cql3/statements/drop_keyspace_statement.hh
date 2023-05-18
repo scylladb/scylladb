@@ -14,7 +14,7 @@
 
 namespace cql3 {
 
-class query_processor;
+class query_backend;
 
 namespace statements {
 
@@ -24,13 +24,13 @@ class drop_keyspace_statement : public schema_altering_statement {
 public:
     drop_keyspace_statement(const sstring& keyspace, bool if_exists);
 
-    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
+    virtual future<> check_access(query_backend& qb, const service::client_state& state) const override;
 
-    virtual void validate(query_processor&, const service::client_state& state) const override;
+    virtual void validate(query_backend&, const service::client_state& state) const override;
 
     virtual const sstring& keyspace() const override;
 
-    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp, api::timestamp_type) const override;
+    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_backend& qb, api::timestamp_type) const override;
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 };

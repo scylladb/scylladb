@@ -13,13 +13,15 @@
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "service/client_state.hh"
 #include "db/system_keyspace.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "create_keyspace_statement.hh"
 #include "gms/feature_service.hh"
+#include "transport/messages/result_message.hh"
 
 bool is_system_keyspace(std::string_view keyspace);
 
@@ -32,11 +34,11 @@ const sstring& cql3::statements::alter_keyspace_statement::keyspace() const {
     return _name;
 }
 
-future<> cql3::statements::alter_keyspace_statement::check_access(query_processor& qp, const service::client_state& state) const {
-    return state.has_keyspace_access(qp.db(), _name, auth::permission::ALTER);
+future<> cql3::statements::alter_keyspace_statement::check_access(query_backend& qb, const service::client_state& state) const {
+    return state.has_keyspace_access(qb.db(), _name, auth::permission::ALTER);
 }
 
-void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, const service::client_state& state) const {
+void cql3::statements::alter_keyspace_statement::validate(query_backend& qb, const service::client_state& state) const {
         auto tmp = _name;
         std::transform(tmp.begin(), tmp.end(), tmp.begin(), ::tolower);
         if (is_system_keyspace(tmp)) {
@@ -49,7 +51,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
             throw exceptions::configuration_exception("Missing replication strategy class");
         }
         try {
-            data_dictionary::storage_options current_options = qp.db().find_keyspace(_name).metadata()->get_storage_options();
+            data_dictionary::storage_options current_options = qb.db().find_keyspace(_name).metadata()->get_storage_options();
             data_dictionary::storage_options new_options = _attrs->get_storage_options();
             if (!current_options.can_update_to(new_options)) {
                 throw exceptions::invalid_request_exception(format("Cannot alter storage options: {} to {} is not supported",
@@ -58,7 +60,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
         } catch (const std::runtime_error& e) {
             throw exceptions::invalid_request_exception(e.what());
         }
-        if (!qp.proxy().features().keyspace_storage_options
+        if (!qb.proxy().features().keyspace_storage_options
             && _attrs->get_storage_options().type_string() != "LOCAL") {
         throw exceptions::invalid_request_exception("Keyspace storage options not supported in the cluster");
     }
@@ -75,12 +77,12 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
     try {
-        auto old_ksm = qp.db().find_keyspace(_name).metadata();
-        const auto& tm = *qp.proxy().get_token_metadata_ptr();
+        auto old_ksm = qb.db().find_keyspace(_name).metadata();
+        const auto& tm = *qb.proxy().get_token_metadata_ptr();
 
-        auto m = qp.get_migration_manager().prepare_keyspace_update_announcement(_attrs->as_ks_metadata_update(old_ksm, tm), ts);
+        auto m = qb.get_migration_manager().prepare_keyspace_update_announcement(_attrs->as_ks_metadata_update(old_ksm, tm), ts);
 
         using namespace cql_transport;
         auto ret = ::make_shared<event::schema_change>(
@@ -102,9 +104,9 @@ cql3::statements::alter_keyspace_statement::prepare(data_dictionary::database db
 static logging::logger mylogger("alter_keyspace");
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-cql3::statements::alter_keyspace_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
-    std::optional<sstring> warning = check_restricted_replication_strategy(qp, keyspace(), *_attrs);
-    return schema_altering_statement::execute(qp, state, options).then([warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
+cql3::statements::alter_keyspace_statement::execute(query_backend& qb, service::query_state& state, const query_options& options) const {
+    std::optional<sstring> warning = check_restricted_replication_strategy(qb, keyspace(), *_attrs);
+    return schema_altering_statement::execute(qb, state, options).then([warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
         if (warning) {
             msg->add_warning(*warning);
             mylogger.warn("{}", *warning);

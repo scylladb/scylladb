@@ -26,7 +26,7 @@
 
 namespace cql3 {
 
-class query_processor;
+class query_backend;
 class attributes;
 class operation;
 
@@ -129,10 +129,10 @@ public:
 
     std::optional<gc_clock::duration> get_time_to_live(const query_options& options) const;
 
-    virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
+    virtual future<> check_access(query_backend& qb, const service::client_state& state) const override;
 
     // Validate before execute, using client state and current schema
-    void validate(query_processor&, const service::client_state& state) const override;
+    void validate(query_backend&, const service::client_state& state) const override;
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
@@ -195,7 +195,7 @@ public:
 
     // Build a read_command instance to fetch the previous mutation from storage. The mutation is
     // fetched if we need to check LWT conditions or apply updates to non-frozen list elements.
-    lw_shared_ptr<query::read_command> read_command(query_processor& qp, query::clustering_row_ranges ranges, db::consistency_level cl) const;
+    lw_shared_ptr<query::read_command> read_command(query_backend& qb, query::clustering_row_ranges ranges, db::consistency_level cl) const;
     // Create a mutation object for the update operation represented by this modification statement.
     // A single mutation object for lightweight transactions, which can only span one partition, or a vector
     // of mutations, one per partition key, for statements which affect multiple partition keys,
@@ -218,7 +218,7 @@ public:
 
 private:
     future<::shared_ptr<cql_transport::messages::result_message>>
-    do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const;
+    do_execute(query_backend& qb, service::query_state& qs, const query_options& options) const;
     friend class modification_statement_executor;
 public:
     // True if the statement has IF conditions. Pre-computed during prepare.
@@ -229,17 +229,17 @@ public:
     bool has_only_static_column_conditions() const { return !_has_regular_column_conditions && _has_static_column_conditions; }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute(query_processor& qp, service::query_state& qs, const query_options& options) const override;
+    execute(query_backend& qb, service::query_state& qs, const query_options& options) const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const override;
+    execute_without_checking_exception_message(query_backend& qb, service::query_state& qs, const query_options& options) const override;
 
 private:
     future<exceptions::coordinator_result<>>
-    execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options) const;
+    execute_without_condition(query_backend& qb, service::query_state& qs, const query_options& options) const;
 
     future<::shared_ptr<cql_transport::messages::result_message>>
-    execute_with_condition(query_processor& qp, service::query_state& qs, const query_options& options) const;
+    execute_with_condition(query_backend& qb, service::query_state& qs, const query_options& options) const;
 
 public:
     /**
@@ -252,7 +252,7 @@ public:
      * @return vector of the mutations
      * @throws invalid_request_exception on invalid requests
      */
-    future<std::vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const;
+    future<std::vector<mutation>> get_mutations(query_backend& qb, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs) const;
 
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
 

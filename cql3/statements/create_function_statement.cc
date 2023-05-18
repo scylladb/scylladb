@@ -16,7 +16,7 @@
 #include "lang/lua.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "replica/database.hh" // for wasm
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "db/config.hh"
 
 namespace cql3 {
@@ -24,20 +24,20 @@ namespace cql3 {
 namespace statements {
 
 
-seastar::future<shared_ptr<functions::function>> create_function_statement::create(query_processor& qp, functions::function* old) const {
+seastar::future<shared_ptr<functions::function>> create_function_statement::create(query_backend& qb, functions::function* old) const {
     if (old && !dynamic_cast<functions::user_function*>(old)) {
         throw exceptions::invalid_request_exception(format("Cannot replace '{}' which is not a user defined function", *old));
     }
     if (_language != "lua" && _language != "wasm") {
         throw exceptions::invalid_request_exception(format("Language '{}' is not supported", _language));
     }
-    data_type return_type = prepare_type(qp, *_return_type);
+    data_type return_type = prepare_type(qb, *_return_type);
     std::vector<sstring> arg_names;
     for (const auto& arg_name : _arg_names) {
         arg_names.push_back(arg_name->to_string());
     }
 
-    auto&& db = qp.db();
+    auto&& db = qb.db();
     if (_language == "lua") {
         auto cfg = lua::make_runtime_config(db.get_config());
         functions::user_function::context ctx = functions::user_function::lua_context {
@@ -49,9 +49,9 @@ seastar::future<shared_ptr<functions::function>> create_function_statement::crea
             std::move(return_type), _called_on_null_input, std::move(ctx));
     } else if (_language == "wasm") {
        // FIXME: need better way to test wasm compilation without real_database()
-       wasm::context ctx{qp.wasm_engine(), _name.name, qp.wasm_instance_cache(), db.get_config().wasm_udf_yield_fuel(), db.get_config().wasm_udf_total_fuel()};
+       wasm::context ctx{qb.wasm_engine(), _name.name, qb.wasm_instance_cache(), db.get_config().wasm_udf_yield_fuel(), db.get_config().wasm_udf_total_fuel()};
        try {
-            co_await wasm::precompile(qp.alien_runner(), ctx, arg_names, _body);
+            co_await wasm::precompile(qb.alien_runner(), ctx, arg_names, _body);
             co_return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
                 std::move(return_type), _called_on_null_input, std::move(ctx));
        } catch (const wasm::exception& we) {
@@ -66,14 +66,14 @@ std::unique_ptr<prepared_statement> create_function_statement::prepare(data_dict
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-create_function_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+create_function_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
-    auto func = dynamic_pointer_cast<functions::user_function>(co_await validate_while_executing(qp));
+    auto func = dynamic_pointer_cast<functions::user_function>(co_await validate_while_executing(qb));
 
     if (func) {
-        m = co_await qp.get_migration_manager().prepare_new_function_announcement(func, ts);
+        m = co_await qb.get_migration_manager().prepare_new_function_announcement(func, ts);
         ret = create_schema_change(*func, true);
     }
 

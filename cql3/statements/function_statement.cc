@@ -14,24 +14,24 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "gms/feature_service.hh"
 #include "service/storage_proxy.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 
 namespace cql3 {
 namespace statements {
 
-future<> function_statement::check_access(query_processor& qp, const service::client_state& state) const { return make_ready_future<>(); }
+future<> function_statement::check_access(query_backend& qb, const service::client_state& state) const { return make_ready_future<>(); }
 
-future<> create_function_statement_base::check_access(query_processor& qp, const service::client_state& state) const {
-    create_arg_types(qp);
+future<> create_function_statement_base::check_access(query_backend& qb, const service::client_state& state) const {
+    create_arg_types(qb);
     if (!functions::functions::find(_name, _arg_types)) {
-        co_await state.has_functions_access(qp.db(), _name.keyspace, auth::permission::CREATE);
+        co_await state.has_functions_access(qb.db(), _name.keyspace, auth::permission::CREATE);
     } else if (_or_replace) {
         _altering = true;
-        co_await state.has_function_access(qp.db(), _name.keyspace, auth::encode_signature(_name.name, _arg_types), auth::permission::ALTER);
+        co_await state.has_function_access(qb.db(), _name.keyspace, auth::encode_signature(_name.name, _arg_types), auth::permission::ALTER);
     }
 }
 
-future<> create_function_statement_base::grant_permissions_to_creator(query_processor& qp, const service::client_state& cs) const {
+future<> create_function_statement_base::grant_permissions_to_creator(query_backend& qb, const service::client_state& cs) const {
     if (_altering) {
         return make_ready_future<>();
     }
@@ -47,9 +47,9 @@ future<> create_function_statement_base::grant_permissions_to_creator(query_proc
     });
 }
 
-future<> drop_function_statement_base::check_access(query_processor& qp, const service::client_state& state) const
+future<> drop_function_statement_base::check_access(query_backend& qb, const service::client_state& state) const
 {
-    create_arg_types(qp);
+    create_arg_types(qb);
     shared_ptr<functions::function> func;
     if (_args_present) {
         func = functions::functions::find(_name, _arg_types);
@@ -73,7 +73,7 @@ future<> drop_function_statement_base::check_access(query_processor& qp, const s
     sstring encoded_signature = auth::encode_signature(_name.name, func->arg_types());
 
     try {
-        return state.has_function_access(qp.db(), _name.keyspace, encoded_signature, auth::permission::DROP);
+        return state.has_function_access(qb.db(), _name.keyspace, encoded_signature, auth::permission::DROP);
     } catch (exceptions::invalid_request_exception&) {
         return make_ready_future();
     }
@@ -96,11 +96,11 @@ shared_ptr<cql_transport::event::schema_change> function_statement::create_schem
     return ::make_shared<event::schema_change>(change, type, func.name().keyspace, std::move(options));
 }
 
-data_type function_statement::prepare_type(query_processor& qp, cql3_type::raw& t) const {
+data_type function_statement::prepare_type(query_backend& qb, cql3_type::raw& t) const {
     if (t.is_user_type() && t.is_frozen()) {
         throw exceptions::invalid_request_exception("User defined argument and return types should not be frozen");
     }
-    auto&& db = qp.db();
+    auto&& db = qb.db();
     // At the CQL level the argument and return types should not have
     // the frozen keyword.
     // We and cassandra 3 support only frozen UDT arguments and
@@ -115,14 +115,14 @@ data_type function_statement::prepare_type(query_processor& qp, cql3_type::raw& 
     return prepared;
 }
 
-void function_statement::create_arg_types(query_processor& qp) const {
-    if (!qp.proxy().features().user_defined_functions) {
+void function_statement::create_arg_types(query_backend& qb) const {
+    if (!qb.proxy().features().user_defined_functions) {
         throw exceptions::invalid_request_exception("User defined functions are disabled. Set enable_user_defined_functions and experimental_features:udf to enable them");
     }
 
     if (_arg_types.empty()) {
         for (const auto& arg_type : _raw_arg_types) {
-            _arg_types.push_back(prepare_type(qp, *arg_type));
+            _arg_types.push_back(prepare_type(qb, *arg_type));
         }
     }
 }
@@ -137,15 +137,15 @@ create_function_statement_base::create_function_statement_base(functions::functi
         std::vector<shared_ptr<cql3_type::raw>> raw_arg_types, bool or_replace, bool if_not_exists)
     : function_statement(std::move(name), std::move(raw_arg_types)), _or_replace(or_replace), _if_not_exists(if_not_exists) {}
 
-void create_function_statement_base::validate(query_processor& qp, const service::client_state& state) const {
+void create_function_statement_base::validate(query_backend& qb, const service::client_state& state) const {
     // validation happens during execution
 }
 
-seastar::future<shared_ptr<functions::function>> create_function_statement_base::validate_while_executing(query_processor& qp) const {
-    create_arg_types(qp);
+seastar::future<shared_ptr<functions::function>> create_function_statement_base::validate_while_executing(query_backend& qb) const {
+    create_arg_types(qb);
     auto old = functions::functions::find(_name, _arg_types);
     if (!old || _or_replace) {
-        co_return co_await create(qp, old.get());
+        co_return co_await create(qb, old.get());
     }
     if (!_if_not_exists) {
         throw exceptions::invalid_request_exception(format("The function '{}' already exists", old));
@@ -157,12 +157,12 @@ drop_function_statement_base::drop_function_statement_base(functions::function_n
         std::vector<shared_ptr<cql3_type::raw>> arg_types, bool args_present, bool if_exists)
     : function_statement(std::move(name), std::move(arg_types)), _args_present(args_present), _if_exists(if_exists) {}
 
-void drop_function_statement_base::validate(query_processor& qp, const service::client_state& state) const {
+void drop_function_statement_base::validate(query_backend& qb, const service::client_state& state) const {
     // validation happens during execution
 }
 
-seastar::future<shared_ptr<db::functions::function>> drop_function_statement_base::validate_while_executing(query_processor& qp) const {
-    create_arg_types(qp);
+seastar::future<shared_ptr<db::functions::function>> drop_function_statement_base::validate_while_executing(query_backend& qb) const {
+    create_arg_types(qb);
     shared_ptr<functions::function> func;
     if (_args_present) {
         func = functions::functions::find(_name, _arg_types);

@@ -9,13 +9,14 @@
 #include <seastar/core/coroutine.hh>
 #include "cql3/statements/drop_type_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "cql3/functions/functions.hh"
 
 #include "boost/range/adaptor/map.hpp"
 
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "service/client_state.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "data_dictionary/user_types_metadata.hh"
@@ -38,18 +39,18 @@ void drop_type_statement::prepare_keyspace(const service::client_state& state)
     }
 }
 
-future<> drop_type_statement::check_access(query_processor& qp, const service::client_state& state) const
+future<> drop_type_statement::check_access(query_backend& qb, const service::client_state& state) const
 {
-    return state.has_keyspace_access(qp.db(), keyspace(), auth::permission::DROP);
+    return state.has_keyspace_access(qb.db(), keyspace(), auth::permission::DROP);
 }
 
-void drop_type_statement::validate(query_processor& qp, const service::client_state& state) const {
+void drop_type_statement::validate(query_backend& qb, const service::client_state& state) const {
     // validation is done at execution time
 }
 
-void drop_type_statement::validate_while_executing(query_processor& qp) const {
+void drop_type_statement::validate_while_executing(query_backend& qb) const {
     try {
-        auto&& ks = qp.db().find_keyspace(keyspace());
+        auto&& ks = qb.db().find_keyspace(keyspace());
         auto&& all_types = ks.metadata()->user_types().get_all_types();
         auto old = all_types.find(_name.get_user_type_name());
         if (old == all_types.end()) {
@@ -125,10 +126,10 @@ const sstring& drop_type_statement::keyspace() const
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-drop_type_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
-    validate_while_executing(qp);
+drop_type_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
+    validate_while_executing(qb);
 
-    data_dictionary::database db = qp.db();
+    data_dictionary::database db = qb.db();
 
     // Keyspace exists or we wouldn't have validated otherwise
     auto&& ks = db.find_keyspace(keyspace());
@@ -141,7 +142,7 @@ drop_type_statement::prepare_schema_mutations(query_processor& qp, api::timestam
 
     // Can happen with if_exists
     if (to_drop != all_types.end()) {
-        m = co_await qp.get_migration_manager().prepare_type_drop_announcement(to_drop->second, ts);
+        m = co_await qb.get_migration_manager().prepare_type_drop_announcement(to_drop->second, ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(

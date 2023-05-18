@@ -60,7 +60,7 @@ public:
         return _rows;
     }
 
-    lw_shared_ptr<query::read_command> read_command(query_processor& qp) const;
+    lw_shared_ptr<query::read_command> read_command(query_backend& qb) const;
 
     void add_row_update(const modification_statement& stmt_arg, std::vector<query::clustering_range> ranges_arg,
         modification_statement::json_cache_opt json_cache_arg, const query_options& options_arg);

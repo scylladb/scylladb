@@ -27,15 +27,15 @@ cql3::statements::drop_service_level_statement::prepare(
     return std::make_unique<prepared_statement>(::make_shared<drop_service_level_statement>(*this));
 }
 
-void drop_service_level_statement::validate(query_processor &, const service::client_state &) const {
+void drop_service_level_statement::validate(query_backend&, const service::client_state &) const {
 }
 
-future<> drop_service_level_statement::check_access(query_processor& qp, const service::client_state &state) const {
+future<> drop_service_level_statement::check_access(query_backend& qb, const service::client_state &state) const {
     return state.ensure_has_permission(auth::command_desc{.permission = auth::permission::DROP, .resource = auth::root_service_level_resource()});
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-drop_service_level_statement::execute(query_processor& qp,
+drop_service_level_statement::execute(query_backend& qb,
         service::query_state &state,
         const query_options &) const {
     return state.get_service_level_controller().drop_distributed_service_level(_service_level, _if_exists).then([] {

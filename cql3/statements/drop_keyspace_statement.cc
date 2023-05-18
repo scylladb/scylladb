@@ -11,9 +11,10 @@
 #include <seastar/core/coroutine.hh>
 #include "cql3/statements/drop_keyspace_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
-#include "cql3/query_processor.hh"
+#include "cql3/query_backend.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "service/client_state.hh"
 #include "transport/event.hh"
 #include "mutation/mutation.hh"
 
@@ -28,12 +29,12 @@ drop_keyspace_statement::drop_keyspace_statement(const sstring& keyspace, bool i
 {
 }
 
-future<> drop_keyspace_statement::check_access(query_processor& qp, const service::client_state& state) const
+future<> drop_keyspace_statement::check_access(query_backend& qb, const service::client_state& state) const
 {
-    return state.has_keyspace_access(qp.db(), keyspace(), auth::permission::DROP);
+    return state.has_keyspace_access(qb.db(), keyspace(), auth::permission::DROP);
 }
 
-void drop_keyspace_statement::validate(query_processor&, const service::client_state& state) const
+void drop_keyspace_statement::validate(query_backend&, const service::client_state& state) const
 {
     warn(unimplemented::cause::VALIDATION);
 #if 0
@@ -47,12 +48,12 @@ const sstring& drop_keyspace_statement::keyspace() const
 }
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-drop_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+drop_keyspace_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
     std::vector<mutation> m;
     ::shared_ptr<cql_transport::event::schema_change> ret;
 
     try {
-        m = co_await qp.get_migration_manager().prepare_keyspace_drop_announcement(_keyspace, ts);
+        m = co_await qb.get_migration_manager().prepare_keyspace_drop_announcement(_keyspace, ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(
