@@ -24,7 +24,7 @@ namespace cql3 {
 namespace statements {
 
 static future<> delete_ghost_rows(dht::partition_range_vector partition_ranges, std::vector<query::clustering_range> clustering_bounds, view_ptr view,
-        service::storage_proxy& proxy, service::query_state& state, const query_options& options, cql_stats& stats, db::timeout_clock::duration timeout_duration) {
+        query_backend& qb, service::query_state& state, const query_options& options, cql_stats& stats, db::timeout_clock::duration timeout_duration) {
     auto key_columns = boost::copy_range<std::vector<const column_definition*>>(
         view->all_columns()
         | boost::adaptors::filtered([] (const column_definition& cdef) { return cdef.is_primary_key(); })
@@ -32,13 +32,13 @@ static future<> delete_ghost_rows(dht::partition_range_vector partition_ranges, 
     auto selection = cql3::selection::selection::for_columns(view, key_columns);
 
     query::partition_slice partition_slice(std::move(clustering_bounds), {},  {}, selection->get_query_options());
-    auto command = ::make_lw_shared<query::read_command>(view->id(), view->version(), partition_slice, proxy.get_max_result_size(partition_slice),
-            query::tombstone_limit(proxy.get_tombstone_limit()));
+    auto command = ::make_lw_shared<query::read_command>(view->id(), view->version(), partition_slice, qb.proxy().get_max_result_size(partition_slice),
+            query::tombstone_limit(qb.get_tombstone_limit()));
 
     tracing::trace(state.get_trace_state(), "Deleting ghost rows from partition ranges {}", partition_ranges);
 
     auto p = service::pager::query_pagers::ghost_row_deleting_pager(schema_ptr(view), selection, state,
-            options, std::move(command), std::move(partition_ranges), stats, proxy, timeout_duration);
+            options, std::move(command), std::move(partition_ranges), stats, qb.proxy(), timeout_duration);
 
     int32_t page_size = std::max(options.get_page_size(), 1000);
     auto now = gc_clock::now();
@@ -65,7 +65,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> prune_materialized
     auto timeout_duration = get_timeout(state.get_client_state(), options);
     dht::partition_range_vector key_ranges = _restrictions->get_partition_key_ranges(options);
     std::vector<query::clustering_range> clustering_bounds = _restrictions->get_clustering_bounds(options);
-    return delete_ghost_rows(std::move(key_ranges), std::move(clustering_bounds), view_ptr(_schema), qb.proxy(), state, options, _stats, timeout_duration).then([] {
+    return delete_ghost_rows(std::move(key_ranges), std::move(clustering_bounds), view_ptr(_schema), qb, state, options, _stats, timeout_duration).then([] {
         return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(::make_shared<cql_transport::messages::result_message::void_message>());
     });
 }

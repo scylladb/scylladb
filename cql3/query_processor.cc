@@ -101,6 +101,8 @@ public:
     }
 
     virtual shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) = 0;
+
+    virtual query::tombstone_limit get_tombstone_limit() const = 0;
 };
 
 query_backend::query_backend(shared_ptr<impl> impl) : _impl(std::move(impl)) { }
@@ -117,6 +119,10 @@ service::storage_proxy& query_backend::proxy() { return _impl->proxy(); }
 
 shared_ptr<cql_transport::messages::result_message> query_backend::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) {
     return _impl->bounce_to_shard(shard, std::move(cached_fn_calls));
+}
+
+query::tombstone_limit query_backend::get_tombstone_limit() const {
+    return _impl->get_tombstone_limit();
 }
 
 class storage_proxy_query_backend : public query_backend::impl {
@@ -150,6 +156,10 @@ public:
     virtual shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) override {
         _proxy->get_stats().replica_cross_shard_ops++;
         return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard, std::move(cached_fn_calls));
+    }
+
+    virtual query::tombstone_limit get_tombstone_limit() const override {
+        return _proxy->get_tombstone_limit();
     }
 };
 

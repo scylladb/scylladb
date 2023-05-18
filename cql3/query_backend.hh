@@ -11,6 +11,7 @@
 #pragma once
 
 #include "data_dictionary/data_dictionary.hh"
+#include "query-request.hh"
 
 namespace service {
 class forward_service;
@@ -63,6 +64,8 @@ public:
     service::storage_proxy& proxy();
 
     shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls);
+
+    query::tombstone_limit get_tombstone_limit() const;
 };
 
 // Make a backend, based on storage proxy.
