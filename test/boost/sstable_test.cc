@@ -436,19 +436,6 @@ SEASTAR_TEST_CASE(wrong_range) {
     });
 }
 
-static future<>
-test_sstable_exists(sstring dir, sstables::generation_type::int_t generation, bool exists) {
-    auto file_path = sstable::filename(dir, "ks", "cf", la, generation_from_value(generation), big, component_type::Data);
-    return open_file_dma(file_path, open_flags::ro).then_wrapped([exists] (future<file> f) {
-        if (exists) {
-            BOOST_CHECK_NO_THROW(f.get0());
-        } else {
-            BOOST_REQUIRE_THROW(f.get0(), std::system_error);
-        }
-        return make_ready_future<>();
-    });
-}
-
 SEASTAR_TEST_CASE(statistics_rewrite) {
     return test_env::do_with_async([] (test_env& env) {
         auto uncompressed_dir_copy = env.tempdir().path();
@@ -460,7 +447,9 @@ SEASTAR_TEST_CASE(statistics_rewrite) {
 
         auto sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir_copy.native()).get0();
         test::create_links(*sstp, generation_dir).get();
-        test_sstable_exists(generation_dir, 1, true).get();
+        auto file_path = sstable::filename(generation_dir, "ks", "cf", la, generation_from_value(1), big, component_type::Data);
+        auto exists = file_exists(file_path).get0();
+        BOOST_REQUIRE(exists);
 
         sstp = env.reusable_sst(uncompressed_schema(), generation_dir).get0();
         // mutate_sstable_level results in statistics rewrite
