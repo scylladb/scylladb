@@ -263,6 +263,10 @@ class UnitTestSuite(TestSuite):
         self.all_can_run_compaction_groups_except = cfg.get("all_can_run_compaction_groups_except")
 
     async def create_test(self, shortname, suite, args):
+        exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
+        if not os.path.exists(exe):
+            print(palette.warn(f"Unit test executable {exe} not found."))
+            return
         test = UnitTest(self.next_id((shortname, self.suite_key)), shortname, suite, args)
         self.tests.append(test)
 
@@ -295,12 +299,15 @@ class BoostTestSuite(UnitTestSuite):
         super().__init__(path, cfg, options, mode)
 
     async def create_test(self, shortname: str, suite, args) -> None:
+        exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
+        if not os.path.exists(exe):
+            print(palette.warn(f"Boost test executable {exe} not found."))
+            return
         options = self.options
         allows_compaction_groups = self.all_can_run_compaction_groups_except != None and shortname not in self.all_can_run_compaction_groups_except
         if options.parallel_cases and (shortname not in self.no_parallel_cases):
             fqname = os.path.join(self.mode, self.name, shortname)
             if fqname not in self._case_cache:
-                exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
                 process = await asyncio.create_subprocess_exec(
                     exe, *['--list_content'],
                     stderr=asyncio.subprocess.PIPE,
