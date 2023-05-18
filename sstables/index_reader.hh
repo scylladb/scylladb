@@ -752,6 +752,16 @@ private:
             b.current_list = {};
         });
     }
+
+    file_input_stream_options get_file_input_stream_options(const io_priority_class& pc) {
+        file_input_stream_options options;
+        options.buffer_size = _sstable->sstable_buffer_size;
+        options.read_ahead = 2;
+        options.io_priority_class = pc;
+        options.dynamic_adjustments = _sstable->_index_history;
+        return options;
+    }
+
 public:
     index_reader(shared_sstable sst, reader_permit permit, const io_priority_class& pc, tracing::trace_state_ptr trace_state,
                  use_caching caching, bool single_partition_read = false)
@@ -795,15 +805,6 @@ public:
     // The returned reference is LSA-managed so call with the region locked.
     index_entry& current_partition_entry() {
         return current_partition_entry(_lower_bound);
-    }
-
-    file_input_stream_options get_file_input_stream_options(const io_priority_class& pc) {
-        file_input_stream_options options;
-        options.buffer_size = _sstable->sstable_buffer_size;
-        options.read_ahead = 2;
-        options.io_priority_class = pc;
-        options.dynamic_adjustments = _sstable->_index_history;
-        return options;
     }
 
     // Returns a pointer to the clustered index cursor for the current partition
