@@ -7,6 +7,10 @@
  */
 
 namespace service {
+  struct fencing_token {
+      service::topology::version_t topology_version;
+  };
+
   struct raft_topology_cmd {
       enum class command: uint8_t {
           barrier,

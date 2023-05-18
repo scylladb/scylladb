@@ -153,6 +153,19 @@ struct raft_topology_cmd_result {
     command_status status = command_status::fail;
 };
 
+// This class is used in RPC's signatures to hold the topology_version of the caller.
+// The reason why we wrap the topology_version in this class is that we anticipate
+// other versions to occur in the future, such as the schema version.
+struct fencing_token {
+    topology::version_t topology_version{0};
+    // topology_version == 0 means the caller is not aware about
+    // the fencing or doesn't use it for some reason.
+    explicit operator bool() const {
+        return topology_version != 0;
+    }
+};
+
+std::ostream& operator<<(std::ostream& os, const fencing_token& fencing_token);
 std::ostream& operator<<(std::ostream& os, topology::transition_state s);
 topology::transition_state transition_state_from_string(const sstring& s);
 std::ostream& operator<<(std::ostream& os, node_state s);

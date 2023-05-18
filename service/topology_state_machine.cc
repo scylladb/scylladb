@@ -36,6 +36,10 @@ bool topology::contains(raft::server_id id) {
            left_nodes.contains(id);
 }
 
+std::ostream& operator<<(std::ostream& os, const fencing_token& fencing_token) {
+    return os << "{" << fencing_token.topology_version << "}";
+}
+
 static std::unordered_map<topology::transition_state, sstring> transition_state_to_name_map = {
     {topology::transition_state::commit_cdc_generation, "commit cdc generation"},
     {topology::transition_state::publish_cdc_generation, "publish cdc generation"},

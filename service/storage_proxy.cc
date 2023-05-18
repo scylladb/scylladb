@@ -2849,6 +2849,34 @@ storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracin
     });
 }
 
+std::optional<replica::stale_topology_exception>
+storage_proxy::apply_fence(fencing_token token, gms::inet_address caller_address) const noexcept {
+    const auto fence_version = _shared_token_metadata.get_fence_version();
+    if (!token || token.topology_version >= fence_version) {
+        return std::nullopt;
+    }
+    static thread_local logger::rate_limit rate_limit(std::chrono::seconds(1));
+    slogger.log(log_level::warn, rate_limit,
+        "Stale topology detected, request has been fenced out, "
+        "local fence version {}, request topology version {}, caller address {}",
+        fence_version, token.topology_version, caller_address);
+    return replica::stale_topology_exception(token.topology_version, fence_version);
+}
+
+template <typename T>
+future<T> storage_proxy::apply_fence(future<T> future, fencing_token fence, gms::inet_address caller_address) const {
+    if (!fence) {
+        return std::move(future);
+    }
+    return future.then_wrapped([this, fence, caller_address](seastar::future<T>&& f) {
+        if (f.failed()) {
+            return std::move(f);
+        }
+        auto stale = apply_fence(fence, caller_address);
+        return stale ? make_exception_future<T>(std::move(*stale)) : std::move(f);
+    });
+}
+
 future<>
 storage_proxy::mutate_counters_on_leader(std::vector<frozen_mutation_and_schema> mutations, db::consistency_level cl, clock_type::time_point timeout,
                                          tracing::trace_state_ptr trace_state, service_permit permit) {
