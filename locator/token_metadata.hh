@@ -332,6 +332,7 @@ class shared_token_metadata {
     //   includes its own invocation as an operation in the new phase.
     utils::phased_barrier _versions_barrier;
     shared_future<> _stale_versions_in_use{make_ready_future<>()};
+    token_metadata::version_t _fence_version = 0;
 
 public:
     // used to construct the shared object as a sharded<> instance
@@ -354,6 +355,11 @@ public:
 
     future<> stale_versions_in_use() const {
         return _stale_versions_in_use.get_future();
+    }
+
+    void update_fence_version(token_metadata::version_t version);
+    token_metadata::version_t get_fence_version() const noexcept {
+        return _fence_version;
     }
 
     // Token metadata changes are serialized

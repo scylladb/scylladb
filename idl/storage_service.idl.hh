@@ -12,7 +12,8 @@ namespace service {
           barrier,
           barrier_and_drain,
           stream_ranges,
-          fence_old_reads
+          fence_old_reads,
+          fence
       };
       service::raft_topology_cmd::command cmd;
   };

@@ -3659,6 +3659,15 @@ future<service::topology> system_keyspace::load_topology_state() {
     co_return ret;
 }
 
+future<int64_t> system_keyspace::get_topology_fence_version() {
+    auto opt = co_await get_scylla_local_param_as<int64_t>("topology_fence_version");
+    co_return opt.value_or<int64_t>(0);
+}
+
+future<> system_keyspace::update_topology_fence_version(int64_t value) {
+    return set_scylla_local_param_as<int64_t>("topology_fence_version", value);
+}
+
 future<cdc::topology_description>
 system_keyspace::read_cdc_generation(utils::UUID id) {
     std::vector<cdc::token_range_description> entries;

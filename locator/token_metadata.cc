@@ -1190,6 +1190,19 @@ void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {
     _shared->set_version_tracker(_versions_barrier.start());
 }
 
+void shared_token_metadata::update_fence_version(token_metadata::version_t version) {
+    if (const auto current_version = _shared->get_version(); version > current_version) {
+        on_internal_error(tlogger,
+            format("shared_token_metadata: invalid new fence version, can't be greater than the current version, "
+                   "current version {}, new fence version {}", current_version, version));
+    }
+    if (version < _fence_version) {
+        on_internal_error(tlogger,
+            format("shared_token_metadata: must not set decreasing fence version: {} -> {}", _fence_version, version));
+    }
+    _fence_version = version;
+}
+
 future<> shared_token_metadata::mutate_token_metadata(seastar::noncopyable_function<future<> (token_metadata&)> func) {
     auto lk = co_await get_lock();
     auto tm = co_await _shared->clone_async();

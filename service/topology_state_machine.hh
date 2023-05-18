@@ -138,7 +138,8 @@ struct raft_topology_cmd {
           barrier_and_drain,    // same + drain requests which use previous versions
           stream_ranges,        // reqeust to stream data, return when streaming is
                                 // done
-          fence_old_reads       // wait for all reads started before to complete
+          fence_old_reads,      // wait for all reads started before to complete
+          fence                 // erect the fence against requests with stale versions
       };
       command cmd;
 };

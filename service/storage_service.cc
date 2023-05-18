@@ -4908,13 +4908,19 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                // Return an error since the command is from outdated leader
                co_return result;
             }
+
+            // We capture the topology version right after the checks
+            // above, before any yields. This is crucial since _topology_state_machine._topology
+            // might be altered concurrently while this method is running,
+            // which can cause the fence command to apply an invalid fence version.
+            const auto version = _topology_state_machine._topology.version;
+
             switch (cmd.cmd) {
                 case raft_topology_cmd::command::barrier:
                     // we already did read barrier above
                     result.status = raft_topology_cmd_result::command_status::success;
                 break;
                 case raft_topology_cmd::command::barrier_and_drain: {
-                    const auto version = _topology_state_machine._topology.version;
                     co_await container().invoke_on_all([version] (storage_service& ss) -> future<> {
                         const auto current_version = ss._shared_token_metadata.get()->get_version();
                         slogger.debug("Got raft_topology_cmd::barrier_and_drain, version {}, current version {}",
@@ -5078,11 +5084,29 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                     //co_await sleep_abortable(_db.local().get_config().read_request_timeout_in_ms() * std::chrono::milliseconds(1), _abort_source);
                     result.status = raft_topology_cmd_result::command_status::success;
                 break;
+                case raft_topology_cmd::command::fence: {
+                    // We can have several concurrent fence commands in case topology change
+                    // coordinator migrated to another node. The update_fence_version function
+                    // checks that the version doesn't decrease, we do the check and persist
+                    // the new version under the same lock to avoid raises.
+                    auto holder = co_await get_units(_raft_topology_cmd_handler_state._operation_mutex, 1);
+                    co_await update_fence_version(version);
+                    co_await _sys_ks.local().update_topology_fence_version(version);
+                    result.status = raft_topology_cmd_result::command_status::success;
+                    break;
+                }
             }
         } catch (...) {
             slogger.error("raft topology: raft_topology_cmd failed with: {}", std::current_exception());
         }
         co_return result;
+}
+
+future<> storage_service::update_fence_version(token_metadata::version_t new_version) {
+    return container().invoke_on_all([new_version] (storage_service& ss) {
+        slogger.debug("update_fence_version, version {}", new_version);
+        ss._shared_token_metadata.update_fence_version(new_version);
+    });
 }
 
 void storage_service::init_messaging_service(sharded<service::storage_proxy>& proxy, sharded<db::system_distributed_keyspace>& sys_dist_ks) {

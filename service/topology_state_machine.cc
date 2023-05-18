@@ -146,6 +146,9 @@ std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd
         case raft_topology_cmd::command::fence_old_reads:
             os << "fence_old_reads";
             break;
+        case raft_topology_cmd::command::fence:
+            os << "fence";
+            break;
     }
     return os;
 }
