@@ -60,5 +60,6 @@ inline std::string getenv_safe(std::string_view name) {
 
 extern boost::test_tools::assertion_result has_scylla_test_env(boost::unit_test::test_unit_id);
 future<bool> compare_files(std::string fa, std::string fb);
+future<> touch_file(std::string name);
 
 }

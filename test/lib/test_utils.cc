@@ -93,4 +93,9 @@ future<bool> compare_files(std::string fa, std::string fb) {
     co_return cont_a == cont_b;
 }
 
+future<> touch_file(std::string name) {
+    auto f = co_await open_file_dma(name, open_flags::create);
+    co_await f.close();
+}
+
 }

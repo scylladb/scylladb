@@ -20,6 +20,7 @@
 #include "test/lib/result_set_assertions.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/test_utils.hh"
 #include "test/lib/key_utils.hh"
 
 #include "replica/database.hh"
@@ -303,8 +304,7 @@ static void touch_dir(const sstring& dirname) {
 }
 
 static void touch_file(const sstring& filename) {
-    auto f = open_file_dma(filename, open_flags::create).get0();
-    f.close().get();
+    tests::touch_file(filename).get();
     require_exist(filename, true);
 }
 

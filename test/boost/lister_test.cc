@@ -18,6 +18,7 @@
 
 #include "test/lib/tmpdir.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/test_utils.hh"
 #include "test/lib/make_random_string.hh"
 
 #include "utils/lister.hh"
@@ -51,13 +52,6 @@ SEASTAR_TEST_CASE(test_empty_directory_lister) {
     BOOST_REQUIRE(!count);
 }
 
-static future<> touch_file(fs::path filename, open_flags flags = open_flags::wo | open_flags::create, file_permissions create_permissions = file_permissions::default_file_permissions) {
-    file_open_options opts;
-    opts.create_permissions = create_permissions;
-    auto f = co_await open_file_dma(filename.native(), flags, opts);
-    co_await f.close();
-}
-
 static future<size_t> generate_random_content(tmpdir& tmp, std::unordered_set<std::string>& file_names, std::unordered_set<std::string>& dir_names, size_t min_count = 1, size_t max_count = 1000) {
     size_t count = tests::random::get_int<size_t>(min_count, max_count);
     for (size_t i = 0; i < count; i++) {
@@ -74,7 +68,7 @@ static future<size_t> generate_random_content(tmpdir& tmp, std::unordered_set<st
     }
 
     for (const auto& name : file_names) {
-        co_await touch_file(tmp.path() / name);
+        co_await tests::touch_file(tmp.path() / name);
     }
     for (const auto& name : dir_names) {
         co_await touch_directory((tmp.path() / name).native());
