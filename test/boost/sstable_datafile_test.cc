@@ -2932,7 +2932,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                     const auto size = std::min(sst->ondisk_data_size() / 2, uint64_t(1024));
                     auto buf = temporary_buffer<char>::aligned(sst_file.disk_write_dma_alignment(), size);
                     std::fill(buf.get_write(), buf.get_write() + size, 0xba);
-                    sst_file.dma_write(sst->ondisk_data_size() / 2, buf.begin(), buf.size(), default_priority_class()).get();
+                    sst_file.dma_write(sst->ondisk_data_size() / 2, buf.begin(), buf.size()).get();
                 }
 
                 valid = sstables::validate_checksums(sst, permit, default_priority_class()).get();
