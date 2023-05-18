@@ -11,6 +11,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_future.hh>
+#include <seastar/core/sharded.hh>
 #include <unordered_map>
 #include <functional>
 #include <set>
@@ -19,11 +20,15 @@
 #include "db/schema_features.hh"
 #include "gms/feature.hh"
 
-namespace db { class config; }
+namespace db {
+class config;
+class system_keyspace;
+}
 namespace service { class storage_service; }
 
 namespace gms {
 
+class gossiper;
 class feature_service;
 
 struct feature_config {
@@ -46,7 +51,7 @@ using namespace std::literals;
  * A pointer to `cql3::query_processor` can be optionally supplied
  * if the instance needs to persist enabled features in a system table.
  */
-class feature_service final {
+class feature_service final : public peering_sharded_service<feature_service> {
     void register_feature(feature& f);
     void unregister_feature(feature& f);
     friend class feature;
@@ -118,10 +123,8 @@ public:
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
 
     static std::set<sstring> to_feature_set(sstring features_string);
-    // Persist enabled feature in the `system.scylla_local` table under the "enabled_features" key.
-    // The key itself is maintained as an `unordered_set<string>` and serialized via `to_string`
-    // function to preserve readability.
-    void persist_enabled_feature_info(const gms::feature& f) const;
+    future<> enable_features_on_startup(db::system_keyspace&);
+    future<> enable_features_on_join(gossiper&, db::system_keyspace&);
 };
 
 } // namespace gms

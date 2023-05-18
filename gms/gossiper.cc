@@ -70,32 +70,10 @@ std::chrono::milliseconds gossiper::quarantine_delay() const noexcept {
     return ring_delay * 2;
 }
 
-class feature_enabler : public i_endpoint_state_change_subscriber {
-    gossiper& _g;
-public:
-    feature_enabler(gossiper& g) : _g(g) {}
-    future<> on_join(inet_address ep, endpoint_state state) override {
-        return _g.maybe_enable_features();
-    }
-    future<> on_change(inet_address ep, application_state state, const versioned_value&) override {
-        if (state == application_state::SUPPORTED_FEATURES) {
-            return _g.maybe_enable_features();
-        }
-        return make_ready_future();
-    }
-    future<> before_change(inet_address, endpoint_state, application_state, const versioned_value&) override { return make_ready_future(); }
-    future<> on_alive(inet_address, endpoint_state) override { return make_ready_future(); }
-    future<> on_dead(inet_address, endpoint_state) override { return make_ready_future(); }
-    future<> on_remove(inet_address) override { return make_ready_future(); }
-    future<> on_restart(inet_address, endpoint_state) override { return make_ready_future(); }
-};
-
-gossiper::gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, sharded<db::system_keyspace>& sys_ks, const db::config& cfg, gossip_config gcfg)
+gossiper::gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, const db::config& cfg, gossip_config gcfg)
         : _abort_source(as)
-        , _feature_service(features)
         , _shared_token_metadata(stm)
         , _messaging(ms)
-        , _sys_ks(sys_ks)
         , _failure_detector_timeout_ms(cfg.failure_detector_timeout_in_ms)
         , _force_gossip_generation(cfg.force_gossip_generation)
         , _gcfg(std::move(gcfg)) {
@@ -107,7 +85,6 @@ gossiper::gossiper(abort_source& as, feature_service& features, const locator::s
     _scheduled_gossip_task.set_callback(_gcfg.gossip_scheduling_group, [this] { run(); });
     // half of QUARATINE_DELAY, to ensure _just_removed_endpoints has enough leeway to prevent re-gossip
     fat_client_timeout = quarantine_delay() / 2;
-    register_(make_shared<feature_enabler>(*this));
     // Register this instance with JMX
     namespace sm = seastar::metrics;
     auto ep = get_broadcast_address();
@@ -2379,9 +2356,6 @@ future<> gossiper::wait_for_gossip_to_settle() {
     if (force_after != 0) {
         co_await wait_for_gossip(GOSSIP_SETTLE_MIN_WAIT_MS, force_after);
     }
-    if (!std::exchange(_gossip_settled, true)) {
-        co_await maybe_enable_features();
-    }
 }
 
 future<> gossiper::wait_for_range_setup() {
@@ -2551,18 +2525,6 @@ void gossiper::append_endpoint_state(std::stringstream& ss, const endpoint_state
     } else {
         ss << "  TOKENS: not present" << "\n";
     }
-}
-
-future<> gossiper::maybe_enable_features() {
-    if (!_gossip_settled) {
-        co_return;
-    }
-    auto loaded_peer_features = co_await db::system_keyspace::load_peer_features();
-    auto&& features = get_supported_features(loaded_peer_features, ignore_features_of_local_node::no);
-    co_await container().invoke_on_all([&features] (gossiper& g) -> future<> {
-        std::set<std::string_view> features_v = boost::copy_range<std::set<std::string_view>>(features);
-        co_await g._feature_service.enable(std::move(features_v));
-    });
 }
 
 locator::token_metadata_ptr gossiper::get_token_metadata_ptr() const noexcept {

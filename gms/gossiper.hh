@@ -42,7 +42,6 @@
 
 namespace db {
 class config;
-class system_keyspace;
 }
 
 namespace gms {
@@ -55,8 +54,6 @@ class inet_address;
 class i_endpoint_state_change_subscriber;
 class gossip_get_endpoint_states_request;
 class gossip_get_endpoint_states_response;
-
-class feature_service;
 
 using advertise_myself = bool_class<class advertise_myself_tag>;
 
@@ -242,7 +239,7 @@ private:
     // The value must be kept alive until completes and not change.
     future<> replicate(inet_address, application_state key, const versioned_value& value);
 public:
-    explicit gossiper(abort_source& as, feature_service& features, const locator::shared_token_metadata& stm, netw::messaging_service& ms, sharded<db::system_keyspace>& sys_ks, const db::config& cfg, gossip_config gcfg);
+    explicit gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, const db::config& cfg, gossip_config gcfg);
 
     /**
      * Register for interesting state changes.
@@ -589,26 +586,22 @@ private:
 
     uint64_t _nr_run = 0;
     uint64_t _msg_processing = 0;
-    bool _gossip_settled = false;
 
     class msg_proc_guard;
 private:
     abort_source& _abort_source;
-    feature_service& _feature_service;
     const locator::shared_token_metadata& _shared_token_metadata;
     netw::messaging_service& _messaging;
-    sharded<db::system_keyspace>& _sys_ks;
     utils::updateable_value<uint32_t> _failure_detector_timeout_ms;
     utils::updateable_value<int32_t> _force_gossip_generation;
     gossip_config _gcfg;
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(inet_address endpoint) const;
-    // Get features supported by all the nodes this node knows about
-    std::set<sstring> get_supported_features(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, ignore_features_of_local_node ignore_local_node) const;
     locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 public:
     void check_knows_remote_features(std::set<std::string_view>& local_features, const std::unordered_map<inet_address, sstring>& loaded_peer_features) const;
-    future<> maybe_enable_features();
+    // Get features supported by all the nodes this node knows about
+    std::set<sstring> get_supported_features(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, ignore_features_of_local_node ignore_local_node) const;
 private:
     seastar::metrics::metric_groups _metrics;
 public:

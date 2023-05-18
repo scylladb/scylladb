@@ -371,9 +371,9 @@ public:
      */
     future<std::unordered_set<dht::token>> get_local_tokens();
 
-    static future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
-    static future<std::set<sstring>> load_local_enabled_features();
-    static future<> save_local_enabled_features(std::set<sstring> features);
+    future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
+    future<std::set<sstring>> load_local_enabled_features();
+    future<> save_local_enabled_features(std::set<sstring> features);
 
     future<int> increment_and_get_generation();
     bool bootstrap_needed() const;
@@ -436,8 +436,6 @@ public:
     future<bool> cdc_is_rewritten();
     future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
 
-    static future<> enable_features_on_startup(sharded<gms::feature_service>& feat);
-
     // Load Raft Group 0 id from scylla.local
     static future<utils::UUID> get_raft_group0_id();
 
@@ -445,7 +443,7 @@ public:
     static future<> set_raft_group0_id(utils::UUID id);
 
     // Save advertised gossip feature set to system.local
-    static future<> save_local_supported_features(const std::set<std::string_view>& feats);
+    future<> save_local_supported_features(const std::set<std::string_view>& feats);
 
     // Get the last (the greatest in timeuuid order) state ID in the group 0 history table.
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.

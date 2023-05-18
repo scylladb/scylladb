@@ -1478,7 +1478,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     // Save the advertised feature set to system.local table after
     // all remote feature checks are complete and after gossip shadow rounds are done.
     // At this point, the final feature set is already determined before the node joins the ring.
-    co_await db::system_keyspace::save_local_supported_features(features);
+    co_await _sys_ks.local().save_local_supported_features(features);
 
     // If this is a restarting node, we should update tokens before gossip starts
     auto my_tokens = co_await _sys_ks.local().get_saved_tokens();
@@ -1585,6 +1585,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     });
     _listeners.emplace_back(make_lw_shared(std::move(schema_change_announce)));
     co_await _gossiper.wait_for_gossip_to_settle();
+    co_await _feature_service.enable_features_on_join(_gossiper, _sys_ks.local());
 
     set_mode(mode::JOINING);
 
@@ -2664,7 +2665,7 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
         auto initial_contact_nodes = loaded_endpoints.empty() ?
             std::unordered_set<gms::inet_address>(seeds.begin(), seeds.end()) :
             loaded_endpoints;
-        auto loaded_peer_features = db::system_keyspace::load_peer_features().get0();
+        auto loaded_peer_features = _sys_ks.local().load_peer_features().get0();
         slogger.info("initial_contact_nodes={}, loaded_endpoints={}, loaded_peer_features={}",
                 initial_contact_nodes, loaded_endpoints, loaded_peer_features.size());
         for (auto& x : loaded_peer_features) {

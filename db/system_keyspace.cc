@@ -1400,7 +1400,7 @@ future<> system_keyspace::setup_version(sharded<netw::messaging_service>& ms) {
 
 future<> system_keyspace::save_local_supported_features(const std::set<std::string_view>& feats) {
     static const auto req = format("INSERT INTO system.{} (key, supported_features) VALUES (?, ?)", LOCAL);
-    return qctx->execute_cql(req,
+    return execute_cql(req,
         sstring(db::system_keyspace::LOCAL),
         fmt::to_string(fmt::join(feats, ","))).discard_result();
 }
@@ -1636,7 +1636,7 @@ future<std::vector<gms::inet_address>> system_keyspace::load_peers() {
 
 future<std::unordered_map<gms::inet_address, sstring>> system_keyspace::load_peer_features() {
     sstring req = format("SELECT peer, supported_features FROM system.{}", PEERS);
-    return qctx->execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+    return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         std::unordered_map<gms::inet_address, sstring> ret;
         for (auto& row : *cql_result) {
             if (row.has("supported_features")) {
@@ -3362,44 +3362,6 @@ future<std::set<sstring>> system_keyspace::load_local_enabled_features() {
 future<> system_keyspace::save_local_enabled_features(std::set<sstring> features) {
     auto features_str = fmt::to_string(fmt::join(features, ","));
     co_await set_scylla_local_param(gms::feature_service::ENABLED_FEATURES_KEY, features_str);
-}
-
-future<> system_keyspace::enable_features_on_startup(sharded<gms::feature_service>& feat) {
-    std::set<sstring> features_to_enable;
-    const auto persisted_features = co_await load_local_enabled_features();
-    if (persisted_features.empty()) {
-        co_return;
-    }
-
-    gms::feature_service& local_feat_srv = feat.local();
-    const auto known_features = local_feat_srv.supported_feature_set();
-    const auto& registered_features = local_feat_srv.registered_features();
-    for (auto&& f : persisted_features) {
-        slogger.debug("Enabling persisted feature '{}'", f);
-        const bool is_registered_feat = registered_features.contains(sstring(f));
-        if (!is_registered_feat || !known_features.contains(f)) {
-            if (is_registered_feat) {
-                throw std::runtime_error(format(
-                    "Feature '{}' was previously enabled in the cluster but its support is disabled by this node. "
-                    "Set the corresponding configuration option to enable the support for the feature.", f));
-            } else {
-                throw std::runtime_error(format("Unknown feature '{}' was previously enabled in the cluster. "
-                    " That means this node is performing a prohibited downgrade procedure"
-                    " and should not be allowed to boot.", f));
-            }
-        }
-        if (is_registered_feat) {
-            features_to_enable.insert(std::move(f));
-        }
-        // If a feature is not in `registered_features` but still in `known_features` list
-        // that means the feature name is used for backward compatibility and should be implicitly
-        // enabled in the code by default, so just skip it.
-    }
-
-    co_await feat.invoke_on_all([&features_to_enable] (auto& srv) -> future<> {
-        std::set<std::string_view> feat = boost::copy_range<std::set<std::string_view>>(features_to_enable);
-        co_await srv.enable(std::move(feat));
-    });
 }
 
 future<utils::UUID> system_keyspace::get_raft_group0_id() {
