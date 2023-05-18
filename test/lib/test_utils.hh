@@ -8,11 +8,14 @@
 
 #pragma once
 
+#include <seastar/core/future.hh>
 #include <source_location>
 #include "utils/source_location-compat.hh"
 #include <string>
 #include <boost/test/unit_test.hpp>
 #include <fmt/format.h>
+
+using namespace seastar;
 
 // Thread safe alternatives to BOOST_REQUIRE_*, BOOST_CHECK_* and BOOST_FAIL().
 // Use these if instead of the BOOST provided macros if you want to use them on
@@ -56,5 +59,6 @@ inline std::string getenv_safe(std::string_view name) {
 }
 
 extern boost::test_tools::assertion_result has_scylla_test_env(boost::unit_test::test_unit_id);
+future<bool> compare_files(std::string fa, std::string fb);
 
 }

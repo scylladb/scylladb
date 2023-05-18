@@ -8,6 +8,7 @@
 
 #include "test/lib/test_utils.hh"
 
+#include <seastar/util/file.hh>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/sort.hpp>
 #include <seastar/core/print.hh>
@@ -82,4 +83,14 @@ sstring make_random_numeric_string(size_t size) {
         b = dist(rng);
     }
     return str;
+}
+
+namespace tests {
+
+future<bool> compare_files(std::string fa, std::string fb) {
+    auto cont_a = co_await util::read_entire_file_contiguous(fa);
+    auto cont_b = co_await util::read_entire_file_contiguous(fb);
+    co_return cont_a == cont_b;
+}
+
 }
