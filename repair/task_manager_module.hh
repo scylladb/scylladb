@@ -120,6 +120,7 @@ public:
     repair_stats _stats;
     std::unordered_set<sstring> dropped_tables;
     bool _hints_batchlog_flushed = false;
+    std::unordered_set<gms::inet_address> nodes_down;
 public:
     shard_repair_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
