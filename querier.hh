@@ -82,13 +82,13 @@ public:
     { }
 
     querier_base(schema_ptr schema, reader_permit permit, dht::partition_range range,
-            query::partition_slice slice, const mutation_source& ms, const io_priority_class& pc, tracing::trace_state_ptr trace_ptr,
+            query::partition_slice slice, const mutation_source& ms, tracing::trace_state_ptr trace_ptr,
             querier_config config)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _range(make_lw_shared<const dht::partition_range>(std::move(range)))
         , _slice(std::make_unique<const query::partition_slice>(std::move(slice)))
-        , _reader(ms.make_reader_v2(_schema, _permit, *_range, *_slice, pc, std::move(trace_ptr), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
+        , _reader(ms.make_reader_v2(_schema, _permit, *_range, *_slice, std::move(trace_ptr), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
         , _query_ranges(*_range)
         , _qr_config(std::move(config))
     { }
@@ -153,10 +153,9 @@ public:
             reader_permit permit,
             dht::partition_range range,
             query::partition_slice slice,
-            const io_priority_class& pc,
             tracing::trace_state_ptr trace_ptr,
             querier_config config = {})
-        : querier_base(schema, permit, std::move(range), std::move(slice), ms, pc, std::move(trace_ptr), std::move(config))
+        : querier_base(schema, permit, std::move(range), std::move(slice), ms, std::move(trace_ptr), std::move(config))
         , _compaction_state(make_lw_shared<compact_for_query_state_v2>(*schema, gc_clock::time_point{}, *_slice, 0, 0)) {
     }
 

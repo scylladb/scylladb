@@ -13,10 +13,6 @@
 #include "schema/schema_fwd.hh"
 #include "seastarx.hh"
 
-namespace seastar {
-class io_priority_class;
-}
-
 class reader_permit;
 class mutation_source;
 
@@ -41,7 +37,6 @@ flat_mutation_reader_v2 make_auto_paused_evictable_reader_v2(
         reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr);
 
@@ -49,7 +44,7 @@ class evictable_reader_v2;
 
 class evictable_reader_handle_v2 {
     friend std::pair<flat_mutation_reader_v2, evictable_reader_handle_v2> make_manually_paused_evictable_reader_v2(mutation_source, schema_ptr, reader_permit,
-            const dht::partition_range&, const query::partition_slice&, const io_priority_class&, tracing::trace_state_ptr, mutation_reader::forwarding);
+            const dht::partition_range&, const query::partition_slice&, tracing::trace_state_ptr, mutation_reader::forwarding);
 
 private:
     evictable_reader_v2* _r;
@@ -78,6 +73,5 @@ std::pair<flat_mutation_reader_v2, evictable_reader_handle_v2> make_manually_pau
         reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr);

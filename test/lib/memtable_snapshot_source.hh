@@ -61,7 +61,6 @@ private:
                  permit,
                  query::full_partition_range,
                  new_mt->schema()->full_slice(),
-                 default_priority_class(),
                  nullptr,
                  streamed_mutation::forwarding::no,
                  mutation_reader::forwarding::yes));

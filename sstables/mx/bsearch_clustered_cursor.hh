@@ -159,7 +159,6 @@ public:
     uint64_t _promoted_index_size;
     metrics& _metrics;
     const pi_index_type _blocks_count;
-    const io_priority_class _pc;
     cached_file& _cached_file;
     data_consumer::primitive_consumer _primitive_parser;
     clustering_parser _clustering_parser;
@@ -193,7 +192,7 @@ private:
     }
 
     future<pi_offset_type> read_block_offset(pi_index_type idx, tracing::trace_state_ptr trace_state) {
-        _stream = _cached_file.read(_promoted_index_start + get_offset_entry_pos(idx), _pc, _permit, trace_state);
+        _stream = _cached_file.read(_promoted_index_start + get_offset_entry_pos(idx), _permit, trace_state);
         return _stream.next_page_view().then([this] (cached_file::page_view page) {
             temporary_buffer<char> buf = page.get_buf();
             static_assert(noexcept(std::declval<data_consumer::primitive_consumer>().read_32(buf)));
@@ -209,7 +208,7 @@ private:
     // Postconditions:
     //   - block.start is engaged and valid.
     future<> read_block_start(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
-        _stream = _cached_file.read(_promoted_index_start + block.offset, _pc, _permit, trace_state);
+        _stream = _cached_file.read(_promoted_index_start + block.offset, _permit, trace_state);
         _clustering_parser.reset();
         return consume_stream(_stream, _clustering_parser).then([this, &block] {
             auto mem_before = block.memory_usage();
@@ -221,7 +220,7 @@ private:
     // Postconditions:
     //   - block.end is engaged, all fields in the block are valid
     future<> read_block(promoted_index_block& block, tracing::trace_state_ptr trace_state) {
-        _stream = _cached_file.read(_promoted_index_start + block.offset, _pc, _permit, trace_state);
+        _stream = _cached_file.read(_promoted_index_start + block.offset, _permit, trace_state);
         _block_parser.reset();
         return consume_stream(_stream, _block_parser).then([this, &block] {
             auto mem_before = block.memory_usage();
@@ -267,7 +266,6 @@ public:
             reader_permit permit,
             column_values_fixed_lengths cvfl,
             cached_file& f,
-            io_priority_class pc,
             pi_index_type blocks_count)
         : _blocks(block_comparator{s})
         , _s(s)
@@ -275,7 +273,6 @@ public:
         , _promoted_index_size(promoted_index_size)
         , _metrics(m)
         , _blocks_count(blocks_count)
-        , _pc(pc)
         , _cached_file(f)
         , _primitive_parser(permit)
         , _clustering_parser(s, permit, cvfl, true)
@@ -441,7 +438,6 @@ public:
             reader_permit permit,
             column_values_fixed_lengths cvfl,
             seastar::shared_ptr<cached_file> f,
-            io_priority_class pc,
             pi_index_type blocks_count,
             tracing::trace_state_ptr trace_state)
         : _s(s)
@@ -454,7 +450,6 @@ public:
             std::move(permit),
             std::move(cvfl),
             *_cached_file,
-            pc,
             blocks_count)
         , _trace_state(std::move(trace_state))
     { }

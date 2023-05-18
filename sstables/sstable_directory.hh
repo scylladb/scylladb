@@ -129,7 +129,6 @@ private:
     schema_ptr _schema;
     lw_shared_ptr<const data_dictionary::storage_options> _storage_opts;
     std::filesystem::path _sstable_dir;
-    ::io_priority_class _io_priority;
     io_error_handler_gen _error_handler_gen;
     std::unique_ptr<components_lister> _lister;
 
@@ -187,7 +186,6 @@ public:
             schema_ptr schema,
             lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
             std::filesystem::path sstable_dir,
-            ::io_priority_class io_prio,
             io_error_handler_gen error_handler_gen);
 
     std::vector<sstables::shared_sstable>& get_unsorted_sstables() {

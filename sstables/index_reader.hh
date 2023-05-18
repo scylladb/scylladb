@@ -335,7 +335,7 @@ std::unique_ptr<clustered_index_cursor> promoted_index::make_cursor(shared_sstab
         return std::make_unique<mc::bsearch_clustered_cursor>(*sst->get_schema(),
             _promoted_index_start, _promoted_index_size,
             promoted_index_cache_metrics, permit,
-            *ck_values_fixed_lengths, cached_file_ptr, options.io_priority_class, _num_blocks, trace_state);
+            *ck_values_fixed_lengths, cached_file_ptr, _num_blocks, trace_state);
     }
 
     auto file = make_tracked_index_file(*sst, permit, std::move(trace_state), caching);
@@ -427,7 +427,6 @@ struct index_bound {
 class index_reader {
     shared_sstable _sstable;
     reader_permit _permit;
-    const io_priority_class& _pc;
     tracing::trace_state_ptr _trace_state;
     std::unique_ptr<partition_index_cache> _local_index_cache; // Used when caching is disabled
     partition_index_cache& _index_cache;
@@ -757,20 +756,17 @@ private:
         file_input_stream_options options;
         options.buffer_size = _sstable->sstable_buffer_size;
         options.read_ahead = 2;
-        options.io_priority_class = _pc;
         options.dynamic_adjustments = _sstable->_index_history;
         return options;
     }
 
 public:
     index_reader(shared_sstable sst, reader_permit permit,
-                 const io_priority_class& pc = default_priority_class(),
                  tracing::trace_state_ptr trace_state = {},
                  use_caching caching = use_caching::yes,
                  bool single_partition_read = false)
         : _sstable(std::move(sst))
         , _permit(std::move(permit))
-        , _pc(pc)
         , _trace_state(std::move(trace_state))
         , _local_index_cache(caching ? nullptr
             : std::make_unique<partition_index_cache>(_sstable->manager().get_cache_tracker().get_lru(),

@@ -19,7 +19,6 @@
 #include "reversibly_mergeable.hh"
 #include "mutation_fragment.hh"
 #include "mutation_query.hh"
-#include "service/priority_manager.hh"
 #include "mutation_compactor.hh"
 #include "counters.hh"
 #include "row_cache.hh"

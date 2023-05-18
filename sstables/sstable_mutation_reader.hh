@@ -117,7 +117,7 @@ inline std::unique_ptr<DataConsumeRowsContext> data_consume_rows(const schema& s
     // This potentially enables read-ahead beyond end, until last_end, which
     // can be beneficial if the user wants to fast_forward_to() on the
     // returned context, and may make small skips.
-    auto input = sst->data_stream(toread.start, last_end - toread.start, consumer.io_priority(),
+    auto input = sst->data_stream(toread.start, last_end - toread.start,
             consumer.permit(), consumer.trace_state(), sst->_partition_range_history);
     return std::make_unique<DataConsumeRowsContext>(s, std::move(sst), consumer, std::move(input), toread.start, toread.end - toread.start);
 }
@@ -140,7 +140,7 @@ inline reversed_context<DataConsumeRowsContext> data_consume_reversed_partition(
         typename DataConsumeRowsContext::consumer& consumer, sstable::disk_read_range toread) {
     auto reversing_data_source = sstables::mx::make_partition_reversing_data_source(
             s, sst, ir, toread.start, toread.end - toread.start,
-            consumer.permit(), consumer.io_priority(), consumer.trace_state());
+            consumer.permit(), consumer.trace_state());
     return reversed_context<DataConsumeRowsContext> {
         .the_context = std::make_unique<DataConsumeRowsContext>(
                 s, std::move(sst), consumer, input_stream<char>(std::move(reversing_data_source.the_source)),
@@ -151,7 +151,7 @@ inline reversed_context<DataConsumeRowsContext> data_consume_reversed_partition(
 
 template <typename DataConsumeRowsContext>
 inline std::unique_ptr<DataConsumeRowsContext> data_consume_single_partition(const schema& s, shared_sstable sst, typename DataConsumeRowsContext::consumer& consumer, sstable::disk_read_range toread) {
-    auto input = sst->data_stream(toread.start, toread.end - toread.start, consumer.io_priority(),
+    auto input = sst->data_stream(toread.start, toread.end - toread.start,
             consumer.permit(), consumer.trace_state(), sst->_single_partition_history);
     return std::make_unique<DataConsumeRowsContext>(s, std::move(sst), consumer, std::move(input), toread.start, toread.end - toread.start);
 }
@@ -168,7 +168,6 @@ concept RowConsumer =
     requires(T t,
                     const partition_key& pk,
                     position_range cr) {
-        { t.io_priority() } -> std::convertible_to<const io_priority_class&>;
         { t.is_mutation_end() } -> std::same_as<bool>;
         { t.setup_for_partition(pk) } -> std::same_as<void>;
         { t.push_ready_fragments() } -> std::same_as<void>;

@@ -126,7 +126,7 @@ public:
     //
     // The caller should also pass a maximum number of SSTables which is the maximum amount of
     // SSTables that can be added into a single job.
-    compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) const;
+    compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_mode mode) const;
 
 };
 

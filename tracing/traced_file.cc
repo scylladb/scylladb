@@ -23,10 +23,10 @@ private:
 public:
     traced_file_impl(file, tracing::trace_state_ptr, sstring);
 
-    virtual future<size_t> write_dma(uint64_t pos, const void* buf, size_t len, const io_priority_class& pc) override;
-    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override;
-    virtual future<size_t> read_dma(uint64_t pos, void* buf, size_t len, const io_priority_class& pc) override;
-    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override;
+    virtual future<size_t> write_dma(uint64_t pos, const void* buf, size_t len, io_intent*) override;
+    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, io_intent*) override;
+    virtual future<size_t> read_dma(uint64_t pos, void* buf, size_t len, io_intent*) override;
+    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent*) override;
     virtual future<> flush(void) override;
     virtual future<struct stat> stat(void) override;
     virtual future<> truncate(uint64_t length) override;
@@ -36,7 +36,7 @@ public:
     virtual future<> close() override;
     virtual std::unique_ptr<seastar::file_handle_impl> dup() override;
     virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) override;
-    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) override;
+    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent*) override;
 };
 
 traced_file_impl::traced_file_impl(file f, tracing::trace_state_ptr trace_state, sstring trace_prefix)
@@ -44,9 +44,9 @@ traced_file_impl::traced_file_impl(file f, tracing::trace_state_ptr trace_state,
 }
 
 future<size_t>
-traced_file_impl::write_dma(uint64_t pos, const void* buf, size_t len, const io_priority_class& pc) {
+traced_file_impl::write_dma(uint64_t pos, const void* buf, size_t len, io_intent* intent) {
     tracing::trace(_trace_state, "{} scheduling DMA write of {} bytes at position {}", _trace_prefix, len, pos);
-    return get_file_impl(_f)->write_dma(pos, buf, len, pc).then_wrapped([this, pos, len] (future<size_t> f) {
+    return get_file_impl(_f)->write_dma(pos, buf, len, intent).then_wrapped([this, pos, len] (future<size_t> f) {
         try {
             auto ret = f.get0();
             tracing::trace(_trace_state, "{} finished DMA write of {} bytes at position {}, successfully wrote {} bytes", _trace_prefix, len, pos, ret);
@@ -59,9 +59,9 @@ traced_file_impl::write_dma(uint64_t pos, const void* buf, size_t len, const io_
 }
 
 future<size_t>
-traced_file_impl::write_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) {
+traced_file_impl::write_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) {
     tracing::trace(_trace_state, "{} scheduling DMA write at position {}", _trace_prefix, pos);
-    return get_file_impl(_f)->write_dma(pos, std::move(iov), pc).then_wrapped([this, pos] (future<size_t> f) {
+    return get_file_impl(_f)->write_dma(pos, std::move(iov), intent).then_wrapped([this, pos] (future<size_t> f) {
         try {
             auto ret = f.get0();
             tracing::trace(_trace_state, "{} finished DMA write at position {}, successfully wrote {} bytes", _trace_prefix, pos, ret);
@@ -74,9 +74,9 @@ traced_file_impl::write_dma(uint64_t pos, std::vector<iovec> iov, const io_prior
 }
 
 future<size_t>
-traced_file_impl::read_dma(uint64_t pos, void* buf, size_t len, const io_priority_class& pc) {
+traced_file_impl::read_dma(uint64_t pos, void* buf, size_t len, io_intent* intent) {
     tracing::trace(_trace_state, "{} scheduling DMA read of {} bytes at position {}", _trace_prefix, len, pos);
-    return get_file_impl(_f)->read_dma(pos, buf, len, pc).then_wrapped([this, pos, len] (future<size_t> f) {
+    return get_file_impl(_f)->read_dma(pos, buf, len, intent).then_wrapped([this, pos, len] (future<size_t> f) {
         try {
             auto ret = f.get0();
             tracing::trace(_trace_state, "{} finished DMA read of {} bytes at position {}, successfully read {} bytes", _trace_prefix, len, pos, ret);
@@ -89,9 +89,9 @@ traced_file_impl::read_dma(uint64_t pos, void* buf, size_t len, const io_priorit
 }
 
 future<size_t>
-traced_file_impl::read_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) {
+traced_file_impl::read_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) {
     tracing::trace(_trace_state, "{} scheduling DMA read at position {}", _trace_prefix, pos);
-    return get_file_impl(_f)->read_dma(pos, std::move(iov), pc).then_wrapped([this, pos] (future<size_t> f) {
+    return get_file_impl(_f)->read_dma(pos, std::move(iov), intent).then_wrapped([this, pos] (future<size_t> f) {
         try {
             auto ret = f.get0();
             tracing::trace(_trace_state, "{} finished DMA read at position {}, successfully read {} bytes", _trace_prefix, pos, ret);
@@ -214,9 +214,9 @@ traced_file_impl::list_directory(std::function<future<> (directory_entry de)> ne
 }
 
 future<temporary_buffer<uint8_t>>
-traced_file_impl::dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) {
+traced_file_impl::dma_read_bulk(uint64_t offset, size_t range_size, io_intent* intent) {
     tracing::trace(_trace_state, "{} scheduling bulk DMA read of size {} at offset {}", _trace_prefix, range_size, offset);
-    return get_file_impl(_f)->dma_read_bulk(offset, range_size, pc).then_wrapped([this, offset, range_size] (future<temporary_buffer<uint8_t>> f) {
+    return get_file_impl(_f)->dma_read_bulk(offset, range_size, intent).then_wrapped([this, offset, range_size] (future<temporary_buffer<uint8_t>> f) {
         try {
             auto ret = f.get0();
             tracing::trace(_trace_state, "{} finished bulk DMA read of size {} at offset {}, successfully read {} bytes",

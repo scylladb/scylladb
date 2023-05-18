@@ -59,7 +59,6 @@
 #include "cdc/generation_service.hh"
 #include "repair/repair.hh"
 #include "repair/row_level.hh"
-#include "service/priority_manager.hh"
 #include "gms/generation-number.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>

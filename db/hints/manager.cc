@@ -26,7 +26,6 @@
 #include "utils/disk-error-handler.hh"
 #include "utils/lister.hh"
 #include "db/timeout_clock.hh"
-#include "service/priority_manager.hh"
 #include "replica/database.hh"
 #include "service_permit.hh"
 #include "utils/directories.hh"
@@ -1035,7 +1034,7 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
     lw_shared_ptr<send_one_file_ctx> ctx_ptr = make_lw_shared<send_one_file_ctx>(_last_schema_ver_to_column_mapping);
 
     try {
-        commitlog::read_log_file(fname, manager::FILENAME_PREFIX, service::get_local_streaming_priority(), [this, secs_since_file_mod, &fname, ctx_ptr] (commitlog::buffer_and_replay_position buf_rp) -> future<> {
+        commitlog::read_log_file(fname, manager::FILENAME_PREFIX, [this, secs_since_file_mod, &fname, ctx_ptr] (commitlog::buffer_and_replay_position buf_rp) -> future<> {
             auto& buf = buf_rp.buffer;
             auto& rp = buf_rp.position;
 

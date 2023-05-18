@@ -61,7 +61,7 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(t
             auto gc_before2 = j->get_gc_before_for_drop_estimation(compaction_time, table_s.get_tombstone_gc_state());
             return i->estimate_droppable_tombstone_ratio(gc_before1) < j->estimate_droppable_tombstone_ratio(gc_before2);
         });
-        return sstables::compaction_descriptor({ sst }, service::get_local_compaction_priority(), sst->get_sstable_level());
+        return sstables::compaction_descriptor({ sst }, sst->get_sstable_level());
     }
     return {};
 }
@@ -145,7 +145,7 @@ int64_t leveled_compaction_strategy::estimated_pending_compactions(table_state& 
 }
 
 compaction_descriptor
-leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) const {
+leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_mode mode) const {
     std::array<std::vector<shared_sstable>, leveled_manifest::MAX_LEVELS> level_info;
 
     auto is_disjoint = [schema] (const std::vector<shared_sstable>& sstables, unsigned tolerance) -> std::tuple<bool, unsigned> {
@@ -162,7 +162,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
 
             // This is really unexpected, so we'll just compact it all to fix it
             auto ideal_level = ideal_level_for_input(input, max_sstable_size_in_bytes);
-            compaction_descriptor desc(std::move(input), iop, ideal_level, max_sstable_size_in_bytes);
+            compaction_descriptor desc(std::move(input), ideal_level, max_sstable_size_in_bytes);
             desc.options = compaction_type_options::make_reshape();
             return desc;
         }
@@ -193,14 +193,14 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
         unsigned ideal_level = ideal_level_for_input(level_info[0], max_sstable_size_in_bytes);
 
         leveled_manifest::logger.info("Reshaping {} disjoint sstables in level 0 into level {}", level_info[0].size(), ideal_level);
-        compaction_descriptor desc(std::move(input), iop, ideal_level, max_sstable_size_in_bytes);
+        compaction_descriptor desc(std::move(input), ideal_level, max_sstable_size_in_bytes);
         desc.options = compaction_type_options::make_reshape();
         return desc;
     }
 
     if (level_info[0].size() > offstrategy_threshold) {
         size_tiered_compaction_strategy stcs(_stcs_options);
-        return stcs.get_reshaping_job(std::move(level_info[0]), schema, iop, mode);
+        return stcs.get_reshaping_job(std::move(level_info[0]), schema, mode);
     }
 
     for (unsigned level = leveled_manifest::MAX_LEVELS - 1; level > 0; --level) {
@@ -211,7 +211,7 @@ leveled_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input
         auto [disjoint, overlapping_sstables] = is_disjoint(level_info[level], tolerance(level));
         if (!disjoint) {
             leveled_manifest::logger.warn("Turns out that level {} is not disjoint, found {} overlapping SSTables, so the level will be entirely compacted on behalf of {}.{}", level, overlapping_sstables, schema->ks_name(), schema->cf_name());
-            compaction_descriptor desc(std::move(level_info[level]), iop, level, max_sstable_size_in_bytes);
+            compaction_descriptor desc(std::move(level_info[level]), level, max_sstable_size_in_bytes);
             desc.options = compaction_type_options::make_reshape();
             return desc;
         }
@@ -231,7 +231,7 @@ leveled_compaction_strategy::get_cleanup_compaction_jobs(table_state& table_s, s
         if (levels[level].empty()) {
             continue;
         }
-        ret.push_back(compaction_descriptor(std::move(levels[level]), service::get_local_compaction_priority(), level, _max_sstable_size_in_mb * 1024 * 1024));
+        ret.push_back(compaction_descriptor(std::move(levels[level]), level, _max_sstable_size_in_mb * 1024 * 1024));
     }
     return ret;
 }

@@ -43,7 +43,6 @@
 #include "test/lib/make_random_string.hh"
 #include "compatible_ring_position.hh"
 #include "mutation/mutation_compactor.hh"
-#include "service/priority_manager.hh"
 #include "db/config.hh"
 #include "mutation_writer/partition_based_splitting_writer.hh"
 
@@ -1827,7 +1826,6 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
             env.make_reader_permit(),
             query::full_partition_range,
             table.schema()->full_slice(),
-            default_priority_class(),
             nullptr,
             streamed_mutation::forwarding::yes,
             mutation_reader::forwarding::yes);

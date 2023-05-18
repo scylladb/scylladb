@@ -123,7 +123,6 @@ class read_context final : public enable_lw_shared_from_this<read_context> {
     const dht::partition_range& _range;
     const query::partition_slice& _slice;
     std::optional<query::partition_slice> _native_slice;
-    const io_priority_class& _pc;
     tracing::trace_state_ptr _trace_state;
     mutation_reader::forwarding _fwd_mr;
     bool _range_query;
@@ -149,7 +148,6 @@ public:
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr)
         : _cache(cache)
@@ -157,7 +155,6 @@ public:
         , _permit(std::move(permit))
         , _range(range)
         , _slice(slice)
-        , _pc(pc)
         , _trace_state(std::move(trace_state))
         , _fwd_mr(fwd_mr)
         , _range_query(!query::is_single_partition(range))
@@ -189,7 +186,6 @@ public:
     bool is_reversed() const { return _slice.options.contains(query::partition_slice::option::reversed); }
     // Returns a slice in the native format (for reversed reads, in native-reversed format).
     const query::partition_slice& native_slice() const { return is_reversed() ? *_native_slice : _slice; }
-    const io_priority_class& pc() const { return _pc; }
     tracing::trace_state_ptr trace_state() const { return _trace_state; }
     mutation_reader::forwarding fwd_mr() const { return _fwd_mr; }
     bool is_range_query() const { return _range_query; }

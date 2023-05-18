@@ -260,12 +260,12 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reversing_reader_random_schema) {
 
                 {
                     auto r1 = source.make_reader_v2(query_schema, semaphore.make_permit(), prange,
-                            slice, default_priority_class(), nullptr,
+                            slice, nullptr,
                             streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
                     auto close_r1 = deferred_action([&r1] { r1.close().get(); });
 
                     auto r2 = rev_source.make_reader_v2(query_schema, semaphore.make_permit(), prange,
-                            rev_slice, default_priority_class(), nullptr,
+                            rev_slice, nullptr,
                             streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
                     close_r1.cancel();
 
@@ -273,12 +273,12 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reversing_reader_random_schema) {
                 }
 
                 auto r1 = source.make_reader_v2(query_schema, semaphore.make_permit(), prange,
-                        query_schema->full_slice(), default_priority_class(), nullptr,
+                        query_schema->full_slice(), nullptr,
                         streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
                 auto close_r1 = deferred_action([&r1] { r1.close().get(); });
 
                 auto r2 = rev_source.make_reader_v2(query_schema, semaphore.make_permit(), prange,
-                        rev_full_slice, default_priority_class(), nullptr,
+                        rev_full_slice, nullptr,
                         streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
                 close_r1.cancel();
 

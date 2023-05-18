@@ -54,13 +54,13 @@ static sstring read_to_string(file& f, size_t start, size_t len) {
 }
 
 static sstring read_to_string(cached_file& cf, size_t off, size_t limit = std::numeric_limits<size_t>::max()) {
-    auto s = cf.read(off, default_priority_class(), std::nullopt);
+    auto s = cf.read(off, std::nullopt);
     return read_to_string(s, limit);
 }
 
 [[gnu::unused]]
 static void read_to_void(cached_file& cf, size_t off, size_t limit = std::numeric_limits<size_t>::max()) {
-    auto s = cf.read(off, default_priority_class(), std::nullopt);
+    auto s = cf.read(off, std::nullopt);
     read_to_void(s, limit);
 }
 
@@ -270,8 +270,8 @@ private:
     }
 public:
     // unsupported
-    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, const io_priority_class& pc) override { unsupported(); }
-    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override { unsupported(); }
+    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent*) override { unsupported(); }
+    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, io_intent*) override { unsupported(); }
     virtual future<> flush(void) override { unsupported(); }
     virtual future<> truncate(uint64_t length) override { unsupported(); }
     virtual future<> discard(uint64_t offset, uint64_t length) override { unsupported(); }
@@ -283,15 +283,15 @@ public:
 
     virtual future<> close() override { return make_ready_future<>(); }
 
-    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t size, const io_priority_class& pc) override {
+    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t size, io_intent*) override {
         return make_ready_future<temporary_buffer<uint8_t>>(temporary_buffer<uint8_t>(size));
     }
 
-    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, const io_priority_class& pc) override {
+    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent*) override {
         unsupported(); // FIXME
     }
 
-    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override {
+    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent*) override {
         unsupported(); // FIXME
     }
 };

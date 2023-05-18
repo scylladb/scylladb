@@ -171,7 +171,7 @@ static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore
                     testlog.info("Read whole partitions at once");
                     auto pranges_walker = partition_range_walker(pranges);
                     auto mr = ms.make_reader_v2(s.schema(), semaphore.make_permit(), pranges_walker.initial_range(), slice,
-                                                default_priority_class(), nullptr, streamed_mutation::forwarding::no, fwd_mr);
+                                                nullptr, streamed_mutation::forwarding::no, fwd_mr);
                     auto actual = assert_that(std::move(mr));
                     for (auto& expected : mutations) {
                         pranges_walker.fast_forward_if_needed(actual, expected);
@@ -198,7 +198,7 @@ static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore
                     testlog.info("Read partitions with fast-forwarding to each individual row");
                     pranges_walker = partition_range_walker(pranges);
                     mr = ms.make_reader_v2(s.schema(), semaphore.make_permit(), pranges_walker.initial_range(), slice,
-                                           default_priority_class(), nullptr, streamed_mutation::forwarding::yes, fwd_mr);
+                                           nullptr, streamed_mutation::forwarding::yes, fwd_mr);
                     actual = assert_that(std::move(mr));
                     for (auto& expected : mutations) {
                         pranges_walker.fast_forward_if_needed(actual, expected);
@@ -234,14 +234,14 @@ static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore
 
                 testlog.info("Test monotonic positions");
                 auto mr = ms.make_reader_v2(s.schema(), semaphore.make_permit(), query::full_partition_range, slice,
-                                            default_priority_class(), nullptr, streamed_mutation::forwarding::no, fwd_mr);
+                                            nullptr, streamed_mutation::forwarding::no, fwd_mr);
                 assert_that(std::move(mr)).has_monotonic_positions();
 
                 if (range_size != 1) {
                     testlog.info("Read partitions fast-forwarded to the range of interest");
                     auto pranges_walker = partition_range_walker(pranges);
                     mr = ms.make_reader_v2(s.schema(), semaphore.make_permit(), pranges_walker.initial_range(), slice,
-                                           default_priority_class(), nullptr, streamed_mutation::forwarding::yes, fwd_mr);
+                                           nullptr, streamed_mutation::forwarding::yes, fwd_mr);
                     auto actual = assert_that(std::move(mr));
                     for (auto& expected : mutations) {
                         pranges_walker.fast_forward_if_needed(actual, expected);
@@ -281,7 +281,7 @@ static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore
                 testlog.info("Read partitions with just static rows");
                 auto pranges_walker = partition_range_walker(pranges);
                 mr = ms.make_reader_v2(s.schema(), semaphore.make_permit(), pranges_walker.initial_range(), slice,
-                                       default_priority_class(), nullptr, streamed_mutation::forwarding::no, fwd_mr);
+                                       nullptr, streamed_mutation::forwarding::no, fwd_mr);
                 auto actual = assert_that(std::move(mr));
                 for (auto& expected : mutations) {
                     pranges_walker.fast_forward_if_needed(actual, expected);
@@ -308,7 +308,7 @@ static void test_slicing_and_fast_forwarding(tests::reader_concurrency_semaphore
 
                     testlog.info("Test monotonic positions");
                     auto mr = ms.make_reader_v2(s.schema(), semaphore.make_permit(), query::full_partition_range, slice,
-                                                default_priority_class(), nullptr, streamed_mutation::forwarding::no, fwd_mr);
+                                                nullptr, streamed_mutation::forwarding::no, fwd_mr);
                     assert_that(std::move(mr)).has_monotonic_positions();
                 }
             }
@@ -383,7 +383,7 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(tests::
         auto close_sliced_reader = deferred_close(sliced_reader);
 
         auto fwd_reader =
-            ms.make_reader_v2(m.schema(), semaphore.make_permit(), prange, full_slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
+            ms.make_reader_v2(m.schema(), semaphore.make_permit(), prange, full_slice, nullptr, streamed_mutation::forwarding::yes);
         std::vector<position_range> position_ranges;
         for (auto& r: ranges) {
             position_ranges.emplace_back(r);
@@ -429,7 +429,6 @@ static void test_streamed_mutation_forwarding_guarantees(tests::reader_concurren
             semaphore.make_permit(),
             query::full_partition_range,
             s->full_slice(),
-            default_priority_class(),
             nullptr,
             streamed_mutation::forwarding::yes));
         res.produces_partition_start(m.decorated_key());
@@ -565,7 +564,6 @@ static void test_fast_forwarding_across_partitions_to_empty_range(tests::reader_
         semaphore.make_permit(),
         pr,
         s->full_slice(),
-        default_priority_class(),
         nullptr,
         streamed_mutation::forwarding::no,
         mutation_reader::forwarding::yes));
@@ -755,7 +753,6 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(tests::rea
         semaphore.make_permit(),
         query::full_partition_range,
         s->full_slice(),
-        default_priority_class(),
         nullptr,
         streamed_mutation::forwarding::yes));
     rd.produces_partition_start(m.decorated_key());
@@ -1091,7 +1088,7 @@ static void test_clustering_slices(tests::reader_concurrency_semaphore_wrapper& 
     {
         auto slice = partition_slice_builder(*s)
             .build();
-        auto rd = assert_that(ds.make_reader_v2(s, semaphore.make_permit(), pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes));
+        auto rd = assert_that(ds.make_reader_v2(s, semaphore.make_permit(), pr, slice, nullptr, streamed_mutation::forwarding::yes));
         rd.produces_partition_start(pk)
           .fast_forward_to(position_range(position_in_partition::for_key(ck1), position_in_partition::after_key(*s, ck2)))
           .produces_row_with_key(ck1)
@@ -1102,7 +1099,7 @@ static void test_clustering_slices(tests::reader_concurrency_semaphore_wrapper& 
     {
         auto slice = partition_slice_builder(*s)
             .build();
-        auto rd = assert_that(ds.make_reader_v2(s, semaphore.make_permit(), pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes));
+        auto rd = assert_that(ds.make_reader_v2(s, semaphore.make_permit(), pr, slice, nullptr, streamed_mutation::forwarding::yes));
         rd.produces_partition_start(pk)
           .produces_end_of_stream()
           .fast_forward_to(position_range(position_in_partition::for_key(ck1), position_in_partition::after_key(*s, ck2)))
@@ -1263,7 +1260,6 @@ void test_streamed_mutation_forwarding_succeeds_with_no_data(tests::reader_concu
                 semaphore.make_permit(),
                 query::full_partition_range,
                 s.schema()->full_slice(),
-                default_priority_class(),
                 nullptr,
                 streamed_mutation::forwarding::yes
                 ))
@@ -1334,8 +1330,7 @@ void test_slicing_with_overlapping_range_tombstones(tests::reader_concurrency_se
 
     // Check fast_forward_to()
     {
-        auto rd = ds.make_fragment_v1_stream(s, semaphore.make_permit(), query::full_partition_range, s->full_slice(), default_priority_class(),
-            nullptr, streamed_mutation::forwarding::yes);
+        auto rd = ds.make_fragment_v1_stream(s, semaphore.make_permit(), query::full_partition_range, s->full_slice(), nullptr, streamed_mutation::forwarding::yes);
         auto close_rd = deferred_close(rd);
 
         auto prange = position_range(range);
@@ -1408,7 +1403,6 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
 
     assert_that(ms.make_reader_v2(s.schema(), semaphore.make_permit(), pr,
                                   s.schema()->full_slice(),
-                                  default_priority_class(),
                                   nullptr,
                                   streamed_mutation::forwarding::yes,
                                   mutation_reader::forwarding::no))
@@ -1432,7 +1426,6 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
 
     assert_that(ms.make_reader_v2(s.schema(), semaphore.make_permit(), pr,
                                   s.schema()->full_slice(),
-                                  default_priority_class(),
                                   nullptr,
                                   streamed_mutation::forwarding::yes,
                                   mutation_reader::forwarding::no))
@@ -1447,7 +1440,6 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
 
     assert_that(ms.make_reader_v2(s.schema(), semaphore.make_permit(), pr,
                                   s.schema()->full_slice(),
-                                  default_priority_class(),
                                   nullptr,
                                   streamed_mutation::forwarding::yes,
                                   mutation_reader::forwarding::no))
@@ -1470,7 +1462,6 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
 
     assert_that(ms.make_reader_v2(s.schema(), semaphore.make_permit(), pr,
                                   s.schema()->full_slice(),
-                                  default_priority_class(),
                                   nullptr,
                                   streamed_mutation::forwarding::yes,
                                   mutation_reader::forwarding::no))
@@ -1487,7 +1478,6 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
 
     assert_that(ms.make_reader_v2(s.schema(), semaphore.make_permit(), pr,
                                   s.schema()->full_slice(),
-                                  default_priority_class(),
                                   nullptr,
                                   streamed_mutation::forwarding::yes,
                                   mutation_reader::forwarding::no))
@@ -1503,7 +1493,6 @@ void test_range_tombstones_v2(tests::reader_concurrency_semaphore_wrapper& semap
 
     assert_that(ms.make_reader_v2(s.schema(), semaphore.make_permit(), pr,
                                   s.schema()->full_slice(),
-                                  default_priority_class(),
                                   nullptr,
                                   streamed_mutation::forwarding::yes,
                                   mutation_reader::forwarding::no))
@@ -1705,14 +1694,13 @@ void run_mutation_source_tests_reverse(populate_fn_ex populate, bool with_partit
                 reader_permit permit,
                 const dht::partition_range& pr,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr tr,
                 streamed_mutation::forwarding fwd,
                 mutation_reader::forwarding mr_fwd) mutable {
             reversed_slices.emplace_back(partition_slice_builder(*table_schema, query::native_reverse_slice_to_legacy_reverse_slice(*table_schema, slice))
                     .with_option<query::partition_slice::option::reversed>()
                     .build());
-            return ms.make_reader_v2(query_schema, std::move(permit), pr, reversed_slices.back(), pc, tr, fwd, mr_fwd);
+            return ms.make_reader_v2(query_schema, std::move(permit), pr, reversed_slices.back(), tr, fwd, mr_fwd);
         });
     }, false); // FIXME: pass with_partition_range_forwarding after all natively reversing sources have fast-forwarding support
 }

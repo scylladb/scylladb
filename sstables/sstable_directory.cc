@@ -73,13 +73,11 @@ sstable_directory::sstable_directory(sstables_manager& manager,
         schema_ptr schema,
         lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
         fs::path sstable_dir,
-        ::io_priority_class io_prio,
         io_error_handler_gen error_handler_gen)
     : _manager(manager)
     , _schema(std::move(schema))
     , _storage_opts(std::move(storage_opts))
     , _sstable_dir(std::move(sstable_dir))
-    , _io_priority(std::move(io_prio))
     , _error_handler_gen(error_handler_gen)
     , _lister(make_components_lister())
     , _unshared_remote_sstables(smp::count)
@@ -136,7 +134,7 @@ void sstable_directory::validate(sstables::shared_sstable sst, process_flags fla
 
 future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc, sstables::sstable_open_config cfg) const {
     auto sst = _manager.make_sstable(_schema, *_storage_opts, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
-    co_await sst->load(_io_priority, cfg);
+    co_await sst->load(cfg);
     co_return sst;
 }
 
@@ -166,7 +164,7 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc, process_f
 
 future<std::vector<shard_id>> sstable_directory::get_shards_for_this_sstable(const sstables::entry_descriptor& desc, process_flags flags) const {
     auto sst = _manager.make_sstable(_schema, *_storage_opts, _sstable_dir.native(), desc.generation, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
-    co_await sst->load_owner_shards(_io_priority);
+    co_await sst->load_owner_shards();
     validate(sst, flags);
     co_return sst->get_shards_for_this_sstable();
 }

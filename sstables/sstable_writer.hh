@@ -9,7 +9,6 @@
 #pragma once
 
 #include <memory>
-#include <seastar/core/io_priority_class.hh>
 #include <seastar/core/smp.hh>
 #include "schema/schema_fwd.hh"
 #include "mutation/mutation_fragment.hh"
@@ -30,7 +29,7 @@ private:
 public:
     sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
             const sstable_writer_config&, encoding_stats enc_stats,
-            const io_priority_class& pc, shard_id shard = this_shard_id());
+            shard_id shard = this_shard_id());
 
     sstable_writer(sstable_writer&& o);
     sstable_writer& operator=(sstable_writer&& o);

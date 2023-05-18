@@ -24,7 +24,6 @@
 #include "range.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/sharder.hh"
-#include "service/priority_manager.hh"
 #include <boost/range/irange.hpp>
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_set.hpp>

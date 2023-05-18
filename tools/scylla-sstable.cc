@@ -249,7 +249,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
         data_dictionary::storage_options local;
         auto sst = sst_man.make_sstable(schema, local, dir_path.c_str(), ed.generation, ed.version, ed.format);
 
-        co_await sst->load(default_priority_class(), sstables::sstable_open_config{.load_first_and_last_position_metadata = false});
+        co_await sst->load(sstables::sstable_open_config{.load_first_and_last_position_metadata = false});
 
         sstables[i] = std::move(sst);
     }).get();
@@ -948,7 +948,7 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
 
     abort_source abort;
     for (const auto& sst : sstables) {
-        const auto errors = sst->validate(permit, default_priority_class(), abort, [] (sstring what) { sst_log.info("{}", what); }).get();
+        const auto errors = sst->validate(permit, abort, [] (sstring what) { sst_log.info("{}", what); }).get();
         fmt::print("{}: {}\n", sst->get_filename(), errors == 0 ? "valid" : "invalid");
     }
 }
@@ -1530,7 +1530,7 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
         auto ostream = make_file_output_stream(std::move(ofile), options).get();
         auto close_ostream = defer([&ostream] { ostream.close().get(); });
 
-        auto istream = sst->data_stream(0, sst->data_size(), default_priority_class(), permit, nullptr, nullptr);
+        auto istream = sst->data_stream(0, sst->data_size(), permit, nullptr, nullptr);
         auto close_istream = defer([&istream] { istream.close().get(); });
 
         istream.consume([&] (temporary_buffer<char> buf) {

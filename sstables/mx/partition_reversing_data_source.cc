@@ -365,7 +365,6 @@ class partition_reversing_data_source_impl final : public data_source_impl {
     const schema& _schema;
     shared_sstable _sst;
     index_reader& _ir;
-    const ::io_priority_class& _io_priority;
     reader_permit _permit;
     tracing::trace_state_ptr _trace_state;
     std::optional<partition_header_context> _partition_header_context;
@@ -403,10 +402,10 @@ class partition_reversing_data_source_impl final : public data_source_impl {
     } _state = state::RANGE_END;
 private:
     input_stream<char> data_stream(size_t start, size_t end) {
-        return _sst->data_stream(start, end - start, _io_priority, _permit, _trace_state, {});
+        return _sst->data_stream(start, end - start, _permit, _trace_state, {});
     }
     future<temporary_buffer<char>> data_read(uint64_t start, uint64_t end) {
-        return _sst->data_read(start, end - start, _io_priority, _permit);
+        return _sst->data_read(start, end - start, _permit);
     }
     future<input_stream<char>> last_row_stream(size_t row_size) {
         if (_cached_read.size() < row_size) {
@@ -457,12 +456,10 @@ public:
             uint64_t partition_start,
             size_t partition_len,
             reader_permit permit,
-            const io_priority_class& io_priority,
             tracing::trace_state_ptr trace_state)
         : _schema(s)
         , _sst(std::move(sst))
         , _ir(ir)
-        , _io_priority(io_priority)
         , _permit(std::move(permit))
         , _trace_state(std::move(trace_state))
         , _partition_start(partition_start)
@@ -606,9 +603,9 @@ public:
 };
 
 partition_reversing_data_source make_partition_reversing_data_source(const schema& s, shared_sstable sst, index_reader& ir, uint64_t pos, size_t len,
-                                                          reader_permit permit, const io_priority_class& io_priority, tracing::trace_state_ptr trace_state) {
+                                                          reader_permit permit, tracing::trace_state_ptr trace_state) {
     auto source_impl = std::make_unique<partition_reversing_data_source_impl>(
-            s, std::move(sst), ir, pos, len, std::move(permit), io_priority, trace_state);
+            s, std::move(sst), ir, pos, len, std::move(permit), trace_state);
     auto& curr_pos = source_impl->current_position_in_sstable();
     return partition_reversing_data_source {
         .the_source = seastar::data_source{std::move(source_impl)},
