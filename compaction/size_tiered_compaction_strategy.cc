@@ -24,7 +24,7 @@ static long validate_sstable_size(const std::map<sstring, sstring>& options) {
     return min_sstables_size;
 }
 
-[[maybe_unused]] static long validate_sstable_size(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+static long validate_sstable_size(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     auto min_sstables_size = validate_sstable_size(options);
     unchecked_options.erase(size_tiered_compaction_strategy_options::MIN_SSTABLE_SIZE_KEY);
     return min_sstables_size;
@@ -39,7 +39,7 @@ static double validate_bucket_low(const std::map<sstring, sstring>& options) {
     return bucket_low;
 }
 
-[[maybe_unused]] static double validate_bucket_low(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+static double validate_bucket_low(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     auto bucket_low = validate_bucket_low(options);
     unchecked_options.erase(size_tiered_compaction_strategy_options::BUCKET_LOW_KEY);
     return bucket_low;
@@ -54,7 +54,7 @@ static double validate_bucket_high(const std::map<sstring, sstring>& options) {
     return bucket_high;
 }
 
-[[maybe_unused]] static double validate_bucket_high(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+static double validate_bucket_high(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     auto bucket_high = validate_bucket_high(options);
     unchecked_options.erase(size_tiered_compaction_strategy_options::BUCKET_HIGH_KEY);
     return bucket_high;
@@ -69,7 +69,7 @@ static double validate_cold_reads_to_omit(const std::map<sstring, sstring>& opti
     return cold_reads_to_omit;
 }
 
-[[maybe_unused]] static double validate_cold_reads_to_omit(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+static double validate_cold_reads_to_omit(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     auto cold_reads_to_omit = validate_cold_reads_to_omit(options);
     unchecked_options.erase(size_tiered_compaction_strategy_options::COLD_READS_TO_OMIT_KEY);
     return cold_reads_to_omit;
@@ -95,7 +95,14 @@ size_tiered_compaction_strategy_options::size_tiered_compaction_strategy_options
 // unchecked_options is an analogical map from which already checked options are deleted.
 // This helps making sure that only allowed options are being set.
 void size_tiered_compaction_strategy_options::validate(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
-
+    validate_sstable_size(options, unchecked_options);
+    auto bucket_low = validate_bucket_low(options, unchecked_options);
+    auto bucket_high = validate_bucket_high(options, unchecked_options);
+    if (bucket_high <= bucket_low) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) is less than or equal to the {} value ({})", BUCKET_HIGH_KEY, bucket_high, BUCKET_LOW_KEY, bucket_low));
+    }
+    validate_cold_reads_to_omit(options, unchecked_options);
+    compaction_strategy_impl::validate_min_max_threshold(options, unchecked_options);
 }
 
 std::vector<std::pair<sstables::shared_sstable, uint64_t>>

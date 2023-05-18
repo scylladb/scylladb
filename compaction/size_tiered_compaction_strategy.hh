@@ -41,47 +41,6 @@ public:
     size_tiered_compaction_strategy_options& operator=(const size_tiered_compaction_strategy_options&) = default;
     size_tiered_compaction_strategy_options& operator=(size_tiered_compaction_strategy_options&&) = default;
 
-    // FIXME: convert java code below.
-#if 0
-    public static Map<String, String> validateOptions(Map<String, String> options, Map<String, String> uncheckedOptions) throws ConfigurationException
-    {
-        String optionValue = options.get(MIN_SSTABLE_SIZE_KEY);
-        try
-        {
-            long minSSTableSize = optionValue == null ? DEFAULT_MIN_SSTABLE_SIZE : Long.parseLong(optionValue);
-            if (minSSTableSize < 0)
-            {
-                throw new ConfigurationException(String.format("%s must be non negative: %d", MIN_SSTABLE_SIZE_KEY, minSSTableSize));
-            }
-        }
-        catch (NumberFormatException e)
-        {
-            throw new ConfigurationException(String.format("%s is not a parsable int (base10) for %s", optionValue, MIN_SSTABLE_SIZE_KEY), e);
-        }
-
-        double bucketLow = parseDouble(options, BUCKET_LOW_KEY, DEFAULT_BUCKET_LOW);
-        double bucketHigh = parseDouble(options, BUCKET_HIGH_KEY, DEFAULT_BUCKET_HIGH);
-        if (bucketHigh <= bucketLow)
-        {
-            throw new ConfigurationException(String.format("%s value (%s) is less than or equal to the %s value (%s)",
-                                                           BUCKET_HIGH_KEY, bucketHigh, BUCKET_LOW_KEY, bucketLow));
-        }
-
-        double maxColdReadsRatio = parseDouble(options, COLD_READS_TO_OMIT_KEY, DEFAULT_COLD_READS_TO_OMIT);
-        if (maxColdReadsRatio < 0.0 || maxColdReadsRatio > 1.0)
-        {
-            throw new ConfigurationException(String.format("%s value (%s) should be between between 0.0 and 1.0",
-                                                           COLD_READS_TO_OMIT_KEY, optionValue));
-        }
-
-        uncheckedOptions.remove(MIN_SSTABLE_SIZE_KEY);
-        uncheckedOptions.remove(BUCKET_LOW_KEY);
-        uncheckedOptions.remove(BUCKET_HIGH_KEY);
-        uncheckedOptions.remove(COLD_READS_TO_OMIT_KEY);
-
-        return uncheckedOptions;
-    }
-#endif
     static void validate(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 
     friend class size_tiered_compaction_strategy;
