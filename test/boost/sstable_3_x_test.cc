@@ -52,19 +52,23 @@ using namespace sstables;
 class sstable_assertions final {
     test_env& _env;
     shared_sstable _sst;
-public:
-    sstable_assertions(test_env& env, schema_ptr schema, const sstring& path, sstable_version_types version = sstable_version_types::mc, sstables::generation_type::int_t generation = 1)
+
+    sstable_assertions(test_env& env, schema_ptr schema, const sstring& path, sstable_version_types version, sstables::generation_type generation)
         : _env(env)
         , _sst(_env.make_sstable(std::move(schema),
                             path,
-                            sstables::generation_type(generation),
+                            generation,
                             version,
                             sstable_format_types::big,
                             1))
     { }
+public:
+    sstable_assertions(test_env& env, schema_ptr schema, const sstring& path)
+        : sstable_assertions(env, schema, path, sstable_version_types::mc, sstables::generation_type{1})
+    {}
 
     sstable_assertions(test_env& env, shared_sstable sst)
-        : sstable_assertions(env, sst->get_schema(), env.tempdir().path().native(), sst->get_version(), sst->generation().as_int())
+        : sstable_assertions(env, sst->get_schema(), env.tempdir().path().native(), sst->get_version(), sst->generation())
     {}
 
     test_env& get_env() {
