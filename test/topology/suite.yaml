@@ -6,3 +6,8 @@ extra_scylla_config_options:
     authenticator: AllowAllAuthenticator
     authorizer: AllowAllAuthorizer
     experimental_features: [tablets]
+run_first:
+    - test_topology_ip
+    - test_topology_remove_decom
+    - test_mutation_schema_change
+    - test_tablets
