@@ -13,6 +13,7 @@
 #include "cql3/prepare_context.hh"
 #include "cql3/expr/expr-utils.hh"
 #include "types/list.hh"
+#include "types/tuple.hh"
 #include <iterator>
 
 namespace cql3 {
@@ -117,6 +118,28 @@ void validate_token_relation(const std::vector<const column_definition*> column_
     }
 }
 
+void validate_tuples_size (const std::vector<expression>& elements, size_t valid_size) {
+    for (auto expr : elements) {
+        size_t expr_size = 0;
+        if (auto the_tuple = as_if<tuple_constructor>(&expr)) {
+            expr_size = the_tuple->elements.size();
+        } else {
+            auto the_const = as_if<constant>(&expr);
+            if (the_const &&  the_const->type->without_reversed().is_tuple()) {
+                const tuple_type_impl* const_tuple =  dynamic_cast<const tuple_type_impl*>(&the_const->type->without_reversed());
+                expr_size = const_tuple->size();
+            } else {
+                continue; // not a tuple; perhaps we need to set expr_size to 1 here when #12554 is fixed
+            }
+        }
+        if (expr_size != valid_size) {
+            throw exceptions::invalid_request_exception(
+                format("Expected {} elements in value tuple, but got {}: {}",
+                        valid_size, expr_size, expr));
+        }
+    }
+}
+
 void preliminary_binop_vaidation_checks(const binary_operator& binop) {
     if (binop.op == oper_t::NEQ) {
         throw exceptions::invalid_request_exception(format("Unsupported \"!=\" relation: {:user}", binop));
@@ -141,6 +164,19 @@ void preliminary_binop_vaidation_checks(const binary_operator& binop) {
 
         if (binop.op == oper_t::LIKE) {
             throw exceptions::invalid_request_exception("LIKE cannot be used for Multi-column relations");
+        }
+
+        if(binop.op == oper_t::IN) {
+            auto valid_size = lhs_tup->elements.size();
+            if (is<collection_constructor>(binop.rhs)) {
+                const std::vector<expression>& elements = as<collection_constructor>(binop.rhs).elements;
+                validate_tuples_size (elements, valid_size);                
+            } else if (auto rhs_const = as_if<constant>(&binop.rhs)) {
+                if (rhs_const->type->without_reversed().is_collection()) {
+                    const std::vector<expression>& elements = as<collection_constructor>(*rhs_const).elements;
+                    validate_tuples_size (elements, valid_size);
+                }
+            }
         }
 
         if (auto rhs_tup = as_if<tuple_constructor>(&binop.rhs)) {
