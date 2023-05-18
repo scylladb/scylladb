@@ -140,6 +140,7 @@ void migration_manager::init_messaging_service()
 
         auto features = self._feat.cluster_schema_features();
         auto& proxy = self._storage_proxy.container();
+        auto& db = proxy.local().get_db();
         auto cm = co_await db::schema_tables::convert_schema_to_mutations(proxy, features);
         if (options->group0_snapshot_transfer) {
             // if `group0_snapshot_transfer` is `true`, the sender must also understand canonical mutations
@@ -148,15 +149,15 @@ void migration_manager::init_messaging_service()
                 on_internal_error(mlogger,
                     "migration request handler: group0 snapshot transfer requested, but canonical mutations not supported");
             }
-            cm.emplace_back(co_await db::system_keyspace::get_group0_history(proxy));
-            for (auto&& m : co_await replica::read_tablet_mutations(proxy)) {
+            cm.emplace_back(co_await db::system_keyspace::get_group0_history(db));
+            for (auto&& m : co_await replica::read_tablet_mutations(db)) {
                 cm.emplace_back(std::move(m));
             }
         }
         if (cm_retval_supported) {
             co_return rpc::tuple(std::vector<frozen_mutation>{}, std::move(cm));
         }
-        auto fm = boost::copy_range<std::vector<frozen_mutation>>(cm | boost::adaptors::transformed([&db = proxy.local().get_db().local()] (const canonical_mutation& cm) {
+        auto fm = boost::copy_range<std::vector<frozen_mutation>>(cm | boost::adaptors::transformed([&db = db.local()] (const canonical_mutation& cm) {
             return cm.to_mutation(db.find_column_family(cm.column_family_id()).schema());
         }));
         co_return rpc::tuple(std::move(fm), std::move(cm));

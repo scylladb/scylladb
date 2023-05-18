@@ -757,8 +757,9 @@ redact_columns_for_missing_features(mutation m, schema_features features) {
 future<table_schema_version> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features features, noncopyable_function<bool(std::string_view)> accept_keyspace)
 {
     auto map = [&proxy, features, accept_keyspace = std::move(accept_keyspace)] (sstring table) mutable -> future<std::vector<mutation>> {
-        auto rs = co_await db::system_keyspace::query_mutations(proxy, NAME, table);
-        auto s = proxy.local().get_db().local().find_schema(NAME, table);
+        auto& db = proxy.local().get_db();
+        auto rs = co_await db::system_keyspace::query_mutations(db, NAME, table);
+        auto s = db.local().find_schema(NAME, table);
         std::vector<mutation> mutations;
         for (auto&& p : rs->partitions()) {
             auto mut = p.mut().unfreeze(s);
@@ -802,8 +803,9 @@ future<table_schema_version> calculate_schema_digest(distributed<service::storag
 future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy, schema_features features)
 {
     auto map = [&proxy, features] (sstring table) -> future<std::vector<canonical_mutation>> {
-        auto rs = co_await db::system_keyspace::query_mutations(proxy, NAME, table);
-        auto s = proxy.local().get_db().local().find_schema(NAME, table);
+        auto& db = proxy.local().get_db();
+        auto rs = co_await db::system_keyspace::query_mutations(db, NAME, table);
+        auto s = db.local().find_schema(NAME, table);
         std::vector<canonical_mutation> results;
         for (auto&& p : rs->partitions()) {
             auto mut = p.mut().unfreeze(s);
@@ -878,7 +880,7 @@ read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, s
     auto schema = proxy.local().get_db().local().find_schema(NAME, schema_table_name);
     auto keyspace_key = dht::decorate_key(*schema,
         partition_key::from_singular(*schema, keyspace_name));
-    auto rs = co_await db::system_keyspace::query(proxy, NAME, schema_table_name, keyspace_key);
+    auto rs = co_await db::system_keyspace::query(proxy.local().get_db(), NAME, schema_table_name, keyspace_key);
     co_return schema_result_value_type{keyspace_name, std::move(rs)};
 }
 
@@ -990,7 +992,7 @@ future<> recalculate_schema_version(sharded<db::system_keyspace>& sys_ks, distri
 future<std::vector<sstring>>
 static read_table_names_of_keyspace(distributed<service::storage_proxy>& proxy, const sstring& keyspace_name, schema_ptr schema_table) {
     auto pkey = dht::decorate_key(*schema_table, partition_key::from_singular(*schema_table, keyspace_name));
-    auto&& rs = co_await db::system_keyspace::query(proxy, schema_table->ks_name(), schema_table->cf_name(), pkey);
+    auto&& rs = co_await db::system_keyspace::query(proxy.local().get_db(), schema_table->ks_name(), schema_table->cf_name(), pkey);
     co_return boost::copy_range<std::vector<sstring>>(rs->rows() | boost::adaptors::transformed([schema_table] (const query::result_set_row& row) {
         const sstring name = schema_table->clustering_key_columns().begin()->name_as_text();
         return row.get_nonnull<sstring>(name);
@@ -1321,7 +1323,7 @@ future<lw_shared_ptr<query::result_set>> extract_scylla_specific_keyspace_info(d
         auto&& row = rs->row(0);
         auto keyspace_name = row.get_nonnull<sstring>("keyspace_name");
         auto keyspace_key = dht::decorate_key(*scylla_keyspaces(), partition_key::from_singular(*scylla_keyspaces(), keyspace_name));
-        scylla_specific_rs = co_await db::system_keyspace::query(proxy, NAME, SCYLLA_KEYSPACES, keyspace_key);
+        scylla_specific_rs = co_await db::system_keyspace::query(proxy.local().get_db(), NAME, SCYLLA_KEYSPACES, keyspace_key);
     }
     co_return scylla_specific_rs;
 }
