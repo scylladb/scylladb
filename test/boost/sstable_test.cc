@@ -192,36 +192,16 @@ static future<> write_sst_info(schema_ptr schema, sstring load_dir, sstring writ
     });
 }
 
-struct sstdesc {
-    sstring dir;
-    sstables::generation_type gen;
-
-    sstdesc(sstring dir, sstables::generation_type gen)
-        : dir(std::move(dir))
-        , gen(gen)
-    {}
-
-    sstdesc(sstring dir, sstables::generation_type::int_t gen_val)
-        : dir(std::move(dir))
-        , gen(gen_val)
-    {}
-};
-
-static future<> compare_files(sstdesc file1, sstdesc file2, component_type component) {
-    auto file_path_a = sstable::filename(file1.dir, "ks", "cf", la, file1.gen, big, component);
-    auto file_path_b = sstable::filename(file2.dir, "ks", "cf", la, file2.gen, big, component);
-    auto eq = co_await tests::compare_files(file_path_a, file_path_b);
-    BOOST_REQUIRE_EQUAL(eq, true);
-}
-
 static future<> check_component_integrity(component_type component) {
     auto tmp = make_lw_shared<tmpdir>();
     auto s = make_schema_for_compressed_sstable();
     sstables::generation_type gen(1);
     return write_sst_info(s, "test/resource/sstables/compressed", tmp->path().string(), gen).then([component, tmp] {
-        return compare_files(sstdesc{"test/resource/sstables/compressed", 1 },
-                             sstdesc{tmp->path().string(), 2 },
-                             component);
+        auto file_path_a = sstable::filename("test/resource/sstables/compressed", "ks", "cf", la, sstables::generation_type(1), big, component);
+        auto file_path_b = sstable::filename(tmp->path().string(), "ks", "cf", la, sstables::generation_type(2), big, component);
+        return tests::compare_files(file_path_a, file_path_b).then([] (auto eq) {
+            BOOST_REQUIRE(eq);
+        });
     }).then([tmp] {});
 }
 
