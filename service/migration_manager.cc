@@ -149,8 +149,10 @@ void migration_manager::init_messaging_service()
                     "migration request handler: group0 snapshot transfer requested, but canonical mutations not supported");
             }
             cm.emplace_back(co_await db::system_keyspace::get_group0_history(proxy));
-            for (auto&& m : co_await replica::read_tablet_mutations(proxy)) {
-                cm.emplace_back(std::move(m));
+            if (proxy.local().local_db().get_config().check_experimental(db::experimental_features_t::feature::TABLETS)) {
+                for (auto&& m: co_await replica::read_tablet_mutations(proxy)) {
+                    cm.emplace_back(std::move(m));
+                }
             }
         }
         if (cm_retval_supported) {
