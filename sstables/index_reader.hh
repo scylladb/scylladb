@@ -763,8 +763,11 @@ private:
     }
 
 public:
-    index_reader(shared_sstable sst, reader_permit permit, const io_priority_class& pc, tracing::trace_state_ptr trace_state,
-                 use_caching caching, bool single_partition_read = false)
+    index_reader(shared_sstable sst, reader_permit permit,
+                 const io_priority_class& pc = default_priority_class(),
+                 tracing::trace_state_ptr trace_state = {},
+                 use_caching caching = use_caching::yes,
+                 bool single_partition_read = false)
         : _sstable(std::move(sst))
         , _permit(std::move(permit))
         , _pc(pc)
