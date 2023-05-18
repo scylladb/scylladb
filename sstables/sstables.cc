@@ -1266,13 +1266,12 @@ void sstable::write_statistics(const io_priority_class& pc) {
     write_simple<component_type::Statistics>(_components->statistics, pc);
 }
 
-void sstable::rewrite_statistics(const io_priority_class& pc) {
+void sstable::rewrite_statistics() {
     auto file_path = filename(component_type::TemporaryStatistics);
     sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
-    options.io_priority_class = pc;
     auto w = make_component_file_writer(component_type::TemporaryStatistics, std::move(options),
             open_flags::wo | open_flags::create | open_flags::truncate).get0();
     write(_version, w, _components->statistics);
@@ -2527,7 +2526,7 @@ future<> sstable::mutate_sstable_level(uint32_t new_level) {
         // which comprises mostly hard link creation and this operation at the end + this operation,
         // and also (eventually) by some compaction strategy. In any of the cases, it won't be high
         // priority enough so we will use the default priority
-        rewrite_statistics(default_priority_class());
+        rewrite_statistics();
     });
 }
 

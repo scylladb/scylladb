@@ -605,7 +605,7 @@ private:
     void write_statistics(const io_priority_class& pc);
     // Rewrite statistics component by creating a temporary Statistics and
     // renaming it into place of existing one.
-    void rewrite_statistics(const io_priority_class& pc);
+    void rewrite_statistics();
     // Validate metadata that's used to optimize reads when user specifies
     // a clustering key range. If this specific metadata is incorrect, then
     // it should be cleared. Otherwise, it could lead to bad decisions.
