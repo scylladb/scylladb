@@ -18,6 +18,7 @@ class size_tiered_backlog_tracker;
 namespace sstables {
 
 class size_tiered_compaction_strategy_options {
+public:
     static constexpr uint64_t DEFAULT_MIN_SSTABLE_SIZE = 50L * 1024L * 1024L;
     static constexpr double DEFAULT_BUCKET_LOW = 0.5;
     static constexpr double DEFAULT_BUCKET_HIGH = 1.5;
@@ -26,7 +27,7 @@ class size_tiered_compaction_strategy_options {
     static constexpr auto BUCKET_LOW_KEY = "bucket_low";
     static constexpr auto BUCKET_HIGH_KEY = "bucket_high";
     static constexpr auto COLD_READS_TO_OMIT_KEY = "cold_reads_to_omit";
-
+private:
     uint64_t min_sstable_size = DEFAULT_MIN_SSTABLE_SIZE;
     double bucket_low = DEFAULT_BUCKET_LOW;
     double bucket_high = DEFAULT_BUCKET_HIGH;
