@@ -50,7 +50,7 @@ static std::chrono::seconds validate_compaction_window_unit(const std::map<sstri
     return window_unit;
 }
 
-[[maybe_unused]] static std::chrono::seconds validate_compaction_window_unit(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+static std::chrono::seconds validate_compaction_window_unit(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     auto window_unit = validate_compaction_window_unit(options);
     unchecked_options.erase(time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY);
     return window_unit;
@@ -67,7 +67,7 @@ static int validate_compaction_window_size(const std::map<sstring, sstring>& opt
     return window_size;
 }
 
-[[maybe_unused]] static int validate_compaction_window_size(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+static int validate_compaction_window_size(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     int window_size = validate_compaction_window_size(options);
     unchecked_options.erase(time_window_compaction_strategy_options::COMPACTION_WINDOW_SIZE_KEY);
     return window_size;
@@ -88,7 +88,7 @@ static db_clock::duration validate_expired_sstable_check_frequency_seconds(const
     return expired_sstable_check_frequency;
 }
 
-[[maybe_unused]] static db_clock::duration validate_expired_sstable_check_frequency_seconds(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+static db_clock::duration validate_expired_sstable_check_frequency_seconds(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     db_clock::duration expired_sstable_check_frequency = validate_expired_sstable_check_frequency_seconds(options);
     unchecked_options.erase(time_window_compaction_strategy_options::EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY);
     return expired_sstable_check_frequency;
@@ -109,7 +109,7 @@ static time_window_compaction_strategy_options::timestamp_resolutions validate_t
     return timestamp_resolution;
 }
 
-[[maybe_unused]] static time_window_compaction_strategy_options::timestamp_resolutions validate_timestamp_resolution(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+static time_window_compaction_strategy_options::timestamp_resolutions validate_timestamp_resolution(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     time_window_compaction_strategy_options::timestamp_resolutions timestamp_resolution = validate_timestamp_resolution(options);
     unchecked_options.erase(time_window_compaction_strategy_options::TIMESTAMP_RESOLUTION_KEY);
     return timestamp_resolution;
@@ -137,7 +137,23 @@ time_window_compaction_strategy_options::time_window_compaction_strategy_options
 // unchecked_options is an analogical map from which already checked options are deleted.
 // This helps making sure that only allowed options are being set.
 void time_window_compaction_strategy_options::validate(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    validate_compaction_window_unit(options, unchecked_options);
+    validate_compaction_window_size(options, unchecked_options);
+    validate_expired_sstable_check_frequency_seconds(options, unchecked_options);
+    validate_timestamp_resolution(options, unchecked_options);
+    compaction_strategy_impl::validate_min_max_threshold(options, unchecked_options);
 
+    auto it = options.find("enable_optimized_twcs_queries");
+    if (it != options.end() && it->second != "true"  && it->second != "false") {
+        throw exceptions::configuration_exception(fmt::format("enable_optimized_twcs_queries value ({}) must be \"true\" or \"false\"", it->second));
+    }
+    unchecked_options.erase("enable_optimized_twcs_queries");
+
+    it = unchecked_options.find("unsafe_aggressive_sstable_expiration");
+    if (it != unchecked_options.end()) {
+        clogger.warn("unsafe_aggressive_sstable_expiration option is not supported for time window compaction strategy");
+        unchecked_options.erase(it);
+    }
 }
 
 class classify_by_timestamp {
