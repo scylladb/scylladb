@@ -25,8 +25,8 @@ class compaction_strategy_impl {
     // minimum interval needed to perform tombstone removal compaction in seconds, default 86400 or 1 day.
     static constexpr std::chrono::seconds DEFAULT_TOMBSTONE_COMPACTION_INTERVAL() { return std::chrono::seconds(86400); }
 protected:
-    const sstring TOMBSTONE_THRESHOLD_OPTION = "tombstone_threshold";
-    const sstring TOMBSTONE_COMPACTION_INTERVAL_OPTION = "tombstone_compaction_interval";
+    static constexpr auto TOMBSTONE_THRESHOLD_OPTION = "tombstone_threshold";
+    static constexpr auto TOMBSTONE_COMPACTION_INTERVAL_OPTION = "tombstone_compaction_interval";
 
     bool _use_clustering_key_filter = false;
     bool _disable_tombstone_compaction = false;
