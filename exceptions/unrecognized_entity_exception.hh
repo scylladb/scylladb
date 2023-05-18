@@ -17,7 +17,7 @@
 namespace exceptions {
 
 /**
- * Exception thrown when an entity is not recognized within a relation.
+ * Exception thrown when an entity is not recognized.
  */
 class unrecognized_entity_exception : public invalid_request_exception {
 public:
@@ -27,19 +27,12 @@ public:
     cql3::column_identifier entity;
 
     /**
-     * The entity relation in a stringified form.
-     */
-    sstring relation_str;
-
-    /**
      * Creates a new <code>UnrecognizedEntityException</code>.
      * @param entity the unrecognized entity
-     * @param relation_str the entity relation string
      */
-    unrecognized_entity_exception(cql3::column_identifier entity, sstring relation_str)
-        : invalid_request_exception(format("Undefined name {} in where clause ('{}')", entity, relation_str))
+    unrecognized_entity_exception(cql3::column_identifier entity)
+        : invalid_request_exception(format("Unrecognized name {}", entity))
         , entity(std::move(entity))
-        , relation_str(std::move(relation_str))
     { }
 };
 
