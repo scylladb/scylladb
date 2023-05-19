@@ -65,6 +65,7 @@ public:
         bool enable_dangerous_direct_import_of_cassandra_counters = false;
         bool allow_loading_materialized_view = false;
         bool sort_sstables_according_to_owner = true;
+        bool garbage_collect = false;
         sstables::sstable_open_config sstable_open_config;
     };
 
@@ -176,6 +177,11 @@ private:
     future<std::vector<shard_id>> get_shards_for_this_sstable(const sstables::entry_descriptor& desc, process_flags flags) const;
     // Retrieves sstables::foreign_sstable_open_info for a particular SSTable.
     future<foreign_sstable_open_info> get_open_info_for_this_sstable(const sstables::entry_descriptor& desc) const;
+
+    future<> cleanup_column_family_temp_sst_dirs();
+    future<> handle_sstables_pending_delete();
+    future<> replay_pending_delete_log(std::filesystem::path log_file);
+
 public:
     sstable_directory(sstables_manager& manager,
             schema_ptr schema,
@@ -260,9 +266,9 @@ public:
     //
     // This function only solves the second problem for now.
     static future<> delete_with_pending_deletion_log(std::vector<shared_sstable> ssts);
-    static future<> replay_pending_delete_log(std::filesystem::path log_file);
 
     static bool compare_sstable_storage_prefix(const sstring& a, const sstring& b) noexcept;
+    future<> garbage_collect();
 };
 
 future<std::optional<sstables::generation_type>> highest_generation_seen(sharded<sstables::sstable_directory>& directory);

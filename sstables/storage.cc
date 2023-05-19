@@ -100,7 +100,7 @@ static future<file> open_sstable_component_file_non_checked(std::string_view nam
 future<file> filesystem_storage::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
     auto create_flags = open_flags::create | open_flags::exclusive;
     auto readonly = (flags & create_flags) != create_flags;
-    auto tgt_dir = !readonly && temp_dir ? dir + "/" + sstable::sst_dir_basename(sst._generation) : dir;
+    auto tgt_dir = !readonly && temp_dir ? *temp_dir : dir;
     auto name = sst.filename(tgt_dir, type);
 
     auto f = open_sstable_component_file_non_checked(name, flags, options, check_integrity);
@@ -162,30 +162,27 @@ future<> filesystem_storage::seal(const sstable& sst) {
 
 future<> filesystem_storage::touch_temp_dir(const sstable& sst) {
     if (temp_dir) {
-        return make_ready_future<>();
+        co_return;
     }
-    auto tmp = dir + "/" + sstable::sst_dir_basename(sst._generation);
+    auto tmp = fmt::format("{}/{}{}", dir, sst._generation, tempdir_extension);
     sstlog.debug("Touching temp_dir={}", tmp);
-    auto fut = sst.sstable_touch_directory_io_check(tmp);
-    return fut.then([this, tmp = std::move(tmp)] () mutable {
-        temp_dir = std::move(tmp);
-    });
+    co_await sst.sstable_touch_directory_io_check(tmp);
+    temp_dir = std::move(tmp);
 }
 
 future<> filesystem_storage::remove_temp_dir() {
     if (!temp_dir) {
-        return make_ready_future<>();
+        co_return;
     }
     sstlog.debug("Removing temp_dir={}", temp_dir);
-    return remove_file(*temp_dir).then_wrapped([this] (future<> f) {
-        if (!f.failed()) {
-            temp_dir.reset();
-            return make_ready_future<>();
-        }
-        auto ep = f.get_exception();
-        sstlog.error("Could not remove temporary directory: {}", ep);
-        return make_exception_future<>(ep);
-    });
+    try {
+        co_await remove_file(*temp_dir);
+    } catch (...) {
+        sstlog.error("Could not remove temporary directory: {}", std::current_exception());
+        throw;
+    }
+
+    temp_dir.reset();
 }
 
 static bool is_same_file(const seastar::stat_data& sd1, const seastar::stat_data& sd2) noexcept {
