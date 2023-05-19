@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <cassert>
 #include <utility>
 #include <functional>
 #include <unordered_set>
@@ -46,6 +47,7 @@ template <>
 struct fmt::formatter<sstables::shared_sstable> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const sstables::shared_sstable& sst, FormatContext& ctx) const {
+        assert(0);
         return fmt::format_to(ctx.out(), "{}", sstables::to_string(sst));
     }
 };
@@ -53,6 +55,7 @@ struct fmt::formatter<sstables::shared_sstable> : fmt::formatter<std::string_vie
 namespace std {
 
 inline std::ostream& operator<<(std::ostream& os, const sstables::shared_sstable& sst) {
+    assert(0);
     return os << fmt::format("{}", sst);
 }
 
