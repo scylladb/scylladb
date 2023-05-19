@@ -115,7 +115,7 @@ static double validate_tombstone_threshold(const std::map<sstring, sstring>& opt
     return tombstone_threshold;
 }
 
-[[maybe_unused]] static double validate_tombstone_threshold(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+static double validate_tombstone_threshold(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     auto tombstone_threshold = validate_tombstone_threshold(options);
     unchecked_options.erase(compaction_strategy_impl::TOMBSTONE_THRESHOLD_OPTION);
     return tombstone_threshold;
@@ -131,10 +131,24 @@ static db_clock::duration validate_tombstone_compaction_interval(const std::map<
     return tombstone_compaction_interval;
 }
 
-[[maybe_unused]] static db_clock::duration validate_tombstone_compaction_interval(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+static db_clock::duration validate_tombstone_compaction_interval(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
     auto tombstone_compaction_interval = validate_tombstone_compaction_interval(options);
     unchecked_options.erase(compaction_strategy_impl::TOMBSTONE_COMPACTION_INTERVAL_OPTION);
     return tombstone_compaction_interval;
+}
+
+// options is a map of compaction strategy options and their values.
+// unchecked_options is an analogical map from which already checked options are deleted.
+// This helps making sure that only allowed options are being set.
+void compaction_strategy_impl::validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    validate_tombstone_threshold(options, unchecked_options);
+    validate_tombstone_compaction_interval(options, unchecked_options);
+
+    auto it = options.find("enabled");
+    if (it != options.end() && it->second != "true" && it->second != "false") {
+        throw exceptions::configuration_exception(fmt::format("enabled value ({}) must be \"true\" or \"false\"", it->second));
+    }
+    unchecked_options.erase("enabled");
 }
 
 compaction_strategy_impl::compaction_strategy_impl(const std::map<sstring, sstring>& options) {
