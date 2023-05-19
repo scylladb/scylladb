@@ -372,22 +372,14 @@ stop_iteration vnode_effective_replication_map::for_each_natural_endpoint_until(
     return _rs->for_each_natural_endpoint_until(search_token, *this, func);
 }
 
-future<> vnode_effective_replication_map::clear_gently() noexcept {
-    co_await utils::clear_gently(_replication_map);
-    co_await utils::clear_gently(_tmptr);
-}
-
 vnode_effective_replication_map::~vnode_effective_replication_map() {
     if (is_registered()) {
         _factory->erase_effective_replication_map(this);
         try {
-            struct background_clear_holder {
-                locator::replication_map replication_map;
-                locator::token_metadata_ptr tmptr;
-            };
-            auto holder = make_lw_shared<background_clear_holder>({std::move(_replication_map), std::move(_tmptr)});
-            auto fut = when_all(utils::clear_gently(holder->replication_map), utils::clear_gently(holder->tmptr)).discard_result().then([holder] {});
-            _factory->submit_background_work(std::move(fut));
+            _factory->submit_background_work(clear_gently(std::move(_replication_map),
+                std::move(_pending_endpoints),
+                std::move(_read_endpoints),
+                std::move(_tmptr)));
         } catch (...) {
             // ignore
         }

@@ -281,8 +281,6 @@ public:
         return _replication_map;
     }
 
-    future<> clear_gently() noexcept;
-
     future<replication_map> clone_endpoints_gently() const;
 
     stop_iteration for_each_natural_endpoint_until(const token& search_token, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
