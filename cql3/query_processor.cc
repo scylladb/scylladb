@@ -108,6 +108,8 @@ public:
 
     virtual shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) = 0;
     virtual future<> truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms) = 0;
+    virtual future<result<coordinator_query_result>> query_result(schema_ptr, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
+            db::consistency_level cl, coordinator_query_options optional_params) = 0;
 
     virtual query::tombstone_limit get_tombstone_limit() const = 0;
     virtual query::max_result_size get_max_result_size(const query::partition_slice& slice) const = 0;
@@ -131,6 +133,10 @@ shared_ptr<cql_transport::messages::result_message> query_backend::bounce_to_sha
 }
 future<> query_backend::truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms) {
     return _impl->truncate_blocking(std::move(keyspace), std::move(cfname), std::move(timeout_in_ms));
+}
+future<exceptions::coordinator_result<coordinator_query_result>> query_backend::query_result(schema_ptr s, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
+        db::consistency_level cl, coordinator_query_options optional_params) {
+    return _impl->query_result(std::move(s), std::move(cmd), std::move(partition_ranges), cl, optional_params);
 }
 
 query::tombstone_limit query_backend::get_tombstone_limit() const {
@@ -174,6 +180,11 @@ public:
     }
     virtual future<> truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms) override {
         return _proxy->truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
+    }
+    virtual future<exceptions::coordinator_result<coordinator_query_result>>
+    query_result(schema_ptr s, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
+            db::consistency_level cl, coordinator_query_options optional_params) override {
+        return _proxy->query_result(std::move(s), std::move(cmd), std::move(partition_ranges), cl, optional_params);
     }
 
     virtual query::tombstone_limit get_tombstone_limit() const override {

@@ -13,6 +13,8 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "query-request.hh"
 #include "locator/token_metadata.hh"
+#include "exceptions/coordinator_result.hh"
+#include "coordinator_query.hh"
 
 namespace service {
 class forward_service;
@@ -45,6 +47,9 @@ class query_backend {
 public:
     class impl;
 
+    template<typename T = void>
+    using result = exceptions::coordinator_result<T>;
+
 private:
     shared_ptr<impl> _impl;
 
@@ -67,6 +72,8 @@ public:
 
     shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls);
     future<> truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms = std::nullopt);
+    future<result<coordinator_query_result>> query_result(schema_ptr, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
+            db::consistency_level cl, coordinator_query_options optional_params);
 
     query::tombstone_limit get_tombstone_limit() const;
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
