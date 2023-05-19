@@ -13,6 +13,7 @@
 #include "paging_state.hh"
 #include "cql3/result_set.hh"
 #include "cql3/selection/selection.hh"
+#include "cql3/query_backend.hh"
 #include "service/query_state.hh"
 #include "utils/result.hh"
 #include "exceptions/exceptions.hh"
@@ -21,8 +22,6 @@
 class coordinator_query_result;
 
 namespace service {
-
-class storage_proxy;
 
 namespace pager {
 
@@ -66,7 +65,7 @@ protected:
     position_in_partition _last_pos;
     std::optional<query_id> _query_uuid;
 
-    shared_ptr<service::storage_proxy> _proxy;
+    cql3::query_backend _qb;
     schema_ptr _schema;
     shared_ptr<const cql3::selection::selection> _selection;
     service::query_state& _state;
@@ -78,7 +77,7 @@ protected:
     uint64_t _rows_fetched_for_last_partition = 0;
     stats _stats;
 public:
-    query_pager(service::storage_proxy& p, schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
+    query_pager(cql3::query_backend qb, schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,
                 const cql3::query_options& options,
                 lw_shared_ptr<query::read_command> cmd,

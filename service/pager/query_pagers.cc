@@ -40,7 +40,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
             && !cmd.slice.options.contains<query::partition_slice::option::distinct>();
 }
 
-query_pager::query_pager(service::storage_proxy& p, schema_ptr s,
+query_pager::query_pager(cql3::query_backend qb, schema_ptr s,
                 shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,
                 const cql3::query_options& options,
@@ -50,7 +50,7 @@ query_pager::query_pager(service::storage_proxy& p, schema_ptr s,
                 , _max(cmd->get_row_limit())
                 , _per_partition_limit(cmd->slice.partition_row_limit())
                 , _last_pos(position_in_partition::for_partition_start())
-                , _proxy(p.shared_from_this())
+                , _qb(std::move(qb))
                 , _schema(std::move(s))
                 , _selection(selection)
                 , _state(state)
@@ -67,7 +67,7 @@ future<result<coordinator_query_result>> query_pager::do_fetch_page(uint32_t pag
     _cmd->slice.options.set<query::partition_slice::option::allow_short_read>();
     // Override this, to make sure we use the value appropriate for paging
     // (with allow_short_read set).
-    _cmd->max_result_size = _proxy->get_max_result_size(_cmd->slice);
+    _cmd->max_result_size = _qb.get_max_result_size(_cmd->slice);
 
     if (!_last_pkey && state) {
         _max = state->get_remaining();
@@ -96,7 +96,7 @@ future<result<coordinator_query_result>> query_pager::do_fetch_page(uint32_t pag
         qlogger.trace("PKey={}, Pos={}, reversed={}", dpk, _last_pos, reversed);
 
         // Note: we're assuming both that the ranges are checked
-        // and "cql-compliant", and that storage_proxy will process
+        // and "cql-compliant", and that storage_qb will process
         // the ranges in order
         //
         // If the original query has singular restrictions like "col in (x, y, z)",
@@ -179,7 +179,7 @@ future<result<coordinator_query_result>> query_pager::do_fetch_page(uint32_t pag
 
     auto ranges = _ranges;
     auto command = ::make_lw_shared<query::read_command>(*_cmd);
-    return _proxy->query_result(_schema,
+    return _qb.query_result(_schema,
             std::move(command),
             std::move(ranges),
             _options.get_consistency(),
@@ -239,13 +239,13 @@ future<result<cql3::result_generator>> query_pager::fetch_page_generator_result(
 class filtering_query_pager : public query_pager {
     const ::shared_ptr<const cql3::restrictions::statement_restrictions> _filtering_restrictions;
 public:
-    filtering_query_pager(service::storage_proxy& p, schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
+    filtering_query_pager(cql3::query_backend qb, schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,
                 const cql3::query_options& options,
                 lw_shared_ptr<query::read_command> cmd,
                 dht::partition_range_vector ranges,
                 ::shared_ptr<const cql3::restrictions::statement_restrictions> filtering_restrictions)
-        : query_pager(p, s, selection, state, options, std::move(cmd), std::move(ranges))
+        : query_pager(std::move(qb), s, selection, state, options, std::move(cmd), std::move(ranges))
         , _filtering_restrictions(std::move(filtering_restrictions))
         {}
     virtual ~filtering_query_pager() {}
@@ -282,19 +282,19 @@ protected:
  * It does not actually return any data to the caller.
  */
 class ghost_row_deleting_query_pager : public service::pager::query_pager {
-    service::storage_proxy& _proxy;
+    cql3::query_backend _qb;
     db::timeout_clock::duration _timeout_duration;
 public:
     ghost_row_deleting_query_pager(schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
-                service::query_state& state,
+                service::query_state state,
                 const cql3::query_options& options,
                 lw_shared_ptr<query::read_command> cmd,
                 dht::partition_range_vector ranges,
                 cql3::cql_stats& stats,
-                service::storage_proxy& proxy,
+                cql3::query_backend qb,
                 db::timeout_clock::duration timeout_duration)
-        : query_pager(proxy, s, selection, state, options, std::move(cmd), std::move(ranges))
-        , _proxy(proxy)
+        : query_pager(qb, s, selection, state, options, std::move(cmd), std::move(ranges))
+        , _qb(std::move(qb))
         , _timeout_duration(timeout_duration)
     {}
     virtual ~ghost_row_deleting_query_pager() {}
@@ -305,7 +305,7 @@ public:
             _query_read_repair_decision = qr.read_repair_decision;
             qr.query_result->ensure_counts();
             return seastar::async([this, query_result = std::move(qr.query_result), page_size, now] () mutable -> result<> {
-                handle_result(db::view::delete_ghost_rows_visitor{_proxy, _state, view_ptr(_schema), _timeout_duration},
+                handle_result(db::view::delete_ghost_rows_visitor{_qb.proxy(), _state, view_ptr(_schema), _timeout_duration},
                         std::move(query_result), page_size, now);
                 return bo::success();
             });
@@ -470,16 +470,27 @@ std::unique_ptr<service::pager::query_pager> service::pager::query_pagers::pager
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector ranges,
         ::shared_ptr<const cql3::restrictions::statement_restrictions> filtering_restrictions) {
+    auto qb = cql3::make_storage_proxy_query_backend(proxy, proxy.data_dictionary(), nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+    return pager(std::move(qb), std::move(s), std::move(selection), state, options, std::move(cmd), std::move(ranges), std::move(filtering_restrictions));
+}
+
+std::unique_ptr<service::pager::query_pager> service::pager::query_pagers::pager(
+        cql3::query_backend qb,
+        schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
+        service::query_state& state, const cql3::query_options& options,
+        lw_shared_ptr<query::read_command> cmd,
+        dht::partition_range_vector ranges,
+        ::shared_ptr<const cql3::restrictions::statement_restrictions> filtering_restrictions) {
     // If partition row limit is applied to paging, we still need to fall back
     // to filtering the results to avoid extraneous rows on page breaks.
     if (!filtering_restrictions && cmd->slice.partition_row_limit() < query::max_rows_if_set) {
         filtering_restrictions = ::make_shared<cql3::restrictions::statement_restrictions>(s, true);
     }
     if (filtering_restrictions) {
-        return std::make_unique<filtering_query_pager>(proxy, std::move(s), std::move(selection), state,
+        return std::make_unique<filtering_query_pager>(std::move(qb), std::move(s), std::move(selection), state,
                     options, std::move(cmd), std::move(ranges), std::move(filtering_restrictions));
     }
-    return std::make_unique<query_pager>(proxy, std::move(s), std::move(selection), state,
+    return std::make_unique<query_pager>(std::move(qb), std::move(s), std::move(selection), state,
             options, std::move(cmd), std::move(ranges));
 }
 
@@ -489,8 +500,8 @@ std::unique_ptr<service::pager::query_pager> service::pager::query_pagers::pager
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector ranges,
         cql3::cql_stats& stats,
-        storage_proxy& proxy,
+        cql3::query_backend qb,
         db::timeout_clock::duration duration) {
     return ::make_shared<ghost_row_deleting_query_pager>(std::move(s), std::move(selection), state,
-            options, std::move(cmd), std::move(ranges), stats, proxy, duration);
+            options, std::move(cmd), std::move(ranges), stats, std::move(qb), duration);
 }

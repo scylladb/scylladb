@@ -38,7 +38,7 @@ static future<> delete_ghost_rows(dht::partition_range_vector partition_ranges, 
     tracing::trace(state.get_trace_state(), "Deleting ghost rows from partition ranges {}", partition_ranges);
 
     auto p = service::pager::query_pagers::ghost_row_deleting_pager(schema_ptr(view), selection, state,
-            options, std::move(command), std::move(partition_ranges), stats, qb.proxy(), timeout_duration);
+            options, std::move(command), std::move(partition_ranges), stats, qb, timeout_duration);
 
     int32_t page_size = std::max(options.get_page_size(), 1000);
     auto now = gc_clock::now();

@@ -413,7 +413,7 @@ select_statement::do_execute(query_backend& qb,
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto timeout_duration = get_timeout(state.get_client_state(), options);
     auto timeout = db::timeout_clock::now() + timeout_duration;
-    auto p = service::pager::query_pagers::pager(qb.proxy(), _schema, _selection,
+    auto p = service::pager::query_pagers::pager(qb, _schema, _selection,
             state, options, command, std::move(key_ranges), _restrictions_need_filtering ? _restrictions : nullptr);
 
     if (aggregate || nonpaged_filtering) {
@@ -1289,7 +1289,7 @@ indexed_table_select_statement::read_posting_list(query_backend& qb,
         }));
     }
 
-    auto p = service::pager::query_pagers::pager(qb.proxy(), _view_schema, selection,
+    auto p = service::pager::query_pagers::pager(qb, _view_schema, selection,
             state, options, cmd, std::move(partition_ranges), nullptr);
     return p->fetch_page_result(options.get_page_size(), now, timeout).then(utils::result_wrap([p = std::move(p)] (std::unique_ptr<cql3::result_set> rs)
             -> coordinator_result<::shared_ptr<cql_transport::messages::result_message::rows>> {
