@@ -837,6 +837,8 @@ class PythonTest(Test):
             "--junit-xml={}".format(self.xmlout)]
         if options.markers:
             self.args.append(f"-m={options.markers}")
+        if options.kexpr:
+            self.args.extend(["-k", f"{options.kexpr}"])
 
             # https://docs.pytest.org/en/7.1.x/reference/exit-codes.html
             no_tests_selected_exit_code = 5
@@ -1141,6 +1143,17 @@ def parse_cmd_line() -> argparse.Namespace:
                              "is only supported by python tests for now, other tests ignore it. "
                              "By default, the marker filter is not applied and all tests will be run without exception."
                              "To exclude e.g. slow tests you can write --markers 'not slow'.")
+    parser.add_argument('--kexpr', action='store', metavar='EXPRESSION',
+                        help="For pytests, only run tests which match the given substring "
+                             "expression. The syntax is the same as in pytest, for example: "
+                             "--kexpr 'test_method or test_other' matches all test functions and "
+                             "classes whose name contains 'test_method' or 'test_other', while "
+                             "--kexpr 'not test_method' matches those that don't contain "
+                             "'test_method' in their names. --kexpr 'not test_method and not "
+                             "test_other' will eliminate the matches. Additionally keywords are "
+                             "matched to classes and functions containing extra names in their "
+                             "'extra_keyword_matches' set, as well as functions which have names "
+                             "assigned directly to them. The matching is case-insensitive.")
 
     scylla_additional_options = parser.add_argument_group('Additional options for Scylla tests')
     scylla_additional_options.add_argument('--x-log2-compaction-groups', action="store", default="0", type=int,
