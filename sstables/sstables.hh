@@ -924,7 +924,7 @@ public:
 //
 // Returns true if all checksums are valid.
 // Validation errors are logged individually.
-future<bool> validate_checksums(shared_sstable sst, reader_permit permit, const io_priority_class& pc);
+future<bool> validate_checksums(shared_sstable sst, reader_permit permit);
 
 struct index_sampling_state {
     static constexpr size_t default_summary_byte_cost = 2000;

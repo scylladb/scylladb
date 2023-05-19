@@ -2400,7 +2400,9 @@ future<checksum> sstable::read_checksum(io_priority_class pc) {
     co_return checksum;
 }
 
-future<bool> validate_checksums(shared_sstable sst, reader_permit permit, const io_priority_class& pc) {
+future<bool> validate_checksums(shared_sstable sst, reader_permit permit) {
+    auto& pc = default_priority_class();
+
     const auto digest = co_await sst->read_digest(pc);
 
     auto data_stream = sst->data_stream(0, sst->ondisk_data_size(), pc, permit, nullptr, nullptr, sstable::raw_stream::yes);

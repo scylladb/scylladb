@@ -2920,7 +2920,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
 
                 testlog.info("Validating intact {}", sst->get_filename());
 
-                valid = sstables::validate_checksums(sst, permit, default_priority_class()).get();
+                valid = sstables::validate_checksums(sst, permit).get();
                 BOOST_REQUIRE(valid);
 
                 auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::wo).get();
@@ -2935,7 +2935,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                     sst_file.dma_write(sst->ondisk_data_size() / 2, buf.begin(), buf.size(), default_priority_class()).get();
                 }
 
-                valid = sstables::validate_checksums(sst, permit, default_priority_class()).get();
+                valid = sstables::validate_checksums(sst, permit).get();
                 BOOST_REQUIRE(!valid);
 
                 testlog.info("Validating truncated {}", sst->get_filename());
@@ -2944,7 +2944,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                     sst_file.truncate(sst->ondisk_data_size() / 2).get();
                 }
 
-                valid = sstables::validate_checksums(sst, permit, default_priority_class()).get();
+                valid = sstables::validate_checksums(sst, permit).get();
                 BOOST_REQUIRE(!valid);
             }
         }
