@@ -66,6 +66,7 @@ public:
     service::storage_proxy& proxy();
 
     shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls);
+    future<> truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms = std::nullopt);
 
     query::tombstone_limit get_tombstone_limit() const;
 };

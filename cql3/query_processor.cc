@@ -107,6 +107,7 @@ public:
     }
 
     virtual shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) = 0;
+    virtual future<> truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms) = 0;
 
     virtual query::tombstone_limit get_tombstone_limit() const = 0;
 };
@@ -126,6 +127,9 @@ service::storage_proxy& query_backend::proxy() { return _impl->proxy(); }
 
 shared_ptr<cql_transport::messages::result_message> query_backend::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) {
     return _impl->bounce_to_shard(shard, std::move(cached_fn_calls));
+}
+future<> query_backend::truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms) {
+    return _impl->truncate_blocking(std::move(keyspace), std::move(cfname), std::move(timeout_in_ms));
 }
 
 query::tombstone_limit query_backend::get_tombstone_limit() const {
@@ -163,6 +167,9 @@ public:
     virtual shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) override {
         _proxy->get_stats().replica_cross_shard_ops++;
         return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard, std::move(cached_fn_calls));
+    }
+    virtual future<> truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms) override {
+        return _proxy->truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
     }
 
     virtual query::tombstone_limit get_tombstone_limit() const override {
