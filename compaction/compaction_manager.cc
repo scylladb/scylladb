@@ -1607,6 +1607,42 @@ bool compaction_manager::requires_cleanup(table_state& t, const sstables::shared
 }
 
 future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_ranges, table_state& t) {
+    constexpr auto sleep_duration = std::chrono::seconds(10);
+    constexpr auto max_idle_duration = std::chrono::seconds(300);
+    auto& cs = get_compaction_state(&t);
+
+    co_await try_perform_cleanup(sorted_owned_ranges, t);
+    auto last_idle = seastar::lowres_clock::now();
+
+    while (!cs.sstables_requiring_cleanup.empty()) {
+        auto idle = seastar::lowres_clock::now() - last_idle;
+        if (idle >= max_idle_duration) {
+            auto msg = ::format("Cleanup timed out after {} seconds of no progress", std::chrono::duration_cast<std::chrono::seconds>(idle).count());
+            cmlog.warn("{}", msg);
+            co_await coroutine::return_exception(std::runtime_error(msg));
+        }
+
+        auto has_sstables_eligible_for_compaction = [&] {
+            for (auto& sst : cs.sstables_requiring_cleanup) {
+                if (sstables::is_eligible_for_compaction(sst)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        cmlog.debug("perform_cleanup: waiting for sstables to become eligible for cleanup");
+        co_await t.get_staging_done_condition().when(sleep_duration, [&] { return has_sstables_eligible_for_compaction(); });
+
+        if (!has_sstables_eligible_for_compaction()) {
+            continue;
+        }
+        co_await try_perform_cleanup(sorted_owned_ranges, t);
+        last_idle = seastar::lowres_clock::now();
+    }
+}
+
+future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, table_state& t) {
     auto check_for_cleanup = [this, &t] {
         return boost::algorithm::any_of(_tasks, [&t] (auto& task) {
             return task->compacting_table() == &t && task->type() == sstables::compaction_type::Cleanup;
@@ -1616,29 +1652,41 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
         throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}", t));
     }
 
+    co_await run_with_compaction_disabled(t, [&] () -> future<> {
+        auto update_sstables_cleanup_state = [&] (const sstables::sstable_set& set) -> future<> {
+            // Hold on to the sstable set since it may be overwritten
+            // while we yield in this loop.
+            auto set_holder = set.shared_from_this();
+            co_await set.for_each_sstable_gently([&] (const sstables::shared_sstable& sst) {
+                update_sstable_cleanup_state(t, sst, *sorted_owned_ranges);
+            });
+        };
+        co_await update_sstables_cleanup_state(t.main_sstable_set());
+        co_await update_sstables_cleanup_state(t.maintenance_sstable_set());
+    });
+
+    auto& cs = get_compaction_state(&t);
+    if (cs.sstables_requiring_cleanup.empty()) {
+        cmlog.debug("perform_cleanup for {} found no sstables requiring cleanup", t);
+        co_return;
+    }
+
+    // Some sstables may remain in sstables_requiring_cleanup
+    // for later processing if they can't be cleaned up right now.
+    // They are erased from sstables_requiring_cleanup by compacting.release_compacting
+    cs.owned_ranges_ptr = std::move(sorted_owned_ranges);
+
+    auto found_maintenance_sstables = bool(t.maintenance_sstable_set().for_each_sstable_until([this, &t] (const sstables::shared_sstable& sst) {
+        return stop_iteration(requires_cleanup(t, sst));
+    }));
+    if (found_maintenance_sstables) {
+        co_await perform_offstrategy(t);
+    }
+
     // Called with compaction_disabled
-    auto get_sstables = [this, &t, sorted_owned_ranges] () -> future<std::vector<sstables::shared_sstable>> {
-        return seastar::async([this, &t, sorted_owned_ranges = std::move(sorted_owned_ranges)] {
-            auto update_sstables_cleanup_state = [&] (const sstables::sstable_set& set) {
-                // Hold on to the sstable set since it may be overwritten
-                // while we yield in this loop.
-                auto set_holder = set.shared_from_this();
-                set.for_each_sstable([&] (const sstables::shared_sstable& sst) {
-                    update_sstable_cleanup_state(t, sst, *sorted_owned_ranges);
-                    seastar::thread::maybe_yield();
-                });
-            };
-            update_sstables_cleanup_state(t.main_sstable_set());
-            update_sstables_cleanup_state(t.maintenance_sstable_set());
-            // Some sstables may remain in sstables_requiring_cleanup
-            // for later processing if they can't be cleaned up right now.
-            // They are erased from sstables_requiring_cleanup by compacting.release_compacting
-            auto& cs = get_compaction_state(&t);
-            if (!cs.sstables_requiring_cleanup.empty()) {
-                cs.owned_ranges_ptr = std::move(sorted_owned_ranges);
-            }
-            return get_candidates(t, cs.sstables_requiring_cleanup);
-        });
+    auto get_sstables = [this, &t] () -> future<std::vector<sstables::shared_sstable>> {
+        auto& cs = get_compaction_state(&t);
+        co_return get_candidates(t, cs.sstables_requiring_cleanup);
     };
 
     co_await perform_task_on_all_files<cleanup_sstables_compaction_task_executor>(t, sstables::compaction_type_options::make_cleanup(), std::move(sorted_owned_ranges),

@@ -52,6 +52,7 @@ class table_for_tests::table_state : public compaction::table_state {
     mutable compaction_backlog_tracker _backlog_tracker;
     compaction::compaction_strategy_state _compaction_strategy_state;
     std::string _group_id;
+    seastar::condition_variable _staging_condition;
 private:
     replica::table& table() const noexcept {
         return *_data.cf;
@@ -126,6 +127,9 @@ public:
     }
     const std::string& get_group_id() const noexcept override {
         return _group_id;
+    }
+    seastar::condition_variable& get_staging_done_condition() noexcept override {
+        return _staging_condition;
     }
 };
 

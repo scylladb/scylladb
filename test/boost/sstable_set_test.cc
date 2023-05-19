@@ -79,5 +79,23 @@ SEASTAR_TEST_CASE(test_time_series_sstable_set_read_modify_write) {
         ss2->insert(sst2);
         BOOST_REQUIRE_EQUAL(ss2->all()->size(), 2);
         BOOST_REQUIRE_EQUAL(ss1->all()->size(), 1);
+
+        std::set<sstables::shared_sstable> in_set;
+        ss2->for_each_sstable_gently_until([&] (sstables::shared_sstable sst) {
+            in_set.insert(sst);
+            return make_ready_future<stop_iteration>(false);
+        }).get();
+        BOOST_REQUIRE(in_set == std::set<sstables::shared_sstable>({sst1, sst2}));
+
+        auto lookup_sst = [&] (sstables::shared_sstable sst) {
+            bool found = false;
+            ss2->for_each_sstable_gently_until([&] (sstables::shared_sstable cur) {
+                found = (cur == sst);
+                return make_ready_future<stop_iteration>(found);
+            }).get();
+            return found;
+        };
+        BOOST_REQUIRE(lookup_sst(sst1));
+        BOOST_REQUIRE(lookup_sst(sst2));
     });
 }
