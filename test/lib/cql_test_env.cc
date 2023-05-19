@@ -554,6 +554,8 @@ public:
                 cfg->max_memory_for_unlimited_query_hard_limit.set(uint64_t(query::result_memory_limiter::unlimited_result_size));
             }
 
+            auto scheduling_groups = get_scheduling_groups().get();
+
             sharded<cql3::query_processor> qp;
             sharded<gms::feature_service> feature_service;
             sharded<netw::messaging_service> ms;
@@ -707,7 +709,6 @@ public:
                 dbcfg.available_memory = memory::stats().total_memory();
             }
 
-            auto scheduling_groups = get_scheduling_groups().get();
             dbcfg.compaction_scheduling_group = scheduling_groups.compaction_scheduling_group;
             dbcfg.memory_compaction_scheduling_group = scheduling_groups.memory_compaction_scheduling_group;
             dbcfg.streaming_scheduling_group = scheduling_groups.streaming_scheduling_group;
