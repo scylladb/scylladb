@@ -629,7 +629,7 @@ indexed_table_select_statement::do_execute_base_query(
             if (previous_result_size < query::result_memory_limiter::maximum_result_size && concurrency < max_base_table_query_concurrency) {
                 concurrency *= 2;
             }
-            coordinator_result<service::storage_proxy::coordinator_query_result> rqr = co_await qb.proxy().query_result(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()});
+            coordinator_result<coordinator_query_result> rqr = co_await qb.proxy().query_result(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()});
             if (!rqr.has_value()) {
                 co_return std::move(rqr).as_failure();
             }
@@ -701,7 +701,7 @@ indexed_table_select_statement::do_execute_base_query(
             if (key.clustering) {
                 command->slice._row_ranges.push_back(query::clustering_range::make_singular(key.clustering));
             }
-            coordinator_result<service::storage_proxy::coordinator_query_result> rqr
+            coordinator_result<coordinator_query_result> rqr
                     = co_await qb.proxy().query_result(_schema, command, {dht::partition_range::make_singular(key.partition)}, options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()});
             if (!rqr.has_value()) {
                 co_return std::move(rqr).as_failure();
@@ -776,7 +776,7 @@ select_statement::execute_without_checking_exception_message(query_backend& qb,
                         command,
                         std::move(prange),
                         options.get_consistency(),
-                        {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()}).then(utils::result_wrap([] (service::storage_proxy::coordinator_query_result qr) {
+                        {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()}).then(utils::result_wrap([] (coordinator_query_result qr) {
                     return make_ready_future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>>(std::move(qr.query_result));
                 }));
             }, std::move(merger));
@@ -785,7 +785,7 @@ select_statement::execute_without_checking_exception_message(query_backend& qb,
         }));
     } else {
         return qb.proxy().query_result(_schema, cmd, std::move(partition_ranges), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
-            .then(wrap_result_to_error_message([this, &options, now, cmd] (service::storage_proxy::coordinator_query_result qr) {
+            .then(wrap_result_to_error_message([this, &options, now, cmd] (coordinator_query_result qr) {
                 return this->process_results(std::move(qr.query_result), cmd, options, now);
             }));
     }
@@ -1279,7 +1279,7 @@ indexed_table_select_statement::read_posting_list(query_backend& qb,
     int32_t page_size = options.get_page_size();
     if (page_size <= 0 || !service::pager::query_pagers::may_need_paging(*_view_schema, page_size, *cmd, partition_ranges)) {
         return qb.proxy().query_result(_view_schema, cmd, std::move(partition_ranges), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
-        .then(utils::result_wrap([this, now, selection = std::move(selection), partition_slice = std::move(partition_slice)] (service::storage_proxy::coordinator_query_result qr)
+        .then(utils::result_wrap([this, now, selection = std::move(selection), partition_slice = std::move(partition_slice)] (coordinator_query_result qr)
                 -> coordinator_result<::shared_ptr<cql_transport::messages::result_message::rows>> {
             cql3::selection::result_set_builder builder(*selection, now);
             query::result_view::consume(*qr.query_result,

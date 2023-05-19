@@ -5235,7 +5235,7 @@ void storage_proxy::handle_read_error(std::variant<exceptions::coordinator_excep
     }));
 }
 
-future<result<storage_proxy::coordinator_query_result>>
+future<result<coordinator_query_result>>
 storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
@@ -5568,7 +5568,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     }));
 }
 
-future<result<storage_proxy::coordinator_query_result>>
+future<result<coordinator_query_result>>
 storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector partition_ranges,
         db::consistency_level cl,
@@ -5631,7 +5631,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     }));
 }
 
-future<storage_proxy::coordinator_query_result>
+future<coordinator_query_result>
 storage_proxy::query(schema_ptr s,
     lw_shared_ptr<query::read_command> cmd,
     dht::partition_range_vector&& partition_ranges,
@@ -5640,10 +5640,10 @@ storage_proxy::query(schema_ptr s,
 {
     utils::get_local_injector().inject("storage_proxy_query_failure", [] { throw std::runtime_error("Error injection: failing a query"); });
     return query_result(std::move(s), std::move(cmd), std::move(partition_ranges), cl, std::move(query_options))
-            .then(utils::result_into_future<result<storage_proxy::coordinator_query_result>>);
+            .then(utils::result_into_future<result<coordinator_query_result>>);
 }
 
-future<result<storage_proxy::coordinator_query_result>>
+future<result<coordinator_query_result>>
 storage_proxy::query_result(schema_ptr s,
     lw_shared_ptr<query::read_command> cmd,
     dht::partition_range_vector&& partition_ranges,
@@ -5681,7 +5681,7 @@ storage_proxy::query_result(schema_ptr s,
     return do_query(s, cmd, std::move(partition_ranges), cl, std::move(query_options));
 }
 
-future<result<storage_proxy::coordinator_query_result>>
+future<result<coordinator_query_result>>
 storage_proxy::do_query(schema_ptr s,
     lw_shared_ptr<query::read_command> cmd,
     dht::partition_range_vector&& partition_ranges,
@@ -5700,7 +5700,7 @@ storage_proxy::do_query(schema_ptr s,
 
     if (db::is_serial_consistency(cl)) {
         auto f = do_query_with_paxos(std::move(s), std::move(cmd), std::move(partition_ranges), cl, std::move(query_options));
-        return utils::then_ok_result<result<storage_proxy::coordinator_query_result>>(std::move(f));
+        return utils::then_ok_result<result<coordinator_query_result>>(std::move(f));
     } else {
         utils::latency_counter lc;
         lc.start();
@@ -5730,19 +5730,19 @@ storage_proxy::do_query(schema_ptr s,
 }
 
 // WARNING: the function should be called on a shard that owns the key that is been read
-future<storage_proxy::coordinator_query_result>
+future<coordinator_query_result>
 storage_proxy::do_query_with_paxos(schema_ptr s,
     lw_shared_ptr<query::read_command> cmd,
     dht::partition_range_vector&& partition_ranges,
     db::consistency_level cl,
     storage_proxy::coordinator_query_options query_options) {
     if (partition_ranges.size() != 1 || !query::is_single_partition(partition_ranges[0])) {
-        return make_exception_future<storage_proxy::coordinator_query_result>(
+        return make_exception_future<coordinator_query_result>(
                 exceptions::invalid_request_exception("SERIAL/LOCAL_SERIAL consistency may only be requested for one partition at a time"));
     }
 
     if (cas_shard(*s, partition_ranges[0].start()->value().as_decorated_key().token()) != this_shard_id()) {
-        return make_exception_future<storage_proxy::coordinator_query_result>(std::logic_error("storage_proxy::do_query_with_paxos called on a wrong shard"));
+        return make_exception_future<coordinator_query_result>(std::logic_error("storage_proxy::do_query_with_paxos called on a wrong shard"));
     }
     // All cas networking operations run with query provided timeout
     db::timeout_clock::time_point timeout = query_options.timeout(*this);

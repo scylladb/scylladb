@@ -59,7 +59,7 @@ query_pager::query_pager(service::storage_proxy& p, schema_ptr s,
                 , _ranges(std::move(ranges))
 {}
 
-future<result<service::storage_proxy::coordinator_query_result>> query_pager::do_fetch_page(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) {
+future<result<coordinator_query_result>> query_pager::do_fetch_page(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) {
     auto state = _options.get_paging_state();
 
     // Most callers should set this but we want to make sure, as results
@@ -192,7 +192,7 @@ future<> query_pager::fetch_page(cql3::selection::result_set_builder& builder, u
 }
 
 future<result<>> query_pager::fetch_page_result(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) {
-    return do_fetch_page(page_size, now, timeout).then(utils::result_wrap([this, &builder, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
+    return do_fetch_page(page_size, now, timeout).then(utils::result_wrap([this, &builder, page_size, now] (coordinator_query_result qr) {
         _last_replicas = std::move(qr.last_replicas);
         _query_read_repair_decision = qr.read_repair_decision;
         return builder.with_thread_if_needed([this, &builder, page_size, now, qr = std::move(qr)] () mutable -> result<> {
@@ -228,7 +228,7 @@ future<cql3::result_generator> query_pager::fetch_page_generator(uint32_t page_s
 }
 
 future<result<cql3::result_generator>> query_pager::fetch_page_generator_result(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout, cql3::cql_stats& stats) {
-    return do_fetch_page(page_size, now, timeout).then(utils::result_wrap([this, page_size, now, &stats] (service::storage_proxy::coordinator_query_result qr) -> future<result<cql3::result_generator>> {
+    return do_fetch_page(page_size, now, timeout).then(utils::result_wrap([this, page_size, now, &stats] (coordinator_query_result qr) -> future<result<cql3::result_generator>> {
         _last_replicas = std::move(qr.last_replicas);
         _query_read_repair_decision = qr.read_repair_decision;
         handle_result(noop_visitor(), qr.query_result, page_size, now);
@@ -251,7 +251,7 @@ public:
     virtual ~filtering_query_pager() {}
 
     virtual future<result<>> fetch_page_result(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) override {
-        return do_fetch_page(page_size, now, timeout).then(utils::result_wrap([this, &builder, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
+        return do_fetch_page(page_size, now, timeout).then(utils::result_wrap([this, &builder, page_size, now] (coordinator_query_result qr) {
             _last_replicas = std::move(qr.last_replicas);
             _query_read_repair_decision = qr.read_repair_decision;
             qr.query_result->ensure_counts();
@@ -300,7 +300,7 @@ public:
     virtual ~ghost_row_deleting_query_pager() {}
 
     virtual future<result<>> fetch_page_result(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) override {
-        return do_fetch_page(page_size, now, timeout).then(utils::result_wrap([this, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
+        return do_fetch_page(page_size, now, timeout).then(utils::result_wrap([this, page_size, now] (coordinator_query_result qr) {
             _last_replicas = std::move(qr.last_replicas);
             _query_read_repair_decision = qr.read_repair_decision;
             qr.query_result->ensure_counts();

@@ -897,7 +897,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
             query::tombstone_limit(_proxy.get_tombstone_limit()), query::row_limit(limit * mul));
 
     return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state)).then(
-            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), start_time = std::move(start_time), limit, key_names = std::move(key_names), attr_names = std::move(attr_names), type, iter, high_ts] (service::storage_proxy::coordinator_query_result qr) mutable {       
+            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), start_time = std::move(start_time), limit, key_names = std::move(key_names), attr_names = std::move(attr_names), type, iter, high_ts] (coordinator_query_result qr) mutable {
         cql3::selection::result_set_builder builder(*selection, gc_clock::now());
         query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *schema, *selection));
 

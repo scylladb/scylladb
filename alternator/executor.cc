@@ -1515,7 +1515,7 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
     auto cl = db::consistency_level::LOCAL_QUORUM;
 
     return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
-            [schema, command, selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
+            [schema, command, selection = std::move(selection)] (coordinator_query_result qr) {
         auto previous_item = executor::describe_single_item(schema, command->slice, *selection, *qr.query_result, {});
         if (previous_item) {
             return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(*previous_item)));
@@ -3111,7 +3111,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
 
     return _proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
             service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state)).then(
-            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (service::storage_proxy::coordinator_query_result qr) mutable {
+            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time)] (coordinator_query_result qr) mutable {
         _stats.api_operations.get_item_latency.add(std::chrono::steady_clock::now() - start_time);
         return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get))));
     });
@@ -3252,7 +3252,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             command->allow_limit = db::allow_per_partition_rate_limit::yes;
             future<std::vector<rjson::value>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
                     service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
-                    [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get] (service::storage_proxy::coordinator_query_result qr) mutable {
+                    [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get] (coordinator_query_result qr) mutable {
                 utils::get_local_injector().inject("alternator_batch_get_item", [] { throw std::runtime_error("batch_get_item injection"); });
                 std::vector<rjson::value> jsons = describe_multi_item(schema, partition_slice, *selection, *qr.query_result, *attrs_to_get);
                 return make_ready_future<std::vector<rjson::value>>(std::move(jsons));

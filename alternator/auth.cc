@@ -43,7 +43,7 @@ future<std::string> get_key_from_roles(service::storage_proxy& proxy, std::strin
     auto cl = auth::password_authenticator::consistency_for_user(username);
 
     service::client_state client_state{service::client_state::internal_tag()};
-    service::storage_proxy::coordinator_query_result qr = co_await proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
+    coordinator_query_result qr = co_await proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
             service::storage_proxy::coordinator_query_options(executor::default_timeout(), empty_service_permit(), client_state));
 
     cql3::selection::result_set_builder builder(*selection, gc_clock::now());

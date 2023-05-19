@@ -17,11 +17,11 @@
 #include "utils/result.hh"
 #include "exceptions/exceptions.hh"
 #include "exceptions/coordinator_result.hh"
+#include "coordinator_query.hh"
 
 namespace service {
 
 class storage_proxy;
-class storage_proxy_coordinator_query_result;
 
 namespace pager {
 
@@ -139,7 +139,7 @@ protected:
     template<typename Base>
     class query_result_visitor;
     
-    future<result<service::storage_proxy_coordinator_query_result>>
+    future<result<coordinator_query_result>>
     do_fetch_page(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout);
 
     template<typename Visitor>

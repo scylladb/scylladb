@@ -36,6 +36,7 @@
 #include "replica/exceptions.hh"
 #include "locator/host_id.hh"
 #include "dht/token_range_endpoints.hh"
+#include "coordinator_query.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
@@ -84,8 +85,6 @@ class migration_manager;
 struct hint_wrapper;
 struct read_repair_mutation;
 
-using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<locator::host_id>>;
-
 struct query_partition_key_range_concurrent_result {
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> result;
     replicas_per_token_range replicas;
@@ -98,20 +97,6 @@ struct view_update_backlog_timestamped {
 
 struct allow_hints_tag {};
 using allow_hints = bool_class<allow_hints_tag>;
-
-struct storage_proxy_coordinator_query_result {
-    foreign_ptr<lw_shared_ptr<query::result>> query_result;
-    replicas_per_token_range last_replicas;
-    db::read_repair_decision read_repair_decision;
-
-    storage_proxy_coordinator_query_result(foreign_ptr<lw_shared_ptr<query::result>> query_result,
-            replicas_per_token_range last_replicas = {},
-            db::read_repair_decision read_repair_decision = db::read_repair_decision::NONE)
-        : query_result(std::move(query_result))
-        , last_replicas(std::move(last_replicas))
-        , read_repair_decision(std::move(read_repair_decision)) {
-    }
-};
 
 class cas_request;
 
@@ -192,8 +177,6 @@ public:
             return _timeout;
         }
     };
-
-    using coordinator_query_result = storage_proxy_coordinator_query_result;
 
     // Holds  a list of endpoints participating in CAS request, for a given
     // consistency level, token, and state of joining/leaving nodes.

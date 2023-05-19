@@ -305,7 +305,7 @@ public:
             return f.then([this, &proxy, schema, cmd, pranges = std::move(pranges), cell_limit, consistency_level, keys, permit = std::move(permit)]() mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.read_timeout;
                 return proxy.query(schema, cmd, std::move(pranges), cl_from_thrift(consistency_level), {timeout, std::move(permit), _query_state.get_client_state()}).then(
-                        [schema, cmd, cell_limit, keys = std::move(keys)](service::storage_proxy::coordinator_query_result qr) {
+                        [schema, cmd, cell_limit, keys = std::move(keys)](coordinator_query_result qr) {
                     return query::result_view::do_with(*qr.query_result, [schema, cmd, cell_limit, keys = std::move(keys)](query::result_view v) mutable {
                         if (schema->is_counter()) {
                             counter_column_aggregator aggregator(*schema, cmd->slice, cell_limit, std::move(keys));
@@ -335,7 +335,7 @@ public:
             return f.then([this, &proxy, schema, cmd, pranges = std::move(pranges), cell_limit, consistency_level, keys, permit = std::move(permit)]() mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.read_timeout;
                 return proxy.query(schema, cmd, std::move(pranges), cl_from_thrift(consistency_level), {timeout, std::move(permit), _query_state.get_client_state()}).then(
-                        [schema, cmd, cell_limit, keys = std::move(keys)](service::storage_proxy::coordinator_query_result qr) {
+                        [schema, cmd, cell_limit, keys = std::move(keys)](coordinator_query_result qr) {
                     return query::result_view::do_with(*qr.query_result, [schema, cmd, cell_limit, keys = std::move(keys)](query::result_view v) mutable {
                         column_counter counter(*schema, cmd->slice, cell_limit, std::move(keys));
                         v.consume(cmd->slice, counter);
@@ -374,7 +374,7 @@ public:
             return f.then([this, &proxy, schema, cmd, prange = std::move(prange), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.range_read_timeout;
                 return proxy.query(schema, cmd, std::move(prange), cl_from_thrift(consistency_level), {timeout, std::move(permit), _query_state.get_client_state()}).then(
-                        [schema, cmd](service::storage_proxy::coordinator_query_result qr) {
+                        [schema, cmd](coordinator_query_result qr) {
                     return query::result_view::do_with(*qr.query_result, [schema, cmd](query::result_view v) {
                         return to_key_slices(*schema, cmd->slice, v, std::numeric_limits<uint32_t>::max());
                     });
@@ -444,7 +444,7 @@ public:
         auto range1 = range; // query() below accepts an rvalue, so need a copy to reuse later
         auto timeout = db::timeout_clock::now() + timeout_config.range_read_timeout;
         return proxy.local().query(schema, cmd, std::move(range), consistency_level, {timeout, std::move(permit), qs.get_client_state()}).then(
-                [schema, cmd, column_limit](service::storage_proxy::coordinator_query_result qr) {
+                [schema, cmd, column_limit](coordinator_query_result qr) {
             return query::result_view::do_with(*qr.query_result, [schema, cmd, column_limit](query::result_view v) {
                 return to_key_slices(*schema, cmd->slice, v, column_limit);
             });
@@ -709,7 +709,7 @@ public:
             return f.then([this, &proxy, dk = std::move(dk), cmd, schema, column_limit = request.count, cl = request.consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.read_timeout;
                 return proxy.query(schema, cmd, {dht::partition_range::make_singular(dk)}, cl_from_thrift(cl), {timeout, std::move(permit), _query_state.get_client_state()}).then(
-                        [schema, cmd, column_limit](service::storage_proxy::coordinator_query_result qr) {
+                        [schema, cmd, column_limit](coordinator_query_result qr) {
                     return query::result_view::do_with(*qr.query_result, [schema, cmd, column_limit](query::result_view v) {
                         column_aggregator<query_order::no> aggregator(*schema, cmd->slice, column_limit, { });
                         v.consume(cmd->slice, aggregator);
