@@ -5292,7 +5292,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     // increase (utils::result_futurize_try is not a coroutine).
 
     try {
-        auto timeout = query_options.timeout(*this);
+        auto timeout = query_options.timeout();
         auto handle_completion = [&] (std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) {
                 auto& [rex, token_range] = executor_and_token_range;
                 used_replicas.emplace(std::move(token_range), endpoints_to_replica_ids(tm, rex->used_targets()));
@@ -5604,7 +5604,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     const auto row_limit = cmd->get_row_limit();
     const auto partition_limit = cmd->partition_limit;
 
-    return query_partition_key_range_concurrent(query_options.timeout(*this),
+    return query_partition_key_range_concurrent(query_options.timeout(),
             std::move(erm),
             std::move(results),
             cmd,
@@ -5745,7 +5745,7 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
         return make_exception_future<coordinator_query_result>(std::logic_error("storage_proxy::do_query_with_paxos called on a wrong shard"));
     }
     // All cas networking operations run with query provided timeout
-    db::timeout_clock::time_point timeout = query_options.timeout(*this);
+    db::timeout_clock::time_point timeout = query_options.timeout();
     // When to give up due to contention
     db::timeout_clock::time_point cas_timeout = db::timeout_clock::now() +
             std::chrono::milliseconds(_db.local().get_config().cas_contention_timeout_in_ms());

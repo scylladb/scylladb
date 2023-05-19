@@ -18,14 +18,12 @@
 
 namespace service {
 class client_state;
-class storage_proxy;
 };
-using clock_type = lowres_clock;
 
 using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<locator::host_id>>;
 
 class coordinator_query_options {
-    clock_type::time_point _timeout;
+    lowres_clock::time_point _timeout;
 
 public:
     service_permit permit;
@@ -34,7 +32,7 @@ public:
     replicas_per_token_range preferred_replicas;
     std::optional<db::read_repair_decision> read_repair_decision;
 
-    coordinator_query_options(clock_type::time_point timeout,
+    coordinator_query_options(lowres_clock::time_point timeout,
             service_permit permit_,
             service::client_state& client_state_,
             tracing::trace_state_ptr trace_state = nullptr,
@@ -48,7 +46,7 @@ public:
         , read_repair_decision(read_repair_decision) {
     }
 
-    clock_type::time_point timeout(service::storage_proxy& sp) const {
+    lowres_clock::time_point timeout() const {
         return _timeout;
     }
 };
