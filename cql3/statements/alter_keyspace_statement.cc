@@ -60,7 +60,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_backend& qb, con
         } catch (const std::runtime_error& e) {
             throw exceptions::invalid_request_exception(e.what());
         }
-        if (!qb.proxy().features().keyspace_storage_options
+        if (!qb.db().features().keyspace_storage_options
             && _attrs->get_storage_options().type_string() != "LOCAL") {
         throw exceptions::invalid_request_exception("Keyspace storage options not supported in the cluster");
     }

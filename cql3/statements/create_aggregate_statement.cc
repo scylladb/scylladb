@@ -24,7 +24,7 @@ namespace cql3 {
 namespace statements {
 
 seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement::create(query_backend& qb, db::functions::function* old) const {
-    if (!qb.proxy().features().user_defined_aggregates) {
+    if (!qb.db().features().user_defined_aggregates) {
         throw exceptions::invalid_request_exception("Cluster does not support user-defined aggregates, upgrade the whole cluster in order to use UDA");
     }
     if (old && !dynamic_cast<functions::user_aggregate*>(old)) {
@@ -45,7 +45,7 @@ seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement:
 
     ::shared_ptr<cql3::functions::scalar_function> reduce_func = nullptr;
     if (_rfunc) {
-        if (!qb.proxy().features().uda_native_parallelized_aggregation) {
+        if (!qb.db().features().uda_native_parallelized_aggregation) {
             throw exceptions::invalid_request_exception("Cluster does not support reduction function for user-defined aggregates, upgrade the whole cluster in order to define REDUCEFUNC for UDA");
         }
 

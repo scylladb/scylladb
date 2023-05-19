@@ -116,7 +116,7 @@ data_type function_statement::prepare_type(query_backend& qb, cql3_type::raw& t)
 }
 
 void function_statement::create_arg_types(query_backend& qb) const {
-    if (!qb.proxy().features().user_defined_functions) {
+    if (!qb.db().features().user_defined_functions) {
         throw exceptions::invalid_request_exception("User defined functions are disabled. Set enable_user_defined_functions and experimental_features:udf to enable them");
     }
 
