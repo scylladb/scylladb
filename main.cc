@@ -1031,7 +1031,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
 
             debug::the_gossiper = &gossiper;
-            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(feature_service), std::ref(token_metadata), std::ref(messaging), std::ref(sys_ks), std::ref(*cfg), std::ref(gcfg)).get();
+            gossiper.start(std::ref(stop_signal.as_sharded_abort_source()), std::ref(token_metadata), std::ref(messaging), std::ref(*cfg), std::ref(gcfg)).get();
             auto stop_gossiper = defer_verbose_shutdown("gossiper", [&gossiper] {
                 // call stop on each instance, but leave the sharded<> pointers alive
                 gossiper.invoke_on_all(&gms::gossiper::stop).get();
@@ -1294,7 +1294,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Re-enable previously enabled features on node startup.
             // This should be done before commitlog starts replaying
             // since some features affect storage.
-            db::system_keyspace::enable_features_on_startup(feature_service).get();
+            feature_service.local().enable_features_on_startup(sys_ks.local()).get();
 
             db.local().maybe_init_schema_commitlog();
 

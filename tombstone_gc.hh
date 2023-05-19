@@ -44,6 +44,9 @@ public:
         return _repair_history_maps != nullptr;
     }
 
+    // Returns true if it's cheap to retrieve gc_before, e.g. the mode will not require accessing a system table.
+    bool cheap_to_get_gc_before(const schema& s) const noexcept;
+
     seastar::lw_shared_ptr<repair_history_map> get_repair_history_map_for_table(const table_id& id) const;
     seastar::lw_shared_ptr<repair_history_map> get_or_create_repair_history_map_for_table(const table_id& id);
     void drop_repair_history_map_for_table(const table_id& id);

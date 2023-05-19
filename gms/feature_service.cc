@@ -18,6 +18,8 @@
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include "gms/gossiper.hh"
+#include "gms/i_endpoint_state_change_subscriber.hh"
 
 namespace gms {
 
@@ -181,13 +183,97 @@ std::set<sstring> feature_service::to_feature_set(sstring features_string) {
     return features;
 }
 
-void feature_service::persist_enabled_feature_info(const gms::feature& f) const {
-    // Executed in seastar::async context, because `gms::feature::enable`
-    // is only allowed to run within a thread context
+class persistent_feature_enabler : public i_endpoint_state_change_subscriber {
+    gossiper& _g;
+    feature_service& _feat;
+    db::system_keyspace& _sys_ks;
 
-    std::set<sstring> feats_set = db::system_keyspace::load_local_enabled_features().get0();
-    feats_set.emplace(f.name());
-    db::system_keyspace::save_local_enabled_features(std::move(feats_set)).get0();
+public:
+    persistent_feature_enabler(gossiper& g, feature_service& f, db::system_keyspace& s)
+            : _g(g)
+            , _feat(f)
+            , _sys_ks(s)
+    {
+    }
+    future<> on_join(inet_address ep, endpoint_state state) override {
+        return enable_features();
+    }
+    future<> on_change(inet_address ep, application_state state, const versioned_value&) override {
+        if (state == application_state::SUPPORTED_FEATURES) {
+            return enable_features();
+        }
+        return make_ready_future();
+    }
+    future<> before_change(inet_address, endpoint_state, application_state, const versioned_value&) override { return make_ready_future(); }
+    future<> on_alive(inet_address, endpoint_state) override { return make_ready_future(); }
+    future<> on_dead(inet_address, endpoint_state) override { return make_ready_future(); }
+    future<> on_remove(inet_address) override { return make_ready_future(); }
+    future<> on_restart(inet_address, endpoint_state) override { return make_ready_future(); }
+
+    future<> enable_features();
+};
+
+future<> feature_service::enable_features_on_join(gossiper& g, db::system_keyspace& sys_ks) {
+    auto enabler = make_shared<persistent_feature_enabler>(g, *this, sys_ks);
+    g.register_(enabler);
+    return enabler->enable_features();
+}
+
+future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks) {
+    std::set<sstring> features_to_enable;
+    const auto persisted_features = co_await sys_ks.load_local_enabled_features();
+    if (persisted_features.empty()) {
+        co_return;
+    }
+
+    const auto known_features = supported_feature_set();
+    for (auto&& f : persisted_features) {
+        logger.debug("Enabling persisted feature '{}'", f);
+        const bool is_registered_feat = _registered_features.contains(sstring(f));
+        if (!is_registered_feat || !known_features.contains(f)) {
+            if (is_registered_feat) {
+                throw std::runtime_error(format(
+                    "Feature '{}' was previously enabled in the cluster but its support is disabled by this node. "
+                    "Set the corresponding configuration option to enable the support for the feature.", f));
+            } else {
+                throw std::runtime_error(format("Unknown feature '{}' was previously enabled in the cluster. "
+                    " That means this node is performing a prohibited downgrade procedure"
+                    " and should not be allowed to boot.", f));
+            }
+        }
+        if (is_registered_feat) {
+            features_to_enable.insert(std::move(f));
+        }
+        // If a feature is not in `registered_features` but still in `known_features` list
+        // that means the feature name is used for backward compatibility and should be implicitly
+        // enabled in the code by default, so just skip it.
+    }
+
+    co_await container().invoke_on_all([&features_to_enable] (auto& srv) -> future<> {
+        std::set<std::string_view> feat = boost::copy_range<std::set<std::string_view>>(features_to_enable);
+        co_await srv.enable(std::move(feat));
+    });
+}
+
+future<> persistent_feature_enabler::enable_features() {
+    auto loaded_peer_features = co_await _sys_ks.load_peer_features();
+    auto&& features = _g.get_supported_features(loaded_peer_features, gossiper::ignore_features_of_local_node::no);
+
+    // Persist enabled feature in the `system.scylla_local` table under the "enabled_features" key.
+    // The key itself is maintained as an `unordered_set<string>` and serialized via `to_string`
+    // function to preserve readability.
+    std::set<sstring> feats_set = co_await _sys_ks.load_local_enabled_features();
+    for (feature& f : _feat.registered_features() | boost::adaptors::map_values) {
+        if (!f && features.contains(f.name())) {
+            feats_set.emplace(f.name());
+        }
+    }
+    co_await _sys_ks.save_local_enabled_features(std::move(feats_set));
+
+    co_await _feat.container().invoke_on_all([&features] (feature_service& fs) -> future<> {
+        std::set<std::string_view> features_v = boost::copy_range<std::set<std::string_view>>(features);
+        co_await fs.enable(std::move(features_v));
+    });
 }
 
 future<> feature_service::enable(std::set<std::string_view> list) {
@@ -195,9 +281,6 @@ future<> feature_service::enable(std::set<std::string_view> list) {
     return seastar::async([this, list = std::move(list)] {
         for (gms::feature& f : _registered_features | boost::adaptors::map_values) {
             if (list.contains(f.name())) {
-                if (db::qctx && !f) {
-                    persist_enabled_feature_info(f);
-                }
                 f.enable();
             }
         }

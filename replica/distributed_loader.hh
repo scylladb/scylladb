@@ -76,8 +76,6 @@ class distributed_loader {
             sharded<replica::database>& db, sharded<db::view::view_update_generator>& view_update_generator,
             bool needs_view_update, sstring ks, sstring cf);
     static future<> populate_keyspace(distributed<replica::database>& db, sstring datadir, sstring ks_name);
-    static future<> cleanup_column_family_temp_sst_dirs(sstring sstdir);
-    static future<> handle_sstables_pending_delete(sstring pending_deletes_dir);
 
 public:
     static future<> init_system_keyspace(sharded<db::system_keyspace>& sys_ks, distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<service::raft_group_registry>& raft_gr, db::config& cfg, system_table_load_phase phase);

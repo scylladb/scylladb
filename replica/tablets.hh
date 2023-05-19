@@ -26,10 +26,6 @@ class query_processor;
 
 }
 
-namespace service {
-class storage_proxy;
-}
-
 namespace replica {
 
 schema_ptr make_tablets_schema();
@@ -60,6 +56,6 @@ future<> save_tablet_metadata(replica::database&, const locator::tablet_metadata
 future<locator::tablet_metadata> read_tablet_metadata(cql3::query_processor&);
 
 /// Reads tablet metadata from system.tablets in the form of mutations.
-future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<service::storage_proxy>&);
+future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<database>&);
 
 } // namespace replica

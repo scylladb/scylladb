@@ -322,10 +322,10 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
         require_exist(file_name, true);
     };
 
-    auto temp_sst_dir_2 = sst_dir + "/" + sst::sst_dir_basename(generation_from_value(2));
+    auto temp_sst_dir_2 = fmt::format("{}/{}{}", sst_dir, generation_from_value(2), tempdir_extension);
     touch_dir(temp_sst_dir_2);
 
-    auto temp_sst_dir_3 = sst_dir + "/" + sst::sst_dir_basename(generation_from_value(3));
+    auto temp_sst_dir_3 = fmt::format("{}/{}{}", sst_dir, generation_from_value(3), tempdir_extension);
     touch_dir(temp_sst_dir_3);
 
     auto temp_file_name = sst::filename(temp_sst_dir_3, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(3), sst::format_types::big, component_type::TemporaryTOC);
@@ -358,7 +358,7 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
     sstring ks = "system";
     sstring cf = "peers-37f71aca7dc2383ba70672528af04d4f";
     sstring sst_dir = (data_dir.path() / std::string_view(ks) / std::string_view(cf)).string();
-    sstring pending_delete_dir = sst_dir + "/" + sst::pending_delete_dir_basename();
+    sstring pending_delete_dir = sst_dir + "/" + sstables::pending_delete_dir;
 
     auto require_exist = [] (const sstring& name, bool should_exist) {
         auto exists = file_exists(name).get0();

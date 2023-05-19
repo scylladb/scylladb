@@ -32,7 +32,6 @@ namespace sstables {
 
 namespace service {
 
-class storage_proxy;
 class storage_service;
 class raft_group_registry;
 struct topology;
@@ -280,12 +279,12 @@ public:
     /// overloads
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-    static query_mutations(distributed<service::storage_proxy>& proxy,
+    static query_mutations(distributed<replica::database>& db,
                     const sstring& ks_name,
                     const sstring& cf_name);
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-    static query_mutations(distributed<service::storage_proxy>& proxy,
+    static query_mutations(distributed<replica::database>& db,
                     const sstring& ks_name,
                     const sstring& cf_name,
                     const dht::partition_range& partition_range,
@@ -293,14 +292,14 @@ public:
 
     // Returns all data from given system table.
     // Intended to be used by code which is not performance critical.
-    static future<lw_shared_ptr<query::result_set>> query(distributed<service::storage_proxy>& proxy,
+    static future<lw_shared_ptr<query::result_set>> query(distributed<replica::database>& db,
                     const sstring& ks_name,
                     const sstring& cf_name);
 
     // Returns a slice of given system table.
     // Intended to be used by code which is not performance critical.
     static future<lw_shared_ptr<query::result_set>> query(
-        distributed<service::storage_proxy>& proxy,
+        distributed<replica::database>& db,
         const sstring& ks_name,
         const sstring& cf_name,
         const dht::decorated_key& key,
@@ -372,9 +371,9 @@ public:
      */
     future<std::unordered_set<dht::token>> get_local_tokens();
 
-    static future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
-    static future<std::set<sstring>> load_local_enabled_features();
-    static future<> save_local_enabled_features(std::set<sstring> features);
+    future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
+    future<std::set<sstring>> load_local_enabled_features();
+    future<> save_local_enabled_features(std::set<sstring> features);
 
     future<int> increment_and_get_generation();
     bool bootstrap_needed() const;
@@ -437,8 +436,6 @@ public:
     future<bool> cdc_is_rewritten();
     future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
 
-    static future<> enable_features_on_startup(sharded<gms::feature_service>& feat);
-
     // Load Raft Group 0 id from scylla.local
     static future<utils::UUID> get_raft_group0_id();
 
@@ -446,7 +443,7 @@ public:
     static future<> set_raft_group0_id(utils::UUID id);
 
     // Save advertised gossip feature set to system.local
-    static future<> save_local_supported_features(const std::set<std::string_view>& feats);
+    future<> save_local_supported_features(const std::set<std::string_view>& feats);
 
     // Get the last (the greatest in timeuuid order) state ID in the group 0 history table.
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
@@ -474,7 +471,7 @@ public:
 
     // Obtain the contents of the group 0 history table in mutation form.
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
-    static future<mutation> get_group0_history(distributed<service::storage_proxy>&);
+    static future<mutation> get_group0_history(distributed<replica::database>&);
 
     future<> sstables_registry_create_entry(sstring location, utils::UUID uuid, sstring status, sstables::entry_descriptor desc);
     future<utils::UUID> sstables_registry_lookup_entry(sstring location, sstables::generation_type gen);

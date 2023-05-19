@@ -19,6 +19,7 @@
 #include "log.hh"
 #include "sstable_directory.hh"
 #include "utils/lister.hh"
+#include "utils/overloaded_functor.hh"
 #include "replica/database.hh"
 #include "db/system_keyspace.hh"
 
@@ -56,6 +57,18 @@ sstable_directory::system_keyspace_components_lister::system_keyspace_components
 {
 }
 
+std::unique_ptr<sstable_directory::components_lister>
+sstable_directory::make_components_lister() {
+    return std::visit(overloaded_functor {
+        [this] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstable_directory::components_lister> {
+            return std::make_unique<sstable_directory::filesystem_components_lister>(_sstable_dir);
+        },
+        [this] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
+            return std::make_unique<sstable_directory::system_keyspace_components_lister>(_manager.system_keyspace(), _sstable_dir.native());
+        }
+    }, _storage_opts->value);
+}
+
 sstable_directory::sstable_directory(sstables_manager& manager,
         schema_ptr schema,
         lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
@@ -68,12 +81,14 @@ sstable_directory::sstable_directory(sstables_manager& manager,
     , _sstable_dir(std::move(sstable_dir))
     , _io_priority(std::move(io_prio))
     , _error_handler_gen(error_handler_gen)
-    , _lister(_manager.get_components_lister(*_storage_opts, _sstable_dir))
+    , _lister(make_components_lister())
     , _unshared_remote_sstables(smp::count)
 {}
 
 void sstable_directory::filesystem_components_lister::handle(sstables::entry_descriptor desc, fs::path filename) {
-    if ((desc.generation.as_int() % smp::count) != this_shard_id()) {
+    // TODO: decorate sstable_directory with some noncopyable_function<shard_id (generation_type)>
+    //       to communicate how different tables place sstables into shards.
+    if (!sstables::sstable_generation_generator::maybe_owned_by_this_shard(desc.generation)) {
         return;
     }
 
@@ -293,7 +308,7 @@ future<> sstable_directory::system_keyspace_components_lister::process(sstable_d
             // FIXME -- handle
             return make_ready_future<>();
         }
-        if ((desc.generation.as_int() % smp::count) != this_shard_id()) {
+        if (!sstable_generation_generator::maybe_owned_by_this_shard(desc.generation)) {
             return make_ready_future<>();
         }
 
@@ -483,7 +498,7 @@ future<> sstable_directory::delete_with_pending_deletion_log(std::vector<shared_
             }
         }
 
-        sstring pending_delete_dir = first->_storage->prefix() + "/" + sstable::pending_delete_dir_basename();
+        sstring pending_delete_dir = first->_storage->prefix() + "/" + sstables::pending_delete_dir;
         sstring pending_delete_log = format("{}/sstables-{}-{}.log", pending_delete_dir, gen_tracker.min(), gen_tracker.max());
         sstring tmp_pending_delete_log = pending_delete_log + ".tmp";
         sstlog.trace("Writing {}", tmp_pending_delete_log);
@@ -538,7 +553,6 @@ future<> sstable_directory::delete_with_pending_deletion_log(std::vector<shared_
 future<> sstable_directory::replay_pending_delete_log(fs::path pending_delete_log) {
     sstlog.debug("Reading pending_deletes log file {}", pending_delete_log);
     fs::path pending_delete_dir = pending_delete_log.parent_path();
-    assert(sstable::is_pending_delete_dir(pending_delete_dir));
     try {
         sstring sstdir = pending_delete_dir.parent_path().native();
         auto text = co_await seastar::util::read_entire_file_contiguous(pending_delete_log);
@@ -555,6 +569,60 @@ future<> sstable_directory::replay_pending_delete_log(fs::path pending_delete_lo
     } catch (...) {
         sstlog.warn("Error replaying {}: {}. Ignoring.", pending_delete_log, std::current_exception());
     }
+}
+
+future<> sstable_directory::garbage_collect() {
+    // First pass, cleanup temporary sstable directories and sstables pending delete.
+    co_await cleanup_column_family_temp_sst_dirs();
+    co_await handle_sstables_pending_delete();
+}
+
+future<> sstable_directory::cleanup_column_family_temp_sst_dirs() {
+    std::vector<future<>> futures;
+
+    co_await lister::scan_dir(_sstable_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [&] (fs::path sstdir, directory_entry de) {
+        // push futures that remove files/directories into an array of futures,
+        // so that the supplied callback will not block scan_dir() from
+        // reading the next entry in the directory.
+        fs::path dirpath = sstdir / de.name;
+        if (dirpath.extension().string() == tempdir_extension) {
+            sstlog.info("Found temporary sstable directory: {}, removing", dirpath);
+            futures.push_back(io_check([dirpath = std::move(dirpath)] () { return lister::rmdir(dirpath); }));
+        }
+        return make_ready_future<>();
+    });
+
+    co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
+}
+
+future<> sstable_directory::handle_sstables_pending_delete() {
+    auto pending_delete_dir = _sstable_dir / sstables::pending_delete_dir;
+    auto exists = co_await file_exists(pending_delete_dir.native());
+    if (!exists) {
+        co_return;
+    }
+
+    std::vector<future<>> futures;
+
+    co_await lister::scan_dir(pending_delete_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), [this, &futures] (fs::path dir, directory_entry de) {
+        // push nested futures that remove files/directories into an array of futures,
+        // so that the supplied callback will not block scan_dir() from
+        // reading the next entry in the directory.
+        fs::path file_path = dir / de.name;
+        if (file_path.extension() == ".tmp") {
+            sstlog.info("Found temporary pending_delete log file: {}, deleting", file_path);
+            futures.push_back(remove_file(file_path.string()));
+        } else if (file_path.extension() == ".log") {
+            sstlog.info("Found pending_delete log file: {}, replaying", file_path);
+            auto f = replay_pending_delete_log(std::move(file_path));
+            futures.push_back(std::move(f));
+        } else {
+            sstlog.debug("Found unknown file in pending_delete directory: {}, ignoring", file_path);
+        }
+        return make_ready_future<>();
+    });
+
+    co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
 }
 
 future<std::optional<sstables::generation_type>>

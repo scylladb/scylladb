@@ -302,7 +302,7 @@ class RandomTables():
         assert self.manager.cql is not None
         self.manager.cql.execute(f"DROP KEYSPACE {self.keyspace}")
 
-    async def verify_schema(self, table: Union[RandomTable, str] = None) -> None:
+    async def verify_schema(self, table: Union[RandomTable, str] = None, do_read_barrier: bool = True) -> None:
         """Verify schema of all active managed random tables"""
         if isinstance(table, RandomTable):
             tables = {table.name}
@@ -324,11 +324,12 @@ class RandomTables():
         cql = self.manager.cql
         assert cql
 
-        # Issue a read barrier on some node and then keep using that node to do the queries.
-        # This ensures that the queries return recent data (at least all data committed
-        # when `verify_schema` was called).
         host = await get_available_host(cql, time.time() + 60)
-        await read_barrier(cql, host)
+        if do_read_barrier:
+            # Issue a read barrier on some node and then keep using that node to do the queries.
+            # This ensures that the queries return recent data (at least all data committed
+            # when `verify_schema` was called).
+            await read_barrier(cql, host)
 
         res1 = {row.table_name for row in await cql.run_async(cql_stmt1, host=host)}
         assert not tables - res1, f"Tables {tables - res1} not present"

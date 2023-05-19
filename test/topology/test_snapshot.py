@@ -47,7 +47,7 @@ async def test_snapshot(manager, random_tables):
     logger.info("Driver connecting to D %s", server_d)
     await manager.driver_connect()
 
-    await random_tables.verify_schema()
+    await random_tables.verify_schema(do_read_barrier=False)
 
     # Start servers to have quorum for post-test checkup
     # TODO: remove once there's a way to disable post-test checkup

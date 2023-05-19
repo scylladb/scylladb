@@ -199,9 +199,9 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
     co_return std::move(tm);
 }
 
-future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<service::storage_proxy>& proxy) {
+future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<replica::database>& db) {
     auto s = db::system_keyspace::tablets();
-    auto rs = co_await db::system_keyspace::query_mutations(proxy, db::system_keyspace::NAME, db::system_keyspace::TABLETS);
+    auto rs = co_await db::system_keyspace::query_mutations(db, db::system_keyspace::NAME, db::system_keyspace::TABLETS);
     std::vector<canonical_mutation> result;
     result.reserve(rs->partitions().size());
     for (auto& p: rs->partitions()) {
