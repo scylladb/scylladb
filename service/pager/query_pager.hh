@@ -17,7 +17,8 @@
 #include "utils/result.hh"
 #include "exceptions/exceptions.hh"
 #include "exceptions/coordinator_result.hh"
-#include "coordinator_query.hh"
+
+class coordinator_query_result;
 
 namespace service {
 

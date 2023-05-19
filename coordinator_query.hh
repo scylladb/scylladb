@@ -16,12 +16,12 @@
 
 using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<locator::host_id>>;
 
-struct storage_proxy_coordinator_query_result {
+struct coordinator_query_result {
     foreign_ptr<lw_shared_ptr<query::result>> query_result;
     replicas_per_token_range last_replicas;
     db::read_repair_decision read_repair_decision;
 
-    storage_proxy_coordinator_query_result(foreign_ptr<lw_shared_ptr<query::result>> query_result,
+    coordinator_query_result(foreign_ptr<lw_shared_ptr<query::result>> query_result,
             replicas_per_token_range last_replicas = {},
             db::read_repair_decision read_repair_decision = db::read_repair_decision::NONE)
         : query_result(std::move(query_result))
@@ -29,5 +29,3 @@ struct storage_proxy_coordinator_query_result {
         , read_repair_decision(std::move(read_repair_decision)) {
     }
 };
-
-using coordinator_query_result = storage_proxy_coordinator_query_result;
