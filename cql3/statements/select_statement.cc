@@ -359,7 +359,7 @@ select_statement::do_execute(query_backend& qb,
     _stats.select_partition_range_scan_no_bypass_cache += _range_scan_no_bypass_cache;
 
     auto slice = make_partition_slice(options);
-    auto max_result_size = qb.proxy().get_max_result_size(slice);
+    auto max_result_size = qb.get_max_result_size(slice);
     auto command = ::make_lw_shared<query::read_command>(
             _schema->id(),
             _schema->version(),
@@ -536,7 +536,7 @@ indexed_table_select_statement::prepare_command_for_base_query(query_backend& qb
             _schema->id(),
             _schema->version(),
             std::move(slice),
-            qb.proxy().get_max_result_size(slice),
+            qb.get_max_result_size(slice),
             query::tombstone_limit(qb.get_tombstone_limit()),
             query::row_limit(get_limit(options)),
             query::partition_limit(query::max_partitions),
@@ -1255,7 +1255,7 @@ indexed_table_select_statement::read_posting_list(query_backend& qb,
             _view_schema->id(),
             _view_schema->version(),
             partition_slice,
-            qb.proxy().get_max_result_size(partition_slice),
+            qb.get_max_result_size(partition_slice),
             query::tombstone_limit(qb.get_tombstone_limit()),
             query::row_limit(limit),
             query::partition_limit(query::max_partitions),
@@ -1541,7 +1541,7 @@ parallelized_select_statement::do_execute(
         _schema->id(),
         _schema->version(),
         std::move(slice),
-        qb.proxy().get_max_result_size(slice),
+        qb.get_max_result_size(slice),
         query::tombstone_limit(qb.get_tombstone_limit()),
         query::row_limit(query::max_rows),
         query::partition_limit(query::max_partitions),

@@ -220,7 +220,7 @@ modification_statement::read_command(query_backend& qb, query::clustering_row_ra
         throw exceptions::invalid_request_exception(format("Write operation require a read but consistency {} is not supported on reads", cl));
     }
     query::partition_slice ps(std::move(ranges), *s, columns_to_read(), update_parameters::options);
-    const auto max_result_size = qb.proxy().get_max_result_size(ps);
+    const auto max_result_size = qb.get_max_result_size(ps);
     return make_lw_shared<query::read_command>(s->id(), s->version(), std::move(ps), query::max_result_size(max_result_size), query::tombstone_limit::max);
 }
 

@@ -91,7 +91,7 @@ lw_shared_ptr<query::read_command> cas_request::read_command(query_backend& qb) 
     options.set(query::partition_slice::option::always_return_static_content);
     query::partition_slice ps(std::move(ranges), *_schema, columns_to_read, options);
     ps.set_partition_row_limit(max_rows);
-    return make_lw_shared<query::read_command>(_schema->id(), _schema->version(), std::move(ps), qb.proxy().get_max_result_size(ps),
+    return make_lw_shared<query::read_command>(_schema->id(), _schema->version(), std::move(ps), qb.get_max_result_size(ps),
             query::tombstone_limit(qb.get_tombstone_limit()));
 }
 

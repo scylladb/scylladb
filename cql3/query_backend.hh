@@ -69,6 +69,7 @@ public:
     future<> truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms = std::nullopt);
 
     query::tombstone_limit get_tombstone_limit() const;
+    query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
 };
 
 // Make a backend, based on storage proxy.

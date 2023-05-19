@@ -110,6 +110,7 @@ public:
     virtual future<> truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms) = 0;
 
     virtual query::tombstone_limit get_tombstone_limit() const = 0;
+    virtual query::max_result_size get_max_result_size(const query::partition_slice& slice) const = 0;
 };
 
 query_backend::query_backend(shared_ptr<impl> impl) : _impl(std::move(impl)) { }
@@ -134,6 +135,9 @@ future<> query_backend::truncate_blocking(sstring keyspace, sstring cfname, std:
 
 query::tombstone_limit query_backend::get_tombstone_limit() const {
     return _impl->get_tombstone_limit();
+}
+query::max_result_size query_backend::get_max_result_size(const query::partition_slice& slice) const {
+    return _impl->get_max_result_size(slice);
 }
 
 class storage_proxy_query_backend : public query_backend::impl {
@@ -174,6 +178,9 @@ public:
 
     virtual query::tombstone_limit get_tombstone_limit() const override {
         return _proxy->get_tombstone_limit();
+    }
+    virtual query::max_result_size get_max_result_size(const query::partition_slice& slice) const override {
+        return _proxy->get_max_result_size(slice);
     }
 };
 

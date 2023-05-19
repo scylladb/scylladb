@@ -32,7 +32,7 @@ static future<> delete_ghost_rows(dht::partition_range_vector partition_ranges, 
     auto selection = cql3::selection::selection::for_columns(view, key_columns);
 
     query::partition_slice partition_slice(std::move(clustering_bounds), {},  {}, selection->get_query_options());
-    auto command = ::make_lw_shared<query::read_command>(view->id(), view->version(), partition_slice, qb.proxy().get_max_result_size(partition_slice),
+    auto command = ::make_lw_shared<query::read_command>(view->id(), view->version(), partition_slice, qb.get_max_result_size(partition_slice),
             query::tombstone_limit(qb.get_tombstone_limit()));
 
     tracing::trace(state.get_trace_state(), "Deleting ghost rows from partition ranges {}", partition_ranges);
