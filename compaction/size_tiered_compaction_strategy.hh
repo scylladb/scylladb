@@ -75,6 +75,7 @@ public:
 
     size_tiered_compaction_strategy(const std::map<sstring, sstring>& options);
     explicit size_tiered_compaction_strategy(const size_tiered_compaction_strategy_options& options);
+    static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 
     virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<sstables::shared_sstable> candidates) override;
 

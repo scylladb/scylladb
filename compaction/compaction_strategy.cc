@@ -549,6 +549,20 @@ leveled_compaction_strategy::leveled_compaction_strategy(const std::map<sstring,
 {
 }
 
+// options is a map of compaction strategy options and their values.
+// unchecked_options is an analogical map from which already checked options are deleted.
+// This helps making sure that only allowed options are being set.
+void leveled_compaction_strategy::validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    size_tiered_compaction_strategy_options::validate(options, unchecked_options);
+
+    auto tmp_value = compaction_strategy_impl::get_value(options, SSTABLE_SIZE_OPTION);
+    auto min_sstables_size = cql3::statements::property_definitions::to_long(SSTABLE_SIZE_OPTION, tmp_value, DEFAULT_MAX_SSTABLE_SIZE_IN_MB);
+    if (min_sstables_size <= 0) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be positive", SSTABLE_SIZE_OPTION, min_sstables_size));
+    }
+    unchecked_options.erase(SSTABLE_SIZE_OPTION);
+}
+
 std::unique_ptr<compaction_backlog_tracker::impl> leveled_compaction_strategy::make_backlog_tracker() const {
     return std::make_unique<leveled_compaction_backlog_tracker>(_max_sstable_size_in_mb, _stcs_options);
 }
@@ -582,6 +596,14 @@ time_window_compaction_strategy::time_window_compaction_strategy(const std::map<
     _use_clustering_key_filter = true;
 }
 
+// options is a map of compaction strategy options and their values.
+// unchecked_options is an analogical map from which already checked options are deleted.
+// This helps making sure that only allowed options are being set.
+void time_window_compaction_strategy::validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    time_window_compaction_strategy_options::validate(options, unchecked_options);
+    size_tiered_compaction_strategy_options::validate(options, unchecked_options);
+}
+
 std::unique_ptr<compaction_backlog_tracker::impl> time_window_compaction_strategy::make_backlog_tracker() const {
     return std::make_unique<time_window_backlog_tracker>(_options, _stcs_options);
 }
@@ -598,6 +620,13 @@ size_tiered_compaction_strategy::size_tiered_compaction_strategy(const std::map<
 size_tiered_compaction_strategy::size_tiered_compaction_strategy(const size_tiered_compaction_strategy_options& options)
     : _options(options)
 {}
+
+// options is a map of compaction strategy options and their values.
+// unchecked_options is an analogical map from which already checked options are deleted.
+// This helps making sure that only allowed options are being set.
+void size_tiered_compaction_strategy::validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    size_tiered_compaction_strategy_options::validate(options, unchecked_options);
+}
 
 std::unique_ptr<compaction_backlog_tracker::impl> size_tiered_compaction_strategy::make_backlog_tracker() const {
     return std::make_unique<size_tiered_backlog_tracker>(_options);
