@@ -32,7 +32,6 @@
 #include "service/query_state.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "data_dictionary/data_dictionary.hh"
-#include "service/storage_proxy.hh"
 #include "cql3/ut_name.hh"
 #include "cql3/util.hh"
 #include "types/map.hh"
@@ -482,10 +481,10 @@ bool cluster_describe_statement::should_add_range_ownership(const service::clien
     return !ks.empty() && !is_system_keyspace(ks) && !is_internal_keyspace(ks);
 }
 
-future<bytes_opt> cluster_describe_statement::range_ownership(const service::storage_proxy& proxy, const sstring& ks) const {
+future<bytes_opt> cluster_describe_statement::range_ownership(const cql3::query_backend& qb, const sstring& ks) const {
     auto [list_type, map_type] = range_ownership_type();
 
-    auto ranges = co_await proxy.describe_ring(ks);
+    auto ranges = co_await qb.describe_ring(ks);
     boost::sort(ranges, [] (const dht::token_range_endpoints& l, const dht::token_range_endpoints& r) {
         return std::stol(l._start_token) < std::stol(r._start_token);
     });
@@ -508,7 +507,6 @@ future<bytes_opt> cluster_describe_statement::range_ownership(const service::sto
 
 future<std::vector<std::vector<bytes_opt>>> cluster_describe_statement::describe(cql3::query_backend& qb, const service::client_state& client_state) const {   
     auto db = qb.db();
-    auto& proxy = qb.proxy();
 
     auto cluster = to_bytes(db.get_config().cluster_name());
     auto partitioner = to_bytes(db.get_config().partitioner());
@@ -521,7 +519,7 @@ future<std::vector<std::vector<bytes_opt>>> cluster_describe_statement::describe
     };
 
     if (should_add_range_ownership(client_state)) {
-        auto ro_map = co_await range_ownership(proxy, client_state.get_raw_keyspace());
+        auto ro_map = co_await range_ownership(qb, client_state.get_raw_keyspace());
         row.push_back(std::move(ro_map));
     }
     

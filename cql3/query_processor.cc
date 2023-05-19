@@ -116,6 +116,7 @@ public:
             tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false) = 0;
     virtual future<bool> cas(schema_ptr schema, shared_ptr<service::cas_request> request, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
             db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn, lowres_clock::time_point write_timeout, lowres_clock::time_point cas_timeout, bool write = true) = 0;
+    virtual future<std::vector<dht::token_range_endpoints>> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const = 0;
 
     virtual query::tombstone_limit get_tombstone_limit() const = 0;
     virtual query::max_result_size get_max_result_size(const query::partition_slice& slice) const = 0;
@@ -157,6 +158,9 @@ query_backend::mutate_with_triggers(std::vector<mutation> mutations, db::consist
 future<bool> query_backend::cas(schema_ptr schema, shared_ptr<service::cas_request> request, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
         db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn, lowres_clock::time_point write_timeout, lowres_clock::time_point cas_timeout, bool write) {
     return _impl->cas(std::move(schema), std::move(request), std::move(cmd), std::move(partition_ranges), query_options, cl_for_paxos, cl_for_learn, write_timeout, cas_timeout, write);
+}
+future<std::vector<dht::token_range_endpoints>> query_backend::describe_ring(const sstring& keyspace, bool include_only_local_dc) const {
+    return _impl->describe_ring(keyspace, include_only_local_dc);
 }
 
 query::tombstone_limit query_backend::get_tombstone_limit() const {
@@ -219,6 +223,9 @@ public:
     virtual future<bool> cas(schema_ptr schema, shared_ptr<service::cas_request> request, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
             db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn, lowres_clock::time_point write_timeout, lowres_clock::time_point cas_timeout, bool write) override {
         return _proxy->cas(std::move(schema), std::move(request), std::move(cmd), std::move(partition_ranges), query_options, cl_for_paxos, cl_for_learn, write_timeout, cas_timeout, write);
+    }
+    virtual future<std::vector<dht::token_range_endpoints>> describe_ring(const sstring& keyspace, bool include_only_local_dc) const override {
+        return _proxy->describe_ring(keyspace, include_only_local_dc);
     }
 
     virtual query::tombstone_limit get_tombstone_limit() const override {

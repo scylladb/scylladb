@@ -58,7 +58,7 @@ public:
 class cluster_describe_statement : public describe_statement {
 private:
     bool should_add_range_ownership(const service::client_state& client_state) const;
-    future<bytes_opt> range_ownership(const service::storage_proxy& proxy, const sstring& ks) const;
+    future<bytes_opt> range_ownership(const cql3::query_backend& qb, const sstring& ks) const;
 
 protected:
     virtual std::vector<lw_shared_ptr<column_specification>> get_column_specifications() const override;

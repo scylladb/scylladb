@@ -15,6 +15,7 @@
 #include "locator/token_metadata.hh"
 #include "exceptions/coordinator_result.hh"
 #include "coordinator_query.hh"
+#include "dht/token_range_endpoints.hh"
 
 namespace service {
 class forward_service;
@@ -81,6 +82,7 @@ public:
             tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false);
     future<bool> cas(schema_ptr schema, shared_ptr<service::cas_request> request, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
             db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn, lowres_clock::time_point write_timeout, lowres_clock::time_point cas_timeout, bool write = true);
+    future<std::vector<dht::token_range_endpoints>> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const;
 
     query::tombstone_limit get_tombstone_limit() const;
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
