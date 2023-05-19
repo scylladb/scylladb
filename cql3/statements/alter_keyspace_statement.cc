@@ -80,7 +80,7 @@ future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<
 cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
     try {
         auto old_ksm = qb.db().find_keyspace(_name).metadata();
-        const auto& tm = *qb.proxy().get_token_metadata_ptr();
+        const auto& tm = *qb.get_token_metadata_ptr();
 
         auto m = qb.get_migration_manager().prepare_keyspace_update_announcement(_attrs->as_ks_metadata_update(old_ksm, tm), ts);
 

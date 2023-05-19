@@ -12,6 +12,7 @@
 
 #include "data_dictionary/data_dictionary.hh"
 #include "query-request.hh"
+#include "locator/token_metadata.hh"
 
 namespace service {
 class forward_service;
@@ -59,6 +60,7 @@ public:
     wasmtime::Engine& wasm_engine();
     wasm::instance_cache& wasm_instance_cache();
     wasm::alien_thread_runner& alien_runner();
+    locator::token_metadata_ptr get_token_metadata_ptr();
 
     //FIXME: get rid of this, by providing abstract methods for all proxy methods currently used directly.
     service::storage_proxy& proxy();

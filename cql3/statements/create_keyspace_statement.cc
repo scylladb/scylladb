@@ -95,7 +95,7 @@ void create_keyspace_statement::validate(query_backend& qb, const service::clien
 
 future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> create_keyspace_statement::prepare_schema_mutations(query_backend& qb, api::timestamp_type ts) const {
     using namespace cql_transport;
-    const auto& tm = *qb.proxy().get_token_metadata_ptr();
+    const auto& tm = *qb.get_token_metadata_ptr();
     ::shared_ptr<event::schema_change> ret;
     std::vector<mutation> m;
 
@@ -177,7 +177,7 @@ std::optional<sstring> check_restricted_replication_strategy(
         case db::tri_mode_restriction_t::mode::FALSE:
             // Scylla was configured to allow SimpleStrategy, but let's warn
             // if it's used on a cluster which *already* has multiple DCs:
-            if (qb.proxy().get_token_metadata_ptr()->get_topology().get_datacenter_endpoints().size() > 1) {
+            if (qb.get_token_metadata_ptr()->get_topology().get_datacenter_endpoints().size() > 1) {
                 return "Using SimpleStrategy in a multi-datacenter environment is not recommended.";
             }
             break;
