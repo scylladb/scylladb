@@ -137,6 +137,29 @@ static db_clock::duration validate_tombstone_compaction_interval(const std::map<
     return tombstone_compaction_interval;
 }
 
+void compaction_strategy_impl::validate_options_for_strategy_type(const std::map<sstring, sstring>& options, sstables::compaction_strategy_type type) {
+    auto unchecked_options = options;
+    compaction_strategy_impl::validate_options(options, unchecked_options);
+    switch (type) {
+        case compaction_strategy_type::size_tiered:
+            size_tiered_compaction_strategy::validate_options(options, unchecked_options);
+            break;
+        case compaction_strategy_type::leveled:
+            leveled_compaction_strategy::validate_options(options, unchecked_options);
+            break;
+        case compaction_strategy_type::time_window:
+            time_window_compaction_strategy::validate_options(options, unchecked_options);
+            break;
+        default:
+            break;
+    }
+
+    unchecked_options.erase("class");
+    if (!unchecked_options.empty()) {
+        throw exceptions::configuration_exception(fmt::format("Invalid compaction strategy options {} for chosen strategy type", unchecked_options));
+    }
+}
+
 // options is a map of compaction strategy options and their values.
 // unchecked_options is an analogical map from which already checked options are deleted.
 // This helps making sure that only allowed options are being set.

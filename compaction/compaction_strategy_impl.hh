@@ -35,6 +35,7 @@ protected:
 public:
     static std::optional<sstring> get_value(const std::map<sstring, sstring>& options, const sstring& name);
     static void validate_min_max_threshold(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
+    static void validate_options_for_strategy_type(const std::map<sstring, sstring>& options, sstables::compaction_strategy_type type);
 protected:
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
     compaction_strategy_impl() = default;
