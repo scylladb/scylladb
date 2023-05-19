@@ -204,8 +204,6 @@ def find_scylla():
 def run_scylla_cmd(pid, dir):
     ip = pid_to_ip(pid)
     print('Booting Scylla on ' + ip + ' in ' + dir + '...')
-    global scylla
-    global source_path
     # To make things easier for users of "killall", "top", and similar,
     # we want the Scylla executable which we run during the test to have
     # a different name from manual runs of Scylla. Unfortunately, using
