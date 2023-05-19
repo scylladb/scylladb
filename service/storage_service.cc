@@ -447,6 +447,8 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
                 // Rebuilding node is normal
                 co_await add_normal_node(id, rs);
                 break;
+            case node_state::left_token_ring:
+                break;
             default:
                 on_fatal_internal_error(slogger, ::format("Unexpected state {} for node {}", rs.state, id));
             }
@@ -1205,10 +1207,10 @@ class topology_coordinator {
                            .set_version(_topo_sm._topology.version + 1)
                            .with_node(node.id)
                            .del("tokens")
-                           .set("node_state", node_state::left);
+                           .set("node_state", node_state::left_token_ring);
                     auto str = ::format("{}: read fence completed", node.rs->state);
                     co_await update_topology_state(take_guard(std::move(node)), {builder.build()}, std::move(str));
-                    }
+                }
                     break;
                 case node_state::replacing: {
                     topology_mutation_builder builder1(node.guard.write_timestamp());
@@ -1342,6 +1344,27 @@ class topology_coordinator {
                        .set("node_state", node_state::normal)
                        .del("rebuild_option");
                 co_await update_topology_state(take_guard(std::move(node)), {builder.build()}, "rebuilding completed");
+            }
+                break;
+            case node_state::left_token_ring: {
+                // Wait until other nodes observe the new token ring and stop sending writes to this node.
+                {
+                    auto id = node.id;
+                    auto f = co_await coroutine::as_future(global_token_metadata_barrier(std::move(node)));
+                    if (f.failed()) {
+                        slogger.error("raft topology: node_state::left_token_ring (node: {}), "
+                                      "global_token_metadata_barrier failed, error {}",
+                                      id, f.get_exception());
+                        break;
+                    }
+                    node = std::move(f).get();
+                }
+
+                topology_mutation_builder builder(node.guard.write_timestamp());
+                builder.with_node(node.id)
+                       .set("node_state", node_state::left);
+                auto str = ::format("finished decommissioning node {}", node.id);
+                co_await update_topology_state(take_guard(std::move(node)), {builder.build()}, std::move(str));
             }
                 break;
             case node_state::bootstrapping:
@@ -5114,6 +5137,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                     result.status = raft_topology_cmd_result::command_status::success;
                 }
                 break;
+                case node_state::left_token_ring:
                 case node_state::left:
                 case node_state::none:
                 case node_state::removing:
