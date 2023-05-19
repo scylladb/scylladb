@@ -112,6 +112,8 @@ public:
             db::consistency_level cl, coordinator_query_options optional_params) = 0;
     virtual future<coordinator_query_result> query(schema_ptr, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
             db::consistency_level cl, coordinator_query_options optional_params) = 0;
+    virtual future<result<>> mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl, lowres_clock::time_point timeout, bool should_mutate_atomically,
+            tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false) = 0;
 
     virtual query::tombstone_limit get_tombstone_limit() const = 0;
     virtual query::max_result_size get_max_result_size(const query::partition_slice& slice) const = 0;
@@ -144,6 +146,11 @@ future<coordinator_query_result>
 query_backend::query(schema_ptr s, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl, coordinator_query_options optional_params) {
     return _impl->query(std::move(s), std::move(cmd), std::move(partition_ranges), cl, optional_params);
+}
+future<exceptions::coordinator_result<>>
+query_backend::mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl, lowres_clock::time_point timeout, bool should_mutate_atomically,
+        tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters) {
+    return _impl->mutate_with_triggers(std::move(mutations), cl, timeout, should_mutate_atomically, std::move(tr_state), std::move(permit), allow_limit, raw_counters);
 }
 
 query::tombstone_limit query_backend::get_tombstone_limit() const {
@@ -197,6 +204,11 @@ public:
     query(schema_ptr s, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
             db::consistency_level cl, coordinator_query_options optional_params) override {
         return _proxy->query(std::move(s), std::move(cmd), std::move(partition_ranges), cl, optional_params);
+    }
+    virtual future<exceptions::coordinator_result<>>
+    mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl, lowres_clock::time_point timeout, bool should_mutate_atomically,
+            tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters) override {
+        return _proxy->mutate_with_triggers(std::move(mutations), cl, timeout, should_mutate_atomically, std::move(tr_state), std::move(permit), allow_limit, raw_counters);
     }
 
     virtual query::tombstone_limit get_tombstone_limit() const override {
