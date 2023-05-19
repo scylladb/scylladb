@@ -195,13 +195,13 @@ std::optional<sstring> check_restricted_replication_strategy(
     for (auto opt : attrs.get_replication_options()) {
         try {
             auto rf = std::stol(opt.second);
-            if (rf > 0 && rf < qb.proxy().data_dictionary().get_config().minimum_keyspace_rf()) {
+            if (rf > 0 && rf < qb.db().get_config().minimum_keyspace_rf()) {
                 throw exceptions::configuration_exception(format(
                     "Replication factor {}={} is forbidden by the current "
                     "configuration setting of minimum_keyspace_rf={}. Please "
                     "increase replication factor, or lower minimum_keyspace_rf "
                     "set in the configuration.", opt.first, opt.second,
-                    qb.proxy().data_dictionary().get_config().minimum_keyspace_rf()));
+                    qb.db().get_config().minimum_keyspace_rf()));
             }
         } catch (std::invalid_argument&) {
         } catch (std::out_of_range& ) {
