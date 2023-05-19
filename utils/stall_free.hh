@@ -95,7 +95,7 @@ concept TriviallyClearableSequence =
 
 template <typename T>
 concept Container = Iterable<T> && requires (T x, typename T::iterator it) {
-    { x.erase(it) } -> std::same_as<typename T::iterator>;
+    x.erase(it);
 };
 
 template <typename T>
