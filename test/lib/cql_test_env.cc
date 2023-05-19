@@ -693,7 +693,7 @@ public:
                 std::ref(raft_address_map), std::ref(ms), std::ref(gossiper), std::ref(fd)).get();
             auto stop_raft_gr = deferred_stop(raft_gr);
 
-            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(ms), std::ref(mm), std::ref(gossiper)).get();
+            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(ms), std::ref(mm), std::ref(gossiper), scheduling_groups.streaming_scheduling_group).get();
             auto stop_streaming = defer([&stream_manager] { stream_manager.stop().get(); });
 
             sharded<sstables::directory_semaphore> sst_dir_semaphore;
