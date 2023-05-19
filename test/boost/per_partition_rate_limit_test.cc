@@ -66,7 +66,7 @@ SEASTAR_TEST_CASE(test_internal_operation_filtering) {
                         cmd,
                         {dht::partition_range(dk)},
                         db::consistency_level::ALL,
-                        service::storage_proxy::coordinator_query_options(
+                        coordinator_query_options(
                                 db::timeout_clock::now() + std::chrono::seconds(10),
                                 empty_service_permit(),
                                 service::client_state::for_internal_calls())).get();

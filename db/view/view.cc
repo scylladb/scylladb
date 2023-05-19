@@ -2668,7 +2668,7 @@ void delete_ghost_rows_visitor::accept_new_row(const clustering_key& ck, const q
     auto command = ::make_lw_shared<query::read_command>(_base_schema->id(), _base_schema->version(), partition_slice,
             _proxy.get_max_result_size(partition_slice), query::tombstone_limit(_proxy.get_tombstone_limit()));
     auto timeout = db::timeout_clock::now() + _timeout_duration;
-    service::storage_proxy::coordinator_query_options opts{timeout, _state.get_permit(), _state.get_client_state(), _state.get_trace_state()};
+    coordinator_query_options opts{timeout, _state.get_permit(), _state.get_client_state(), _state.get_trace_state()};
     auto base_qr = _proxy.query(_base_schema, command, std::move(partition_ranges), db::consistency_level::ALL, opts).get0();
     query::result& result = *base_qr.query_result;
     if (result.row_count().value_or(0) == 0) {

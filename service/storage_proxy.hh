@@ -24,7 +24,6 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include "storage_proxy_stats.hh"
-#include "service_permit.hh"
 #include "cdc/stats.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "db/hints/host_filter.hh"
@@ -148,35 +147,6 @@ public:
     using stats = storage_proxy_stats::stats;
     using global_stats = storage_proxy_stats::global_stats;
     using cdc_stats = cdc::stats;
-
-    class coordinator_query_options {
-        clock_type::time_point _timeout;
-
-    public:
-        service_permit permit;
-        client_state& cstate;
-        tracing::trace_state_ptr trace_state = nullptr;
-        replicas_per_token_range preferred_replicas;
-        std::optional<db::read_repair_decision> read_repair_decision;
-
-        coordinator_query_options(clock_type::time_point timeout,
-                service_permit permit_,
-                client_state& client_state_,
-                tracing::trace_state_ptr trace_state = nullptr,
-                replicas_per_token_range preferred_replicas = { },
-                std::optional<db::read_repair_decision> read_repair_decision = { })
-            : _timeout(timeout)
-            , permit(std::move(permit_))
-            , cstate(client_state_)
-            , trace_state(std::move(trace_state))
-            , preferred_replicas(std::move(preferred_replicas))
-            , read_repair_decision(read_repair_decision) {
-        }
-
-        clock_type::time_point timeout(storage_proxy& sp) const {
-            return _timeout;
-        }
-    };
 
     // Holds  a list of endpoints participating in CAS request, for a given
     // consistency level, token, and state of joining/leaving nodes.

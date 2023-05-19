@@ -5239,7 +5239,7 @@ future<result<coordinator_query_result>>
 storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
-        storage_proxy::coordinator_query_options query_options) {
+        coordinator_query_options query_options) {
     utils::small_vector<std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>, 1> exec;
     exec.reserve(partition_ranges.size());
 
@@ -5572,7 +5572,7 @@ future<result<coordinator_query_result>>
 storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector partition_ranges,
         db::consistency_level cl,
-        storage_proxy::coordinator_query_options query_options) {
+        coordinator_query_options query_options) {
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     replica::table& table = _db.local().find_column_family(schema->id());
     auto erm = table.get_effective_replication_map();
@@ -5636,7 +5636,7 @@ storage_proxy::query(schema_ptr s,
     lw_shared_ptr<query::read_command> cmd,
     dht::partition_range_vector&& partition_ranges,
     db::consistency_level cl,
-    storage_proxy::coordinator_query_options query_options)
+    coordinator_query_options query_options)
 {
     utils::get_local_injector().inject("storage_proxy_query_failure", [] { throw std::runtime_error("Error injection: failing a query"); });
     return query_result(std::move(s), std::move(cmd), std::move(partition_ranges), cl, std::move(query_options))
@@ -5648,7 +5648,7 @@ storage_proxy::query_result(schema_ptr s,
     lw_shared_ptr<query::read_command> cmd,
     dht::partition_range_vector&& partition_ranges,
     db::consistency_level cl,
-    storage_proxy::coordinator_query_options query_options)
+    coordinator_query_options query_options)
 {
     if (slogger.is_enabled(logging::log_level::trace) || qlogger.is_enabled(logging::log_level::trace)) {
         static thread_local int next_id = 0;
@@ -5686,7 +5686,7 @@ storage_proxy::do_query(schema_ptr s,
     lw_shared_ptr<query::read_command> cmd,
     dht::partition_range_vector&& partition_ranges,
     db::consistency_level cl,
-    storage_proxy::coordinator_query_options query_options)
+    coordinator_query_options query_options)
 {
     static auto make_empty = [] {
         return make_ready_future<result<coordinator_query_result>>(make_foreign(make_lw_shared<query::result>()));
@@ -5735,7 +5735,7 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
     lw_shared_ptr<query::read_command> cmd,
     dht::partition_range_vector&& partition_ranges,
     db::consistency_level cl,
-    storage_proxy::coordinator_query_options query_options) {
+    coordinator_query_options query_options) {
     if (partition_ranges.size() != 1 || !query::is_single_partition(partition_ranges[0])) {
         return make_exception_future<coordinator_query_result>(
                 exceptions::invalid_request_exception("SERIAL/LOCAL_SERIAL consistency may only be requested for one partition at a time"));
@@ -5828,7 +5828,7 @@ static mutation_write_failure_exception read_failure_to_write(schema_ptr s, read
  * WARNING: the function should be called on a shard that owns the key cas() operates on
  */
 future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
-        dht::partition_range_vector partition_ranges, storage_proxy::coordinator_query_options query_options,
+        dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
         db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
         clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write) {
 
