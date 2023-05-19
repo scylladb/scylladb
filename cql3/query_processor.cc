@@ -114,6 +114,8 @@ public:
             db::consistency_level cl, coordinator_query_options optional_params) = 0;
     virtual future<result<>> mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl, lowres_clock::time_point timeout, bool should_mutate_atomically,
             tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false) = 0;
+    virtual future<bool> cas(schema_ptr schema, shared_ptr<service::cas_request> request, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
+            db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn, lowres_clock::time_point write_timeout, lowres_clock::time_point cas_timeout, bool write = true) = 0;
 
     virtual query::tombstone_limit get_tombstone_limit() const = 0;
     virtual query::max_result_size get_max_result_size(const query::partition_slice& slice) const = 0;
@@ -151,6 +153,10 @@ future<exceptions::coordinator_result<>>
 query_backend::mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl, lowres_clock::time_point timeout, bool should_mutate_atomically,
         tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters) {
     return _impl->mutate_with_triggers(std::move(mutations), cl, timeout, should_mutate_atomically, std::move(tr_state), std::move(permit), allow_limit, raw_counters);
+}
+future<bool> query_backend::cas(schema_ptr schema, shared_ptr<service::cas_request> request, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
+        db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn, lowres_clock::time_point write_timeout, lowres_clock::time_point cas_timeout, bool write) {
+    return _impl->cas(std::move(schema), std::move(request), std::move(cmd), std::move(partition_ranges), query_options, cl_for_paxos, cl_for_learn, write_timeout, cas_timeout, write);
 }
 
 query::tombstone_limit query_backend::get_tombstone_limit() const {
@@ -209,6 +215,10 @@ public:
     mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl, lowres_clock::time_point timeout, bool should_mutate_atomically,
             tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters) override {
         return _proxy->mutate_with_triggers(std::move(mutations), cl, timeout, should_mutate_atomically, std::move(tr_state), std::move(permit), allow_limit, raw_counters);
+    }
+    virtual future<bool> cas(schema_ptr schema, shared_ptr<service::cas_request> request, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
+            db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn, lowres_clock::time_point write_timeout, lowres_clock::time_point cas_timeout, bool write) override {
+        return _proxy->cas(std::move(schema), std::move(request), std::move(cmd), std::move(partition_ranges), query_options, cl_for_paxos, cl_for_learn, write_timeout, cas_timeout, write);
     }
 
     virtual query::tombstone_limit get_tombstone_limit() const override {

@@ -20,6 +20,7 @@ namespace service {
 class forward_service;
 class migration_manager;
 class raft_group0_client;
+class cas_request;
 class storage_proxy;
 }
 
@@ -78,6 +79,8 @@ public:
             db::consistency_level cl, coordinator_query_options optional_params);
     future<result<>> mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl, lowres_clock::time_point timeout, bool should_mutate_atomically,
             tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false);
+    future<bool> cas(schema_ptr schema, shared_ptr<service::cas_request> request, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
+            db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn, lowres_clock::time_point write_timeout, lowres_clock::time_point cas_timeout, bool write = true);
 
     query::tombstone_limit get_tombstone_limit() const;
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;
