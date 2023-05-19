@@ -110,6 +110,8 @@ public:
     virtual future<> truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms) = 0;
     virtual future<result<coordinator_query_result>> query_result(schema_ptr, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
             db::consistency_level cl, coordinator_query_options optional_params) = 0;
+    virtual future<coordinator_query_result> query(schema_ptr, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
+            db::consistency_level cl, coordinator_query_options optional_params) = 0;
 
     virtual query::tombstone_limit get_tombstone_limit() const = 0;
     virtual query::max_result_size get_max_result_size(const query::partition_slice& slice) const = 0;
@@ -137,6 +139,11 @@ future<> query_backend::truncate_blocking(sstring keyspace, sstring cfname, std:
 future<exceptions::coordinator_result<coordinator_query_result>> query_backend::query_result(schema_ptr s, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl, coordinator_query_options optional_params) {
     return _impl->query_result(std::move(s), std::move(cmd), std::move(partition_ranges), cl, optional_params);
+}
+future<coordinator_query_result>
+query_backend::query(schema_ptr s, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
+        db::consistency_level cl, coordinator_query_options optional_params) {
+    return _impl->query(std::move(s), std::move(cmd), std::move(partition_ranges), cl, optional_params);
 }
 
 query::tombstone_limit query_backend::get_tombstone_limit() const {
@@ -185,6 +192,11 @@ public:
     query_result(schema_ptr s, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
             db::consistency_level cl, coordinator_query_options optional_params) override {
         return _proxy->query_result(std::move(s), std::move(cmd), std::move(partition_ranges), cl, optional_params);
+    }
+    virtual future<coordinator_query_result>
+    query(schema_ptr s, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
+            db::consistency_level cl, coordinator_query_options optional_params) override {
+        return _proxy->query(std::move(s), std::move(cmd), std::move(partition_ranges), cl, optional_params);
     }
 
     virtual query::tombstone_limit get_tombstone_limit() const override {

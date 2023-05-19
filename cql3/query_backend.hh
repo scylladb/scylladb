@@ -74,6 +74,8 @@ public:
     future<> truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms = std::nullopt);
     future<result<coordinator_query_result>> query_result(schema_ptr, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
             db::consistency_level cl, coordinator_query_options optional_params);
+    future<coordinator_query_result> query(schema_ptr, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
+            db::consistency_level cl, coordinator_query_options optional_params);
 
     query::tombstone_limit get_tombstone_limit() const;
     query::max_result_size get_max_result_size(const query::partition_slice& slice) const;

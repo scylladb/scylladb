@@ -129,7 +129,7 @@ modification_statement::get_mutations(query_backend& qb, const query_options& op
     if (requires_read()) {
         lw_shared_ptr<query::read_command> cmd = read_command(qb, ranges, cl);
         // FIXME: ignoring "local"
-        f = qb.proxy().query(s, cmd, dht::partition_range_vector(keys), cl,
+        f = qb.query(s, cmd, dht::partition_range_vector(keys), cl,
                 {timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()}).then(
 
                 [this, cmd] (auto cqr) {
