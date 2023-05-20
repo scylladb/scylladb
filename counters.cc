@@ -12,6 +12,18 @@
 
 #include <boost/range/algorithm/sort.hpp>
 
+auto fmt::formatter<counter_shard_view>::format(const counter_shard_view& csv,
+                                                fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{{global_shard id: {} value: {}, clock: {}}}",
+                          csv.id(), csv.value(), csv.logical_clock());
+}
+
+auto fmt::formatter<counter_cell_view>::format(const counter_cell_view& ccv,
+                                               fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{{counter_cell timestamp: {} shards: {{{}}}}}",
+                          ccv.timestamp(), fmt::join(ccv.shards(), ", "));
+}
+
 void counter_cell_builder::do_sort_and_remove_duplicates()
 {
     boost::range::sort(_shards, [] (auto& a, auto& b) { return a.id() < b.id(); });
