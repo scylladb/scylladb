@@ -2270,7 +2270,8 @@ SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
                     auto acv = ac_o_c.as_atomic_cell(s->regular_column_at(id));
                     counter_cell_view ccv(acv);
                     counter_shard_view::less_compare_by_id cmp;
-                    BOOST_REQUIRE_MESSAGE(boost::algorithm::is_sorted(ccv.shards(), cmp), ccv << " is expected to be sorted");
+                    BOOST_REQUIRE_MESSAGE(boost::algorithm::is_sorted(ccv.shards(), cmp),
+                                          fmt::format("{} is expected to be sorted", ccv));
                     BOOST_REQUIRE_EQUAL(ccv.total_value(), expected_value);
                     n++;
                 });

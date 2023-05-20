@@ -88,7 +88,14 @@ public:
 
 using counter_shard_view = basic_counter_shard_view<mutable_view::no>;
 
-std::ostream& operator<<(std::ostream& os, counter_shard_view csv);
+template <>
+struct fmt::formatter<counter_shard_view> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const counter_shard_view& csv, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{{global_shard id: {} value: {}, clock: {}}}",
+                              csv.id(), csv.value(), csv.logical_clock());
+    }
+};
 
 class counter_shard {
     counter_id _id;
@@ -346,8 +353,15 @@ struct counter_cell_view : basic_counter_cell_view<mutable_view::no> {
     // Computes a counter cell containing minimal amount of data which, when
     // applied to 'b' returns the same cell as 'a' and 'b' applied together.
     static std::optional<atomic_cell> difference(atomic_cell_view a, atomic_cell_view b);
+};
 
-    friend std::ostream& operator<<(std::ostream& os, counter_cell_view ccv);
+template <>
+struct fmt::formatter<counter_cell_view> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const counter_cell_view& ccv, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{{counter_cell timestamp: {} shards: {{{}}}}}",
+                              ccv.timestamp(), fmt::join(ccv.shards(), ", "));
+    }
 };
 
 struct counter_cell_mutable_view : basic_counter_cell_view<mutable_view::yes> {

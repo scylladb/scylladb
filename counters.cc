@@ -12,17 +12,6 @@
 
 #include <boost/range/algorithm/sort.hpp>
 
-std::ostream& operator<<(std::ostream& os, counter_shard_view csv) {
-    fmt::print(os, "{{global_shard id: {} value: {}, clock: {}}}",
-               csv.id(), csv.value(), csv.logical_clock());
-    return os;
-}
-
-std::ostream& operator<<(std::ostream& os, counter_cell_view ccv) {
-    fmt::print(os, "{{counter_cell timestamp: {} shards: {{{}}}}}", ccv.timestamp(), fmt::join(ccv.shards(), ", "));
-    return os;
-}
-
 void counter_cell_builder::do_sort_and_remove_duplicates()
 {
     boost::range::sort(_shards, [] (auto& a, auto& b) { return a.id() < b.id(); });
