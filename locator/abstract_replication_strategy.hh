@@ -67,6 +67,7 @@ protected:
     replication_strategy_type _my_type;
     bool _per_table = false;
     bool _uses_tablets = false;
+    bool _natural_endpoints_depend_on_token = true;
 
     template <typename... Args>
     void err(const char* fmt, Args&&... args) const {
@@ -92,7 +93,7 @@ public:
 
     // Evaluates to true iff calculate_natural_endpoints
     // returns different results for different tokens.
-    virtual bool natural_endpoints_depend_on_token() const noexcept { return true; }
+    bool natural_endpoints_depend_on_token() const noexcept { return _natural_endpoints_depend_on_token; }
 
     // The returned vector has size O(number of normal token owners), which is O(number of nodes in the cluster).
     // Note: it is not guaranteed that the function will actually yield. If the complexity of a particular implementation

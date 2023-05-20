@@ -18,8 +18,6 @@ class everywhere_replication_strategy : public abstract_replication_strategy {
 public:
     everywhere_replication_strategy(const replication_strategy_config_options& config_options);
 
-    virtual bool natural_endpoints_depend_on_token() const noexcept override { return false; }
-
     virtual future<endpoint_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const override;
 
     virtual void validate_options(const gms::feature_service&) const override { /* noop */ }

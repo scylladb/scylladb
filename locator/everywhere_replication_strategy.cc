@@ -17,7 +17,9 @@
 namespace locator {
 
 everywhere_replication_strategy::everywhere_replication_strategy(const replication_strategy_config_options& config_options) :
-        abstract_replication_strategy(config_options, replication_strategy_type::everywhere_topology) {}
+        abstract_replication_strategy(config_options, replication_strategy_type::everywhere_topology) {
+    _natural_endpoints_depend_on_token = false;
+}
 
 future<endpoint_set> everywhere_replication_strategy::calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const {
     auto eps = tm.get_all_endpoints();

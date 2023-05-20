@@ -15,7 +15,9 @@
 namespace locator {
 
 local_strategy::local_strategy(const replication_strategy_config_options& config_options) :
-        abstract_replication_strategy(config_options, replication_strategy_type::local) {}
+        abstract_replication_strategy(config_options, replication_strategy_type::local) {
+    _natural_endpoints_depend_on_token = false;
+}
 
 future<endpoint_set> local_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm) const {
     return make_ready_future<endpoint_set>(endpoint_set({utils::fb_utilities::get_broadcast_address()}));
