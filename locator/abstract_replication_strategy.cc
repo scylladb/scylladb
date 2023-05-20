@@ -287,10 +287,10 @@ future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 vnode_effective_replication_map::get_range_addresses() const {
     const token_metadata& tm = *_tmptr;
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;
-    for (const auto& [t, eps] : _replication_map) {
+    for (auto& t : tm.sorted_tokens()) {
         dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
         for (auto& r : ranges) {
-            ret.emplace(r, eps);
+            ret.emplace(r, get_natural_endpoints(t));
         }
         co_await coroutine::maybe_yield();
     }
