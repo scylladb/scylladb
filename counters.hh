@@ -90,11 +90,7 @@ using counter_shard_view = basic_counter_shard_view<mutable_view::no>;
 
 template <>
 struct fmt::formatter<counter_shard_view> : fmt::formatter<std::string_view> {
-    template <typename FormatContext>
-    auto format(const counter_shard_view& csv, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{{global_shard id: {} value: {}, clock: {}}}",
-                              csv.id(), csv.value(), csv.logical_clock());
-    }
+    auto format(const counter_shard_view&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 class counter_shard {
@@ -357,11 +353,7 @@ struct counter_cell_view : basic_counter_cell_view<mutable_view::no> {
 
 template <>
 struct fmt::formatter<counter_cell_view> : fmt::formatter<std::string_view> {
-    template <typename FormatContext>
-    auto format(const counter_cell_view& ccv, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{{counter_cell timestamp: {} shards: {{{}}}}}",
-                              ccv.timestamp(), fmt::join(ccv.shards(), ", "));
-    }
+    auto format(const counter_cell_view&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 struct counter_cell_mutable_view : basic_counter_cell_view<mutable_view::yes> {
