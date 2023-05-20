@@ -64,23 +64,6 @@ sstring abstract_replication_strategy::to_qualified_class_name(std::string_view 
     return strategy_class_registry::to_qualified_class_name(strategy_class_name);
 }
 
-inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpoints(const token& search_token, const vnode_effective_replication_map& erm) const {
-    const token& key_token = erm.get_token_metadata_ptr()->first_token(search_token);
-    auto res = erm.get_replication_map().find(key_token);
-    return res->second;
-}
-
-stop_iteration abstract_replication_strategy::for_each_natural_endpoint_until(const token& search_token, const vnode_effective_replication_map& erm, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {
-    const token& key_token = erm.get_token_metadata_ptr()->first_token(search_token);
-    auto res = erm.get_replication_map().find(key_token);
-    for (const auto& ep : res->second) {
-        if (func(ep) == stop_iteration::yes) {
-            return stop_iteration::yes;
-        }
-    }
-    return stop_iteration::no;
-}
-
 inet_address_vector_replica_set vnode_effective_replication_map::get_natural_endpoints_without_node_being_replaced(const token& search_token) const {
     inet_address_vector_replica_set natural_endpoints = get_natural_endpoints(search_token);
     maybe_remove_node_being_replaced(*_tmptr, *_rs, natural_endpoints);
@@ -328,24 +311,21 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
     co_return ret;
 }
 
+static const auto default_replication_map_key = dht::token::from_int64(0);
+
 future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr) {
     replication_map replication_map;
+    const auto depend_on_token = rs->natural_endpoints_depend_on_token();
     const auto& sorted_tokens = tmptr->sorted_tokens();
-
-    if (!sorted_tokens.empty()) {
-        replication_map.reserve(sorted_tokens.size());
-        if (rs->natural_endpoints_depend_on_token()) {
-            for (const auto &t : sorted_tokens) {
-                auto eps = co_await rs->calculate_natural_endpoints(t, *tmptr);
-                replication_map.emplace(t, eps.get_vector());
-            }
-        } else {
-            auto eps = co_await rs->calculate_natural_endpoints(sorted_tokens.front(), *tmptr);
-            for (const auto &t : sorted_tokens) {
-                replication_map.emplace(t, eps.get_vector());
-                co_await coroutine::maybe_yield();
-            }
+    replication_map.reserve(depend_on_token ? sorted_tokens.size() : 1);
+    if (depend_on_token) {
+        for (const auto &t : sorted_tokens) {
+            auto eps = co_await rs->calculate_natural_endpoints(t, *tmptr);
+            replication_map.emplace(t, eps.get_vector());
         }
+    } else {
+        auto eps = co_await rs->calculate_natural_endpoints(default_replication_map_key, *tmptr);
+        replication_map.emplace(default_replication_map_key, std::move(eps).extract_vector());
     }
 
     auto rf = rs->get_replication_factor(*tmptr);
@@ -373,12 +353,25 @@ auto vnode_effective_replication_map::clone_data_gently() const -> future<std::u
     co_return std::move(result);
 }
 
+const inet_address_vector_replica_set& vnode_effective_replication_map::do_get_natural_endpoints(const token& search_token) const {
+    const token& key_token = _rs->natural_endpoints_depend_on_token()
+        ? _tmptr->first_token(search_token)
+        : default_replication_map_key;
+    const auto it = _replication_map.find(key_token);
+    return it->second;
+}
+
 inet_address_vector_replica_set vnode_effective_replication_map::get_natural_endpoints(const token& search_token) const {
-    return _rs->get_natural_endpoints(search_token, *this);
+    return do_get_natural_endpoints(search_token);
 }
 
 stop_iteration vnode_effective_replication_map::for_each_natural_endpoint_until(const token& search_token, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {
-    return _rs->for_each_natural_endpoint_until(search_token, *this, func);
+    for (const auto& ep : do_get_natural_endpoints(search_token)) {
+        if (func(ep) == stop_iteration::yes) {
+            return stop_iteration::yes;
+        }
+    }
+    return stop_iteration::no;
 }
 
 vnode_effective_replication_map::~vnode_effective_replication_map() {

@@ -113,9 +113,6 @@ public:
 
     static sstring to_qualified_class_name(std::string_view strategy_class_name);
 
-    virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token, const vnode_effective_replication_map& erm) const;
-    // Returns the last stop_iteration result of the called func
-    virtual stop_iteration for_each_natural_endpoint_until(const token& search_token, const vnode_effective_replication_map& erm, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
     virtual void validate_options(const gms::feature_service&) const = 0;
     virtual std::optional<std::unordered_set<sstring>> recognized_options(const topology&) const = 0;
     virtual size_t get_replication_factor(const token_metadata& tm) const = 0;
@@ -251,7 +248,6 @@ public:
 
         sstring to_sstring() const;
     };
-
 private:
     replication_map _replication_map;
     ring_mapping _pending_endpoints;
@@ -277,10 +273,6 @@ public:
     vnode_effective_replication_map() = delete;
     vnode_effective_replication_map(vnode_effective_replication_map&&) = default;
     ~vnode_effective_replication_map();
-
-    const replication_map& get_replication_map() const noexcept {
-        return _replication_map;
-    }
 
     struct cloned_data {
         replication_map replication_map;
@@ -323,6 +315,7 @@ public:
 
 private:
     dht::token_range_vector do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const inet_address& natural_endpoint)> consider_range_for_endpoint) const;
+    const inet_address_vector_replica_set& do_get_natural_endpoints(const token& search_token) const;
 
 public:
     static factory_key make_factory_key(const replication_strategy_ptr& rs, const token_metadata_ptr& tmptr);
