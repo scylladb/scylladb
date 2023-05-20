@@ -23,6 +23,16 @@
 #include "mutation/frozen_mutation.hh"
 #include "mutation/mutation_partition_view.hh"
 
+std::ostream& boost_test_print_type(std::ostream& os, const counter_shard_view& csv) {
+    fmt::print(os, "{}", csv);
+    return os;
+}
+
+std::ostream& boost_test_print_type(std::ostream& os, const counter_cell_view& ccv) {
+    fmt::print(os, "{}", ccv);
+    return os;
+}
+
 void verify_shard_order(counter_cell_view ccv) {
     if (ccv.shards().begin() == ccv.shards().end()) {
         return;
