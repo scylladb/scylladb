@@ -144,8 +144,11 @@ protected:
 class cql_table_large_data_handler : public large_data_handler {
     gms::feature_service& _feat;
     std::function<future<> (const sstables::sstable& sst, const sstables::key& partition_key,
+            uint64_t partition_size, uint64_t rows, uint64_t dead_rows, uint64_t range_tombstones)> _record_large_partitions;
+    std::function<future<> (const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements)> _record_large_cells;
-    std::optional<std::any> _feat_listener;
+    std::optional<std::any> _deleted_rows_detection_listener;
+    std::optional<std::any> _large_collection_detection_listener;
 
     static constexpr uint64_t MB = 1024 * 1024;
 
@@ -171,6 +174,8 @@ protected:
     virtual future<> record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key, const clustering_key_prefix* clustering_key, uint64_t row_size) const override;
 
 private:
+    future<> internal_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows) const;
+    future<> internal_record_large_partitions_v2(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows, uint64_t dead_rows, uint64_t range_tombstones) const;
     future<> internal_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const;
     future<> internal_record_large_cells_and_collections(const sstables::sstable& sst, const sstables::key& partition_key,
