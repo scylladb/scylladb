@@ -1373,6 +1373,7 @@ table::add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>
 
 future<>
 table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts) {
+  try {
     auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
     mutation_source_opt ms_opt;
     if (ssts.size() == 1) {
@@ -1399,6 +1400,11 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
     } else {
         co_return co_await _cache.invalidate(std::move(adder)).then([m] { return m->clear_gently(); });
     }
+  } catch (...) {
+    std::invoke([&] () noexcept {
+        on_fatal_internal_error(tlogger, fmt::format("failed to update the row cache: {}", std::current_exception()));
+    });
+  }
 }
 
 // Handles permit management only, used for situations where we don't want to inform
