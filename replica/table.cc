@@ -1401,10 +1401,15 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
         try_trigger_compaction(cg);
     });
     if (cache_enabled()) {
+      try {
         co_return co_await _cache.update(adder, *m);
-    } else {
-        co_return co_await _cache.invalidate(adder).then([m] { return m->clear_gently(); });
+      } catch (...) {
+        // Just report the exception, as invalidating the cache is fine as fallback.
+        tlogger.warn("Failed to update the row cache: {}: invalidating instead", std::current_exception());
+      }
     }
+    co_await _cache.invalidate(adder);
+    co_await m->clear_gently();
   } catch (...) {
     std::invoke([&] () noexcept {
         on_fatal_internal_error(tlogger, fmt::format("failed to update the row cache: {}", std::current_exception()));
