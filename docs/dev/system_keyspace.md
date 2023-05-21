@@ -34,6 +34,8 @@ CREATE TABLE system.large_partitions (
     partition_key text,
     rows bigint,
     compaction_time timestamp,
+    dead_rows bigint,
+    range_tombstones bigint,
     PRIMARY KEY ((keyspace_name, table_name), sstable_name, partition_size, partition_key)
 ) WITH CLUSTERING ORDER BY (sstable_name ASC, partition_size DESC, partition_key ASC);
 ~~~
