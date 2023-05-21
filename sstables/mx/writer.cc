@@ -1369,6 +1369,7 @@ void writer::write_pi_block(const pi_block& block) {
 }
 
 void writer::write_clustered(const rt_marker& marker, uint64_t prev_row_size) {
+    uint64_t current_pos = _data_writer->offset();
     write(_sst.get_version(), *_data_writer, row_flags::is_marker);
     write_clustering_prefix(_sst.get_version(), *_data_writer, marker.kind, _schema, marker.clustering);
     auto write_marker_body = [this, &marker] (bytes_ostream& writer) {
@@ -1385,6 +1386,8 @@ void writer::write_clustered(const rt_marker& marker, uint64_t prev_row_size) {
     write_vint(*_data_writer, _tmp_bufs.size());
     flush_tmp_bufs();
     _collector.update_min_max_components(marker.position());
+    ++_c_stats.range_tombstones_count;
+    collect_row_stats(_data_writer->offset() - current_pos, &marker.clustering);
 }
 
 void writer::consume(rt_marker&& marker) {

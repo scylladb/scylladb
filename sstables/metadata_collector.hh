@@ -38,6 +38,8 @@ struct column_stats {
     uint64_t rows_count;
     /** how many dead rows are there in the partition out of total rows_count */
     uint64_t dead_rows_count;
+    /** how many range tombstones are there in the partition out of total rows_count */
+    uint64_t range_tombstones_count;
 
     uint64_t start_offset;
     uint64_t partition_size;
@@ -57,6 +59,7 @@ struct column_stats {
         column_count(0),
         rows_count(0),
         dead_rows_count(0),
+        range_tombstones_count(0),
         start_offset(0),
         partition_size(0),
         tombstone_histogram(TOMBSTONE_HISTOGRAM_BIN_SIZE),
