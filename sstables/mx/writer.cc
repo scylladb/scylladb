@@ -687,7 +687,7 @@ private:
         std::optional<gc_clock::time_point> local_deletion_time;
     };
 
-    void maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows);
+    void maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows, uint64_t dead_rows, uint64_t range_tombstones);
     void maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const uint64_t row_size);
     void maybe_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
@@ -964,12 +964,12 @@ void writer::consume(tombstone t) {
 }
 
 void writer::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key,
-                                           uint64_t partition_size, uint64_t rows) {
+                                           uint64_t partition_size, uint64_t rows, uint64_t dead_rows, uint64_t range_tombstones) {
     auto& size_entry = _partition_size_entry;
     auto& row_count_entry = _rows_in_partition_entry;
     size_entry.max_value = std::max(size_entry.max_value, partition_size);
     row_count_entry.max_value = std::max(row_count_entry.max_value, rows);
-    auto ret = _sst.get_large_data_handler().maybe_record_large_partitions(sst, partition_key, partition_size, rows).get0();
+    auto ret = _sst.get_large_data_handler().maybe_record_large_partitions(sst, partition_key, partition_size, rows, dead_rows, range_tombstones).get0();
     size_entry.above_threshold += unsigned(bool(ret.size));
     row_count_entry.above_threshold += unsigned(bool(ret.rows));
 }
@@ -1432,7 +1432,7 @@ stop_iteration writer::consume_end_of_partition() {
     // compute size of the current row.
     _c_stats.partition_size = _data_writer->offset() - _c_stats.start_offset;
 
-    maybe_record_large_partitions(_sst, *_partition_key, _c_stats.partition_size, _c_stats.rows_count);
+    maybe_record_large_partitions(_sst, *_partition_key, _c_stats.partition_size, _c_stats.rows_count, _c_stats.dead_rows_count, _c_stats.range_tombstones_count);
 
 
     // update is about merging column_stats with the data being stored by collector.
