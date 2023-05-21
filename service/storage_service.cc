@@ -1347,6 +1347,28 @@ class topology_coordinator {
             }
                 break;
             case node_state::left_token_ring: {
+                if (node.id == _raft.id()) {
+                    // Someone else needs to coordinate the rest of the decommission process,
+                    // because the decommissioning node is going to shut down in the middle of this state.
+                    slogger.info("raft topology: coordinator is decommissioning; giving up leadership");
+                    // Become a nonvoter which triggers a leader stepdown.
+                    co_await _group0.become_nonvoter();
+                    if (_raft.is_leader()) {
+                        co_await _raft.wait_for_state_change(&_as);
+                    }
+
+                    // throw term_changed_error so we leave the coordinator loop instead of trying another
+                    // read_barrier which may fail with an (harmless, but unnecessary and annoying) error
+                    // telling us we're not in the configuration anymore (we'll get removed by the new
+                    // coordinator)
+                    throw term_changed_error{};
+
+                    // Note: if we restart after this point and become a voter
+                    // and then a coordinator again, it's fine - we'll just repeat this step.
+                    // (If we're in `left` state when we try to restart we won't
+                    // be able to become a voter - we'll be banned from the cluster.)
+                }
+
                 // Wait until other nodes observe the new token ring and stop sending writes to this node.
                 {
                     auto id = node.id;
@@ -1359,6 +1381,35 @@ class topology_coordinator {
                     }
                     node = std::move(f).get();
                 }
+
+                // Tell the node to shut down.
+                // This is done to improve user experience when there are no failures.
+                // In the next state (`node_state::left`), the node will be banned by the rest of the cluster,
+                // so there's no guarantee that it would learn about entering that state even if it was still
+                // a member of group0, hence we use a separate direct RPC in this state to shut it down.
+                //
+                // There is the possibility that the node will never get the message
+                // and decommission will hang on that node.
+                // This is fine for the rest of the cluster - we will still remove, ban the node and continue.
+                auto node_id = node.id;
+                bool shutdown_failed = false;
+                try {
+                    node = co_await exec_direct_command(std::move(node), raft_topology_cmd::command::shutdown);
+                } catch (...) {
+                    slogger.warn("raft topology: failed to tell node {} to shut down - it may hang."
+                                 " It's safe to shut it down manually now. (Exception: {})",
+                                 node.id, std::current_exception());
+                    shutdown_failed = true;
+                }
+                if (shutdown_failed) {
+                    node = retake_node(co_await start_operation(), node_id);
+                }
+
+                // Remove the node from group0 here - in general, it won't be able to leave on its own
+                // because we'll ban it as soon as we tell it to shut down.
+                slogger.info("raft topology: removing node {} from group 0 configuration...", id);
+                co_await _group0.remove_from_raft_config(id);
+                slogger.info("raft topology: node {} removed from group 0 configuration", id);
 
                 topology_mutation_builder builder(node.guard.write_timestamp());
                 builder.with_node(node.id)
@@ -3531,6 +3582,11 @@ void on_streaming_finished() {
 future<> storage_service::raft_decomission() {
     auto& raft_server = _group0->group0_server();
 
+    auto shutdown_request_future = make_ready_future<>();
+    auto disengage_shutdown_promise = defer([this] {
+        _shutdown_request_promise = std::nullopt;
+    });
+
     while (true) {
         auto guard = co_await _group0->client().start_operation(&_abort_source);
 
@@ -3549,6 +3605,8 @@ future<> storage_service::raft_decomission() {
             throw std::runtime_error("Cannot decomission last node in the cluster");
         }
 
+        shutdown_request_future = _shutdown_request_promise.emplace().get_future();
+
         slogger.info("raft topology: request decomission for: {}", raft_server.id());
         topology_mutation_builder builder(guard.write_timestamp());
         builder.with_node(raft_server.id())
@@ -3565,10 +3623,8 @@ future<> storage_service::raft_decomission() {
         break;
     }
 
-    // Wait until we enter left state
-    co_await _topology_state_machine.event.when([this, &raft_server] {
-        return _topology_state_machine._topology.left_nodes.contains(raft_server.id());
-    });
+    // Wait for the coordinator to tell us to shut down.
+    co_await std::move(shutdown_request_future);
 
     // Need to set it otherwise gossiper will try to send shutdown on exit
     co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::left({}, _gossiper.now().time_since_epoch().count()) }});
@@ -3577,13 +3633,12 @@ future<> storage_service::raft_decomission() {
 future<> storage_service::decommission() {
     return run_with_api_lock(sstring("decommission"), [] (storage_service& ss) {
         return seastar::async([&ss] {
-            bool raft_available = false;
-            bool left_token_ring = false;
-            auto uuid = node_ops_id::create_random_id();
+            std::exception_ptr leave_group0_ex;
             if (ss._raft_topology_change_enabled) {
                 ss.raft_decomission().get();
-                raft_available = true;
             } else {
+                bool left_token_ring = false;
+                auto uuid = node_ops_id::create_random_id();
                 auto& db = ss._db.local();
                 node_ops_ctl ctl(ss, node_ops_cmd::decommission_prepare, db.get_config().host_id, ss.get_broadcast_address());
                 auto stop_ctl = deferred_stop(ctl);
@@ -3632,7 +3687,7 @@ future<> storage_service::decommission() {
                 ctl.req.leaving_nodes = std::list<gms::inet_address>{endpoint};
 
                 assert(ss._group0);
-                raft_available = ss._group0->wait_for_raft().get();
+                bool raft_available = ss._group0->wait_for_raft().get();
 
                 try {
                     // Step 2: Start heartbeat updater
@@ -3672,29 +3727,22 @@ future<> storage_service::decommission() {
                 } catch (...) {
                     ctl.abort_on_error(node_ops_cmd::decommission_abort, std::current_exception()).get();
                 }
-            }
 
-            // Step 8: Leave group 0
-            //
-            // If the node failed to leave the token ring, don't remove it from group 0
-            // --- hence the `left_token_ring` check.
-            std::exception_ptr leave_group0_ex;
-            try {
-                utils::get_local_injector().inject("decommission_fail_before_leave_group0",
-                    [] { throw std::runtime_error("decommission_fail_before_leave_group0"); });
+                // Step 8: Leave group 0
+                //
+                // If the node failed to leave the token ring, don't remove it from group 0
+                // --- hence the `left_token_ring` check.
+                try {
+                    utils::get_local_injector().inject("decommission_fail_before_leave_group0",
+                        [] { throw std::runtime_error("decommission_fail_before_leave_group0"); });
 
-                if (raft_available && left_token_ring) {
-                    slogger.info("decommission[{}]: leaving Raft group 0", uuid);
-                    assert(ss._group0);
-                    try {
+                    if (raft_available && left_token_ring) {
+                        slogger.info("decommission[{}]: leaving Raft group 0", uuid);
+                        assert(ss._group0);
                         ss._group0->leave_group0().get();
-                    } catch (raft::not_a_member& err) {
-                        slogger.info("DECOMMISSIONING: already removed from the raft config by the topology coordinator");
+                        slogger.info("decommission[{}]: left Raft group 0", uuid);
                     }
-                    slogger.info("decommission[{}]: left Raft group 0", uuid);
-                }
-            } catch (...) {
-                if (!ss._raft_topology_change_enabled) {
+                } catch (...) {
                     // Even though leave_group0 failed, we will finish decommission and shut down everything.
                     // There's nothing smarter we could do. We should not continue operating in this broken
                     // state (we're not a member of the token ring any more).
@@ -5158,6 +5206,13 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
                 result.status = raft_topology_cmd_result::command_status::success;
                 break;
             }
+            case raft_topology_cmd::command::shutdown:
+                if (_shutdown_request_promise) {
+                    std::exchange(_shutdown_request_promise, std::nullopt)->set_value();
+                } else {
+                    slogger.warn("raft topology: got shutdown request while not decommissioning");
+                }
+                break;
         }
     } catch (...) {
         slogger.error("raft topology: raft_topology_cmd failed with: {}", std::current_exception());

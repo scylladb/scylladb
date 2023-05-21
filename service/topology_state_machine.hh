@@ -139,7 +139,8 @@ struct raft_topology_cmd {
           barrier_and_drain,    // same + drain requests which use previous versions
           stream_ranges,        // reqeust to stream data, return when streaming is
                                 // done
-          fence                 // erect the fence against requests with stale versions
+          fence,                // erect the fence against requests with stale versions
+          shutdown,             // a decommissioning node should shut down
       };
       command cmd;
 
