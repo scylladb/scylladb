@@ -13,7 +13,6 @@
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/query_backend.hh"
 #include "service/migration_manager.hh"
-#include "service/storage_proxy.hh"
 #include "service/client_state.hh"
 #include "transport/event.hh"
 #include "mutation/mutation.hh"

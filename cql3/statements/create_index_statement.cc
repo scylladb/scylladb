@@ -13,7 +13,6 @@
 #include "exceptions/exceptions.hh"
 #include "prepared_statement.hh"
 #include "validation.hh"
-#include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
 #include "service/client_state.hh"
 #include "schema/schema.hh"

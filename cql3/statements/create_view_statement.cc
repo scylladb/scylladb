@@ -30,7 +30,6 @@
 #include "cql3/query_backend.hh"
 #include "cql3/util.hh"
 #include "schema/schema_builder.hh"
-#include "service/storage_proxy.hh"
 #include "validation.hh"
 #include "db/extensions.hh"
 #include "data_dictionary/data_dictionary.hh"

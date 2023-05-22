@@ -13,7 +13,6 @@
 #include "db/config.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "gms/feature_service.hh"
-#include "service/storage_proxy.hh"
 #include "cql3/query_backend.hh"
 
 namespace cql3 {

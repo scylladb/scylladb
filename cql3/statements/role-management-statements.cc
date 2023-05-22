@@ -25,7 +25,6 @@
 #include "cql3/statements/revoke_role_statement.hh"
 #include "cql3/statements/request_validations.hh"
 #include "exceptions/exceptions.hh"
-#include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
 #include "transport/messages/result_message.hh"
 #include "unimplemented.hh"

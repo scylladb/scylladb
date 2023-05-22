@@ -12,7 +12,6 @@
 #include "cql3/statements/alter_view_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "service/migration_manager.hh"
-#include "service/storage_proxy.hh"
 #include "service/client_state.hh"
 #include "validation.hh"
 #include "view_info.hh"

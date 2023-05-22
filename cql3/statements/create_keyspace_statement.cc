@@ -16,7 +16,6 @@
 #include "data_dictionary/keyspace_metadata.hh"
 #include "mutation/mutation.hh"
 #include "service/migration_manager.hh"
-#include "service/storage_proxy.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/query_backend.hh"
 #include "db/config.hh"

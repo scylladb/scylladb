@@ -29,7 +29,6 @@
 #include "types/user.hh"
 #include "gms/feature_service.hh"
 #include "service/migration_manager.hh"
-#include "service/storage_proxy.hh"
 #include "db/config.hh"
 #include "compaction/time_window_compaction_strategy.hh"
 #include "transport/messages/result_message.hh"

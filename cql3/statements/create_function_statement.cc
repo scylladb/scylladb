@@ -12,7 +12,6 @@
 #include "cql3/functions/user_function.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
-#include "service/storage_proxy.hh"
 #include "lang/lua.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "replica/database.hh" // for wasm

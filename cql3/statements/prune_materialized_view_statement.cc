@@ -13,7 +13,6 @@
 #include "service/pager/query_pagers.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/query_backend.hh"
-#include "service/storage_proxy.hh"
 #include <boost/range/adaptors.hpp>
 #include <seastar/core/coroutine.hh>
 

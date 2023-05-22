@@ -14,7 +14,6 @@
 #include "cql3/cql_statement.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/query_backend.hh"
-#include "service/storage_proxy.hh"
 #include "service/client_state.hh"
 #include "service/query_state.hh"
 #include <optional>

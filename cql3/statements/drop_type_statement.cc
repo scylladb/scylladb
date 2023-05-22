@@ -15,7 +15,6 @@
 #include "boost/range/adaptor/map.hpp"
 
 #include "service/migration_manager.hh"
-#include "service/storage_proxy.hh"
 #include "service/client_state.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"

@@ -12,7 +12,6 @@
 #include "alter_keyspace_statement.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
-#include "service/storage_proxy.hh"
 #include "service/client_state.hh"
 #include "db/system_keyspace.hh"
 #include "data_dictionary/data_dictionary.hh"
