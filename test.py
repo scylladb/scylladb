@@ -264,7 +264,7 @@ class UnitTestSuite(TestSuite):
 
     async def create_test(self, shortname, suite, args):
         exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
-        if not os.path.exists(exe):
+        if not os.access(exe, os.X_OK):
             print(palette.warn(f"Unit test executable {exe} not found."))
             return
         test = UnitTest(self.next_id((shortname, self.suite_key)), shortname, suite, args)
@@ -300,7 +300,7 @@ class BoostTestSuite(UnitTestSuite):
 
     async def create_test(self, shortname: str, suite, args) -> None:
         exe = os.path.join("build", suite.mode, "test", suite.name, shortname)
-        if not os.path.exists(exe):
+        if not os.access(exe, os.X_OK):
             print(palette.warn(f"Boost test executable {exe} not found."))
             return
         options = self.options
