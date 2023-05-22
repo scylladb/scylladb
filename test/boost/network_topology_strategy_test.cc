@@ -757,6 +757,9 @@ SEASTAR_TEST_CASE(test_invalid_dcs) {
                     "= {'class': 'NetworkTopologyStrategy', 'dc1':'" + incorrect + "'}").get(),
                     exceptions::configuration_exception);
             BOOST_REQUIRE_THROW(e.execute_cql("CREATE KEYSPACE abc WITH REPLICATION "
+                    "= {'class': 'NetworkTopologyStrategy', 'replication_factor':'" + incorrect + "'}").get(),
+                    exceptions::configuration_exception);
+            BOOST_REQUIRE_THROW(e.execute_cql("CREATE KEYSPACE abc WITH REPLICATION "
                     "= {'class': 'SimpleStrategy', 'replication_factor':'" + incorrect + "'}").get(),
                     exceptions::configuration_exception);
         };
