@@ -1387,13 +1387,17 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
         }
         ms_opt = make_combined_mutation_source(std::move(sources));
     }
-    auto adder = row_cache::external_updater([this, m, ssts = std::move(ssts), new_ssts_ms = std::move(*ms_opt), &cg] () mutable {
+    auto adder = row_cache::external_updater([this, m, ssts = std::move(ssts), ms_opt = std::move(ms_opt), &cg] () mutable {
         // FIXME: the following isn't exception safe.
-        for (auto& sst : ssts) {
+        for (auto& i : ssts) {
+          if (auto sst = std::move(i)) {
             add_sstable(cg, sst);
             update_stats_for_new_sstable(sst);
+          }
         }
-        m->mark_flushed(std::move(new_ssts_ms));
+        if (auto new_ssts_ms = std::move(ms_opt)) {
+            m->mark_flushed(std::move(*new_ssts_ms));
+        }
         try_trigger_compaction(cg);
     });
     if (cache_enabled()) {
