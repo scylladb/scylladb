@@ -1743,7 +1743,7 @@ static
 void populate(const std::vector<dataset*>& datasets, cql_test_env& env, const table_config& cfg, size_t flush_threshold) {
     drop_keyspace_if_exists(env, "ks");
 
-    env.execute_cql("CREATE KEYSPACE ks WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1};").get();
+    env.execute_cql("CREATE KEYSPACE ks WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1};").get();
 
     std::cout << "Saving test config...\n";
     env.execute_cql("create table config (name text primary key, n_rows int, value_size int)").get();

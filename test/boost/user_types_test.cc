@@ -128,7 +128,7 @@ SEASTAR_TEST_CASE(test_invalid_user_type_statements) {
                 "A user type cannot contain non-frozen user type fields");
 
         // table cannot refer to UDT in another keyspace
-        e.execute_cql("create keyspace ks2 with replication={'class':'SimpleStrategy','replication_factor':1}").discard_result().get();
+        e.execute_cql("create keyspace ks2 with replication={'class':'NetworkTopologyStrategy','replication_factor':1}").discard_result().get();
         e.execute_cql("create type ks2.ut2 (a int)").discard_result().get();
         REQUIRE_INVALID(e, "create table bad (a int primary key, b ks2.ut2)",
                 "Statement on keyspace ks cannot refer to a user type in keyspace ks2; "

@@ -630,7 +630,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
             // expected
         }
 
-        env.execute_cql("CREATE KEYSPACE querier_cache WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1};").get();
+        env.execute_cql("CREATE KEYSPACE querier_cache WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1};").get();
         env.execute_cql("CREATE TABLE querier_cache.test (pk int, ck int, value int, primary key (pk, ck));").get();
 
         env.require_table_exists("querier_cache", "test").get();

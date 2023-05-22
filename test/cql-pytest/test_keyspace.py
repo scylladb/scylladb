@@ -194,7 +194,7 @@ def test_concurrent_create_and_drop_keyspace(cql, this_dc, fails_without_consist
 # Test that passing "LOCAL" parameter to storage options works as expected
 # and is not explicitly stored - since it's equal to the original storage
 def test_storage_options_local(cql, scylla_only):
-    ksdef = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
+    ksdef = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : '1' } " \
             "AND STORAGE = { 'type' : 'LOCAL' }"
     with new_test_keyspace(cql, ksdef) as keyspace:
         res = cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{keyspace}'")
@@ -202,7 +202,7 @@ def test_storage_options_local(cql, scylla_only):
 
 # Test that passing an unsupported storage type is not legal
 def test_storage_options_unknown_type(cql, scylla_only):
-    ksdef = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
+    ksdef = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : '1' } " \
             "AND STORAGE = { 'type' : 'S4', 'bucket' : '42', 'endpoint' : 'localhost' }"
     with pytest.raises(InvalidRequest):
         with new_test_keyspace(cql, ksdef):
@@ -210,12 +210,12 @@ def test_storage_options_unknown_type(cql, scylla_only):
 
 # Test that passing nonexistent options results in an error
 def test_storage_options_nonexistent_param(cql, scylla_only):
-    ksdef = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
+    ksdef = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : '1' } " \
             "AND STORAGE = { 'type' : 'S3', 'bucket' : '42', 'endpoint' : 'localhost', 'superfluous' : 'info' }"
     with pytest.raises(InvalidRequest):
         with new_test_keyspace(cql, ksdef):
             pass
-    ksdef = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
+    ksdef = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : '1' } " \
             "AND STORAGE = { 'type' : 'LOCAL', 'superfluous' : 'info' }"
     with pytest.raises(InvalidRequest):
         with new_test_keyspace(cql, ksdef):
@@ -223,7 +223,7 @@ def test_storage_options_nonexistent_param(cql, scylla_only):
 
 # Test that not passing required parameters fails
 def test_storage_options_required_param(cql, scylla_only):
-    ksdef = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
+    ksdef = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : '1' } " \
             "AND STORAGE = { 'type' : 'S3', 'bucket' : '42' }"
     with pytest.raises(InvalidRequest):
         with new_test_keyspace(cql, ksdef):
@@ -232,18 +232,18 @@ def test_storage_options_required_param(cql, scylla_only):
 # Test that storage options cannot be altered (at least until it's well defined
 # what it means to e.g. switch from S3 to another format and back).
 def test_storage_options_alter_type(cql, scylla_only):
-    ksdef = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
+    ksdef = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : '1' } " \
             "AND STORAGE = { 'type' : 'LOCAL' }"
     with new_test_keyspace(cql, ksdef) as keyspace:
          # It's not fine to change the storage type
-        ksdef_local = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
+        ksdef_local = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : '1' } " \
             "AND STORAGE = { 'type' : 'S3', 'bucket' : '/b1', 'endpoint': 'localhost'}"
         with pytest.raises(InvalidRequest):
             res = cql.execute(f"ALTER KEYSPACE {keyspace} {ksdef_local}")
 
 # Test that server-side desc statement is able to describe storage options, when not local.
 def test_storage_options_describe(cql, scylla_only):
-    ksdef = "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' } " \
+    ksdef = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : '1' } " \
             "AND STORAGE = {'type': 'S3', 'bucket': '42', 'endpoint': 'localhost'}"
 
     with new_test_keyspace(cql, ksdef) as keyspace:

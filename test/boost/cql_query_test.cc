@@ -49,7 +49,7 @@ using namespace std::literals::chrono_literals;
 
 SEASTAR_TEST_CASE(test_create_keyspace_statement) {
     return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("create keyspace ks2 with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").discard_result().then([&e] {
+        return e.execute_cql("create keyspace ks2 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").discard_result().then([&e] {
             return e.require_keyspace_exists("ks2");
         });
     });
@@ -1790,19 +1790,19 @@ SEASTAR_TEST_CASE(test_select_multiple_ranges) {
 SEASTAR_TEST_CASE(test_validate_keyspace) {
     return do_with_cql_env([] (cql_test_env& e) {
         return make_ready_future<>().then([&e] {
-            return e.execute_cql("create keyspace kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkssssssssssssssssssssssssssssssssssssssssssssss with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };");
+            return e.execute_cql("create keyspace kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkssssssssssssssssssssssssssssssssssssssssssssss with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };");
         }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
             assert_that_failed(f);
-            return e.execute_cql("create keyspace ks3-1 with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };");
+            return e.execute_cql("create keyspace ks3-1 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };");
         }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
             assert_that_failed(f);
             return e.execute_cql("create keyspace ks3 with replication = { 'replication_factor' : 1 };");
         }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
             assert_that_failed(f);
-            return e.execute_cql("create keyspace ks3 with rreplication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };");
+            return e.execute_cql("create keyspace ks3 with rreplication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };");
         }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
             assert_that_failed(f);
-            return e.execute_cql("create keyspace SyStEm with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };");
+            return e.execute_cql("create keyspace SyStEm with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };");
         }).then_wrapped([] (future<shared_ptr<cql_transport::messages::result_message>> f) {
             assert_that_failed(f);
         });
@@ -3202,7 +3202,7 @@ SEASTAR_TEST_CASE(test_time_conversions) {
 // range list.
 SEASTAR_TEST_CASE(test_empty_partition_range_scan) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        e.execute_cql("create keyspace empty_partition_range_scan with replication = {'class': 'SimpleStrategy', 'replication_factor': 1};").get();
+        e.execute_cql("create keyspace empty_partition_range_scan with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};").get();
         e.execute_cql("create table empty_partition_range_scan.tb (a int, b int, c int, val int, PRIMARY KEY ((a,b),c) );").get();
 
 
@@ -4309,7 +4309,7 @@ SEASTAR_TEST_CASE(test_describe_view_schema) {
           {"cf_index4_index", "CREATE INDEX cf_index4 ON \"KS\".\"cF\"((pk, pk1),col2);"}
         };
 
-        e.execute_cql("CREATE KEYSPACE \"KS\" WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}").get();
+        e.execute_cql("CREATE KEYSPACE \"KS\" WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}").get();
         e.execute_cql(base_table).get();
 
         for (auto &&ct : cql_create_tables) {

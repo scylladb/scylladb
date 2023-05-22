@@ -52,7 +52,7 @@ SEASTAR_TEST_CASE(test_abort_server_on_background_error) {
             if (has_ks) {
                 co_await e.execute_cql("drop keyspace new_ks");
             } else {
-                co_await e.execute_cql("create keyspace new_ks with replication = {'class': 'SimpleStrategy', 'replication_factor': 1}");
+                co_await e.execute_cql("create keyspace new_ks with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}");
             }
             has_ks = !has_ks;
         };
@@ -81,7 +81,7 @@ SEASTAR_TEST_CASE(test_group0_history_clearing_old_entries) {
             if (has_ks) {
                 co_await e.execute_cql("drop keyspace new_ks");
             } else {
-                co_await e.execute_cql("create keyspace new_ks with replication = {'class': 'SimpleStrategy', 'replication_factor': 1}");
+                co_await e.execute_cql("create keyspace new_ks with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}");
             }
             has_ks = !has_ks;
         };
@@ -172,7 +172,7 @@ SEASTAR_TEST_CASE(test_concurrent_group0_modifications) {
             size_t successes = 0;
             bool has_ks = false;
             auto drop_ks_cql = format("drop keyspace new_ks{}", task_id);
-            auto create_ks_cql = format("create keyspace new_ks{} with replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}}", task_id);
+            auto create_ks_cql = format("create keyspace new_ks{} with replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}", task_id);
 
             auto perform = [&] () -> future<> {
                 try {

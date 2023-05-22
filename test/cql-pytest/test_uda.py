@@ -217,7 +217,7 @@ def test_nested_collection_initcond(scylla_only, cql, test_keyspace):
 
 def test_drop_keyspace_with_uda(scylla_only, cql):
     ks = unique_name()
-    cql.execute(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': '1'}}")
+    cql.execute(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}}")
     f1 = unique_name()
     cql.execute(f"CREATE FUNCTION {ks}.{f1}(acc int, val int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE lua AS $$ return acc $$")
     f2 = unique_name()
