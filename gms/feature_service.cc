@@ -257,19 +257,24 @@ future<> persistent_feature_enabler::enable_features() {
     auto loaded_peer_features = co_await _sys_ks.load_peer_features();
     auto&& features = _g.get_supported_features(loaded_peer_features, gossiper::ignore_features_of_local_node::no);
 
+    auto features_v = boost::copy_range<std::set<std::string_view>>(features);
+    co_await _feat.enable(std::move(features_v), _sys_ks);
+}
+
+future<> feature_service::enable(std::set<std::string_view> features, db::system_keyspace& sys_ks) {
     // Persist enabled feature in the `system.scylla_local` table under the "enabled_features" key.
     // The key itself is maintained as an `unordered_set<string>` and serialized via `to_string`
     // function to preserve readability.
-    std::set<sstring> feats_set = co_await _sys_ks.load_local_enabled_features();
-    for (feature& f : _feat.registered_features() | boost::adaptors::map_values) {
+    std::set<sstring> feats_set = co_await sys_ks.load_local_enabled_features();
+    for (feature& f : registered_features() | boost::adaptors::map_values) {
         if (!f && features.contains(f.name())) {
             feats_set.emplace(f.name());
         }
     }
-    co_await _sys_ks.save_local_enabled_features(std::move(feats_set));
+    co_await sys_ks.save_local_enabled_features(std::move(feats_set));
 
     std::set<std::string_view> features_v = boost::copy_range<std::set<std::string_view>>(features);
-    co_await _feat.enable(std::move(features_v), feature_service::without_persisting{});
+    co_await enable(std::move(features_v), feature_service::without_persisting{});
 }
 
 future<> feature_service::enable(std::set<std::string_view> list, feature_service::without_persisting) {

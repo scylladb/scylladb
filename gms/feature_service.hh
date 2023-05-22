@@ -64,6 +64,7 @@ public:
     explicit feature_service(feature_config cfg);
     ~feature_service() = default;
     future<> stop();
+    future<> enable(std::set<std::string_view> list, db::system_keyspace& sys_ks);
     future<> enable(std::set<std::string_view> list, without_persisting);
     db::schema_features cluster_schema_features() const;
     std::set<std::string_view> supported_feature_set() const;
