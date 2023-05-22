@@ -76,25 +76,25 @@ else
 fi
 
 ##Check server release (Fedora/Oracle/Debian/Gentoo)##
-cat /etc/os-release | grep -i fedora &> /dev/null
+grep -i fedora /etc/os-release &> /dev/null
 if [ $? -ne 0 ]; then
-    cat /etc/os-release | grep -i oracle &> /dev/null
+    grep -i oracle /etc/os-release &> /dev/null
     if [ $? -ne 0 ]; then
         IS_FEDORA="1"
     fi
 fi
 
-cat /etc/os-release | grep -i debian &> /dev/null
+grep -i debian /etc/os-release &> /dev/null
 if [ $? -ne 0 ]; then
     IS_DEBIAN="1"
 fi
 
-cat /etc/os-release | grep -i gentoo &> /dev/null
+grep -i gentoo /etc/os-release &> /dev/null
 if [ $? -ne 0 ]; then
     IS_GENTOO="1"
 fi
 
-if [ "$IS_FEDORA" == "1" ] && [ "$IS_DEBIAN" == "1" ] && [ "$IS_GENTOO" == "1" ]; then
+if [ "$IS_FEDORA" == "1" ] || [ "$IS_DEBIAN" == "1" ] || [ "$IS_GENTOO" == "1" ]; then
     echo "This s a Non-Supported OS, Please Review the Support Matrix"
     exit 222
 fi
