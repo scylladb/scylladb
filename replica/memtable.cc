@@ -118,13 +118,13 @@ memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, replica::table_
     memtable_list* memtable_list, seastar::scheduling_group compaction_scheduling_group)
         : dirty_memory_manager_logalloc::size_tracked_region()
         , _dirty_mgr(dmm)
-        , _cleaner(*this, no_cache_tracker, table_stats.memtable_app_stats, compaction_scheduling_group,
-                   [this] (size_t freed) { remove_flushed_memory(freed); })
+        , _cleaner(*this, no_cache_tracker, table_stats.memtable_app_stats, compaction_scheduling_group)
         , _memtable_list(memtable_list)
         , _schema(std::move(schema))
         , partitions(dht::raw_token_less_comparator{})
         , _table_stats(table_stats) {
     logalloc::region::listen(&dmm.region_group());
+    _cleaner.set_callback_on_space_freed([this] (size_t freed_total, size_t) { remove_flushed_memory(freed_total); });
 }
 
 static thread_local dirty_memory_manager mgr_for_tests;
