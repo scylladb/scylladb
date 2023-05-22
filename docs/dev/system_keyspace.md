@@ -364,7 +364,7 @@ Schema:
 ~~~
 CREATE TABLE system.sstables (
     location text,
-    generation bigint,
+    generation timeuuid,
     format text,
     status text,
     uuid uuid,
