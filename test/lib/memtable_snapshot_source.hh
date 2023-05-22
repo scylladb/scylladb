@@ -27,6 +27,14 @@ class memtable_snapshot_source {
     bool _closed = false;
     seastar::condition_variable _should_compact;
     future<> _compactor;
+    // Allows disabling/enabling compaction.
+    // Has a double role -- it's the means for disable_compaction
+    // to wait for current compaction to end, and it signals to
+    // the compactor that compaction is disabled.
+    semaphore _compaction_semaphore = {1};
+    // Only for asserting that enable_compaction and disable_compaction are
+    // called in the correct order.
+    bool _compaction_enabled = true;
 private:
     bool should_compact() const {
         return !_closed && _memtables.size() >= 3;
@@ -47,6 +55,7 @@ private:
         }
     }
     void compact() {
+        auto compacting = get_units(_compaction_semaphore, 1).get();
         if (_memtables.empty()) {
             return;
         }
@@ -84,7 +93,7 @@ public:
                 // condition_variable::wait() also allocates memory
                 memory::scoped_critical_alloc_section dfg;
                 _should_compact.wait().get();
-                while (should_compact()) {
+                while (should_compact() && _compaction_semaphore.available_units() > 0) {
                     compact();
                 }
             }
@@ -141,5 +150,18 @@ public:
         _memtables.push_back(new_memtable()); // so that src won't change any more.
         on_new_memtable();
         return make_combined_mutation_source(std::move(src));
+    }
+    // Must run in a seastar thread
+    void disable_compaction() {
+        assert(_compaction_enabled);
+        _compaction_enabled = false;
+        _compaction_semaphore.wait(1).get();
+    }
+    // May only be called after a previous call to disable_compaction()
+    void enable_compaction() {
+        assert(!_compaction_enabled);
+        _compaction_enabled = true;
+        _compaction_semaphore.signal(1);
+        _should_compact.broadcast();
     }
 };
