@@ -963,7 +963,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , cache_index_pages(this, "cache_index_pages", liveness::LiveUpdate, value_status::Used, false,
         "Keep SSTable index pages in the global cache after a SSTable read. Expected to improve performance for workloads with big partitions, but may degrade performance for workloads with small partitions.")
     , x_log2_compaction_groups(this, "x_log2_compaction_groups", value_status::Used, 0, "Controls static number of compaction groups per table per shard. For X groups, set the option to log (base 2) of X. Example: Value of 3 implies 8 groups.")
-     , consistent_cluster_management(this, "consistent_cluster_management", value_status::Used, false, "Use RAFT for cluster management and DDL")
+     , consistent_cluster_management(this, "consistent_cluster_management", value_status::Used, true, "Use RAFT for cluster management and DDL")
     , wasm_cache_memory_fraction(this, "wasm_cache_memory_fraction", value_status::Used, 0.01, "Maximum total size of all WASM instances stored in the cache as fraction of total shard memory")
     , wasm_cache_timeout_in_ms(this, "wasm_cache_timeout_in_ms", value_status::Used, 5000, "Time after which an instance is evicted from the cache")
     , wasm_cache_instance_size_limit(this, "wasm_cache_instance_size_limit", value_status::Used, 1024*1024, "Instances with size above this limit will not be stored in the cache")
