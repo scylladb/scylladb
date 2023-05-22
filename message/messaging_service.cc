@@ -628,9 +628,9 @@ messaging_service::initial_scheduling_info() const {
     sched_infos.reserve(sched_infos.size() +
         _scheduling_config.statement_tenants.size() * PER_TENANT_CONNECTION_COUNT);
     for (const auto& tenant : _scheduling_config.statement_tenants) {
-        sched_infos.push_back({ tenant.sched_group, "statement:" + tenant.name });
-        sched_infos.push_back({ tenant.sched_group, "statement-ack:" + tenant.name });
-        sched_infos.push_back({ tenant.sched_group, "forward:" + tenant.name });
+        for (auto&& connection_prefix : _connection_types_prefix) {
+            sched_infos.push_back({ tenant.sched_group, sstring(connection_prefix) + tenant.name });
+        }
     }
 
     assert(sched_infos.size() == PER_SHARD_CONNECTION_COUNT +
@@ -654,6 +654,14 @@ messaging_service::scheduling_group_for_isolation_cookie(const sstring& isolatio
     for (auto&& info : _scheduling_info_for_connection_index) {
         if (info.isolation_cookie == isolation_cookie) {
             return info.sched_group;
+        }
+    }
+    // Check for the case of the client using a connection class we don't
+    // recognize, but we know its a tenant, not a system connection.
+    // Fall-back to the default tenant in this case.
+    for (auto&& connection_prefix : _connection_types_prefix) {
+        if (isolation_cookie.find(connection_prefix.data()) == 0) {
+            return _scheduling_config.statement_tenants.front().sched_group;
         }
     }
     // Client is using a new connection class that the server doesn't recognize yet.

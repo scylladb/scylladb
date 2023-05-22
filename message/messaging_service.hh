@@ -25,6 +25,7 @@
 #include <list>
 #include <vector>
 #include <optional>
+#include <array>
 #include <absl/container/btree_set.h>
 #include <seastar/net/tls.hh>
 
@@ -526,6 +527,7 @@ public:
     scheduling_group scheduling_group_for_isolation_cookie(const sstring& isolation_cookie) const;
     std::vector<messaging_service::scheduling_info_for_connection_index> initial_scheduling_info() const;
     unsigned get_rpc_client_idx(messaging_verb verb) const;
+    static constexpr std::array<std::string_view, 3> _connection_types_prefix = {"statement:", "statement-ack:", "forward:"};
 };
 
 } // namespace netw
