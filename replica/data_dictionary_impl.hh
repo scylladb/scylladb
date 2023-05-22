@@ -92,6 +92,9 @@ public:
     virtual const secondary_index::secondary_index_manager& get_index_manager(data_dictionary::table t) const override {
         return const_cast<replica::table&>(unwrap(t)).get_index_manager();
     }
+    virtual locator::effective_replication_map_ptr get_effective_replication_map(data_dictionary::table t) const override {
+        return unwrap(t).get_effective_replication_map();
+    }
     virtual lw_shared_ptr<keyspace_metadata> get_keyspace_metadata(data_dictionary::keyspace ks) const override {
         return unwrap(ks).metadata();
     }

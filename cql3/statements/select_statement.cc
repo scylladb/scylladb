@@ -561,7 +561,7 @@ indexed_table_select_statement::do_execute_base_query(
     auto cmd = prepare_command_for_base_query(qb, options, state, now, bool(paging_state));
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     uint32_t queried_ranges_count = partition_ranges.size();
-    auto&& table = qb.proxy().local_db().find_column_family(_schema);
+    auto&& table = qb.db().find_column_family(_schema);
     auto erm = table.get_effective_replication_map();
     query_ranges_to_vnodes_generator ranges_to_vnodes(erm->make_splitter(), _schema, std::move(partition_ranges));
 

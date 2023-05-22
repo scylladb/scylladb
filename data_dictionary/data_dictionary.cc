@@ -38,6 +38,11 @@ table::get_index_manager() const {
     return _ops->get_index_manager(*this);
 }
 
+locator::effective_replication_map_ptr
+table::get_effective_replication_map() const {
+    return _ops->get_effective_replication_map(*this);
+}
+
 lw_shared_ptr<keyspace_metadata>
 keyspace::metadata() const {
     return _ops->get_keyspace_metadata(*this);

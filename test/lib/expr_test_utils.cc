@@ -533,6 +533,9 @@ public:
     virtual const secondary_index::secondary_index_manager& get_index_manager(data_dictionary::table t) const override {
         throw std::bad_function_call();
     }
+    virtual locator::effective_replication_map_ptr get_effective_replication_map(data_dictionary::table t) const override {
+        throw std::bad_function_call();
+    }
     virtual schema_ptr get_table_schema(data_dictionary::table t) const override { return _table_schema; }
     virtual lw_shared_ptr<data_dictionary::keyspace_metadata> get_keyspace_metadata(
         data_dictionary::keyspace ks) const override {

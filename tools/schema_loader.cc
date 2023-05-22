@@ -137,6 +137,9 @@ private:
     virtual const secondary_index::secondary_index_manager& get_index_manager(data_dictionary::table t) const override {
         return unwrap(t).secondary_idx_man;
     }
+    virtual locator::effective_replication_map_ptr get_effective_replication_map(data_dictionary::table t) const override {
+        throw std::bad_function_call();
+    }
     virtual schema_ptr get_table_schema(data_dictionary::table t) const override {
         return unwrap(t).schema;
     }

@@ -39,6 +39,8 @@ class feature_service;
 
 namespace locator {
 class abstract_replication_strategy;
+class effective_replication_map;
+using effective_replication_map_ptr = seastar::shared_ptr<const effective_replication_map>;
 }
 
 // Classes representing the overall schema, but without access to data.
@@ -77,6 +79,7 @@ public:
     schema_ptr schema() const;
     const std::vector<view_ptr>& views() const;
     const secondary_index::secondary_index_manager& get_index_manager() const;
+    locator::effective_replication_map_ptr get_effective_replication_map() const;
 };
 
 class keyspace {

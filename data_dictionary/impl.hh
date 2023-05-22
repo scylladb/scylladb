@@ -25,6 +25,7 @@ public:
     virtual std::optional<table> try_find_table(database db, std::string_view ks, std::string_view tab) const = 0;
     virtual std::optional<table> try_find_table(database db, table_id id) const = 0;
     virtual const secondary_index::secondary_index_manager& get_index_manager(table t) const = 0;
+    virtual locator::effective_replication_map_ptr get_effective_replication_map(table t) const = 0;
     virtual schema_ptr get_table_schema(table t) const = 0;
     virtual lw_shared_ptr<keyspace_metadata> get_keyspace_metadata(keyspace ks) const = 0;
     virtual bool is_internal(keyspace ks) const = 0;
