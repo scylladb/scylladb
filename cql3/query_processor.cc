@@ -112,6 +112,8 @@ public:
             db::consistency_level cl, coordinator_query_options optional_params) = 0;
     virtual future<coordinator_query_result> query(schema_ptr, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
             db::consistency_level cl, coordinator_query_options optional_params) = 0;
+    virtual future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, lowres_clock::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit,
+            db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false) = 0;
     virtual future<result<>> mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl, lowres_clock::time_point timeout, bool should_mutate_atomically,
             tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false) = 0;
     virtual future<bool> cas(schema_ptr schema, shared_ptr<service::cas_request> request, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
@@ -149,6 +151,10 @@ future<coordinator_query_result>
 query_backend::query(schema_ptr s, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl, coordinator_query_options optional_params) {
     return _impl->query(std::move(s), std::move(cmd), std::move(partition_ranges), cl, optional_params);
+}
+future<> query_backend::mutate(std::vector<mutation> mutations, db::consistency_level cl, lowres_clock::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit,
+        db::allow_per_partition_rate_limit allow_limit, bool raw_counters) {
+    return _impl->mutate(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), allow_limit, raw_counters);
 }
 future<exceptions::coordinator_result<>>
 query_backend::mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl, lowres_clock::time_point timeout, bool should_mutate_atomically,
@@ -214,6 +220,10 @@ public:
     query(schema_ptr s, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
             db::consistency_level cl, coordinator_query_options optional_params) override {
         return _proxy->query(std::move(s), std::move(cmd), std::move(partition_ranges), cl, optional_params);
+    }
+    virtual future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, lowres_clock::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit,
+            db::allow_per_partition_rate_limit allow_limit, bool raw_counters) override {
+        return _proxy->mutate(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), allow_limit, raw_counters);
     }
     virtual future<exceptions::coordinator_result<>>
     mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl, lowres_clock::time_point timeout, bool should_mutate_atomically,

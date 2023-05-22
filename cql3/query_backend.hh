@@ -78,6 +78,8 @@ public:
             db::consistency_level cl, coordinator_query_options optional_params);
     future<coordinator_query_result> query(schema_ptr, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
             db::consistency_level cl, coordinator_query_options optional_params);
+    future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, lowres_clock::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit,
+            db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false);
     future<result<>> mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl, lowres_clock::time_point timeout, bool should_mutate_atomically,
             tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false);
     future<bool> cas(schema_ptr schema, shared_ptr<service::cas_request> request, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
