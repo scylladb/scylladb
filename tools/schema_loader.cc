@@ -216,7 +216,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
     feature_service.start(gms::feature_config_from_db_config(cfg)).get();
     auto stop_feature_service = deferred_stop(feature_service);
 
-    feature_service.local().enable(feature_service.local().supported_feature_set()).get();
+    feature_service.local().enable(feature_service.local().supported_feature_set(), gms::feature_service::without_persisting{}).get();
     sharded<locator::shared_token_metadata> token_metadata;
 
     utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));

@@ -250,7 +250,7 @@ future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks
     }
 
     std::set<std::string_view> feat = boost::copy_range<std::set<std::string_view>>(features_to_enable);
-    co_await enable(std::move(feat));
+    co_await enable(std::move(feat), feature_service::without_persisting{});
 }
 
 future<> persistent_feature_enabler::enable_features() {
@@ -269,10 +269,10 @@ future<> persistent_feature_enabler::enable_features() {
     co_await _sys_ks.save_local_enabled_features(std::move(feats_set));
 
     std::set<std::string_view> features_v = boost::copy_range<std::set<std::string_view>>(features);
-    co_await _feat.enable(std::move(features_v));
+    co_await _feat.enable(std::move(features_v), feature_service::without_persisting{});
 }
 
-future<> feature_service::enable(std::set<std::string_view> list) {
+future<> feature_service::enable(std::set<std::string_view> list, feature_service::without_persisting) {
     // `gms::feature::enable` should be run within a seastar thread context
     co_await container().invoke_on_all([&list] (feature_service& fs) -> future<> {
         return seastar::async([&fs, &list] {

@@ -751,7 +751,7 @@ public:
 
             db.invoke_on_all(&replica::database::start).get();
 
-            feature_service.local().enable(feature_service.local().supported_feature_set()).get();
+            feature_service.local().enable(feature_service.local().supported_feature_set(), gms::feature_service::without_persisting{}).get();
 
             smp::invoke_on_all([blocked_reactor_notify_ms] {
                 engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);

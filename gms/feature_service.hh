@@ -59,10 +59,12 @@ class feature_service final : public peering_sharded_service<feature_service> {
 
     feature_config _config;
 public:
+    struct without_persisting {};
+
     explicit feature_service(feature_config cfg);
     ~feature_service() = default;
     future<> stop();
-    future<> enable(std::set<std::string_view> list);
+    future<> enable(std::set<std::string_view> list, without_persisting);
     db::schema_features cluster_schema_features() const;
     std::set<std::string_view> supported_feature_set() const;
 
