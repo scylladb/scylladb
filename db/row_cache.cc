@@ -1232,9 +1232,8 @@ future<> row_cache::invalidate(external_updater& eu, const dht::partition_range&
 }
 
 future<> row_cache::invalidate(external_updater& eu, dht::partition_range_vector&& ranges) noexcept {
-  try {
-    return do_update(eu, [this, ranges_ = std::move(ranges)] () -> future<> {
-        // FIXME: indentation
+    try {
+        return do_update(eu, [this, ranges_ = std::move(ranges)] () -> future<> {
             auto ranges = std::move(ranges_);
             auto on_failure = defer([this] () noexcept {
                 this->clear_now();
@@ -1282,10 +1281,10 @@ future<> row_cache::invalidate(external_updater& eu, dht::partition_range_vector
             }
 
             on_failure.cancel();
-    });
-  } catch (...) {
-    return invalidate_on_error(eu, std::current_exception());
-  }
+        });
+    } catch (...) {
+        return invalidate_on_error(eu, std::current_exception());
+    }
 }
 
 future<> row_cache::invalidate_on_error(external_updater& eu, std::exception_ptr ex) noexcept {
