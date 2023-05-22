@@ -2630,7 +2630,6 @@ delete_ghost_rows_visitor::delete_ghost_rows_visitor(service::storage_proxy& pro
         , _state(state)
         , _timeout_duration(timeout_duration)
         , _view(view)
-        , _view_table(_proxy.get_db().local().find_column_family(view))
         , _base_schema(_proxy.get_db().local().find_schema(_view->view_info()->base_id()))
         , _view_pk()
 {}

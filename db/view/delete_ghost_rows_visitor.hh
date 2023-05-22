@@ -20,7 +20,6 @@ class delete_ghost_rows_visitor {
     service::query_state& _state;
     db::timeout_clock::duration _timeout_duration;
     view_ptr _view;
-    replica::table& _view_table;
     schema_ptr _base_schema;
     std::optional<partition_key> _view_pk;
 public:
