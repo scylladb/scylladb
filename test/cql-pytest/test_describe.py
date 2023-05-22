@@ -469,7 +469,7 @@ def test_keyspaces_quoting(cql):
     # are the ones with capital letters.
     name = "Quoted_KS"
 
-    cql.execute(f"CREATE KEYSPACE \"{name}\" WITH REPLICATION = {{'class': 'SimpleStrategy', 'replication_factor': 1}}")
+    cql.execute(f"CREATE KEYSPACE \"{name}\" WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
     try:
         desc = cql.execute(f"DESC KEYSPACE \"{name}\"").one().create_statement
 
@@ -494,7 +494,7 @@ def test_table_quoting(cql):
     name = "Quoted_TABLE"
     col_name = "!@#$%"
 
-    cql.execute(f"CREATE KEYSPACE \"{ks_name}\" WITH REPLICATION = {{'class': 'SimpleStrategy', 'replication_factor': 1}}")
+    cql.execute(f"CREATE KEYSPACE \"{ks_name}\" WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
     try:
         cql.execute(f"CREATE TABLE \"{ks_name}\".\"{name}\"(a int primary key, \"{col_name}\" int)")
         desc = cql.execute(f"DESC TABLE \"{ks_name}\".\"{name}\"").one().create_statement
@@ -528,7 +528,7 @@ def test_type_quoting(cql):
     name = "udt_@@@"
     field_name = "field_!!!"
 
-    cql.execute(f"CREATE KEYSPACE \"{ks_name}\" WITH REPLICATION = {{'class': 'SimpleStrategy', 'replication_factor': 1}}")
+    cql.execute(f"CREATE KEYSPACE \"{ks_name}\" WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
     try:
         cql.execute(f"CREATE TYPE \"{ks_name}\".\"{name}\" (a int, \"{field_name}\" text)")
         desc = cql.execute(f"DESC TYPE \"{ks_name}\".\"{name}\"").one().create_statement
@@ -553,7 +553,7 @@ def test_function_quoting(scylla_only, cql, test_keyspace):
     ks_name = "Quoted_KS"
     name = "!udf!"
 
-    cql.execute(f"CREATE KEYSPACE \"{ks_name}\" WITH REPLICATION = {{'class': 'SimpleStrategy', 'replication_factor': 1}}")
+    cql.execute(f"CREATE KEYSPACE \"{ks_name}\" WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
     try:
         cql.execute(f"""
             CREATE FUNCTION \"{ks_name}\".\"{name}\"(val int)
@@ -583,7 +583,7 @@ def test_aggregate_quoting(scylla_only, cql, test_keyspace):
     sfunc_name = "!udf!"
     name = "'uda'!"
 
-    cql.execute(f"CREATE KEYSPACE \"{ks_name}\" WITH REPLICATION = {{'class': 'SimpleStrategy', 'replication_factor': 1}}")
+    cql.execute(f"CREATE KEYSPACE \"{ks_name}\" WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
     try:
         cql.execute(f"""
             CREATE FUNCTION \"{ks_name}\".\"{sfunc_name}\"(val1 int, val2 int)

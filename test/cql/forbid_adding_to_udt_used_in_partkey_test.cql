@@ -1,5 +1,5 @@
 -- Error messages contain a keyspace name. Make the output stable.
-CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
 create type ks.ut (a int);
 create table ks.t (pk frozen<ut> primary key);
 alter type ks.ut add b int;

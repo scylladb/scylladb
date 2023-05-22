@@ -918,7 +918,7 @@ SEASTAR_TEST_CASE(memtable_flush_compresses_mutations) {
         // Create table and insert some data
         char const* ks_name = "keyspace_name";
         char const* table_name = "table_name";
-        env.execute_cql(format("CREATE KEYSPACE {} WITH REPLICATION = {{'class' : 'SimpleStrategy', 'replication_factor' : 1}};", ks_name)).get();
+        env.execute_cql(format("CREATE KEYSPACE {} WITH REPLICATION = {{'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1}};", ks_name)).get();
         env.execute_cql(format("CREATE TABLE {}.{} (pk int, ck int, id int, PRIMARY KEY(pk, ck));", ks_name, table_name)).get();
 
         replica::database& db = env.local_db();

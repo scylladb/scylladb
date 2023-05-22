@@ -38,7 +38,7 @@ SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
                     .with_column("pk", bytes_type, column_kind::partition_key)
                     .with_column("v1", bytes_type);
 
-            e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
 
             auto old_schema = partial.build();
 
@@ -73,7 +73,7 @@ SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
                     .with_column("pk", bytes_type, column_kind::partition_key)
                     .with_column("v1", bytes_type);
 
-            e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
 
             auto old_schema = builder.build();
 
@@ -108,7 +108,7 @@ SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
 SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {
-            e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
 
             auto table_schema = schema_builder("ks", "table")
                     .with_column("pk", bytes_type, column_kind::partition_key)
@@ -145,7 +145,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
 SEASTAR_TEST_CASE(test_concurrent_column_addition) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {
-            e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
 
             service::migration_manager& mm = e.migration_manager().local();
 
@@ -222,7 +222,7 @@ SEASTAR_TEST_CASE(test_sort_type_in_update) {
 SEASTAR_TEST_CASE(test_column_is_dropped) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {
-            e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
             e.execute_cql("create table tests.table1 (pk int primary key, c1 int, c2 int);").get();
             e.execute_cql("alter table tests.table1 drop c2;").get();
             e.execute_cql("alter table tests.table1 add s1 int;").get();
@@ -237,7 +237,7 @@ SEASTAR_TEST_CASE(test_column_is_dropped) {
 
 SEASTAR_TEST_CASE(test_static_column_is_dropped) {
     return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+        e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
         e.execute_cql("create table tests.table1 (pk int, c1 int, c2 int static, primary key (pk, c1));").get();
 
         e.execute_cql("alter table tests.table1 drop c2;").get();
@@ -257,7 +257,7 @@ SEASTAR_TEST_CASE(test_static_column_is_dropped) {
 
 SEASTAR_TEST_CASE(test_multiple_columns_add_and_drop) {
     return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+        e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
         e.execute_cql("create table tests.table1 (pk int primary key, c1 int, c2 int, c3 int);").get();
 
         e.execute_cql("alter table tests.table1 drop (c2);").get();
@@ -282,7 +282,7 @@ SEASTAR_TEST_CASE(test_multiple_columns_add_and_drop) {
 
 SEASTAR_TEST_CASE(test_multiple_static_columns_add_and_drop) {
     return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+        e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
         e.execute_cql("create table tests.table1 (pk int, c1 int, c2 int static, c3 int, primary key(pk, c1));").get();
 
         e.execute_cql("alter table tests.table1 drop (c2);").get();
@@ -310,7 +310,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
         return seastar::async([&] {
             service::migration_manager& mm = e.migration_manager().local();
 
-            e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
 
             auto s1 = schema_builder("ks", "table1")
                     .with_column("pk", bytes_type, column_kind::partition_key)
@@ -372,7 +372,7 @@ SEASTAR_TEST_CASE(test_concurrent_table_creation_with_different_schema) {
         return seastar::async([&] {
             service::migration_manager& mm = e.migration_manager().local();
 
-            e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
 
             auto s1 = schema_builder("ks", "table1")
                     .with_column("pk1", bytes_type, column_kind::partition_key)
@@ -605,7 +605,7 @@ SEASTAR_TEST_CASE(test_notifications) {
             e.local_mnotifier().register_listener(&listener);
             auto listener_lease = defer([&e, &listener] { e.local_mnotifier().register_listener(&listener); });
 
-            e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
 
             BOOST_REQUIRE_EQUAL(listener.create_keyspace_count, 1);
 
@@ -690,7 +690,7 @@ SEASTAR_TEST_CASE(test_prepared_statement_is_invalidated_by_schema_change) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {
             logging::logger_registry().set_logger_level("query_processor", logging::log_level::debug);
-            e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
             e.execute_cql("create table tests.table1 (pk int primary key, c1 int, c2 int);").get();
             auto id = e.prepare("select * from tests.table1;").get0();
 
@@ -752,7 +752,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
         if (regenerate) {
             // Exercise many different kinds of schema changes.
             e.execute_cql(
-                "create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+                "create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
             e.execute_cql("create table tests.table1 (pk int primary key, c1 int, c2 int);").get();
             e.execute_cql("create type tests.basic_info (c1 timestamp, v2 text);").get();
             e.execute_cql("create index on tests.table1 (c1);").get();
@@ -762,7 +762,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
             e.execute_cql(
                 "create materialized view ks.tbl_view_2 AS SELECT a FROM ks.tbl WHERE a IS NOT NULL PRIMARY KEY (a)").get();
             e.execute_cql(
-                "create keyspace tests2 with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+                "create keyspace tests2 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
             e.execute_cql("drop keyspace tests2;").get();
             extra_schema_changes(e);
         }
@@ -926,7 +926,7 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_keyspace_storage_optio
         std::set<sstring>{},
         std::move(expected_digests),
         [] (cql_test_env& e) {
-            e.execute_cql("create keyspace tests_s3 with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }"
+            e.execute_cql("create keyspace tests_s3 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }"
                     " and storage = { 'type': 'S3', 'bucket': 'b1', 'endpoint': 'localhost' };").get();
             e.execute_cql("create table tests_s3.table1 (pk int primary key, c1 int, c2 int)").get();
         });

@@ -1,4 +1,4 @@
-> CREATE KEYSPACE k WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+> CREATE KEYSPACE k WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
 OK
 > USE k;
 OK

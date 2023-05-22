@@ -86,11 +86,11 @@ def test_grant_revoke_data_permissions(cql, test_keyspace):
             ks = unique_name()
             # Permissions on all keyspaces
             def create_keyspace_idempotent():
-                user_session.execute(f"CREATE KEYSPACE IF NOT EXISTS {ks} WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 1 }}")
+                user_session.execute(f"CREATE KEYSPACE IF NOT EXISTS {ks} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}")
                 user_session.execute(f"DROP KEYSPACE IF EXISTS {ks}")
             check_enforced(cql, username, permission='CREATE', resource='ALL KEYSPACES', function=create_keyspace_idempotent)
             # Permissions for a specific keyspace
-            with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }") as keyspace:
+            with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }") as keyspace:
                 t = unique_name()
                 def create_table_idempotent():
                     user_session.execute(f"CREATE TABLE IF NOT EXISTS {keyspace}.{t}(id int primary key)")
@@ -127,7 +127,7 @@ def test_grant_revoke_data_permissions(cql, test_keyspace):
 # Test that permissions for user-defined functions are serialized in a Cassandra-compatible way
 def test_udf_permissions_serialization(cql):
     schema = "a int primary key"
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace, new_user(cql) as user:
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace, new_user(cql) as user:
         with new_test_table(cql, keyspace, schema) as table:
             # Creating a bilingual function makes this test case work for both Scylla and Cassandra
             div_body_lua = "(b bigint, i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return b//i'"
@@ -165,7 +165,7 @@ def test_udf_permissions_serialization(cql):
 def test_udf_permissions_quoted_names(cassandra_bug, cql):
     udt_name = f'"{unique_name()}weird_udt[t^t]a^b^[]"'
     schema = f"a frozen<{udt_name}> primary key"
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         with new_type(cql, keyspace, "(a text, b int)", udt_name) as udt, new_test_table(cql, keyspace, schema) as table:
             fun_body_lua = f"(i {udt}) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
             fun_body_java = f"(i {udt}) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42;'"
@@ -197,7 +197,7 @@ def test_udf_permissions_quoted_names(cassandra_bug, cql):
 # If the signature is specified, test that the permission check is performed as usual.
 def test_drop_udf_with_same_name(cql):
     schema = "a int primary key"
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         body1_lua = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
         body1_java = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return Long.valueOf(42);'"
         body2_lua = "(i int, j int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
@@ -229,7 +229,7 @@ def test_drop_udf_with_same_name(cql):
 def test_grant_revoke_udf_permissions(cql):
     schema = "a int primary key, b list<int>"
     user = "cassandra"
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         with new_test_table(cql, keyspace, schema) as table:
             fun_body_lua = "(i int, l list<int>) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
             fun_body_java = "(i int, l list<int>) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
@@ -295,7 +295,7 @@ def test_grant_perms_on_nonexistent_udf(cql):
             grant(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {keyspace}', username)
         with pytest.raises((InvalidRequest, ConfigurationException)):
             grant(cql, 'EXECUTE', f'FUNCTION {keyspace}.{fun_name}(int)', username)
-        cql.execute(f"CREATE KEYSPACE IF NOT EXISTS {keyspace} WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 1 }}")
+        cql.execute(f"CREATE KEYSPACE IF NOT EXISTS {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}")
         grant(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {keyspace}', username)
         revoke(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {keyspace}', username)
         with pytest.raises((InvalidRequest, SyntaxException)):
@@ -316,7 +316,7 @@ def test_grant_perms_on_nonexistent_udf(cql):
 # Test that permissions for user-defined aggregates are also enforced.
 def test_grant_revoke_uda_permissions(cql):
     schema = 'id bigint primary key'
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         with new_test_table(cql, keyspace, schema) as table:
             for i in range(8):
                 cql.execute(f"INSERT INTO {table} (id) VALUES ({10**i})")
@@ -375,7 +375,7 @@ def test_grant_revoke_uda_permissions(cql):
 
 # Test that permissions for user-defined functions created on top of user-defined types work
 def test_udf_permissions_with_udt(cql):
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         with new_type(cql, keyspace, '(v int)') as udt:
             schema = f"a frozen<{udt}> primary key"
             with new_test_table(cql, keyspace, schema) as table:
@@ -397,7 +397,7 @@ def test_udf_permissions_with_udt(cql):
 
 # Test that permissions on user-defined functions with no arguments work
 def test_udf_permissions_no_args(cql):
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         with new_test_table(cql, keyspace, schema="a int primary key") as table, new_user(cql) as username:
             with new_session(cql, username) as user_session:
                 fun_body_lua = f"() CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
@@ -423,7 +423,7 @@ def test_udf_permissions_no_args(cql):
 def test_create_on_single_function(cql):
     schema = "a int primary key"
     user = "cassandra"
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         with new_test_table(cql, keyspace, schema) as table:
             fun_body_lua = f"(a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return a + b;'"
             fun_body_java = f"(a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return a + b;'"

@@ -2,7 +2,7 @@
 -- do not depend on how stream IDs are assigned to partition keys.
 
 -- Error messages contain a keyspace name. Make the output stable.
-CREATE KEYSPACE ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
 
 -- create cdc enabled table
 create table ks.t (pk int, ck int, v int, primary key(pk, ck)) with cdc = {'enabled': true};

@@ -299,7 +299,7 @@ SEASTAR_TEST_CASE(create_keyspace_default_permissions) {
                 env,
                 alice,
                 "GRANT CREATE ON ALL KEYSPACES TO alice",
-                "CREATE KEYSPACE armies WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }",
+                "CREATE KEYSPACE armies WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }",
                 auth::make_data_resource("armies"));
     }, db_config_with_auth());
 }

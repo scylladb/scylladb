@@ -458,7 +458,7 @@ class ScyllaServer:
                      ) as cluster:
             with cluster.connect() as session:
                 session.execute("CREATE KEYSPACE IF NOT EXISTS k WITH REPLICATION = {" +
-                                "'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
+                                "'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
                 session.execute("DROP KEYSPACE k")
 
     async def shutdown_control_connection(self) -> None:

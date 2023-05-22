@@ -1,5 +1,5 @@
 -- single null value
-CREATE KEYSPACE reproducer WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+CREATE KEYSPACE reproducer WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
 CREATE TABLE reproducer.t(pk int PRIMARY KEY, v int);
 INSERT INTO reproducer.t (pk) VALUES (1);
 SELECT TOKEN(v) FROM reproducer.t;
