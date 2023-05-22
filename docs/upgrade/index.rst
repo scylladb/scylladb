@@ -6,8 +6,9 @@ Upgrade ScyllaDB
    :titlesonly:
    :hidden:
 
-   ScyllaDB Open Source <upgrade-opensource/index>
-   ScyllaDB Open Source to ScyllaDB Enterprise <upgrade-to-enterprise/index>
+   ScyllaDB Versioning <scylladb-versioning>
+   ScyllaDB Open Source Upgrade <upgrade-opensource/index>
+   ScyllaDB Open Source to ScyllaDB Enterprise Upgrade <upgrade-to-enterprise/index>
    ScyllaDB AMI <ami-upgrade>
    ScyllaDB Enterprise <https://enterprise.docs.scylladb.com/stable/upgrade/upgrade-enterprise/index.html>
 
