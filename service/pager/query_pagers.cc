@@ -305,7 +305,7 @@ public:
             _query_read_repair_decision = qr.read_repair_decision;
             qr.query_result->ensure_counts();
             return seastar::async([this, query_result = std::move(qr.query_result), page_size, now] () mutable -> result<> {
-                handle_result(db::view::delete_ghost_rows_visitor{_qb.proxy(), _state, view_ptr(_schema), _timeout_duration},
+                handle_result(db::view::delete_ghost_rows_visitor{_qb, _state, view_ptr(_schema), _timeout_duration},
                         std::move(query_result), page_size, now);
                 return bo::success();
             });

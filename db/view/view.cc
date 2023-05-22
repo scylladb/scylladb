@@ -32,6 +32,7 @@
 #include "cql3/statements/select_statement.hh"
 #include "cql3/util.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
+#include "cql3/query_backend.hh"
 #include "db/view/view.hh"
 #include "db/view/view_builder.hh"
 #include "db/view/view_updating_consumer.hh"
@@ -2625,12 +2626,12 @@ std::vector<db::view::view_and_base> with_base_info_snapshot(std::vector<view_pt
     }));
 }
 
-delete_ghost_rows_visitor::delete_ghost_rows_visitor(service::storage_proxy& proxy, service::query_state& state, view_ptr view, db::timeout_clock::duration timeout_duration)
-        : _proxy(proxy)
+delete_ghost_rows_visitor::delete_ghost_rows_visitor(cql3::query_backend& qb, service::query_state& state, view_ptr view, db::timeout_clock::duration timeout_duration)
+        : _qb(qb)
         , _state(state)
         , _timeout_duration(timeout_duration)
         , _view(view)
-        , _base_schema(_proxy.get_db().local().find_schema(_view->view_info()->base_id()))
+        , _base_schema(_qb.db().find_schema(_view->view_info()->base_id()))
         , _view_pk()
 {}
 
@@ -2665,17 +2666,17 @@ void delete_ghost_rows_visitor::accept_new_row(const clustering_key& ck, const q
     std::vector<query::clustering_range> bounds{query::clustering_range::make_singular(base_ck)};
     query::partition_slice partition_slice(std::move(bounds), {},  {}, selection->get_query_options());
     auto command = ::make_lw_shared<query::read_command>(_base_schema->id(), _base_schema->version(), partition_slice,
-            _proxy.get_max_result_size(partition_slice), query::tombstone_limit(_proxy.get_tombstone_limit()));
+            _qb.get_max_result_size(partition_slice), query::tombstone_limit(_qb.get_tombstone_limit()));
     auto timeout = db::timeout_clock::now() + _timeout_duration;
     coordinator_query_options opts{timeout, _state.get_permit(), _state.get_client_state(), _state.get_trace_state()};
-    auto base_qr = _proxy.query(_base_schema, command, std::move(partition_ranges), db::consistency_level::ALL, opts).get0();
+    auto base_qr = _qb.query(_base_schema, command, std::move(partition_ranges), db::consistency_level::ALL, opts).get0();
     query::result& result = *base_qr.query_result;
     if (result.row_count().value_or(0) == 0) {
         mutation m(_view, *_view_pk);
         auto& row = m.partition().clustered_row(*_view, ck);
         row.apply(tombstone(api::new_timestamp(), gc_clock::now()));
         timeout = db::timeout_clock::now() + _timeout_duration;
-        _proxy.mutate({m}, db::consistency_level::ALL, timeout, _state.get_trace_state(), empty_service_permit(), db::allow_per_partition_rate_limit::no).get();
+        _qb.mutate({m}, db::consistency_level::ALL, timeout, _state.get_trace_state(), empty_service_permit(), db::allow_per_partition_rate_limit::no).get();
     }
 }
 

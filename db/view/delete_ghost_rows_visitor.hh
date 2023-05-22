@@ -8,22 +8,25 @@
 #include "replica/database_fwd.hh"
 #include "db/timeout_clock.hh"
 
+namespace cql3 {
+class query_backend;
+}
+
 namespace service {
-class storage_proxy;
 class query_state;
 }
 
 namespace db::view {
 
 class delete_ghost_rows_visitor {
-    service::storage_proxy& _proxy;
+    cql3::query_backend& _qb;
     service::query_state& _state;
     db::timeout_clock::duration _timeout_duration;
     view_ptr _view;
     schema_ptr _base_schema;
     std::optional<partition_key> _view_pk;
 public:
-    delete_ghost_rows_visitor(service::storage_proxy& proxy, service::query_state& state, view_ptr view, db::timeout_clock::duration timeout_duration);
+    delete_ghost_rows_visitor(cql3::query_backend& qb, service::query_state& state, view_ptr view, db::timeout_clock::duration timeout_duration);
 
     void add_value(const column_definition& def, query::result_row_view::iterator_type& i) {
     }
