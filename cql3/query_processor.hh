@@ -20,6 +20,7 @@
 #include "cql3/prepared_statements_cache.hh"
 #include "cql3/authorized_prepared_statements_cache.hh"
 #include "cql3/statements/prepared_statement.hh"
+#include "cql3/query_backend.hh"
 #include "exceptions/exceptions.hh"
 #include "lang/wasm_instance_cache.hh"
 #include "service/migration_listener.hh"
@@ -129,6 +130,8 @@ private:
     std::shared_ptr<rust::Box<wasmtime::Engine>> _wasm_engine;
     std::optional<wasm::instance_cache> _wasm_instance_cache;
     std::shared_ptr<wasm::alien_thread_runner> _alien_runner;
+
+    query_backend _backend;
 public:
     static const sstring CQL_VERSION;
 
@@ -180,6 +183,10 @@ public:
 
     wasm::alien_thread_runner& alien_runner() {
         return *_alien_runner;
+    }
+
+    query_backend get_backend() {
+        return _backend;
     }
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key) {

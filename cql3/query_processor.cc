@@ -208,6 +208,7 @@ query_processor::query_processor(service::storage_proxy& proxy, service::forward
         , _wasm_engine(wasm_ctx ? std::move(wasm_ctx->engine) : nullptr)
         , _wasm_instance_cache(wasm_ctx ? std::make_optional<wasm::instance_cache>(wasm_ctx->cache_size, wasm_ctx->instance_size, wasm_ctx->timer_period) : std::nullopt)
         , _alien_runner(wasm_ctx ? std::move(wasm_ctx->alien_runner) : nullptr)
+        , _backend(make_shared<storage_proxy_query_backend>(_proxy.shared_from_this(), _db, _forwarder, _mm, _group0_client, **_wasm_engine, *_wasm_instance_cache, *_alien_runner))
         {
     namespace sm = seastar::metrics;
     namespace stm = statements;
