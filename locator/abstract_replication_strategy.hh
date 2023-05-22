@@ -11,6 +11,8 @@
 #include <memory>
 #include <functional>
 #include <unordered_map>
+#include <boost/icl/interval.hpp>
+#include <boost/icl/interval_map.hpp>
 #include "gms/inet_address.hh"
 #include "gms/feature_service.hh"
 #include "locator/snitch_base.hh"
@@ -65,6 +67,7 @@ protected:
     replication_strategy_type _my_type;
     bool _per_table = false;
     bool _uses_tablets = false;
+    bool _natural_endpoints_depend_on_token = true;
 
     template <typename... Args>
     void err(const char* fmt, Args&&... args) const {
@@ -90,7 +93,7 @@ public:
 
     // Evaluates to true iff calculate_natural_endpoints
     // returns different results for different tokens.
-    virtual bool natural_endpoints_depend_on_token() const noexcept { return true; }
+    bool natural_endpoints_depend_on_token() const noexcept { return _natural_endpoints_depend_on_token; }
 
     // The returned vector has size O(number of normal token owners), which is O(number of nodes in the cluster).
     // Note: it is not guaranteed that the function will actually yield. If the complexity of a particular implementation
@@ -110,9 +113,6 @@ public:
 
     static sstring to_qualified_class_name(std::string_view strategy_class_name);
 
-    virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token, const vnode_effective_replication_map& erm) const;
-    // Returns the last stop_iteration result of the called func
-    virtual stop_iteration for_each_natural_endpoint_until(const token& search_token, const vnode_effective_replication_map& erm, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
     virtual void validate_options(const gms::feature_service&) const = 0;
     virtual std::optional<std::unordered_set<sstring>> recognized_options(const topology&) const = 0;
     virtual size_t get_replication_factor(const token_metadata& tm) const = 0;
@@ -154,6 +154,7 @@ public:
     future<dht::token_range_vector> get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, inet_address pending_address, locator::endpoint_dc_rack dr) const;
 };
 
+using ring_mapping = boost::icl::interval_map<token, std::unordered_set<inet_address>>;
 using replication_strategy_ptr = seastar::shared_ptr<const abstract_replication_strategy>;
 using mutable_replication_strategy_ptr = seastar::shared_ptr<abstract_replication_strategy>;
 
@@ -197,7 +198,17 @@ public:
     /// Returns the set of pending replicas for a given token.
     /// Pending replica is a replica which gains ownership of data.
     /// Non-empty only during topology change.
-    virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token, const sstring& ks_name) const = 0;
+    virtual inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const = 0;
+
+    /// Returns a list of nodes to which a read request should be directed.
+    /// Returns not null only during topology changes, if request_read_new was called and
+    /// new set of replicas differs from the old one.
+    virtual std::optional<inet_address_vector_replica_set> get_endpoints_for_reading(const token& search_token) const = 0;
+
+    /// Returns true if there are any pending ranges for this endpoint.
+    /// This operation is expensive, for vnode_erm it iterates
+    /// over all pending ranges which is O(number of tokens).
+    virtual bool has_pending_ranges(inet_address endpoint) const = 0;
 
     /// Returns a token_range_splitter which is line with the replica assignment of this replication map.
     /// The splitter can live longer than this instance.
@@ -247,9 +258,10 @@ public:
 
         sstring to_sstring() const;
     };
-
 private:
     replication_map _replication_map;
+    ring_mapping _pending_endpoints;
+    ring_mapping _read_endpoints;
     std::optional<factory_key> _factory_key = std::nullopt;
     effective_replication_map_factory* _factory = nullptr;
 
@@ -258,24 +270,30 @@ private:
 public: // effective_replication_map
     inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override;
     inet_address_vector_replica_set get_natural_endpoints_without_node_being_replaced(const token& search_token) const override;
-    inet_address_vector_topology_change get_pending_endpoints(const token& search_token, const sstring& ks_name) const override;
+    inet_address_vector_topology_change get_pending_endpoints(const token& search_token) const override;
+    std::optional<inet_address_vector_replica_set> get_endpoints_for_reading(const token& search_token) const override;
+    bool has_pending_ranges(inet_address endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
 public:
-    explicit vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map, size_t replication_factor) noexcept
+    explicit vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map,
+            ring_mapping pending_endpoints, ring_mapping read_endpoints, size_t replication_factor) noexcept
         : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
         , _replication_map(std::move(replication_map))
+        , _pending_endpoints(std::move(pending_endpoints))
+        , _read_endpoints(std::move(read_endpoints))
     { }
     vnode_effective_replication_map() = delete;
     vnode_effective_replication_map(vnode_effective_replication_map&&) = default;
     ~vnode_effective_replication_map();
 
-    const replication_map& get_replication_map() const noexcept {
-        return _replication_map;
-    }
-
-    future<> clear_gently() noexcept;
-
-    future<replication_map> clone_endpoints_gently() const;
+    struct cloned_data {
+        replication_map replication_map;
+        ring_mapping pending_endpoints;
+        ring_mapping read_endpoints;
+    };
+    // boost::icl::interval_map is not no_throw_move_constructible -> can't return cloned_data by val,
+    // since future_state requires T to be no_throw_move_constructible.
+    future<std::unique_ptr<cloned_data>> clone_data_gently() const;
 
     stop_iteration for_each_natural_endpoint_until(const token& search_token, const noncopyable_function<stop_iteration(const inet_address&)>& func) const;
 
@@ -309,6 +327,7 @@ public:
 
 private:
     dht::token_range_vector do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const inet_address& natural_endpoint)> consider_range_for_endpoint) const;
+    const inet_address_vector_replica_set& do_get_natural_endpoints(const token& search_token) const;
 
 public:
     static factory_key make_factory_key(const replication_strategy_ptr& rs, const token_metadata_ptr& tmptr);
@@ -336,9 +355,11 @@ using mutable_vnode_effective_replication_map_ptr = shared_ptr<vnode_effective_r
 using vnode_erm_ptr = vnode_effective_replication_map_ptr;
 using mutable_vnode_erm_ptr = mutable_vnode_effective_replication_map_ptr;
 
-inline mutable_vnode_erm_ptr make_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map, size_t replication_factor) {
+inline mutable_vnode_erm_ptr make_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map, ring_mapping pending_endpoints,
+    ring_mapping read_endpoints, size_t replication_factor) {
     return seastar::make_shared<vnode_effective_replication_map>(
-            std::move(rs), std::move(tmptr), std::move(replication_map), replication_factor);
+            std::move(rs), std::move(tmptr), std::move(replication_map),
+        std::move(pending_endpoints), std::move(read_endpoints), replication_factor);
 }
 
 // Apply the replication strategy over the current configuration and the given token_metadata.

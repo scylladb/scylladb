@@ -28,7 +28,6 @@
 
 #include "locator/types.hh"
 #include "locator/topology.hh"
-#include "service/topology_state_machine.hh"
 
 // forward declaration since replica/database.hh includes this file
 namespace replica {
@@ -70,6 +69,7 @@ struct host_id_or_endpoint {
 };
 
 class token_metadata_impl;
+struct topology_change_info;
 
 class token_metadata final {
     std::unique_ptr<token_metadata_impl> _impl;
@@ -244,18 +244,9 @@ public:
     static boost::icl::interval<token>::interval_type range_to_interval(range<dht::token> r);
     static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
-    bool has_pending_ranges(sstring keyspace_name, inet_address endpoint) const;
-     /**
-     * Calculate pending ranges according to bootstrapping, leaving and replacing nodes.
-     *
-     * We construct an updated version of the token_metadata by incorporating
-     * all proposed modifications (join, bootstrap, and replace operations).
-     * Subsequently, for each token range, we compare the outcomes of the calculate_natural_endpoints
-     * function applied to both the previous and the new token_metadata.
-     * Endpoints present in the updated version but absent in the original one
-     * ought to be appended to the pending_ranges.
-     */
-    future<> update_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name, dc_rack_fn& get_dc_rack);
+    future<> update_topology_change_info(dc_rack_fn& get_dc_rack);
+
+    const std::optional<topology_change_info>& get_topology_change_info() const;
 
     token get_predecessor(token t) const;
 
@@ -265,18 +256,13 @@ public:
      * Bootstrapping tokens are not taken into account. */
     size_t count_normal_token_owners() const;
 
-    // returns empty vector if keyspace_name not found.
-    inet_address_vector_topology_change pending_endpoints_for(const token& token, const sstring& keyspace_name) const;
-
-    // This function returns a list of nodes to which a read request should be directed.
-    // Returns not null only during topology changes, if _topology_change_stage == read_new and
-    // new set of replicas differs from the old one.
-    std::optional<inet_address_vector_replica_set> endpoints_for_reading(const token& token, const sstring& keyspace_name) const;
-
-    // updates the current topology_transition_state of this instance,
-    // this value is preserved in all clone functions,
-    // by default it's not set
-    void set_topology_transition_state(std::optional<service::topology::transition_state> state);
+    // Updates the read_new flag, switching read requests from
+    // the old endpoints to the new ones during topology changes:
+    // read_new_t::no - no read_endpoints will be stored on update_pending_ranges, all reads goes to normal endpoints;
+    // read_new_t::yes - triggers update_pending_ranges to compute and store new ranges for read requests.
+    // The value is preserved in all clone functions, the default is read_new_t::no.
+    using read_new_t = bool_class<class read_new_tag>;
+    void set_read_new(read_new_t value);
 
     /** @return an endpoint to token multimap representation of tokenToEndpointMap (a copy) */
     std::multimap<inet_address, token> get_endpoint_to_token_map_for_reading() const;
@@ -290,6 +276,19 @@ public:
     void invalidate_cached_rings();
 
     friend class token_metadata_impl;
+};
+
+struct topology_change_info {
+    token_metadata target_token_metadata;
+    std::optional<token_metadata> base_token_metadata;
+    std::vector<dht::token> all_tokens;
+    token_metadata::read_new_t read_new;
+
+    topology_change_info(token_metadata target_token_metadata_,
+        std::optional<token_metadata> base_token_metadata_,
+        std::vector<dht::token> all_tokens_,
+        token_metadata::read_new_t read_new_);
+    future<> clear_gently();
 };
 
 using token_metadata_ptr = lw_shared_ptr<const token_metadata>;

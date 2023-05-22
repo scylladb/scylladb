@@ -2845,7 +2845,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
     replica::table& table = _db.local().find_column_family(s->id());
     auto erm = table.get_effective_replication_map();
     inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints_without_node_being_replaced(token);
-    inet_address_vector_topology_change pending_endpoints = erm->get_pending_endpoints(token, s->ks_name());
+    inet_address_vector_topology_change pending_endpoints = erm->get_pending_endpoints(token);
 
     slogger.trace("creating write handler for token: {} natural: {} pending: {}", token, natural_endpoints, pending_endpoints);
     tracing::trace(tr_state, "Creating write handler for token: {} natural: {} pending: {}", token, natural_endpoints ,pending_endpoints);
@@ -3208,7 +3208,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 storage_proxy::paxos_participants
 storage_proxy::get_paxos_participants(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token &token, db::consistency_level cl_for_paxos) {
     inet_address_vector_replica_set natural_endpoints = erm.get_natural_endpoints_without_node_being_replaced(token);
-    inet_address_vector_topology_change pending_endpoints = erm.get_pending_endpoints(token, ks_name);
+    inet_address_vector_topology_change pending_endpoints = erm.get_pending_endpoints(token);
 
     if (cl_for_paxos == db::consistency_level::LOCAL_SERIAL) {
         auto local_dc_filter = erm.get_topology().get_local_dc_filter();
@@ -6008,7 +6008,7 @@ void storage_proxy::sort_endpoints_by_proximity(const locator::topology& topo, i
 }
 
 inet_address_vector_replica_set storage_proxy::get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const {
-    auto endpoints = erm.get_token_metadata_ptr()->endpoints_for_reading(token, ks_name);
+    auto endpoints = erm.get_endpoints_for_reading(token);
     if (!endpoints) {
         endpoints = erm.get_natural_endpoints_without_node_being_replaced(token);
     }

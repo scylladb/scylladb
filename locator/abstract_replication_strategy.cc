@@ -64,23 +64,6 @@ sstring abstract_replication_strategy::to_qualified_class_name(std::string_view 
     return strategy_class_registry::to_qualified_class_name(strategy_class_name);
 }
 
-inet_address_vector_replica_set abstract_replication_strategy::get_natural_endpoints(const token& search_token, const vnode_effective_replication_map& erm) const {
-    const token& key_token = erm.get_token_metadata_ptr()->first_token(search_token);
-    auto res = erm.get_replication_map().find(key_token);
-    return res->second;
-}
-
-stop_iteration abstract_replication_strategy::for_each_natural_endpoint_until(const token& search_token, const vnode_effective_replication_map& erm, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {
-    const token& key_token = erm.get_token_metadata_ptr()->first_token(search_token);
-    auto res = erm.get_replication_map().find(key_token);
-    for (const auto& ep : res->second) {
-        if (func(ep) == stop_iteration::yes) {
-            return stop_iteration::yes;
-        }
-    }
-    return stop_iteration::no;
-}
-
 inet_address_vector_replica_set vnode_effective_replication_map::get_natural_endpoints_without_node_being_replaced(const token& search_token) const {
     inet_address_vector_replica_set natural_endpoints = get_natural_endpoints(search_token);
     maybe_remove_node_being_replaced(*_tmptr, *_rs, natural_endpoints);
@@ -110,8 +93,41 @@ void maybe_remove_node_being_replaced(const token_metadata& tm,
     }
 }
 
-inet_address_vector_topology_change vnode_effective_replication_map::get_pending_endpoints(const token& search_token, const sstring& ks_name) const {
-    return _tmptr->pending_endpoints_for(search_token, ks_name);
+static const std::unordered_set<inet_address>* find_token(const ring_mapping& ring_mapping, const token& token) {
+    if (ring_mapping.empty()) {
+        return nullptr;
+    }
+    const auto interval = token_metadata::range_to_interval(range<dht::token>(token));
+    const auto it = ring_mapping.find(interval);
+    return it != ring_mapping.end() ? &it->second : nullptr;
+}
+
+inet_address_vector_topology_change vnode_effective_replication_map::get_pending_endpoints(const token& search_token) const {
+    inet_address_vector_topology_change endpoints;
+    const auto* pending_endpoints = find_token(_pending_endpoints, search_token);
+    if (pending_endpoints) {
+        // interval_map does not work with std::vector, convert to inet_address_vector_topology_change
+        endpoints = inet_address_vector_topology_change(pending_endpoints->begin(), pending_endpoints->end());
+    }
+    return endpoints;
+}
+
+std::optional<inet_address_vector_replica_set> vnode_effective_replication_map::get_endpoints_for_reading(const token& token) const {
+    const auto* endpoints = find_token(_read_endpoints, token);
+    if (endpoints == nullptr) {
+        return {};
+    }
+    return inet_address_vector_replica_set(endpoints->begin(), endpoints->end());
+}
+
+bool vnode_effective_replication_map::has_pending_ranges(inet_address endpoint) const {
+    for (const auto& item : _pending_endpoints) {
+        const auto& nodes = item.second;
+        if (nodes.contains(endpoint)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 std::unique_ptr<token_range_splitter> vnode_effective_replication_map::make_splitter() const {
@@ -287,10 +303,10 @@ future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 vnode_effective_replication_map::get_range_addresses() const {
     const token_metadata& tm = *_tmptr;
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> ret;
-    for (const auto& [t, eps] : _replication_map) {
+    for (auto& t : tm.sorted_tokens()) {
         dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
         for (auto& r : ranges) {
-            ret.emplace(r, eps);
+            ret.emplace(r, get_natural_endpoints(t));
         }
         co_await coroutine::maybe_yield();
     }
@@ -328,65 +344,138 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
     co_return ret;
 }
 
+static const auto default_replication_map_key = dht::token::from_int64(0);
+
 future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr) {
     replication_map replication_map;
+    ring_mapping pending_endpoints;
+    ring_mapping read_endpoints;
+    const auto depend_on_token = rs->natural_endpoints_depend_on_token();
     const auto& sorted_tokens = tmptr->sorted_tokens();
+    replication_map.reserve(depend_on_token ? sorted_tokens.size() : 1);
+    if (const auto& topology_changes = tmptr->get_topology_change_info(); topology_changes) {
+        const auto& all_tokens = topology_changes->all_tokens;
+        const auto& base_token_metadata = topology_changes->base_token_metadata
+            ? *topology_changes->base_token_metadata
+            : *tmptr;
+        const auto& current_tokens = tmptr->get_token_to_endpoint();
+        for (size_t i = 0, size = all_tokens.size(); i < size; ++i) {
+            co_await coroutine::maybe_yield();
 
-    if (!sorted_tokens.empty()) {
-        replication_map.reserve(sorted_tokens.size());
-        if (rs->natural_endpoints_depend_on_token()) {
-            for (const auto &t : sorted_tokens) {
-                auto eps = co_await rs->calculate_natural_endpoints(t, *tmptr);
-                replication_map.emplace(t, eps.get_vector());
+            const auto token = all_tokens[i];
+
+            auto current_endpoints = co_await rs->calculate_natural_endpoints(token, base_token_metadata);
+            auto target_endpoints = co_await rs->calculate_natural_endpoints(token, topology_changes->target_token_metadata);
+
+            auto add_mapping = [&](ring_mapping& target, std::unordered_set<inet_address>&& endpoints) {
+                using interval = ring_mapping::interval_type;
+                if (!depend_on_token) {
+                    target += std::make_pair(
+                        interval::open(dht::minimum_token(), dht::maximum_token()),
+                        std::move(endpoints));
+                } else if (i == 0) {
+                    target += std::make_pair(
+                        interval::open(all_tokens.back(), dht::maximum_token()),
+                        endpoints);
+                    target += std::make_pair(
+                        interval::left_open(dht::minimum_token(), token),
+                        std::move(endpoints));
+                } else {
+                    target += std::make_pair(
+                        interval::left_open(all_tokens[i - 1], token),
+                        std::move(endpoints));
+                }
+            };
+
+            {
+                std::unordered_set<inet_address> endpoints_diff;
+                for (const auto& e: target_endpoints) {
+                    if (!current_endpoints.contains(e)) {
+                        endpoints_diff.insert(e);
+                    }
+                }
+                if (!endpoints_diff.empty()) {
+                    add_mapping(pending_endpoints, std::move(endpoints_diff));
+                }
             }
-        } else {
-            auto eps = co_await rs->calculate_natural_endpoints(sorted_tokens.front(), *tmptr);
-            for (const auto &t : sorted_tokens) {
-                replication_map.emplace(t, eps.get_vector());
-                co_await coroutine::maybe_yield();
+
+            // in order not to waste memory, we update read_endpoints only if the
+            // new endpoints differs from the old one
+            if (topology_changes->read_new && target_endpoints.get_vector() != current_endpoints.get_vector()) {
+                add_mapping(read_endpoints, std::move(target_endpoints).extract_set());
+            }
+
+            if (!depend_on_token) {
+                replication_map.emplace(default_replication_map_key, std::move(current_endpoints).extract_vector());
+                break;
+            } else if (current_tokens.contains(token)) {
+                replication_map.emplace(token, std::move(current_endpoints).extract_vector());
             }
         }
+    } else if (depend_on_token) {
+        for (const auto &t : sorted_tokens) {
+            auto eps = co_await rs->calculate_natural_endpoints(t, *tmptr);
+            replication_map.emplace(t, std::move(eps).extract_vector());
+        }
+    } else {
+        auto eps = co_await rs->calculate_natural_endpoints(default_replication_map_key, *tmptr);
+        replication_map.emplace(default_replication_map_key, std::move(eps).extract_vector());
     }
 
     auto rf = rs->get_replication_factor(*tmptr);
-    co_return make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(replication_map), rf);
+    co_return make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(replication_map),
+        std::move(pending_endpoints), std::move(read_endpoints), rf);
 }
 
-future<replication_map> vnode_effective_replication_map::clone_endpoints_gently() const {
-    replication_map cloned_endpoints;
+auto vnode_effective_replication_map::clone_data_gently() const -> future<std::unique_ptr<cloned_data>> {
+    auto result = std::make_unique<cloned_data>();
 
     for (auto& i : _replication_map) {
-        cloned_endpoints.emplace(i.first, i.second);
+        result->replication_map.emplace(i.first, i.second);
         co_await coroutine::maybe_yield();
     }
 
-    co_return cloned_endpoints;
+    for (const auto& i : _pending_endpoints) {
+        result->pending_endpoints += i;
+        co_await coroutine::maybe_yield();
+    }
+
+    for (const auto& i : _read_endpoints) {
+        result->read_endpoints += i;
+        co_await coroutine::maybe_yield();
+    }
+    co_return std::move(result);
+}
+
+const inet_address_vector_replica_set& vnode_effective_replication_map::do_get_natural_endpoints(const token& search_token) const {
+    const token& key_token = _rs->natural_endpoints_depend_on_token()
+        ? _tmptr->first_token(search_token)
+        : default_replication_map_key;
+    const auto it = _replication_map.find(key_token);
+    return it->second;
 }
 
 inet_address_vector_replica_set vnode_effective_replication_map::get_natural_endpoints(const token& search_token) const {
-    return _rs->get_natural_endpoints(search_token, *this);
+    return do_get_natural_endpoints(search_token);
 }
 
 stop_iteration vnode_effective_replication_map::for_each_natural_endpoint_until(const token& search_token, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {
-    return _rs->for_each_natural_endpoint_until(search_token, *this, func);
-}
-
-future<> vnode_effective_replication_map::clear_gently() noexcept {
-    co_await utils::clear_gently(_replication_map);
-    co_await utils::clear_gently(_tmptr);
+    for (const auto& ep : do_get_natural_endpoints(search_token)) {
+        if (func(ep) == stop_iteration::yes) {
+            return stop_iteration::yes;
+        }
+    }
+    return stop_iteration::no;
 }
 
 vnode_effective_replication_map::~vnode_effective_replication_map() {
     if (is_registered()) {
         _factory->erase_effective_replication_map(this);
         try {
-            struct background_clear_holder {
-                locator::replication_map replication_map;
-                locator::token_metadata_ptr tmptr;
-            };
-            auto holder = make_lw_shared<background_clear_holder>({std::move(_replication_map), std::move(_tmptr)});
-            auto fut = when_all(utils::clear_gently(holder->replication_map), utils::clear_gently(holder->tmptr)).discard_result().then([holder] {});
-            _factory->submit_background_work(std::move(fut));
+            _factory->submit_background_work(clear_gently(std::move(_replication_map),
+                std::move(_pending_endpoints),
+                std::move(_read_endpoints),
+                std::move(_tmptr)));
         } catch (...) {
             // ignore
         }
@@ -425,8 +514,9 @@ future<vnode_effective_replication_map_ptr> effective_replication_map_factory::c
     mutable_vnode_effective_replication_map_ptr new_erm;
     if (ref_erm) {
         auto rf = ref_erm->get_replication_factor();
-        auto local_replication_map = co_await ref_erm->clone_endpoints_gently();
-        new_erm = make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(local_replication_map), rf);
+        auto local_data = co_await ref_erm->clone_data_gently();
+        new_erm = make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(local_data->replication_map),
+            std::move(local_data->pending_endpoints), std::move(local_data->read_endpoints), rf);
     } else {
         new_erm = co_await calculate_effective_replication_map(std::move(rs), std::move(tmptr));
     }

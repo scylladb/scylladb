@@ -1637,7 +1637,7 @@ future<> view_update_generator::mutate_MV(
         auto view_token = dht::get_token(*mut.s, mut.fm.key());
         auto& keyspace_name = mut.s->ks_name();
         auto target_endpoint = get_view_natural_endpoint(_proxy.local().local_db(), keyspace_name, base_token, view_token);
-        auto remote_endpoints = _proxy.local().get_token_metadata_ptr()->pending_endpoints_for(view_token, keyspace_name);
+        auto remote_endpoints = _proxy.local().local_db().find_keyspace(keyspace_name).get_effective_replication_map()->get_pending_endpoints(view_token);
         auto sem_units = pending_view_updates.split(mut.fm.representation().size());
 
         const bool update_synchronously = should_update_synchronously(*mut.s);

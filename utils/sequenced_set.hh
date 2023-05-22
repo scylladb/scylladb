@@ -129,6 +129,10 @@ public:
         return _set;
     }
 
+    auto extract_vector() && noexcept {
+        return std::move(_vec);
+    }
+
     auto extract_set() && noexcept {
         return std::move(_set);
     }

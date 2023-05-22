@@ -14,6 +14,8 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/when_all.hh>
+#include <seastar/core/do_with.hh>
 #include "utils/collection-concepts.hh"
 
 using namespace seastar;
@@ -95,7 +97,7 @@ concept TriviallyClearableSequence =
 
 template <typename T>
 concept Container = Iterable<T> && requires (T x, typename T::iterator it) {
-    { x.erase(it) } -> std::same_as<typename T::iterator>;
+    x.erase(it);
 };
 
 template <typename T>
@@ -171,6 +173,14 @@ template <typename T>
 future<> clear_gently(foreign_ptr<T>& o) noexcept {
     return smp::submit_to(o.get_owner_shard(), [&o] {
         return internal::clear_gently(*o);
+    });
+}
+
+template <typename... T>
+requires (std::is_rvalue_reference_v<T&&> && ...)
+future<> clear_gently(T&&... o) noexcept {
+    return do_with(std::move(o)..., [](auto&... args) {
+        return when_all(clear_gently(args)...).discard_result();
     });
 }
 

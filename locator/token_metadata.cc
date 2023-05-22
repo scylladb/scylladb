@@ -59,20 +59,7 @@ private:
     // The map between the existing node to be replaced and the replacing node
     std::unordered_map<inet_address, inet_address> _replacing_endpoints;
 
-    using ring_mapping = boost::icl::interval_map<token, std::unordered_set<inet_address>>;
-    // For each keyspace, migration_info contains ranges of tokens and
-    // corresponding replicas to which writes or reads will be directed:
-    //   - pending_endpoints - will be appended to normal endpoints for writes;
-    //   - read_endpoints - will completely replace normal endpoints for reads.
-    // This data structure is filled only during data migration between nodes
-    // when they are added or removed from the cluster.
-    // During normal operation, token mapping to nodes is
-    // implemented in the effective_replication_map.
-    struct migration_info {
-        ring_mapping pending_endpoints;
-        ring_mapping read_endpoints;
-    };
-    std::unordered_map<sstring, migration_info> _keyspace_to_migration_info;
+    std::optional<topology_change_info> _topology_change_info;
 
     std::vector<token> _sorted_tokens;
 
@@ -80,7 +67,7 @@ private:
 
     topology _topology;
 
-    std::optional<service::topology::transition_state> _topology_transition_state;
+    token_metadata::read_new_t _read_new = token_metadata::read_new_t::no;
 
     long _ring_version = 0;
     static thread_local long _static_ring_version;
@@ -242,21 +229,10 @@ public:
     static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
 public:
-    bool has_pending_ranges(sstring keyspace_name, inet_address endpoint) const;
-
-    /**
-    * Calculate pending ranges according to bootstrapping, leaving and replacing nodes.
-    *
-    * We construct an updated version of the token_metadata by incorporating
-    * all proposed modifications (join, bootstrap, and replace operations).
-    * Subsequently, for each token range, we compare the outcomes of the calculate_natural_endpoints
-    * function applied to both the previous and the new token_metadata.
-    * Endpoints present in the updated version but absent in the original one
-    * ought to be appended to the pending_ranges.
-    */
-    future<> update_pending_ranges(
-            const token_metadata& unpimplified_this,
-            const abstract_replication_strategy& strategy, const sstring& keyspace_name, dc_rack_fn& get_dc_rack);
+    future<> update_topology_change_info(dc_rack_fn& get_dc_rack);
+    const std::optional<topology_change_info>& get_topology_change_info() const {
+        return _topology_change_info;
+    }
 public:
 
     token get_predecessor(token t) const;
@@ -274,22 +250,14 @@ public:
     size_t count_normal_token_owners() const;
 private:
     future<> update_normal_token_owners();
-
-    enum class endpoints_field {
-        pending_endpoints,
-        read_endpoints
-    };
-    const std::unordered_set<inet_address>* maybe_migration_endpoints(endpoints_field field,
-        const token& token,
-        const sstring& keyspace_name) const;
 public:
     // returns empty vector if keyspace_name not found.
     inet_address_vector_topology_change pending_endpoints_for(const token& token, const sstring& keyspace_name) const;
 
     std::optional<inet_address_vector_replica_set> endpoints_for_reading(const token& token, const sstring& keyspace_name) const;
 
-    void set_topology_transition_state(std::optional<service::topology::transition_state> state) {
-        _topology_transition_state = state;
+    void set_read_new(token_metadata::read_new_t read_new) {
+        _read_new = read_new;
     }
 
 public:
@@ -359,10 +327,6 @@ future<std::unique_ptr<token_metadata_impl>> token_metadata_impl::clone_async() 
     }
     ret->_leaving_endpoints = _leaving_endpoints;
     ret->_replacing_endpoints = _replacing_endpoints;
-    for (const auto& p : _keyspace_to_migration_info) {
-        ret->_keyspace_to_migration_info.emplace(p);
-        co_await coroutine::maybe_yield();
-    }
     ret->_ring_version = _ring_version;
     co_return ret;
 }
@@ -381,7 +345,7 @@ future<std::unique_ptr<token_metadata_impl>> token_metadata_impl::clone_only_tok
         co_await coroutine::maybe_yield();
     }
     ret->_tablets = _tablets;
-    ret->_topology_transition_state =_topology_transition_state;
+    ret->_read_new = _read_new;
     co_return ret;
 }
 
@@ -391,7 +355,6 @@ future<> token_metadata_impl::clear_gently() noexcept {
     co_await utils::clear_gently(_bootstrap_tokens);
     co_await utils::clear_gently(_leaving_endpoints);
     co_await utils::clear_gently(_replacing_endpoints);
-    co_await utils::clear_gently(_keyspace_to_migration_info);
     co_await utils::clear_gently(_sorted_tokens);
     co_await _topology.clear_gently();
     co_await _tablets.clear_gently();
@@ -723,157 +686,84 @@ token_metadata_impl::interval_to_range(boost::icl::interval<token>::interval_typ
     return range<dht::token>({{i.lower(), start_inclusive}}, {{i.upper(), end_inclusive}});
 }
 
-bool
-token_metadata_impl::has_pending_ranges(sstring keyspace_name, inet_address endpoint) const {
-    const auto it = _keyspace_to_migration_info.find(keyspace_name);
-    if (it == _keyspace_to_migration_info.end()) {
-        return false;
-    }
-    for (const auto& item : it->second.pending_endpoints) {
-        const auto& nodes = item.second;
-        if (nodes.contains(endpoint)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-future<> token_metadata_impl::update_pending_ranges(
-        const token_metadata& unpimplified_this,
-        const abstract_replication_strategy& strategy, const sstring& keyspace_name, dc_rack_fn& get_dc_rack) {
-    tlogger.debug("calculate_pending_ranges: keyspace_name={}, bootstrap_tokens={}, leaving nodes={}, replacing_endpoints={}",
-        keyspace_name, _bootstrap_tokens, _leaving_endpoints, _replacing_endpoints);
+future<> token_metadata_impl::update_topology_change_info(dc_rack_fn& get_dc_rack) {
     if (_bootstrap_tokens.empty() && _leaving_endpoints.empty() && _replacing_endpoints.empty()) {
-        tlogger.debug("No bootstrapping, leaving nodes, replacing nodes -> empty pending ranges for {}", keyspace_name);
-        _keyspace_to_migration_info.erase(keyspace_name);
-        return make_ready_future<>();
+        co_await utils::clear_gently(_topology_change_info);
+        _topology_change_info.reset();
+        co_return;
     }
 
-    return async([this, &unpimplified_this, &strategy, keyspace_name, &get_dc_rack] () mutable {
-        // true if there is a node replaced with the same IP
-        bool replace_with_same_endpoint = false;
-        // new_token_metadata incorporates all the changes from leaving, bootstrapping and replacing
-        const auto new_token_metadata = token_metadata(std::invoke([&]() -> std::unique_ptr<token_metadata_impl> {
-            auto result = clone_only_token_map(false).get0();
-
-            // construct new_normal_tokens based on _bootstrap_tokens and _replacing_endpoints
-            std::unordered_map<inet_address, std::unordered_set<token>> new_normal_tokens;
-            if (!_replacing_endpoints.empty()) {
-                for (const auto& [token, inet_address]: _token_to_endpoint_map) {
-                    const auto it = _replacing_endpoints.find(inet_address);
-                    if (it == _replacing_endpoints.end()) {
-                        continue;
-                    }
-                    new_normal_tokens[it->second].insert(token);
+    // true if there is a node replaced with the same IP
+    bool replace_with_same_endpoint = false;
+    // target_token_metadata incorporates all the changes from leaving, bootstrapping and replacing
+    auto target_token_metadata = co_await clone_only_token_map(false);
+    {
+        // construct new_normal_tokens based on _bootstrap_tokens and _replacing_endpoints
+        std::unordered_map<inet_address, std::unordered_set<token>> new_normal_tokens;
+        if (!_replacing_endpoints.empty()) {
+            for (const auto& [token, inet_address]: _token_to_endpoint_map) {
+                const auto it = _replacing_endpoints.find(inet_address);
+                if (it == _replacing_endpoints.end()) {
+                    continue;
                 }
-                for (const auto& [replace_from, replace_to]: _replacing_endpoints) {
-                    if (replace_from == replace_to) {
-                        replace_with_same_endpoint = true;
-                    } else {
-                        result->remove_endpoint(replace_from);
-                    }
+                new_normal_tokens[it->second].insert(token);
+            }
+            for (const auto& [replace_from, replace_to]: _replacing_endpoints) {
+                if (replace_from == replace_to) {
+                    replace_with_same_endpoint = true;
+                } else {
+                    target_token_metadata->remove_endpoint(replace_from);
                 }
             }
-            for (const auto& [token, inet_address]: _bootstrap_tokens) {
-                new_normal_tokens[inet_address].insert(token);
-            }
-            // apply new_normal_tokens
-            for (auto& [endpoint, tokens]: new_normal_tokens) {
-                result->update_topology(endpoint, get_dc_rack(endpoint), node::state::normal);
-                result->update_normal_tokens(std::move(tokens), endpoint).get();
-            }
-            // apply leaving endpoints
-            for (const auto& endpoint: _leaving_endpoints) {
-                result->remove_endpoint(endpoint);
-            }
-            result->sort_tokens();
-            return result;
-        }));
-
-        // We require a distinct token_metadata instance when replace_from equals replace_to,
-        // as it ensures the node is included in pending_ranges.
-        // Otherwise, the node would be excluded from both pending_ranges and
-        // get_natural_endpoints_without_node_being_replaced,
-        // causing the coordinator to overlook it entirely.
-        const token_metadata* base_token_metadata;
-        std::optional<token_metadata> self_copy;
-        if (replace_with_same_endpoint) {
-            self_copy = token_metadata(std::invoke([&]() -> std::unique_ptr<token_metadata_impl> {
-                auto result = clone_only_token_map(false).get0();
-                for (const auto& [replace_from, replace_to]: _replacing_endpoints) {
-                    if (replace_from == replace_to) {
-                        result->remove_endpoint(replace_from);
-                    }
-                }
-                result->sort_tokens();
-                return result;
-            }));
-            base_token_metadata = &*self_copy;
-        } else {
-            base_token_metadata = &unpimplified_this;
         }
+        for (const auto& [token, inet_address]: _bootstrap_tokens) {
+            new_normal_tokens[inet_address].insert(token);
+        }
+        // apply new_normal_tokens
+        for (auto& [endpoint, tokens]: new_normal_tokens) {
+            target_token_metadata->update_topology(endpoint, get_dc_rack(endpoint), node::state::normal);
+            co_await target_token_metadata->update_normal_tokens(std::move(tokens), endpoint);
+        }
+        // apply leaving endpoints
+        for (const auto& endpoint: _leaving_endpoints) {
+            target_token_metadata->remove_endpoint(endpoint);
+        }
+        target_token_metadata->sort_tokens();
+    }
 
-        // merge tokens from token_to_endpoint and bootstrap_tokens,
-        // preserving tokens of leaving endpoints
-        const auto tokens = std::invoke([&]() -> std::vector<dht::token> {
-            auto tokens = std::vector<dht::token>();
-            tokens.reserve(sorted_tokens().size() + get_bootstrap_tokens().size());
-            tokens.resize(sorted_tokens().size());
-            std::copy(begin(sorted_tokens()), end(sorted_tokens()), begin(tokens));
-            for (const auto& p: get_bootstrap_tokens()) {
-                tokens.push_back(p.first);
+    // We require a distinct token_metadata instance when replace_from equals replace_to,
+    // as it ensures the node is included in pending_ranges.
+    // Otherwise, the node would be excluded from both pending_ranges and
+    // get_natural_endpoints_without_node_being_replaced,
+    // causing the coordinator to overlook it entirely.
+    std::unique_ptr<token_metadata_impl> base_token_metadata;
+    if (replace_with_same_endpoint) {
+        base_token_metadata = co_await clone_only_token_map(false);
+        for (const auto& [replace_from, replace_to]: _replacing_endpoints) {
+            if (replace_from == replace_to) {
+                base_token_metadata->remove_endpoint(replace_from);
             }
-            std::sort(begin(tokens), end(tokens));
-            return tokens;
-        });
+        }
+        base_token_metadata->sort_tokens();
+    }
 
-        _keyspace_to_migration_info[keyspace_name] = std::invoke([&]() -> migration_info {
-            migration_info migration_info;
-            for (size_t i = 0, size = tokens.size(); i < size; ++i) {
-                seastar::thread::maybe_yield();
+    // merge tokens from token_to_endpoint and bootstrap_tokens,
+    // preserving tokens of leaving endpoints
+    auto all_tokens = std::vector<dht::token>();
+    all_tokens.reserve(sorted_tokens().size() + get_bootstrap_tokens().size());
+    all_tokens.resize(sorted_tokens().size());
+    std::copy(begin(sorted_tokens()), end(sorted_tokens()), begin(all_tokens));
+    for (const auto& p: get_bootstrap_tokens()) {
+        all_tokens.push_back(p.first);
+    }
+    std::sort(begin(all_tokens), end(all_tokens));
 
-                const auto token = tokens[i];
-
-                const auto old_endpoints = strategy.calculate_natural_endpoints(token, *base_token_metadata).get0();
-                auto new_endpoints = strategy.calculate_natural_endpoints(token, new_token_metadata).get0();
-
-                auto add_mapping = [&](ring_mapping& target, std::unordered_set<inet_address>&& endpoints) {
-                    using interval = ring_mapping::interval_type;
-                    if (i == 0) {
-                        target += std::make_pair(
-                            interval::open(tokens.back(), dht::maximum_token()),
-                            endpoints);
-                        target += std::make_pair(
-                            interval::left_open(dht::minimum_token(), token),
-                            std::move(endpoints));
-                    } else {
-                        target += std::make_pair(
-                            interval::left_open(tokens[i - 1], token),
-                            std::move(endpoints));
-                    }
-                };
-
-                std::unordered_set<inet_address> pending_endpoints;
-                for (const auto& e: new_endpoints) {
-                    if (!old_endpoints.contains(e)) {
-                        pending_endpoints.insert(e);
-                    }
-                }
-                if (!pending_endpoints.empty()) {
-                    add_mapping(migration_info.pending_endpoints, std::move(pending_endpoints));
-                }
-
-                // in order not to waste memory, we update read_endpoints only if the
-                // new endpoints differs from the old one
-                if (_topology_transition_state == service::topology::transition_state::write_both_read_new &&
-                    new_endpoints.get_vector() != old_endpoints.get_vector())
-                {
-                    add_mapping(migration_info.read_endpoints, std::move(new_endpoints).extract_set());
-                }
-            }
-            return migration_info;
-        });
-    });
+    auto prev_value = std::move(_topology_change_info);
+    _topology_change_info.emplace(token_metadata(std::move(target_token_metadata)),
+        base_token_metadata ? std::optional(token_metadata(std::move(base_token_metadata))): std::nullopt,
+        std::move(all_tokens),
+        _read_new);
+    co_await utils::clear_gently(prev_value);
 }
 
 size_t token_metadata_impl::count_normal_token_owners() const {
@@ -911,50 +801,6 @@ void token_metadata_impl::del_replacing_endpoint(inet_address existing_node) {
     _replacing_endpoints.erase(existing_node);
 }
 
-const std::unordered_set<inet_address>* token_metadata_impl::maybe_migration_endpoints(endpoints_field field,
-    const token& token,
-    const sstring& keyspace_name) const
-{
-    // Fast path 0: migration_info not found for this keyspace_name
-    const auto migration_info_it = _keyspace_to_migration_info.find(keyspace_name);
-    if (migration_info_it == _keyspace_to_migration_info.end()) {
-        return nullptr;
-    }
-
-    // Fast path 1: empty ring_mapping for this keyspace_name
-    const auto& migration_info = migration_info_it->second;
-    const auto& ring_mapping = field == endpoints_field::pending_endpoints
-        ? migration_info.pending_endpoints
-        : migration_info.read_endpoints;
-    if (ring_mapping.empty()) {
-        return nullptr;
-    }
-
-    // Slow path: lookup remapping
-    const auto interval = range_to_interval(range<dht::token>(token));
-    const auto it = ring_mapping.find(interval);
-    return it != ring_mapping.end() ? &it->second : nullptr;
-}
-
-inet_address_vector_topology_change token_metadata_impl::pending_endpoints_for(const token& token, const sstring& keyspace_name) const {
-    inet_address_vector_topology_change endpoints;
-    const auto* pending_endpoints = maybe_migration_endpoints(endpoints_field::pending_endpoints,
-        token, keyspace_name);
-    if (pending_endpoints) {
-        // interval_map does not work with std::vector, convert to inet_address_vector_topology_change
-        endpoints = inet_address_vector_topology_change(pending_endpoints->begin(), pending_endpoints->end());
-    }
-    return endpoints;
-}
-
-std::optional<inet_address_vector_replica_set> token_metadata_impl::endpoints_for_reading(const token& token, const sstring& keyspace_name) const {
-    const auto* endpoints = maybe_migration_endpoints(endpoints_field::read_endpoints, token, keyspace_name);
-    if (endpoints == nullptr) {
-        return std::nullopt;
-    }
-    return inet_address_vector_replica_set(endpoints->begin(), endpoints->end());
-}
-
 std::map<token, inet_address> token_metadata_impl::get_normal_and_bootstrapping_token_to_endpoint_map() const {
     std::map<token, inet_address> ret(_token_to_endpoint_map.begin(), _token_to_endpoint_map.end());
     ret.insert(_bootstrap_tokens.begin(), _bootstrap_tokens.end());
@@ -967,6 +813,23 @@ std::multimap<inet_address, token> token_metadata_impl::get_endpoint_to_token_ma
         cloned.emplace(x.second, x.first);
     }
     return cloned;
+}
+
+topology_change_info::topology_change_info(token_metadata target_token_metadata_,
+        std::optional<token_metadata> base_token_metadata_,
+        std::vector<dht::token> all_tokens_,
+        token_metadata::read_new_t read_new_)
+    : target_token_metadata(std::move(target_token_metadata_))
+    , base_token_metadata(std::move(base_token_metadata_))
+    , all_tokens(std::move(all_tokens_))
+    , read_new(read_new_)
+{
+}
+
+future<> topology_change_info::clear_gently() {
+    co_await utils::clear_gently(target_token_metadata);
+    co_await utils::clear_gently(base_token_metadata);
+    co_await utils::clear_gently(all_tokens);
 }
 
 token_metadata::token_metadata(std::unique_ptr<token_metadata_impl> impl)
@@ -1222,14 +1085,14 @@ token_metadata::interval_to_range(boost::icl::interval<token>::interval_type i) 
     return token_metadata_impl::interval_to_range(std::move(i));
 }
 
-bool
-token_metadata::has_pending_ranges(sstring keyspace_name, inet_address endpoint) const {
-    return _impl->has_pending_ranges(std::move(keyspace_name), endpoint);
+future<>
+token_metadata::update_topology_change_info(dc_rack_fn& get_dc_rack) {
+    return _impl->update_topology_change_info(get_dc_rack);
 }
 
-future<>
-token_metadata::update_pending_ranges(const abstract_replication_strategy& strategy, const sstring& keyspace_name, dc_rack_fn& get_dc_rack) {
-    return _impl->update_pending_ranges(*this, strategy, keyspace_name, get_dc_rack);
+const std::optional<topology_change_info>&
+token_metadata::get_topology_change_info() const {
+    return _impl->get_topology_change_info();
 }
 
 token
@@ -1247,19 +1110,9 @@ token_metadata::count_normal_token_owners() const {
     return _impl->count_normal_token_owners();
 }
 
-inet_address_vector_topology_change
-token_metadata::pending_endpoints_for(const token& token, const sstring& keyspace_name) const {
-    return _impl->pending_endpoints_for(token, keyspace_name);
-}
-
-std::optional<inet_address_vector_replica_set>
-token_metadata::endpoints_for_reading(const token& token, const sstring& keyspace_name) const {
-    return _impl->endpoints_for_reading(token, keyspace_name);
-}
-
 void
-token_metadata::set_topology_transition_state(std::optional<service::topology::transition_state> state) {
-    _impl->set_topology_transition_state(state);
+token_metadata::set_read_new(read_new_t read_new) {
+    _impl->set_read_new(read_new);
 }
 
 std::multimap<inet_address, token>
