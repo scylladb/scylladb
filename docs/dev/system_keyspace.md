@@ -119,6 +119,25 @@ SELECT * FROM system.large_cells;
 SELECT * FROM system.large_cells WHERE keyspace_name = 'ks1' and table_name = 'standard1';
 ~~~
 
+## system.raft
+
+Holds information about Raft
+
+Schema:
+~~~
+CREATE TABLE system.raft (
+    group_id timeuuid,
+    index bigint,
+    term bigint,
+    data blob,
+    vote_term bigint static,
+    vote uuid static,
+    snapshot_id uuid static,
+    commit_idx bigint static,
+    PRIMARY KEY (group_id, index)
+) WITH CLUSTERING ORDER BY (index ASC)
+~~~
+
 ## system.truncated
 
 Holds truncation replay positions per table and shard
