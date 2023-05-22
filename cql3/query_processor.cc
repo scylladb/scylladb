@@ -48,7 +48,6 @@ class query_backend::impl {
     wasm::instance_cache* _wasm_ic;
     wasm::alien_thread_runner* _wasm_atr;
     locator::token_metadata_ptr _token_metadata;
-    service::storage_proxy& _proxy;
 
     void check(const void* ptr, const char* func) {
         if (!ptr) {
@@ -57,7 +56,7 @@ class query_backend::impl {
     }
 public:
     impl(std::string name, data_dictionary::database db, service::forward_service* fwd_service, service::migration_manager* mm, service::raft_group0_client* rgc,
-            wasmtime::Engine* wasm_engine, wasm::instance_cache* wasm_ic, wasm::alien_thread_runner* wasm_atr, locator::token_metadata_ptr token_metadata, service::storage_proxy& proxy)
+            wasmtime::Engine* wasm_engine, wasm::instance_cache* wasm_ic, wasm::alien_thread_runner* wasm_atr, locator::token_metadata_ptr token_metadata)
         : _name(std::move(name))
         , _db(db)
         , _fwd_service(fwd_service)
@@ -67,7 +66,6 @@ public:
         , _wasm_ic(wasm_ic)
         , _wasm_atr(wasm_atr)
         , _token_metadata(std::move(token_metadata))
-        , _proxy(proxy)
     { }
 
     data_dictionary::database db() {
@@ -102,10 +100,6 @@ public:
         return _token_metadata;
     }
 
-    service::storage_proxy& proxy() {
-        return _proxy;
-    }
-
     virtual shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) = 0;
     virtual future<> truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms) = 0;
     virtual future<result<coordinator_query_result>> query_result(schema_ptr, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
@@ -135,7 +129,6 @@ wasmtime::Engine& query_backend::wasm_engine() { return _impl->wasm_engine(); }
 wasm::instance_cache& query_backend::wasm_instance_cache() { return _impl->wasm_instance_cache(); }
 wasm::alien_thread_runner& query_backend::alien_runner() { return _impl->alien_runner(); }
 locator::token_metadata_ptr query_backend::get_token_metadata_ptr() { return _impl->get_token_metadata_ptr(); }
-service::storage_proxy& query_backend::proxy() { return _impl->proxy(); }
 
 shared_ptr<cql_transport::messages::result_message> query_backend::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) {
     return _impl->bounce_to_shard(shard, std::move(cached_fn_calls));
@@ -189,7 +182,7 @@ public:
             wasmtime::Engine* wasm_engine,
             wasm::instance_cache* wasm_ic,
             wasm::alien_thread_runner* wasm_atr)
-        : impl("storage_proxy_query_backend", db, fwd_service, mm, rgc, wasm_engine, wasm_ic, wasm_atr, proxy->get_token_metadata_ptr(), *proxy)
+        : impl("storage_proxy_query_backend", db, fwd_service, mm, rgc, wasm_engine, wasm_ic, wasm_atr, proxy->get_token_metadata_ptr())
         , _proxy(std::move(proxy))
     { }
     storage_proxy_query_backend(

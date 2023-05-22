@@ -69,9 +69,6 @@ public:
     wasm::alien_thread_runner& alien_runner();
     locator::token_metadata_ptr get_token_metadata_ptr();
 
-    //FIXME: get rid of this, by providing abstract methods for all proxy methods currently used directly.
-    service::storage_proxy& proxy();
-
     shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls);
     future<> truncate_blocking(sstring keyspace, sstring cfname, std::optional<std::chrono::milliseconds> timeout_in_ms = std::nullopt);
     future<result<coordinator_query_result>> query_result(schema_ptr, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges,
