@@ -34,7 +34,7 @@ static std::map<sstring, sstring> prepare_options(
     // but the other strategy used the 'replication_factor' option, it will also be expanded.
     // See issue CASSANDRA-14303.
 
-    sstring rf;
+    std::optional<sstring> rf;
     auto it = options.find(ks_prop_defs::REPLICATION_FACTOR_KEY);
     if (it != options.end()) {
         // Expand: the user explicitly provided a 'replication_factor'.
@@ -49,10 +49,10 @@ static std::map<sstring, sstring> prepare_options(
         }
     }
 
-    if (!rf.empty()) {
+    if (rf.has_value()) {
         // The code below may end up not using "rf" at all (if all the DCs
         // already have rf settings), so let's validate it once (#8880).
-        locator::abstract_replication_strategy::validate_replication_factor(rf);
+        locator::abstract_replication_strategy::validate_replication_factor(*rf);
 
         // We keep previously specified DC factors for safety.
         for (const auto& opt : old_options) {
@@ -62,7 +62,7 @@ static std::map<sstring, sstring> prepare_options(
         }
 
         for (const auto& dc : tm.get_topology().get_datacenters()) {
-            options.emplace(dc, rf);
+            options.emplace(dc, *rf);
         }
     }
 
