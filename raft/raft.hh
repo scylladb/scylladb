@@ -74,8 +74,6 @@ struct server_address {
     bool operator<(const server_address& rhs) const {
         return id < rhs.id;
     }
-
-    friend std::ostream& operator<<(std::ostream&, const server_address&);
 };
 
 struct config_member {
@@ -97,8 +95,6 @@ struct config_member {
     bool operator<(const config_member& rhs) const {
         return addr < rhs.addr;
     }
-
-    friend std::ostream& operator<<(std::ostream&, const config_member&);
 };
 
 struct server_address_hash {
@@ -236,8 +232,6 @@ struct configuration {
         assert(is_joint());
         previous.clear();
     }
-
-    friend std::ostream& operator<<(std::ostream&, const configuration&);
 };
 
 struct log_entry {
@@ -801,3 +795,17 @@ public:
 
 } // namespace raft
 
+template <>
+struct fmt::formatter<raft::server_address> : fmt::formatter<std::string_view> {
+    auto format(const raft::server_address&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<raft::config_member> : fmt::formatter<std::string_view> {
+    auto format(const raft::config_member&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<raft::configuration> : fmt::formatter<std::string_view> {
+    auto format(const raft::configuration&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
