@@ -65,4 +65,15 @@ public:
     shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls);
 };
 
+// Make a backend, based on storage proxy.
+query_backend make_storage_proxy_query_backend(
+        service::storage_proxy& proxy,
+        data_dictionary::database db,
+        service::forward_service* fwd_service,
+        service::migration_manager* mm,
+        service::raft_group0_client* rgc,
+        wasmtime::Engine* wasm_engine,
+        wasm::instance_cache* wasm_ic,
+        wasm::alien_thread_runner* wasm_atr);
+
 } // namespace cql3

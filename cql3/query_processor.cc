@@ -119,6 +119,52 @@ shared_ptr<cql_transport::messages::result_message> query_backend::bounce_to_sha
     return _impl->bounce_to_shard(shard, std::move(cached_fn_calls));
 }
 
+class storage_proxy_query_backend : public query_backend::impl {
+    shared_ptr<service::storage_proxy> _proxy;
+
+public:
+    storage_proxy_query_backend(
+            shared_ptr<service::storage_proxy> proxy,
+            data_dictionary::database db,
+            service::forward_service* fwd_service,
+            service::migration_manager* mm,
+            service::raft_group0_client* rgc,
+            wasmtime::Engine* wasm_engine,
+            wasm::instance_cache* wasm_ic,
+            wasm::alien_thread_runner* wasm_atr)
+        : impl("storage_proxy_query_backend", db, fwd_service, mm, rgc, wasm_engine, wasm_ic, wasm_atr, *proxy)
+        , _proxy(std::move(proxy))
+    { }
+    storage_proxy_query_backend(
+            shared_ptr<service::storage_proxy> proxy,
+            data_dictionary::database db,
+            service::forward_service& fwd_service,
+            service::migration_manager& mm,
+            service::raft_group0_client& rgc,
+            wasmtime::Engine& wasm_engine,
+            wasm::instance_cache& wasm_ic,
+            wasm::alien_thread_runner& wasm_atr)
+        : storage_proxy_query_backend(std::move(proxy), db, &fwd_service, &mm, &rgc, &wasm_engine, &wasm_ic, &wasm_atr)
+    { }
+
+    virtual shared_ptr<cql_transport::messages::result_message> bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls) override {
+        _proxy->get_stats().replica_cross_shard_ops++;
+        return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(shard, std::move(cached_fn_calls));
+    }
+};
+
+query_backend make_storage_proxy_query_backend(
+        service::storage_proxy& proxy,
+        data_dictionary::database db,
+        service::forward_service* fwd_service,
+        service::migration_manager* mm,
+        service::raft_group0_client* rgc,
+        wasmtime::Engine* wasm_engine,
+        wasm::instance_cache* wasm_ic,
+        wasm::alien_thread_runner* wasm_atr) {
+    return query_backend(make_shared<storage_proxy_query_backend>(proxy.shared_from_this(), db, fwd_service, mm, rgc, wasm_engine, wasm_ic, wasm_atr));
+}
+
 const sstring query_processor::CQL_VERSION = "3.3.1";
 
 const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono::minutes(60);
