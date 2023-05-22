@@ -256,10 +256,11 @@ schema_ptr system_keyspace::topology() {
             .with_column("num_tokens", int32_type)
             .with_column("shard_count", int32_type)
             .with_column("ignore_msb", int32_type)
-            .with_column("new_cdc_generation_data_uuid", uuid_type)
+            .with_column("new_cdc_generation_data_uuid", uuid_type, column_kind::static_column)
             .with_column("transition_state", utf8_type, column_kind::static_column)
             .with_column("current_cdc_generation_uuid", uuid_type, column_kind::static_column)
             .with_column("current_cdc_generation_timestamp", timestamp_type, column_kind::static_column)
+            .with_column("global_topology_request", utf8_type, column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_version(generate_schema_version(id))
             .build();
@@ -3504,14 +3505,8 @@ future<service::topology> system_keyspace::load_topology_state() {
                     host_id));
             }
 
-            utils::UUID new_cdc_gen_uuid;
-            if (row.has("new_cdc_generation_data_uuid")) {
-                new_cdc_gen_uuid = row.get_as<utils::UUID>("new_cdc_generation_data_uuid");
-            }
-
             ring_slice = service::ring_slice {
                 .tokens = std::move(tokens),
-                .new_cdc_generation_data_uuid = new_cdc_gen_uuid,
             };
         }
 
@@ -3606,6 +3601,10 @@ future<service::topology> system_keyspace::load_topology_state() {
                 "load_topology_state: topology not in transition state but transition nodes are present");
         }
 
+        if (some_row.has("new_cdc_generation_data_uuid")) {
+            ret.new_cdc_generation_data_uuid = some_row.get_as<utils::UUID>("new_cdc_generation_data_uuid");
+        }
+
         if (some_row.has("current_cdc_generation_uuid")) {
             auto gen_uuid = some_row.get_as<utils::UUID>("current_cdc_generation_uuid");
             if (!some_row.has("current_cdc_generation_timestamp")) {
@@ -3643,6 +3642,12 @@ future<service::topology> system_keyspace::load_topology_state() {
                 on_internal_error(slogger,
                     "load_topology_state: normal nodes present but no current CDC generation ID");
             }
+        }
+
+        if (some_row.has("global_topology_request")) {
+            auto req = service::global_topology_request_from_string(
+                    some_row.get_as<sstring>("global_topology_request"));
+            ret.global_request.emplace(req);
         }
     }
 

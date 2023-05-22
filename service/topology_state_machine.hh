@@ -26,7 +26,7 @@
 
 namespace service {
 
-enum class node_state: uint8_t {
+enum class node_state: uint16_t {
     none,                // the new node joined group0 but did not bootstraped yet (has no tokens and data to serve)
     bootstrapping,       // the node is currently in the process of streaming its part of the ring
     decommissioning,     // the node is being decomissioned and stream its data to nodes that took over
@@ -37,7 +37,7 @@ enum class node_state: uint8_t {
     left                 // the node left the cluster and group0
 };
 
-enum class topology_request: uint8_t {
+enum class topology_request: uint16_t {
     join,
     leave,
     remove,
@@ -47,13 +47,12 @@ enum class topology_request: uint8_t {
 
 using request_param = std::variant<raft::server_id, sstring, uint32_t>;
 
+enum class global_topology_request: uint16_t {
+    new_cdc_generation,
+};
+
 struct ring_slice {
     std::unordered_set<dht::token> tokens;
-
-    // When a new node joins the cluster, always a new CDC generation is created.
-    // This is the UUID used to access the data of the CDC generation introduced
-    // when the node owning this ring_slice joined (it's the partition key in CDC_GENERATIONS_V3 table).
-    utils::UUID new_cdc_generation_data_uuid;
 };
 
 struct replica_state {
@@ -67,8 +66,9 @@ struct replica_state {
 };
 
 struct topology {
-    enum class transition_state: uint8_t {
+    enum class transition_state: uint16_t {
         commit_cdc_generation,
+        publish_cdc_generation,
         write_both_read_old,
         write_both_read_new,
     };
@@ -92,7 +92,16 @@ struct topology {
     // operation untill the node becomes normal
     std::unordered_map<raft::server_id, request_param> req_param;
 
+    // Pending global topology request (i.e. not related to any specific node).
+    std::optional<global_topology_request> global_request;
+
+    // The ID of the last introduced CDC generation.
     std::optional<cdc::generation_id_v2> current_cdc_generation_id;
+
+    // This is the UUID used to access the data of a new CDC generation introduced
+    // e.g. when a new node bootstraps, needed in `commit_cdc_generation` transition state.
+    // It's used as partition key in CDC_GENERATIONS_V3 table.
+    std::optional<utils::UUID> new_cdc_generation_data_uuid;
 
     // Find only nodes in non 'left' state
     const std::pair<const raft::server_id, replica_state>* find(raft::server_id id) const;
@@ -120,7 +129,7 @@ struct topology_state_machine {
 
 // Raft leader uses this command to drive bootstrap process on other nodes
 struct raft_topology_cmd {
-      enum class command: uint8_t {
+      enum class command: uint16_t {
           barrier,         // request to wait for the latest topology
           stream_ranges,   // reqeust to stream data, return when streaming is
                            // done
@@ -131,7 +140,7 @@ struct raft_topology_cmd {
 
 // returned as a result of raft_bootstrap_cmd
 struct raft_topology_cmd_result {
-    enum class command_status: uint8_t {
+    enum class command_status: uint16_t {
         fail,
         success
     };
@@ -144,5 +153,7 @@ std::ostream& operator<<(std::ostream& os, node_state s);
 node_state node_state_from_string(const sstring& s);
 std::ostream& operator<<(std::ostream& os, const topology_request& req);
 topology_request topology_request_from_string(const sstring& s);
+std::ostream& operator<<(std::ostream&, const global_topology_request&);
+global_topology_request global_topology_request_from_string(const sstring&);
 std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd);
 }
