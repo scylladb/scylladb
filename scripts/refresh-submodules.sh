@@ -36,7 +36,7 @@ for ent in "${@:-${submodules[@]}}"; do
     fi
     # collect the summary
     head_ref=$(git rev-parse --short=8 HEAD)
-    branch_ref=$(git rev-parse --short=8 ${branch})
+    branch_ref=$(git rev-parse --short=8 origin/${branch})
     count=$(git rev-list --no-merges --count HEAD..${bump_to})
     # create a summary using the output format of "git submodule summary"
     SUMMARY="
