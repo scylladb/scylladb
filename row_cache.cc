@@ -939,17 +939,13 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
     STAP_PROBE(scylla, row_cache_update_start);
     auto cleanup = defer([&m, this] () noexcept {
         invalidate_sync(m);
+        _prev_snapshot_pos = {};
+        _prev_snapshot = {};
         STAP_PROBE(scylla, row_cache_update_end);
     });
 
     return seastar::async([this, &m, updater = std::move(updater), real_dirty_acc = std::move(real_dirty_acc)] () mutable {
         size_t size_entry;
-        // In case updater fails, we must bring the cache to consistency without deferring.
-        auto cleanup = defer([&m, this] () noexcept {
-            invalidate_sync(m);
-            _prev_snapshot_pos = {};
-            _prev_snapshot = {};
-        });
         utils::coroutine update; // Destroy before cleanup to release snapshots before invalidating.
         auto destroy_update = defer([&] {
             with_allocator(_tracker.allocator(), [&] {
