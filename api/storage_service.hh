@@ -85,3 +85,8 @@ namespace std {
 std::ostream& operator<<(std::ostream& os, const api::table_info& ti);
 
 } // namespace std
+
+template <>
+struct fmt::formatter<api::table_info> : fmt::formatter<std::string_view> {
+    auto format(const api::table_info&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
