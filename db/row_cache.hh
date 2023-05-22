@@ -407,6 +407,8 @@ public:
             const query::partition_slice& slice, tracing::trace_state_ptr ts);
 
     const stats& stats() const { return _stats; }
+
+    future<> invalidate_on_error(external_updater&, std::exception_ptr) noexcept;
 public:
     // Populate cache from given mutation, which must be fully continuous.
     // Intended to be used only in tests.
@@ -453,13 +455,17 @@ public:
     // Guarantees that readers created after invalidate()
     // completes will see all writes from the underlying
     // mutation source made prior to the call to invalidate().
+    //
+    // Invalidate never fails. Failures to allocate in early stages
+    // are considered fatal; later failures will clear the
+    // entire cache and return success.
     static external_updater noop_external_updater;
-    future<> invalidate() {
+    future<> invalidate() noexcept {
         return invalidate(noop_external_updater, query::full_partition_range);
     }
-    future<> invalidate(external_updater&, const dht::decorated_key&);
-    future<> invalidate(external_updater&, const dht::partition_range& = query::full_partition_range);
-    future<> invalidate(external_updater&, dht::partition_range_vector&&);
+    future<> invalidate(external_updater&, const dht::decorated_key&) noexcept;
+    future<> invalidate(external_updater&, const dht::partition_range& = query::full_partition_range) noexcept;
+    future<> invalidate(external_updater&, dht::partition_range_vector&&) noexcept;
 
     // Evicts entries from cache.
     //

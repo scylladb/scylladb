@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <exception>
+
 #include "db/row_cache.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/memory.hh>
@@ -1212,15 +1214,24 @@ void row_cache::invalidate_locked(const dht::decorated_key& dk) {
 
 row_cache::external_updater row_cache::noop_external_updater([]{});
 
-future<> row_cache::invalidate(external_updater& eu, const dht::decorated_key& dk) {
+future<> row_cache::invalidate(external_updater& eu, const dht::decorated_key& dk) noexcept {
+  try {
     return invalidate(eu, dht::partition_range::make_singular(dk));
+  } catch (...) {
+    return invalidate_on_error(eu, std::current_exception());
+  }
 }
 
-future<> row_cache::invalidate(external_updater& eu, const dht::partition_range& range) {
+future<> row_cache::invalidate(external_updater& eu, const dht::partition_range& range) noexcept {
+  try {
     return invalidate(eu, dht::partition_range_vector({range}));
+  } catch (...) {
+    return invalidate_on_error(eu, std::current_exception());
+  }
 }
 
-future<> row_cache::invalidate(external_updater& eu, dht::partition_range_vector&& ranges) {
+future<> row_cache::invalidate(external_updater& eu, dht::partition_range_vector&& ranges) noexcept {
+  try {
     return do_update(eu, [this, ranges = std::move(ranges)] {
         return seastar::async([this, ranges = std::move(ranges)] {
             auto on_failure = defer([this] () noexcept {
@@ -1270,6 +1281,19 @@ future<> row_cache::invalidate(external_updater& eu, dht::partition_range_vector
 
             on_failure.cancel();
         });
+    });
+  } catch (...) {
+    return invalidate_on_error(eu, std::current_exception());
+  }
+}
+
+future<> row_cache::invalidate_on_error(external_updater& eu, std::exception_ptr ex) noexcept {
+    clogger.warn("Invalidate failed: {}. Clearing the cache.", std::move(ex));
+    return do_update(eu, [this] {
+        this->clear_now();
+        _prev_snapshot_pos = {};
+        _prev_snapshot = {};
+        return make_ready_future<>();
     });
 }
 
