@@ -320,7 +320,7 @@ static void test_database(void (*run_tests)(populate_fn_ex, bool), unsigned cgs)
                 apply_mutation(e.db(), uuid, m).get();
             }
             cf.flush().get();
-            cf.get_row_cache().invalidate(row_cache::external_updater([] {})).get();
+            cf.get_row_cache().invalidate().get();
             return mutation_source([&] (schema_ptr s,
                     reader_permit permit,
                     const dht::partition_range& range,

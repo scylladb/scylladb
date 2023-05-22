@@ -1398,7 +1398,7 @@ database::drop_caches() const {
     std::unordered_map<table_id, lw_shared_ptr<column_family>> tables = get_tables_metadata().get_column_families_copy();
     for (auto&& e : tables) {
         table& t = *e.second;
-        co_await t.get_row_cache().invalidate(row_cache::external_updater([] {}));
+        co_await t.get_row_cache().invalidate();
         auto sstables = t.get_sstables();
         for (sstables::shared_sstable sst : *sstables) {
             co_await sst->drop_caches();
@@ -2417,7 +2417,7 @@ future<> database::flush_table_on_all_shards(sharded<database>& sharded_db, tabl
 
 future<> database::drop_cache_for_table_on_all_shards(sharded<database>& sharded_db, table_id id) {
     return sharded_db.invoke_on_all([id] (replica::database& db) {
-        return db.find_column_family(id).get_row_cache().invalidate(row_cache::external_updater([] {}));
+        return db.find_column_family(id).get_row_cache().invalidate();
     });
 }
 

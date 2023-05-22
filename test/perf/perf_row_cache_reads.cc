@@ -134,7 +134,7 @@ void test_scans_with_dummy_entries() {
     test_read();
 
     // Clean gently to avoid reactor stalls in destructors
-    cache.invalidate(row_cache::external_updater([]{})).get();
+    cache.invalidate().get();
     tracker.cleaner().drain().get();
 }
 
@@ -215,7 +215,7 @@ void test_scan_with_range_delete_over_rows() {
     test_read();
 
     // Clean gently to avoid reactor stalls in destructors
-    cache.invalidate(row_cache::external_updater([]{})).get();
+    cache.invalidate().get();
     tracker.cleaner().drain().get();
 }
 

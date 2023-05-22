@@ -252,7 +252,7 @@ void test_main_thread(cql_test_env& env) {
     while (tr.get_stats().row_evictions == prev_evictions) {
         auto mt = make_lw_shared<replica::memtable>(s);
         mt->apply(gen(sstable_size));
-        c.update(row_cache::external_updater([] {}), *mt).get();
+        c.update(row_cache::noop_external_updater, *mt).get();
         thread::maybe_yield();
     }
 

@@ -333,7 +333,7 @@ private:
     // It is invoked inside allocating section and in the context of cache's allocator.
     // All memtable entries will be removed.
     template <typename Updater>
-    future<> do_update(external_updater, replica::memtable& m, Updater func, preemption_source&);
+    future<> do_update(external_updater&, replica::memtable& m, Updater func, preemption_source&);
 
     // Clears given memtable invalidating any affected cache elements.
     void invalidate_sync(replica::memtable&) noexcept;
@@ -351,7 +351,7 @@ private:
     // source was and cache are not modified.
     //
     // internal_updater is only kept alive until its invocation returns.
-    future<> do_update(external_updater eu, internal_updater iu) noexcept;
+    future<> do_update(external_updater& eu, internal_updater iu) noexcept;
 
 public:
     ~row_cache();
@@ -421,13 +421,13 @@ public:
     // has just been flushed to the underlying data source.
     // The memtable can be queried during the process, but must not be written.
     // After the update is complete, memtable is empty.
-    future<> update(external_updater, replica::memtable&, preemption_source& preempt = default_preemption_source);
+    future<> update(external_updater&, replica::memtable&, preemption_source& preempt = default_preemption_source);
 
     // Like update(), synchronizes cache with an incremental change to the underlying
     // mutation source, but instead of inserting and merging data, invalidates affected ranges.
     // Can be thought of as a more fine-grained version of invalidate(), which invalidates
     // as few elements as possible.
-    future<> update_invalidating(external_updater, replica::memtable&);
+    future<> update_invalidating(external_updater&, replica::memtable&);
 
     // Refreshes snapshot. Must only be used if logical state in the underlying data
     // source hasn't changed.
@@ -453,9 +453,13 @@ public:
     // Guarantees that readers created after invalidate()
     // completes will see all writes from the underlying
     // mutation source made prior to the call to invalidate().
-    future<> invalidate(external_updater, const dht::decorated_key&);
-    future<> invalidate(external_updater, const dht::partition_range& = query::full_partition_range);
-    future<> invalidate(external_updater, dht::partition_range_vector&&);
+    static external_updater noop_external_updater;
+    future<> invalidate() {
+        return invalidate(noop_external_updater, query::full_partition_range);
+    }
+    future<> invalidate(external_updater&, const dht::decorated_key&);
+    future<> invalidate(external_updater&, const dht::partition_range& = query::full_partition_range);
+    future<> invalidate(external_updater&, dht::partition_range_vector&&);
 
     // Evicts entries from cache.
     //
