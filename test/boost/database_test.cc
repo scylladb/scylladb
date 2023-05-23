@@ -52,6 +52,8 @@
 #include "db/view/view_builder.hh"
 #include "replica/mutation_dump.hh"
 #include "utils/disk_space_monitor.hh"
+#include "utils/error_injection.hh"
+#include "test/lib/cql_assertions.hh"
 
 using namespace std::chrono_literals;
 using namespace sstables;
@@ -1655,6 +1657,49 @@ SEASTAR_TEST_CASE(test_disk_space_monitor_capacity_override) {
         poll_barrier.advance_and_await().get();
         BOOST_REQUIRE(monitor.space() == orig_space);
     });
+}
+
+SEASTAR_TEST_CASE(update_cache_error_handling) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.error("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev)");
+    return make_ready_future<>();
+#else
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        cquery_nofail(e, "create table t (part int, row int, val text, primary key(part, row))");
+
+        // populate cache
+        cquery_nofail(e, "insert into t (part, row, val) values (0, 1, '1')");
+        cquery_nofail(e, "insert into t (part, row, val) values (0, 3, '3')");
+        cquery_nofail(e, "insert into t (part, row, val) values (0, 5, '5')");
+        cquery_nofail(e, "insert into t (part, row, val) values (0, 7, '7')");
+
+        // flush table and populate cache
+        replica::database::flush_table_on_all_shards(e.db(), "ks", "t").get();
+        require_rows(e, "select val from t where part = 0", {{"1"}, {"3"}, {"5"}, {"7"}});
+        require_rows(e, "select val from t where part = 0 and row = 2", {});
+
+        // Write missing row with error injected in row_cache::update
+        // so the cache will get invalidated on error.
+        utils::get_local_injector().enable("row_cache.do_update", true /* oneshot */);
+        cquery_nofail(e, "insert into t (part, row, val) values (0, 2, '2')");
+        replica::database::flush_table_on_all_shards(e.db(), "ks", "t").get();
+        require_rows(e, "select val from t where part = 0 and row = 2", {{"2"}});
+
+        // Write missing row with error injected in both row_cache::update and row_cache::invalidate
+        // test test invalidate fallback path.
+        utils::get_local_injector().enable("row_cache.do_update.0", true /* oneshot */);
+        utils::get_local_injector().enable("row_cache.invalidate.0", true /* oneshot */);
+        cquery_nofail(e, "insert into t (part, row, val) values (0, 4, '4')");
+        replica::database::flush_table_on_all_shards(e.db(), "ks", "t").get();
+        require_rows(e, "select val from t where part = 0 and row = 4", {{"4"}});
+
+        utils::get_local_injector().enable("row_cache.do_update.0", true /* oneshot */);
+        utils::get_local_injector().enable("row_cache.invalidate.1", true /* oneshot */);
+        cquery_nofail(e, "insert into t (part, row, val) values (0, 6, '6')");
+        replica::database::flush_table_on_all_shards(e.db(), "ks", "t").get();
+        require_rows(e, "select val from t where part = 0", {{"1"}, {"2"}, {"3"}, {"4"}, {"5"}, {"6"}, {"7"}});
+    });
+#endif
 }
 
 BOOST_AUTO_TEST_SUITE_END()

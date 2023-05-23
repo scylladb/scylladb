@@ -32,6 +32,7 @@
 #include "utils/assert.hh"
 #include "utils/updateable_value.hh"
 #include "utils/labels.hh"
+#include "utils/error_injection.hh"
 
 namespace cache {
 
@@ -1233,6 +1234,11 @@ future<> row_cache::invalidate(external_updater& eu, const dht::partition_range&
 
 future<> row_cache::invalidate(external_updater& eu, dht::partition_range_vector&& ranges) noexcept {
     try {
+        utils::get_local_injector().inject("row_cache.invalidate.0", [] {
+            auto msg = "row_cache.invalidate.0 injection";
+            clogger.warn("{}", msg);
+            throw std::runtime_error(msg);
+        });
         return do_update(eu, [this, ranges_ = std::move(ranges)] () -> future<> {
             auto ranges = std::move(ranges_);
             auto on_failure = defer([this] () noexcept {
@@ -1241,6 +1247,11 @@ future<> row_cache::invalidate(external_updater& eu, dht::partition_range_vector
                 _prev_snapshot = {};
             });
 
+            utils::get_local_injector().inject("row_cache.invalidate.1", [] {
+                auto msg = "row_cache.invalidate.1 injection";
+                clogger.warn("{}", msg);
+                throw std::runtime_error(msg);
+            });
             for (auto&& range : ranges) {
                 _prev_snapshot_pos = dht::ring_position_view::for_range_start(range);
                 co_await coroutine::maybe_yield();
@@ -1467,6 +1478,11 @@ std::ostream& operator<<(std::ostream& out, row_cache& rc) {
 }
 
 future<> row_cache::do_update(row_cache::external_updater& eu, row_cache::internal_updater iu) noexcept {
+    utils::get_local_injector().inject("row_cache.do_update.0", [] {
+        auto msg = "row_cache.do_update.0 injection";
+        clogger.warn("{}", msg);
+        throw std::runtime_error(msg);
+    });
     auto permit = co_await get_units(_update_sem, 1);
     co_await eu.prepare();
     {
