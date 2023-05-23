@@ -146,5 +146,5 @@ struct repair_flush_hints_batchlog_request {
 struct repair_flush_hints_batchlog_response {
 };
 
-verb [[with_client_info]] repair_update_system_table (repair_update_system_table_request) -> repair_update_system_table_response;
-verb [[with_client_info]] repair_flush_hints_batchlog (repair_flush_hints_batchlog_request) -> repair_flush_hints_batchlog_response;
+verb [[with_client_info]] repair_update_system_table (repair_update_system_table_request req [[ref]]) -> repair_update_system_table_response;
+verb [[with_client_info]] repair_flush_hints_batchlog (repair_flush_hints_batchlog_request req [[ref]]) -> repair_flush_hints_batchlog_response;
