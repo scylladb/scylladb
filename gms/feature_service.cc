@@ -266,11 +266,18 @@ future<> feature_service::enable(std::set<std::string_view> features, db::system
     // The key itself is maintained as an `unordered_set<string>` and serialized via `to_string`
     // function to preserve readability.
     std::set<sstring> feats_set = co_await sys_ks.load_local_enabled_features();
+    bool any_new_features_to_enable = false;
     for (feature& f : registered_features() | boost::adaptors::map_values) {
         if (!f && features.contains(f.name())) {
+            any_new_features_to_enable |= !feats_set.contains(f.name());
             feats_set.emplace(f.name());
         }
     }
+
+    if (!any_new_features_to_enable) {
+        co_return;
+    }
+
     co_await sys_ks.save_local_enabled_features(std::move(feats_set));
 
     std::set<std::string_view> features_v = boost::copy_range<std::set<std::string_view>>(features);
