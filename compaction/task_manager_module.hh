@@ -16,6 +16,7 @@
 namespace sstables {
 class sstable_directory;
 }
+
 namespace compaction {
 
 class compaction_task_impl : public tasks::task_manager::task::impl {
@@ -570,6 +571,30 @@ public:
     }
 protected:
     virtual future<> run() override = 0;
+};
+
+class table_resharding_compaction_task_impl : public resharding_compaction_task_impl {
+private:
+    sharded<sstables::sstable_directory>& _dir;
+    sharded<replica::database>& _db;
+    sstables::compaction_sstable_creator_fn _creator;
+    compaction::owned_ranges_ptr _owned_ranges_ptr;
+public:
+    table_resharding_compaction_task_impl(tasks::task_manager::module_ptr module,
+            std::string keyspace,
+            std::string table,
+            sharded<sstables::sstable_directory>& dir,
+            sharded<replica::database>& db,
+            sstables::compaction_sstable_creator_fn creator,
+            compaction::owned_ranges_ptr owned_ranges_ptr) noexcept
+        : resharding_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), std::move(table), "", tasks::task_id::create_null_id())
+        , _dir(dir)
+        , _db(db)
+        , _creator(std::move(creator))
+        , _owned_ranges_ptr(std::move(owned_ranges_ptr))
+    {}
+protected:
+    virtual future<> run() override;
 };
 
 class task_manager_module : public tasks::task_manager::module {

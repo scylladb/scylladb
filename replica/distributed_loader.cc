@@ -23,6 +23,7 @@
 #include "utils/lister.hh"
 #include "compaction/compaction.hh"
 #include "compaction/compaction_manager.hh"
+#include "compaction/task_manager_module.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"
@@ -303,9 +304,9 @@ future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vec
 //    assigned.
 future<>
 distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr) {
-    auto all_jobs = co_await collect_all_shared_sstables(dir, db, ks_name, table_name, owned_ranges_ptr);
-    auto destinations = co_await distribute_reshard_jobs(std::move(all_jobs));
-    co_await run_resharding_jobs(dir, std::move(destinations), db, ks_name, table_name, std::move(creator), std::move(owned_ranges_ptr));
+    auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+    auto task = co_await compaction_module.make_and_start_task<table_resharding_compaction_task_impl>({}, std::move(ks_name), std::move(table_name), dir, db, std::move(creator), std::move(owned_ranges_ptr));
+    co_await task->done();
 }
 
 future<sstables::sstable::version_types>

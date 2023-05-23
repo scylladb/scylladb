@@ -546,4 +546,10 @@ future<> shard_reshaping_compaction_task_impl::run() {
     _total_shard_size = reshaped_size;
 }
 
+future<> table_resharding_compaction_task_impl::run() {
+    auto all_jobs = co_await collect_all_shared_sstables(_dir, _db, _status.keyspace, _status.table, _owned_ranges_ptr);
+    auto destinations = co_await distribute_reshard_jobs(std::move(all_jobs));
+    co_await run_resharding_jobs(_dir, std::move(destinations), _db, _status.keyspace, _status.table, std::move(_creator), std::move(_owned_ranges_ptr));
+}
+
 }
