@@ -65,7 +65,7 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
 
     # Check that after rolling restart the tablet metadata is still there
     for s in servers:
-        manager.server_restart(s, wait_others=2)
+        await manager.server_restart(s, wait_others=2)
 
     manager.driver_close()
     await manager.driver_connect(server=servers[0])
