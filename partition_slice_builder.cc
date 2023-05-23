@@ -105,6 +105,12 @@ partition_slice_builder::mutate_specific_ranges(std::function<void(query::specif
 }
 
 partition_slice_builder&
+partition_slice_builder::set_specific_ranges(query::specific_ranges ranges) {
+    _specific_ranges = std::make_unique<query::specific_ranges>(std::move(ranges));
+    return *this;
+}
+
+partition_slice_builder&
 partition_slice_builder::with_no_regular_columns() {
     _regular_columns = query::column_id_vector();
     return *this;
