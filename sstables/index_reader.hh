@@ -439,7 +439,7 @@ class index_reader {
     std::unique_ptr<index_consume_entry_context<index_consumer>> make_context(uint64_t begin, uint64_t end, index_consumer& consumer) {
         auto index_file = make_tracked_index_file(*_sstable, _permit, _trace_state, _use_caching);
         auto input = make_file_input_stream(index_file, begin, (_single_page_read ? end : _sstable->index_size()) - begin,
-                        get_file_input_stream_options(_pc));
+                        get_file_input_stream_options());
         auto trust_pi = trust_promoted_index(_sstable->has_correct_promoted_index_entries());
         auto ck_values_fixed_lengths = _sstable->get_version() >= sstable_version_types::mc
                             ? std::make_optional(get_clustering_values_fixed_lengths(_sstable->get_serialization_header()))
@@ -752,9 +752,22 @@ private:
             b.current_list = {};
         });
     }
+
+    file_input_stream_options get_file_input_stream_options() {
+        file_input_stream_options options;
+        options.buffer_size = _sstable->sstable_buffer_size;
+        options.read_ahead = 2;
+        options.io_priority_class = _pc;
+        options.dynamic_adjustments = _sstable->_index_history;
+        return options;
+    }
+
 public:
-    index_reader(shared_sstable sst, reader_permit permit, const io_priority_class& pc, tracing::trace_state_ptr trace_state,
-                 use_caching caching, bool single_partition_read = false)
+    index_reader(shared_sstable sst, reader_permit permit,
+                 const io_priority_class& pc = default_priority_class(),
+                 tracing::trace_state_ptr trace_state = {},
+                 use_caching caching = use_caching::yes,
+                 bool single_partition_read = false)
         : _sstable(std::move(sst))
         , _permit(std::move(permit))
         , _pc(pc)
@@ -797,15 +810,6 @@ public:
         return current_partition_entry(_lower_bound);
     }
 
-    file_input_stream_options get_file_input_stream_options(const io_priority_class& pc) {
-        file_input_stream_options options;
-        options.buffer_size = _sstable->sstable_buffer_size;
-        options.read_ahead = 2;
-        options.io_priority_class = pc;
-        options.dynamic_adjustments = _sstable->_index_history;
-        return options;
-    }
-
     // Returns a pointer to the clustered index cursor for the current partition
     // or nullptr if there is no clustered index in the current partition.
     // Returns the same instance until we move to a different partition.
@@ -820,7 +824,7 @@ public:
                 promoted_index* pi = e.get_promoted_index().get();
                 if (pi) {
                     bound.clustered_cursor = pi->make_cursor(_sstable, _permit, _trace_state,
-                        get_file_input_stream_options(_pc), _use_caching);
+                        get_file_input_stream_options(), _use_caching);
                 }
             });
             if (!bound.clustered_cursor) {

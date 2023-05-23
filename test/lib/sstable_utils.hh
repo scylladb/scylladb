@@ -64,8 +64,7 @@ public:
     }
 
     std::unique_ptr<index_reader> make_index_reader(reader_permit permit) {
-        return std::make_unique<index_reader>(_sst, std::move(permit), default_priority_class(),
-                                              tracing::trace_state_ptr(), use_caching::yes);
+        return std::make_unique<index_reader>(_sst, std::move(permit));
     }
 
     struct index_entry {

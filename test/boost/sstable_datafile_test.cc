@@ -2310,8 +2310,7 @@ SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
 }
 
 static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst, reader_permit permit) {
-    return std::make_unique<index_reader>(sst, std::move(permit), default_priority_class(),
-                                          tracing::trace_state_ptr(), use_caching::yes);
+    return std::make_unique<index_reader>(sst, std::move(permit));
 }
 
 SEASTAR_TEST_CASE(test_broken_promoted_index_is_skipped) {
