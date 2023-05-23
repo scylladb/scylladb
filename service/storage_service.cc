@@ -361,6 +361,7 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
                 co_await _sys_ks.local().update_peer_info(ip, "rack", rs.rack);
                 co_await _sys_ks.local().update_peer_info(ip, "host_id", id.uuid());
                 co_await _sys_ks.local().update_peer_info(ip, "release_version", rs.release_version);
+                co_await _sys_ks.local().update_peer_info(ip, "supported_features", gms::feature_service::from_feature_set(rs.supported_features));
             } else {
                 co_await _sys_ks.local().update_tokens(rs.ring.value().tokens);
                 co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens) }});
