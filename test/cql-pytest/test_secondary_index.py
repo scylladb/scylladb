@@ -81,7 +81,7 @@ def test_order_of_indexes(scylla_only, cql, test_keyspace):
         # server restart), but some of them fail. Once a proper ordering
         # is implemented, all cases below should succeed.
         def index_used(query, index_name):
-            assert any([index_name in event.description for event in cql.execute(query, trace=True).one().get_query_trace().events])
+            assert any([index_name in event.description for event in cql.execute(query, trace=True).get_query_trace().events])
         index_used(f"SELECT * FROM {table} WHERE v3 = 1", "my_v3_idx")
         index_used(f"SELECT * FROM {table} WHERE v3 = 1 and v1 = 2 allow filtering", "my_v3_idx")
         index_used(f"SELECT * FROM {table} WHERE p = 1 and v1 = 1 and v3 = 2 allow filtering", "my_v1_idx")
