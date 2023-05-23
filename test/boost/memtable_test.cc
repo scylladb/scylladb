@@ -293,7 +293,7 @@ SEASTAR_TEST_CASE(test_unspooled_dirty_accounting_on_flush) {
         std::vector<size_t> unspooled_dirty_values;
         unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
 
-        auto flush_reader_check = assert_that(mt->make_flush_reader(s, semaphore.make_permit(), service::get_local_priority_manager().memtable_flush_priority()));
+        auto flush_reader_check = assert_that(mt->make_flush_reader(s, semaphore.make_permit()));
         flush_reader_check.produces_partition(current_ring[0]);
         unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
         flush_reader_check.produces_partition(current_ring[1]);
@@ -412,7 +412,7 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
             mt->apply(m);
         }
 
-        auto rd = mt->make_flush_reader(s, semaphore.make_permit(), service::get_local_priority_manager().memtable_flush_priority());
+        auto rd = mt->make_flush_reader(s, semaphore.make_permit());
         auto close_rd = deferred_close(rd);
 
         for (int i = 0; i < partitions; ++i) {
