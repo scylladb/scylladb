@@ -440,10 +440,8 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
         auto write_to_sstable = [&] (mutation m) {
             auto sst = t->make_streaming_staging_sstable();
             sstables::sstable_writer_config sst_cfg = e.db().local().get_user_sstables_manager().configure_writer("test");
-            auto& pc = service::get_local_streaming_priority();
-
             auto permit = e.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout, {});
-            sst->write_components(make_flat_mutation_reader_from_mutations_v2(m.schema(), std::move(permit), m), 1ul, s, sst_cfg, {}, pc).get();
+            sst->write_components(make_flat_mutation_reader_from_mutations_v2(m.schema(), std::move(permit), m), 1ul, s, sst_cfg, {}).get();
             sst->open_data().get();
             t->add_sstable_and_update_cache(sst).get();
             return sst;
@@ -554,10 +552,8 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
 
         auto sst = t->make_streaming_staging_sstable();
         sstables::sstable_writer_config sst_cfg = e.local_db().get_user_sstables_manager().configure_writer("test");
-        auto& pc = service::get_local_streaming_priority();
-
         auto permit = e.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout, {});
-        sst->write_components(make_flat_mutation_reader_from_mutations_v2(m.schema(), std::move(permit), m), 1ul, s, sst_cfg, {}, pc).get();
+        sst->write_components(make_flat_mutation_reader_from_mutations_v2(m.schema(), std::move(permit), m), 1ul, s, sst_cfg, {}).get();
         sst->open_data().get();
         t->add_sstable_and_update_cache(sst).get();
 
@@ -628,10 +624,8 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
 
             auto sst = t->make_streaming_staging_sstable();
             sstables::sstable_writer_config sst_cfg = e.local_db().get_user_sstables_manager().configure_writer("test");
-            auto& pc = service::get_local_streaming_priority();
-
             auto permit = e.local_db().get_reader_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout, {});
-            sst->write_components(make_flat_mutation_reader_from_mutations_v2(m.schema(), std::move(permit), m), 1ul, s, sst_cfg, {}, pc).get();
+            sst->write_components(make_flat_mutation_reader_from_mutations_v2(m.schema(), std::move(permit), m), 1ul, s, sst_cfg, {}).get();
             sst->open_data().get();
             t->add_sstable_and_update_cache(sst).get();
             return sst;

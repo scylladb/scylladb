@@ -2767,7 +2767,7 @@ SEASTAR_TEST_CASE(test_missing_partition_end_fragment) {
             sstable_writer_config cfg = env.manager().configure_writer();
 
             try {
-                auto wr = sst->get_writer(*s, 1, cfg, encoding_stats{}, default_priority_class());
+                auto wr = sst->get_writer(*s, 1, cfg, encoding_stats{});
                 mr.consume_in_thread(std::move(wr));
                 BOOST_FAIL("write_components() should have failed");
             } catch (const std::runtime_error&) {
@@ -2911,7 +2911,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 auto sst = env.make_sstable(sst_schema, version);
                 sstable_writer_config cfg = env.manager().configure_writer();
 
-                auto wr = sst->get_writer(*sst_schema, 1, cfg, encoding_stats{}, default_priority_class());
+                auto wr = sst->get_writer(*sst_schema, 1, cfg, encoding_stats{});
                 mr.consume_in_thread(std::move(wr));
 
                 sst->load().get();
@@ -2932,7 +2932,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                     const auto size = std::min(sst->ondisk_data_size() / 2, uint64_t(1024));
                     auto buf = temporary_buffer<char>::aligned(sst_file.disk_write_dma_alignment(), size);
                     std::fill(buf.get_write(), buf.get_write() + size, 0xba);
-                    sst_file.dma_write(sst->ondisk_data_size() / 2, buf.begin(), buf.size(), default_priority_class()).get();
+                    sst_file.dma_write(sst->ondisk_data_size() / 2, buf.begin(), buf.size()).get();
                 }
 
                 valid = sstables::validate_checksums(sst, permit, default_priority_class()).get();
@@ -2992,7 +2992,7 @@ SEASTAR_TEST_CASE(test_index_fast_forwarding_after_eof) {
 
             sstable_writer_config cfg = env.manager().configure_writer();
 
-            auto wr = sst->get_writer(*schema, 1, cfg, encoding_stats{}, default_priority_class());
+            auto wr = sst->get_writer(*schema, 1, cfg, encoding_stats{});
             mr.consume_in_thread(std::move(wr));
 
             sst->load().get();
