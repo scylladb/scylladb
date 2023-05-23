@@ -173,33 +173,6 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
     });
 }
 
-future<> run_resharding_jobs(sharded<sstables::sstable_directory>& dir, std::vector<replica::reshard_shard_descriptor> reshard_jobs,
-                             sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator,
-                             compaction::owned_ranges_ptr owned_ranges_ptr) {
-
-    uint64_t total_size = boost::accumulate(reshard_jobs | boost::adaptors::transformed(std::mem_fn(&replica::reshard_shard_descriptor::size)), uint64_t(0));
-    if (total_size == 0) {
-        co_return;
-    }
-
-    auto start = std::chrono::steady_clock::now();
-    dblog.info("Resharding {} for {}.{}", utils::pretty_printed_data_size(total_size), ks_name, table_name);
-
-    co_await dir.invoke_on_all(coroutine::lambda([&] (sstables::sstable_directory& d) -> future<> {
-        auto& table = db.local().find_column_family(ks_name, table_name);
-        auto info_vec = std::move(reshard_jobs[this_shard_id()].info_vec);
-        // make shard-local copy of owned_ranges
-        compaction::owned_ranges_ptr local_owned_ranges_ptr;
-        if (owned_ranges_ptr) {
-            local_owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(*owned_ranges_ptr);
-        }
-        co_await reshard(d, std::move(info_vec), table, creator, std::move(local_owned_ranges_ptr));
-        co_await d.move_foreign_sstables(dir);
-    }));
-
-    auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
-    dblog.info("Resharded {} for {}.{} in {:.2f} seconds, {}", utils::pretty_printed_data_size(total_size), ks_name, table_name, duration.count(), utils::pretty_printed_throughput(total_size, duration));
-}
 namespace compaction {
 
 struct table_tasks_info {
@@ -549,7 +522,29 @@ future<> shard_reshaping_compaction_task_impl::run() {
 future<> table_resharding_compaction_task_impl::run() {
     auto all_jobs = co_await collect_all_shared_sstables(_dir, _db, _status.keyspace, _status.table, _owned_ranges_ptr);
     auto destinations = co_await distribute_reshard_jobs(std::move(all_jobs));
-    co_await run_resharding_jobs(_dir, std::move(destinations), _db, _status.keyspace, _status.table, std::move(_creator), std::move(_owned_ranges_ptr));
+
+    uint64_t total_size = boost::accumulate(destinations | boost::adaptors::transformed(std::mem_fn(&replica::reshard_shard_descriptor::size)), uint64_t(0));
+    if (total_size == 0) {
+        co_return;
+    }
+
+    auto start = std::chrono::steady_clock::now();
+    dblog.info("Resharding {} for {}.{}", utils::pretty_printed_data_size(total_size), _status.keyspace, _status.table);
+
+    co_await _dir.invoke_on_all(coroutine::lambda([&] (sstables::sstable_directory& d) -> future<> {
+        auto& table = _db.local().find_column_family(_status.keyspace, _status.table);
+        auto info_vec = std::move(destinations[this_shard_id()].info_vec);
+        // make shard-local copy of owned_ranges
+        compaction::owned_ranges_ptr local_owned_ranges_ptr;
+        if (_owned_ranges_ptr) {
+            local_owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(*_owned_ranges_ptr);
+        }
+        co_await reshard(d, std::move(info_vec), table, _creator, std::move(local_owned_ranges_ptr));
+        co_await d.move_foreign_sstables(_dir);
+    }));
+
+    auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
+    dblog.info("Resharded {} for {}.{} in {:.2f} seconds, {}", utils::pretty_printed_data_size(total_size), _status.keyspace, _status.table, duration.count(), utils::pretty_printed_throughput(total_size, duration));
 }
 
 }
