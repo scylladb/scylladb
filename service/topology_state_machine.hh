@@ -141,6 +141,8 @@ struct raft_topology_cmd {
           fence                 // erect the fence against requests with stale versions
       };
       command cmd;
+
+      raft_topology_cmd(command c) : cmd(c) {}
 };
 
 // returned as a result of raft_bootstrap_cmd

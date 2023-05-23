@@ -1005,10 +1005,10 @@ class topology_coordinator {
 
     future<node_to_work_on> global_token_metadata_barrier(node_to_work_on&& node) {
         node = co_await exec_global_command(std::move(node),
-            raft_topology_cmd { raft_topology_cmd::command::barrier_and_drain },
+            raft_topology_cmd::command::barrier_and_drain,
             true);
         node = co_await exec_global_command(std::move(node),
-            raft_topology_cmd { raft_topology_cmd::command::fence },
+            raft_topology_cmd::command::fence,
             true);
         co_return std::move(node);
     }
@@ -1040,7 +1040,7 @@ class topology_coordinator {
                 // introduced during replace/remove.
                 {
                     auto f = co_await coroutine::as_future(exec_global_command(std::move(guard),
-                        raft_topology_cmd{raft_topology_cmd::command::barrier},
+                        raft_topology_cmd::command::barrier,
                         {_raft.id()}));
                     if (f.failed()) {
                         slogger.error("raft topology: transition_state::commit_cdc_generation, "
@@ -1336,7 +1336,7 @@ class topology_coordinator {
             }
             case node_state::rebuilding: {
                 node = co_await exec_direct_command(
-                        std::move(node), raft_topology_cmd{raft_topology_cmd::command::stream_ranges});
+                        std::move(node), raft_topology_cmd::command::stream_ranges);
                 topology_mutation_builder builder(node.guard.write_timestamp());
                 builder.with_node(node.id)
                        .set("node_state", node_state::normal)
