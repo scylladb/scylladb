@@ -209,12 +209,12 @@ public:
 
     future<> send_hint_mutation(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
-            frozen_mutation m, inet_address_vector_replica_set&& forward, gms::inet_address reply_to, unsigned shard,
+            const frozen_mutation& m, inet_address_vector_replica_set&& forward, gms::inet_address reply_to, unsigned shard,
             storage_proxy::response_id_type response_id, db::per_partition_rate_limit::info rate_limit_info) {
         tracing::trace(tr_state, "Sending a hint to /{}", addr.addr);
         return ser::storage_proxy_rpc_verbs::send_hint_mutation(
                 &_ms, std::move(addr), timeout,
-                std::move(m), std::move(forward), std::move(reply_to), shard,
+                m, std::move(forward), std::move(reply_to), shard,
                 response_id, tracing::make_trace_info(tr_state));
     }
 
