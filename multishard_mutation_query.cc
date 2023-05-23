@@ -560,21 +560,23 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) noe
     }
     try {
         return _db.invoke_on_all([this, cmd = &_cmd, ranges = &_ranges, gs = global_schema_ptr(_schema),
-                gts = tracing::global_trace_state_ptr(_trace_state), timeout] (replica::database& db) mutable {
+                gts = tracing::global_trace_state_ptr(_trace_state), timeout] (replica::database& db) mutable -> future<> {
             auto schema = gs.get();
-            auto querier_opt = db.get_querier_cache().lookup_shard_mutation_querier(cmd->query_uuid, *schema, *ranges, cmd->slice, gts.get(), timeout);
             auto& table = db.find_column_family(schema);
             auto& semaphore = this->semaphore();
             auto shard = this_shard_id();
 
+            auto querier_opt = db.get_querier_cache().lookup_shard_mutation_querier(cmd->query_uuid, *schema, *ranges, cmd->slice, gts.get(), timeout);
+
             if (!querier_opt) {
                 _readers[shard] = reader_meta(reader_state::inexistent);
-                return;
+                co_return;
             }
 
             auto& q = *querier_opt;
 
             if (&q.permit().semaphore() != &semaphore) {
+                co_await q.close();
                 on_internal_error(mmq_log, format("looked-up reader belongs to different semaphore than the one appropriate for this query class: "
                         "looked-up reader belongs to {} (0x{:x}) the query class appropriate is {} (0x{:x})",
                         q.permit().semaphore().name(),
@@ -583,6 +585,9 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) noe
                         reinterpret_cast<uintptr_t>(&semaphore)));
             }
 
+            // At this point the readers is passed to the semaphore and we are
+            // safe w.r.t. exceptions. The code between this point and obtaining
+            // the querier must take care of closing it if an error happens.
             auto handle = semaphore.register_inactive_read(std::move(q).reader());
             _readers[shard] = reader_meta(
                     reader_state::successful_lookup,
