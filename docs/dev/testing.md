@@ -121,12 +121,15 @@ which the test is invoked is recorded in `testlog/test.py.log`.
 ## Python tests
 
 `test.py` supports pytest standard of tests, for suites (directories)
-specifying `Python` test type in their scylla.yaml. For such tests,
+specifying `Python` test type in their suite.yaml. For such tests,
 a standalone server instance is created, and a connection URI to the
 server is passed to the test. Thanks to convenience fixtures,
 test writers don't need to create or cleanup connections or keyspaces.
 `test.py` will also keep track of the used server(s) and will shut
 down the server when all tests  using it end.
+
+Note that some suites have a convenience helper script called `run`. Find
+more information about it in [test/cql-pytest](../../test/cql-pytest/README.md) and [test/alternator](../../test/alternator/README.md).
 
 ## Sharing and pooling servers
 
