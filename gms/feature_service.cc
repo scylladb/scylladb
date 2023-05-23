@@ -196,11 +196,11 @@ public:
     {
     }
     future<> on_join(inet_address ep, endpoint_state state) override {
-        return enable_features();
+        return enable_features_from_gossip();
     }
     future<> on_change(inet_address ep, application_state state, const versioned_value&) override {
         if (state == application_state::SUPPORTED_FEATURES) {
-            return enable_features();
+            return enable_features_from_gossip();
         }
         return make_ready_future();
     }
@@ -210,13 +210,13 @@ public:
     future<> on_remove(inet_address) override { return make_ready_future(); }
     future<> on_restart(inet_address, endpoint_state) override { return make_ready_future(); }
 
-    future<> enable_features();
+    future<> enable_features_from_gossip();
 };
 
 future<> feature_service::enable_features_on_join(gossiper& g, db::system_keyspace& sys_ks) {
     auto enabler = make_shared<persistent_feature_enabler>(g, *this, sys_ks);
     g.register_(enabler);
-    return enabler->enable_features();
+    return enabler->enable_features_from_gossip();
 }
 
 future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks) {
@@ -253,7 +253,7 @@ future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks
     co_await enable(std::move(feat), feature_service::without_persisting{});
 }
 
-future<> persistent_feature_enabler::enable_features() {
+future<> persistent_feature_enabler::enable_features_from_gossip() {
     auto loaded_peer_features = co_await _sys_ks.load_peer_features();
     auto&& features = _g.get_supported_features(loaded_peer_features, gossiper::ignore_features_of_local_node::no);
 
