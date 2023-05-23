@@ -450,12 +450,12 @@ utils::coroutine partition_entry::apply_to_incomplete(const schema& s,
                 bool static_row_continuous = dst_snp->static_row_continuous();
                 auto current = &*src_snp->version();
                 while (current) {
-                    dirty_size += allocator.object_memory_size_in_allocator(current)
-                        + current->partition().static_row().external_memory_usage(s, column_kind::static_column);
                     dst.partition().apply(current->partition().partition_tombstone());
                     if (static_row_continuous) {
                         lazy_row& static_row = dst.partition().static_row();
                         if (can_move) {
+                            dirty_size += allocator.object_memory_size_in_allocator(current)
+                                + current->partition().static_row().external_memory_usage(s, column_kind::static_column);
                             static_row.apply(s, column_kind::static_column,
                                 std::move(current->partition().static_row()));
                         } else {
@@ -536,7 +536,9 @@ utils::coroutine partition_entry::apply_to_incomplete(const schema& s,
                 // FIXME: Avoid storing lb if no range tombstones
                 lb = position_in_partition(src_cur.position());
                 auto has_next = src_cur.erase_and_advance();
-                acc.unpin_memory(size);
+                if (can_move) {
+                    acc.unpin_memory(size);
+                }
                 if (!has_next) {
                     dst_snp->unlock();
                     return stop_iteration::yes;

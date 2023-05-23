@@ -935,17 +935,22 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
     real_dirty_memory_accounter real_dirty_acc(m, _tracker);
     m.on_detach_from_region_group();
     _tracker.region().merge(m); // Now all data in memtable belongs to cache
-    _tracker.memtable_cleaner().merge(m._cleaner);
+    m.cleaner().set_callback_on_space_freed({});
     STAP_PROBE(scylla, row_cache_update_start);
     auto cleanup = defer([&m, this] () noexcept {
         invalidate_sync(m);
         _prev_snapshot_pos = {};
         _prev_snapshot = {};
+        m.cleaner().set_callback_on_space_freed({});
+        _tracker.memtable_cleaner().merge(m.cleaner());
         STAP_PROBE(scylla, row_cache_update_end);
     });
 
-    return seastar::async([this, &m, updater = std::move(updater), real_dirty_acc = std::move(real_dirty_acc)] () mutable {
-        size_t size_entry;
+    // Put real_dirty_acc on heap to get a stable address for the callback below.
+    auto real_dirty_acc_ptr = make_lw_shared<real_dirty_memory_accounter>(std::move(real_dirty_acc));
+    m.cleaner().set_callback_on_space_freed([real_dirty_acc_ptr] (size_t, size_t freed_used) {real_dirty_acc_ptr->unpin_memory(freed_used);});
+
+    return seastar::async([this, &m, updater = std::move(updater), real_dirty_acc_ptr] () mutable {
         utils::coroutine update; // Destroy before cleanup to release snapshots before invalidating.
         auto destroy_update = defer([&] {
             with_allocator(_tracker.allocator(), [&] {
@@ -966,10 +971,9 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
                             if (!update) {
                                 _update_section(_tracker.region(), [&] {
                                     replica::memtable_entry& mem_e = *m.partitions.begin();
-                                    size_entry = mem_e.size_in_allocator_without_rows(_tracker.allocator());
                                     partitions_type::bound_hint hint;
                                     auto cache_i = _partitions.lower_bound(mem_e.key(), cmp, hint);
-                                    update = updater(_update_section, cache_i, mem_e, is_present, real_dirty_acc, hint);
+                                    update = updater(_update_section, cache_i, mem_e, is_present, *real_dirty_acc_ptr, hint);
                                 });
                             }
                             // We use cooperative deferring instead of futures so that
@@ -979,12 +983,15 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
                                 return;
                             }
                             update = {};
-                            real_dirty_acc.unpin_memory(size_entry);
                             _update_section(_tracker.region(), [&] {
                                 auto i = m.partitions.begin();
+                                size_t memory_before;
                                 i.erase_and_dispose(dht::raw_token_less_comparator{}, [&] (replica::memtable_entry* e) noexcept {
-                                    m.evict_entry(*e, _tracker.memtable_cleaner());
+                                    m.evict_entry(*e, m.cleaner());
+                                    memory_before = m.occupancy().used_space();
                                 });
+                                size_t memory_after = m.occupancy().used_space();
+                                real_dirty_acc_ptr->unpin_memory(memory_before - memory_after);
                             });
                             ++partition_count;
                           }
@@ -1003,15 +1010,23 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
                     }
                 }
             });
-            real_dirty_acc.commit();
-            seastar::thread::yield();
+            while (true) {
+                real_dirty_acc_ptr->commit();
+                seastar::thread::yield();
+                stop_iteration cleared = with_allocator(m.allocator(), [&] {
+                    return m.cleaner().clear_gently();
+                });
+                if (cleared == stop_iteration::yes) {
+                    break;
+                }
+            }
         }
     }).finally([cleanup = std::move(cleanup)] {});
   });
 }
 
 future<> row_cache::update(external_updater eu, replica::memtable& m) {
-    return do_update(std::move(eu), m, [this] (logalloc::allocating_section& alloc,
+    return do_update(std::move(eu), m, [this, &m_cleaner = m.cleaner()] (logalloc::allocating_section& alloc,
             row_cache::partitions_type::iterator cache_i, replica::memtable_entry& mem_e, partition_presence_checker& is_present,
             real_dirty_memory_accounter& acc, const partitions_type::bound_hint& hint) mutable {
         // If cache doesn't contain the entry we cannot insert it because the mutation may be incomplete.
@@ -1023,7 +1038,7 @@ future<> row_cache::update(external_updater eu, replica::memtable& m) {
             assert(entry._schema == _schema);
             _tracker.on_partition_merge();
             mem_e.upgrade_schema(_schema, _tracker.memtable_cleaner());
-            return entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), _tracker.memtable_cleaner(),
+            return entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), m_cleaner,
                 alloc, _tracker.region(), _tracker, _underlying_phase, acc);
         } else if (cache_i->continuous()
                    || with_allocator(standard_allocator(), [&] { return is_present(mem_e.key()); })
@@ -1035,7 +1050,7 @@ future<> row_cache::update(external_updater eu, replica::memtable& m) {
             entry->set_continuous(cache_i->continuous());
             _tracker.insert(*entry);
             mem_e.upgrade_schema(_schema, _tracker.memtable_cleaner());
-            return entry->partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), _tracker.memtable_cleaner(),
+            return entry->partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), m_cleaner,
                 alloc, _tracker.region(), _tracker, _underlying_phase, acc);
         } else {
             return utils::make_empty_coroutine();
