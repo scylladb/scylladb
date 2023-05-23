@@ -60,3 +60,4 @@ Getting Started
   
   * `Build an IoT App with sensor simulator and a REST API <https://care-pet.docs.scylladb.com/>`_ - ScyllaDB Tutorial
   * `Implement CRUD operations with a TODO App <https://github.com/scylladb/scylla-cloud-getting-started/>`_ - ScyllaDB Cloud Tutorial
+  * `Build a machine learning (ML) feature store with ScyllaDB <https://feature-store.scylladb.com/stable/>`_ - ScyllaDB Cloud Tutorial
