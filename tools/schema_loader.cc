@@ -212,8 +212,11 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
     cfg.enable_cache(false);
     cfg.volatile_system_keyspace_for_testing(true);
 
-    gms::feature_service feature_service(gms::feature_config_from_db_config(cfg));
-    feature_service.enable(feature_service.supported_feature_set()).get();
+    sharded<gms::feature_service> feature_service;
+    feature_service.start(gms::feature_config_from_db_config(cfg)).get();
+    auto stop_feature_service = deferred_stop(feature_service);
+
+    feature_service.local().enable(feature_service.local().supported_feature_set()).get();
     sharded<locator::shared_token_metadata> token_metadata;
 
     utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
@@ -221,7 +224,7 @@ std::vector<schema_ptr> do_load_schemas(std::string_view schema_str) {
     auto stop_token_metadata = deferred_stop(token_metadata);
 
     data_dictionary_impl dd_impl;
-    database real_db(cfg, feature_service);
+    database real_db(cfg, feature_service.local());
     auto db = dd_impl.wrap(real_db);
 
     // Mock system_schema keyspace to be able to parse modification statements
