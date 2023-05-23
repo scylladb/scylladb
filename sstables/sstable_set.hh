@@ -145,6 +145,9 @@ public:
     bool insert(shared_sstable sst);
     // Return true iff sst was erase
     bool erase(shared_sstable sst);
+    // Returns a vector holding the unique sstables that were inserted
+    // Guarantees strong exception safety
+    std::vector<shared_sstable> insert(const std::span<shared_sstable>& sstables);
     size_t size() const noexcept;
     uint64_t bytes_on_disk() const noexcept;
 
