@@ -8,7 +8,7 @@ The tutorials will show you how to use ScyllaDB as a data source for an applicat
 ScyllaDB Tutorial
 ===================
 
-`Build an IoT App with sensor simulator and a REST API <https://care-pet.docs.scylladb.com/>`_
+`Build an IoT App with sensor simulator and a REST API <https://iot.scylladb.com/stable/>`_
 
 ScyllaDB Cloud Tutorial
 =======================

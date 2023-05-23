@@ -58,6 +58,6 @@ Getting Started
 
   The tutorials will show you how to use ScyllaDB as a data source for an application.
   
-  * `Build an IoT App with sensor simulator and a REST API <https://care-pet.docs.scylladb.com/>`_ - ScyllaDB Tutorial
+  * `Build an IoT App with sensor simulator and a REST API <https://iot.scylladb.com/stable/>`_ - ScyllaDB Tutorial
   * `Implement CRUD operations with a TODO App <https://github.com/scylladb/scylla-cloud-getting-started/>`_ - ScyllaDB Cloud Tutorial
-  * `Build a machine learning (ML) feature store with ScyllaDB <https://feature-store.scylladb.com/stable/>`_ - ScyllaDB Cloud Tutorial
+  * `Build a machine learning (ML) feature store with ScyllaDB <https://feature-store.scylladb.com/stable/>`_ - ScyllaDB Cloud Tutorial  ` <>`_
