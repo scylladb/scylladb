@@ -1266,13 +1266,12 @@ void sstable::write_statistics(const io_priority_class& pc) {
     write_simple<component_type::Statistics>(_components->statistics, pc);
 }
 
-void sstable::rewrite_statistics(const io_priority_class& pc) {
+void sstable::rewrite_statistics() {
     auto file_path = filename(component_type::TemporaryStatistics);
     sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
-    options.io_priority_class = pc;
     auto w = make_component_file_writer(component_type::TemporaryStatistics, std::move(options),
             open_flags::wo | open_flags::create | open_flags::truncate).get0();
     write(_version, w, _components->statistics);
@@ -2339,13 +2338,12 @@ static future<bool> do_validate_uncompressed(input_stream<char>& stream, const c
     co_return valid;
 }
 
-future<uint32_t> sstable::read_digest(io_priority_class pc) {
+future<uint32_t> sstable::read_digest() {
     sstring digest_str;
 
     co_await do_read_simple(component_type::Digest, [&] (version_types v, file digest_file) -> future<> {
         file_input_stream_options options;
         options.buffer_size = 4096;
-        options.io_priority_class = pc;
 
         auto digest_stream = make_file_input_stream(std::move(digest_file), options);
 
@@ -2364,13 +2362,12 @@ future<uint32_t> sstable::read_digest(io_priority_class pc) {
     co_return boost::lexical_cast<uint32_t>(digest_str);
 }
 
-future<checksum> sstable::read_checksum(io_priority_class pc) {
+future<checksum> sstable::read_checksum() {
     sstables::checksum checksum;
 
     co_await do_read_simple(component_type::CRC, [&] (version_types v, file crc_file) -> future<> {
         file_input_stream_options options;
         options.buffer_size = 4096;
-        options.io_priority_class = pc;
 
         auto crc_stream = make_file_input_stream(std::move(crc_file), options);
 
@@ -2400,8 +2397,10 @@ future<checksum> sstable::read_checksum(io_priority_class pc) {
     co_return checksum;
 }
 
-future<bool> validate_checksums(shared_sstable sst, reader_permit permit, const io_priority_class& pc) {
-    const auto digest = co_await sst->read_digest(pc);
+future<bool> validate_checksums(shared_sstable sst, reader_permit permit) {
+    auto& pc = default_priority_class();
+
+    const auto digest = co_await sst->read_digest();
 
     auto data_stream = sst->data_stream(0, sst->ondisk_data_size(), pc, permit, nullptr, nullptr, sstable::raw_stream::yes);
 
@@ -2416,7 +2415,7 @@ future<bool> validate_checksums(shared_sstable sst, reader_permit permit, const 
                 valid = co_await do_validate_compressed<adler32_utils>(data_stream, sst->get_compression(), false, digest);
             }
         } else {
-            auto checksum = co_await sst->read_checksum(pc);
+            auto checksum = co_await sst->read_checksum();
             if (sst->get_version() >= sstable_version_types::mc) {
                 valid = co_await do_validate_uncompressed<crc32_utils>(data_stream, checksum, digest);
             } else {
@@ -2527,7 +2526,7 @@ future<> sstable::mutate_sstable_level(uint32_t new_level) {
         // which comprises mostly hard link creation and this operation at the end + this operation,
         // and also (eventually) by some compaction strategy. In any of the cases, it won't be high
         // priority enough so we will use the default priority
-        rewrite_statistics(default_priority_class());
+        rewrite_statistics();
     });
 }
 

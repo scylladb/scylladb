@@ -605,7 +605,7 @@ private:
     void write_statistics(const io_priority_class& pc);
     // Rewrite statistics component by creating a temporary Statistics and
     // renaming it into place of existing one.
-    void rewrite_statistics(const io_priority_class& pc);
+    void rewrite_statistics();
     // Validate metadata that's used to optimize reads when user specifies
     // a clustering key range. If this specific metadata is incorrect, then
     // it should be cleared. Otherwise, it could lead to bad decisions.
@@ -897,8 +897,8 @@ public:
     gc_clock::time_point get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state) const;
     gc_clock::time_point get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state) const;
 
-    future<uint32_t> read_digest(io_priority_class pc);
-    future<checksum> read_checksum(io_priority_class pc);
+    future<uint32_t> read_digest();
+    future<checksum> read_checksum();
 };
 
 // Validate checksums
@@ -924,7 +924,7 @@ public:
 //
 // Returns true if all checksums are valid.
 // Validation errors are logged individually.
-future<bool> validate_checksums(shared_sstable sst, reader_permit permit, const io_priority_class& pc);
+future<bool> validate_checksums(shared_sstable sst, reader_permit permit);
 
 struct index_sampling_state {
     static constexpr size_t default_summary_byte_cost = 2000;

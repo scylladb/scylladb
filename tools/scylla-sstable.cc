@@ -1504,7 +1504,7 @@ void validate_checksums_operation(schema_ptr schema, reader_permit permit, const
     }
 
     for (auto& sst : sstables) {
-        const auto valid = sstables::validate_checksums(sst, permit, default_priority_class()).get();
+        const auto valid = sstables::validate_checksums(sst, permit).get();
         sst_log.info("validated the checksums of {}: {}", sst->get_filename(), valid ? "valid" : "invalid");
     }
 }
