@@ -13,7 +13,7 @@ ScyllaDB Docker supports x86_64 for all versions, and aarch64 starting from Scyl
 
 ## Quick start
 
-To startup a ScyllaDB single-node cluster in developer mode execute:
+To startup a ScyllaDB single-node cluster in developer mode, execute:
 
 ```console
 $ docker run --name some-scylla --hostname some-scylla -d scylladb/scylla --smp 1
