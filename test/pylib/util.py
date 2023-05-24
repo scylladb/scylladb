@@ -121,4 +121,16 @@ async def read_barrier(cql: Session, host: Host):
     await cql.run_async("drop table if exists nosuchkeyspace.nosuchtable", host = host)
 
 
+# Wait for the given feature to be enabled.
+async def wait_for_feature(feature: str, cql: Session, host: Host, deadline: float) -> None:
+    async def feature_is_enabled():
+        rs = await cql.run_async("select value from system.scylla_local where key = 'enabled_features'", host=host)
+        if rs:
+            value = rs[0].value
+            if feature in value:
+                return True
+        return None
+    await wait_for(feature_is_enabled, deadline)
+
+
 unique_name.last_ms = 0
