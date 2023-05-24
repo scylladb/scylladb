@@ -67,8 +67,6 @@ future<> create_metadata_table_if_missing(
         std::string_view cql,
         ::service::migration_manager&) noexcept;
 
-future<> wait_for_schema_agreement(::service::migration_manager&, const replica::database&, seastar::abort_source&);
-
 ///
 /// Time-outs for internal, non-local CQL queries.
 ///

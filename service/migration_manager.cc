@@ -239,6 +239,18 @@ bool migration_manager::have_schema_agreement() {
     return match;
 }
 
+future<> migration_manager::wait_for_schema_agreement(const replica::database& db, db::timeout_clock::time_point deadline, seastar::abort_source* as) {
+    while (db.get_version() == replica::database::empty_version || !have_schema_agreement()) {
+        if (as) {
+            as->check();
+        }
+        if (db::timeout_clock::now() > deadline) {
+            throw std::runtime_error("Unable to reach schema agreement");
+        }
+        co_await (as ? sleep_abortable(std::chrono::milliseconds(500), *as) : sleep(std::chrono::milliseconds(500)));
+    }
+}
+
 /**
  * If versions differ this node sends request with local migration list to the endpoint
  * and expecting to receive a list of migrations to apply locally.

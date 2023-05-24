@@ -1794,9 +1794,8 @@ future<> view_builder::start(service::migration_manager& mm) {
             // or `on_update_view` events.
             auto units = get_units(_sem, 1).get0();
             // Wait for schema agreement even if we're a seed node.
-            while (!mm.have_schema_agreement()) {
-                seastar::sleep_abortable(500ms, _as).get();
-            }
+            mm.wait_for_schema_agreement(_db, db::timeout_clock::time_point::max(), &_as).get();
+
             auto built = _sys_ks.load_built_views().get0();
             auto in_progress = _sys_ks.load_view_build_progress().get0();
             setup_shard_build_step(vbi, std::move(built), std::move(in_progress));
