@@ -846,7 +846,7 @@ cache_entry& row_cache::find_or_create_incomplete(const partition_start& ps, row
 
 cache_entry& row_cache::find_or_create_missing(const dht::decorated_key& key) {
     return do_find_or_create_entry(key, nullptr, [&] (auto i, const partitions_type::bound_hint& hint) {
-        mutation_partition mp(_schema);
+        mutation_partition mp(*_schema);
         bool cont = i->continuous();
         partitions_type::iterator entry = _partitions.emplace_before(i, key.token().raw(), hint,
                 _schema, key, std::move(mp));
@@ -1024,9 +1024,9 @@ future<> row_cache::update(external_updater eu, replica::memtable& m) {
         if (cache_i != partitions_end() && hint.match) {
             cache_entry& entry = *cache_i;
             upgrade_entry(entry);
-            assert(entry._schema == _schema);
+            assert(entry.schema() == _schema);
             _tracker.on_partition_merge();
-            mem_e.upgrade_schema(_schema, _tracker.memtable_cleaner());
+            mem_e.upgrade_schema(_tracker.region(), _schema, _tracker.memtable_cleaner());
             return entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), _tracker.memtable_cleaner(),
                 alloc, _tracker.region(), _tracker, _underlying_phase, acc);
         } else if (cache_i->continuous()
@@ -1035,10 +1035,10 @@ future<> row_cache::update(external_updater eu, replica::memtable& m) {
             // Partition is absent in underlying. First, insert a neutral partition entry.
             partitions_type::iterator entry = _partitions.emplace_before(cache_i, mem_e.key().token().raw(), hint,
                 cache_entry::evictable_tag(), _schema, dht::decorated_key(mem_e.key()),
-                partition_entry::make_evictable(*_schema, mutation_partition(_schema)));
+                partition_entry::make_evictable(*_schema, mutation_partition(*_schema)));
             entry->set_continuous(cache_i->continuous());
             _tracker.insert(*entry);
-            mem_e.upgrade_schema(_schema, _tracker.memtable_cleaner());
+            mem_e.upgrade_schema(_tracker.region(), _schema, _tracker.memtable_cleaner());
             return entry->partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), _tracker.memtable_cleaner(),
                 alloc, _tracker.region(), _tracker, _underlying_phase, acc);
         } else {
@@ -1194,8 +1194,7 @@ row_cache::row_cache(schema_ptr s, snapshot_source src, cache_tracker& tracker, 
 }
 
 cache_entry::cache_entry(cache_entry&& o) noexcept
-    : _schema(std::move(o._schema))
-    , _key(std::move(o._key))
+    : _key(std::move(o._key))
     , _pe(std::move(o._pe))
     , _flags(o._flags)
 {
@@ -1296,9 +1295,9 @@ flat_mutation_reader_v2 cache_entry::read(row_cache& rc, std::unique_ptr<read_co
 
 // Assumes reader is in the corresponding partition
 flat_mutation_reader_v2 cache_entry::do_read(row_cache& rc, read_context& reader) {
-    auto snp = _pe.read(rc._tracker.region(), rc._tracker.cleaner(), _schema, &rc._tracker, reader.phase());
-    auto ckr = query::clustering_key_filter_ranges::get_native_ranges(*_schema, reader.native_slice(), _key.key());
-    schema_ptr entry_schema = to_query_domain(reader.slice(), _schema);
+    auto snp = _pe.read(rc._tracker.region(), rc._tracker.cleaner(), &rc._tracker, reader.phase());
+    auto ckr = query::clustering_key_filter_ranges::get_native_ranges(*schema(), reader.native_slice(), _key.key());
+    schema_ptr entry_schema = to_query_domain(reader.slice(), schema());
     auto r = make_cache_flat_mutation_reader(entry_schema, _key, std::move(ckr), rc, reader, std::move(snp));
     r.upgrade_schema(to_query_domain(reader.slice(), rc.schema()));
     r.upgrade_schema(reader.schema());
@@ -1306,10 +1305,10 @@ flat_mutation_reader_v2 cache_entry::do_read(row_cache& rc, read_context& reader
 }
 
 flat_mutation_reader_v2 cache_entry::do_read(row_cache& rc, std::unique_ptr<read_context> unique_ctx) {
-    auto snp = _pe.read(rc._tracker.region(), rc._tracker.cleaner(), _schema, &rc._tracker, unique_ctx->phase());
-    auto ckr = query::clustering_key_filter_ranges::get_native_ranges(*_schema, unique_ctx->native_slice(), _key.key());
+    auto snp = _pe.read(rc._tracker.region(), rc._tracker.cleaner(), &rc._tracker, unique_ctx->phase());
+    auto ckr = query::clustering_key_filter_ranges::get_native_ranges(*schema(), unique_ctx->native_slice(), _key.key());
     schema_ptr reader_schema = unique_ctx->schema();
-    schema_ptr entry_schema = to_query_domain(unique_ctx->slice(), _schema);
+    schema_ptr entry_schema = to_query_domain(unique_ctx->slice(), schema());
     auto rc_schema = to_query_domain(unique_ctx->slice(), rc.schema());
     auto r = make_cache_flat_mutation_reader(entry_schema, _key, std::move(ckr), rc, std::move(unique_ctx), std::move(snp));
     r.upgrade_schema(rc_schema);
@@ -1322,13 +1321,10 @@ const schema_ptr& row_cache::schema() const {
 }
 
 void row_cache::upgrade_entry(cache_entry& e) {
-    if (e._schema != _schema && !e.partition().is_locked()) {
+    if (e.schema() != _schema && !e.partition().is_locked()) {
         auto& r = _tracker.region();
         assert(!r.reclaiming_enabled());
-        with_allocator(r.allocator(), [this, &e] {
-            e.partition().upgrade(e._schema, _schema, _tracker.cleaner(), &_tracker);
-            e._schema = _schema;
-        });
+        e.partition().upgrade(r, _schema, _tracker.cleaner(), &_tracker);
     }
 }
 
@@ -1371,6 +1367,6 @@ std::ostream& operator<<(std::ostream& out, const cache_entry& e) {
     return out << "{cache_entry: " << e.position()
                << ", cont=" << e.continuous()
                << ", dummy=" << e.is_dummy_entry()
-               << ", " << partition_entry::printer(*e.schema(), e.partition())
+               << ", " << partition_entry::printer(e.partition())
                << "}";
 }

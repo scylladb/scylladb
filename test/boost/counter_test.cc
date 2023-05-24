@@ -270,7 +270,7 @@ SEASTAR_TEST_CASE(test_counter_mutations) {
 
         // Difference
 
-        m = mutation(s, m1.decorated_key(), m1.partition().difference(s, m2.partition()));
+        m = mutation(s, m1.decorated_key(), m1.partition().difference(*s, m2.partition()));
         ac = get_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
       {
@@ -287,7 +287,7 @@ SEASTAR_TEST_CASE(test_counter_mutations) {
         verify_shard_order(ccv);
       }
 
-        m = mutation(s, m1.decorated_key(), m2.partition().difference(s, m1.partition()));
+        m = mutation(s, m1.decorated_key(), m2.partition().difference(*s, m1.partition()));
         ac = get_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
       {
@@ -304,11 +304,11 @@ SEASTAR_TEST_CASE(test_counter_mutations) {
         verify_shard_order(ccv);
       }
 
-        m = mutation(s, m1.decorated_key(), m1.partition().difference(s, m3.partition()));
+        m = mutation(s, m1.decorated_key(), m1.partition().difference(*s, m3.partition()));
         BOOST_REQUIRE_EQUAL(m.partition().clustered_rows().calculate_size(), 0);
         BOOST_REQUIRE(m.partition().static_row().empty());
 
-        m = mutation(s, m1.decorated_key(), m3.partition().difference(s, m1.partition()));
+        m = mutation(s, m1.decorated_key(), m3.partition().difference(*s, m1.partition()));
         ac = get_counter_cell(m);
         BOOST_REQUIRE(!ac.is_live());
 

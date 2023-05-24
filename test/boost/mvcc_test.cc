@@ -41,7 +41,7 @@ static thread_local mutation_application_stats app_stats_for_tests;
 // The cursor must be pointing at a row and valid.
 // The cursor will not be pointing at a row after this.
 static mutation_partition read_partition_from(const schema& schema, partition_snapshot_row_cursor& cur) {
-    mutation_partition p(schema.shared_from_this());
+    mutation_partition p(schema);
     position_in_partition prev = position_in_partition::before_all_clustered_rows();
     do {
         testlog.trace("cur: {}", cur);
@@ -170,14 +170,14 @@ public:
 
     void upgrade(schema_ptr new_schema) {
         _container.allocate_in_region([&] {
-            _e.upgrade(_s, new_schema, _container.cleaner(), _container.tracker());
+            _e.upgrade(_container.region(), new_schema, _container.cleaner(), _container.tracker());
             _s = new_schema;
         });
     }
 
     partition_snapshot_ptr read() {
         return _container.allocate_in_region([&] {
-            return _e.read(region(), _container.cleaner(), schema(), _container.tracker(), _container.phase());
+            return _e.read(region(), _container.cleaner(), _container.tracker(), _container.phase());
         });
     }
 
@@ -194,7 +194,7 @@ void mvcc_partition::apply_to_evictable(partition_entry&& src, schema_ptr src_sc
         mutation_cleaner src_cleaner(region(), no_cache_tracker, app_stats_for_tests);
         auto c = as(region(), [&] {
             if (_s != src_schema) {
-                src.upgrade(src_schema, _s, src_cleaner, no_cache_tracker);
+                src.upgrade(region(), _s, src_cleaner, no_cache_tracker);
             }
             return _e.apply_to_incomplete(*schema(), std::move(src), src_cleaner, as, region(),
                 *_container.tracker(), _container.next_phase(), _container.accounter());
@@ -221,7 +221,7 @@ mvcc_partition& mvcc_partition::operator+=(const mutation& m) {
 void mvcc_partition::apply(const mutation_partition& mp, schema_ptr mp_s) {
     with_allocator(region().allocator(), [&] {
         if (_evictable) {
-            apply_to_evictable(partition_entry(mutation_partition_v2(*mp_s, mp)), mp_s);
+            apply_to_evictable(partition_entry(*mp_s, mutation_partition_v2(*mp_s, mp)), mp_s);
         } else {
             logalloc::allocating_section as;
             as(region(), [&] {
@@ -249,7 +249,7 @@ mvcc_partition mvcc_container::make_not_evictable(const mutation_partition& mp) 
     return with_allocator(region().allocator(), [&] {
         logalloc::allocating_section as;
         return as(region(), [&] {
-            return mvcc_partition(_schema, partition_entry(mutation_partition_v2(*_schema, mp)), *this, false);
+            return mvcc_partition(_schema, partition_entry(*_schema, mutation_partition_v2(*_schema, mp)), *this, false);
         });
     });
 }
@@ -304,7 +304,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete) {
             assert_that(table.schema(), e.squashed()).is_equal_to((m2 + m3).partition());
 
             // Check that snapshot data is not stolen when its entry is applied
-            auto e2 = ms.make_evictable(mutation_partition(table.schema()));
+            auto e2 = ms.make_evictable(mutation_partition(s));
             e2 += std::move(e);
             assert_that(table.schema(), ms.squashed(snap1)).is_equal_to(m1.partition());
             assert_that(table.schema(), e2.squashed()).is_equal_to((m2 + m3).partition());
@@ -381,7 +381,7 @@ SEASTAR_TEST_CASE(test_eviction_with_active_reader) {
             auto ck1 = table.make_ckey(1);
             auto ck2 = table.make_ckey(2);
 
-            auto e = ms.make_evictable(mutation_partition(table.schema()));
+            auto e = ms.make_evictable(mutation_partition(s));
 
             mutation m1(table.schema(), pk);
             m1.partition().clustered_row(s, ck2);
@@ -452,7 +452,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
                 }
 
                 auto expected = mutation_partition(*s, before);
-                expected.apply_weak(*s, std::move(expected_to_apply_slice), app_stats);
+                expected.apply(*s, std::move(expected_to_apply_slice), app_stats);
 
                 e += to_apply;
 
@@ -505,7 +505,7 @@ void evict_with_consistency_check(mvcc_container& ms, mvcc_partition& e, const m
         testlog.trace("evicting");
         auto ret = ms.tracker()->evict_from_lru_shallow();
 
-        testlog.trace("entry: {}", partition_entry::printer(s, e.entry()));
+        testlog.trace("entry: {}", partition_entry::printer(e.entry()));
 
         auto p = e.squashed();
         auto cont = p.get_continuity(s);
@@ -553,7 +553,7 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging) {
                 auto snap2 = e.read();
                 e += m3;
 
-                testlog.trace("e: {}", partition_entry::printer(*e.schema(), e.entry()));
+                testlog.trace("e: {}", partition_entry::printer(e.entry()));
 
                 auto expected = e.squashed();
                 auto snap = e.read();
@@ -592,14 +592,14 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging_for_nonevictab
             {
                 mutation_application_stats app_stats;
                 logalloc::reclaim_lock rl(r);
-                auto e = partition_entry(mutation_partition_v2(*s, m3.partition()));
-                auto snap1 = e.read(r, cleaner, s, no_cache_tracker);
+                auto e = partition_entry(*s, mutation_partition_v2(*s, m3.partition()));
+                auto snap1 = e.read(r, cleaner, no_cache_tracker);
                 e.apply(r, cleaner, *s, m2.partition(), *s, app_stats);
-                auto snap2 = e.read(r, cleaner, s, no_cache_tracker);
+                auto snap2 = e.read(r, cleaner, no_cache_tracker);
                 e.apply(r, cleaner, *s, m1.partition(), *s, app_stats);
 
                 auto expected = e.squashed(*s, is_evictable::no);
-                auto snap = e.read(r, cleaner, s, no_cache_tracker);
+                auto snap = e.read(r, cleaner, no_cache_tracker);
                 auto actual = read_using_cursor(*snap);
 
                 BOOST_REQUIRE(expected.is_fully_continuous());
@@ -636,7 +636,7 @@ SEASTAR_TEST_CASE(test_continuity_merging_in_evictable) {
             {
                 logalloc::reclaim_lock rl(r);
                 auto e = partition_entry::make_evictable(*s, m1.partition());
-                auto snap1 = e.read(r, tracker.cleaner(), s, &tracker);
+                auto snap1 = e.read(r, tracker.cleaner(), &tracker);
                 e.add_version(*s, &tracker).partition()
                     .clustered_row(*s, ss.make_ckey(1), is_dummy::no, is_continuous::no);
                 e.add_version(*s, &tracker).partition()
@@ -646,7 +646,7 @@ SEASTAR_TEST_CASE(test_continuity_merging_in_evictable) {
                 expected.clustered_row(*s, ss.make_ckey(1), is_dummy::no, is_continuous::no);
                 expected.clustered_row(*s, ss.make_ckey(2), is_dummy::no, is_continuous::no);
 
-                auto snap = e.read(r, tracker.cleaner(), s, &tracker);
+                auto snap = e.read(r, tracker.cleaner(), &tracker);
                 auto actual = read_using_cursor(*snap);
                 auto actual2 = e.squashed(*s, is_evictable::yes);
 
@@ -670,8 +670,8 @@ SEASTAR_TEST_CASE(test_partition_snapshot_row_cursor) {
             simple_schema table;
             auto&& s = *table.schema();
 
-            auto e = partition_entry::make_evictable(s, mutation_partition(table.schema()));
-            auto snap1 = e.read(r, tracker.cleaner(), table.schema(), &tracker);
+            auto e = partition_entry::make_evictable(s, mutation_partition(s));
+            auto snap1 = e.read(r, tracker.cleaner(), &tracker);
 
             {
                 auto&& p1 = snap1->version()->partition();
@@ -683,7 +683,7 @@ SEASTAR_TEST_CASE(test_partition_snapshot_row_cursor) {
                 p1.ensure_last_dummy(s);
             }
 
-            auto snap2 = e.read(r, tracker.cleaner(), table.schema(), &tracker, 1);
+            auto snap2 = e.read(r, tracker.cleaner(), &tracker, 1);
 
             partition_snapshot_row_cursor cur(s, *snap2);
             position_in_partition::equal_compare eq(s);
@@ -841,8 +841,8 @@ SEASTAR_TEST_CASE(test_partition_snapshot_row_cursor_reversed) {
             simple_schema table;
             auto&& s = *table.schema();
 
-            auto e = partition_entry::make_evictable(s, mutation_partition(table.schema()));
-            auto snap1 = e.read(r, tracker.cleaner(), table.schema(), &tracker);
+            auto e = partition_entry::make_evictable(s, mutation_partition(s));
+            auto snap1 = e.read(r, tracker.cleaner(), &tracker);
 
             int ck_0 = 10;
             int ck_1 = 9;
@@ -862,7 +862,7 @@ SEASTAR_TEST_CASE(test_partition_snapshot_row_cursor_reversed) {
                 p1.ensure_last_dummy(s);
             }
 
-            auto snap2 = e.read(r, tracker.cleaner(), table.schema(), &tracker, 1);
+            auto snap2 = e.read(r, tracker.cleaner(), &tracker, 1);
 
             auto rev_s = s.make_reversed();
             partition_snapshot_row_cursor cur(*rev_s, *snap2, false, true);
@@ -1032,9 +1032,9 @@ SEASTAR_TEST_CASE(test_cursor_tracks_continuity_in_reversed_mode) {
             simple_schema table;
             auto&& s = *table.schema();
 
-            auto e = partition_entry::make_evictable(s, mutation_partition(table.schema()));
+            auto e = partition_entry::make_evictable(s, mutation_partition(s));
             tracker.insert(e);
-            auto snap1 = e.read(r, tracker.cleaner(), table.schema(), &tracker);
+            auto snap1 = e.read(r, tracker.cleaner(), &tracker);
 
             {
                 auto&& p1 = snap1->version()->partition();
@@ -1044,7 +1044,7 @@ SEASTAR_TEST_CASE(test_cursor_tracks_continuity_in_reversed_mode) {
                     p1.clustered_rows_entry(s, table.make_ckey(4), is_dummy::no, is_continuous::no));
             }
 
-            auto snap2 = e.read(r, tracker.cleaner(), table.schema(), &tracker, 1);
+            auto snap2 = e.read(r, tracker.cleaner(), &tracker, 1);
 
             {
                 auto&& p2 = snap2->version()->partition();
@@ -1173,7 +1173,7 @@ public:
             , _tracker(t)
             , _r(r)
             , _e(_tracker ? partition_entry::make_evictable(*_schema, mutation_partition::make_incomplete(*_schema))
-                          : partition_entry(mutation_partition_v2(_schema)))
+                          : partition_entry(*_schema, mutation_partition_v2(*_schema)))
     {
         if (_tracker) {
             _tracker->insert(_e);
@@ -1181,7 +1181,7 @@ public:
     }
 
     partition_entry_builder& new_version() {
-        _snapshots.emplace_back(_e.read(_r, _cleaner, _schema, _tracker, _snapshots.size()));
+        _snapshots.emplace_back(_e.read(_r, _cleaner, _tracker, _snapshots.size()));
         _last_key = {};
         return *this;
     }
@@ -1537,8 +1537,8 @@ SEASTAR_TEST_CASE(test_ensure_entry_in_latest_in_reversed_mode) {
             simple_schema table;
             auto&& s = *table.schema();
 
-            auto e = partition_entry::make_evictable(s, mutation_partition(table.schema()));
-            auto snap1 = e.read(r, tracker.cleaner(), table.schema(), &tracker);
+            auto e = partition_entry::make_evictable(s, mutation_partition(s));
+            auto snap1 = e.read(r, tracker.cleaner(), &tracker);
 
             {
                 auto&& p1 = snap1->version()->partition();
@@ -1547,7 +1547,7 @@ SEASTAR_TEST_CASE(test_ensure_entry_in_latest_in_reversed_mode) {
                 p1.ensure_last_dummy(s);
             }
 
-            auto snap2 = e.read(r, tracker.cleaner(), table.schema(), &tracker, 1);
+            auto snap2 = e.read(r, tracker.cleaner(), &tracker, 1);
 
             {
                 auto&& p2 = snap2->version()->partition();
@@ -1593,8 +1593,8 @@ SEASTAR_TEST_CASE(test_ensure_entry_in_latest_does_not_set_continuity_in_reverse
             simple_schema table;
             auto&& s = *table.schema();
 
-            auto e = partition_entry::make_evictable(s, mutation_partition(table.schema()));
-            auto snap1 = e.read(r, tracker.cleaner(), table.schema(), &tracker);
+            auto e = partition_entry::make_evictable(s, mutation_partition(s));
+            auto snap1 = e.read(r, tracker.cleaner(), &tracker);
 
             {
                 auto&& p1 = snap1->version()->partition();
@@ -1604,7 +1604,7 @@ SEASTAR_TEST_CASE(test_ensure_entry_in_latest_does_not_set_continuity_in_reverse
                 p1.ensure_last_dummy(s);
             }
 
-            auto snap2 = e.read(r, tracker.cleaner(), table.schema(), &tracker, 1);
+            auto snap2 = e.read(r, tracker.cleaner(), &tracker, 1);
 
             {
                 auto&& p2 = snap2->version()->partition();
@@ -1654,7 +1654,7 @@ SEASTAR_TEST_CASE(test_apply_is_atomic) {
             while (true) {
                 logalloc::reclaim_lock rl(r);
                 mutation_partition_v2 m2 = mutation_partition_v2(*second.schema(), second.partition());
-                auto e = partition_entry(mutation_partition_v2(*target.schema(), target.partition()));
+                auto e = partition_entry(*target.schema(), mutation_partition_v2(*target.schema(), target.partition()));
                 //auto snap1 = e.read(r, gen.schema());
 
                 alloc.fail_after(fail_offset++);
@@ -1703,8 +1703,8 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
             m3.partition().make_fully_continuous();
 
             {
-                auto e = partition_entry(mutation_partition_v2(*s, m1.partition()));
-                auto snap1 = e.read(r, cleaner, s, nullptr);
+                auto e = partition_entry(*s, mutation_partition_v2(*s, m1.partition()));
+                auto snap1 = e.read(r, cleaner, nullptr);
 
                 {
                     mutation_application_stats app_stats;
@@ -1712,7 +1712,7 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
                     e.apply(r, cleaner, *s, m2.partition(), *s, app_stats);
                 }
 
-                auto snap2 = e.read(r, cleaner, s, nullptr);
+                auto snap2 = e.read(r, cleaner, nullptr);
 
                 snap1 = {};
                 snap2 = {};
@@ -1724,8 +1724,8 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
             }
 
             {
-                auto e = partition_entry(mutation_partition_v2(*s, m1.partition()));
-                auto snap1 = e.read(r, cleaner, s, nullptr);
+                auto e = partition_entry(*s, mutation_partition_v2(*s, m1.partition()));
+                auto snap1 = e.read(r, cleaner, nullptr);
 
                 {
                     mutation_application_stats app_stats;
@@ -1733,7 +1733,7 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
                     e.apply(r, cleaner, *s, m2.partition(), *s, app_stats);
                 }
 
-                auto snap2 = e.read(r, cleaner, s, nullptr);
+                auto snap2 = e.read(r, cleaner, nullptr);
 
                 snap2 = {};
                 snap1 = {};
@@ -2005,7 +2005,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_with_dummies) {
             }
         });
 
-        testlog.trace("entry @{}: {}", __LINE__, partition_entry::printer(*s, e.entry()));
+        testlog.trace("entry @{}: {}", __LINE__, partition_entry::printer(e.entry()));
 
         mutation m2(s, ss.make_pkey());
         // This one covers the dummy row for before(3) and before(2), marking the range [1, 3] as continuous.
@@ -2020,7 +2020,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_with_dummies) {
         e += m3;
         auto snp3 = e.read();
 
-        testlog.trace("entry @{}: {}", __LINE__, partition_entry::printer(*s, e.entry()));
+        testlog.trace("entry @{}: {}", __LINE__, partition_entry::printer(e.entry()));
 
         auto expected = m0 + m1 + m2 + m3;
 
@@ -2031,5 +2031,106 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_with_dummies) {
         ms.cleaner().drain().get();
 
         evict_with_consistency_check(ms, e, expected.partition());
+    });
+}
+
+SEASTAR_TEST_CASE(test_gentle_schema_upgrades) {
+    return seastar::async([] {
+        auto ts1 = api::new_timestamp();
+        auto ts_drop = api::new_timestamp();
+        auto ts2 = api::new_timestamp();
+
+        auto s1 = schema_builder("ks", "cf")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("ck", utf8_type, column_kind::clustering_key)
+            .with_column("s1", utf8_type, column_kind::static_column)
+            .with_column("s2", utf8_type, column_kind::static_column)
+            .with_column("v1", utf8_type, column_kind::regular_column)
+            .with_column("v2", utf8_type, column_kind::regular_column)
+            .with_column("v3", utf8_type, column_kind::regular_column)
+            .with_column("v4", utf8_type, column_kind::regular_column)
+            .build();
+        auto s2 = schema_builder(s1)
+            .remove_column("s1")
+            .remove_column("v3")
+            .without_column("v4", ts_drop).with_column("v4", utf8_type)
+            .with_column("v5", utf8_type)
+            .build();
+
+        auto m1 = std::invoke([s1, ts1] {
+            auto x = mutation(s1, partition_key::from_single_value(*s1, serialized(0)));
+            auto ck = clustering_key::from_single_value(*s1, serialized(0));
+            x.set_static_cell("s1", "s1_value", ts1);
+            x.set_static_cell("s2", "s2_value", ts1);
+            x.set_clustered_cell(ck, "v1", "v1_value", ts1);
+            x.set_clustered_cell(ck, "v2", "v2_value", ts1);
+            x.set_clustered_cell(ck, "v3", "v3_value", ts1);
+            x.set_clustered_cell(ck, "v4", "v4_value", ts1);
+            x.partition().set_static_row_continuous(false);
+            x.partition().ensure_last_dummy(*s1);
+            return x;
+        });
+
+        auto m2 = std::invoke([s2, ts2] {
+            auto x = mutation(s2, partition_key::from_single_value(*s2, serialized(0)));
+            auto ck = clustering_key::from_single_value(*s2, serialized(0));
+            x.set_clustered_cell(ck, "v2", "v2_value_new", ts2);
+            x.set_clustered_cell(ck, "v5", "v5_value_new", ts2);
+            x.partition().set_static_row_continuous(false);
+            x.partition().ensure_last_dummy(*s2);
+            return x;
+        });
+
+        auto expected = std::invoke([s2, ts1, ts2] {
+            auto x = mutation(s2, partition_key::from_single_value(*s2, serialized(0)));
+            auto ck = clustering_key::from_single_value(*s2, serialized(0));
+            x.set_static_cell("s2", "s2_value", ts1);
+            x.set_clustered_cell(ck, "v1", "v1_value", ts1);
+            x.set_clustered_cell(ck, "v2", "v2_value_new", ts2);
+            x.set_clustered_cell(ck, "v5", "v5_value_new", ts2);
+            x.partition().set_static_row_continuous(false);
+            x.partition().ensure_last_dummy(*s2);
+            return x;
+        });
+
+        {
+            // Test that the version merge is lazy.
+            // (This is not important and might be changed in the future.
+            // We often run some operations synchronously and only put them
+            // in the background after they preempt for the first time.)
+            mvcc_container ms(s1);
+            auto e = ms.make_evictable(m1.partition());
+            e.upgrade(s2);
+            BOOST_REQUIRE(e.entry().version()->next());
+            // Test that the upgrade initiated the merge.
+            ms.cleaner().drain().get();
+            BOOST_REQUIRE(!e.entry().version()->next());
+        }
+        {
+            // Test that the on-the-fly merge gives the expected result.
+            mvcc_container ms(s1);
+            auto e = ms.make_evictable(m1.partition());
+            auto rd1 = e.read();
+            e.upgrade(s2);
+            auto rd2 = e.read();
+            e += m2;
+            auto rd3 = e.read();
+
+            assert_that(s1, read_using_cursor(*rd1)).is_equal_to(*s1, m1.partition());
+
+            auto rd2_expected = mutation_partition(*s1, m1.partition());
+            rd2_expected.upgrade(*s1, *s2);
+            assert_that(s2, read_using_cursor(*rd2)).is_equal_to(rd2_expected);
+
+            assert_that(s2, read_using_cursor(*rd3)).is_equal_to(*s2, expected.partition());
+
+            rd1 = {};
+            rd2 = {};
+            // Merge versions.
+            ms.cleaner().drain().get();
+            BOOST_REQUIRE(!e.entry().version()->next());
+            // Test that the background merge gives the expected result.
+            assert_that(s2, read_using_cursor(*rd3)).is_equal_to(*s2, expected.partition());
+        }
     });
 }

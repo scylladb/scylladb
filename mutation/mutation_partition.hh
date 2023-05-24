@@ -97,6 +97,7 @@ public:
     row();
     ~row();
     row(const schema&, column_kind, const row&);
+    static row construct(const schema& our_schema, const schema& their_schema, column_kind, const row&);
     row(row&& other) noexcept;
     row& operator=(row&& other) noexcept;
     size_t size() const { return _size; }
@@ -178,10 +179,15 @@ public:
 
     // Weak exception guarantees
     void apply(const schema&, column_kind, const row& src);
-    // Weak exception guarantees
     void apply(const schema&, column_kind, row&& src);
+    void apply(const schema& our_schema, const schema& their_schema, column_kind kind, const row& other);
+    void apply(const schema& our_schema, const schema& their_schema, column_kind kind, row&& other);
+
     // Monotonic exception guarantees
     void apply_monotonically(const schema&, column_kind, row&& src);
+    void apply_monotonically(const schema&, column_kind, const row& src);
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind, row&& src);
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind, const row& src);
 
     // Expires cells based on query_time. Expires tombstones based on gc_before
     // and max_purgeable. Removes cells covered by tomb.
@@ -414,6 +420,14 @@ public:
             return;
         }
         get_existing().apply_monotonically(s, kind, std::move(src.get_existing()));
+    }
+
+    // Monotonic exception guarantees
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind kind, lazy_row&& src) {
+        if (src.empty()) {
+            return;
+        }
+        maybe_create().apply_monotonically(our_schema, their_schema, kind, std::move(src.get_existing()));
     }
 
     // Expires cells based on query_time. Expires tombstones based on gc_before
@@ -820,6 +834,11 @@ public:
         , _marker(other._marker)
         , _cells(s, column_kind::regular_column, other._cells)
     { }
+    deletable_row(const schema& our_schema, const schema& their_schema, const deletable_row& other)
+        : _deleted_at(other._deleted_at)
+        , _marker(other._marker)
+        , _cells(row::construct(our_schema, their_schema, column_kind::regular_column, other._cells))
+    { }
     deletable_row(row_tombstone&& tomb, row_marker&& marker, row&& cells)
         : _deleted_at(std::move(tomb)), _marker(std::move(marker)), _cells(std::move(cells))
     {}
@@ -852,10 +871,15 @@ public:
 
     // Weak exception guarantees. After exception, both src and this will commute to the same value as
     // they would should the exception not happen.
-    void apply(const schema& s, const deletable_row& src);
-    void apply(const schema& s, deletable_row&& src);
-    void apply_monotonically(const schema& s, const deletable_row& src);
-    void apply_monotonically(const schema& s, deletable_row&& src);
+    void apply(const schema&, deletable_row&& src);
+    void apply(const schema&, const deletable_row& src);
+    void apply(const schema& our_schema, const schema& their_schema, const deletable_row& src);
+    void apply(const schema& our_schema, const schema& their_schema, deletable_row&& src);
+
+    void apply_monotonically(const schema&, deletable_row&& src);
+    void apply_monotonically(const schema&, const deletable_row& src);
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, deletable_row&& src);
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, const deletable_row& src);
 public:
     row_tombstone deleted_at() const { return _deleted_at; }
     api::timestamp_type created_at() const { return _marker.timestamp(); }
@@ -956,6 +980,12 @@ public:
         , _range_tombstone(e._range_tombstone)
         , _flags(e._flags)
     { }
+    rows_entry(const schema& our_schema, const schema& their_schema, const rows_entry& e)
+        : _key(e._key)
+        , _row(our_schema, their_schema, e._row)
+        , _range_tombstone(e._range_tombstone)
+        , _flags(e._flags)
+    { }
     // Valid only if !dummy()
     clustering_key& key() {
         return _key;
@@ -989,7 +1019,10 @@ public:
         _row.apply(t);
     }
     void apply_monotonically(const schema& s, rows_entry&& e) {
-        _row.apply(s, std::move(e._row));
+        _row.apply_monotonically(s, std::move(e._row));
+    }
+    void apply_monotonically(const schema& our_schema, const schema& their_schema, rows_entry&& e) {
+        _row.apply_monotonically(our_schema, their_schema, std::move(e._row));
     }
     bool empty() const {
         return _row.empty();
@@ -1193,11 +1226,11 @@ public:
     static mutation_partition make_incomplete(const schema& s, tombstone t = {}) {
         return mutation_partition(incomplete_tag(), s, t);
     }
-    mutation_partition(schema_ptr s)
+    mutation_partition(const schema& s)
         : _rows()
-        , _row_tombstones(*s)
+        , _row_tombstones(s)
 #ifdef SEASTAR_DEBUG
-        , _schema_version(s->version())
+        , _schema_version(s.version())
 #endif
     { }
     mutation_partition(mutation_partition& other, copy_comparators_only)
@@ -1279,14 +1312,14 @@ public:
     // is not representable in this_schema is dropped, thus apply() loses commutativity.
     //
     // Weak exception guarantees.
+    // Assumes this and p are not owned by a cache_tracker.
     void apply(const schema& this_schema, const mutation_partition& p, const schema& p_schema,
             mutation_application_stats& app_stats);
-    // Use in case this instance and p share the same schema.
-    // Same guarantees as apply(const schema&, mutation_partition&&, const schema&);
-    void apply(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats);
-    // Same guarantees and constraints as for apply(const schema&, const mutation_partition&, const schema&).
     void apply(const schema& this_schema, mutation_partition_view p, const schema& p_schema,
             mutation_application_stats& app_stats);
+    // Use in case this instance and p share the same schema.
+    // Same guarantees and constraints as for other variants of apply().
+    void apply(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats);
 
     // Applies p to this instance.
     //
@@ -1319,15 +1352,6 @@ public:
     stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker* tracker,
             mutation_application_stats& app_stats);
     stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema,
-            mutation_application_stats& app_stats);
-
-    // Weak exception guarantees.
-    // Assumes this and p are not owned by a cache_tracker.
-    void apply_weak(const schema& s, const mutation_partition& p, const schema& p_schema,
-            mutation_application_stats& app_stats);
-    void apply_weak(const schema& s, mutation_partition&&,
-            mutation_application_stats& app_stats);
-    void apply_weak(const schema& s, mutation_partition_view p, const schema& p_schema,
             mutation_application_stats& app_stats);
 
     // Converts partition to the new schema. When succeeds the partition should only be accessed
@@ -1397,7 +1421,7 @@ public:
     // Returns the minimal mutation_partition that when applied to "other" will
     // create a mutation_partition equal to the sum of other and this one.
     // This and other must both be governed by the same schema s.
-    mutation_partition difference(schema_ptr s, const mutation_partition& other) const;
+    mutation_partition difference(const schema& s, const mutation_partition& other) const;
 
     // Returns a subset of this mutation holding only information relevant for given clustering ranges.
     // Range tombstones will be trimmed to the boundaries of the clustering ranges.

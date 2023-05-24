@@ -4509,7 +4509,7 @@ public:
             const mutation& m = z.get<1>().mut;
             for (const version& v : z.get<0>()) {
                 auto diff = v.par
-                          ? m.partition().difference(schema, (co_await v.par->mut().unfreeze_gently(schema)).partition())
+                          ? m.partition().difference(*schema, (co_await v.par->mut().unfreeze_gently(schema)).partition())
                           : mutation_partition(*schema, m.partition());
                 std::optional<mutation> mdiff;
                 if (!diff.empty()) {

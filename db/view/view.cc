@@ -487,7 +487,7 @@ mutation_partition& view_updates::partition_for(partition_key&& key) {
     if (it != _updates.end()) {
         return it->second;
     }
-    return _updates.emplace(std::move(key), mutation_partition(_view)).first->second;
+    return _updates.emplace(std::move(key), mutation_partition(*_view)).first->second;
 }
 
 size_t view_updates::op_count() const {

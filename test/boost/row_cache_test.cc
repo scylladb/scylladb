@@ -950,6 +950,7 @@ SEASTAR_TEST_CASE(test_eviction_after_schema_change) {
             rd.fill_buffer().get();
         }
 
+        tracker.cleaner().drain().get0();
         while (tracker.region().evict_some() == memory::reclaiming_result::reclaimed_something) ;
 
         // The partition should be evictable after schema change
@@ -3507,6 +3508,16 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
         while (!done && n_updates--) {
             auto m2 = gen();
             m2.partition().make_fully_continuous();
+
+            bool upgrade_schema = tests::random::get_bool();
+            if (upgrade_schema) {
+                schema_ptr new_schema = schema_builder(s)
+                    .with_column(to_bytes("_phantom"), byte_type)
+                    .remove_column("_phantom")
+                    .build();
+                m2.upgrade(new_schema);
+                cache.set_schema(new_schema);
+            }
 
             auto mt = make_lw_shared<replica::memtable>(m2.schema());
             mt->apply(m2);
