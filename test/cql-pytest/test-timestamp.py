@@ -78,3 +78,15 @@ def test_futuristic_timestamp(cql, table1):
         print('checking with restrict_future_timestamp=false')
         cql.execute(f'INSERT INTO {table1} (k, v) VALUES ({p}, 1) USING TIMESTAMP {futuristic_ts}')
         assert [(futuristic_ts,)] == cql.execute(f'SELECT writetime(v) FROM {table1} where k = {p}')
+
+# Currently, writetime(k) is not allowed for a key column. Neither is ttl(k).
+# Scylla issue #14019 and CASSANDRA-9312 consider allowing it - with the
+# meaning that it should return the timestamp and ttl of a row marker.
+# If this issue is ever implemented in Scylla or Cassandra, the following
+# test will need to be replaced by a test for the new feature instead of
+# expecting an error message.
+def test_key_writetime(cql, table1):
+    with pytest.raises(InvalidRequest, match='PRIMARY KEY part k'):
+        cql.execute(f'SELECT writetime(k) FROM {table1}')
+    with pytest.raises(InvalidRequest, match='PRIMARY KEY part k'):
+        cql.execute(f'SELECT ttl(k) FROM {table1}')

@@ -61,7 +61,7 @@ selectable::writetime_or_ttl::new_selector_factory(data_dictionary::database db,
         throw exceptions::invalid_request_exception(
                 format("Cannot use selection function {} on PRIMARY KEY part {}",
                               _is_writetime ? "writeTime" : "ttl",
-                              def->name()));
+                              def->name_as_text()));
     }
     if (def->type->is_multi_cell()) {
         throw exceptions::invalid_request_exception(format("Cannot use selection function {} on non-frozen collections",
