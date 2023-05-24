@@ -11,3 +11,5 @@ run_first:
     - test_topology_remove_decom
     - test_mutation_schema_change
     - test_tablets
+skip_in_release:
+    - test_cluster_features

@@ -133,4 +133,16 @@ async def wait_for_feature(feature: str, cql: Session, host: Host, deadline: flo
     await wait_for(feature_is_enabled, deadline)
 
 
+async def get_supported_features(cql: Session, host: Host) -> set[str]:
+    """Returns a set of cluster features that a node advertises support for."""
+    rs = await cql.run_async(f"SELECT supported_features FROM system.local WHERE key = 'local'", host=host)
+    return set(rs[0].supported_features.split(","))
+
+
+async def get_enabled_features(cql: Session, host: Host) -> set[str]:
+    """Returns a set of cluster features that a node considers to be enabled."""
+    rs = await cql.run_async(f"SELECT value FROM system.scylla_local WHERE key = 'enabled_features'", host=host)
+    return set(rs[0].value.split(","))
+
+
 unique_name.last_ms = 0

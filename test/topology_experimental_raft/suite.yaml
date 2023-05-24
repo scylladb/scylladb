@@ -6,3 +6,6 @@ extra_scylla_config_options:
     authenticator: AllowAllAuthenticator
     authorizer: AllowAllAuthorizer
     experimental_features: ['raft']
+    error_injections_at_startup: ['gossiper_censor_test_only_feature']
+skip_in_release:
+    - test_raft_cluster_features
