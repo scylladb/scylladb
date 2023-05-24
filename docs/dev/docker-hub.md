@@ -448,4 +448,4 @@ For questions and comments, use ScyllaDB's [Community Forum](https://forum.scyll
 
 Want to scratch your own itch and contribute a patch?
 We are eager to review and merge your code.
-Please consult the [Contributing to ScyllaDB page](https://github.com/scylladb/scylladb/blob/master/CONTRIBUTING.md)
+Please consult the [Contributing to ScyllaDB](https://github.com/scylladb/scylladb/blob/master/CONTRIBUTING.md) page.
