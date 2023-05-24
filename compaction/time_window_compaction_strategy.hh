@@ -34,16 +34,13 @@ public:
     static constexpr auto COMPACTION_WINDOW_SIZE_KEY = "compaction_window_size";
     static constexpr auto EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY = "expired_sstable_check_frequency_seconds";
 private:
-    const std::unordered_map<sstring, std::chrono::seconds> valid_window_units = { { "MINUTES", 60s }, { "HOURS", 3600s }, { "DAYS", 86400s } };
+    static const std::unordered_map<sstring, std::chrono::seconds> valid_window_units;
 
     enum class timestamp_resolutions {
         microsecond,
         millisecond,
     };
-    const std::unordered_map<sstring, timestamp_resolutions> valid_timestamp_resolutions = {
-        { "MICROSECONDS", timestamp_resolutions::microsecond },
-        { "MILLISECONDS", timestamp_resolutions::millisecond },
-    };
+    static const std::unordered_map<sstring, timestamp_resolutions> valid_timestamp_resolutions;
 
     std::chrono::seconds sstable_window_size = DEFAULT_COMPACTION_WINDOW_UNIT * DEFAULT_COMPACTION_WINDOW_SIZE;
     db_clock::duration expired_sstable_check_frequency = DEFAULT_EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS();

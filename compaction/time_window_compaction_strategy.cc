@@ -26,6 +26,15 @@ time_window_compaction_strategy_state& time_window_compaction_strategy::get_stat
     return table_s.get_compaction_strategy_state().get<time_window_compaction_strategy_state>();
 }
 
+const std::unordered_map<sstring, std::chrono::seconds> time_window_compaction_strategy_options::valid_window_units = {
+    { "MINUTES", 60s }, { "HOURS", 3600s }, { "DAYS", 86400s }
+};
+
+const std::unordered_map<sstring, time_window_compaction_strategy_options::timestamp_resolutions> time_window_compaction_strategy_options::valid_timestamp_resolutions = {
+    { "MICROSECONDS", timestamp_resolutions::microsecond },
+    { "MILLISECONDS", timestamp_resolutions::millisecond },
+};
+
 time_window_compaction_strategy_options::time_window_compaction_strategy_options(const std::map<sstring, sstring>& options) {
     std::chrono::seconds window_unit = DEFAULT_COMPACTION_WINDOW_UNIT;
     int window_size = DEFAULT_COMPACTION_WINDOW_SIZE;
