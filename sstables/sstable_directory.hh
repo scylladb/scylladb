@@ -95,7 +95,7 @@ public:
 
         void handle(sstables::entry_descriptor desc, std::filesystem::path filename);
 
-        directory_lister _lister;
+        fs::path _directory;
         std::unique_ptr<scan_state> _state;
 
     public:

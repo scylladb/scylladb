@@ -37,7 +37,7 @@ bool manifest_json_filter(const fs::path&, const directory_entry& entry) {
 }
 
 sstable_directory::filesystem_components_lister::filesystem_components_lister(std::filesystem::path dir)
-        : _lister(dir, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter)
+        : _directory(dir)
         , _state(std::make_unique<scan_state>())
 {
 }
@@ -216,10 +216,11 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     // - If all shards scan in parallel, they can start loading sooner. That is faster than having
     //   a separate step to fetch all files, followed by another step to distribute and process.
 
+    directory_lister lister(_directory, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter);
     std::exception_ptr ex;
     try {
         while (true) {
-            auto de = co_await _lister.get();
+            auto de = co_await lister.get();
             if (!de) {
                 break;
             }
@@ -229,7 +230,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     } catch (...) {
         ex = std::current_exception();
     }
-    co_await _lister.close();
+    co_await lister.close();
     if (ex) {
         dirlog.debug("Could not process sstable directory {}: {}", location, ex);
         // FIXME: waiting for https://github.com/scylladb/seastar/pull/1090
