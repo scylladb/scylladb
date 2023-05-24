@@ -53,6 +53,7 @@ The benefits:
 - Resumable in nature
 
 - No extra data is streamed on wire
+
   E.g., rebuild twice, will not stream the same data twice
 
 - Unified code path for all the node operations
@@ -62,55 +63,59 @@ The benefits:
 Select nodes to synchronize with:
 
 - Replace operation
+  
   Synchronize with all replica nodes from the local DC
 
 - Rebuild operation
+  
   Synchronize with all replica nodes from the local DC or from the DC specified by the user
 
 - Removenode operation
+  
   Synchronize with all replica nodes from local DC
 
 - Bootstrap operation
-  0) If everywhere_topology is used, synchronize with all nodes in local dc
+  1) If everywhere_topology is used, synchronize with all nodes in local dc
 
-  1) If local_dc_replica_nodes = RF, synchronize with 1 node that is losing the
+  2) If local_dc_replica_nodes = RF, synchronize with 1 node that is losing the
   range in the local DC
 
-  2) If 0 < local_dc_replica_nodes < RF, synchronize with
+  3) If 0 < local_dc_replica_nodes < RF, synchronize with
   up to RF/2 + 1 nodes in local DC
 
-  3) If local_dc_replica_nodes = 0, reject the bootstrap operation
+  4) If local_dc_replica_nodes = 0, reject the bootstrap operation
 
 - Decommission operation
   1) Synchronize with one node that is gaining the range in local DC
 
-  For example, with RF = 3 and 4 nodes n1, n2, n3, n4 in the cluster, n3 is
-  removed, old_replicas = {n1, n2, n3}, new_replicas = {n1, n2, n4}.
+     For example, with RF = 3 and 4 nodes n1, n2, n3, n4 in the cluster, n3 is
+     removed, old_replicas = {n1, n2, n3}, new_replicas = {n1, n2, n4}.
 
-  The decommission node will repair all the ranges the leaving node is
-  responsible for. Choose the decommission node n3 to run repair to synchronize
-  with the new owner node n4 in the local DC.
+     The decommission node will repair all the ranges the leaving node is
+     responsible for. Choose the decommission node n3 to run repair to synchronize
+     with the new owner node n4 in the local DC.
 
   2) Synchronize with one node when no node is gaining the range in local DC
 
-  For example, with RF = 3 and 3 nodes n1, n2, n3 in the cluster, n3 is
-  removed, old_replicas = {n1, n2, n3}, new_replicas = {n1, n2}.
+     For example, with RF = 3 and 3 nodes n1, n2, n3 in the cluster, n3 is
+     removed, old_replicas = {n1, n2, n3}, new_replicas = {n1, n2}.
 
-  The decommission node will repair all the ranges the leaving node is
-  responsible for. The cluster is losing data on n3, it has to synchronize with
-  at least one of {n1, n2}, otherwise it might lose the only new replica on n3.
-  Choose the decommission node n3 to run repair to synchronize with one of the
-  replica nodes, e.g., n1, in the local DC.
+     The decommission node will repair all the ranges the leaving node is
+     responsible for. The cluster is losing data on n3, it has to synchronize with
+     at least one of {n1, n2}, otherwise it might lose the only new replica on n3.
+     Choose the decommission node n3 to run repair to synchronize with one of the
+     replica nodes, e.g., n1, in the local DC.
 
-  Note, it is enough to synchronize with one node instead of quorum number of
-  nodes. For example, with RF = 3, timestamp(B) > timestamp(A),
+     Note, it is enough to synchronize with one node instead of quorum number of
+     nodes. For example, with RF = 3, timestamp(B) > timestamp(A),
 
-     n1  n2  n3  n4
-  1) A   B   B       (Before n3 is decommissioned)
-  2) A   B           (After n3 is decommissioned)
-  3) A   B       B   (After n4 is bootstrapped)
+     |     | n1 | n2 | n3 | n4 |    |
+     | --- | -- | -- | -- | -- | -- |
+     | 1)  | A  | B  | B  |    | (Before n3 is decommissioned) |
+     | 2)  | A  | B  |    |    | (After n3 is decommissioned) |
+     | 3)  | A  | B  |    | B  | (After n4 is bootstrapped) |
 
-  Suppose we decommission n3 and n3 decides to synchronize with only n2. We end
-  up with n1 has A, n2 has B. Then we add a new node n4 to the cluster, since
-  no node is losing the range, so n4 will sync quorum number of nodes,
-  that is n1 and n2. As a result, n4 will have B instead of A.
+     Suppose we decommission n3 and n3 decides to synchronize with only n2. We end
+     up with n1 has A, n2 has B. Then we add a new node n4 to the cluster, since
+     no node is losing the range, so n4 will sync quorum number of nodes,
+     that is n1 and n2. As a result, n4 will have B instead of A.
