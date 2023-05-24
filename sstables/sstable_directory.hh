@@ -98,9 +98,6 @@ public:
         directory_lister _lister;
         std::unique_ptr<scan_state> _state;
 
-        future<sstring> get();
-        future<> close();
-
     public:
         filesystem_components_lister(std::filesystem::path dir);
 

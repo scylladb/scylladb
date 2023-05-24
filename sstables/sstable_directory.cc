@@ -42,15 +42,6 @@ sstable_directory::filesystem_components_lister::filesystem_components_lister(st
 {
 }
 
-future<sstring> sstable_directory::filesystem_components_lister::get() {
-    auto de = co_await _lister.get();
-    co_return sstring(de ? de->name : "");
-}
-
-future<> sstable_directory::filesystem_components_lister::close() {
-    return _lister.close();
-}
-
 sstable_directory::system_keyspace_components_lister::system_keyspace_components_lister(db::system_keyspace& sys_ks, sstring location)
         : _sys_ks(sys_ks)
         , _location(std::move(location))
@@ -228,17 +219,17 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     std::exception_ptr ex;
     try {
         while (true) {
-            sstring name = co_await get();
-            if (name == "") {
+            auto de = co_await _lister.get();
+            if (!de) {
                 break;
             }
-            auto comps = sstables::entry_descriptor::make_descriptor(location.native(), name);
-            handle(std::move(comps), location / name);
+            auto comps = sstables::entry_descriptor::make_descriptor(location.native(), de->name);
+            handle(std::move(comps), location / de->name);
         }
     } catch (...) {
         ex = std::current_exception();
     }
-    co_await close();
+    co_await _lister.close();
     if (ex) {
         dirlog.debug("Could not process sstable directory {}: {}", location, ex);
         // FIXME: waiting for https://github.com/scylladb/seastar/pull/1090
