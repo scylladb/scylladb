@@ -22,6 +22,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/test_utils.hh"
 #include "schema/schema.hh"
 #include "compress.hh"
 #include "replica/database.hh"
@@ -191,62 +192,16 @@ static future<> write_sst_info(schema_ptr schema, sstring load_dir, sstring writ
     });
 }
 
-using bufptr_t = std::unique_ptr<char [], free_deleter>;
-static future<std::pair<bufptr_t, size_t>> read_file(sstring file_path)
-{
-    return open_file_dma(file_path, open_flags::ro).then([] (file f) {
-        return f.size().then([f] (auto size) mutable {
-            auto aligned_size = align_up(size, 512UL);
-            auto buf = allocate_aligned_buffer<char>(aligned_size, 512UL);
-            auto rbuf = buf.get();
-            ::memset(rbuf, 0, aligned_size);
-            return f.dma_read(0, rbuf, aligned_size).then([size, buf = std::move(buf), f] (auto ret) mutable {
-                BOOST_REQUIRE(ret == size);
-                std::pair<bufptr_t, size_t> p(std::move(buf), std::move(size));
-                return make_ready_future<std::pair<bufptr_t, size_t>>(std::move(p));
-            }).finally([f] () mutable { return f.close().finally([f] {}); });
-        });
-    });
-}
-
-struct sstdesc {
-    sstring dir;
-    sstables::generation_type gen;
-
-    sstdesc(sstring dir, sstables::generation_type gen)
-        : dir(std::move(dir))
-        , gen(gen)
-    {}
-
-    sstdesc(sstring dir, sstables::generation_type::int_t gen_val)
-        : dir(std::move(dir))
-        , gen(gen_val)
-    {}
-};
-
-static future<> compare_files(sstdesc file1, sstdesc file2, component_type component) {
-    auto file_path = sstable::filename(file1.dir, "ks", "cf", la, file1.gen, big, component);
-    return read_file(file_path).then([component, file2] (auto ret) {
-        auto file_path = sstable::filename(file2.dir, "ks", "cf", la, file2.gen, big, component);
-        return read_file(file_path).then([ret = std::move(ret)] (auto ret2) {
-            // assert that both files have the same size.
-            BOOST_REQUIRE(ret.second == ret2.second);
-            // assert that both files have the same content.
-            BOOST_REQUIRE(::memcmp(ret.first.get(), ret2.first.get(), ret.second) == 0);
-            // free buf from both files.
-        });
-    });
-
-}
-
 static future<> check_component_integrity(component_type component) {
     auto tmp = make_lw_shared<tmpdir>();
     auto s = make_schema_for_compressed_sstable();
     sstables::generation_type gen(1);
     return write_sst_info(s, "test/resource/sstables/compressed", tmp->path().string(), gen).then([component, tmp] {
-        return compare_files(sstdesc{"test/resource/sstables/compressed", 1 },
-                             sstdesc{tmp->path().string(), 2 },
-                             component);
+        auto file_path_a = sstable::filename("test/resource/sstables/compressed", "ks", "cf", la, sstables::generation_type(1), big, component);
+        auto file_path_b = sstable::filename(tmp->path().string(), "ks", "cf", la, sstables::generation_type(2), big, component);
+        return tests::compare_files(file_path_a, file_path_b).then([] (auto eq) {
+            BOOST_REQUIRE(eq);
+        });
     }).then([tmp] {});
 }
 
@@ -481,19 +436,6 @@ SEASTAR_TEST_CASE(wrong_range) {
     });
 }
 
-static future<>
-test_sstable_exists(sstring dir, sstables::generation_type::int_t generation, bool exists) {
-    auto file_path = sstable::filename(dir, "ks", "cf", la, generation_from_value(generation), big, component_type::Data);
-    return open_file_dma(file_path, open_flags::ro).then_wrapped([exists] (future<file> f) {
-        if (exists) {
-            BOOST_CHECK_NO_THROW(f.get0());
-        } else {
-            BOOST_REQUIRE_THROW(f.get0(), std::system_error);
-        }
-        return make_ready_future<>();
-    });
-}
-
 SEASTAR_TEST_CASE(statistics_rewrite) {
     return test_env::do_with_async([] (test_env& env) {
         auto uncompressed_dir_copy = env.tempdir().path();
@@ -505,7 +447,9 @@ SEASTAR_TEST_CASE(statistics_rewrite) {
 
         auto sstp = env.reusable_sst(uncompressed_schema(), uncompressed_dir_copy.native()).get0();
         test::create_links(*sstp, generation_dir).get();
-        test_sstable_exists(generation_dir, 1, true).get();
+        auto file_path = sstable::filename(generation_dir, "ks", "cf", la, generation_from_value(1), big, component_type::Data);
+        auto exists = file_exists(file_path).get0();
+        BOOST_REQUIRE(exists);
 
         sstp = env.reusable_sst(uncompressed_schema(), generation_dir).get0();
         // mutate_sstable_level results in statistics rewrite
