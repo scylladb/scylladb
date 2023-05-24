@@ -11,6 +11,9 @@
 #include <seastar/core/do_with.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/metrics.hh>
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/util/defer.hh>
 #include "replica/memtable.hh"
 #include <chrono>
@@ -1423,11 +1426,8 @@ std::ostream& operator<<(std::ostream& out, row_cache& rc) {
 
 future<> row_cache::do_update(row_cache::external_updater eu, row_cache::internal_updater iu) noexcept {
   // FIXME: indentation
-  return do_with(std::move(eu), std::move(iu), [this] (auto& eu, auto& iu) {
-    return futurize_invoke([this] {
-        return get_units(_update_sem, 1);
-    }).then([this, &eu, &iu] (auto permit) mutable {
-      return eu.prepare().then([this, &eu, &iu, permit = std::move(permit)] () mutable {
+    auto permit = co_await get_units(_update_sem, 1);
+      co_await eu.prepare();
         try {
             eu.execute();
         } catch (...) {
@@ -1440,18 +1440,14 @@ future<> row_cache::do_update(row_cache::external_updater eu, row_cache::interna
             _prev_snapshot = std::exchange(_underlying, _snapshot_source());
             ++_underlying_phase;
         }();
-        return futurize_invoke([&iu] {
+        auto f = co_await coroutine::as_future(futurize_invoke([&iu] {
             return iu();
-        }).then_wrapped([this, permit = std::move(permit)] (auto f) {
+        }));
             _prev_snapshot_pos = {};
             _prev_snapshot = {};
             if (f.failed()) {
                 clogger.warn("Failure during cache update: {}", f.get_exception());
             }
-        });
-      });
-    });
-  });
 }
 
 std::ostream& operator<<(std::ostream& out, const cache_entry& e) {

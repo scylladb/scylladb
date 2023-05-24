@@ -1210,13 +1210,17 @@ struct update_failure_tester {
         };
         auto updater = row_cache::external_updater(std::make_unique<updater_impl>(test_mode));
 
-        // allocate all available memory
+        // allocate almost all available memory
         std::vector<bytes> memory_hog;
         {
             logalloc::reclaim_lock _(tracker.region());
             try {
                 while (true) {
-                    memory_hog.emplace_back(bytes(bytes::initialized_later(), 4 * 1024));
+                    // Try allocating large blocks to leave more slack
+                    // after the last allocation fails.
+                    // Otherwise, the row_cache::update coroutine hits a
+                    // nasty internal allocation failure in dev mode.
+                    memory_hog.emplace_back(bytes(bytes::initialized_later(), 128 * 1024));
                 }
             } catch (const std::bad_alloc&) {
                 // expected
