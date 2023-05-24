@@ -17,10 +17,10 @@ def test_wrong_key_access(request, dynamodb):
     url = dynamodb.meta.client._endpoint.host
     with pytest.raises(ClientError, match='UnrecognizedClientException'):
         if url.endswith('.amazonaws.com'):
-            boto3.client('dynamodb',endpoint_url=url, aws_access_key_id='wrong_id', aws_secret_access_key='').describe_endpoints()
+            boto3.client('dynamodb',endpoint_url=url, aws_access_key_id='wrong_id', aws_secret_access_key='x').describe_endpoints()
         else:
             verify = not url.startswith('https')
-            boto3.client('dynamodb',endpoint_url=url, region_name='us-east-1', aws_access_key_id='whatever', aws_secret_access_key='', verify=verify).describe_endpoints()
+            boto3.client('dynamodb',endpoint_url=url, region_name='us-east-1', aws_access_key_id='whatever', aws_secret_access_key='x', verify=verify).describe_endpoints()
 
 # A similar test, but this time the user is expected to exist in the database (for local tests)
 def test_wrong_password(request, dynamodb):
