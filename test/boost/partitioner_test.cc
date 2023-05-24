@@ -310,7 +310,7 @@ normalize(dht::partition_range pr) {
 
 static
 void
-test_something_with_some_interesting_ranges_and_sharder(std::function<void (const schema&, const dht::partition_range&)> func_to_test) {
+test_something_with_some_interesting_ranges_and_sharder(std::function<void (const schema&, const dht::sharder&, const dht::partition_range&)> func_to_test) {
     auto s = schema_builder("ks", "cf")
         .with_column("c1", int32_type, column_kind::partition_key)
         .with_column("c2", int32_type, column_kind::partition_key)
@@ -346,17 +346,17 @@ test_something_with_some_interesting_ranges_and_sharder(std::function<void (cons
         auto schema = schema_builder(s)
             .with_sharder(sharder.shard_count(), sharder.sharding_ignore_msb()).build();
         for (auto&& range : some_murmur3_ranges) {
-            func_to_test(*schema, range);
+            func_to_test(*schema, sharder, range);
         }
     }
 }
 
 static
 void
-do_test_split_range_to_single_shard(const schema& s, const dht::partition_range& pr) {
-    for (auto shard : boost::irange(0u, s.get_sharder().shard_count())) {
-        auto ranges = dht::split_range_to_single_shard(s, s.get_sharder(), pr, shard).get0();
-        auto sharder = dht::ring_position_range_sharder(s.get_sharder(), pr);
+do_test_split_range_to_single_shard(const schema& s, const dht::sharder& sharder_, const dht::partition_range& pr) {
+    for (auto shard : boost::irange(0u, sharder_.shard_count())) {
+        auto ranges = dht::split_range_to_single_shard(s, sharder_, pr, shard).get0();
+        auto sharder = dht::ring_position_range_sharder(sharder_, pr);
         auto x = sharder.next(s);
         auto cmp = dht::ring_position_comparator(s);
         auto reference_ranges = std::vector<dht::partition_range>();
