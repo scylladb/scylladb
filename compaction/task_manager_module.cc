@@ -532,19 +532,30 @@ future<> table_resharding_compaction_task_impl::run() {
     dblog.info("Resharding {} for {}.{}", utils::pretty_printed_data_size(total_size), _status.keyspace, _status.table);
 
     co_await _db.invoke_on_all(coroutine::lambda([&] (replica::database& db) -> future<> {
-        auto& table = db.find_column_family(_status.keyspace, _status.table);
-        auto info_vec = std::move(destinations[this_shard_id()].info_vec);
-        // make shard-local copy of owned_ranges
-        compaction::owned_ranges_ptr local_owned_ranges_ptr;
-        if (_owned_ranges_ptr) {
-            local_owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(*_owned_ranges_ptr);
-        }
-        co_await reshard(_dir.local(), std::move(info_vec), table, _creator, std::move(local_owned_ranges_ptr));
-        co_await _dir.local().move_foreign_sstables(_dir);
+        tasks::task_info parent_info{_status.id, _status.shard};
+        auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
+        auto task = co_await compaction_module.make_and_start_task<shard_resharding_compaction_task_impl>(parent_info, _status.keyspace, _status.table, _status.id, _dir, db, _creator, _owned_ranges_ptr, destinations);
+        co_await task->done();
     }));
 
     auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
     dblog.info("Resharded {} for {}.{} in {:.2f} seconds, {}", utils::pretty_printed_data_size(total_size), _status.keyspace, _status.table, duration.count(), utils::pretty_printed_throughput(total_size, duration));
+}
+
+tasks::is_internal shard_resharding_compaction_task_impl::is_internal() const noexcept {
+    return tasks::is_internal::yes;
+}
+
+future<> shard_resharding_compaction_task_impl::run() {
+    auto& table = _db.find_column_family(_status.keyspace, _status.table);
+    auto info_vec = std::move(_destinations[this_shard_id()].info_vec);
+    // make shard-local copy of owned_ranges
+    compaction::owned_ranges_ptr local_owned_ranges_ptr;
+    if (_owned_ranges_ptr) {
+        local_owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(*_owned_ranges_ptr);
+    }
+    co_await reshard(_dir.local(), std::move(info_vec), table, _creator, std::move(local_owned_ranges_ptr));
+    co_await _dir.local().move_foreign_sstables(_dir);
 }
 
 }
