@@ -29,13 +29,14 @@ stream_manager::stream_manager(db::config& cfg,
             sharded<db::view::view_update_generator>& view_update_generator,
             sharded<netw::messaging_service>& ms,
             sharded<service::migration_manager>& mm,
-            gms::gossiper& gossiper)
+            gms::gossiper& gossiper, scheduling_group sg)
         : _db(db)
         , _sys_dist_ks(sys_dist_ks)
         , _view_update_generator(view_update_generator)
         , _ms(ms)
         , _mm(mm)
         , _gossiper(gossiper)
+        , _streaming_group(std::move(sg))
         , _io_throughput_mbs(cfg.stream_io_throughput_mb_per_sec)
 {
     namespace sm = seastar::metrics;
