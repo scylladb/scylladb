@@ -6,9 +6,12 @@
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
+from test.pylib.util import wait_for_cql_and_get_hosts
+
 import pytest
 import asyncio
 import logging
+import time
 
 
 logger = logging.getLogger(__name__)
@@ -46,10 +49,10 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
     for r in rows:
         assert r.c == 1
 
-    await manager.server_start(s0, wait_others=2)
-
     manager.driver_close()
+    await manager.server_start(s0, wait_others=2)
     await manager.driver_connect(server=servers[0])
+    await wait_for_cql_and_get_hosts(manager.cql, [servers[0]], time.time() + 60)
 
     # Trigger a schema change to invoke schema agreement waiting to make sure that s0 has the latest schema
     manager.cql.execute("CREATE KEYSPACE test_dummy WITH replication = {'class': 'NetworkTopologyStrategy', "
@@ -67,8 +70,7 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
     for s in servers:
         await manager.server_restart(s.server_id, wait_others=2)
 
-    manager.driver_close()
-    await manager.driver_connect(server=servers[0])
+    await wait_for_cql_and_get_hosts(manager.cql, [servers[0]], time.time() + 60)
 
     await asyncio.gather(*[manager.cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, 3);", execution_profile='whitelist')
                            for k in keys])
