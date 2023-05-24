@@ -440,7 +440,7 @@ Please read the [How to report a ScyllaDB problem](http://docs.scylladb.com/oper
 
 For general help, see ScyllaDB's [documentation](https://docs.scylladb.com/stable/).
 
-Training material and online courses can be found at [ScyllaDB University](https://university.scylladb.com/).
+You can find training material and online courses at [ScyllaDB University](https://university.scylladb.com/).
 
 For questions and comments, use ScyllaDB's [Community Forum](https://forum.scylladb.com/).
 
