@@ -22,10 +22,10 @@ class size_tiered_compaction_strategy_options {
     static constexpr double DEFAULT_BUCKET_LOW = 0.5;
     static constexpr double DEFAULT_BUCKET_HIGH = 1.5;
     static constexpr double DEFAULT_COLD_READS_TO_OMIT = 0.05;
-    const sstring MIN_SSTABLE_SIZE_KEY = "min_sstable_size";
-    const sstring BUCKET_LOW_KEY = "bucket_low";
-    const sstring BUCKET_HIGH_KEY = "bucket_high";
-    const sstring COLD_READS_TO_OMIT_KEY = "cold_reads_to_omit";
+    static constexpr auto MIN_SSTABLE_SIZE_KEY = "min_sstable_size";
+    static constexpr auto BUCKET_LOW_KEY = "bucket_low";
+    static constexpr auto BUCKET_HIGH_KEY = "bucket_high";
+    static constexpr auto COLD_READS_TO_OMIT_KEY = "cold_reads_to_omit";
 
     uint64_t min_sstable_size = DEFAULT_MIN_SSTABLE_SIZE;
     double bucket_low = DEFAULT_BUCKET_LOW;
@@ -35,6 +35,10 @@ public:
     size_tiered_compaction_strategy_options(const std::map<sstring, sstring>& options);
 
     size_tiered_compaction_strategy_options();
+    size_tiered_compaction_strategy_options(const size_tiered_compaction_strategy_options&) = default;
+    size_tiered_compaction_strategy_options(size_tiered_compaction_strategy_options&&) = default;
+    size_tiered_compaction_strategy_options& operator=(const size_tiered_compaction_strategy_options&) = default;
+    size_tiered_compaction_strategy_options& operator=(size_tiered_compaction_strategy_options&&) = default;
 
     // FIXME: convert java code below.
 #if 0
