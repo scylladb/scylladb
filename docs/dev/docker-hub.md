@@ -25,7 +25,7 @@ Production grade configuration requires tuning a few kernel parameters
 such that limiting the number of available cores (with `--smp 1`) is
 the simplest way to go.
 
-Using multiple cores, requires setting a proper value to the `/proc/sys/fs/aio-max-nr`.
+Using multiple cores requires setting a proper value to the `/proc/sys/fs/aio-max-nr`.
 On many non-production systems, it will be equal to 65K. The formula
 to calculate the proper value is:
 
