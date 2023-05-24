@@ -1,4 +1,6 @@
 type: boost
+# Relative load of this suite, higher values will be scheduled first
+suite_load: 10
 # A list of long tests, which should be started early
 run_first:
     - index_with_paging_test
