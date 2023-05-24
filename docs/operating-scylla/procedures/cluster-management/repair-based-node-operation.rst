@@ -12,7 +12,7 @@ Example from scylla.yaml:
 
 .. code:: yaml
    
-   Enable_repair_based_node_ops: true
+   enable_repair_based_node_ops: true
    allowed_repair_based_node_ops: replace
 
 To enable other operations (experimental), add them as a comma-separated list to allowed_repair_based_node_ops. Available operations are:
