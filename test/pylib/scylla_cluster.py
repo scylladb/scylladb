@@ -502,9 +502,15 @@ class ScyllaServer:
         except ProcessLookupError:
             pass
         else:
-            # FIXME: add timeout, fail the test and mark cluster as dirty
-            # if we timeout.
-            await self.cmd.wait()
+            STOP_TIMEOUT_SECONDS = 60
+            wait_task = self.cmd.wait()
+            try:
+                await asyncio.wait_for(wait_task, timeout=STOP_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                self.cmd.kill()
+                await self.cmd.wait()
+                raise RuntimeError(
+                    f"Stopping server {self} gracefully took longer than {STOP_TIMEOUT_SECONDS}s")
         finally:
             if self.cmd:
                 self.logger.info("gracefully stopped %s", self)
