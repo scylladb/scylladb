@@ -71,7 +71,7 @@ public:
 
     class components_lister {
     public:
-        virtual future<> process(sstable_directory& directory, fs::path location, process_flags flags) = 0;
+        virtual future<> process(sstable_directory& directory, process_flags flags) = 0;
         virtual future<> commit() = 0;
         virtual ~components_lister() {}
     };
@@ -101,7 +101,7 @@ public:
     public:
         filesystem_components_lister(std::filesystem::path dir);
 
-        virtual future<> process(sstable_directory& directory, fs::path location, process_flags flags) override;
+        virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;
     };
 
@@ -112,7 +112,7 @@ public:
     public:
         system_keyspace_components_lister(db::system_keyspace& sys_ks, sstring location);
 
-        virtual future<> process(sstable_directory& directory, fs::path location, process_flags flags) override;
+        virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;
     };
 

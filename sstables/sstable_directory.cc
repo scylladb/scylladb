@@ -200,10 +200,10 @@ sstable_directory::highest_version_seen() const {
 
 future<> sstable_directory::process_sstable_dir(process_flags flags) {
     dirlog.debug("Start processing directory {} for SSTables (storage {})", _sstable_dir, _storage_opts->type_string());
-    return _lister->process(*this, _sstable_dir, flags);
+    return _lister->process(*this, flags);
 }
 
-future<> sstable_directory::filesystem_components_lister::process(sstable_directory& directory, fs::path location, process_flags flags) {
+future<> sstable_directory::filesystem_components_lister::process(sstable_directory& directory, process_flags flags) {
     // It seems wasteful that each shard is repeating this scan, and to some extent it is.
     // However, we still want to open the files and especially call process_dir() in a distributed
     // fashion not to overload any shard. Also in the common case the SSTables will all be
@@ -224,15 +224,15 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
             if (!de) {
                 break;
             }
-            auto comps = sstables::entry_descriptor::make_descriptor(location.native(), de->name);
-            handle(std::move(comps), location / de->name);
+            auto comps = sstables::entry_descriptor::make_descriptor(_directory.native(), de->name);
+            handle(std::move(comps), _directory / de->name);
         }
     } catch (...) {
         ex = std::current_exception();
     }
     co_await lister.close();
     if (ex) {
-        dirlog.debug("Could not process sstable directory {}: {}", location, ex);
+        dirlog.debug("Could not process sstable directory {}: {}", _directory, ex);
         // FIXME: waiting for https://github.com/scylladb/seastar/pull/1090
         // co_await coroutine::return_exception(std::move(ex));
         std::rethrow_exception(std::move(ex));
@@ -253,7 +253,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     }
 
     auto msg = format("After {} scanned, {} descriptors found, {} different files found",
-            location, _state->descriptors.size(), _state->generations_found.size());
+            _directory, _state->descriptors.size(), _state->generations_found.size());
 
     if (!_state->generations_found.empty()) {
         // FIXME: for now set _max_generation_seen is any generation were found
@@ -286,16 +286,16 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     // log and proceed.
     for (auto& path : _state->generations_found | boost::adaptors::map_values) {
         if (flags.throw_on_missing_toc) {
-            throw sstables::malformed_sstable_exception(format("At directory: {}: no TOC found for SSTable {}!. Refusing to boot", location.native(), path.native()));
+            throw sstables::malformed_sstable_exception(format("At directory: {}: no TOC found for SSTable {}!. Refusing to boot", _directory.native(), path.native()));
         } else {
-            dirlog.info("Found incomplete SSTable {} at directory {}. Removing", path.native(), location.native());
+            dirlog.info("Found incomplete SSTable {} at directory {}. Removing", path.native(), _directory.native());
             _state->files_for_removal.insert(path.native());
         }
     }
 }
 
-future<> sstable_directory::system_keyspace_components_lister::process(sstable_directory& directory, fs::path location, process_flags flags) {
-    return _sys_ks.sstables_registry_list(location.native(), [this, flags, &directory] (utils::UUID uuid, sstring status, entry_descriptor desc) {
+future<> sstable_directory::system_keyspace_components_lister::process(sstable_directory& directory, process_flags flags) {
+    return _sys_ks.sstables_registry_list(_location, [this, flags, &directory] (utils::UUID uuid, sstring status, entry_descriptor desc) {
         if (status != "sealed") {
             // FIXME -- handle
             return make_ready_future<>();
