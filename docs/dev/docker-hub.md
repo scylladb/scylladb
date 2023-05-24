@@ -9,7 +9,7 @@ ScyllaDB is released under the GNU Affero General Public License version 3 and t
 
 ![logo](http://www.scylladb.com/wp-content/uploads/mascot_medium.png)
 
-ScyllaDB Docker support x86_64 for all version, and aarch64 starting from ScyllaDB 4.6. Get it now with ScyllaDB [nightly build](https://hub.docker.com/r/scylladb/scylla-nightly)
+ScyllaDB Docker supports x86_64 for all versions, and aarch64 starting from ScyllaDB 4.6. Get it now with ScyllaDB [nightly build](https://hub.docker.com/r/scylladb/scylla-nightly)
 
 ## Quick start
 
