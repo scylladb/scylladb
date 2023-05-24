@@ -73,6 +73,7 @@ public:
     public:
         virtual future<> process(sstable_directory& directory, process_flags flags) = 0;
         virtual future<> commit() = 0;
+        virtual future<> garbage_collect() = 0;
         virtual ~components_lister() {}
     };
 
@@ -98,11 +99,17 @@ public:
         fs::path _directory;
         std::unique_ptr<scan_state> _state;
 
+        future<> cleanup_column_family_temp_sst_dirs();
+        future<> handle_sstables_pending_delete();
+        future<> replay_pending_delete_log(std::filesystem::path log_file);
+
+
     public:
         filesystem_components_lister(std::filesystem::path dir);
 
         virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;
+        virtual future<> garbage_collect() override;
     };
 
     class system_keyspace_components_lister final : public components_lister {
@@ -114,6 +121,7 @@ public:
 
         virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;
+        virtual future<> garbage_collect() override;
     };
 
 private:
@@ -174,10 +182,6 @@ private:
     future<std::vector<shard_id>> get_shards_for_this_sstable(const sstables::entry_descriptor& desc, process_flags flags) const;
     // Retrieves sstables::foreign_sstable_open_info for a particular SSTable.
     future<foreign_sstable_open_info> get_open_info_for_this_sstable(const sstables::entry_descriptor& desc) const;
-
-    future<> cleanup_column_family_temp_sst_dirs();
-    future<> handle_sstables_pending_delete();
-    future<> replay_pending_delete_log(std::filesystem::path log_file);
 
 public:
     sstable_directory(sstables_manager& manager,

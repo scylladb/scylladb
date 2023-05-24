@@ -325,6 +325,11 @@ future<> sstable_directory::system_keyspace_components_lister::commit() {
     return make_ready_future<>();
 }
 
+future<> sstable_directory::system_keyspace_components_lister::garbage_collect() {
+    // FIXME -- implement
+    co_return;
+}
+
 future<>
 sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_directory) {
     return parallel_for_each(boost::irange(0u, smp::count), [this, &source_directory] (unsigned shard_id) mutable {
@@ -542,7 +547,7 @@ future<> sstable_directory::delete_with_pending_deletion_log(std::vector<shared_
 
 // FIXME: Go through maybe_delete_large_partitions_entry on recovery since
 // this is an indication we crashed in the middle of delete_with_pending_deletion_log
-future<> sstable_directory::replay_pending_delete_log(fs::path pending_delete_log) {
+future<> sstable_directory::filesystem_components_lister::replay_pending_delete_log(fs::path pending_delete_log) {
     sstlog.debug("Reading pending_deletes log file {}", pending_delete_log);
     fs::path pending_delete_dir = pending_delete_log.parent_path();
     try {
@@ -564,15 +569,19 @@ future<> sstable_directory::replay_pending_delete_log(fs::path pending_delete_lo
 }
 
 future<> sstable_directory::garbage_collect() {
+    return _lister->garbage_collect();
+}
+
+future<> sstable_directory::filesystem_components_lister::garbage_collect() {
     // First pass, cleanup temporary sstable directories and sstables pending delete.
     co_await cleanup_column_family_temp_sst_dirs();
     co_await handle_sstables_pending_delete();
 }
 
-future<> sstable_directory::cleanup_column_family_temp_sst_dirs() {
+future<> sstable_directory::filesystem_components_lister::cleanup_column_family_temp_sst_dirs() {
     std::vector<future<>> futures;
 
-    co_await lister::scan_dir(_sstable_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [&] (fs::path sstdir, directory_entry de) {
+    co_await lister::scan_dir(_directory, lister::dir_entry_types::of<directory_entry_type::directory>(), [&] (fs::path sstdir, directory_entry de) {
         // push futures that remove files/directories into an array of futures,
         // so that the supplied callback will not block scan_dir() from
         // reading the next entry in the directory.
@@ -587,8 +596,8 @@ future<> sstable_directory::cleanup_column_family_temp_sst_dirs() {
     co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
 }
 
-future<> sstable_directory::handle_sstables_pending_delete() {
-    auto pending_delete_dir = _sstable_dir / sstables::pending_delete_dir;
+future<> sstable_directory::filesystem_components_lister::handle_sstables_pending_delete() {
+    auto pending_delete_dir = _directory / sstables::pending_delete_dir;
     auto exists = co_await file_exists(pending_delete_dir.native());
     if (!exists) {
         co_return;
