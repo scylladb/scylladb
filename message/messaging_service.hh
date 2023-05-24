@@ -14,11 +14,9 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/sstring.hh>
 #include "gms/inet_address.hh"
-#include "inet_address_vectors.hh"
 #include <seastar/rpc/rpc_types.hh>
 #include <unordered_map>
 #include "range.hh"
-#include "tracing/tracing.hh"
 #include "schema/schema_fwd.hh"
 #include "streaming/stream_fwd.hh"
 
