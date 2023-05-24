@@ -1,1 +1,3 @@
 type: Run
+# Relative load of this suite, higher values will be scheduled first
+suite_load: 12

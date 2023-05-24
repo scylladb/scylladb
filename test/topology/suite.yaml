@@ -1,4 +1,6 @@
 type: Topology
+# Relative load of this suite, higher values will be scheduled first
+suite_load: 20
 pool_size: 4
 cluster:
   initial_size: 3

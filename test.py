@@ -39,7 +39,7 @@ from test.pylib.pool import Pool
 from test.pylib.util import LogPrefixAdapter
 from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager, merge_cmdline_options
 from test.pylib.minio_server import MinioServer
-from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union
+from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union, Tuple
 
 launch_time = time.monotonic()
 
@@ -47,6 +47,8 @@ output_is_a_tty = sys.stdout.isatty()
 
 all_modes = set(['debug', 'release', 'dev', 'sanitize', 'coverage'])
 debug_modes = set(['debug', 'sanitize'])
+# Slow modes to run first
+mode_run_order = ["debug", "release"]
 
 
 def create_formatter(*decorators) -> Callable[[Any], str]:
@@ -101,6 +103,8 @@ class TestSuite(ABC):
         # The number of failed tests
         self.n_failed = 0
 
+        # Relative load of suite, higher values will be scheduled to run first
+        self.load = cfg.get("suite_load", 1)
         self.run_first_tests = set(cfg.get("run_first", []))
         self.no_parallel_cases = set(cfg.get("no_parallel_cases", []))
         # Skip tests disabled in suite.yaml
@@ -176,6 +180,16 @@ class TestSuite(ABC):
             assert suite is not None
             TestSuite.suites[suite_key] = suite
         return suite
+
+    @staticmethod
+    def sort_suites() -> None:
+        """Reorder suites by configured slowness factor"""
+        mode_index = {key: i for i, key in enumerate(mode_run_order)}
+        def key_mode_load(i: Tuple[str, TestSuite]):
+            """Order suites by mode (debug/release/dev) and load (config)"""
+            # Note: flip sign so higher load values go first
+            return mode_index.get(i[1].mode, len(mode_index)), - i[1].load
+        TestSuite.suites = dict(sorted(TestSuite.suites.items(), key=key_mode_load))
 
     @staticmethod
     def all_tests() -> Iterable['Test']:
@@ -1498,6 +1512,9 @@ async def main() -> int:
     open_log(options.tmpdir, f"test.py.{'-'.join(options.modes)}.log", options.log_level)
 
     await find_tests(options)
+
+    TestSuite.sort_suites()
+
     if options.list_tests:
         print('\n'.join([f"{t.suite.mode:<8} {type(t.suite).__name__[:-9]:<11} {t.name}"
                          for t in TestSuite.all_tests()]))
