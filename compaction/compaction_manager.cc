@@ -300,6 +300,9 @@ private:
         return _added_backlog * _available_memory;
     }
     virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override {}
+    virtual std::unique_ptr<compaction_backlog_tracker::impl> clone_and_replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) const override {
+        return std::make_unique<user_initiated_backlog_tracker>(*this);
+    }
 };
 
 compaction::compaction_state& compaction_manager::get_compaction_state(table_state* t) {
@@ -2080,6 +2083,17 @@ void compaction_backlog_tracker::replace_sstables(const std::vector<sstables::sh
         // FIXME: tracker should be able to recover from a failure, e.g. OOM, by having its state reset. More details on https://github.com/scylladb/scylla/issues/10297.
         disable();
     }
+}
+
+compaction_backlog_tracker compaction_backlog_tracker::clone_and_replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) const {
+    auto ret = compaction_backlog_tracker(_impl->clone_and_replace_sstables(old_ssts, new_ssts));
+    ret._ongoing_writes = _ongoing_writes;
+    ret._ongoing_compactions = _ongoing_compactions;
+    for (const auto& sst : old_ssts) {
+        ret._ongoing_writes.erase(sst);
+        ret._ongoing_compactions.erase(sst);
+    }
+    return ret;
 }
 
 bool compaction_backlog_tracker::sstable_belongs_to_tracker(const sstables::shared_sstable& sst) {
