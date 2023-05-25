@@ -51,7 +51,6 @@ public:
     static constexpr const char* STATUS_LEFT = "LEFT";
     static constexpr const char* STATUS_MOVING = "MOVING";
 
-    static constexpr const char* REMOVING_TOKEN = "removing";
     static constexpr const char* REMOVED_TOKEN = "removed";
 
     static constexpr const char* HIBERNATE = "hibernate";

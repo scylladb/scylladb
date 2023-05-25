@@ -162,12 +162,10 @@ private:
 
 public:
     const std::vector<sstring> DEAD_STATES = {
-        versioned_value::REMOVING_TOKEN,
         versioned_value::REMOVED_TOKEN,
         versioned_value::STATUS_LEFT,
     };
     const std::vector<sstring> SILENT_SHUTDOWN_STATES = {
-        versioned_value::REMOVING_TOKEN,
         versioned_value::REMOVED_TOKEN,
         versioned_value::STATUS_LEFT,
         versioned_value::HIBERNATE,

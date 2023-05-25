@@ -27,7 +27,6 @@ constexpr const char* versioned_value::STATUS_NORMAL;
 constexpr const char* versioned_value::STATUS_LEAVING;
 constexpr const char* versioned_value::STATUS_LEFT;
 constexpr const char* versioned_value::STATUS_MOVING;
-constexpr const char* versioned_value::REMOVING_TOKEN;
 constexpr const char* versioned_value::REMOVED_TOKEN;
 constexpr const char* versioned_value::HIBERNATE;
 constexpr const char* versioned_value::SHUTDOWN;

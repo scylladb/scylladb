@@ -2447,47 +2447,6 @@ future<> storage_service::handle_state_removing(inet_address endpoint, std::vect
         if (sstring(gms::versioned_value::REMOVED_TOKEN) == state) {
             std::unordered_set<token> tmp(remove_tokens.begin(), remove_tokens.end());
             co_await excise(std::move(tmp), endpoint, extract_expire_time(pieces));
-        } else if (sstring(gms::versioned_value::REMOVING_TOKEN) == state) {
-            co_await mutate_token_metadata([this, remove_tokens = std::move(remove_tokens), endpoint] (mutable_token_metadata_ptr tmptr) mutable {
-                slogger.debug("Tokens {} removed manually (endpoint was {})", remove_tokens, endpoint);
-                // Note that the endpoint is being removed
-                tmptr->add_leaving_endpoint(endpoint);
-                return update_topology_change_info(std::move(tmptr), ::format("handle_state_removing {}", endpoint));
-            });
-            // find the endpoint coordinating this removal that we need to notify when we're done
-            auto* value = _gossiper.get_application_state_ptr(endpoint, application_state::REMOVAL_COORDINATOR);
-            if (!value) {
-                auto err = ::format("Can not find application_state for endpoint={}", endpoint);
-                slogger.warn("{}", err);
-                throw std::runtime_error(err);
-            }
-            std::vector<sstring> coordinator;
-            boost::split(coordinator, value->value(), boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
-            if (coordinator.size() != 2) {
-                auto err = ::format("Can not split REMOVAL_COORDINATOR for endpoint={}, value={}", endpoint, value->value());
-                slogger.warn("{}", err);
-                throw std::runtime_error(err);
-            }
-            auto host_id = locator::host_id(utils::UUID(coordinator[1]));
-            // grab any data we are now responsible for and notify responsible node
-            auto ep = get_token_metadata().get_endpoint_for_host_id(host_id);
-            if (!ep) {
-                auto err = ::format("Can not find host_id={}", host_id);
-                slogger.warn("{}", err);
-                throw std::runtime_error(err);
-            }
-            // Kick off streaming commands. No need to wait for
-            // restore_replica_count to complete which can take a long time,
-            // since when it completes, this node will send notification to
-            // tell the removal_coordinator with IP address notify_endpoint
-            // that the restore process is finished on this node.
-            auto notify_endpoint = ep.value();
-            // OK to discard future since _async_gate is closed on stop()
-            (void)with_gate(_async_gate, [this, endpoint, notify_endpoint] {
-              return restore_replica_count(endpoint, notify_endpoint).handle_exception([endpoint, notify_endpoint] (auto ep) {
-                slogger.warn("Failed to restore_replica_count for node {}, notify_endpoint={} : {}", endpoint, notify_endpoint, ep);
-              });
-            });
         }
     } else { // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
         if (sstring(gms::versioned_value::REMOVED_TOKEN) == pieces[0]) {
@@ -2549,8 +2508,7 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
         } else if (move_name == sstring(versioned_value::STATUS_NORMAL) ||
                    move_name == sstring(versioned_value::SHUTDOWN)) {
             co_await handle_state_normal(endpoint);
-        } else if (move_name == sstring(versioned_value::REMOVING_TOKEN) ||
-                   move_name == sstring(versioned_value::REMOVED_TOKEN)) {
+        } else if (move_name == sstring(versioned_value::REMOVED_TOKEN)) {
             co_await handle_state_removing(endpoint, pieces);
         } else if (move_name == sstring(versioned_value::STATUS_LEAVING)) {
             co_await handle_state_leaving(endpoint);
@@ -4641,83 +4599,6 @@ future<> storage_service::removenode_with_stream(gms::inet_address leaving_node,
     });
 }
 
-future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
-    _abort_source.check();
-    // Allocate a shared abort_source for node_ops_info
-    auto sas = make_shared<abort_source>();
-    auto sub = _abort_source.subscribe([sas] () noexcept {
-        if (!sas->abort_requested()) {
-            sas->request_abort();
-        }
-    });
-    if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
-        auto ops_uuid = node_ops_id::create_random_id();
-        auto ops = seastar::make_shared<node_ops_info>(ops_uuid, sas, std::list<gms::inet_address>());
-        auto f = co_await coroutine::as_future(_repair.local().removenode_with_repair(get_token_metadata_ptr(), endpoint, ops));
-        co_await send_replication_notification(notify_endpoint);
-        co_return co_await std::move(f);
-    }
-
-    auto tmptr = get_token_metadata_ptr();
-    auto& as = *sas;
-    auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, get_broadcast_address(), _sys_ks.local().local_dc_rack(), "Restore_replica_count", streaming::stream_reason::removenode);
-    removenode_add_ranges(streamer, endpoint).get();
-    auto check_status_loop = [this, endpoint, &as] () -> future<> {
-        slogger.debug("restore_replica_count: Started status checker for removing node {}", endpoint);
-        while (!as.abort_requested()) {
-            auto status = _gossiper.get_gossip_status(endpoint);
-            // If the node to be removed is already in removed status, it has
-            // probably been removed forcely with `nodetool removenode force`.
-            // Abort the restore_replica_count in such case to avoid streaming
-            // attempt since the user has removed the node forcely.
-            if (status == sstring(versioned_value::REMOVED_TOKEN)) {
-                slogger.info("restore_replica_count: Detected node {} has left the cluster, status={}, abort restore_replica_count for removing node {}",
-                        endpoint, status, endpoint);
-                if (!as.abort_requested()) {
-                    as.request_abort();
-                }
-                co_return;
-            }
-            slogger.debug("restore_replica_count: Sleep and detect removing node {}, status={}", endpoint, status);
-            co_await sleep_abortable(std::chrono::seconds(10), as);
-        }
-    };
-    auto status_checker = check_status_loop();
-    std::exception_ptr ex;
-    try {
-        co_await streamer->stream_async();
-    } catch (...) {
-        ex = std::current_exception();
-        slogger.debug("Streaming to restore replica count failed: {}.", ex);
-        // We still want to send the notification
-    }
-    try {
-        co_await this->send_replication_notification(notify_endpoint);
-    } catch (...) {
-        auto ex2 = std::current_exception();
-        slogger.debug("Sending replication notification to {} failed: {}", notify_endpoint, ex2);
-        if (!ex) {
-            ex = std::move(ex2);
-        }
-    }
-    try {
-        slogger.debug("restore_replica_count: Started to stop status checker for removing node {}", endpoint);
-        if (!as.abort_requested()) {
-            as.request_abort();
-        }
-        co_await std::move(status_checker);
-    } catch (const seastar::sleep_aborted& ignored) {
-        slogger.debug("restore_replica_count: Got sleep_abort to stop status checker for removing node {}: {}", endpoint, ignored);
-    } catch (...) {
-        slogger.warn("restore_replica_count: Found error in status checker for removing node {}: {}",
-                endpoint, std::current_exception());
-    }
-    slogger.debug("restore_replica_count: Finished to stop status checker for removing node {}", endpoint);
-    if (ex) {
-        co_await coroutine::return_exception_ptr(std::move(ex));
-    }
-}
-
 future<> storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint) {
     slogger.info("Removing tokens {} for {}", tokens, endpoint);
     // FIXME: HintedHandOffManager.instance.deleteHintsForEndpoint(endpoint);
@@ -4737,35 +4618,6 @@ future<> storage_service::excise(std::unordered_set<token> tokens, inet_address 
 future<> storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint, int64_t expire_time) {
     add_expire_time_if_found(endpoint, expire_time);
     return excise(tokens, endpoint);
-}
-
-future<> storage_service::send_replication_notification(inet_address remote) {
-    // notify the remote token
-    auto done = make_shared<bool>(false);
-    auto local = get_broadcast_address();
-    auto sent = make_lw_shared<int>(0);
-    slogger.debug("Notifying {} of replication completion", remote);
-    return do_until(
-        [this, done, sent, remote] {
-            // The node can send REPLICATION_FINISHED to itself, in which case
-            // is_alive will be true. If the messaging_service is stopped,
-            // REPLICATION_FINISHED can be sent infinitely here. To fix, limit
-            // the number of retries.
-            return *done || !_gossiper.is_alive(remote) || *sent >= 3;
-        },
-        [this, done, sent, remote, local] {
-            netw::msg_addr id{remote, 0};
-            (*sent)++;
-            return _messaging.local().send_replication_finished(id, local).then_wrapped([id, done] (auto&& f) {
-                try {
-                    f.get();
-                    *done = true;
-                } catch (...) {
-                    slogger.warn("Fail to send REPLICATION_FINISHED to {}: {}", id, std::current_exception());
-                }
-            });
-        }
-    );
 }
 
 future<> storage_service::leave_ring() {
@@ -5183,11 +5035,6 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
 }
 
 void storage_service::init_messaging_service(sharded<service::storage_proxy>& proxy, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
-    _messaging.local().register_replication_finished([] (gms::inet_address from) {
-        slogger.info("Got confirm_replication from {}", from);
-        return make_ready_future<>();
-    });
-
     _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
         auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return container().invoke_on(0, [coordinator, req = std::move(req)] (auto& ss) mutable {
@@ -5263,7 +5110,6 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
 
 future<> storage_service::uninit_messaging_service() {
     return when_all_succeed(
-        _messaging.local().unregister_replication_finished(),
         _messaging.local().unregister_node_ops_cmd(),
         ser::storage_service_rpc_verbs::unregister(&_messaging.local())
     ).discard_result();

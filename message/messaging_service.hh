@@ -128,7 +128,7 @@ enum class messaging_verb : int32_t {
     // end of gossip verb
     DEFINITIONS_UPDATE = 11,
     TRUNCATE = 12,
-    REPLICATION_FINISHED = 13,
+    UNUSED__REPLICATION_FINISHED = 13,
     MIGRATION_REQUEST = 14,
     // Used by streaming
     PREPARE_MESSAGE = 15,
@@ -495,11 +495,6 @@ public:
     future<> unregister_schema_check();
     future<table_schema_version> send_schema_check(msg_addr);
     future<table_schema_version> send_schema_check(msg_addr, abort_source&);
-
-    // Wrapper for REPLICATION_FINISHED verb
-    void register_replication_finished(std::function<future<> (inet_address from)>&& func);
-    future<> unregister_replication_finished();
-    future<> send_replication_finished(msg_addr id, inet_address from);
 
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 private:
