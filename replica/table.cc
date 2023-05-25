@@ -2024,7 +2024,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         void prune(compaction_group& cg, db_clock::time_point truncated_at) {
             auto gc_trunc = to_gc_clock(truncated_at);
 
-            auto& st = cg_map[&cg];
+            cg_state st;
             st.main.pruning = cg.main_sstables();
             st.main.pruned = make_lw_shared<sstables::sstable_set>(cf._compaction_strategy.make_sstable_set(cf._schema));
             st.maintenance.pruning = cg.maintenance_sstables();
@@ -2039,9 +2039,16 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
                     }
                     cgs.pruned->insert(p);
                 });
+                if (cgs.remove.empty()) {
+                    cgs.pruned = {};
+                }
             };
             prune(st.main);
             prune(st.maintenance);
+
+            if (!st.main.remove.empty() || !st.maintenance.remove.empty()) {
+                cg_map[&cg] = std::move(st);
+            }
         }
     };
 
@@ -2066,8 +2073,12 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
 
         virtual void execute() override {
             for (auto& [cg, st] : p.cg_map) {
-                cg->set_main_sstables(std::move(st.main.pruned));
-                cg->set_maintenance_sstables(std::move(st.maintenance.pruned));
+                if (st.main.pruned) {
+                    cg->set_main_sstables(std::move(st.main.pruned));
+                }
+                if (st.maintenance.pruned) {
+                    cg->set_maintenance_sstables(std::move(st.maintenance.pruned));
+                }
             }
             // FIXME: the following isn't exception safe.
             t.refresh_compound_sstable_set();
