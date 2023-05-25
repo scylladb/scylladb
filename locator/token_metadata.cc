@@ -20,7 +20,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <boost/range/adaptors.hpp>
-#include "seastar/core/smp.hh"
+#include <seastar/core/smp.hh>
 #include "utils/stall_free.hh"
 #include "utils/fb_utilities.hh"
 
