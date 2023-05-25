@@ -327,7 +327,7 @@ public:
 
 private:
     dht::token_range_vector do_get_ranges(noncopyable_function<stop_iteration(bool& add_range, const inet_address& natural_endpoint)> consider_range_for_endpoint) const;
-    const inet_address_vector_replica_set& do_get_natural_endpoints(const token& search_token) const;
+    const inet_address_vector_replica_set& do_get_natural_endpoints(const token& tok, bool is_vnode) const;
 
 public:
     static factory_key make_factory_key(const replication_strategy_ptr& rs, const token_metadata_ptr& tmptr);

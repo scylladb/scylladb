@@ -306,7 +306,7 @@ vnode_effective_replication_map::get_range_addresses() const {
     for (auto& t : tm.sorted_tokens()) {
         dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
         for (auto& r : ranges) {
-            ret.emplace(r, get_natural_endpoints(t));
+            ret.emplace(r, do_get_natural_endpoints(t, true));
         }
         co_await coroutine::maybe_yield();
     }
@@ -447,20 +447,22 @@ auto vnode_effective_replication_map::clone_data_gently() const -> future<std::u
     co_return std::move(result);
 }
 
-const inet_address_vector_replica_set& vnode_effective_replication_map::do_get_natural_endpoints(const token& search_token) const {
+const inet_address_vector_replica_set& vnode_effective_replication_map::do_get_natural_endpoints(const token& tok,
+    bool is_vnode) const
+{
     const token& key_token = _rs->natural_endpoints_depend_on_token()
-        ? _tmptr->first_token(search_token)
+        ? (is_vnode ? tok : _tmptr->first_token(tok))
         : default_replication_map_key;
     const auto it = _replication_map.find(key_token);
     return it->second;
 }
 
 inet_address_vector_replica_set vnode_effective_replication_map::get_natural_endpoints(const token& search_token) const {
-    return do_get_natural_endpoints(search_token);
+    return do_get_natural_endpoints(search_token, false);
 }
 
 stop_iteration vnode_effective_replication_map::for_each_natural_endpoint_until(const token& search_token, const noncopyable_function<stop_iteration(const inet_address&)>& func) const {
-    for (const auto& ep : do_get_natural_endpoints(search_token)) {
+    for (const auto& ep : do_get_natural_endpoints(search_token, false)) {
         if (func(ep) == stop_iteration::yes) {
             return stop_iteration::yes;
         }

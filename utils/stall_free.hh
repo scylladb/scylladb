@@ -178,7 +178,7 @@ future<> clear_gently(foreign_ptr<T>& o) noexcept {
 
 template <typename... T>
 requires (std::is_rvalue_reference_v<T&&> && ...)
-future<> clear_gently(T&&... o) noexcept {
+future<> clear_gently(T&&... o) {
     return do_with(std::move(o)..., [](auto&... args) {
         return when_all(clear_gently(args)...).discard_result();
     });
