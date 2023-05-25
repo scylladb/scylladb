@@ -1524,13 +1524,17 @@ protected:
         co_return std::nullopt;
     }
 private:
-    // Releases reference to cleaned files such that respective used disk space can be freed.
-    void release_exhausted(std::vector<sstables::shared_sstable> exhausted_sstables) {
-        _compacting.release_compacting(exhausted_sstables);
-    }
-
     future<> run_cleanup_job(sstables::compaction_descriptor descriptor) {
         co_await coroutine::switch_to(_cm.compaction_sg().cpu);
+
+        // Releases reference to cleaned files such that respective used disk space can be freed.
+        auto release_exhausted = [this, &descriptor] (std::vector<sstables::shared_sstable> exhausted_sstables) mutable {
+            auto exhausted = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(exhausted_sstables);
+            std::erase_if(descriptor.sstables, [&] (const sstables::shared_sstable& sst) {
+                return exhausted.contains(sst);
+            });
+            _compacting.release_compacting(exhausted_sstables);
+        };
 
         for (;;) {
             compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_cm._compaction_controller.backlog_of_shares(200), _cm.available_memory()));
@@ -1539,8 +1543,7 @@ private:
             std::exception_ptr ex;
             try {
                 setup_new_compaction(descriptor.run_identifier);
-                co_await compact_sstables_and_update_history(descriptor, _compaction_data,
-                                          std::bind(&cleanup_sstables_compaction_task_executor::release_exhausted, this, std::placeholders::_1));
+                co_await compact_sstables_and_update_history(descriptor, _compaction_data, release_exhausted);
                 finish_compaction();
                 _cm.reevaluate_postponed_compactions();
                 co_return;  // done with current job
