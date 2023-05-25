@@ -1,2 +1,6 @@
 type: Python
+# A list of long tests, which should be started early
+run_first:
+    - cassandra_tests/validation/entities/uf_types_test
+    - test_tools
 pool_size: 4
