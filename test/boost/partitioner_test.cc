@@ -308,6 +308,86 @@ normalize(dht::partition_range pr) {
     return dht::partition_range(start, end);
 };
 
+class map_sharder : public dht::sharder {
+    // Defines mapping of tokens to shards.
+    //
+    // For example, {t1:s1, t2:s2, t3:s3} defines the following mapping on token ranges:
+    //
+    //   (-inf, t1) -> s1
+    //   [t1, t2) -> s2
+    //   [t2, t3) -> s3
+    //   [t3, +inf) -> s1
+    //
+    std::map<dht::token, unsigned> _shards;
+public:
+    map_sharder(unsigned num_shards) : dht::sharder(num_shards) {}
+
+    const std::map<dht::token, unsigned>& get_map() const {
+        return _shards;
+    }
+
+    void add_token(dht::token t, unsigned shard) {
+        _shards[t] = shard;
+    }
+
+    size_t token_count() const {
+        return _shards.size();
+    }
+
+    unsigned shard_of(const dht::token& t) const override {
+        auto i = _shards.upper_bound(t);
+        if (i == _shards.end()) {
+            i = _shards.begin();
+        }
+        return i->second;
+    }
+
+    dht::token token_for_next_shard(const dht::token& t, shard_id shard, unsigned int spans) const override {
+        auto i = _shards.upper_bound(t);
+        if (i == _shards.end()) {
+            return dht::maximum_token();
+        }
+        while (true) {
+            auto prev = i;
+            ++i;
+            if (i == _shards.end()) {
+                i = _shards.begin();
+                if (i->second == shard && --spans == 0) {
+                    return prev->first;
+                }
+                return dht::maximum_token();
+            }
+            if (i->second == shard && --spans == 0) {
+                return prev->first;
+            }
+        }
+    }
+
+    std::optional<dht::shard_and_token> next_shard(const dht::token& t) const override {
+        auto i = _shards.upper_bound(t);
+        if (i == _shards.end()) {
+            return std::nullopt;
+        }
+        auto prev = i;
+        ++i;
+        if (i == _shards.end()) {
+            i = _shards.begin();
+        }
+        return dht::shard_and_token{i->second, prev->first};
+    }
+};
+
+class random_sharder : public map_sharder {
+public:
+    random_sharder(unsigned num_shards, unsigned nr_tokens)
+            : map_sharder(num_shards) {
+        unsigned i = 0;
+        while (token_count() < nr_tokens) {
+            add_token(dht::token::get_random_token(), i++ % num_shards);
+        }
+    }
+};
+
 static
 void
 test_something_with_some_interesting_ranges_and_sharder(std::function<void (const schema&, const dht::sharder&, const dht::partition_range&)> func_to_test) {
@@ -347,6 +427,18 @@ test_something_with_some_interesting_ranges_and_sharder(std::function<void (cons
             .with_sharder(sharder.shard_count(), sharder.sharding_ignore_msb()).build();
         for (auto&& range : some_murmur3_ranges) {
             func_to_test(*schema, sharder, range);
+        }
+    }
+
+    auto random_sharders = {
+        random_sharder(1, 10),
+        random_sharder(16, 256),
+        random_sharder(4, 32)
+    };
+
+    for (auto&& sharder : random_sharders) {
+        for (auto&& range : some_murmur3_ranges) {
+            func_to_test(*s, sharder, range);
         }
     }
 }
