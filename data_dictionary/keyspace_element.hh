@@ -9,7 +9,7 @@
 #pragma once
 
 #include <ostream>
-#include "seastar/core/sstring.hh"
+#include <seastar/core/sstring.hh>
 
 namespace replica {
 class database;

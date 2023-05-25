@@ -8,8 +8,8 @@
 
 #include "lang/wasm_instance_cache.hh"
 #include "lang/wasm.hh"
-#include "seastar/core/metrics.hh"
-#include "seastar/core/scheduling.hh"
+#include <seastar/core/metrics.hh>
+#include <seastar/core/scheduling.hh>
 #include <exception>
 #include <seastar/core/units.hh>
 #include <seastar/core/shared_mutex.hh>

@@ -13,8 +13,8 @@
 #include <optional>
 #include <variant>
 
-#include "seastar/core/sstring.hh"
-#include "seastar/core/timed_out_error.hh"
+#include <seastar/core/sstring.hh>
+#include <seastar/core/timed_out_error.hh>
 
 #include "utils/exception_container.hh"
 #include "utils/result.hh"

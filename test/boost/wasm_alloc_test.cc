@@ -9,7 +9,7 @@
 #include "lang/wasm.hh"
 #include "lang/wasm_instance_cache.hh"
 #include "rust/wasmtime_bindings.hh"
-#include "seastar/core/reactor.hh"
+#include <seastar/core/reactor.hh>
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/core/coroutine.hh>
 

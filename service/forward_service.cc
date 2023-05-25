@@ -27,10 +27,10 @@
 #include "replica/database.hh"
 #include "schema/schema.hh"
 #include "schema/schema_registry.hh"
-#include "seastar/core/do_with.hh"
-#include "seastar/core/future.hh"
-#include "seastar/core/on_internal_error.hh"
-#include "seastar/core/when_all.hh"
+#include <seastar/core/do_with.hh>
+#include <seastar/core/future.hh>
+#include <seastar/core/on_internal_error.hh>
+#include <seastar/core/when_all.hh>
 #include "service/pager/query_pagers.hh"
 #include "tracing/trace_state.hh"
 #include "tracing/tracing.hh"
