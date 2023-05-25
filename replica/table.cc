@@ -2006,12 +2006,17 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     struct pruner {
         column_family& cf;
         db::replay_position rp;
-        struct removed_sstable {
-            compaction_group& cg;
-            sstables::shared_sstable sst;
-            replica::enable_backlog_tracker enable_backlog_tracker;
+
+        struct cg_sstables {
+            lw_shared_ptr<sstables::sstable_set> pruning;
+            lw_shared_ptr<sstables::sstable_set> pruned;
+            std::vector<sstables::shared_sstable> remove;
         };
-        std::vector<removed_sstable> remove;
+        struct cg_state {
+            cg_sstables main;
+            cg_sstables maintenance;
+        };
+        std::unordered_map<compaction_group*, cg_state> cg_map;
 
         pruner(column_family& cf)
             : cf(cf) {}
@@ -2019,26 +2024,27 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         void prune(compaction_group& cg, db_clock::time_point truncated_at) {
             auto gc_trunc = to_gc_clock(truncated_at);
 
-            auto pruned = make_lw_shared<sstables::sstable_set>(cf._compaction_strategy.make_sstable_set(cf._schema));
-            auto maintenance_pruned = cf.make_maintenance_sstable_set();
+            auto& st = cg_map[&cg];
+            st.main.pruning = cg.main_sstables();
+            st.main.pruned = make_lw_shared<sstables::sstable_set>(cf._compaction_strategy.make_sstable_set(cf._schema));
+            st.maintenance.pruning = cg.maintenance_sstables();
+            st.maintenance.pruned = cf.make_maintenance_sstable_set();
 
-            auto prune = [this, &cg, &gc_trunc] (lw_shared_ptr<sstables::sstable_set>& pruned,
-                                            const lw_shared_ptr<sstables::sstable_set>& pruning,
-                                            replica::enable_backlog_tracker enable_backlog_tracker) mutable {
-                pruning->for_each_sstable([&] (const sstables::shared_sstable& p) mutable {
+            auto prune = [this, &gc_trunc] (cg_sstables& cgs) mutable {
+                cgs.pruning->for_each_sstable([&] (const sstables::shared_sstable& p) mutable {
                     if (p->max_data_age() <= gc_trunc) {
                         rp = std::max(p->get_stats_metadata().position, rp);
-                        remove.emplace_back(removed_sstable{cg, p, enable_backlog_tracker});
+                        cgs.remove.emplace_back(p);
                         return;
                     }
-                    pruned->insert(p);
+                    cgs.pruned->insert(p);
                 });
             };
-            prune(pruned, cg.main_sstables(), enable_backlog_tracker::yes);
-            prune(maintenance_pruned, cg.maintenance_sstables(), enable_backlog_tracker::no);
+            prune(st.main);
+            prune(st.maintenance);
 
-            cg.set_main_sstables(std::move(pruned));
-            cg.set_maintenance_sstables(std::move(maintenance_pruned));
+            cg.set_main_sstables(std::move(st.main.pruned));
+            cg.set_maintenance_sstables(std::move(st.maintenance.pruned));
         }
     };
     auto p = make_lw_shared<pruner>(*this);
@@ -2051,13 +2057,17 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         tlogger.debug("cleaning out row cache");
     }));
     rebuild_statistics();
-    co_await coroutine::parallel_for_each(p->remove, [this, p] (pruner::removed_sstable& r) -> future<> {
-        if (r.enable_backlog_tracker) {
-            remove_sstable_from_backlog_tracker(r.cg.get_backlog_tracker(), r.sst);
+    for (const auto& [cg, st] : p->cg_map) {
+        for (const auto& sst : st.main.remove) {
+            remove_sstable_from_backlog_tracker(cg->get_backlog_tracker(), sst);
+            co_await get_sstables_manager().delete_atomically({sst});
+            erase_sstable_cleanup_state(sst);
         }
-        co_await get_sstables_manager().delete_atomically({r.sst});
-        erase_sstable_cleanup_state(r.sst);
-    });
+        for (const auto& sst : st.maintenance.remove) {
+            co_await get_sstables_manager().delete_atomically({sst});
+            erase_sstable_cleanup_state(sst);
+        }
+    }
     co_return p->rp;
 }
 
