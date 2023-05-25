@@ -1857,6 +1857,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             stop_signal.wait().get();
             startlog.info("Signal received; shutting down");
 	    // At this point, all objects destructors and all shutdown hooks registered with defer() are executed
+          } catch (const sleep_aborted&) {
+            startlog.info("Startup interrupted");
+            // This happens when scylla gets SIGINT in the middle of join_cluster(), so
+            // just ignore it and exit normally
+            _exit(0);
+            return 0;
           } catch (...) {
             startlog.error("Startup failed: {}", std::current_exception());
             // We should be returning 1 here, but the system is not yet prepared for orderly rollback of main() objects
