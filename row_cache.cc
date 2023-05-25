@@ -1425,29 +1425,28 @@ std::ostream& operator<<(std::ostream& out, row_cache& rc) {
 }
 
 future<> row_cache::do_update(row_cache::external_updater eu, row_cache::internal_updater iu) noexcept {
-  // FIXME: indentation
     auto permit = co_await get_units(_update_sem, 1);
-      co_await eu.prepare();
-        try {
-            eu.execute();
-        } catch (...) {
-            // Any error from execute is considered fatal
-            // to enforce exception safety.
-            on_fatal_internal_error(clogger, fmt::format("Fatal error during cache update: {}", std::current_exception()));
-        }
-        [&] () noexcept {
-            _prev_snapshot_pos = dht::ring_position::min();
-            _prev_snapshot = std::exchange(_underlying, _snapshot_source());
-            ++_underlying_phase;
-        }();
-        auto f = co_await coroutine::as_future(futurize_invoke([&iu] {
-            return iu();
-        }));
-            _prev_snapshot_pos = {};
-            _prev_snapshot = {};
-            if (f.failed()) {
-                clogger.warn("Failure during cache update: {}", f.get_exception());
-            }
+    co_await eu.prepare();
+    try {
+        eu.execute();
+    } catch (...) {
+        // Any error from execute is considered fatal
+        // to enforce exception safety.
+        on_fatal_internal_error(clogger, fmt::format("Fatal error during cache update: {}", std::current_exception()));
+    }
+    [&] () noexcept {
+        _prev_snapshot_pos = dht::ring_position::min();
+        _prev_snapshot = std::exchange(_underlying, _snapshot_source());
+        ++_underlying_phase;
+    }();
+    auto f = co_await coroutine::as_future(futurize_invoke([&iu] {
+        return iu();
+    }));
+    _prev_snapshot_pos = {};
+    _prev_snapshot = {};
+    if (f.failed()) {
+        clogger.warn("Failure during cache update: {}", f.get_exception());
+    }
 }
 
 std::ostream& operator<<(std::ostream& out, const cache_entry& e) {
