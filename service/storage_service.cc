@@ -2502,13 +2502,13 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
                    move_name == sstring(versioned_value::SHUTDOWN)) {
             co_await handle_state_normal(endpoint);
         } else if (move_name == sstring(versioned_value::REMOVED_TOKEN)) {
-            co_await handle_state_removed(endpoint, pieces);
+            co_await handle_state_removed(endpoint, std::move(pieces));
         } else if (move_name == sstring(versioned_value::STATUS_LEAVING)) {
             co_await handle_state_leaving(endpoint);
         } else if (move_name == sstring(versioned_value::STATUS_LEFT)) {
-            co_await handle_state_left(endpoint, pieces);
+            co_await handle_state_left(endpoint, std::move(pieces));
         } else if (move_name == sstring(versioned_value::STATUS_MOVING)) {
-            handle_state_moving(endpoint, pieces);
+            handle_state_moving(endpoint, std::move(pieces));
         } else if (move_name == sstring(versioned_value::HIBERNATE)) {
             slogger.warn("endpoint={} went into HIBERNATE state, this is no longer supported.  Use a new version to perform the replace operation.", endpoint);
         } else {
