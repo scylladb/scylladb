@@ -325,16 +325,6 @@ private:
 
 public:
     /**
-     * This method will begin removing an existing endpoint from the cluster by spoofing its state
-     * This should never be called unless this coordinator has had 'removenode' invoked
-     *
-     * @param endpoint    - the endpoint being removed
-     * @param host_id      - the ID of the host being removed
-     * @param local_host_id - my own host ID for replication coordination
-     */
-    future<> advertise_removing(inet_address endpoint, locator::host_id host_id, locator::host_id local_host_id);
-
-    /**
      * Handles switching the endpoint's state from REMOVING_TOKEN to REMOVED_TOKEN
      * This should only be called after advertise_removing
      *
