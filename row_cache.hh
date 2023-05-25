@@ -179,6 +179,8 @@ public:
         virtual future<> prepare() { return make_ready_future<>(); }
         // FIXME: make execute() noexcept, that will require every updater to make execution exception safe,
         // also change function signature.
+        // Updaters that are exception safe should handle all exceptions in prepare.
+        // Any exceptions from execute() are fatal.
         virtual void execute() = 0;
     };
 
