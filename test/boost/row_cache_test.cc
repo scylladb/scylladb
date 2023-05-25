@@ -43,6 +43,20 @@
 
 using namespace std::chrono_literals;
 
+static void consume_all(flat_mutation_reader_v2& rd) {
+    while (auto mfopt = rd().get0()) {}
+}
+
+static void populate_range(row_cache& cache, const dht::partition_range& pr = query::full_partition_range,
+    const query::clustering_range& r = query::full_clustering_range)
+{
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto slice = partition_slice_builder(*cache.schema()).with_range(r).build();
+    auto rd = cache.make_reader(cache.schema(), semaphore.make_permit(), pr, slice);
+    auto close_rd = deferred_close(rd);
+    consume_all(rd);
+}
+
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
@@ -1910,6 +1924,240 @@ SEASTAR_TEST_CASE(test_update_invalidating) {
     });
 }
 
+// When memtable memory is released (either by freeing or moving it into the ownership
+// of row_cache, this is accounted for memtable flush control purposes.
+//
+// It is desirable (but not essential) that this accounting happens smoothly -- that is,
+// with sub-memtable, and even sub-partition granularity, to avoid sawtooth-like
+// patterns in flush control.
+//
+// This test checks that property when the memtable is processed with update_invalidating().
+SEASTAR_THREAD_TEST_CASE(test_update_invalidating_decreases_real_memory_incrementally) {
+    cache_tracker tracker;
+    simple_schema s;
+
+    replica::dirty_memory_manager mgr;
+    replica::table_stats dummy_stats;
+
+    auto mt = make_lw_shared<replica::memtable>(s.schema(), mgr, dummy_stats);
+
+    memtable_snapshot_source underlying(s.schema());
+
+#ifdef SEASTAR_DEBUG
+    // The test is scaled down in debug mode, otherwise it takes unreasonably long to run.
+    constexpr size_t rows_per_partition = 1000;
+    constexpr size_t min_expected_initial_size = 1'000'000;
+#else
+    constexpr size_t rows_per_partition = 100000;
+    constexpr size_t min_expected_initial_size = 100'000'000;
+#endif
+
+    // We don't memtable_snapshot_source holding any snapshots to the memtable
+    // (and preventing its cleanup) in this test.
+    underlying.disable_compaction();
+
+    row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+    // We want a memtable big enough for its update_invalidating to be preempted many times.
+    // The number of partitions should be small so that the final check verifies that
+    // memory is freed with sub-partition granularity.
+    for (const auto& k : s.make_pkeys(5)) {
+        auto m = mutation(s.schema(), k);
+        for (const auto& ck : s.make_ckeys(rows_per_partition)) {
+            s.add_row(m, ck, "v");
+        }
+        mt->apply(m);
+    }
+
+    // The test checks "incrementality" by comparing memory deltas
+    // to a chosen fraction of the initial size.
+    size_t initial_size = mgr.real_dirty_memory();
+
+    // Just a sanity check. The memtable is supposed to be quite big.
+    BOOST_REQUIRE_GT(initial_size, min_expected_initial_size);
+
+    size_t last_noticed_size = initial_size;
+
+    // Check that memory was freed incrementally.
+    // We created a big memtable, so we expect only a small fraction of it to be freed
+    // during a task quota. Below we check that at most 0.1 of the total was freed 
+    // per task quota.
+    // This is a timing-dependent test, but it checks for sufficient *slowness*, not sufficient speed,
+    // so it shouldn't be impacted by slow test machines.
+    auto peek_once = [&] {
+        constexpr double MAX_ALLOWED_STEP = 0.1;
+        size_t current_size = mgr.real_dirty_memory();
+        double step = (double(last_noticed_size) - double(current_size)) / initial_size;
+        if (step > MAX_ALLOWED_STEP) {
+            BOOST_ERROR(fmt::format("Real dirty memory jumped from {} to {} of the total during a single task quota, more than the expected {}.", last_noticed_size, current_size, MAX_ALLOWED_STEP));
+        }
+        last_noticed_size = current_size;
+    };
+
+    // The task below will chime in on each preemption to check
+    // that the amount of memory didn't change too much since the last
+    // preemption.
+    bool stop_peeking = false;
+    auto peek_at_dirty_memory = seastar::async([&] {
+        while (!stop_peeking) {
+            peek_once();
+            seastar::thread::yield();
+        }
+    });
+
+    // Perform an update and check memory deltas between its preemption points.
+    {
+        auto peek_at_dirty_memory_stop = defer([&] { stop_peeking = true; peek_at_dirty_memory.get(); });
+        // Invalidate the cache.
+        // The cache is empty, so this boils down to clearing the memtable.
+        cache.update_invalidating(row_cache::external_updater([&] { underlying.apply(mt); }), *mt).get();
+        // Stop the background measurement task we started above.
+        // ...defer() activates here...
+    }
+
+    // The asynchronous checking task isn't guaranteed to run after the update is finished,
+    // so check the final memory delta here.
+    peek_once();
+
+    // Just a sanity check.
+    BOOST_REQUIRE_EQUAL(tracker.get_stats().partitions, 0);
+
+    // Verify that the entire memtable was freed (according to dirty_memory_manager, that is).
+    BOOST_REQUIRE_EQUAL(last_noticed_size, 0);
+}
+
+// When memtable memory is released (either by freeing or moving it into the ownership
+// of row_cache, this is accounted for memtable flush control purposes.
+//
+// It is desirable (but not essential) that this accounting happens smoothly -- that is,
+// with sub-memtable, and even sub-partition granularity, to avoid sawtooth-like
+// patterns in flush control.
+//
+// This test checks that property when the memtable is processed with row_cache::update(),
+// both with partitions that are discarded (because they exist in cache's underlying source,
+// but not in cache) and with partitions that are merged into existing cache entries.
+SEASTAR_THREAD_TEST_CASE(test_update_garbage_is_cleared_incrementally) {
+    cache_tracker tracker;
+    simple_schema s;
+
+    replica::dirty_memory_manager mgr;
+    replica::table_stats dummy_stats;
+
+    auto mt_update = make_lw_shared<replica::memtable>(s.schema(), mgr, dummy_stats);
+
+    memtable_snapshot_source underlying(s.schema());
+
+#ifdef SEASTAR_DEBUG
+    // The test is scaled down in debug mode, otherwise it takes unreasonably long to run.
+    constexpr size_t rows_per_partition = 1000;
+    constexpr size_t min_expected_initial_size = 1'000'000;
+#else
+    constexpr size_t rows_per_partition = 100000;
+    constexpr size_t min_expected_initial_size = 100'000'000;
+#endif
+
+    // Initialize underlying and cache. Before the test proper starts,
+    // some partitions are present in cache, some are only present in underlying.
+    // This tests both the code path when a memtable partition is merged into
+    // the cache and the code path when it's discarded.
+    auto keys = s.make_pkeys(6);
+    for (size_t i = 0; i < keys.size(); ++i) {
+        auto m = mutation(s.schema(), keys[i]);
+        for (const auto& ck : s.make_ckeys(1)) {
+            s.add_row(m, ck, "v");
+        }
+        underlying.apply(m);
+    }
+
+    row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+    // Bring into the cache these partitions which are supposed to be in cache.
+    for (size_t i = 0; i < keys.size(); ++i) {
+        switch (i % 2) {
+        case 0:
+            // Present in underlying only.
+            break;
+        case 1:
+            // Present in both cache and underlying.
+            populate_range(cache, dht::partition_range::make_singular(keys[i]));
+            break;
+        }
+    }
+
+    // Just a sanity check.
+    BOOST_REQUIRE_EQUAL(tracker.get_stats().partitions, 3);
+
+    // We don't memtable_snapshot_source holding any snapshots to the memtable
+    // (and preventing its cleanup) in this test.
+    underlying.disable_compaction();
+
+    // We want a memtable big enough for its update_invalidating to be preempted many times.
+    // The number of partitions should be small so that the final check verifies that
+    // memory is freed with sub-partition granularity.
+    for (const auto& k : keys) {
+        auto m = mutation(s.schema(), k);
+        for (const auto& ck : s.make_ckeys(rows_per_partition)) {
+            s.add_row(m, ck, "v");
+        }
+        mt_update->apply(m);
+    }
+
+    // The test checks "incrementality" by comparing memory deltas
+    // to a chosen fraction of the initial size.
+    size_t initial_size = mgr.real_dirty_memory();
+
+    // Just a sanity check. The memtable is supposed to be quite big.
+    BOOST_REQUIRE_GT(initial_size, min_expected_initial_size);
+
+    size_t last_noticed_size = initial_size;
+
+    // Check that memory was freed incrementally.
+    // We created a big memtable, so we expect only a small fraction of it to be freed
+    // during a task quota. Below we check that at most 0.1 of the total was freed 
+    // per task quota.
+    // This is a timing-dependent test, but it checks for sufficient *slowness*, not sufficient speed,
+    // so it shouldn't be impacted by slow test machines.
+    auto peek_once = [&] {
+        constexpr double MAX_ALLOWED_STEP = 0.1;
+        size_t current_size = mgr.real_dirty_memory();
+        double step = (double(last_noticed_size) - double(current_size)) / initial_size;
+        if (step > MAX_ALLOWED_STEP) {
+            BOOST_ERROR(fmt::format("Real dirty memory jumped from {} to {} of the total during a single task quota, more than the expected {}.", last_noticed_size, current_size, MAX_ALLOWED_STEP));
+        }
+        last_noticed_size = current_size;
+    };
+
+    // The task below will chime in on each preemption to check
+    // that the amount of memory didn't change too much since the last
+    // preemption.
+    bool stop_peeking = false;
+    auto peek_at_dirty_memory = seastar::async([&] {
+        while (!stop_peeking) {
+            peek_once();
+            seastar::thread::yield();
+        }
+    });
+
+    // Perform an update and check memory deltas between its preemption points.
+    {
+        auto peek_at_dirty_memory_stop = defer([&] { stop_peeking = true; peek_at_dirty_memory.get(); });
+        // Do the work.
+        cache.update(row_cache::external_updater([&] { underlying.apply(mt_update); }), *mt_update).get();
+        // Stop the background measurement task we started above.
+        // ...defer() activates here...
+    }
+
+    // Just a sanity check.
+    BOOST_REQUIRE_EQUAL(tracker.get_stats().partitions, 3);
+
+    // The asynchronous checking task isn't guaranteed to run after the update is finished,
+    // so check the final memory delta here.
+    peek_once();
+
+    // Verify that the entire memtable was freed (according to dirty_memory_manager, that is).
+    BOOST_REQUIRE_EQUAL(last_noticed_size, 0);
+}
+
 SEASTAR_TEST_CASE(test_scan_with_partial_partitions) {
     return seastar::async([] {
         simple_schema s;
@@ -2223,20 +2471,6 @@ SEASTAR_TEST_CASE(test_tombstone_merging_in_partial_partition) {
             assert_that(cache.make_reader(s.schema(), semaphore.make_permit(), pr, slice)).has_monotonic_positions();
         }
     });
-}
-
-static void consume_all(flat_mutation_reader_v2& rd) {
-    while (auto mfopt = rd().get0()) {}
-}
-
-static void populate_range(row_cache& cache, const dht::partition_range& pr = query::full_partition_range,
-    const query::clustering_range& r = query::full_clustering_range)
-{
-    tests::reader_concurrency_semaphore_wrapper semaphore;
-    auto slice = partition_slice_builder(*cache.schema()).with_range(r).build();
-    auto rd = cache.make_reader(cache.schema(), semaphore.make_permit(), pr, slice);
-    auto close_rd = deferred_close(rd);
-    consume_all(rd);
 }
 
 static void apply(row_cache& cache, memtable_snapshot_source& underlying, const mutation& m) {

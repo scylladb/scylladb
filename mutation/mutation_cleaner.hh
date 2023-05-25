@@ -25,6 +25,9 @@ class mutation_cleaner_impl final {
         logalloc::allocating_section alloc_section;
         bool done = false; // true means the worker was abandoned and cannot access the mutation_cleaner_impl instance.
     };
+public:
+    // Callback arguments: change in total memory, change in used memory.
+    using on_space_freed_callback = std::function<void(size_t, size_t)>;
 private:
     logalloc::region& _region;
     cache_tracker* _tracker;
@@ -33,7 +36,7 @@ private:
     lw_shared_ptr<worker> _worker_state;
     mutation_application_stats& _app_stats;
     seastar::scheduling_group _scheduling_group;
-    std::function<void(size_t)> _on_space_freed;
+    on_space_freed_callback _on_space_freed;
 private:
     stop_iteration merge_some(partition_snapshot& snp) noexcept;
     stop_iteration merge_some() noexcept;
@@ -41,15 +44,13 @@ private:
 public:
     mutation_cleaner_impl(logalloc::region& r, cache_tracker* t, mutation_cleaner* cleaner,
             mutation_application_stats& app_stats,
-            seastar::scheduling_group sg = seastar::current_scheduling_group(),
-            std::function<void(size_t)> on_space_freed = nullptr)
+            seastar::scheduling_group sg = seastar::current_scheduling_group())
         : _region(r)
         , _tracker(t)
         , _cleaner(cleaner)
         , _worker_state(make_lw_shared<worker>())
         , _app_stats(app_stats)
         , _scheduling_group(sg)
-        , _on_space_freed(std::move(on_space_freed))
     {
         start_worker();
     }
@@ -68,12 +69,20 @@ public:
         _worker_state->cv.broadcast();
     }
     auto make_region_space_guard() {
-        return defer([&, dirty_before = _region.occupancy().total_space()] {
-            auto dirty_after = _region.occupancy().total_space();
-            if (_on_space_freed && dirty_before > dirty_after) {
-                _on_space_freed(dirty_before - dirty_after);
+        auto total_before = _region.occupancy().total_space();
+        auto used_before = _region.occupancy().used_space();
+        return defer([=] {
+            auto total_after = _region.occupancy().total_space();
+            auto used_after = _region.occupancy().used_space();
+            auto total_diff = total_before > total_after ? total_before - total_after : 0;
+            auto used_diff = used_before > used_after ? used_before - used_after : 0;
+            if (_on_space_freed && (total_diff || used_diff)) {
+                _on_space_freed(total_diff, used_diff);
             }
         });
+    }
+    void set_callback_on_space_freed(on_space_freed_callback cb) {
+        _on_space_freed = std::move(cb);
     }
 };
 
@@ -84,6 +93,7 @@ void mutation_cleaner_impl::destroy_later(partition_version& v) noexcept {
 
 inline
 void mutation_cleaner_impl::destroy_gently(partition_version& v) noexcept {
+    auto dirty_guard = make_region_space_guard();
     if (v.clear_gently(_tracker) == stop_iteration::no) {
         destroy_later(v);
     } else {
@@ -117,9 +127,8 @@ class mutation_cleaner final {
     lw_shared_ptr<mutation_cleaner_impl> _impl;
 public:
     mutation_cleaner(logalloc::region& r, cache_tracker* t, mutation_application_stats& app_stats,
-            seastar::scheduling_group sg = seastar::current_scheduling_group(),
-            std::function<void(size_t)> on_space_freed = nullptr)
-        : _impl(make_lw_shared<mutation_cleaner_impl>(r, t, this, app_stats, sg, std::move(on_space_freed))) {
+            seastar::scheduling_group sg = seastar::current_scheduling_group())
+        : _impl(make_lw_shared<mutation_cleaner_impl>(r, t, this, app_stats, sg)) {
     }
 
     mutation_cleaner(mutation_cleaner&&) = delete;
@@ -193,5 +202,9 @@ public:
     // nor access it after calling this.
     void merge_and_destroy(partition_snapshot& ps) {
         return _impl->merge_and_destroy(ps);
+    }
+
+    void set_callback_on_space_freed(mutation_cleaner_impl::on_space_freed_callback cb) {
+        _impl->set_callback_on_space_freed(std::move(cb));
     }
 };

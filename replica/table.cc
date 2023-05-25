@@ -637,7 +637,7 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
     if (cache_enabled()) {
         co_return co_await _cache.update(std::move(adder), *m);
     } else {
-        co_return co_await _cache.invalidate(std::move(adder)).then([m] { return m->clear_gently(); });
+        co_return co_await _cache.update_invalidating(std::move(adder), *m);
     }
 }
 
