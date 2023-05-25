@@ -279,10 +279,10 @@ private:
     std::function<void()> compaction_submission_callback();
     // all registered tables are reevaluated at a constant interval.
     // Submission is a NO-OP when there's nothing to do, so it's fine to call it regularly.
-    timer<lowres_clock> _compaction_submission_timer = timer<lowres_clock>(compaction_submission_callback());
     static constexpr std::chrono::seconds periodic_compaction_submission_interval() { return std::chrono::seconds(3600); }
 
     config _cfg;
+    timer<lowres_clock> _compaction_submission_timer;
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
@@ -330,7 +330,7 @@ private:
     // table still exists and compaction is not disabled for the table.
     inline bool can_proceed(compaction::table_state* t) const;
 
-    void postponed_compactions_reevaluation();
+    future<> postponed_compactions_reevaluation();
     void reevaluate_postponed_compactions() noexcept;
     // Postpone compaction for a table that couldn't be executed due to ongoing
     // similar-sized compaction.

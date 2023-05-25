@@ -15,6 +15,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "sstables/exceptions.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/fb_utilities.hh"
@@ -637,6 +638,7 @@ sstables::compaction_stopped_exception compaction_manager::task::make_compaction
 
 compaction_manager::compaction_manager(config cfg, abort_source& as)
     : _cfg(std::move(cfg))
+    , _compaction_submission_timer(compaction_sg().cpu, compaction_submission_callback())
     , _compaction_controller(make_compaction_controller(compaction_sg(), static_shares(), [this] () -> float {
         _last_backlog = backlog();
         auto b = _last_backlog / available_memory();
@@ -670,6 +672,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as)
 
 compaction_manager::compaction_manager()
     : _cfg(config{ .available_memory = 1 })
+    , _compaction_submission_timer(compaction_sg().cpu, compaction_submission_callback())
     , _compaction_controller(make_compaction_controller(compaction_sg(), 1, [] () -> float { return 1.0; }))
     , _backlog_manager(_compaction_controller)
     , _throughput_updater(serialized_action([this] { return update_throughput(throughput_mbs()); }))
@@ -726,38 +729,46 @@ void compaction_manager::register_metrics() {
 void compaction_manager::enable() {
     assert(_state == state::none || _state == state::disabled);
     _state = state::enabled;
-    _compaction_submission_timer.arm(periodic_compaction_submission_interval());
-    postponed_compactions_reevaluation();
+    _compaction_submission_timer.arm_periodic(periodic_compaction_submission_interval());
+    _waiting_reevalution = postponed_compactions_reevaluation();
 }
 
 std::function<void()> compaction_manager::compaction_submission_callback() {
     return [this] () mutable {
         for (auto& e: _compaction_state) {
-            submit(*e.first);
+            postpone_compaction_for_table(e.first);
         }
+        reevaluate_postponed_compactions();
     };
 }
 
-void compaction_manager::postponed_compactions_reevaluation() {
-    _waiting_reevalution = repeat([this] {
-        return _postponed_reevaluation.wait().then([this] {
-            if (_state != state::enabled) {
-                _postponed.clear();
-                return stop_iteration::yes;
-            }
-            auto postponed = std::move(_postponed);
-            try {
-                for (auto& t : postponed) {
-                    auto s = t->schema();
-                    cmlog.debug("resubmitting postponed compaction for table {}.{} [{}]", s->ks_name(), s->cf_name(), fmt::ptr(t));
-                    submit(*t);
+future<> compaction_manager::postponed_compactions_reevaluation() {
+     while (true) {
+        co_await _postponed_reevaluation.when();
+        if (_state != state::enabled) {
+            _postponed.clear();
+            co_return;
+        }
+        // A task_state being reevaluated can re-insert itself into postponed list, which is the reason
+        // for moving the list to be processed into a local.
+        auto postponed = std::exchange(_postponed, {});
+        try {
+            for (auto it = postponed.begin(); it != postponed.end();) {
+                compaction::table_state* t = *it;
+                it = postponed.erase(it);
+                // skip reevaluation of a table_state that became invalid post its removal
+                if (!_compaction_state.contains(t)) {
+                    continue;
                 }
-            } catch (...) {
-                _postponed = std::move(postponed);
+                auto s = t->schema();
+                cmlog.debug("resubmitting postponed compaction for table {}.{} [{}]", s->ks_name(), s->cf_name(), fmt::ptr(t));
+                submit(*t);
+                co_await coroutine::maybe_yield();
             }
-            return stop_iteration::no;
-        });
-    });
+        } catch (...) {
+            _postponed.insert(postponed.begin(), postponed.end());
+        }
+    }
 }
 
 void compaction_manager::reevaluate_postponed_compactions() noexcept {
