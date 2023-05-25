@@ -533,9 +533,9 @@ private:
      * Handle notification that a node being actively removed from the ring via 'removenode'
      *
      * @param endpoint node
-     * @param pieces either REMOVED_TOKEN (node is gone) or REMOVING_TOKEN (replicas need to be restored)
+     * @param pieces is REMOVED_TOKEN (node is gone)
      */
-    future<> handle_state_removing(inet_address endpoint, std::vector<sstring> pieces);
+    future<> handle_state_removed(inet_address endpoint, std::vector<sstring> pieces);
 
     future<>
     handle_state_replacing_update_pending_ranges(mutable_token_metadata_ptr tmptr, inet_address replacing_node);

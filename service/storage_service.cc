@@ -2425,8 +2425,8 @@ void storage_service::handle_state_moving(inet_address endpoint, std::vector<sst
     throw std::runtime_error(::format("Move operation is not supported anymore, endpoint={}", endpoint));
 }
 
-future<> storage_service::handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
-    slogger.debug("endpoint={} handle_state_removing", endpoint);
+future<> storage_service::handle_state_removed(inet_address endpoint, std::vector<sstring> pieces) {
+    slogger.debug("endpoint={} handle_state_removed", endpoint);
     if (pieces.empty()) {
         slogger.warn("Fail to handle_state_removing endpoint={} pieces={}", endpoint, pieces);
         co_return;
@@ -2444,14 +2444,10 @@ future<> storage_service::handle_state_removing(inet_address endpoint, std::vect
     if (get_token_metadata().is_normal_token_owner(endpoint)) {
         auto state = pieces[0];
         auto remove_tokens = get_token_metadata().get_tokens(endpoint);
-        if (sstring(gms::versioned_value::REMOVED_TOKEN) == state) {
-            std::unordered_set<token> tmp(remove_tokens.begin(), remove_tokens.end());
-            co_await excise(std::move(tmp), endpoint, extract_expire_time(pieces));
-        }
+        std::unordered_set<token> tmp(remove_tokens.begin(), remove_tokens.end());
+        co_await excise(std::move(tmp), endpoint, extract_expire_time(pieces));
     } else { // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
-        if (sstring(gms::versioned_value::REMOVED_TOKEN) == pieces[0]) {
-            add_expire_time_if_found(endpoint, extract_expire_time(pieces));
-        }
+        add_expire_time_if_found(endpoint, extract_expire_time(pieces));
         co_await remove_endpoint(endpoint);
     }
 }
@@ -2509,7 +2505,7 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
                    move_name == sstring(versioned_value::SHUTDOWN)) {
             co_await handle_state_normal(endpoint);
         } else if (move_name == sstring(versioned_value::REMOVED_TOKEN)) {
-            co_await handle_state_removing(endpoint, pieces);
+            co_await handle_state_removed(endpoint, pieces);
         } else if (move_name == sstring(versioned_value::STATUS_LEAVING)) {
             co_await handle_state_leaving(endpoint);
         } else if (move_name == sstring(versioned_value::STATUS_LEFT)) {
