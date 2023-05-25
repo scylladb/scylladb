@@ -2427,10 +2427,7 @@ void storage_service::handle_state_moving(inet_address endpoint, std::vector<sst
 
 future<> storage_service::handle_state_removed(inet_address endpoint, std::vector<sstring> pieces) {
     slogger.debug("endpoint={} handle_state_removed", endpoint);
-    if (pieces.empty()) {
-        slogger.warn("Fail to handle_state_removing endpoint={} pieces={}", endpoint, pieces);
-        co_return;
-    }
+
     if (endpoint == get_broadcast_address()) {
         slogger.info("Received removenode gossip about myself. Is this node rejoining after an explicit removenode?");
         try {
