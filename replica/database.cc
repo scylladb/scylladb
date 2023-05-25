@@ -2904,8 +2904,9 @@ future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations(
     auto max_size = db.local().get_unlimited_query_max_result_size();
     auto max_res_size = query::max_result_size(max_size.soft_limit, max_size.hard_limit, query::result_memory_limiter::maximum_result_size);
     auto cmd = query::read_command(s->id(), s->version(), ps, max_res_size, query::tombstone_limit::max);
-    if (pr.is_singular()) {
-        unsigned shard = dht::shard_of(*s, pr.start()->value().token());
+    auto erm = s->table().get_effective_replication_map();
+    if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
+        auto shard = *shard_opt;
         co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, &pr, timeout] (replica::database& db) mutable {
             return db.query_mutations(gs, cmd, pr, {}, timeout).then([] (std::tuple<reconcilable_result, cache_temperature>&& res) {
                 return make_foreign(make_lw_shared<reconcilable_result>(std::move(std::get<0>(res))));
@@ -2929,8 +2930,9 @@ future<foreign_ptr<lw_shared_ptr<query::result>>> query_data(
     auto cmd = query::read_command(s->id(), s->version(), ps, max_res_size, query::tombstone_limit::max);
     auto prs = dht::partition_range_vector{pr};
     auto opts = query::result_options::only_result();
-    if (pr.is_singular()) {
-        unsigned shard = dht::shard_of(*s, pr.start()->value().token());
+    auto erm = s->table().get_effective_replication_map();
+    if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
+        auto shard = *shard_opt;
         co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, opts, &prs, timeout] (replica::database& db) mutable {
             return db.query(gs, cmd, opts, prs, {}, timeout).then([] (std::tuple<lw_shared_ptr<query::result>, cache_temperature>&& res) {
                 return make_foreign(std::move(std::get<0>(res)));

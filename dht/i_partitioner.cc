@@ -504,4 +504,33 @@ dht::token_range_vector split_token_range_msb(unsigned most_significant_bits) {
     return ret;
 }
 
+dht::token first_token(const dht::partition_range& pr) {
+    auto start = dht::ring_position_view::for_range_start(pr);
+    auto token = start.token();
+    // Check if the range excludes "token".
+    if (!start.key()
+        && start.get_token_bound() == dht::ring_position::token_bound::end
+        && token._kind == dht::token::kind::key
+        && !token.is_last()) {
+        token = dht::next_token(token);
+    }
+    return token;
+}
+
+std::optional<shard_id> is_single_shard(const dht::sharder& sharder, const schema& s, const dht::partition_range& pr) {
+    auto token = first_token(pr);
+    auto shard = sharder.shard_of(token);
+    if (pr.is_singular()) {
+        return shard;
+    }
+    if (auto s_a_t = sharder.next_shard(token)) {
+        dht::ring_position_comparator cmp(s);
+        auto end = dht::ring_position_view::for_range_end(pr);
+        if (cmp(end, dht::ring_position_view::starting_at(s_a_t->token)) > 0) {
+            return std::nullopt;
+        }
+    }
+    return shard;
+}
+
 }

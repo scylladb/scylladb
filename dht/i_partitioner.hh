@@ -653,6 +653,14 @@ future<dht::partition_range_vector> subtract_ranges(const schema& schema, const 
 // Returns a token_range vector split based on the given number of most-significant bits
 dht::token_range_vector split_token_range_msb(unsigned most_significant_bits);
 
+// Returns the first token included by a partition range.
+// May return tokens for which is_minimum() or is_maximum() is true.
+dht::token first_token(const dht::partition_range&);
+
+// Returns true iff a given partition range is wholly owned by a single shard.
+// If so, returns that shard. Otherwise, return std::nullopt.
+std::optional<shard_id> is_single_shard(const dht::sharder&, const schema&, const dht::partition_range&);
+
 } // dht
 
 namespace std {

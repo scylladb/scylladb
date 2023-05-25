@@ -5308,8 +5308,8 @@ future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
 storage_proxy::query_result_local(locator::effective_replication_map_ptr erm, schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, query::result_options opts,
                                   tracing::trace_state_ptr trace_state, storage_proxy::clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
     cmd->slice.options.set_if<query::partition_slice::option::with_digest>(opts.request != query::result_request::only_result);
-    if (pr.is_singular()) {
-        auto shard = erm->get_sharder(*s).shard_of(pr.start()->value().token());
+    if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
+        auto shard = *shard_opt;
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return _db.invoke_on(shard, _read_smp_service_group, [gs = global_schema_ptr(s), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, opts, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), rate_limit_info] (replica::database& db) mutable {
             auto trace_state = gt.get();
@@ -5540,6 +5540,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         // getRestrictedRange has broken the queried range into per-[vnode] token ranges, but this doesn't take
         // the replication factor into account. If the intersection of live endpoints for 2 consecutive ranges
         // still meets the CL requirements, then we can merge both ranges into the same RangeSliceCommand.
+      if (!erm->get_replication_strategy().uses_tablets()) {
         while (i != ranges.end())
         {
             const auto current_range_preferred_replicas = preferred_replicas_for_range(*i);
@@ -5638,6 +5639,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             ++i;
             merged_ranges.push_back(to_token_range(next_range));
         }
+      }
         slogger.trace("creating range read executor for range {} in table {}.{} with targets {}",
                       range, schema->ks_name(), schema->cf_name(), filtered_endpoints);
         try {
@@ -6227,10 +6229,10 @@ future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
 storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
                                        storage_proxy::clock_type::time_point timeout,
                                        tracing::trace_state_ptr trace_state) {
-    if (pr.is_singular()) {
-        auto& table = local_db().find_column_family(s);
-        auto erm = table.get_effective_replication_map();
-        unsigned shard = erm->shard_of(*s, pr.start()->value().token());
+    auto& table = s->table();
+    auto erm = table.get_effective_replication_map();
+    if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
+        auto shard = *shard_opt;
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return _db.invoke_on(shard, _read_smp_service_group, [cmd, &pr, gs=global_schema_ptr(s), timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (replica::database& db) mutable {
             return db.query_mutations(gs, *cmd, pr, gt, timeout).then([] (std::tuple<reconcilable_result, cache_temperature> result_ht) {

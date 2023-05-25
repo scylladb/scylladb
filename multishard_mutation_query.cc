@@ -222,6 +222,14 @@ public:
             , _semaphores(smp::count, nullptr) {
         _readers.resize(smp::count);
         _permit.set_max_result_size(get_max_result_size());
+
+        if (!_erm->get_replication_strategy().is_vnode_based()) {
+            // The algorithm is full of assumptions about shard assignment being round-robin, static, and full.
+            // This does not hold for tablets. We chose to avoid this algorithm rather than adapting it.
+            // The coordinator should split ranges accordingly.
+            on_internal_error(mmq_log, format("multishard reader cannot be used on tables with non-static sharding: {}.{}",
+                              _schema->ks_name(), _schema->cf_name()));
+        }
     }
 
     read_context(read_context&&) = delete;
