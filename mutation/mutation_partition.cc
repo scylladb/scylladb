@@ -2505,6 +2505,7 @@ memory::reclaiming_result mutation_cleaner_impl::clear_some() noexcept {
     if (_versions.empty()) {
         return memory::reclaiming_result::reclaimed_nothing;
     }
+    auto dirty_guard = make_region_space_guard();
     auto&& alloc = current_allocator();
     partition_version& pv = _versions.front();
     if (pv.clear_gently(_tracker) == stop_iteration::yes) {
