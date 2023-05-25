@@ -97,17 +97,21 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
     cln->close().get();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload) {
-    const sstring name(fmt::format("/{}/testlargeobject-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
+void do_test_client_multipart_upload(bool with_copy_upload) {
+    const sstring name(fmt::format("/{}/test{}object-{}", tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), with_copy_upload ? "jumbo" : "large", ::getpid()));
 
     testlog.info("Make client\n");
     auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config());
 
-    testlog.info("Upload object\n");
-    auto out = output_stream<char>(cln->make_upload_sink(name));
+    testlog.info("Upload object (with copy = {})\n", with_copy_upload);
+    auto out = output_stream<char>(
+        // Make it 3 parts per piece, so that 128Mb buffer below
+        // would be split into several 15Mb pieces
+        with_copy_upload ? cln->make_upload_jumbo_sink(name, 3) : cln->make_upload_sink(name)
+    );
     auto close = seastar::deferred_close(out);
 
-    static constexpr unsigned chunk_size = 1024;
+    static constexpr unsigned chunk_size = 1000;
     auto rnd = tests::random::get_bytes(chunk_size);
     uint64_t object_size = 0;
     for (unsigned ch = 0; ch < 128 * 1024; ch++) {
@@ -145,6 +149,14 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload) {
     cln->delete_object(name).get();
 
     cln->close().get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload) {
+    do_test_client_multipart_upload(false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload) {
+    do_test_client_multipart_upload(true);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
