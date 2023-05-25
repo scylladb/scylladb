@@ -446,11 +446,9 @@ future<> messaging_service::shutdown() {
 
 future<> messaging_service::stop() {
     if (!_shutting_down) {
-        return shutdown().then([this] {
-            return stop();
-        });
+        co_await shutdown();
     }
-    return unregister_handler(messaging_verb::CLIENT_ID).then([this] {
+    co_await unregister_handler(messaging_verb::CLIENT_ID);
         if (_rpc->has_handlers()) {
             mlogger.error("RPC server still has handlers registered");
             for (auto verb = messaging_verb::MUTATION; verb < messaging_verb::LAST;
@@ -462,9 +460,6 @@ future<> messaging_service::stop() {
 
             std::abort();
         }
-
-        return make_ready_future<>();
-    });
 }
 
 rpc::no_wait_type messaging_service::no_wait() {
