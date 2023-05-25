@@ -2042,20 +2042,42 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
             };
             prune(st.main);
             prune(st.maintenance);
-
-            cg.set_main_sstables(std::move(st.main.pruned));
-            cg.set_maintenance_sstables(std::move(st.maintenance.pruned));
         }
     };
-    auto p = make_lw_shared<pruner>(*this);
-    co_await _cache.invalidate(row_cache::external_updater([this, p, truncated_at] {
-        // FIXME: the following isn't exception safe.
-        for (const compaction_group_ptr& cg : compaction_groups()) {
-            p->prune(*cg, truncated_at);
+
+    struct updater_impl : public row_cache::external_updater_impl {
+        table& t;
+        pruner& p;
+        db_clock::time_point truncated_at;
+        std::unordered_map<compaction_group*, compaction_backlog_tracker> new_trackers;
+
+        updater_impl(table& t, pruner& p, db_clock::time_point truncated_at) noexcept
+            : t(t)
+            , p(p)
+            , truncated_at(truncated_at)
+        {}
+
+        virtual future<> prepare() override {
+            for (const compaction_group_ptr& cg : t.compaction_groups()) {
+                p.prune(*cg, truncated_at);
+                co_await coroutine::maybe_yield();
+            }
         }
-        refresh_compound_sstable_set();
-        tlogger.debug("cleaning out row cache");
-    }));
+
+        virtual void execute() override {
+            for (auto& [cg, st] : p.cg_map) {
+                cg->set_main_sstables(std::move(st.main.pruned));
+                cg->set_maintenance_sstables(std::move(st.maintenance.pruned));
+            }
+            // FIXME: the following isn't exception safe.
+            t.refresh_compound_sstable_set();
+            tlogger.debug("cleaning out row cache");
+        }
+    };
+
+    auto p = make_lw_shared<pruner>(*this);
+    auto updater = row_cache::external_updater(std::make_unique<updater_impl>(*this, *p, truncated_at));
+    co_await _cache.invalidate(std::move(updater));
     rebuild_statistics();
     for (const auto& [cg, st] : p->cg_map) {
         for (const auto& sst : st.main.remove) {
