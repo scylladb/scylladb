@@ -432,17 +432,17 @@ future<> messaging_service::stop() {
         co_await shutdown();
     }
     co_await unregister_handler(messaging_verb::CLIENT_ID);
-        if (_rpc->has_handlers()) {
-            mlogger.error("RPC server still has handlers registered");
-            for (auto verb = messaging_verb::MUTATION; verb < messaging_verb::LAST;
-                    verb = messaging_verb(int(verb) + 1)) {
-                if (_rpc->has_handler(verb)) {
-                    mlogger.error(" - {}", static_cast<int>(verb));
-                }
+    if (_rpc->has_handlers()) {
+        mlogger.error("RPC server still has handlers registered");
+        for (auto verb = messaging_verb::MUTATION; verb < messaging_verb::LAST;
+                verb = messaging_verb(int(verb) + 1)) {
+            if (_rpc->has_handler(verb)) {
+                mlogger.error(" - {}", static_cast<int>(verb));
             }
-
-            std::abort();
         }
+
+        std::abort();
+    }
 }
 
 rpc::no_wait_type messaging_service::no_wait() {
