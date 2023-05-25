@@ -9,6 +9,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/exception.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 
 #include "message/messaging_service.hh"
 #include <seastar/core/distributed.hh>
@@ -407,7 +408,7 @@ gms::inet_address messaging_service::listen_address() {
 }
 
 static future<> stop_servers(std::array<std::unique_ptr<messaging_service::rpc_protocol_server_wrapper>, 2>& servers) {
-    return parallel_for_each(
+    co_await coroutine::parallel_for_each(
             servers | boost::adaptors::filtered([] (auto& ptr) { return bool(ptr); }) | boost::adaptors::indirected,
             std::mem_fn(&messaging_service::rpc_protocol_server_wrapper::stop));
 }
