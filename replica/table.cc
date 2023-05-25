@@ -744,6 +744,7 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
         ms_opt = make_combined_mutation_source(std::move(sources));
     }
     auto adder = row_cache::external_updater([this, m, ssts = std::move(ssts), new_ssts_ms = std::move(*ms_opt), &cg] () mutable {
+        // FIXME: the following isn't exception safe.
         for (auto& sst : ssts) {
             add_sstable(cg, sst);
             update_stats_for_new_sstable(sst);
@@ -1247,6 +1248,7 @@ compaction_group::update_sstable_lists_on_off_strategy_completion(sstables::comp
         virtual void execute() override {
             _cg.set_main_sstables(std::move(_new_main_list));
             _cg.set_maintenance_sstables(std::move(_new_maintenance_list));
+            // FIXME: the following is not exception safe
             _t.refresh_compound_sstable_set();
             // Input sstables aren't not removed from backlog tracker because they come from the maintenance set.
             _cg.backlog_tracker_adjust_charges({}, _new_main);
@@ -1333,6 +1335,7 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
         }
         virtual void execute() override {
             _cg.set_main_sstables(std::move(_new_sstables));
+            // FIXME: the following is not exception safe
             _t.refresh_compound_sstable_set();
             _cg.backlog_tracker_adjust_charges(_desc.old_sstables, _desc.new_sstables);
         }
@@ -2027,6 +2030,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     };
     auto p = make_lw_shared<pruner>(*this);
     co_await _cache.invalidate(row_cache::external_updater([this, p, truncated_at] {
+        // FIXME: the following isn't exception safe.
         for (const compaction_group_ptr& cg : compaction_groups()) {
             p->prune(*cg, truncated_at);
         }
