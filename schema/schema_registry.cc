@@ -64,7 +64,7 @@ schema_ptr schema_registry::learn(const schema_ptr& s) {
     }
     slogger.debug("Learning about version {} of {}.{}", s->version(), s->ks_name(), s->cf_name());
     auto e_ptr = make_lw_shared<schema_registry_entry>(s->version(), *this);
-    auto loaded_s = e_ptr->load(frozen_schema(s));
+    auto loaded_s = e_ptr->load(s);
     _entries.emplace(s->version(), e_ptr);
     return loaded_s;
 }
@@ -138,6 +138,20 @@ schema_ptr schema_registry::get_or_load(table_schema_version v, const schema_loa
 schema_ptr schema_registry_entry::load(frozen_schema fs) {
     _frozen_schema = std::move(fs);
     auto s = get_schema();
+    if (_state == state::LOADING) {
+        _schema_promise.set_value(s);
+        _schema_promise = {};
+    }
+    _state = state::LOADED;
+    slogger.trace("Loaded {} = {}", _version, *s);
+    return s;
+}
+
+schema_ptr schema_registry_entry::load(schema_ptr s) {
+    _frozen_schema = frozen_schema(s);
+    _schema = &*s;
+    _schema->_registry_entry = this;
+    _erase_timer.cancel();
     if (_state == state::LOADING) {
         _schema_promise.set_value(s);
         _schema_promise = {};

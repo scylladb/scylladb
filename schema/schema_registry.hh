@@ -76,6 +76,7 @@ public:
     schema_registry_entry(const schema_registry_entry&) = delete;
     ~schema_registry_entry();
     schema_ptr load(frozen_schema);
+    schema_ptr load(schema_ptr);
     future<schema_ptr> start_loading(async_schema_loader);
     schema_ptr get_schema(); // call only when state >= LOADED
     // Can be called from other shards
@@ -137,10 +138,9 @@ public:
 
     // Attempts to add given schema to the registry. If the registry already
     // knows about the schema, returns existing entry, otherwise returns back
-    // the schema which was passed as argument. Users should prefer to use the
-    // schema_ptr returned by this method instead of the one passed to it,
-    // because doing so ensures that the entry will be kept in the registry as
-    // long as the schema is actively used.
+    // the schema which was passed as argument.
+    // The schema instance pointed to by the argument will be attached to the registry
+    // entry and will keep it alive.
     schema_ptr learn(const schema_ptr&);
 };
 
