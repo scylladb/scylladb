@@ -415,6 +415,14 @@ static future<> do_with_servers(std::string_view what, std::array<std::unique_pt
     mlogger.info("{} server - Done", what);
 }
 
+future<> messaging_service::shutdown_tls_server() {
+    return do_with_servers("Shutting down tls", _server_tls, std::mem_fn(&rpc_protocol_server_wrapper::shutdown));
+}
+
+future<> messaging_service::shutdown_nontls_server() {
+    return do_with_servers("Shutting down nontls", _server, std::mem_fn(&rpc_protocol_server_wrapper::shutdown));
+}
+
 future<> messaging_service::stop_tls_server() {
     return do_with_servers("Stopping tls", _server_tls, std::mem_fn(&rpc_protocol_server_wrapper::stop));
 }
@@ -436,7 +444,7 @@ future<> messaging_service::stop_client() {
 
 future<> messaging_service::shutdown() {
     _shutting_down = true;
-    co_await when_all(stop_nontls_server(), stop_tls_server(), stop_client()).discard_result();
+    co_await when_all(shutdown_nontls_server(), shutdown_tls_server(), stop_client()).discard_result();
     _token_metadata = nullptr;
 }
 
@@ -444,6 +452,7 @@ future<> messaging_service::stop() {
     if (!_shutting_down) {
         co_await shutdown();
     }
+    co_await when_all(stop_nontls_server(), stop_tls_server());
     co_await unregister_handler(messaging_verb::CLIENT_ID);
     if (_rpc->has_handlers()) {
         mlogger.error("RPC server still has handlers registered");
