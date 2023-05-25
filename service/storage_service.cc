@@ -2502,7 +2502,7 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
             slogger.warn("Fail to split status in on_change: endpoint={}, app_state={}, value={}", endpoint, state, value);
             co_return;
         }
-        sstring move_name = pieces[0];
+        const sstring& move_name = pieces[0];
         if (move_name == sstring(versioned_value::STATUS_BOOTSTRAPPING)) {
             co_await handle_state_bootstrap(endpoint);
         } else if (move_name == sstring(versioned_value::STATUS_NORMAL) ||
