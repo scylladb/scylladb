@@ -7,6 +7,19 @@
 
 /master/glossary.html: /master/reference/glossary.html
 
+# moving files out of install-scylla(starting from version 5.3)
+# the files to be reused by install-scylla-enteprirse
+# "master" needs to be replaced with "stable" when 5.3 is released
+
+   /master/getting-started/install-scylla/scylla-web-installer: /master/getting-started/installation-common/scylla-web-installer
+   /master/getting-started/install-scylla/unified-installer: /master/getting-started//installation-common/unified-installer
+   /master/getting-started/install-scylla/air-gapped-install: /master/getting-started/installation-common/air-gapped-install
+   /master/getting-started/install-scylla/rpm-info: /master/getting-started/installation-common/rpm-info
+   /master/getting-started/install-scylla/disable-housekeeping: /master/getting-started/installation-common/disable-housekeeping
+   /master/getting-started/install-scylla/dev-mod: /master/getting-started/installation-common/dev-mod
+   /master/getting-started/install-scylla/config-commands: /master/getting-started/config-commands
+
+
 # removing the Enterprise upgrade guides from the Open Source documentation
 
 /stable/upgrade/upgrade-enterprise/index.html: https://enterprise.docs.scylladb.com/stable/upgrade/upgrade-enterprise/index.html

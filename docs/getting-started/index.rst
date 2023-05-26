@@ -7,6 +7,7 @@ Getting Started
    
    install-scylla/index
    configure
+   config-commands
    requirements
    Migrate to ScyllaDB </using-scylla/migrate-scylla>
    Integration Solutions </using-scylla/integrations/index>
