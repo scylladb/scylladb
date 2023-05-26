@@ -81,15 +81,9 @@ public:
     void copy_ongoing_charges(compaction_backlog_tracker& new_bt, bool move_read_charges = true) const;
     void revert_charges(sstables::shared_sstable sst);
 
-    void disable() {
-        _impl = {};
-        _ongoing_writes = {};
-        _ongoing_compactions = {};
-    }
 private:
     // Returns true if this SSTable can be added or removed from the tracker.
     bool sstable_belongs_to_tracker(const sstables::shared_sstable& sst);
-    bool disabled() const noexcept { return !_impl; }
     std::unique_ptr<impl> _impl;
     // We keep track of this so that we can transfer to a new tracker if the compaction strategy is
     // changed in the middle of a compaction.
