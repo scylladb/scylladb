@@ -82,7 +82,7 @@ public:
             tasks::task_id parent_id,
             replica::database& db,
             std::vector<table_id> local_tables) noexcept
-        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", parent_id)
+        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _local_tables(std::move(local_tables))
     {}
@@ -140,7 +140,7 @@ public:
             tasks::task_id parent_id,
             replica::database& db,
             std::vector<table_id> local_tables) noexcept
-        : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", parent_id)
+        : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _local_tables(std::move(local_tables))
     {}
@@ -203,7 +203,7 @@ public:
             replica::database& db,
             std::vector<table_id> table_infos,
             bool& needed) noexcept
-        : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", parent_id)
+        : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _needed(needed)
@@ -267,7 +267,7 @@ public:
             replica::database& db,
             std::vector<table_id> table_infos,
             bool exclude_current_version) noexcept
-        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", parent_id)
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _table_infos(std::move(table_infos))
         , _exclude_current_version(exclude_current_version)
@@ -315,7 +315,7 @@ public:
             std::vector<sstring> column_families,
             sstables::compaction_type_options::scrub opts,
             sstables::compaction_stats& stats) noexcept
-        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), "", "", parent_id)
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _column_families(std::move(column_families))
         , _opts(opts)
@@ -340,7 +340,7 @@ public:
             replica::database& db,
             sstables::compaction_type_options::scrub opts,
             sstables::compaction_stats& stats) noexcept
-        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), std::move(table), "", parent_id)
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), std::move(table), "", parent_id)
         , _db(db)
         , _opts(opts)
         , _stats(stats)
