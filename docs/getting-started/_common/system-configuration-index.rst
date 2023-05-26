@@ -24,6 +24,8 @@ Several system configuration settings should be applied. For ease of use, the ne
    * - (written by ``scylla_coredump_setup``, below)
      - Configure core dumps to use the ``scylla_save_coredump`` script
 
+.. _system-configuration-scripts:
+
 Scylla Scripts
 --------------
 

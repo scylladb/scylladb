@@ -11,7 +11,7 @@ Procedures
    Best Practices <tips/index>
    Benchmarking Scylla </operating-scylla/benchmarking-scylla>
    Migrate from Cassandra to Scylla <cassandra-to-scylla-migration-process>
-   Disable Housekeeping </getting-started/install-scylla/disable-housekeeping>
+   Disable Housekeeping </getting-started/installation-common/disable-housekeeping>
 
 
 .. raw:: html
@@ -33,7 +33,7 @@ Procedures to create, out-scale, down-scale, and backup Scylla clusters
 * :doc:`Best Practices </operating-scylla/procedures/tips/index>`
 * :doc:`Benchmarking Scylla </operating-scylla/benchmarking-scylla>`
 * :doc:`Migrate from Cassandra to Scylla </operating-scylla/procedures/cassandra-to-scylla-migration-process>`
-* :doc:`Disable Scylla Housekeeping </getting-started/install-scylla/disable-housekeeping>`
+* :doc:`Disable Scylla Housekeeping </getting-started/installation-common/disable-housekeeping>`
 * :doc:`How to Change Log Level in Runtime </troubleshooting/log-level/>`
 * For training material and hands-on examples also check out the `Cluster Management Repair and Scylla Manager lesson <https://university.scylladb.com/courses/scylla-operations/lessons/cluster-management-repair-and-scylla-manager/>`_ on Scylla University.
 
