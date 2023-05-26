@@ -38,7 +38,8 @@ private:
     utils::UUID _value;
 
 public:
-    generation_type() = delete;
+    // create an invalid sstable identifier
+    generation_type() = default;
 
     // use zero as the timestamp to differentiate from the regular timeuuid,
     // and use the least_sig_bits to encode the value of generation identifier.
@@ -47,13 +48,13 @@ public:
     explicit constexpr generation_type(utils::UUID value) noexcept
         : _value(value) {}
     constexpr utils::UUID as_uuid() const noexcept {
-        if (_value.timestamp() == 0) {
+        if (_value.is_null() || _value.timestamp() == 0) {
             on_internal_error(sstlog, "int generation used as a UUID ");
         }
         return _value;
     }
     constexpr int_t as_int() const noexcept {
-        if (_value.timestamp() != 0) {
+        if (_value.is_null() || _value.timestamp() != 0) {
             on_internal_error(sstlog, "UUID generation used as an int");
         }
         return _value.get_least_significant_bits();
@@ -221,7 +222,9 @@ template <>
 struct fmt::formatter<sstables::generation_type> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const sstables::generation_type& generation, FormatContext& ctx) const {
-        if (generation.is_uuid_based()) {
+        if (!generation) {
+            return fmt::format_to(ctx.out(), "-");
+        } else if (generation.is_uuid_based()) {
             // format the uuid with 4 parts splitted with "_". each these parts is encoded
             // as base36 chars.
             //

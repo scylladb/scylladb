@@ -46,6 +46,13 @@ BOOST_AUTO_TEST_CASE(from_string_int_good) {
     BOOST_CHECK_EQUAL(id, fmt::to_string(gen));
 }
 
+BOOST_AUTO_TEST_CASE(invalid_identifier) {
+  const auto invalid_id = sstables::generation_type{};
+  BOOST_CHECK_NO_THROW(fmt::to_string(invalid_id));
+  BOOST_CHECK(!invalid_id);
+}
+
+
 BOOST_AUTO_TEST_CASE(from_string_bad) {
     const auto bad_uuids = {
       "3fw _0tj4_46w3k2cpidnirvjy7k"s,

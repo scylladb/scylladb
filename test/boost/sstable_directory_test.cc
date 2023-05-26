@@ -511,7 +511,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
         auto max_generation_seen = highest_generation_seen(sstdir).get0();
-        sharded_gen.start(max_generation_seen->as_int()).get();
+        sharded_gen.start(max_generation_seen.as_int()).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         auto make_sstable = [&e, upload_path, &sharded_gen] (shard_id shard) {
@@ -564,7 +564,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
         auto max_generation_seen = highest_generation_seen(sstdir).get0();
-        sharded_gen.start(max_generation_seen->as_int()).get();
+        sharded_gen.start(max_generation_seen.as_int()).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         auto make_sstable = [&e, upload_path, &sharded_gen] (shard_id shard) {
@@ -616,7 +616,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
         auto max_generation_seen = highest_generation_seen(sstdir).get0();
-        sharded_gen.start(max_generation_seen->as_int()).get();
+        sharded_gen.start(max_generation_seen.as_int()).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         auto make_sstable = [&e, upload_path, &sharded_gen] (shard_id shard) {
