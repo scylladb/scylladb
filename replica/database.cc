@@ -1318,15 +1318,11 @@ keyspace::column_family_directory(const sstring& base_path, const sstring& name,
 }
 
 future<> table::init_storage() {
-    std::vector<sstring> cfdirs;
-    for (auto& extra : _config.all_datadirs) {
-        cfdirs.push_back(extra);
-    }
-    co_await coroutine::parallel_for_each(cfdirs, [] (sstring cfdir) {
+    co_await coroutine::parallel_for_each(_config.all_datadirs, [] (sstring cfdir) {
         return io_check([cfdir] { return recursive_touch_directory(cfdir); });
     });
-    co_await io_check([cfdirs0 = cfdirs[0]] { return touch_directory(cfdirs0 + "/upload"); });
-    co_await io_check([cfdirs0 = cfdirs[0]] { return touch_directory(cfdirs0 + "/staging"); });
+    co_await io_check([this] { return touch_directory(_config.datadir + "/upload"); });
+    co_await io_check([this] { return touch_directory(_config.datadir + "/staging"); });
 }
 
 column_family& database::find_column_family(const schema_ptr& schema) {
