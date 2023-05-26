@@ -13,6 +13,9 @@
 #include "schema/schema_fwd.hh"
 #include "tasks/task_manager.hh"
 
+namespace sstables {
+class sstable_directory;
+}
 namespace compaction {
 
 class compaction_task_impl : public tasks::task_manager::task::impl {
@@ -485,6 +488,33 @@ public:
     }
 protected:
     virtual future<> run() override = 0;
+};
+
+class table_reshaping_compaction_task_impl : public reshaping_compaction_task_impl {
+private:
+    sharded<sstables::sstable_directory>& _dir;
+    sharded<replica::database>& _db;
+    sstables::reshape_mode _mode;
+    sstables::compaction_sstable_creator_fn _creator;
+    std::function<bool (const sstables::shared_sstable&)> _filter;
+public:
+    table_reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
+            std::string keyspace,
+            std::string table,
+            sharded<sstables::sstable_directory>& dir,
+            sharded<replica::database>& db,
+            sstables::reshape_mode mode,
+            sstables::compaction_sstable_creator_fn creator,
+            std::function<bool (const sstables::shared_sstable&)> filter) noexcept
+        : reshaping_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), std::move(table), "", tasks::task_id::create_null_id())
+        , _dir(dir)
+        , _db(db)
+        , _mode(mode)
+        , _creator(std::move(creator))
+        , _filter(std::move(filter))
+    {}
+protected:
+    virtual future<> run() override;
 };
 
 class task_manager_module : public tasks::task_manager::module {

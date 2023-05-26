@@ -378,17 +378,9 @@ future<>
 distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstables::reshape_mode mode,
         sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator,
         std::function<bool (const sstables::shared_sstable&)> filter) {
-
-    auto start = std::chrono::steady_clock::now();
-    auto total_size = co_await dir.map_reduce0([&db, ks_name = std::move(ks_name), table_name = std::move(table_name), creator = std::move(creator), mode, filter] (sstables::sstable_directory& d) {
-        auto& table = db.local().find_column_family(ks_name, table_name);
-        return ::replica::reshape(d, table, creator, mode, filter);
-    }, uint64_t(0), std::plus<uint64_t>());
-
-    if (total_size > 0) {
-        auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
-        dblog.info("Reshaped {} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), duration.count(), sstables::pretty_printed_throughput(total_size, duration));
-    }
+    auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+    auto task = co_await compaction_module.make_and_start_task<table_reshaping_compaction_task_impl>({}, std::move(ks_name), std::move(table_name), dir, db, mode, std::move(creator), std::move(filter));
+    co_await task->done();
 }
 
 // Loads SSTables into the main directory (or staging) and returns how many were loaded
