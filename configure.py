@@ -2008,7 +2008,6 @@ with open(buildfile, 'w') as f:
                     rust_headers[hh] = src
                 else:
                     raise Exception('No rule for ' + src)
-        f.write('   libs = $seastar_libs_{}\n'.format(mode))
         f.write(
             'build {mode}-objects: phony {objs}\n'.format(
                 mode=mode,
