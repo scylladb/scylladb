@@ -1322,13 +1322,11 @@ future<> table::init_storage() {
     for (auto& extra : _config.all_datadirs) {
         cfdirs.push_back(extra);
     }
-    return parallel_for_each(cfdirs, [] (sstring cfdir) {
+    co_await coroutine::parallel_for_each(cfdirs, [] (sstring cfdir) {
         return io_check([cfdir] { return recursive_touch_directory(cfdir); });
-    }).then([cfdirs0 = cfdirs[0]] {
-        return io_check([cfdirs0] { return touch_directory(cfdirs0 + "/upload"); });
-    }).then([cfdirs0 = cfdirs[0]] {
-        return io_check([cfdirs0] { return touch_directory(cfdirs0 + "/staging"); });
     });
+    co_await io_check([cfdirs0 = cfdirs[0]] { return touch_directory(cfdirs0 + "/upload"); });
+    co_await io_check([cfdirs0 = cfdirs[0]] { return touch_directory(cfdirs0 + "/staging"); });
 }
 
 column_family& database::find_column_family(const schema_ptr& schema) {
