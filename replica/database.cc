@@ -1323,6 +1323,12 @@ future<> table::destroy_storage() {
     return sstables::remove_table_directory_if_has_no_snapshots(fs::path(_config.datadir));
 }
 
+future<> keyspace::init_storage() {
+    if (_config.datadir != "") {
+        co_await io_check([this] { return touch_directory(_config.datadir); });
+    }
+}
+
 column_family& database::find_column_family(const schema_ptr& schema) {
     return find_column_family(schema->id());
 }
@@ -1394,11 +1400,7 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
 
     co_await create_in_memory_keyspace(ksm, erm_factory, system);
     auto& ks = _keyspaces.at(ksm->name());
-    auto& datadir = ks.datadir();
-
-    if (datadir != "") {
-        co_await io_check([&datadir] { return touch_directory(datadir); });
-    }
+    co_await ks.init_storage();
 }
 
 future<>

@@ -1204,6 +1204,8 @@ public:
 
     future<> update_from(const locator::shared_token_metadata& stm, lw_shared_ptr<keyspace_metadata>);
 
+    future<> init_storage();
+
     /** Note: return by shared pointer value, since the meta data is
      * semi-volatile. I.e. we could do alter keyspace at any time, and
      * boom, it is replaced.
