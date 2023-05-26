@@ -273,8 +273,8 @@ private:
     std::unordered_map<gms::inet_address, view_update_backlog_timestamped> _view_update_backlogs;
 
     //NOTICE(sarna): This opaque pointer is here just to avoid moving write handler class definitions from .cc to .hh. It's slow path.
-    class view_update_handlers_list;
-    std::unique_ptr<view_update_handlers_list> _view_update_handlers_list;
+    class cancellable_write_handlers_list;
+    std::unique_ptr<cancellable_write_handlers_list> _cancellable_write_handlers_list;
 
     /* This is a pointer to the shard-local part of the sharded cdc_service:
      * storage_proxy needs access to cdc_service to augument mutations.
@@ -427,7 +427,8 @@ private:
     template<typename Range>
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 
-    void retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
+    // Retires (times out) write response handlers which were constructed as `cancellable` and pass the given filter.
+    void cancel_write_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
 
     /**
      * Returns whether for a range query doing a query against merged is likely
