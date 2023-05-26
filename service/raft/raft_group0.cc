@@ -469,6 +469,13 @@ struct group0_members {
     const raft::server& _group0_server;
     const raft_address_map& _address_map;
 
+    raft::config_member_set get_members() const {
+        return _group0_server.get_configuration().current;
+    }
+
+    std::optional<gms::inet_address> get_inet_addr(const raft::config_member& member) const {
+        return _address_map.find(member.addr.id);
+    }
 
     std::vector<gms::inet_address> get_inet_addrs(seastar::compat::source_location l =
             seastar::compat::source_location::current()) const {
@@ -1192,10 +1199,7 @@ static future<bool> wait_for_peers_to_enter_synchronize_state(
 
     for (sleep_with_exponential_backoff sleep;; co_await sleep(as)) {
         // We fetch the config again on every attempt to handle the possibility of removing failed nodes.
-        auto current_config = members0.get_inet_addrs();
-        if (current_config.empty()) {
-            continue;
-        }
+        auto current_members_set = members0.get_members();
 
         ::tracker<bool> tracker;
         auto retry = make_lw_shared<bool>(false);
@@ -1209,10 +1213,20 @@ static future<bool> wait_for_peers_to_enter_synchronize_state(
         }
 
         (void) [] (netw::messaging_service& ms, abort_source& as, gate::holder pause_shutdown,
-                   std::vector<gms::inet_address> current_config,
+                   raft::config_member_set current_members_set, group0_members members0,
                    lw_shared_ptr<std::unordered_set<gms::inet_address>> entered_synchronize,
                    lw_shared_ptr<bool> retry, ::tracker<bool> tracker) -> future<> {
-            co_await max_concurrent_for_each(current_config, max_concurrency, [&] (const gms::inet_address& node) -> future<> {
+            co_await max_concurrent_for_each(current_members_set, max_concurrency, [&] (const raft::config_member& member) -> future<> {
+                auto node_opt = members0.get_inet_addr(member);
+
+                if (!node_opt.has_value()) {
+                    upgrade_log.warn("wait_for_peers_to_enter_synchronize_state: cannot resolve the IP of {}", member);
+                    *retry = true;
+                    co_return;
+                }
+
+                auto node = *node_opt;
+
                 if (entered_synchronize->contains(node)) {
                     co_return;
                 }
@@ -1249,7 +1263,7 @@ static future<bool> wait_for_peers_to_enter_synchronize_state(
             });
 
             tracker.set_value(false);
-        }(ms, as, pause_shutdown, std::move(current_config), entered_synchronize, retry, tracker);
+        }(ms, as, pause_shutdown, std::move(current_members_set), members0, entered_synchronize, retry, tracker);
 
         auto finish_early = co_await tracker.get();
         if (finish_early) {
