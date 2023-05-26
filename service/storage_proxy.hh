@@ -470,10 +470,6 @@ public:
         return _cdc;
     }
 
-    view_update_handlers_list& get_view_update_handlers_list() {
-        return *_view_update_handlers_list;
-    }
-
     response_id_type get_next_response_id() {
         auto next = _next_response_id++;
         if (next == 0) { // 0 is reserved for unique_response_handler
