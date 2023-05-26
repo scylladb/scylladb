@@ -1277,7 +1277,9 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     const db::config& db_config = db.get_config();
 
     for (auto& extra : _config.all_datadirs) {
-        cfg.all_datadirs.push_back(column_family_directory(extra, s.cf_name(), s.id()));
+        auto uuid_sstring = s.id().to_sstring();
+        boost::erase_all(uuid_sstring, "-");
+        cfg.all_datadirs.push_back(format("{}/{}-{}", extra, s.cf_name(), uuid_sstring));
     }
     cfg.datadir = cfg.all_datadirs[0];
     cfg.enable_disk_reads = _config.enable_disk_reads;
@@ -1307,13 +1309,6 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.x_log2_compaction_groups = db_config.x_log2_compaction_groups();
 
     return cfg;
-}
-
-sstring
-keyspace::column_family_directory(const sstring& base_path, const sstring& name, table_id uuid) const {
-    auto uuid_sstring = uuid.to_sstring();
-    boost::erase_all(uuid_sstring, "-");
-    return format("{}/{}-{}", base_path, name, uuid_sstring);
 }
 
 future<> table::init_storage() {

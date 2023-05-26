@@ -1242,8 +1242,6 @@ public:
     const sstring& datadir() const {
         return _config.datadir;
     }
-
-    sstring column_family_directory(const sstring& base_path, const sstring& name, table_id uuid) const;
 };
 
 using no_such_keyspace = data_dictionary::no_such_keyspace;
