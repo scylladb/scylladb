@@ -108,34 +108,34 @@ void verification_error(fs::path path, const char* fstr, Args&&... args) {
 // No other file types may exist.
 future<> directories::verify_owner_and_mode(fs::path path) {
     auto sd = co_await file_stat(path.string(), follow_symlink::no);
-        // Under docker, we run with euid 0 and there is no reasonable way to enforce that the
-        // in-container uid will have the same uid as files mounted from outside the container. So
-        // just allow euid 0 as a special case. It should survive the file_accessible() checks below.
-        // See #4823.
-        if (geteuid() != 0 && sd.uid != geteuid()) {
-            verification_error(std::move(path), "File not owned by current euid: {}. Owner is: {}", geteuid(), sd.uid);
+    // Under docker, we run with euid 0 and there is no reasonable way to enforce that the
+    // in-container uid will have the same uid as files mounted from outside the container. So
+    // just allow euid 0 as a special case. It should survive the file_accessible() checks below.
+    // See #4823.
+    if (geteuid() != 0 && sd.uid != geteuid()) {
+        verification_error(std::move(path), "File not owned by current euid: {}. Owner is: {}", geteuid(), sd.uid);
+    }
+    switch (sd.type) {
+    case directory_entry_type::regular: {
+        bool can_access = co_await file_accessible(path.string(), access_flags::read);
+        if (!can_access) {
+            verification_error(std::move(path), "File cannot be accessed for read");
         }
-        switch (sd.type) {
-        case directory_entry_type::regular: {
-            bool can_access = co_await file_accessible(path.string(), access_flags::read);
-                if (!can_access) {
-                    verification_error(std::move(path), "File cannot be accessed for read");
-                }
-            break;
+        break;
+    }
+    case directory_entry_type::directory: {
+        bool can_access = co_await file_accessible(path.string(), access_flags::read | access_flags::write | access_flags::execute);
+        if (!can_access) {
+            verification_error(std::move(path), "Directory cannot be accessed for read, write, and execute");
         }
-        case directory_entry_type::directory: {
-            bool can_access = co_await file_accessible(path.string(), access_flags::read | access_flags::write | access_flags::execute);
-                if (!can_access) {
-                    verification_error(std::move(path), "Directory cannot be accessed for read, write, and execute");
-                }
-                co_await lister::scan_dir(path, {}, [] (fs::path dir, directory_entry de) -> future<> {
-                    co_await verify_owner_and_mode(dir / de.name);
-                });
-            break;
-        }
-        default:
-            verification_error(std::move(path), "Must be either a regular file or a directory (type={})", static_cast<int>(sd.type));
-        }
+        co_await lister::scan_dir(path, {}, [] (fs::path dir, directory_entry de) -> future<> {
+            co_await verify_owner_and_mode(dir / de.name);
+        });
+        break;
+    }
+    default:
+        verification_error(std::move(path), "Must be either a regular file or a directory (type={})", static_cast<int>(sd.type));
+    }
 };
 
 } // namespace utils
