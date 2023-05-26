@@ -342,15 +342,28 @@ future<> table_scrub_sstables_compaction_task_impl::run() {
 
 future<> table_reshaping_compaction_task_impl::run() {
     auto start = std::chrono::steady_clock::now();
-    auto total_size = co_await _dir.map_reduce0([&db = _db, &ks_name = _status.keyspace, &table_name = _status.table, creator = std::move(_creator), mode = _mode, filter = _filter] (sstables::sstable_directory& d) {
-        auto& table = db.local().find_column_family(ks_name, table_name);
-        return reshape(d, table, creator, mode, filter);
+    auto total_size = co_await _dir.map_reduce0([&] (sstables::sstable_directory& d) -> future<uint64_t> {
+        uint64_t total_shard_size;
+        tasks::task_info parent_info{_status.id, _status.shard};
+        auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
+        auto task = co_await compaction_module.make_and_start_task<shard_reshaping_compaction_task_impl>(parent_info, _status.keyspace, _status.table, _status.id, d, _db, _mode, _creator, _filter, total_shard_size);
+        co_await task->done();
+        co_return total_shard_size;
     }, uint64_t(0), std::plus<uint64_t>());
 
     if (total_size > 0) {
         auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
         dblog.info("Reshaped {} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), duration.count(), sstables::pretty_printed_throughput(total_size, duration));
     }
+}
+
+tasks::is_internal shard_reshaping_compaction_task_impl::is_internal() const noexcept {
+    return tasks::is_internal::yes;
+}
+
+future<> shard_reshaping_compaction_task_impl::run() {
+    auto& table = _db.local().find_column_family(_status.keyspace, _status.table);
+    _total_shard_size = co_await reshape(_dir, table, _creator, _mode, _filter);
 }
 
 }

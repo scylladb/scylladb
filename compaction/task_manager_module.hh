@@ -517,6 +517,39 @@ protected:
     virtual future<> run() override;
 };
 
+class shard_reshaping_compaction_task_impl : public reshaping_compaction_task_impl {
+private:
+    sstables::sstable_directory& _dir;
+    sharded<replica::database>& _db;
+    sstables::reshape_mode _mode;
+    sstables::compaction_sstable_creator_fn _creator;
+    std::function<bool (const sstables::shared_sstable&)> _filter;
+    uint64_t& _total_shard_size;
+public:
+    shard_reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
+            std::string keyspace,
+            std::string table,
+            tasks::task_id parent_id,
+            sstables::sstable_directory& dir,
+            sharded<replica::database>& db,
+            sstables::reshape_mode mode,
+            sstables::compaction_sstable_creator_fn creator,
+            std::function<bool (const sstables::shared_sstable&)> filter,
+            uint64_t& total_shard_size) noexcept
+        : reshaping_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), std::move(table), "", parent_id)
+        , _dir(dir)
+        , _db(db)
+        , _mode(mode)
+        , _creator(std::move(creator))
+        , _filter(std::move(filter))
+        , _total_shard_size(total_shard_size)
+    {}
+
+    virtual tasks::is_internal is_internal() const noexcept override;
+protected:
+    virtual future<> run() override;
+};
+
 class task_manager_module : public tasks::task_manager::module {
 public:
     task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "compaction") {}
