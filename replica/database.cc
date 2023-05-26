@@ -993,8 +993,9 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 future<> database::add_column_family_and_make_directory(schema_ptr schema) {
     auto& ks = find_keyspace(schema->ks_name());
     add_column_family(ks, schema, ks.make_column_family_config(*schema, *this));
-    find_column_family(schema).get_index_manager().reload();
-    return ks.make_directory_for_column_family(schema->cf_name(), schema->id());
+    auto& cf = find_column_family(schema);
+    cf.get_index_manager().reload();
+    return cf.init_storage();
 }
 
 bool database::update_column_family(schema_ptr new_schema) {
@@ -1316,11 +1317,10 @@ keyspace::column_family_directory(const sstring& base_path, const sstring& name,
     return format("{}/{}-{}", base_path, name, uuid_sstring);
 }
 
-future<>
-keyspace::make_directory_for_column_family(const sstring& name, table_id uuid) {
+future<> table::init_storage() {
     std::vector<sstring> cfdirs;
     for (auto& extra : _config.all_datadirs) {
-        cfdirs.push_back(column_family_directory(extra, name, uuid));
+        cfdirs.push_back(extra);
     }
     return parallel_for_each(cfdirs, [] (sstring cfdir) {
         return io_check([cfdir] { return recursive_touch_directory(cfdir); });

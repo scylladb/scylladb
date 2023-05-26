@@ -626,6 +626,7 @@ public:
 
     const storage_options& get_storage_options() const noexcept { return *_storage_opts; }
     lw_shared_ptr<const storage_options> get_storage_options_ptr() const noexcept { return _storage_opts; }
+    future<> init_storage();
 
     seastar::gate& async_gate() { return _async_gate; }
 
@@ -1225,7 +1226,6 @@ public:
     locator::vnode_effective_replication_map_ptr get_effective_replication_map() const;
 
     column_family::config make_column_family_config(const schema& s, const database& db) const;
-    future<> make_directory_for_column_family(const sstring& name, table_id uuid);
     void add_or_update_column_family(const schema_ptr& s);
     void add_user_type(const user_type ut);
     void remove_user_type(const user_type ut);
