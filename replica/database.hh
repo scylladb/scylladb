@@ -627,6 +627,7 @@ public:
     const storage_options& get_storage_options() const noexcept { return *_storage_opts; }
     lw_shared_ptr<const storage_options> get_storage_options_ptr() const noexcept { return _storage_opts; }
     future<> init_storage();
+    future<> destroy_storage();
 
     seastar::gate& async_gate() { return _async_gate; }
 
