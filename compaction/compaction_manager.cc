@@ -2075,14 +2075,7 @@ void compaction_backlog_tracker::replace_sstables(const std::vector<sstables::sh
         return ret;
     };
 
-    // FIXME: propagate exception to caller once all replace_sstables implementations provide strong exception safety guarantees.
-    try {
-        _impl->replace_sstables(filter_and_revert_charges(old_ssts), filter_and_revert_charges(new_ssts));
-    } catch (...) {
-        cmlog.error("Disabling backlog tracker due to exception {}", std::current_exception());
-        // FIXME: tracker should be able to recover from a failure, e.g. OOM, by having its state reset. More details on https://github.com/scylladb/scylla/issues/10297.
-        disable();
-    }
+    _impl->replace_sstables(filter_and_revert_charges(old_ssts), filter_and_revert_charges(new_ssts));
 }
 
 compaction_backlog_tracker compaction_backlog_tracker::clone_and_replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) const {
