@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/seastar.hh>
+#include <seastar/core/coroutine.hh>
 #include "init.hh"
 #include "supervisor.hh"
 #include "directories.hh"
@@ -96,51 +97,45 @@ future<> directories::create_and_verify(directories::set dir_set) {
 
 template <typename... Args>
 static inline
-future<> verification_error(fs::path path, const char* fstr, Args&&... args) {
+void verification_error(fs::path path, const char* fstr, Args&&... args) {
     auto emsg = fmt::format(fmt::runtime(fstr), std::forward<Args>(args)...);
     startlog.error("{}: {}", path.string(), emsg);
-    return make_exception_future<>(std::runtime_error(emsg));
+    throw std::runtime_error(emsg);
 }
 
 // Verify that all files and directories are owned by current uid
 // and that files can be read and directories can be read, written, and looked up (execute)
 // No other file types may exist.
 future<> directories::verify_owner_and_mode(fs::path path) {
-    return file_stat(path.string(), follow_symlink::no).then([path = std::move(path)] (stat_data sd) {
+    auto sd = co_await file_stat(path.string(), follow_symlink::no);
         // Under docker, we run with euid 0 and there is no reasonable way to enforce that the
         // in-container uid will have the same uid as files mounted from outside the container. So
         // just allow euid 0 as a special case. It should survive the file_accessible() checks below.
         // See #4823.
         if (geteuid() != 0 && sd.uid != geteuid()) {
-            return verification_error(std::move(path), "File not owned by current euid: {}. Owner is: {}", geteuid(), sd.uid);
+            verification_error(std::move(path), "File not owned by current euid: {}. Owner is: {}", geteuid(), sd.uid);
         }
         switch (sd.type) {
         case directory_entry_type::regular: {
-            auto f = file_accessible(path.string(), access_flags::read);
-            return f.then([path = std::move(path)] (bool can_access) {
+            bool can_access = co_await file_accessible(path.string(), access_flags::read);
                 if (!can_access) {
-                    return verification_error(std::move(path), "File cannot be accessed for read");
+                    verification_error(std::move(path), "File cannot be accessed for read");
                 }
-                return make_ready_future<>();
-            });
             break;
         }
         case directory_entry_type::directory: {
-            auto f = file_accessible(path.string(), access_flags::read | access_flags::write | access_flags::execute);
-            return f.then([path = std::move(path)] (bool can_access) {
+            bool can_access = co_await file_accessible(path.string(), access_flags::read | access_flags::write | access_flags::execute);
                 if (!can_access) {
-                    return verification_error(std::move(path), "Directory cannot be accessed for read, write, and execute");
+                    verification_error(std::move(path), "Directory cannot be accessed for read, write, and execute");
                 }
-                return lister::scan_dir(path, {}, [] (fs::path dir, directory_entry de) {
-                    return verify_owner_and_mode(dir / de.name);
+                co_await lister::scan_dir(path, {}, [] (fs::path dir, directory_entry de) -> future<> {
+                    co_await verify_owner_and_mode(dir / de.name);
                 });
-            });
             break;
         }
         default:
-            return verification_error(std::move(path), "Must be either a regular file or a directory (type={})", static_cast<int>(sd.type));
+            verification_error(std::move(path), "Must be either a regular file or a directory (type={})", static_cast<int>(sd.type));
         }
-    });
 };
 
 } // namespace utils
