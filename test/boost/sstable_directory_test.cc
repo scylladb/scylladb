@@ -427,7 +427,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
                     return make_ready_future<>();
                 });
             }).get();
-            BOOST_REQUIRE(sstables.size() != 0);
+            BOOST_REQUIRE_NE(sstables.size(), 0);
 
             distributed_loader_for_tests::lock_table(sstdir, e.db(), ks_name, cf_name).get();
 
@@ -460,8 +460,8 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
             };
 
             auto res = all_sstables_exist();
-            BOOST_REQUIRE(res[false] == 0);
-            BOOST_REQUIRE(res[true] == sstables.size());
+            BOOST_REQUIRE_EQUAL(res[false], 0);
+            BOOST_REQUIRE_EQUAL(res[true], sstables.size());
 
             // Stop manually now, to allow for the object to be destroyed and take the
             // phaser with it.
@@ -471,8 +471,8 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
             BOOST_REQUIRE(!table_exists());
 
             res = all_sstables_exist();
-            BOOST_REQUIRE(res[false] == sstables.size());
-            BOOST_REQUIRE(res[true] == 0);
+            BOOST_REQUIRE_EQUAL(res[false], sstables.size());
+            BOOST_REQUIRE_EQUAL(res[true], 0);
         });
     });
 }
