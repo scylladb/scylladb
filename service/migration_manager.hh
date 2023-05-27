@@ -172,6 +172,7 @@ public:
      * Known peers in the cluster have the same schema version as us.
      */
     bool have_schema_agreement();
+    future<> wait_for_schema_agreement(const replica::database& db, db::timeout_clock::time_point deadline, seastar::abort_source* as);
 
     void init_messaging_service();
 

@@ -523,7 +523,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::UNUSED__STREAM_MUTATION:
     case messaging_verb::STREAM_MUTATION_DONE:
     case messaging_verb::COMPLETE_MESSAGE:
-    case messaging_verb::REPLICATION_FINISHED:
+    case messaging_verb::UNUSED__REPLICATION_FINISHED:
     case messaging_verb::UNUSED__REPAIR_CHECKSUM_RANGE:
     case messaging_verb::STREAM_MUTATION_FRAGMENTS:
     case messaging_verb::REPAIR_ROW_LEVEL_START:
@@ -1181,18 +1181,6 @@ future<table_schema_version> messaging_service::send_schema_check(msg_addr dst) 
 }
 future<table_schema_version> messaging_service::send_schema_check(msg_addr dst, abort_source& as) {
     return send_message_cancellable<table_schema_version>(this, netw::messaging_verb::SCHEMA_CHECK, dst, as);
-}
-
-// Wrapper for REPLICATION_FINISHED
-void messaging_service::register_replication_finished(std::function<future<> (inet_address)>&& func) {
-    register_handler(this, messaging_verb::REPLICATION_FINISHED, std::move(func));
-}
-future<> messaging_service::unregister_replication_finished() {
-    return unregister_handler(messaging_verb::REPLICATION_FINISHED);
-}
-future<> messaging_service::send_replication_finished(msg_addr id, inet_address from) {
-    // FIXME: getRpcTimeout : conf.request_timeout_in_ms
-    return send_message_timeout<void>(this, messaging_verb::REPLICATION_FINISHED, std::move(id), 10000ms, std::move(from));
 }
 
 // Wrapper for REPAIR_GET_FULL_ROW_HASHES

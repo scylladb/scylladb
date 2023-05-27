@@ -245,7 +245,7 @@
                  "GOSSIP_SHUTDOWN",
                  "DEFINITIONS_UPDATE",
                  "TRUNCATE",
-                 "REPLICATION_FINISHED",
+                 "UNUSED__REPLICATION_FINISHED",
                  "MIGRATION_REQUEST",
                  "PREPARE_MESSAGE",
                  "PREPARE_DONE_MESSAGE",

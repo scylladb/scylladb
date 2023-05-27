@@ -28,6 +28,7 @@
 #include "log.hh"
 #include "utils/class_registrator.hh"
 #include "replica/database.hh"
+#include "service/migration_manager.hh"
 
 namespace auth {
 
@@ -232,7 +233,7 @@ future<> standard_role_manager::start() {
         return this->create_metadata_tables_if_missing().then([this] {
             _stopped = auth::do_after_system_ready(_as, [this] {
                 return seastar::async([this] {
-                    wait_for_schema_agreement(_migration_manager, _qp.db().real_database(), _as).get0();
+                    _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get0();
 
                     if (any_nondefault_role_row_satisfies(_qp, &has_can_login).get0()) {
                         if (this->legacy_metadata_exists()) {

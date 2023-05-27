@@ -162,12 +162,10 @@ private:
 
 public:
     const std::vector<sstring> DEAD_STATES = {
-        versioned_value::REMOVING_TOKEN,
         versioned_value::REMOVED_TOKEN,
         versioned_value::STATUS_LEFT,
     };
     const std::vector<sstring> SILENT_SHUTDOWN_STATES = {
-        versioned_value::REMOVING_TOKEN,
         versioned_value::REMOVED_TOKEN,
         versioned_value::STATUS_LEFT,
         versioned_value::HIBERNATE,
@@ -324,16 +322,6 @@ private:
     void make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests);
 
 public:
-    /**
-     * This method will begin removing an existing endpoint from the cluster by spoofing its state
-     * This should never be called unless this coordinator has had 'removenode' invoked
-     *
-     * @param endpoint    - the endpoint being removed
-     * @param host_id      - the ID of the host being removed
-     * @param local_host_id - my own host ID for replication coordination
-     */
-    future<> advertise_removing(inet_address endpoint, locator::host_id host_id, locator::host_id local_host_id);
-
     /**
      * Handles switching the endpoint's state from REMOVING_TOKEN to REMOVED_TOKEN
      * This should only be called after advertise_removing

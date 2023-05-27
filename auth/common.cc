@@ -84,20 +84,6 @@ future<> create_metadata_table_if_missing(
     return futurize_invoke(create_metadata_table_if_missing_impl, table_name, qp, cql, mm);
 }
 
-future<> wait_for_schema_agreement(::service::migration_manager& mm, const replica::database& db, seastar::abort_source& as) {
-    static const auto pause = [] { return sleep(std::chrono::milliseconds(500)); };
-
-    return do_until([&db, &as] {
-        as.check();
-        return db.get_version() != replica::database::empty_version;
-    }, pause).then([&mm, &as] {
-        return do_until([&mm, &as] {
-            as.check();
-            return mm.have_schema_agreement();
-        }, pause);
-    });
-}
-
 ::service::query_state& internal_distributed_query_state() noexcept {
 #ifdef DEBUG
     // Give the much slower debug tests more headroom for completing auth queries.

@@ -828,17 +828,6 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
     return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
 }
 
-static future<> wait_for_schema_agreement(service::migration_manager& mm, db::timeout_clock::time_point deadline) {
-    return do_until([&mm, deadline] {
-        if (db::timeout_clock::now() > deadline) {
-            throw std::runtime_error("Unable to reach schema agreement");
-        }
-        return mm.have_schema_agreement();
-    }, [] {
-        return seastar::sleep(500ms);
-    });
-}
-
 static void verify_billing_mode(const rjson::value& request) {
         // Alternator does not yet support billing or throughput limitations, but
     // let's verify that BillingMode is at least legal.
@@ -1084,7 +1073,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     }
     co_await mm.announce(std::move(schema_mutations), std::move(group0_guard));
 
-    co_await wait_for_schema_agreement(mm, db::timeout_clock::now() + 10s);
+    co_await mm.wait_for_schema_agreement(sp.local_db(), db::timeout_clock::now() + 10s, nullptr);
     rjson::value status = rjson::empty_object();
     executor::supplement_table_info(request, *schema, sp);
     rjson::add(status, "TableDescription", std::move(request));
@@ -1151,7 +1140,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
         co_await mm.announce(std::move(m), std::move(group0_guard));
 
-        co_await wait_for_schema_agreement(mm, db::timeout_clock::now() + 10s);
+        co_await mm.wait_for_schema_agreement(p.local().local_db(), db::timeout_clock::now() + 10s, nullptr);
 
         rjson::value status = rjson::empty_object();
         supplement_table_info(request, *schema, p.local());

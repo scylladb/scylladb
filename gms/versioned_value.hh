@@ -51,7 +51,6 @@ public:
     static constexpr const char* STATUS_LEFT = "LEFT";
     static constexpr const char* STATUS_MOVING = "MOVING";
 
-    static constexpr const char* REMOVING_TOKEN = "removing";
     static constexpr const char* REMOVED_TOKEN = "removed";
 
     static constexpr const char* HIBERNATE = "hibernate";
@@ -155,11 +154,6 @@ public:
 
     static versioned_value cdc_generation_id(std::optional<cdc::generation_id> gen_id) {
         return versioned_value(make_cdc_generation_id_string(gen_id));
-    }
-
-    static versioned_value removing_nonlocal(const locator::host_id& host_id) {
-        return versioned_value(sstring(REMOVING_TOKEN) +
-            sstring(DELIMITER_STR) + host_id.to_sstring());
     }
 
     static versioned_value removed_nonlocal(const locator::host_id& host_id, int64_t expire_time) {

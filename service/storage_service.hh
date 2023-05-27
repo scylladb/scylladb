@@ -533,9 +533,9 @@ private:
      * Handle notification that a node being actively removed from the ring via 'removenode'
      *
      * @param endpoint node
-     * @param pieces either REMOVED_TOKEN (node is gone) or REMOVING_TOKEN (replicas need to be restored)
+     * @param pieces is REMOVED_TOKEN (node is gone)
      */
-    future<> handle_state_removing(inet_address endpoint, std::vector<sstring> pieces);
+    future<> handle_state_removed(inet_address endpoint, std::vector<sstring> pieces);
 
     future<>
     handle_state_replacing_update_pending_ranges(mutable_token_metadata_ptr tmptr, inet_address replacing_node);
@@ -562,24 +562,6 @@ private:
      */
     future<std::unordered_multimap<inet_address, dht::token_range>> get_new_source_ranges(locator::vnode_effective_replication_map_ptr erm, const dht::token_range_vector& ranges) const;
 
-    /**
-     * Sends a notification to a node indicating we have finished replicating data.
-     *
-     * @param remote node to send notification to
-     */
-    future<> send_replication_notification(inet_address remote);
-
-    /**
-     * Called when an endpoint is removed from the ring. This function checks
-     * whether this node becomes responsible for new ranges as a
-     * consequence and streams data if needed.
-     *
-     * This is rather ineffective, but it does not matter so much
-     * since this is called very seldom
-     *
-     * @param endpoint the node that left
-     */
-    future<> restore_replica_count(inet_address endpoint, inet_address notify_endpoint);
     future<> removenode_with_stream(gms::inet_address leaving_node, shared_ptr<abort_source> as_ptr);
     future<> removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, gms::inet_address leaving_node);
 
