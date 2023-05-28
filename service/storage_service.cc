@@ -2711,15 +2711,14 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
     _group0 = &group0;
     _raft_topology_change_enabled = _group0->is_raft_enabled() && _db.local().get_config().check_experimental(db::experimental_features_t::feature::RAFT);
 
-    return seastar::async([this, &cdc_gen_service, &sys_dist_ks, &proxy, &qp] {
         set_mode(mode::STARTING);
 
         std::unordered_set<inet_address> loaded_endpoints;
         if (_db.local().get_config().load_ring_state() && !_raft_topology_change_enabled) {
             slogger.info("Loading persisted ring state");
-            auto loaded_tokens = _sys_ks.local().load_tokens().get0();
-            auto loaded_host_ids = _sys_ks.local().load_host_ids().get0();
-            auto loaded_dc_rack = _sys_ks.local().load_dc_rack_info().get0();
+            auto loaded_tokens = co_await _sys_ks.local().load_tokens();
+            auto loaded_host_ids = co_await _sys_ks.local().load_host_ids();
+            auto loaded_dc_rack = co_await _sys_ks.local().load_dc_rack_info();
 
             auto get_dc_rack = [&loaded_dc_rack] (inet_address ep) {
                 if (loaded_dc_rack.contains(ep)) {
@@ -2739,25 +2738,25 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
                 }
             }
 
-            auto tmlock = get_token_metadata_lock().get0();
-            auto tmptr = get_mutable_token_metadata_ptr().get0();
+            auto tmlock = co_await get_token_metadata_lock();
+            auto tmptr = co_await get_mutable_token_metadata_ptr();
             for (auto x : loaded_tokens) {
                 auto ep = x.first;
                 auto tokens = x.second;
                 if (ep == get_broadcast_address()) {
                     // entry has been mistakenly added, delete it
-                    _sys_ks.local().remove_endpoint(ep).get();
+                    co_await _sys_ks.local().remove_endpoint(ep);
                 } else {
                     tmptr->update_topology(ep, get_dc_rack(ep), locator::node::state::normal);
-                    tmptr->update_normal_tokens(tokens, ep).get();
+                    co_await tmptr->update_normal_tokens(tokens, ep);
                     if (loaded_host_ids.contains(ep)) {
                         tmptr->update_host_id(loaded_host_ids.at(ep), ep);
                     }
                     loaded_endpoints.insert(ep);
-                    _gossiper.add_saved_endpoint(ep).get();
+                    co_await _gossiper.add_saved_endpoint(ep);
                 }
             }
-            replicate_to_all_cores(std::move(tmptr)).get();
+            co_await replicate_to_all_cores(std::move(tmptr));
         }
 
         // Seeds are now only used as the initial contact point nodes. If the
@@ -2768,14 +2767,13 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
         auto initial_contact_nodes = loaded_endpoints.empty() ?
             std::unordered_set<gms::inet_address>(seeds.begin(), seeds.end()) :
             loaded_endpoints;
-        auto loaded_peer_features = _sys_ks.local().load_peer_features().get0();
+        auto loaded_peer_features = co_await _sys_ks.local().load_peer_features();
         slogger.info("initial_contact_nodes={}, loaded_endpoints={}, loaded_peer_features={}",
                 initial_contact_nodes, loaded_endpoints, loaded_peer_features.size());
         for (auto& x : loaded_peer_features) {
             slogger.info("peer={}, supported_features={}", x.first, x.second);
         }
-        join_token_ring(cdc_gen_service, sys_dist_ks, proxy, std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), qp).get();
-    });
+        co_return co_await join_token_ring(cdc_gen_service, sys_dist_ks, proxy, std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), qp);
 }
 
 future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept {
