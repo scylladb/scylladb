@@ -723,7 +723,6 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
         }
 
         sstring cfname = cf->schema()->cf_name();
-        auto sstdir = ks.column_family_directory(ksdir, cfname, uuid);
         dblog.info("Keyspace {}: Reading CF {} id={} version={} storage={}", ks_name, cfname, uuid, s->version(), cf->get_storage_options().type_string());
 
         auto gtable = co_await get_table_on_all_shards(db, ks_name, cfname);
@@ -731,16 +730,16 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
         std::exception_ptr ex;
 
         try {
-            co_await ks.make_directory_for_column_family(cfname, uuid);
+            co_await cf->init_storage();
 
             co_await metadata.start();
         } catch (...) {
             std::exception_ptr eptr = std::current_exception();
             std::string msg =
                 format("Exception while populating keyspace '{}' with column family '{}' from file '{}': {}",
-                        ks_name, cfname, sstdir, eptr);
+                        ks_name, cfname, cf->dir(), eptr);
             dblog.error("Exception while populating keyspace '{}' with column family '{}' from file '{}': {}",
-                        ks_name, cfname, sstdir, eptr);
+                        ks_name, cfname, cf->dir(), eptr);
             try {
                 std::rethrow_exception(eptr);
             } catch (sstables::compaction_stopped_exception& e) {

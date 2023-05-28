@@ -626,6 +626,8 @@ public:
 
     const storage_options& get_storage_options() const noexcept { return *_storage_opts; }
     lw_shared_ptr<const storage_options> get_storage_options_ptr() const noexcept { return _storage_opts; }
+    future<> init_storage();
+    future<> destroy_storage();
 
     seastar::gate& async_gate() { return _async_gate; }
 
@@ -1202,6 +1204,8 @@ public:
 
     future<> update_from(const locator::shared_token_metadata& stm, lw_shared_ptr<keyspace_metadata>);
 
+    future<> init_storage();
+
     /** Note: return by shared pointer value, since the meta data is
      * semi-volatile. I.e. we could do alter keyspace at any time, and
      * boom, it is replaced.
@@ -1225,7 +1229,6 @@ public:
     locator::vnode_effective_replication_map_ptr get_effective_replication_map() const;
 
     column_family::config make_column_family_config(const schema& s, const database& db) const;
-    future<> make_directory_for_column_family(const sstring& name, table_id uuid);
     void add_or_update_column_family(const schema_ptr& s);
     void add_user_type(const user_type ut);
     void remove_user_type(const user_type ut);
@@ -1241,8 +1244,6 @@ public:
     const sstring& datadir() const {
         return _config.datadir;
     }
-
-    sstring column_family_directory(const sstring& base_path, const sstring& name, table_id uuid) const;
 };
 
 using no_such_keyspace = data_dictionary::no_such_keyspace;

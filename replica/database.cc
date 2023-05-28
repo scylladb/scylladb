@@ -993,8 +993,9 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 future<> database::add_column_family_and_make_directory(schema_ptr schema) {
     auto& ks = find_keyspace(schema->ks_name());
     add_column_family(ks, schema, ks.make_column_family_config(*schema, *this));
-    find_column_family(schema).get_index_manager().reload();
-    return ks.make_directory_for_column_family(schema->cf_name(), schema->id());
+    auto& cf = find_column_family(schema);
+    cf.get_index_manager().reload();
+    return cf.init_storage();
 }
 
 bool database::update_column_family(schema_ptr new_schema) {
@@ -1081,7 +1082,6 @@ future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstri
 
     auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
     auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
-    auto table_dir = fs::path(table_shards->dir());
     std::optional<sstring> snapshot_name_opt;
     if (with_snapshot) {
         snapshot_name_opt = format("pre-drop-{}", db_clock::now().time_since_epoch().count());
@@ -1098,7 +1098,7 @@ future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstri
         return table_shards->stop();
     });
     f.get(); // re-throw exception from truncate() if any
-    co_await sstables::remove_table_directory_if_has_no_snapshots(table_dir);
+    co_await table_shards->destroy_storage();
 }
 
 const table_id& database::find_uuid(std::string_view ks, std::string_view cf) const {
@@ -1277,7 +1277,9 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     const db::config& db_config = db.get_config();
 
     for (auto& extra : _config.all_datadirs) {
-        cfg.all_datadirs.push_back(column_family_directory(extra, s.cf_name(), s.id()));
+        auto uuid_sstring = s.id().to_sstring();
+        boost::erase_all(uuid_sstring, "-");
+        cfg.all_datadirs.push_back(format("{}/{}-{}", extra, s.cf_name(), uuid_sstring));
     }
     cfg.datadir = cfg.all_datadirs[0];
     cfg.enable_disk_reads = _config.enable_disk_reads;
@@ -1309,26 +1311,22 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     return cfg;
 }
 
-sstring
-keyspace::column_family_directory(const sstring& base_path, const sstring& name, table_id uuid) const {
-    auto uuid_sstring = uuid.to_sstring();
-    boost::erase_all(uuid_sstring, "-");
-    return format("{}/{}-{}", base_path, name, uuid_sstring);
+future<> table::init_storage() {
+    co_await coroutine::parallel_for_each(_config.all_datadirs, [] (sstring cfdir) {
+        return io_check([cfdir] { return recursive_touch_directory(cfdir); });
+    });
+    co_await io_check([this] { return touch_directory(_config.datadir + "/upload"); });
+    co_await io_check([this] { return touch_directory(_config.datadir + "/staging"); });
 }
 
-future<>
-keyspace::make_directory_for_column_family(const sstring& name, table_id uuid) {
-    std::vector<sstring> cfdirs;
-    for (auto& extra : _config.all_datadirs) {
-        cfdirs.push_back(column_family_directory(extra, name, uuid));
+future<> table::destroy_storage() {
+    return sstables::remove_table_directory_if_has_no_snapshots(fs::path(_config.datadir));
+}
+
+future<> keyspace::init_storage() {
+    if (_config.datadir != "") {
+        co_await io_check([this] { return touch_directory(_config.datadir); });
     }
-    return parallel_for_each(cfdirs, [] (sstring cfdir) {
-        return io_check([cfdir] { return recursive_touch_directory(cfdir); });
-    }).then([cfdirs0 = cfdirs[0]] {
-        return io_check([cfdirs0] { return touch_directory(cfdirs0 + "/upload"); });
-    }).then([cfdirs0 = cfdirs[0]] {
-        return io_check([cfdirs0] { return touch_directory(cfdirs0 + "/staging"); });
-    });
 }
 
 column_family& database::find_column_family(const schema_ptr& schema) {
@@ -1402,11 +1400,7 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
 
     co_await create_in_memory_keyspace(ksm, erm_factory, system);
     auto& ks = _keyspaces.at(ksm->name());
-    auto& datadir = ks.datadir();
-
-    if (datadir != "") {
-        co_await io_check([&datadir] { return touch_directory(datadir); });
-    }
+    co_await ks.init_storage();
 }
 
 future<>

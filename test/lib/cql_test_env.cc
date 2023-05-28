@@ -843,11 +843,6 @@ public:
                 replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, raft_gr, *cfg, p).get();
             }
 
-            auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
-            parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
-                auto cfm = pair.second;
-                return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
-            }).get();
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
 
             db.invoke_on_all([] (replica::database& db) {
