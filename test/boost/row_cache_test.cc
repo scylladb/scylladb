@@ -1187,12 +1187,12 @@ SEASTAR_TEST_CASE(test_update_failure) {
         }
 
         auto ev = tracker.region().evictor();
-        int evicitons_left = 10;
+        int evictions_left = 10;
         tracker.region().make_evictable([&] () mutable {
-            if (evicitons_left == 0) {
+            if (evictions_left == 0) {
                 return memory::reclaiming_result::reclaimed_nothing;
             }
-            --evicitons_left;
+            --evictions_left;
             return ev();
         });
 
@@ -1202,7 +1202,7 @@ SEASTAR_TEST_CASE(test_update_failure) {
         } catch (const std::bad_alloc&) {
             failed = true;
         }
-        BOOST_REQUIRE(!evicitons_left); // should have happened
+        BOOST_REQUIRE(!evictions_left); // should have happened
 
         memory_hog.clear();
 
