@@ -41,6 +41,9 @@ public:
     // Returns false if sstable being inserted cannot satisfy the disjoint invariant. Then caller should pick another run for it.
     bool insert(shared_sstable sst);
     void erase(shared_sstable sst);
+    bool empty() const noexcept {
+        return _all.empty();
+    }
     // Data size of the whole run, meaning it's a sum of the data size of all its fragments.
     uint64_t data_size() const;
     const sstable_set& all() const { return _all; }
