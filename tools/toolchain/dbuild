@@ -16,6 +16,9 @@ EOF
     exit 1
 }
 
+if env | grep DOCKER_USERNAME > /dev/null ; then
+  echo $DOCKER_PASSWORD | docker login --username=$DOCKER_USERNAME --password-stdin
+fi
 if which docker >/dev/null 2>&1 ; then
   tool=${DBUILD_TOOL-docker}
 elif which podman >/dev/null 2>&1 ; then
