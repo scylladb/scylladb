@@ -131,7 +131,6 @@ public:
     //
     // If the local RAFT feature is enabled, does one of the following:
     // - join group 0 (if we're bootstrapping),
-    // - start existing group 0 server (if we bootstrapped before),
     // - prepare us for the upgrade procedure, which will create group 0 later (if we're upgrading).
     //
     // Cannot be called twice.
@@ -139,6 +138,14 @@ public:
     // Also make sure to call `finish_setup_after_join` after the node has joined the cluster and entered NORMAL state.
     future<> setup_group0(db::system_keyspace&, const std::unordered_set<gms::inet_address>& initial_contact_nodes,
                           std::optional<replace_info>, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, cdc::generation_service& cdc_gen_service);
+
+    // Call during the startup procedure before networking is enabled during restart
+    //
+    // If the local RAFT feature is enabled start existing group 0 server.
+    //
+    // Cannot be called twice.
+    //
+    future<> setup_group0_if_exist(db::system_keyspace&, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, cdc::generation_service& cdc_gen_service);
 
     // Call at the end of the startup procedure, after the node entered NORMAL state.
     // `setup_group0()` must have finished earlier.
@@ -306,6 +313,9 @@ private:
     // Load the initial Raft <-> IP address map as seen by
     // the gossiper.
     void load_initial_raft_address_map();
+
+    // Returns true if raft is enabled
+    future<bool> use_raft();
 };
 
 } // end of namespace service
