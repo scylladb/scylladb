@@ -2729,12 +2729,14 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
                 }
             };
 
-            for (auto& x : loaded_tokens) {
-                slogger.debug("Loaded tokens: endpoint={}, tokens={}", x.first, x.second);
-            }
+            if (slogger.is_enabled(logging::log_level::debug)) {
+                for (auto& x : loaded_tokens) {
+                    slogger.debug("Loaded tokens: endpoint={}, tokens={}", x.first, x.second);
+                }
 
-            for (auto& x : loaded_host_ids) {
-                slogger.debug("Loaded host_id: endpoint={}, uuid={}", x.first, x.second);
+                for (auto& x : loaded_host_ids) {
+                    slogger.debug("Loaded host_id: endpoint={}, uuid={}", x.first, x.second);
+                }
             }
 
             auto tmlock = get_token_metadata_lock().get0();
