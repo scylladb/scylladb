@@ -58,11 +58,11 @@ protected:
     };
 
     scheduling_group _scheduling_group;
-    timer<> _update_timer;
 
     std::vector<control_point> _control_points;
 
     std::function<float()> _current_backlog;
+    timer<> _update_timer;
     // updating shares for an I/O class may contact another shard and returns a future.
     future<> _inflight_update;
 
@@ -82,9 +82,9 @@ protected:
                        std::vector<control_point> control_points, std::function<float()> backlog,
                        float static_shares = 0)
         : _scheduling_group(std::move(sg))
-        , _update_timer([this] { adjust(); })
         , _control_points()
         , _current_backlog(std::move(backlog))
+        , _update_timer([this] { adjust(); })
         , _inflight_update(make_ready_future<>())
         , _static_shares(static_shares)
     {
