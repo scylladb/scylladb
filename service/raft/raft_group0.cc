@@ -555,7 +555,7 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
 
 future<> raft_group0::setup_group0(
         db::system_keyspace& sys_ks, const std::unordered_set<gms::inet_address>& initial_contact_nodes,
-        std::optional<replace_info> replace_info, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, cdc::generation_service& cdc_gen_servic) {
+        std::optional<replace_info> replace_info, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, cdc::generation_service& cdc_gen_service) {
     if (!co_await use_raft()) {
         co_return;
     }
@@ -573,7 +573,7 @@ future<> raft_group0::setup_group0(
     }
 
     group0_log.info("setup_group0: joining group 0...");
-    co_await join_group0(std::move(seeds), false /* non-voter */, ss, qp, mm, cdc_gen_servic);
+    co_await join_group0(std::move(seeds), false /* non-voter */, ss, qp, mm, cdc_gen_service);
     group0_log.info("setup_group0: successfully joined group 0.");
 
     if (replace_info) {
