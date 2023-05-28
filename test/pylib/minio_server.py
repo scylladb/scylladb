@@ -62,6 +62,7 @@ class MinioServer:
         os.environ['S3_PUBLIC_BUCKET_FOR_TEST'] = f'{self.bucket_name}'
 
         self.logger.info(f'Starting minio server at {self.address}:{self.port}')
+        shutil.rmtree(self.rootdir, ignore_errors=True)   # clean leftover
         os.mkdir(self.rootdir)
         self.cmd = await asyncio.create_subprocess_exec(
             self.srv_exe,
