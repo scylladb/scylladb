@@ -2715,7 +2715,7 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
         set_mode(mode::STARTING);
 
         std::unordered_set<inet_address> loaded_endpoints;
-        if (_db.local().get_config().load_ring_state()) {
+        if (_db.local().get_config().load_ring_state() && !_raft_topology_change_enabled) {
             slogger.info("Loading persisted ring state");
             auto loaded_tokens = _sys_ks.local().load_tokens().get0();
             auto loaded_host_ids = _sys_ks.local().load_host_ids().get0();
