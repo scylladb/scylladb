@@ -342,7 +342,11 @@ future<stop_iteration> partitioned_sstable_set::for_each_sstable_gently_until(st
 }
 
 void partitioned_sstable_set::insert(shared_sstable sst) {
-    _all->insert(sst);
+    auto [_, inserted] = _all->insert(sst);
+    if (!inserted) {
+        // sst is already in the set, no further handling is required
+        return;
+    }
     auto undo_all_insert = defer([&] () { _all->erase(sst); });
 
     // If sstable doesn't satisfy disjoint invariant, then place it in a new sstable run.
