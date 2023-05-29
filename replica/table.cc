@@ -358,6 +358,12 @@ flat_mutation_reader_v2 table::make_memtable_reader(schema_ptr schema, reader_pe
     return make_combined_reader(std::move(schema), std::move(permit), std::move(readers), streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
 }
 
+flat_mutation_reader_v2 table::make_sstable_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
+        const query::partition_slice& slice) {
+    return make_sstable_reader(std::move(schema), std::move(permit), _sstables, range, slice, default_priority_class(), {},
+            streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+}
+
 future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout) {
     assert(m.schema() == _counter_cell_locks->schema());
     return _counter_cell_locks->lock_cells(m.decorated_key(), partition_cells_range(m.partition()), timeout);
