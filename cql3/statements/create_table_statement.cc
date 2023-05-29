@@ -146,7 +146,7 @@ create_table_statement::prepare(data_dictionary::database db, cql_stats& stats) 
     abort();
 }
 
-future<> create_table_statement::grant_permissions_to_creator(query_processor& qp, const service::client_state& cs) const {
+future<> create_table_statement::grant_permissions_to_creator(const service::client_state& cs) const {
     return do_with(auth::make_data_resource(keyspace(), column_family()), [&cs](const auth::resource& r) {
         return auth::grant_applicable_permissions(
                 *cs.get_auth_service(),

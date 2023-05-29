@@ -8,7 +8,7 @@
 
 import pytest
 import time
-from cassandra.protocol import SyntaxException, InvalidRequest, Unauthorized, ConfigurationException
+from cassandra.protocol import SyntaxException, InvalidRequest, Unauthorized
 from util import new_test_table, new_function, new_user, new_session, new_test_keyspace, unique_name, new_type
 
 # Test that granting permissions to various resources works for the default user.
@@ -149,7 +149,7 @@ def test_udf_permissions_serialization(cql):
                     for permission in permissions:
                         cql.execute(f"GRANT {permission} ON {resource} TO {user}")
 
-                permissions = {row.resource: row.permissions for row in cql.execute(f"SELECT * FROM system_auth.role_permissions WHERE role = '{user}'")}
+                permissions = {row.resource: row.permissions for row in cql.execute(f"SELECT * FROM system_auth.role_permissions")}
                 assert permissions['functions'] == set(['ALTER', 'AUTHORIZE', 'CREATE', 'DROP', 'EXECUTE'])
                 assert permissions[f'functions/{keyspace}'] == set(['ALTER', 'AUTHORIZE', 'CREATE', 'DROP', 'EXECUTE'])
                 assert permissions[f'functions/{keyspace}/{div_fun}[org.apache.cassandra.db.marshal.LongType^org.apache.cassandra.db.marshal.Int32Type]'] == set(['ALTER', 'AUTHORIZE', 'DROP', 'EXECUTE'])
@@ -199,9 +199,9 @@ def test_drop_udf_with_same_name(cql):
     schema = "a int primary key"
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
         body1_lua = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
-        body1_java = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return Long.valueOf(42);'"
+        body1_java = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42;'"
         body2_lua = "(i int, j int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
-        body2_java = "(i int, j int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return Long.valueOf(42);'"
+        body2_java = "(i int, j int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42;'"
         body1 = body1_lua
         body2 = body2_lua
         try:
@@ -216,16 +216,17 @@ def test_drop_udf_with_same_name(cql):
         with new_user(cql) as username:
             with new_session(cql, username) as user_session:
                 grant(cql, 'DROP', f'FUNCTION {keyspace}.{fun}(int)', username)
-                with pytest.raises((InvalidRequest, Unauthorized)):
+                with pytest.raises(InvalidRequest):
                     user_session.execute(f"DROP FUNCTION {keyspace}.{fun}")
                 eventually_unauthorized(lambda: user_session.execute(f"DROP FUNCTION {keyspace}.{fun}(int, int)"))
                 grant(cql, 'DROP', f'FUNCTION {keyspace}.{fun}(int, int)', username)
-                with pytest.raises((InvalidRequest, Unauthorized)):
+                with pytest.raises(InvalidRequest):
                     user_session.execute(f"DROP FUNCTION {keyspace}.{fun}")
                 eventually_authorized(lambda: user_session.execute(f"DROP FUNCTION {keyspace}.{fun}(int)"))
                 eventually_authorized(lambda: user_session.execute(f"DROP FUNCTION {keyspace}.{fun}"))
 
 # Test that permissions set for user-defined functions are enforced
+# Tests for ALTER are separate, because they are qualified as cassandra_bug
 def test_grant_revoke_udf_permissions(cql):
     schema = "a int primary key, b list<int>"
     user = "cassandra"
@@ -269,19 +270,40 @@ def test_grant_revoke_udf_permissions(cql):
                     for resource in [f'function {keyspace}.{fun}(int, list<int>)', f'all functions in keyspace {keyspace}', 'all functions']:
                         check_enforced(cql, username, permission='AUTHORIZE', resource=resource, function=grant_idempotent)
 
+# This test case is artificially extracted from the one above,
+# because it's qualified as cassandra_bug - the documentation quotes that ALTER is needed on
+# functions if the definition is replaced (CREATE OR REPLACE FUNCTION (...)),
+# and yet it's not enforced
+def test_grant_revoke_alter_udf_permissions(cassandra_bug, cql):
+    schema = "a int primary key"
+    user = "cassandra"
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+        with new_test_table(cql, keyspace, schema) as table:
+            fun_body_lua = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
+            fun_body_java = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
+            fun_body = fun_body_lua
+            try:
+                with new_function(cql, keyspace, fun_body) as fun:
+                    pass
+            except:
+                fun_body = fun_body_java
+            with new_user(cql) as username:
+                with new_session(cql, username) as user_session:
+                    fun = "fun42"
+
                     grant(cql, 'ALTER', 'ALL FUNCTIONS', username)
                     check_enforced(cql, username, permission='CREATE', resource=f'all functions in keyspace {keyspace}',
-                            function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{unique_name()} {fun_body}"))
+                            function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
                     check_enforced(cql, username, permission='CREATE', resource='all functions',
-                            function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{unique_name()} {fun_body}"))
+                            function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
                     revoke(cql, 'ALTER', 'ALL FUNCTIONS', username)
 
-                    cql.execute(f"CREATE FUNCTION IF NOT EXISTS {keyspace}.{fun} {fun_body}")
+                    grant(cql, 'CREATE', 'ALL FUNCTIONS', username)
                     check_enforced(cql, username, permission='ALTER', resource=f'all functions in keyspace {keyspace}',
                             function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
                     check_enforced(cql, username, permission='ALTER', resource='all functions',
                             function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}")) 
-                    check_enforced(cql, username, permission='ALTER', resource=f'FUNCTION {keyspace}.{fun}(int, list<int>)',
+                    check_enforced(cql, username, permission='ALTER', resource=f'FUNCTION {keyspace}.{fun}(int)',
                             function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
 
 # Test that granting permissions on non-existent UDFs fails
@@ -293,12 +315,12 @@ def test_grant_perms_on_nonexistent_udf(cql):
         revoke(cql, 'EXECUTE', 'ALL FUNCTIONS', username)
         with pytest.raises(InvalidRequest):
             grant(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {keyspace}', username)
-        with pytest.raises((InvalidRequest, ConfigurationException)):
+        with pytest.raises(InvalidRequest):
             grant(cql, 'EXECUTE', f'FUNCTION {keyspace}.{fun_name}(int)', username)
         cql.execute(f"CREATE KEYSPACE IF NOT EXISTS {keyspace} WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 1 }}")
         grant(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {keyspace}', username)
         revoke(cql, 'EXECUTE', f'ALL FUNCTIONS IN KEYSPACE {keyspace}', username)
-        with pytest.raises((InvalidRequest, SyntaxException)):
+        with pytest.raises(InvalidRequest):
             grant(cql, 'EXECUTE', f'FUNCTION {keyspace}.{fun_name}(int)', username)
 
         fun_body_lua = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
@@ -314,24 +336,15 @@ def test_grant_perms_on_nonexistent_udf(cql):
         cql.execute(f"DROP KEYSPACE IF EXISTS {keyspace}")
 
 # Test that permissions for user-defined aggregates are also enforced.
-def test_grant_revoke_uda_permissions(cql):
+# scylla_only, because Lua is used as the target language
+def test_grant_revoke_uda_permissions(scylla_only, cql):
     schema = 'id bigint primary key'
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
         with new_test_table(cql, keyspace, schema) as table:
             for i in range(8):
                 cql.execute(f"INSERT INTO {table} (id) VALUES ({10**i})")
-            avg_partial_body_lua = "(state tuple<bigint, bigint>, val bigint) CALLED ON NULL INPUT RETURNS tuple<bigint, bigint> LANGUAGE lua AS 'return {state[1] + val, state[2] + 1}'"
-            avg_partial_body_java = "(state tuple<bigint, bigint>, val bigint) CALLED ON NULL INPUT RETURNS tuple<bigint, bigint> LANGUAGE java AS 'return state.setLong(0, state.getLong(0) + val).setLong(1, state.getLong(1) + Long.valueOf(1));'"
-            div_body_lua = "(state tuple<bigint, bigint>) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return state[1]//state[2]'"
-            div_body_java = "(state tuple<bigint, bigint>) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return state.getLong(0)/state.getLong(1);'"
-            avg_partial_body = avg_partial_body_lua
-            div_body = div_body_lua
-            try:
-                with new_function(cql, keyspace, avg_partial_body):
-                    pass
-            except:
-                avg_partial_body = avg_partial_body_java
-                div_body = div_body_java
+            avg_partial_body = "(state tuple<bigint, bigint>, val bigint) CALLED ON NULL INPUT RETURNS tuple<bigint, bigint> LANGUAGE lua AS 'return {state[1] + val, state[2] + 1}'"
+            div_body = "(state tuple<bigint, bigint>) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return state[1]//state[2]'"
             with new_function(cql, keyspace, avg_partial_body) as avg_partial, new_function(cql, keyspace, div_body) as div_fun:
                 custom_avg_body = f"(bigint) SFUNC {avg_partial} STYPE tuple<bigint, bigint> FINALFUNC {div_fun} INITCOND (0,0)"
                 with new_user(cql) as username:
@@ -347,7 +360,7 @@ def test_grant_revoke_uda_permissions(cql):
                         check_enforced(cql, username, permission='CREATE', resource='all functions',
                                 function=create_aggr_idempotent)
 
-                        cql.execute(f"CREATE AGGREGATE IF NOT EXISTS {keyspace}.{custom_avg} {custom_avg_body}")
+                        grant(cql, 'CREATE', 'ALL FUNCTIONS', username)
                         check_enforced(cql, username, permission='ALTER', resource=f'all functions in keyspace {keyspace}',
                                 function=lambda: user_session.execute(f"CREATE OR REPLACE AGGREGATE {keyspace}.{custom_avg} {custom_avg_body}"))
                         check_enforced(cql, username, permission='ALTER', resource='all functions',
