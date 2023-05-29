@@ -1605,7 +1605,8 @@ static future<> apply_to_remote_endpoints(service::storage_proxy& proxy, gms::in
             std::move(pending_endpoints),
             db::write_type::VIEW,
             std::move(tr_state),
-            allow_hints);
+            allow_hints,
+            service::is_cancellable::yes);
 }
 
 static bool should_update_synchronously(const schema& s) {

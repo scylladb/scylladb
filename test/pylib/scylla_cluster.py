@@ -18,7 +18,7 @@ import shutil
 import tempfile
 import time
 import traceback
-from typing import Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union
+from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union
 import uuid
 from enum import Enum
 from io import BufferedWriter
@@ -203,7 +203,7 @@ class ScyllaServer:
                  logger: Union[logging.Logger, logging.LoggerAdapter],
                  cluster_name: str, ip_addr: str, seeds: List[str],
                  cmdline_options: List[str],
-                 config_options: Dict[str, str]) -> None:
+                 config_options: Dict[str, Any]) -> None:
         # pylint: disable=too-many-arguments
         self.server_id = ServerNum(ScyllaServer.newid())
         self.exe = pathlib.Path(exe).resolve()
@@ -502,9 +502,15 @@ class ScyllaServer:
         except ProcessLookupError:
             pass
         else:
-            # FIXME: add timeout, fail the test and mark cluster as dirty
-            # if we timeout.
-            await self.cmd.wait()
+            STOP_TIMEOUT_SECONDS = 60
+            wait_task = self.cmd.wait()
+            try:
+                await asyncio.wait_for(wait_task, timeout=STOP_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                self.cmd.kill()
+                await self.cmd.wait()
+                raise RuntimeError(
+                    f"Stopping server {self} gracefully took longer than {STOP_TIMEOUT_SECONDS}s")
         finally:
             if self.cmd:
                 self.logger.info("gracefully stopped %s", self)
@@ -559,7 +565,7 @@ class ScyllaCluster:
         cluster_name: str
         ip_addr: IPAddress
         seeds: List[str]
-        config_from_test: dict[str, str]
+        config_from_test: dict[str, Any]
         cmdline_from_test: List[str]
 
     def __init__(self, logger: Union[logging.Logger, logging.LoggerAdapter],
@@ -646,11 +652,11 @@ class ScyllaCluster:
     def _seeds(self) -> List[str]:
         return [server.ip_addr for server in self.running.values()]
 
-    async def add_server(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None, config: Optional[dict[str, str]] = None, start: bool = True) -> ServerInfo:
+    async def add_server(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None, config: Optional[dict[str, Any]] = None, start: bool = True) -> ServerInfo:
         """Add a new server to the cluster"""
         self.is_dirty = True
 
-        extra_config: dict[str, str] = config.copy() if config else {}
+        extra_config: dict[str, Any] = config.copy() if config else {}
         if replace_cfg:
             replaced_id = replace_cfg.replaced_id
             assert replaced_id in self.servers, \

@@ -99,6 +99,8 @@ struct view_update_backlog_timestamped {
 struct allow_hints_tag {};
 using allow_hints = bool_class<allow_hints_tag>;
 
+using is_cancellable = bool_class<struct cancellable_tag>;
+
 struct storage_proxy_coordinator_query_result {
     foreign_ptr<lw_shared_ptr<query::result>> query_result;
     replicas_per_token_range last_replicas;
@@ -273,8 +275,8 @@ private:
     std::unordered_map<gms::inet_address, view_update_backlog_timestamped> _view_update_backlogs;
 
     //NOTICE(sarna): This opaque pointer is here just to avoid moving write handler class definitions from .cc to .hh. It's slow path.
-    class view_update_handlers_list;
-    std::unique_ptr<view_update_handlers_list> _view_update_handlers_list;
+    class cancellable_write_handlers_list;
+    std::unique_ptr<cancellable_write_handlers_list> _cancellable_write_handlers_list;
 
     /* This is a pointer to the shard-local part of the sharded cdc_service:
      * storage_proxy needs access to cdc_service to augument mutations.
@@ -307,9 +309,9 @@ private:
     ::shared_ptr<abstract_write_response_handler>& get_write_response_handler(storage_proxy::response_id_type id);
     result<response_id_type> create_write_response_handler_helper(schema_ptr s, const dht::token& token,
             std::unique_ptr<mutation_holder> mh, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state,
-            service_permit permit, db::allow_per_partition_rate_limit allow_limit);
+            service_permit permit, db::allow_per_partition_rate_limit allow_limit, is_cancellable);
     result<response_id_type> create_write_response_handler(locator::effective_replication_map_ptr ermp, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, inet_address_vector_replica_set targets,
-            const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info);
+            const inet_address_vector_topology_change& pending_endpoints, inet_address_vector_topology_change, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info, is_cancellable);
     result<response_id_type> create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
     result<response_id_type> create_write_response_handler(const hint_wrapper&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
     result<response_id_type> create_write_response_handler(const read_repair_mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
@@ -416,7 +418,8 @@ private:
             db::write_type type,
             tracing::trace_state_ptr tr_state,
             write_stats& stats,
-            allow_hints allow_hints = allow_hints::yes);
+            allow_hints,
+            is_cancellable);
 
     db::view::update_backlog get_view_update_backlog() const;
 
@@ -427,7 +430,8 @@ private:
     template<typename Range>
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 
-    void retire_view_response_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
+    // Retires (times out) write response handlers which were constructed as `cancellable` and pass the given filter.
+    void cancel_write_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
 
     /**
      * Returns whether for a range query doing a query against merged is likely
@@ -468,10 +472,6 @@ public:
     }
     cdc::cdc_service* get_cdc_service() const {
         return _cdc;
-    }
-
-    view_update_handlers_list& get_view_update_handlers_list() {
-        return *_view_update_handlers_list;
     }
 
     response_id_type get_next_response_id() {
@@ -568,9 +568,9 @@ public:
     // hinted handoff support, and just one target. See also
     // send_to_live_endpoints() - another take on the same original function.
     future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, inet_address_vector_topology_change pending_endpoints, db::write_type type,
-            tracing::trace_state_ptr tr_state, write_stats& stats, allow_hints allow_hints = allow_hints::yes);
+            tracing::trace_state_ptr tr_state, write_stats& stats, allow_hints, is_cancellable);
     future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, inet_address_vector_topology_change pending_endpoints, db::write_type type,
-            tracing::trace_state_ptr tr_state, allow_hints allow_hints = allow_hints::yes);
+            tracing::trace_state_ptr tr_state, allow_hints, is_cancellable);
 
     // Send a mutation to a specific remote target as a hint.
     // Unlike regular mutations during write operations, hints are sent on the streaming connection

@@ -5,3 +5,7 @@ cluster:
 extra_scylla_config_options:
     authenticator: AllowAllAuthenticator
     authorizer: AllowAllAuthorizer
+skip_in_release:
+  - test_shutdown_hang
+skip_in_debug:
+  - test_shutdown_hang

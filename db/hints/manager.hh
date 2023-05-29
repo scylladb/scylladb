@@ -501,7 +501,8 @@ private:
 
 public:
     static const std::string FILENAME_PREFIX;
-    static const std::chrono::seconds hints_flush_period;
+    // Non-const - can be modified with an error injection.
+    static std::chrono::seconds hints_flush_period;
     static const std::chrono::seconds hint_file_write_timeout;
 
 private:
