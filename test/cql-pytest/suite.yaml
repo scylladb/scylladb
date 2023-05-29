@@ -1,6 +1,26 @@
 type: Python
 # A list of long tests, which should be started early
 run_first:
-    - cassandra_tests/validation/entities/uf_types_test
+    - test_secondary_index
     - test_tools
+    - cql-pytest.cassandra_tests/validation/operations/compact_storage_test
+    - cql-pytest.cassandra_tests/validation/operations/select_test
+    - cql-pytest.cassandra_tests/validation/entities/secondary_index_test
+    - cql-pytest.test_materialized_view
+    - cassandra_tests/validation/entities/user_types_test
+    - cassandra_tests/validation/operations/delete_test
+    - cql-pytest.cassandra_tests/validation/entities/collections_test
+    - test_permissions
+    - cassandra_tests/validation/entities/frozen_collections_test
+    - test_uda
+    - cassandra_tests/validation/operations/alter_test
+    - cassandra_tests/validation/operations/select_single_column_relation_test
+    - test_describe
+    - test_tombstone_limit
+    - cassandra_tests/validation/operations/insert_update_if_condition_collections_test
+    - test_keyspace
+    - cassandra_tests/validation/operations/select_multi_column_relation_test
+    - cassandra_tests/validation/entities/uf_types_test
+    - test_sstable_validation
+    - cassandra_tests/validation/operations/select_order_by_test
 pool_size: 4
