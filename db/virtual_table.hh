@@ -27,6 +27,7 @@ protected: // opt-ins
     bool _shard_aware = false;
 
 protected:
+    static void set_cell(const ::schema&, row&, const bytes& column_name, data_value);
     void set_cell(row&, const bytes& column_name, data_value);
     bool contains_key(const dht::partition_range&, const dht::decorated_key&) const;
     bool this_shard_owns(const dht::decorated_key&) const;

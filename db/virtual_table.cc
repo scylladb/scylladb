@@ -16,15 +16,19 @@
 
 namespace db {
 
-void virtual_table::set_cell(row& cr, const bytes& column_name, data_value value) {
+void virtual_table::set_cell(const ::schema& schema, row& cr, const bytes& column_name, data_value value) {
     auto ts = api::new_timestamp();
-    auto cdef = schema()->get_column_definition(column_name);
+    auto cdef = schema.get_column_definition(column_name);
     if (!cdef) {
         throw_with_backtrace<std::runtime_error>(format("column not found: {}", column_name));
     }
     if (!value.is_null()) {
         cr.apply(*cdef, atomic_cell::make_live(*cdef->type, ts, value.serialize_nonnull()));
     }
+}
+
+void virtual_table::set_cell(row& cr, const bytes& column_name, data_value value) {
+    return set_cell(*schema(), cr, column_name, std::move(value));
 }
 
 bool virtual_table::this_shard_owns(const dht::decorated_key& dk) const {
