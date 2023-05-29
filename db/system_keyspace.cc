@@ -36,6 +36,7 @@
 #include "gms/feature_service.hh"
 #include "system_keyspace_view_types.hh"
 #include "schema/schema_builder.hh"
+#include "schema/schema_registry.hh"
 #include "utils/hashers.hh"
 #include "release.hh"
 #include "log.hh"
@@ -2737,6 +2738,265 @@ public:
     }
 };
 
+class data_source_table : public virtual_table {
+    distributed<replica::database>& _db;
+
+private:
+    class reader : public flat_mutation_reader_v2::impl {
+        struct data_source {
+            sstring name;
+            mutation_source ms;
+        };
+        struct remote_state {
+            schema_ptr output_schema;
+            schema_ptr underlying_schema;
+            reader_permit permit;
+            flat_mutation_reader_v2::tracked_buffer buf;
+            flat_mutation_reader_v2_opt reader;
+            circular_buffer<data_source> data_sources;
+
+            remote_state(schema_ptr output_schema, schema_ptr underlying_schema, reader_permit permit)
+                : output_schema(std::move(output_schema)), underlying_schema(std::move(underlying_schema)), permit(permit), buf(permit)
+            { }
+        };
+
+    private:
+        distributed<replica::database>& _db;
+        dht::decorated_key _dk;
+        schema_ptr _underlying_schema;
+        dht::partition_range _underlying_pr;
+        unsigned _shard;
+        foreign_ptr<std::unique_ptr<remote_state>> _remote_state;
+        bool _partition_start_emitted = false;
+        bool _partition_end_emitted = false;
+
+    private:
+        std::pair<schema_ptr, dht::partition_range> get_underlying_table_partition(const dht::decorated_key& dk) {
+            auto exploded_pk = dk.key().explode(*_schema);
+
+            const auto keyspace_name = value_cast<sstring>(utf8_type->deserialize_value(exploded_pk[0]));
+            const auto table_name = value_cast<sstring>(utf8_type->deserialize_value(exploded_pk[1]));
+            const auto underlying_pk_vals = value_cast<std::vector<data_value>>(get_underlying_key_type()->deserialize_value(exploded_pk[2]));
+
+            auto underlying_schema = _db.local().find_schema(keyspace_name, table_name);
+
+            const auto& underlying_pk_types = underlying_schema->partition_key_type()->types();
+            if (underlying_pk_types.size() != underlying_pk_vals.size()) {
+                throw std::runtime_error(fmt::format("underlying table has {} partition key components, but got {}", underlying_pk_types.size(), underlying_pk_vals.size()));
+            }
+            std::vector<bytes> underlying_pk_raw;
+            underlying_pk_raw.reserve(underlying_pk_types.size());
+            for (unsigned i = 0; i < underlying_pk_types.size(); ++i) {
+                const auto& type = underlying_pk_types[i];
+                const auto& value = underlying_pk_vals[i];
+                const auto component_str = value_cast<sstring>(value);
+                underlying_pk_raw.push_back(type->from_string(component_str));
+            }
+            auto underlying_pk = partition_key::from_exploded(underlying_pk_raw);
+            auto underlying_dk = dht::decorate_key(*underlying_schema, underlying_pk);
+
+            return std::pair(underlying_schema, dht::partition_range::make_singular(std::move(underlying_dk)));
+        }
+
+        // Runs on _shard
+        static foreign_ptr<std::unique_ptr<remote_state>>
+        create_remote_state(replica::database& db, schema_ptr output_schema, schema_ptr underlying_schema, reader_permit permit) {
+            auto& tbl = db.find_column_family(underlying_schema);
+            auto rs = std::make_unique<remote_state>(std::move(output_schema), std::move(underlying_schema), std::move(permit));
+
+            // Data sources have to be inserted ascending name order.
+            rs->data_sources.push_back(data_source{"memtable", mutation_source([&tbl] (schema_ptr schema, reader_permit permit, const dht::partition_range& pr, const query::partition_slice& ps) {
+                return tbl.make_memtable_reader(std::move(schema), std::move(permit), pr, ps);
+            })});
+            rs->data_sources.push_back(data_source{"row_cache", mutation_source([] (schema_ptr schema, reader_permit permit, const dht::partition_range& pr, const query::partition_slice& ps) {
+                //TODO
+                return make_empty_flat_reader_v2(std::move(schema), std::move(permit));
+            })});
+            rs->data_sources.push_back(data_source{"sstable", mutation_source([&tbl] (schema_ptr schema, reader_permit permit, const dht::partition_range& pr, const query::partition_slice& ps) {
+                return tbl.make_sstable_reader(std::move(schema), std::move(permit), pr, ps);
+            })});
+            return make_foreign(std::move(rs));
+        }
+
+        static clustering_key
+        transform_clustering_key(position_in_partition_view pos, const sstring& data_source_name, const ::schema& output_schema, const ::schema& underlying_schema) {
+            const auto& underlying_ck_types = underlying_schema.clustering_key_type()->types();
+            const auto underlying_ck_raw_values = pos.has_key() ? pos.key().explode(underlying_schema) : std::vector<bytes>{};
+            std::vector<data_value> underlying_ck_data_values;
+            underlying_ck_data_values.reserve(underlying_ck_raw_values.size());
+            for (unsigned i = 0; i < underlying_ck_raw_values.size(); ++i) {
+                const auto ck_component_str = underlying_ck_types[i]->to_string(underlying_ck_raw_values[i]);
+                underlying_ck_data_values.emplace_back(ck_component_str);
+            }
+
+            std::vector<bytes> output_ck_raw_values;
+            const auto& output_ck_types = output_schema.clustering_key_type()->types();
+            output_ck_raw_values.push_back(data_value(data_source_name).serialize_nonnull());
+            output_ck_raw_values.push_back(data_value(static_cast<int8_t>(pos.region())).serialize_nonnull());
+            output_ck_raw_values.push_back(make_list_value(output_ck_types[2], underlying_ck_data_values).serialize_nonnull());
+            output_ck_raw_values.push_back(data_value(static_cast<int8_t>(pos.get_bound_weight())).serialize_nonnull());
+
+            return clustering_key::from_exploded(output_schema, output_ck_raw_values);
+        }
+
+        // Runs on _shard
+        static mutation_fragment_v2
+        transform_mutation_fragment(mutation_fragment_v2&& mf, const sstring& data_source_name, schema_ptr output_schema, schema_ptr underlying_schema, reader_permit permit) {
+            auto ck = transform_clustering_key(mf.position(), data_source_name, *output_schema, *underlying_schema);
+            auto cr = clustering_row(ck);
+            data_source_table::set_cell(*output_schema, cr.cells(), "kind", fmt::to_string(mf.mutation_fragment_kind()));
+
+            switch (mf.mutation_fragment_kind()) {
+                case mutation_fragment_v2::kind::partition_start:
+                    if (auto tomb = mf.as_partition_start().partition_tombstone()) {
+                        data_source_table::set_cell(*output_schema, cr.cells(), "value", fmt::to_string(tomb));
+                    }
+                    break;
+                case mutation_fragment_v2::kind::static_row:
+                    data_source_table::set_cell(*output_schema, cr.cells(), "value", fmt::to_string(mutation_fragment_v2::printer(*underlying_schema, mf)));
+                    break;
+                case mutation_fragment_v2::kind::clustering_row:
+                    data_source_table::set_cell(*output_schema, cr.cells(), "value", fmt::to_string(mutation_fragment_v2::printer(*underlying_schema, mf)));
+                    break;
+                case mutation_fragment_v2::kind::range_tombstone_change:
+                    data_source_table::set_cell(*output_schema, cr.cells(), "value", fmt::to_string(mutation_fragment_v2::printer(*underlying_schema, mf)));
+                    break;
+                case mutation_fragment_v2::kind::partition_end:
+                    // No value set.
+                    break;
+            }
+
+            return mutation_fragment_v2(*output_schema, permit, std::move(cr));
+        }
+
+        // Runs on _shard
+        static future<> fill_remote_buffer(remote_state& rs, size_t max_buffer_size_in_bytes, const dht::partition_range& pr) {
+            rs.buf.clear();
+            size_t size = 0;
+            while (size < max_buffer_size_in_bytes && !rs.data_sources.empty()) {
+                if (!rs.reader) {
+                    rs.reader = rs.data_sources.front().ms.make_reader_v2(rs.underlying_schema, rs.permit, pr, rs.underlying_schema->full_slice(),
+                            default_priority_class(), {}, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+                }
+                auto mf_opt = co_await (*rs.reader)();
+                if (!mf_opt) {
+                    co_await rs.reader->close();
+                    rs.reader = {};
+                    rs.data_sources.pop_front();
+                    continue;
+                }
+                auto trasnformed_mf = transform_mutation_fragment(std::move(*mf_opt), rs.data_sources.front().name, rs.output_schema, rs.underlying_schema, rs.permit);
+                rs.buf.push_back(std::move(trasnformed_mf));
+                size += rs.buf.back().memory_usage();
+            }
+        }
+
+    public:
+        reader(schema_ptr schema, reader_permit permit, distributed<replica::database>& db, const dht::decorated_key& dk)
+            : impl(std::move(schema), std::move(permit))
+            , _db(db)
+            , _dk(dk)
+        {
+            std::tie(_underlying_schema, _underlying_pr) = get_underlying_table_partition(_dk);
+            _shard = dht::shard_of(*_underlying_schema, _underlying_pr.start()->value().token());
+        }
+
+        virtual future<> fill_buffer() override {
+            if (!is_buffer_empty()) {
+                co_return;
+            }
+            if (!_remote_state) {
+                if (_shard == this_shard_id()) {
+                    _remote_state = create_remote_state(_db.local(), _schema, _underlying_schema, _permit);
+                } else {
+                    _remote_state = co_await _db.invoke_on(_shard, [gs = global_schema_ptr(_schema), gus = global_schema_ptr(_underlying_schema), timeout = _permit.timeout()] (replica::database& db) {
+                        auto output_schema = gs.get();
+                        auto underlying_schema = gus.get();
+                        return db.obtain_reader_permit(underlying_schema, "data-source-remote-read", timeout, {}).then([&db, output_schema, underlying_schema] (reader_permit permit) {
+                            return create_remote_state(db, output_schema, underlying_schema, std::move(permit));
+                        });
+                    });
+                }
+            }
+            if (!_partition_start_emitted) {
+                push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, partition_start(_dk, {})));
+                _partition_start_emitted = true;
+            }
+            co_await _db.invoke_on(_shard, [this] (replica::database&) {
+                return fill_remote_buffer(*_remote_state, max_buffer_size_in_bytes, _underlying_pr);
+            });
+            for (const auto& remote_mf : _remote_state->buf) {
+                push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, remote_mf));
+            }
+            _end_of_stream = _remote_state->data_sources.empty();
+            if (_end_of_stream && !_partition_end_emitted) {
+                push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, partition_end{}));
+                _partition_end_emitted = true;
+            }
+        }
+
+        virtual future<> next_partition() override { throw std::bad_function_call(); }
+        virtual future<> fast_forward_to(const dht::partition_range&) override { throw std::bad_function_call(); }
+        virtual future<> fast_forward_to(position_range) override { throw std::bad_function_call(); }
+        virtual future<> close() noexcept override {
+            if (_remote_state) {
+                return smp::submit_to(_shard, [rs = std::exchange(_remote_state, {})] () mutable -> future<> {
+                    if (rs->reader) {
+                        return rs->reader->close();
+                    }
+                    rs.release();
+                    return make_ready_future<>();
+                });
+            }
+            return make_ready_future<>();
+        }
+    };
+
+private:
+    static data_type get_underlying_key_type() {
+        return list_type_impl::get_instance(utf8_type, false);
+    }
+
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, "data_source");
+        return schema_builder(system_keyspace::NAME, "data_source", std::make_optional(id))
+            .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+            .with_column("table_name", utf8_type, column_kind::partition_key)
+            .with_column("partition_key", get_underlying_key_type(), column_kind::partition_key)
+            .with_column("source", utf8_type, column_kind::clustering_key)
+            .with_column("partition_region", byte_type, column_kind::clustering_key)
+            .with_column("clustering_key", list_type_impl::get_instance(utf8_type, false), column_kind::clustering_key)
+            .with_column("position_weight", byte_type, column_kind::clustering_key)
+            .with_column("kind", utf8_type)
+            .with_column("value", utf8_type)
+            .with_version(system_keyspace::generate_schema_version(id))
+            .build();
+    }
+
+    mutation_source as_mutation_source() override {
+        return mutation_source([this] (schema_ptr schema, reader_permit permit, const dht::partition_range& pr, const query::partition_slice& slice) {
+            if (!pr.is_singular()) {
+                throw std::runtime_error("only single partition queries are supported");
+            }
+
+            const auto& rp = pr.start()->value();
+            if (dht::shard_of(*schema, rp.token()) != this_shard_id()) {
+                return make_empty_flat_reader_v2(std::move(schema), std::move(permit));
+            }
+
+            return make_flat_mutation_reader_v2<reader>(std::move(schema), std::move(permit), _db, rp.as_decorated_key());
+        });
+    }
+
+public:
+    data_source_table(distributed<replica::database>& db)
+            : virtual_table(build_schema())
+            , _db(db)
+    {
+        _shard_aware = true;
+    }
+};
+
 // Shows the current state of each Raft group.
 // Currently it shows only the configuration.
 // In the future we plan to add additional columns with more information.
@@ -2872,6 +3132,7 @@ void register_virtual_tables(distributed<replica::database>& dist_db, distribute
     add_table(std::make_unique<db_config_table>(cfg));
     add_table(std::make_unique<clients_table>(ss));
     add_table(std::make_unique<raft_state_table>(dist_raft_gr));
+    add_table(std::make_unique<data_source_table>(dist_db));
 }
 
 std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
