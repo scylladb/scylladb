@@ -341,6 +341,23 @@ flat_mutation_reader_v2 table::make_streaming_reader(schema_ptr schema, reader_p
             std::move(trace_state), fwd, fwd_mr);
 }
 
+flat_mutation_reader_v2 table::make_memtable_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
+        const query::partition_slice& slice) {
+    std::vector<flat_mutation_reader_v2> readers;
+    add_memtables_to_reader_list(
+            readers,
+            schema,
+            permit,
+            range,
+            slice,
+            default_priority_class(),
+            {},
+            streamed_mutation::forwarding::no,
+            mutation_reader::forwarding::no,
+            [&readers] (size_t memtable_count) { readers.reserve(memtable_count); });
+    return make_combined_reader(std::move(schema), std::move(permit), std::move(readers), streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+}
+
 future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout) {
     assert(m.schema() == _counter_cell_locks->schema());
     return _counter_cell_locks->lock_cells(m.decorated_key(), partition_cells_range(m.partition()), timeout);

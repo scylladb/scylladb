@@ -708,6 +708,10 @@ public:
     flat_mutation_reader_v2 make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
             lw_shared_ptr<sstables::sstable_set> sstables) const;
 
+    // Make a reader which reads only from the memtable(s).
+    flat_mutation_reader_v2 make_memtable_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
+            const query::partition_slice& slice);
+
     sstables::shared_sstable make_streaming_sstable_for_write(std::optional<sstring> subdir = {});
     sstables::shared_sstable make_streaming_staging_sstable();
 
