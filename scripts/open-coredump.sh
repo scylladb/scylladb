@@ -131,13 +131,14 @@ SCYLLA_REPO_PATH="${SCYLLA_REPO_PATH}"
 SCYLLA_GDB_PY_SOURCE="${SCYLLA_GDB_PY_SOURCE:-repo}"
 ARTIFACT_DIR=${ARTIFACT_DIR:-${SCRIPT_NAME}.dir}
 
+if [[ $# -ge 1 && ( "$1" == "--help" || "$1" == "-h" ) ]]; then
+    print_usage
+    exit 0
+fi
+
 while [[ $# -gt 1 ]]
 do
     case $1 in
-        "--help"|"-h")
-            print_usage
-            exit 0
-            ;;
         "--verbose"|"-v")
             VERBOSE_LEVEL=2
             shift 1
