@@ -48,7 +48,7 @@ protected:
      *
      * By default, this function does nothing.
      */
-    virtual future<> grant_permissions_to_creator(query_processor& qp, const service::client_state&) const;
+    virtual future<> grant_permissions_to_creator(const service::client_state&) const;
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
