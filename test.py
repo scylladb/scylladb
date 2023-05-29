@@ -543,8 +543,8 @@ class Test:
     def print_summary(self) -> None:
         pass
 
-    def get_junit_etree(self):
-        return None
+    def get_test_cases(self) -> list[ET.Element]:
+        return []
 
     def check_log(self, trim: bool) -> None:
         """Check and trim logs and xml output for tests which have it"""
@@ -594,6 +594,8 @@ class UnitTest(Test):
         return self
 
 
+TestPath = collections.namedtuple('TestPath', ['suite_name', 'test_name', 'case_name'])
+
 class BoostTest(UnitTest):
     """A unit test which can produce its own XML output"""
 
@@ -613,41 +615,43 @@ class BoostTest(UnitTest):
         self.args = boost_args + self.args
         self.casename = casename
         BoostTest._reset(self)
-        self.__junit_etree: Optional[ET.ElementTree] = None
+        self.__test_case_elements: list[ET.Element] = []
         self.allows_compaction_groups = allows_compaction_groups
 
     def _reset(self) -> None:
         """Reset the test before a retry, if it is retried as flaky"""
-        self.__junit_etree = None
+        self.__test_case_elements = []
 
-    def get_junit_etree(self) -> ET.ElementTree:
-        def adjust_suite_name(name):
-            # Normalize "path/to/file.cc" to "path.to.file" to conform to
-            # Jenkins expectations that the suite name is a class name. ".cc"
-            # doesn't add any infomation. Add the mode, otherwise failures
-            # in different modes are indistinguishable. The "test/" prefix adds
-            # no information, so remove it.
-            import re
-            name = re.sub(r'^test/', '', name)
-            name = re.sub(r'\.cc$', '', name)
-            name = re.sub(r'/', '.', name)
-            # add the suite name to disambiguate tests named "run"
-            name = f'{self.suite.name}.{name}.{self.mode}'
-            return name
-        if self.__junit_etree is None:
-            self.__junit_etree = ET.parse(self.xmlout)
-            root = self.__junit_etree.getroot()
-            suites = root.findall('.//TestSuite')
-            for suite in suites:
-                suite.attrib['name'] = adjust_suite_name(suite.attrib['name'])
-                skipped = suite.findall('./TestCase[@reason="disabled"]')
-                for e in skipped:
-                    suite.remove(e)
-            os.unlink(self.xmlout)
-        return self.__junit_etree
+    def get_test_cases(self) -> list[ET.Element]:
+        if not self.__test_case_elements:
+            self.__parse_logger()
+        return self.__test_case_elements
+
+    @staticmethod
+    def test_path_of_element(test: ET.Element) -> TestPath:
+        path = test.attrib['path']
+        prefix, case_name = path.rsplit('::', 1)
+        suite_name, test_name = prefix.split('.', 1)
+        return TestPath(suite_name, test_name, case_name)
+
+    def __parse_logger(self) -> None:
+        def attach_path_and_mode(test):
+            # attach the "path" to the test so we can group the tests by this string
+            test_name = test.attrib['name']
+            prefix = self.name.replace(os.path.sep, '.')
+            test.attrib['path'] = f'{prefix}::{test_name}'
+            test.attrib['mode'] = self.mode
+            return test
+
+        root = ET.parse(self.xmlout).getroot()
+        # only keep the tests which actually ran, the skipped ones do not have
+        # TestingTime tag in the corresponding TestCase tag.
+        self.__test_case_elements = map(attach_path_and_mode,
+                                        root.findall(".//TestCase[TestingTime]"))
+        os.unlink(self.xmlout)
 
     def check_log(self, trim: bool) -> None:
-        self.get_junit_etree()
+        self.__parse_logger()
         super().check_log(trim)
 
     async def run(self, options):
@@ -1359,15 +1363,101 @@ def write_junit_report(tmpdir: str, mode: str) -> None:
         ET.ElementTree(xml_results).write(f, encoding="unicode")
 
 
+def summarize_tests(tests):
+    # in case we run a certain test multiple times
+    # - if any of the runs failed, the test is considered failed, and
+    #   the last failed run is returned.
+    # - otherwise, the last successful run is returned
+    failed_test = None
+    passed_test = None
+    num_failed_tests = collections.defaultdict(int)
+    num_passed_tests = collections.defaultdict(int)
+    for test in tests:
+        error = None
+        for tag in ['Error', 'FatalError', 'Exception']:
+            error = test.find(tag)
+            if error is not None:
+                break
+        mode = test.attrib['mode']
+        if error is None:
+            passed_test = test
+            num_passed_tests[mode] += 1
+        else:
+            failed_test = test
+            num_failed_tests[mode] += 1
+
+    if failed_test is not None:
+        test = failed_test
+    else:
+        test = passed_test
+
+    num_failed = sum(num_failed_tests.values())
+    num_passed = sum(num_passed_tests.values())
+    num_total = num_failed + num_passed
+    if num_total == 1:
+        return test
+    if num_failed == 0:
+        return test
+    # we repeated this test for multiple times.
+    #
+    # Boost::test's XML logger schema does not allow us to put text directly in a
+    # TestCase tag, so create a dummy Message tag in the TestCase for carrying the
+    # summary. and the schema requires that the tags should be listed in following order:
+    # 1. TestSuite
+    # 2. Info
+    # 3. Error
+    # 3. FatalError
+    # 4. Message
+    # 5. Exception
+    # 6. Warning
+    # and both "file" and "line" are required in an "Info" tag, so appease it. assuming
+    # there is no TestSuite under tag TestCase, we always add Info as the first subelements
+    if num_passed == 0:
+        message = ET.Element('Info', file=test.attrib['file'], line=test.attrib['line'])
+        message.text = f'The test failed {num_failed}/{num_total} times'
+        test.insert(0, message)
+    else:
+        message = ET.Element('Info', file=test.attrib['file'], line=test.attrib['line'])
+        modes = ', '.join(f'{mode}={n}' for mode, n in num_failed_tests.items())
+        message.text = f'failed: {modes}'
+        test.insert(0, message)
+
+        message = ET.Element('Info', file=test.attrib['file'], line=test.attrib['line'])
+        modes = ', '.join(f'{mode}={n}' for mode, n in num_passed_tests.items())
+        message.text = f'passed: {modes}'
+        test.insert(0, message)
+
+        message = ET.Element('Info', file=test.attrib['file'], line=test.attrib['line'])
+        message.text = f'{num_failed} out of {num_total} times failed: failed.'
+        test.insert(0, message)
+    return test
+
+
 def write_consolidated_boost_junit_xml(tmpdir: str, mode: str) -> None:
+    # collects all boost tests sorted by their full names
+    test_cases = itertools.chain.from_iterable(test.get_test_cases()
+                                               for test in TestSuite.all_tests()
+                                               if test.get_test_cases())
+    test_cases = sorted(test_cases, key=BoostTest.test_path_of_element)
+
     xml = ET.Element("TestLog")
-    for suite in TestSuite.suites.values():
-        for test in suite.tests:
-            if test.mode != mode:
-                continue
-            test_xml = test.get_junit_etree()
-            if test_xml is not None:
-                xml.extend(test_xml.getroot().findall('.//TestSuite'))
+    for full_path, tests in itertools.groupby(
+            test_cases,
+            key=BoostTest.test_path_of_element):
+        # dedup the tests with the same name, so only the representive one is
+        # preserved
+        test_case = summarize_tests(tests)
+        test_case.attrib.pop('path')
+        test_case.attrib.pop('mode')
+
+        suite_name, test_name, _ = full_path
+        suite = xml.find(f"./TestSuite[@name='{suite_name}']")
+        if suite is None:
+            suite = ET.SubElement(xml, 'TestSuite', name=suite_name)
+        test = suite.find(f"./TestSuite[@name='{test_name}']")
+        if test is None:
+            test = ET.SubElement(suite, 'TestSuite', name=test_name)
+        test.append(test_case)
     et = ET.ElementTree(xml)
     et.write(f'{tmpdir}/{mode}/xml/boost.xunit.xml', encoding='unicode')
 
