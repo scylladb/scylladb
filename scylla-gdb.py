@@ -1383,6 +1383,26 @@ class scylla_databases(gdb.Command):
             gdb.write('{:5} (replica::database*){}\n'.format(shard, db))
 
 
+class scylla_commitlog(gdb.Command):
+    """Prints info about commitlog segment manager and managed segments
+    """
+
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla commitlog', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    def invoke(self, arg, from_tty):
+        db = find_db()
+        cmtlog = std_unique_ptr(db['_commitlog']).get()
+        gdb.write('(db::commitlog*){}\n'.format(cmtlog))
+        segmgr = seastar_shared_ptr(cmtlog['_segment_manager']).get()
+        gdb.write('(db::commitlog::segment_manager*){}\n'.format(segmgr))
+        segs = std_vector(segmgr['_segments'])
+        gdb.write('segments ({}):\n'.format(len(segs)))
+        for seg_p in segs:
+            seg = seastar_shared_ptr(seg_p).get()
+            gdb.write('(db::commitlog::segment*){}\n'.format(seg))
+
+
 class scylla_keyspaces(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla keyspaces', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
@@ -5652,6 +5672,7 @@ class scylla_gdb_func_variant_member(gdb.Function):
 # Commands
 scylla()
 scylla_databases()
+scylla_commitlog()
 scylla_keyspaces()
 scylla_tables()
 scylla_memory()

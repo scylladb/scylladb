@@ -27,6 +27,9 @@ def test_compaction_tasks(gdb):
 def test_databases(gdb):
     scylla(gdb, 'databases')
 
+def test_commitlog(gdb):
+    scylla(gdb, 'commitlog')
+
 def test_tables(gdb):
     scylla(gdb, 'tables')
 
