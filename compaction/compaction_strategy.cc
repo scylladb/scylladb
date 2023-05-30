@@ -106,17 +106,40 @@ void compaction_strategy_impl::validate_min_max_threshold(const std::map<sstring
     unchecked_options.erase(max_threshold_key);
 }
 
+static double validate_tombstone_threshold(const std::map<sstring, sstring>& options) {
+    auto tmp_value = compaction_strategy_impl::get_value(options, compaction_strategy_impl::TOMBSTONE_THRESHOLD_OPTION);
+    auto tombstone_threshold = cql3::statements::property_definitions::to_double(compaction_strategy_impl::TOMBSTONE_THRESHOLD_OPTION, tmp_value, compaction_strategy_impl::DEFAULT_TOMBSTONE_THRESHOLD);
+    if (tombstone_threshold < 0.0 || tombstone_threshold > 1.0) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be between 0.0 and 1.0", compaction_strategy_impl::TOMBSTONE_THRESHOLD_OPTION, tombstone_threshold));
+    }
+    return tombstone_threshold;
+}
+
+[[maybe_unused]] static double validate_tombstone_threshold(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    auto tombstone_threshold = validate_tombstone_threshold(options);
+    unchecked_options.erase(compaction_strategy_impl::TOMBSTONE_THRESHOLD_OPTION);
+    return tombstone_threshold;
+}
+
+static db_clock::duration validate_tombstone_compaction_interval(const std::map<sstring, sstring>& options) {
+    auto tmp_value = compaction_strategy_impl::get_value(options, compaction_strategy_impl::TOMBSTONE_COMPACTION_INTERVAL_OPTION);
+    auto interval = cql3::statements::property_definitions::to_long(compaction_strategy_impl::TOMBSTONE_COMPACTION_INTERVAL_OPTION, tmp_value, compaction_strategy_impl::DEFAULT_TOMBSTONE_COMPACTION_INTERVAL().count());
+    auto tombstone_compaction_interval = db_clock::duration(std::chrono::seconds(interval));
+    if (interval <= 0) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be positive", compaction_strategy_impl::TOMBSTONE_COMPACTION_INTERVAL_OPTION, tombstone_compaction_interval));
+    }
+    return tombstone_compaction_interval;
+}
+
+[[maybe_unused]] static db_clock::duration validate_tombstone_compaction_interval(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    auto tombstone_compaction_interval = validate_tombstone_compaction_interval(options);
+    unchecked_options.erase(compaction_strategy_impl::TOMBSTONE_COMPACTION_INTERVAL_OPTION);
+    return tombstone_compaction_interval;
+}
+
 compaction_strategy_impl::compaction_strategy_impl(const std::map<sstring, sstring>& options) {
-    using namespace cql3::statements;
-
-    auto tmp_value = get_value(options, TOMBSTONE_THRESHOLD_OPTION);
-    _tombstone_threshold = property_definitions::to_double(TOMBSTONE_THRESHOLD_OPTION, tmp_value, DEFAULT_TOMBSTONE_THRESHOLD);
-
-    tmp_value = get_value(options, TOMBSTONE_COMPACTION_INTERVAL_OPTION);
-    auto interval = property_definitions::to_long(TOMBSTONE_COMPACTION_INTERVAL_OPTION, tmp_value, DEFAULT_TOMBSTONE_COMPACTION_INTERVAL().count());
-    _tombstone_compaction_interval = db_clock::duration(std::chrono::seconds(interval));
-
-    // FIXME: validate options.
+    _tombstone_threshold = validate_tombstone_threshold(options);
+    _tombstone_compaction_interval = validate_tombstone_compaction_interval(options);
 }
 
 } // namespace sstables

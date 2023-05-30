@@ -21,13 +21,13 @@ class sstable_set_impl;
 class resharding_descriptor;
 
 class compaction_strategy_impl {
+public:
     static constexpr float DEFAULT_TOMBSTONE_THRESHOLD = 0.2f;
     // minimum interval needed to perform tombstone removal compaction in seconds, default 86400 or 1 day.
     static constexpr std::chrono::seconds DEFAULT_TOMBSTONE_COMPACTION_INTERVAL() { return std::chrono::seconds(86400); }
-protected:
     static constexpr auto TOMBSTONE_THRESHOLD_OPTION = "tombstone_threshold";
     static constexpr auto TOMBSTONE_COMPACTION_INTERVAL_OPTION = "tombstone_compaction_interval";
-
+protected:
     bool _use_clustering_key_filter = false;
     bool _disable_tombstone_compaction = false;
     float _tombstone_threshold = DEFAULT_TOMBSTONE_THRESHOLD;
