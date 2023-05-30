@@ -568,14 +568,12 @@ query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> 
 
     statement->validate(*this, client_state);
 
-    auto fut = statement->execute_without_checking_exception_message(*this, query_state, options);
+    auto msg = co_await statement->execute_without_checking_exception_message(*this, query_state, options);
 
-    return fut.then([statement] (auto msg) {
-        if (msg) {
-            return make_ready_future<::shared_ptr<result_message>>(std::move(msg));
-        }
-        return make_ready_future<::shared_ptr<result_message>>(::make_shared<result_message::void_message>());
-    });
+    if (msg) {
+       co_return std::move(msg);
+    }
+    co_return ::make_shared<result_message::void_message>();
 }
 
 future<::shared_ptr<cql_transport::messages::result_message::prepared>>
