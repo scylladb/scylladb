@@ -1536,6 +1536,39 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
     co_await _sys_ks.local().set_must_synchronize_topology(false);
 }
 
+// Wait until gossiper observes the given nodes or timeout is reached.
+// Called on initial startup (bootstrap/replace), not during restarts.
+static future<> wait_until_seen_during_boot(
+        const gms::gossiper& g, const std::unordered_set<gms::inet_address>& initial_contact_nodes,
+        db::timeout_clock::time_point timeout, abort_source& as) {
+    logger::rate_limit rate_limit{std::chrono::seconds{5}};
+    while (!as.abort_requested()) {
+        std::vector<gms::inet_address> observed = g.get_endpoints();
+        std::unordered_set<gms::inet_address> observed_set{observed.begin(), observed.end()};
+
+        std::vector<gms::inet_address> diff;
+        diff.reserve(initial_contact_nodes.size());
+        for (auto& n: initial_contact_nodes) {
+            if (!observed_set.contains(n)) {
+                diff.push_back(n);
+            }
+        }
+        if (diff.empty()) {
+            slogger.info("All initial contact nodes ({}) seen in gossip", initial_contact_nodes);
+            co_return;
+        }
+
+        if (db::timeout_clock::now() >= timeout) {
+            auto err = ::format("Timed out waiting for nodes {} to show up in gossip during boot", diff);
+            slogger.error("{}", err);
+            throw std::runtime_error{std::move(err)};
+        }
+
+        slogger.log(log_level::info, rate_limit, "Nodes {} not yet seen in gossip during initial boot", diff);
+        co_await sleep_abortable(std::chrono::milliseconds{100}, as);
+    }
+}
+
 future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_service,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<service::storage_proxy>& proxy,
@@ -1736,6 +1769,16 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     _listeners.emplace_back(make_lw_shared(std::move(schema_change_announce)));
     co_await _gossiper.wait_for_gossip_to_settle();
     co_await _feature_service.enable_features_on_join(_gossiper, _sys_ks.local());
+    if (!_sys_ks.local().bootstrap_complete()) {
+        co_await wait_until_seen_during_boot(
+            _gossiper, initial_contact_nodes, db::timeout_clock::now() + std::chrono::minutes{5}, _abort_source);
+        // This must be done after features are enabled; otherwise, even if we pull all schema mutations,
+        // schema won't get in sync (the mutations are interpreted differently depending on the enabled
+        // features and the schema version is also different).
+        co_await _migration_manager.local().wait_for_schema_agreement(
+            _db.local(), db::timeout_clock::now() + std::chrono::minutes{5}, &_abort_source);
+        slogger.info("Schema is synchronized during initial boot");
+    }
 
     set_mode(mode::JOINING);
 
