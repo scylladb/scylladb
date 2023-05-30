@@ -25,7 +25,7 @@ std::function<bool(const std::exception&)> exception_predicate::make(
 
 std::function<bool(const std::exception&)> exception_predicate::message_contains(
         const sstring& fragment,
-        const std::source_location& loc) {
+        const seastar::compat::source_location& loc) {
     return make([=] (const std::exception& e) { return sstring(e.what()).find(fragment) != sstring::npos; },
                 [=] (const std::exception& e) {
                     return fmt::format("Message '{}' doesn't contain '{}'\n{}:{}: invoked here",
@@ -35,7 +35,7 @@ std::function<bool(const std::exception&)> exception_predicate::message_contains
 
 std::function<bool(const std::exception&)> exception_predicate::message_equals(
         const sstring& text,
-        const std::source_location& loc) {
+        const seastar::compat::source_location& loc) {
     return make([=] (const std::exception& e) { return text == e.what(); },
                 [=] (const std::exception& e) {
                     return fmt::format("Message '{}' doesn't equal '{}'\n{}:{}: invoked here",
@@ -45,7 +45,7 @@ std::function<bool(const std::exception&)> exception_predicate::message_equals(
 
 std::function<bool(const std::exception&)> exception_predicate::message_matches(
         const std::string& regex,
-        const std::source_location& loc) {
+        const seastar::compat::source_location& loc) {
     // Use boost::regex since std::regex (with libstdc++ 12) uses too much stack
     return make([=] (const std::exception& e) { return boost::regex_search(e.what(), boost::regex(regex)); },
                 [=] (const std::exception& e) {

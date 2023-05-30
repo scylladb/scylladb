@@ -24,7 +24,7 @@
 
 namespace {
 
-using std::source_location;
+using seastar::compat::source_location;
 using boost::adaptors::transformed;
 
 std::unique_ptr<cql3::query_options> to_options(
@@ -44,7 +44,7 @@ void require_rows(cql_test_env& e,
                   std::optional<std::vector<sstring_view>> names,
                   const std::vector<bytes_opt>& values,
                   const std::vector<std::vector<bytes_opt>>& expected,
-                  const std::source_location& loc = source_location::current()) {
+                  const seastar::compat::source_location& loc = source_location::current()) {
     // This helps compiler pick the right overload for make_value:
     const auto rvals = values | transformed([] (const bytes_opt& v) { return cql3::raw_value::make_value(v); });
     cql3::cql_config cfg(cql3::cql_config::default_tag{});

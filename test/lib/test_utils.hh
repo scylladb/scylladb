@@ -9,8 +9,7 @@
 #pragma once
 
 #include <seastar/core/future.hh>
-#include <source_location>
-#include "utils/source_location-compat.hh"
+#include <seastar/util/source_location-compat.hh>
 #include <string>
 #include <boost/test/unit_test.hpp>
 #include <fmt/format.h>
@@ -24,31 +23,31 @@ using namespace seastar;
 
 namespace tests {
 
-[[nodiscard]] bool do_check(bool condition, std::source_location sl, std::string_view msg);
+[[nodiscard]] bool do_check(bool condition, seastar::compat::source_location sl, std::string_view msg);
 
-[[nodiscard]] inline bool check(bool condition, std::source_location sl = std::source_location::current()) {
+[[nodiscard]] inline bool check(bool condition, seastar::compat::source_location sl = seastar::compat::source_location::current()) {
     return do_check(condition, sl, {});
 }
 
 template <typename LHS, typename RHS>
-[[nodiscard]] bool check_equal(const LHS& lhs, const RHS& rhs, std::source_location sl = std::source_location::current()) {
+[[nodiscard]] bool check_equal(const LHS& lhs, const RHS& rhs, seastar::compat::source_location sl = seastar::compat::source_location::current()) {
     const auto condition = (lhs == rhs);
     return do_check(condition, sl, fmt::format("{} {}= {}", lhs, condition ? "=" : "!", rhs));
 }
 
-void do_require(bool condition, std::source_location sl, std::string_view msg);
+void do_require(bool condition, seastar::compat::source_location sl, std::string_view msg);
 
-inline void require(bool condition, std::source_location sl = std::source_location::current()) {
+inline void require(bool condition, seastar::compat::source_location sl = seastar::compat::source_location::current()) {
     do_require(condition, sl, {});
 }
 
 template <typename LHS, typename RHS>
-void require_equal(const LHS& lhs, const RHS& rhs, std::source_location sl = std::source_location::current()) {
+void require_equal(const LHS& lhs, const RHS& rhs, seastar::compat::source_location sl = seastar::compat::source_location::current()) {
     const auto condition = (lhs == rhs);
     do_require(condition, sl, fmt::format("{} {}= {}", lhs, condition ? "=" : "!", rhs));
 }
 
-void fail(std::string_view msg, std::source_location sl = std::source_location::current());
+void fail(std::string_view msg, seastar::compat::source_location sl = seastar::compat::source_location::current());
 
 inline std::string getenv_safe(std::string_view name) {
     auto v = ::getenv(name.data());

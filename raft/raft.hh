@@ -11,11 +11,11 @@
 #include <unordered_set>
 #include <functional>
 #include <source_location>
-#include "utils/source_location-compat.hh"
 #include <boost/container/deque.hpp>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/future.hh>
 #include <seastar/util/log.hh>
+#include <seastar/util/source_location-compat.hh>
 #include <seastar/core/abort_source.hh>
 #include "bytes_ostream.hh"
 #include "utils/UUID.hh"
@@ -290,7 +290,7 @@ struct timeout_error : public error {
 };
 
 struct state_machine_error: public error {
-    state_machine_error(std::source_location l = std::source_location::current())
+    state_machine_error(seastar::compat::source_location l = seastar::compat::source_location::current())
         : error(fmt::format("State machine error at {}:{}", l.file_name(), l.line())) {}
 };
 

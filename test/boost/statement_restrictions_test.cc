@@ -368,7 +368,7 @@ static bool expression_eq(const expr::expression& e1, const expr::expression& e2
 static void assert_expr_vec_eq(
     const std::vector<expr::expression>& v1,
     const std::vector<expr::expression>& v2,
-    const std::source_location& loc = std::source_location::current()) {
+    const seastar::compat::source_location& loc = seastar::compat::source_location::current()) {
 
     if (std::equal(v1.begin(), v1.end(), v2.begin(), v2.end(), expression_eq)) {
         return;

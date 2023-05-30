@@ -171,7 +171,7 @@ class raft_address_map_t : public peering_sharded_service<raft_address_map_t<Clo
     }
 
     template <std::invocable<raft_address_map_t&> F>
-    void replicate(F f, std::source_location l = std::source_location::current()) {
+    void replicate(F f, seastar::compat::source_location l = seastar::compat::source_location::current()) {
         if (this_shard_id() != 0) {
             auto msg = format("raft_address_map::{}() called on shard {} != 0",
                 l.function_name(), this_shard_id());
