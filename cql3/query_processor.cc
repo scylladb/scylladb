@@ -11,6 +11,7 @@
 #include "cql3/query_processor.hh"
 
 #include <seastar/core/metrics.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 
 #include "lang/wasm_alien_thread_runner.hh"
 #include "lang/wasm_instance_cache.hh"
@@ -866,25 +867,25 @@ query_processor::execute_batch_without_checking_exception_message(
         service::query_state& query_state,
         query_options& options,
         std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries) {
-    return batch->check_access(*this, query_state.get_client_state()).then([this, &query_state, &options, batch, pending_authorization_entries = std::move(pending_authorization_entries)] () mutable {
-        return parallel_for_each(pending_authorization_entries, [this, &query_state] (auto& e) {
-            return _authorized_prepared_cache.insert(*query_state.get_client_state().user(), e.first, std::move(e.second)).handle_exception([] (auto eptr) {
-                log.error("failed to cache the entry: {}", eptr);
-            });
-        }).then([this, &query_state, &options, batch] {
-            batch->validate();
-            batch->validate(*this, query_state.get_client_state());
-            _stats.queries_by_cl[size_t(options.get_consistency())] += batch->get_statements().size();
-            if (log.is_enabled(logging::log_level::trace)) {
-                std::ostringstream oss;
-                for (const auto& s: batch->get_statements()) {
-                    oss << std::endl <<  s.statement->raw_cql_statement;
-                }
-                log.trace("execute_batch({}): {}", batch->get_statements().size(), oss.str());
+    co_await batch->check_access(*this, query_state.get_client_state());
+    co_await coroutine::parallel_for_each(pending_authorization_entries, [this, &query_state] (auto& e) -> future<> {
+            try {
+                co_await _authorized_prepared_cache.insert(*query_state.get_client_state().user(), e.first, std::move(e.second));
+            } catch (...) {
+                log.error("failed to cache the entry: {}", std::current_exception());
             }
-            return batch->execute(*this, query_state, options);
         });
-    });
+    batch->validate();
+    batch->validate(*this, query_state.get_client_state());
+    _stats.queries_by_cl[size_t(options.get_consistency())] += batch->get_statements().size();
+   if (log.is_enabled(logging::log_level::trace)) {
+        std::ostringstream oss;
+        for (const auto& s: batch->get_statements()) {
+            oss << std::endl <<  s.statement->raw_cql_statement;
+        }
+        log.trace("execute_batch({}): {}", batch->get_statements().size(), oss.str());
+    }
+    co_return co_await batch->execute(*this, query_state, options);
 }
 
 future<service::broadcast_tables::query_result>
