@@ -8,6 +8,7 @@
 
 import pytest
 import time
+import rest_api
 from cassandra.protocol import SyntaxException, InvalidRequest, Unauthorized
 from util import new_test_table, new_function, new_user, new_session, new_test_keyspace, unique_name, new_type
 
@@ -450,3 +451,54 @@ def test_create_on_single_function(cql):
             with new_function(cql, keyspace, fun_body) as fun:
                 with pytest.raises(SyntaxException):
                     grant(cql, 'CREATE', f'FUNCTION {keyspace}.{fun}(int, int)', user)
+
+# Test that permissions on a table are not granted to a user as a creator if the table already exists when the user
+# tries to create it. Reproduces GHSA-ww5v-p45p-3vhq
+def test_create_on_existing_table(cql):
+    names = [row.table_name for row in cql.execute("SELECT table_name FROM system_schema.tables WHERE keyspace_name = 'system'")]
+    is_scylla = any('scylla' in name for name in names)
+    def ensure_updated_permissions():
+        if is_scylla:
+            rest_api.post_request(cql, "authorization_cache/reset")
+        else:
+            time.sleep(4)
+    schema = "a int primary key"
+    with new_user(cql) as username:
+        with new_session(cql, username) as user_session:
+            with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
+                grant(cql, 'CREATE', f"KEYSPACE {keyspace}", username)
+                # Wait until the CREATE permission appears in the permissions cache
+                ensure_updated_permissions()
+                with new_test_table(cql, keyspace, schema) as table:
+                    def ensure_all_table_permissions_unauthorized(user_session):
+                        def ensure_unauthorized(fun):
+                            try:
+                                fun()
+                                pytest.fail(f"Function {fun} was not refused as unauthorized")
+                            except Unauthorized:
+                                pass
+                        ensure_unauthorized(lambda: user_session.execute(f"ALTER TABLE {table} WITH comment = 'hey'"))
+                        ensure_unauthorized(lambda: user_session.execute(f"SELECT * FROM {table}"))
+                        ensure_unauthorized(lambda: user_session.execute(f"INSERT INTO {table}(a) VALUES (42)"))
+                        ensure_unauthorized(lambda: user_session.execute(f"DROP TABLE {table}"))
+                        # Grant the SELECT permission to the user so that the GRANT SELECT TO cassandra below only requires
+                        # the missing AUTHORIZE permission. Wait until the permissions cache registers the SELECT permission,
+                        # and then revoke it after confirming the user doesn't have the AUTHORIZE permission.
+                        grant(cql, 'SELECT', table, username)
+                        ensure_updated_permissions()
+                        rest_api.post_request(cql, "authorization_cache/reset")
+                        ensure_unauthorized(lambda: user_session.execute(f"GRANT SELECT ON {table} TO cassandra"))
+                        revoke(cql, 'SELECT', table, username)
+
+                    ensure_all_table_permissions_unauthorized(user_session)
+                    try:
+                        user_session.execute(f"CREATE TABLE {table}(a int primary key)")
+                    except:
+                        pass
+                    # As a result of the CREATE query, user could be granted invalid permissions but they may still be not
+                    # visible in the permissions cache. Sleep until permissions cache is refreshed.
+                    ensure_updated_permissions()
+                    ensure_all_table_permissions_unauthorized(user_session)
+                    user_session.execute(f"CREATE TABLE IF NOT EXISTS {table}(a int primary key)")
+                    ensure_updated_permissions()
+                    ensure_all_table_permissions_unauthorized(user_session)
