@@ -36,6 +36,7 @@ struct test_config {
     unsigned partitions;
     unsigned duration_in_seconds;
     unsigned concurrency;
+    unsigned scan_total_segments;
     bool flush;
     std::string remote_host;
 };
@@ -109,7 +110,7 @@ static void create_alternator_table(http::experimental::client& cli) {
     )").get();
 }
 
-static future<> update_item(http::experimental::client& cli, uint64_t seq) {
+static future<> update_item(const test_config& _, http::experimental::client& cli, uint64_t seq) {
     // Exercise various types documented here: https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_AttributeValue.html 
     auto prefix = format(R"({{
             "TableName": "workloads_test",
@@ -161,7 +162,7 @@ static future<> update_item(http::experimental::client& cli, uint64_t seq) {
     return make_request(cli, "UpdateItem", prefix+suffix);
 }
 
-static future<> get_item(http::experimental::client& cli, uint64_t seq) {
+static future<> get_item(const test_config& _, http::experimental::client& cli, uint64_t seq) {
     auto body = format(R"({{
         "TableName": "workloads_test",
         "Key": {{
@@ -179,6 +180,18 @@ static future<> get_item(http::experimental::client& cli, uint64_t seq) {
     co_await make_request(cli, "GetItem", std::move(body));
 }
 
+static future<> scan(const test_config& c, http::experimental::client& cli, uint64_t seq) {
+    // This uses "parallel scan" feature, see https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Scan.html#Scan.ParallelScan
+    auto body = format(R"({{
+        "TableName": "workloads_test",
+        "Select": "ALL_ATTRIBUTES",
+        "Segment": {},
+        "TotalSegments": {},
+        "ConsistentRead": false
+    }})", seq % c.scan_total_segments, c.scan_total_segments);
+    co_await make_request(cli, "Scan", std::move(body));
+}
+
 static void flush_table(const test_config& c) {
     auto cli = get_client(c, 10000);
     auto req = http::request::make("POST", "localhost", "/storage_service/keyspace_flush/alternator_workloads_test");
@@ -191,7 +204,7 @@ static void flush_table(const test_config& c) {
 static void create_partitions(const test_config& c, http::experimental::client& cli) {
     std::cout << "Creating " << c.partitions << " partitions..." << std::endl;
     for (unsigned seq = 0; seq < c.partitions; ++seq) {
-        update_item(cli, seq).get();
+        update_item(c, cli, seq).get();
     }
     if (c.flush) {
         std::cout << "Flushing partitions..." << std::endl;
@@ -218,13 +231,14 @@ void workload_main(const test_config& c) {
     });
 
     create_alternator_table(cli);
-    using fun_t = std::function<future<>(http::experimental::client&, uint64_t)>;
+    using fun_t = std::function<future<>(const test_config&, http::experimental::client&, uint64_t)>;
     std::map<std::string, fun_t> workloads = {
         {"read",  get_item},
+        {"scan", scan},
         {"write", update_item},
     };
 
-    if (c.workload == "read") {
+    if (c.workload == "read" || c.workload == "scan") {
         create_partitions(c, cli);
     }
 
@@ -238,7 +252,7 @@ void workload_main(const test_config& c) {
         static thread_local auto sharded_cli_pool = make_client_pool(c); // for simplicity never closed as it lives for the whole process runtime
         static thread_local auto cli_iter = -1;
         auto seq = tests::random::get_int<uint64_t>(c.partitions - 1);
-        return fun(sharded_cli_pool[++cli_iter % c.concurrency], seq);
+        return fun(c, sharded_cli_pool[++cli_iter % c.concurrency], seq);
     }, c.concurrency, c.duration_in_seconds);
 
     std::cout << aggregated_perf_results(results) << std::endl;
@@ -267,6 +281,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
             ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core")
             ("flush", bpo::value<bool>()->default_value(true), "flush memtables before test")
             ("remote-host", bpo::value<std::string>()->default_value(""), "address of remote alternator service, use localhost by default")
+            ("scan-total-segments", bpo::value<unsigned>()->default_value(10), "single scan operation will retreive 1/scan-total-segments portion of a table")
         ;
         bpo::variables_map opts;
         bpo::store(bpo::command_line_parser(ac, av).options(opts_desc).allow_unregistered().run(), opts);
@@ -277,6 +292,11 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
         c.concurrency = opts["concurrency"].as<unsigned>();
         c.flush = opts["flush"].as<bool>();
         c.remote_host = opts["remote-host"].as<std::string>();
+        c.scan_total_segments = opts["scan-total-segments"].as<unsigned>();
+
+        if (c.scan_total_segments < 1 || c.scan_total_segments > 1'000'000) {
+            throw std::invalid_argument("scan-total-segments must be between 1 and 1'000'000");
+        }
 
         // Remove test options to not disturb scylla main app
         for (auto& opt : opts_desc.options()) {
