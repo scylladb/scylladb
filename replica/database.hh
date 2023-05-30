@@ -702,6 +702,13 @@ public:
     flat_mutation_reader_v2 make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
             lw_shared_ptr<sstables::sstable_set> sstables) const;
 
+    // Make a reader which reads only from the row-cache.
+    // The reader doens't populate the cache, it reads only what is in the cache
+    // Supports reading only a single partition.
+    // Does not support reading in reverse.
+    flat_mutation_reader_v2 make_nonpopulating_cache_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
+            const query::partition_slice& slice, tracing::trace_state_ptr ts);
+
     sstables::shared_sstable make_streaming_sstable_for_write(std::optional<sstring> subdir = {});
     sstables::shared_sstable make_streaming_staging_sstable();
 
