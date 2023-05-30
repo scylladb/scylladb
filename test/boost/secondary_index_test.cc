@@ -613,6 +613,20 @@ SEASTAR_TEST_CASE(test_secondary_index_collections) {
         BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(VALUES  (l1))").get(), ire, duplicate);
         BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(         l1 )").get(), ire, duplicate);
 
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(         s2 )").get(), ire, non_full);
+        e.execute_cql(                        "create index on t(FULL    (s2))").get();
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(FULL    (s2))").get(), ire, duplicate);
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(         m2 )").get(), ire, non_full);
+        e.execute_cql(                        "create index on t(FULL    (m2))").get();
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(FULL    (m2))").get(), ire, duplicate);
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(         l2 )").get(), ire, non_full);
+        e.execute_cql(                        "create index on t(FULL    (l2))").get();
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(FULL    (l2))").get(), ire, duplicate);
+
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("select * from t where m2[1] = '1'").get(), ire, entry_eq);
+
         const sstring insert_into = "insert into t(p, s1, m1, l1, s2, m2, l2) values ";
         e.execute_cql(insert_into + "(1, {1},    {1: 'one', 2: 'two'},                [2],       {1}, {1: 'one', 2: 'two'},    [2])").get();
         e.execute_cql(insert_into + "(2, {2},    {3: 'three', 7: 'five'},             [3, 4, 5], {2}, {3: 'three'},            [3, 4, 5])").get();
@@ -648,20 +662,6 @@ SEASTAR_TEST_CASE(test_secondary_index_collections) {
         assert_that(res).is_rows().with_rows_ignore_order({{{{int32_type->decompose(1)}}}, {{{int32_type->decompose(3)}}}});
         res = e.execute_cql("SELECT p from t where l1 CONTAINS 1").get0();
         assert_that(res).is_rows().with_size(0);
-
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(         s2 )").get(), ire, non_full);
-        e.execute_cql(                        "create index on t(FULL    (s2))").get();
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(FULL    (s2))").get(), ire, duplicate);
-
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(         m2 )").get(), ire, non_full);
-        e.execute_cql(                        "create index on t(FULL    (m2))").get();
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(FULL    (m2))").get(), ire, duplicate);
-
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(         l2 )").get(), ire, non_full);
-        e.execute_cql(                        "create index on t(FULL    (l2))").get();
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("create index on t(FULL    (l2))").get(), ire, duplicate);
-
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("select * from t where m2[1] = '1'").get(), ire, entry_eq);
 
         res = e.execute_cql("SELECT p from t where s2 = {2}").get0();
         assert_that(res).is_rows().with_rows({{{int32_type->decompose(2)}}});
