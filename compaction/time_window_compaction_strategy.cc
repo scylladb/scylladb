@@ -42,7 +42,7 @@ static std::chrono::seconds validate_compaction_window_unit(const std::map<sstri
     if (tmp_value) {
         auto valid_window_units_it = time_window_compaction_strategy_options::valid_window_units.find(tmp_value.value());
         if (valid_window_units_it == time_window_compaction_strategy_options::valid_window_units.end()) {
-            throw exceptions::configuration_exception(sstring("Invalid window unit ") + tmp_value.value() + " for " + time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY);
+            throw exceptions::configuration_exception(fmt::format("Invalid window unit {} for {}", tmp_value.value(), time_window_compaction_strategy_options::COMPACTION_WINDOW_UNIT_KEY));
         }
         window_unit = valid_window_units_it->second;
     }
@@ -81,7 +81,7 @@ static db_clock::duration validate_expired_sstable_check_frequency_seconds(const
         try {
             expired_sstable_check_frequency = std::chrono::seconds(std::stol(tmp_value.value()));
         } catch (const std::exception& e) {
-            throw exceptions::syntax_exception(sstring("Invalid long value ") + tmp_value.value() + "for " + time_window_compaction_strategy_options::EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY);
+            throw exceptions::syntax_exception(fmt::format("Invalid long value {} for {}", tmp_value.value(), time_window_compaction_strategy_options::EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY));
         }
     }
 
@@ -100,7 +100,7 @@ static time_window_compaction_strategy_options::timestamp_resolutions validate_t
     auto tmp_value = compaction_strategy_impl::get_value(options, time_window_compaction_strategy_options::TIMESTAMP_RESOLUTION_KEY);
     if (tmp_value) {
         if (!time_window_compaction_strategy_options::valid_timestamp_resolutions.contains(tmp_value.value())) {
-            throw exceptions::configuration_exception(sstring("Invalid timestamp resolution ") + tmp_value.value() + "for " + time_window_compaction_strategy_options::TIMESTAMP_RESOLUTION_KEY);
+            throw exceptions::configuration_exception(fmt::format("Invalid timestamp resolution {} for {}", tmp_value.value(), time_window_compaction_strategy_options::TIMESTAMP_RESOLUTION_KEY));
         } else {
             timestamp_resolution = time_window_compaction_strategy_options::valid_timestamp_resolutions.at(tmp_value.value());
         }
