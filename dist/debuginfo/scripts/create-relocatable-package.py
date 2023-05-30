@@ -56,7 +56,10 @@ gzip_process = subprocess.Popen("pigz > "+output, shell=True, stdin=subprocess.P
 
 ar = tarfile.open(fileobj=gzip_process.stdin, mode='w|')
 # relocatable package format version = 2.1
-shutil.rmtree(f'build/{SCYLLA_DIR}', ignore_errors=True)
+try:
+    shutil.rmtree(f'build/{SCYLLA_DIR}')
+except FileNotFoundError:
+    pass
 os.makedirs(f'build/{SCYLLA_DIR}')
 with open(f'build/{SCYLLA_DIR}/.relocatable_package_version', 'w') as f:
     f.write('2.1\n')
