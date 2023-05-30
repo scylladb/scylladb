@@ -52,20 +52,6 @@ using namespace std::chrono_literals;
 
 extern logging::logger apilog;
 
-namespace std {
-
-std::ostream& operator<<(std::ostream& os, const api::table_info& ti) {
-    fmt::print(os, "{}", ti);
-    return os;
-}
-
-} // namespace std
-
-auto fmt::formatter<api::table_info>::format(const api::table_info& ti,
-                                             fmt::format_context& ctx) const -> decltype(ctx.out()) {
-    return fmt::format_to(ctx.out(), "table{{name={}, id={}}}", ti.name, ti.id);
-}
-
 namespace api {
 
 const locator::token_metadata& http_context::get_token_metadata() {
@@ -479,14 +465,6 @@ static future<json::json_return_type> describe_ring_as_json(sharded<service::sto
     co_return json::json_return_type(stream_range_as_array(co_await ss.local().describe_ring(keyspace), token_range_endpoints_to_json));
 }
 
-static std::vector<table_id> get_table_ids(const std::vector<table_info>& table_infos) {
-    std::vector<table_id> table_ids{table_infos.size()};
-    boost::transform(table_infos, table_ids.begin(), [] (const auto& ti) {
-        return ti.id;
-    });
-    return table_ids;
-}
-
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, gms::gossiper& g, sharded<cdc::generation_service>& cdc_gs, sharded<db::system_keyspace>& sys_ks) {
     ss::local_hostid.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto id = ctx.db.local().get_config().host_id;
@@ -705,7 +683,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         apilog.debug("force_keyspace_compaction: keyspace={} tables={}", keyspace, table_infos);
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), db, get_table_ids(table_infos));
+        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), db, table_infos);
         try {
             co_await task->done();
         } catch (...) {
@@ -728,7 +706,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         }
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<cleanup_keyspace_compaction_task_impl>({}, std::move(keyspace), db, get_table_ids(table_infos));
+        auto task = co_await compaction_module.make_and_start_task<cleanup_keyspace_compaction_task_impl>({}, std::move(keyspace), db, table_infos);
         try {
             co_await task->done();
         } catch (...) {
@@ -743,7 +721,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, table_infos);
         bool res = false;
         auto& compaction_module = ctx.db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<offstrategy_keyspace_compaction_task_impl>({}, std::move(keyspace), ctx.db, get_table_ids(table_infos), res);
+        auto task = co_await compaction_module.make_and_start_task<offstrategy_keyspace_compaction_task_impl>({}, std::move(keyspace), ctx.db, table_infos, res);
         try {
             co_await task->done();
         } catch (...) {
@@ -761,7 +739,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         apilog.info("upgrade_sstables: keyspace={} tables={} exclude_current_version={}", keyspace, table_infos, exclude_current_version);
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<upgrade_sstables_compaction_task_impl>({}, std::move(keyspace), db, get_table_ids(table_infos), exclude_current_version);
+        auto task = co_await compaction_module.make_and_start_task<upgrade_sstables_compaction_task_impl>({}, std::move(keyspace), db, table_infos, exclude_current_version);
         try {
             co_await task->done();
         } catch (...) {

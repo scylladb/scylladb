@@ -25,6 +25,22 @@ using schema_ptr = seastar::lw_shared_ptr<const schema>;
 
 using table_id = utils::tagged_uuid<struct table_id_tag>;
 
+struct table_info {
+    sstring name;
+    table_id id;
+};
+
+namespace std {
+
+std::ostream& operator<<(std::ostream& os, const table_info& ti);
+
+} // namespace std
+
+template <>
+struct fmt::formatter<table_info> : fmt::formatter<std::string_view> {
+    auto format(const table_info&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
 // Cluster-wide identifier of schema version of particular table.
 //
 // The version changes the value not only on structural changes but also

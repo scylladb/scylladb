@@ -1964,6 +1964,20 @@ std::ostream& operator<<(std::ostream& os, const view_ptr& view) {
     return view ? os << *view : os << "null";
 }
 
+namespace std {
+
+std::ostream& operator<<(std::ostream& os, const table_info& ti) {
+    fmt::print(os, "{}", ti);
+    return os;
+}
+
+} // namespace std
+
+auto fmt::formatter<table_info>::format(const table_info& ti,
+                                             fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "table{{name={}, id={}}}", ti.name, ti.id);
+}
+
 schema_mismatch_error::schema_mismatch_error(table_schema_version expected, const schema& access)
     : std::runtime_error(fmt::format("Attempted to deserialize schema-dependent object of version {} using {}.{} {}",
         expected, access.ks_name(), access.cf_name(), access.version()))
