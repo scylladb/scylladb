@@ -45,5 +45,5 @@ struct forward_result {
     std::vector<bytes_opt> query_results;
 };
 
-verb forward_request(query::forward_request req [[ref]], std::optional<tracing::trace_info>) -> query::forward_result;
+verb forward_request(query::forward_request req [[ref]], std::optional<tracing::trace_info> trace_info [[ref]]) -> query::forward_result;
 }

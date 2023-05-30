@@ -198,13 +198,13 @@ public:
     }
 
     future<> send_mutation(
-            netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, std::optional<tracing::trace_info> trace_info,
+            netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, const std::optional<tracing::trace_info>& trace_info,
             const frozen_mutation& m, const inet_address_vector_replica_set& forward, gms::inet_address reply_to, unsigned shard,
             storage_proxy::response_id_type response_id, db::per_partition_rate_limit::info rate_limit_info) {
         return ser::storage_proxy_rpc_verbs::send_mutation(
                 &_ms, std::move(addr), timeout,
                 m, forward, std::move(reply_to), shard,
-                response_id, std::move(trace_info), rate_limit_info);
+                response_id, trace_info, rate_limit_info);
     }
 
     future<> send_hint_mutation(
@@ -313,11 +313,11 @@ public:
     }
 
     future<> send_paxos_learn(
-            netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, std::optional<tracing::trace_info> trace_info,
+            netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, const std::optional<tracing::trace_info>& trace_info,
             const service::paxos::proposal& decision, const inet_address_vector_replica_set& forward,
             gms::inet_address reply_to, unsigned shard, uint64_t response_id) {
         return ser::storage_proxy_rpc_verbs::send_paxos_learn(
-                &_ms, addr, timeout, decision, forward, reply_to, shard, response_id, std::move(trace_info));
+                &_ms, addr, timeout, decision, forward, reply_to, shard, response_id, trace_info);
     }
 
     future<> send_paxos_prune(
@@ -398,7 +398,7 @@ private:
     future<rpc::no_wait_type> handle_write(
             netw::messaging_service::msg_addr src_addr, rpc::opt_time_point t,
             auto schema_version, auto in, const inet_address_vector_replica_set& forward, gms::inet_address reply_to,
-            unsigned shard, storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,
+            unsigned shard, storage_proxy::response_id_type response_id, const std::optional<tracing::trace_info>& trace_info,
             auto&& apply_fn1, auto&& forward_fn1) {
         auto apply_fn = std::move(apply_fn1);
         auto forward_fn = std::move(forward_fn1);
@@ -406,7 +406,7 @@ private:
         tracing::trace_state_ptr trace_state_ptr;
 
         if (trace_info) {
-            tracing::trace_info& tr_info = *trace_info;
+            const tracing::trace_info& tr_info = *trace_info;
             trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(tr_info);
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
@@ -512,8 +512,8 @@ private:
                 },
                 /* forward_fn */ [this, rate_limit_info] (shared_ptr<storage_proxy>& p, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const frozen_mutation& m,
                         gms::inet_address reply_to, unsigned shard, response_id_type response_id,
-                        std::optional<tracing::trace_info> trace_info) {
-                    return send_mutation(addr, timeout, std::move(trace_info), m, {}, reply_to, shard, response_id, rate_limit_info);
+                        const std::optional<tracing::trace_info>& trace_info) {
+                    return send_mutation(addr, timeout, trace_info, m, {}, reply_to, shard, response_id, rate_limit_info);
                 });
     }
 
@@ -533,8 +533,8 @@ private:
               },
               /* forward_fn */ [this] (shared_ptr<storage_proxy>&, netw::messaging_service::msg_addr addr, clock_type::time_point timeout, const paxos::proposal& m,
                       gms::inet_address reply_to, unsigned shard, response_id_type response_id,
-                      std::optional<tracing::trace_info> trace_info) {
-                    return send_paxos_learn(addr, timeout, std::move(trace_info), m, {}, reply_to, shard, response_id);
+                      const std::optional<tracing::trace_info>& trace_info) {
+                    return send_paxos_learn(addr, timeout, trace_info, m, {}, reply_to, shard, response_id);
               });
     }
 
