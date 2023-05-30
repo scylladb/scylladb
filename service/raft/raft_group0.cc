@@ -470,8 +470,8 @@ struct group0_members {
     const raft_address_map& _address_map;
 
 
-    std::vector<gms::inet_address> get_inet_addrs(std::source_location l =
-            std::source_location::current()) const {
+    std::vector<gms::inet_address> get_inet_addrs(seastar::compat::source_location l =
+            seastar::compat::source_location::current()) const {
         const raft::config_member_set& members = _group0_server.get_configuration().current;
         std::vector<gms::inet_address> ret;
         std::vector<raft::server_id> missing;
@@ -1040,7 +1040,7 @@ struct sleep_with_exponential_backoff {
     std::chrono::seconds _retry_period{1};
     static constexpr std::chrono::seconds _max_retry_period{16};
     future<> operator()(abort_source& as,
-                        std::source_location loc = std::source_location::current()) {
+                        seastar::compat::source_location loc = seastar::compat::source_location::current()) {
         upgrade_log.info("{}: sleeping for {} seconds before retrying...", loc.function_name(), _retry_period);
         co_await sleep_abortable(_retry_period, as);
         _retry_period = std::min(_retry_period * 2, _max_retry_period);

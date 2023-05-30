@@ -1661,7 +1661,7 @@ SEASTAR_TEST_CASE(test_tuples) {
 
 namespace {
 
-using std::source_location;
+using seastar::compat::source_location;
 
 auto validate_request_failure(
         cql_test_env& env,
@@ -4333,7 +4333,7 @@ shared_ptr<cql_transport::messages::result_message> cql_func_require_nofail(
         const seastar::sstring& fct,
         const seastar::sstring& inp,
         std::unique_ptr<cql3::query_options>&& qo = nullptr,
-        const std::source_location& loc = std::source_location::current()) {
+        const seastar::compat::source_location& loc = seastar::compat::source_location::current()) {
     auto res = shared_ptr<cql_transport::messages::result_message>(nullptr);
     auto query = format("SELECT {}({}) FROM t;", fct, inp);
     try {
@@ -4358,7 +4358,7 @@ void cql_func_require_throw(
         const seastar::sstring& fct,
         const seastar::sstring& inp,
         std::unique_ptr<cql3::query_options>&& qo = nullptr,
-        const std::source_location& loc = std::source_location::current()) {
+        const seastar::compat::source_location& loc = seastar::compat::source_location::current()) {
     auto query = format("SELECT {}({}) FROM t;", fct, inp);
     try {
         if (qo) {
@@ -5496,11 +5496,11 @@ SEASTAR_TEST_CASE(test_null_and_unset_in_collections) {
         e.execute_cql("CREATE TABLE null_in_col (p int primary key, l list<int>, s set<int>, m map<int, int>);").get();
 
         // The predicate that checks the message has to be a lambda to preserve source_location
-        auto check_null_msg = [](std::source_location loc = std::source_location::current()) {
+        auto check_null_msg = [](compat::source_location loc = seastar::compat::source_location::current()) {
             return exception_predicate::message_matches(".*(null|NULL).*", loc);
         };
 
-        auto check_unset_msg = [](std::source_location loc = std::source_location::current()) {
+        auto check_unset_msg = [](compat::source_location loc = seastar::compat::source_location::current()) {
             return exception_predicate::message_contains("unset", loc);
         };
 
@@ -5667,7 +5667,7 @@ SEASTAR_TEST_CASE(test_bind_variable_type_checking) {
         e.execute_cql("CREATE TABLE tab1 (p int primary key, a int, b text, c int)").get();
 
         // The predicate that checks the message has to be a lambda to preserve source_location
-        auto check_type_conflict = [](std::source_location loc = std::source_location::current()) {
+        auto check_type_conflict = [](compat::source_location loc = seastar::compat::source_location::current()) {
             return exception_predicate::message_contains("variable :var has type", loc);
         };
 

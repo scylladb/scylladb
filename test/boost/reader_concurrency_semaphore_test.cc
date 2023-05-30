@@ -1498,7 +1498,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_request_memory_preser
 
     uint64_t reads_enqueued_for_memory = 0;
 
-    auto do_check = [&] (reader_permit& permit, uint64_t need_cpu, uint64_t awaits, std::source_location sl) {
+    auto do_check = [&] (reader_permit& permit, uint64_t need_cpu, uint64_t awaits, seastar::compat::source_location sl) {
         testlog.info("do_check() {}:{}", sl.file_name(), sl.line());
 
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 2);
@@ -1530,14 +1530,14 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_request_memory_preser
     // active
     {
         auto permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get0();
-        do_check(permit, 0, 0, std::source_location::current());
+        do_check(permit, 0, 0, seastar::compat::source_location::current());
     }
 
     // need_cpu
     {
         auto permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get0();
         reader_permit::need_cpu_guard ncpu_guard{permit};
-        do_check(permit, 1, 0, std::source_location::current());
+        do_check(permit, 1, 0, seastar::compat::source_location::current());
     }
 
     // awaits
@@ -1545,7 +1545,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_request_memory_preser
         auto permit = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get0();
         reader_permit::need_cpu_guard ncpu_guard{permit};
         reader_permit::awaits_guard awaits_guard{permit};
-        do_check(permit, 1, 1, std::source_location::current());
+        do_check(permit, 1, 1, seastar::compat::source_location::current());
     }
 }
 

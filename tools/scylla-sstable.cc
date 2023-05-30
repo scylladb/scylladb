@@ -2086,10 +2086,10 @@ class json_mutation_stream_parser {
             }
             return true;
         }
-        bool unexpected(std::source_location sl = std::source_location::current()) {
+        bool unexpected(seastar::compat::source_location sl = seastar::compat::source_location::current()) {
             return error("unexpected json event {} in state {}", sl.function_name(), stack_to_string());
         }
-        bool unexpected(std::string_view key, std::source_location sl = std::source_location::current()) {
+        bool unexpected(std::string_view key, seastar::compat::source_location sl = seastar::compat::source_location::current()) {
             return error("unexpected json event {}({}) in state {}", sl.function_name(), key, stack_to_string());
         }
     public:

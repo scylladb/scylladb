@@ -1259,7 +1259,7 @@ SEASTAR_TEST_CASE(test_indexing_paging_and_aggregation) {
 void assert_select_count_and_select_rows_has_size(
         cql_test_env& e, 
         const sstring& rest_of_query, int64_t expected_count, 
-        const std::source_location& loc = std::source_location::current()) {
+        const seastar::compat::source_location& loc = seastar::compat::source_location::current()) {
     eventually([&] { 
         require_rows(e, "SELECT count(*) " + rest_of_query, {
             { long_type->decompose(expected_count) }

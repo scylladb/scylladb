@@ -22,13 +22,13 @@ namespace tests {
 
 namespace {
 
-std::string format_msg(std::string_view test_function_name, bool ok, std::source_location sl, std::string_view msg) {
+std::string format_msg(std::string_view test_function_name, bool ok, seastar::compat::source_location sl, std::string_view msg) {
     return fmt::format("{}(): {} @ {}() {}:{:d}{}{}", test_function_name, ok ? "OK" : "FAIL", sl.function_name(), sl.file_name(), sl.line(), msg.empty() ? "" : ": ", msg);
 }
 
 }
 
-bool do_check(bool condition, std::source_location sl, std::string_view msg) {
+bool do_check(bool condition, seastar::compat::source_location sl, std::string_view msg) {
     if (condition) {
         testlog.trace("{}", format_msg(__FUNCTION__, condition, sl, msg));
     } else {
@@ -37,7 +37,7 @@ bool do_check(bool condition, std::source_location sl, std::string_view msg) {
     return condition;
 }
 
-void do_require(bool condition, std::source_location sl, std::string_view msg) {
+void do_require(bool condition, seastar::compat::source_location sl, std::string_view msg) {
     if (condition) {
         testlog.trace("{}", format_msg(__FUNCTION__, condition, sl, msg));
     } else {
@@ -48,7 +48,7 @@ void do_require(bool condition, std::source_location sl, std::string_view msg) {
 
 }
 
-void fail(std::string_view msg, std::source_location sl) {
+void fail(std::string_view msg, seastar::compat::source_location sl) {
     throw_with_backtrace<std::runtime_error>(format_msg(__FUNCTION__, false, sl, msg));
 }
 

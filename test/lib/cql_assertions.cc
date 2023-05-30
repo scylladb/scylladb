@@ -187,7 +187,7 @@ rows_assertions rows_assertions::with_serialized_columns_count(size_t columns_co
 }
 
 shared_ptr<cql_transport::messages::result_message> cquery_nofail(
-        cql_test_env& env, sstring_view query, std::unique_ptr<cql3::query_options>&& qo, const std::source_location& loc) {
+        cql_test_env& env, sstring_view query, std::unique_ptr<cql3::query_options>&& qo, const seastar::compat::source_location& loc) {
     try {
         if (qo) {
             return env.execute_cql(query, std::move(qo)).get0();
@@ -204,7 +204,7 @@ shared_ptr<cql_transport::messages::result_message> cquery_nofail(
 void require_rows(cql_test_env& e,
                   sstring_view qstr,
                   const std::vector<std::vector<bytes_opt>>& expected,
-                  const std::source_location& loc) {
+                  const seastar::compat::source_location& loc) {
     try {
         assert_that(cquery_nofail(e, qstr, nullptr, loc)).is_rows().with_rows_ignore_order(expected);
     }
@@ -215,7 +215,7 @@ void require_rows(cql_test_env& e,
 }
 
 void eventually_require_rows(cql_test_env& e, sstring_view qstr, const std::vector<std::vector<bytes_opt>>& expected,
-                             const std::source_location& loc) {
+                             const seastar::compat::source_location& loc) {
     try {
         eventually([&] {
             assert_that(cquery_nofail(e, qstr, nullptr, loc)).is_rows().with_rows_ignore_order(expected);
@@ -230,7 +230,7 @@ void require_rows(cql_test_env& e,
                   cql3::prepared_cache_key_type id,
                   const std::vector<cql3::raw_value>& values,
                   const std::vector<std::vector<bytes_opt>>& expected,
-                  const std::source_location& loc) {
+                  const seastar::compat::source_location& loc) {
     try {
         assert_that(e.execute_prepared(id, values).get0()).is_rows().with_rows_ignore_order(expected);
     } catch (const std::exception& e) {
