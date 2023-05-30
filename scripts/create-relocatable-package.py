@@ -170,8 +170,8 @@ ar.reloc_add('api')
 ar.reloc_add('tools/scyllatop')
 ar.reloc_add('scylla-gdb.py')
 ar.reloc_add('build/debian/debian', arcname='debian')
-ar.reloc_add('build/node_exporter', arcname='node_exporter')
 if args.stripped:
+    ar.reloc_add('build/node_exporter', arcname='node_exporter')
     ar.reloc_add('build/node_exporter/node_exporter.stripped', arcname='node_exporter/node_exporter')
 else:
     ar.reloc_add('build/node_exporter/node_exporter', arcname='node_exporter/node_exporter')
