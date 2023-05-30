@@ -65,8 +65,8 @@ public:
     virtual lw_shared_ptr<const sstable_list> all() const override;
     virtual stop_iteration for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const override;
     virtual future<stop_iteration> for_each_sstable_gently_until(std::function<future<stop_iteration>(const shared_sstable&)> func) const override;
-    virtual void insert(shared_sstable sst) override;
-    virtual void erase(shared_sstable sst) override;
+    virtual bool insert(shared_sstable sst) override;
+    virtual bool erase(shared_sstable sst) override;
     virtual size_t size() const noexcept override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
     class incremental_selector;
@@ -93,8 +93,8 @@ public:
     virtual lw_shared_ptr<const sstable_list> all() const override;
     virtual stop_iteration for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const override;
     virtual future<stop_iteration> for_each_sstable_gently_until(std::function<future<stop_iteration>(const shared_sstable&)> func) const override;
-    virtual void insert(shared_sstable sst) override;
-    virtual void erase(shared_sstable sst) override;
+    virtual bool insert(shared_sstable sst) override;
+    virtual bool erase(shared_sstable sst) override;
     virtual size_t size() const noexcept override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
 
@@ -134,8 +134,8 @@ public:
     virtual lw_shared_ptr<const sstable_list> all() const override;
     virtual stop_iteration for_each_sstable_until(std::function<stop_iteration(const shared_sstable&)> func) const override;
     virtual future<stop_iteration> for_each_sstable_gently_until(std::function<future<stop_iteration>(const shared_sstable&)> func) const override;
-    virtual void insert(shared_sstable sst) override;
-    virtual void erase(shared_sstable sst) override;
+    virtual bool insert(shared_sstable sst) override;
+    virtual bool erase(shared_sstable sst) override;
     virtual size_t size() const noexcept override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
 

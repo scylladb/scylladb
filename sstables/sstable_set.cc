@@ -172,14 +172,14 @@ stop_iteration sstable_set::for_each_sstable_until(std::function<stop_iteration(
     return _impl->for_each_sstable_until(std::move(func));
 }
 
-void
+bool
 sstable_set::insert(shared_sstable sst) {
-    _impl->insert(sst);
+    return _impl->insert(sst);
 }
 
-void
+bool
 sstable_set::erase(shared_sstable sst) {
-    _impl->erase(sst);
+    return _impl->erase(sst);
 }
 
 size_t
@@ -341,11 +341,11 @@ future<stop_iteration> partitioned_sstable_set::for_each_sstable_gently_until(st
     co_return stop_iteration::no;
 }
 
-void partitioned_sstable_set::insert(shared_sstable sst) {
+bool partitioned_sstable_set::insert(shared_sstable sst) {
     auto [_, inserted] = _all->insert(sst);
     if (!inserted) {
         // sst is already in the set, no further handling is required
-        return;
+        return false;
     }
     auto undo_all_insert = defer([&] () { _all->erase(sst); });
 
@@ -365,22 +365,24 @@ void partitioned_sstable_set::insert(shared_sstable sst) {
     }
     undo_all_insert.cancel();
     undo_all_runs_insert.cancel();
+    return true;
 }
 
-void partitioned_sstable_set::erase(shared_sstable sst) {
+bool partitioned_sstable_set::erase(shared_sstable sst) {
     if (auto it = _all_runs.find(sst->run_identifier()); it != _all_runs.end()) {
         it->second.erase(sst);
         if (it->second.empty()) {
             _all_runs.erase(it);
         }
     }
-    _all->erase(sst);
+    auto ret = _all->erase(sst) != 0;
     if (store_as_unleveled(sst)) {
         _unleveled_sstables.erase(std::remove(_unleveled_sstables.begin(), _unleveled_sstables.end(), sst), _unleveled_sstables.end());
     } else {
         _leveled_sstables_change_cnt++;
         _leveled_sstables.subtract({make_interval(*sst), value_set({sst})});
     }
+    return ret;
 }
 
 size_t
@@ -502,7 +504,7 @@ future<stop_iteration> time_series_sstable_set::for_each_sstable_gently_until(st
 }
 
 // O(log n)
-void time_series_sstable_set::insert(shared_sstable sst) {
+bool time_series_sstable_set::insert(shared_sstable sst) {
   try {
     auto min_pos = sst->min_position();
     auto max_pos_reversed = sst->max_position().reversed();
@@ -512,15 +514,18 @@ void time_series_sstable_set::insert(shared_sstable sst) {
     erase(sst);
     throw;
   }
+  return true;
 }
 
 // O(n) worst case, but should be close to O(log n) most of the time
-void time_series_sstable_set::erase(shared_sstable sst) {
+bool time_series_sstable_set::erase(shared_sstable sst) {
+    bool found;
     {
         auto [first, last] = _sstables->equal_range(sst->min_position());
         auto it = std::find_if(first, last,
                 [&sst] (const std::pair<position_in_partition, shared_sstable>& p) { return sst == p.second; });
-        if (it != last) {
+        found = it != last;
+        if (found) {
             _sstables->erase(it);
         }
     }
@@ -531,6 +536,7 @@ void time_series_sstable_set::erase(shared_sstable sst) {
     if (it != last) {
         _sstables_reversed->erase(it);
     }
+    return found;
 }
 
 std::unique_ptr<incremental_selector_impl> time_series_sstable_set::make_incremental_selector() const {
@@ -1098,10 +1104,10 @@ future<stop_iteration> compound_sstable_set::for_each_sstable_gently_until(std::
     co_return stop_iteration::no;
 }
 
-void compound_sstable_set::insert(shared_sstable sst) {
+bool compound_sstable_set::insert(shared_sstable sst) {
     throw_with_backtrace<std::bad_function_call>();
 }
-void compound_sstable_set::erase(shared_sstable sst) {
+bool compound_sstable_set::erase(shared_sstable sst) {
     throw_with_backtrace<std::bad_function_call>();
 }
 
