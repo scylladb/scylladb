@@ -140,6 +140,9 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
                 },
                 [] (topology_change& chng) -> std::vector<canonical_mutation>& {
                     return chng.mutations;
+                },
+                [] (write_mutations& muts) -> std::vector<canonical_mutation>& {
+                    return muts.mutations;
                 }
             ), cmd.change);
         }
@@ -205,6 +208,9 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
             [&] (topology_change& chng) -> future<> {
                 co_await write_mutations_to_database(sm._sp, cmd.creator_addr, std::move(chng.mutations));
                 co_await sm._ss.topology_transition(sm._cdc_gen_svc);
+            },
+            [&] (write_mutations& muts) -> future<> {
+                return write_mutations_to_database(sm._sp, cmd.creator_addr, std::move(muts.mutations));
             }
             ), cmd.change);
 
