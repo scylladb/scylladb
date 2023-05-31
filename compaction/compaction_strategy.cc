@@ -177,25 +177,35 @@ double size_tiered_backlog_tracker::backlog(const compaction_backlog_tracker::on
     return b > 0 ? b : 0;
 }
 
-// FIXME: Should provide strong exception safety guarantees
+// Provides strong exception safety guarantees.
 void size_tiered_backlog_tracker::replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) {
+    auto tmp_all = _all;
+    auto tmp_total_bytes = _total_bytes;
+    tmp_all.reserve(_all.size() + new_ssts.size());
+
     for (auto& sst : old_ssts) {
         if (sst->data_size() > 0) {
-            auto erased = _all.erase(sst);
+            auto erased = tmp_all.erase(sst);
             if (erased) {
-                _total_bytes -= sst->data_size();
+                tmp_total_bytes -= sst->data_size();
             }
         }
     }
     for (auto& sst : new_ssts) {
         if (sst->data_size() > 0) {
-            auto [_, inserted] = _all.insert(sst);
+            auto [_, inserted] = tmp_all.insert(sst);
             if (inserted) {
-                _total_bytes += sst->data_size();
+                tmp_total_bytes += sst->data_size();
             }
         }
     }
-    _contrib = calculate_sstables_backlog_contribution(boost::copy_range<std::vector<shared_sstable>>(_all), _stcs_options);
+    auto tmp_contrib = calculate_sstables_backlog_contribution(boost::copy_range<std::vector<shared_sstable>>(tmp_all), _stcs_options);
+
+    std::invoke([&] () noexcept {
+        _all = std::move(tmp_all);
+        _total_bytes = tmp_total_bytes;
+        _contrib = std::move(tmp_contrib);
+    });
 }
 
 namespace sstables {

@@ -94,7 +94,7 @@ public:
 
     // Removing could be the result of a failure of an in progress write, successful finish of a
     // compaction, or some one-off operation, like drop
-    // FIXME: Should provide strong exception safety guarantees
+    // Provides strong exception safety guarantees.
     virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override;
 
     int64_t total_bytes() const {
