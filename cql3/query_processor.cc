@@ -849,11 +849,8 @@ query_processor::execute_with_params(
         service::query_state& query_state,
         const std::initializer_list<data_value>& values) {
     auto opts = make_internal_options(p, values, cl);
-    return do_with(std::move(opts), [this, &query_state, p = std::move(p)](auto & opts) {
-        return p->statement->execute(*this, query_state, opts).then([](auto msg) {
-            return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
-        });
-    });
+    auto msg = co_await p->statement->execute(*this, query_state, opts);
+    co_return ::make_shared<untyped_result_set>(msg);
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
