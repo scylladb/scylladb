@@ -25,6 +25,8 @@ namespace seastar { class file; }
 
 #include "seastarx.hh"
 
+class compressor;
+
 namespace db {
 
 class config;
@@ -122,6 +124,8 @@ public:
         std::optional<segment_id_type> base_segment_id;
 
         const db::extensions * extensions = nullptr;
+
+        seastar::shared_ptr<::compressor> compressor;
     };
 
     struct descriptor {
