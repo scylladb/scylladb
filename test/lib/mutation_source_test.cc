@@ -1597,8 +1597,8 @@ void test_reader_conversions(tests::reader_concurrency_semaphore_wrapper& semaph
 
         {
             auto rd = ms.make_fragment_v1_stream(m.schema(), semaphore.make_permit());
+            auto close_rd = deferred_close(rd);
             match_compacted_mutation(read_mutation_from_flat_mutation_reader(rd).get0(), m_compacted, query_time);
-            rd.close().get();
         }
     });
 }
