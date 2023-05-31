@@ -1917,6 +1917,7 @@ void compaction_backlog_tracker::replace_sstables(const std::vector<sstables::sh
         return ret;
     };
 
+    // FIXME: propagate exception to caller once all replace_sstables implementations provide strong exception safety guarantees.
     try {
         _impl->replace_sstables(filter_and_revert_charges(old_ssts), filter_and_revert_charges(new_ssts));
     } catch (...) {

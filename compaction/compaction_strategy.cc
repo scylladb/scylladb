@@ -174,6 +174,7 @@ double size_tiered_backlog_tracker::backlog(const compaction_backlog_tracker::on
     return b > 0 ? b : 0;
 }
 
+// FIXME: Should provide strong exception safety guarantees
 void size_tiered_backlog_tracker::replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) {
     for (auto& sst : old_ssts) {
         if (sst->data_size() > 0) {
@@ -265,6 +266,7 @@ public:
         return b;
     }
 
+    // FIXME: Should provide strong exception safety guarantees
     virtual void replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) override {
         struct replacement {
             std::vector<sstables::shared_sstable> old_ssts;
@@ -394,6 +396,7 @@ public:
         return b;
     }
 
+    // FIXME: Should provide strong exception safety guarantees
     virtual void replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) override {
         std::vector<sstables::shared_sstable> l0_old_ssts, l0_new_ssts;
         for (auto& sst : new_ssts) {
