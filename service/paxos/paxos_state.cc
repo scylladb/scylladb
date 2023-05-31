@@ -43,7 +43,7 @@ future<paxos_state::guard> paxos_state::get_cas_lock(const dht::token& key, cloc
     co_return m;
 }
 
-future<prepare_response> paxos_state::prepare(storage_proxy& sp, tracing::trace_state_ptr tr_state, schema_ptr schema,
+future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keyspace& sys_ks, tracing::trace_state_ptr tr_state, schema_ptr schema,
         const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
         bool only_digest, query::digest_algorithm da, clock_type::time_point timeout) {
     return utils::get_local_injector().inject("paxos_prepare_timeout", timeout, [&sp, &cmd, &key, ballot, tr_state, schema, only_digest, da, timeout] {
@@ -139,7 +139,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, tracing::trace_
     });
 }
 
-future<bool> paxos_state::accept(storage_proxy& sp, tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
+future<bool> paxos_state::accept(storage_proxy& sp, db::system_keyspace& sys_ks, tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
         clock_type::time_point timeout) {
     return utils::get_local_injector().inject("paxos_accept_proposal_timeout", timeout,
             [&sp, token = std::move(token), &proposal, schema, tr_state, timeout] {
@@ -178,7 +178,7 @@ future<bool> paxos_state::accept(storage_proxy& sp, tracing::trace_state_ptr tr_
     });
 }
 
-future<> paxos_state::learn(storage_proxy& sp, schema_ptr schema, proposal decision, clock_type::time_point timeout,
+future<> paxos_state::learn(storage_proxy& sp, db::system_keyspace& sys_ks, schema_ptr schema, proposal decision, clock_type::time_point timeout,
         tracing::trace_state_ptr tr_state) {
     if (utils::get_local_injector().enter("paxos_error_before_learn")) {
         return make_exception_future<>(utils::injected_error("injected_error_before_learn"));
@@ -237,7 +237,7 @@ future<> paxos_state::learn(storage_proxy& sp, schema_ptr schema, proposal decis
     });
 }
 
-future<> paxos_state::prune(schema_ptr schema, const partition_key& key, utils::UUID ballot, clock_type::time_point timeout,
+future<> paxos_state::prune(db::system_keyspace& sys_ks, schema_ptr schema, const partition_key& key, utils::UUID ballot, clock_type::time_point timeout,
         tracing::trace_state_ptr tr_state) {
     logger.debug("Delete paxos state for ballot {}", ballot);
     tracing::trace(tr_state, "Delete paxos state for ballot {}", ballot);
