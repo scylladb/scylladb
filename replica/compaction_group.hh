@@ -47,8 +47,6 @@ class compaction_group {
     // have not been deleted yet, so must not GC any tombstones in other sstables
     // that may delete data in these sstables:
     std::vector<sstables::shared_sstable> _sstables_compacted_but_not_deleted;
-    uint64_t _main_set_disk_space_used = 0;
-    uint64_t _maintenance_set_disk_space_used = 0;
     seastar::condition_variable _staging_done_condition;
 private:
     // Adds new sstable to the set of sstables

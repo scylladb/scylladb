@@ -57,7 +57,8 @@ public:
         const interval_map_type& leveled_sstables,
         const lw_shared_ptr<sstable_list>& all,
         const std::unordered_map<run_id, sstable_run>& all_runs,
-        bool use_level_metadata);
+        bool use_level_metadata,
+        uint64_t bytes_on_disk);
 
     virtual std::unique_ptr<sstable_set_impl> clone() const override;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range) const override;
@@ -137,6 +138,7 @@ public:
     virtual bool insert(shared_sstable sst) override;
     virtual bool erase(shared_sstable sst) override;
     virtual size_t size() const noexcept override;
+    virtual uint64_t bytes_on_disk() const noexcept override;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
 
     virtual flat_mutation_reader_v2 create_single_key_sstable_reader(

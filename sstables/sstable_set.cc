@@ -115,13 +115,13 @@ std::ostream& operator<<(std::ostream& os, const sstables::sstable_run& run) {
 
 sstable_set::sstable_set(std::unique_ptr<sstable_set_impl> impl, schema_ptr s)
         : _impl(std::move(impl))
-        , _schema(std::move(s)) {
-}
+        , _schema(std::move(s))
+{}
 
 sstable_set::sstable_set(const sstable_set& x)
         : _impl(x._impl->clone())
-        , _schema(x._schema) {
-}
+        , _schema(x._schema)
+{}
 
 sstable_set::sstable_set(sstable_set&&) noexcept = default;
 
@@ -185,6 +185,11 @@ sstable_set::erase(shared_sstable sst) {
 size_t
 sstable_set::size() const noexcept {
     return _impl->size();
+}
+
+uint64_t
+sstable_set::bytes_on_disk() const noexcept {
+    return _impl->bytes_on_disk();
 }
 
 sstable_set::~sstable_set() = default;
@@ -292,8 +297,9 @@ partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, bool use_lev
 }
 
 partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const std::vector<shared_sstable>& unleveled_sstables, const interval_map_type& leveled_sstables,
-        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, sstable_run>& all_runs, bool use_level_metadata)
-        : _schema(schema)
+        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, sstable_run>& all_runs, bool use_level_metadata, uint64_t bytes_on_disk)
+        : sstable_set_impl(bytes_on_disk)
+        , _schema(schema)
         , _unleveled_sstables(unleveled_sstables)
         , _leveled_sstables(leveled_sstables)
         , _all(make_lw_shared<sstable_list>(*all))
@@ -302,7 +308,7 @@ partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const std::v
 }
 
 std::unique_ptr<sstable_set_impl> partitioned_sstable_set::clone() const {
-    return std::make_unique<partitioned_sstable_set>(_schema, _unleveled_sstables, _leveled_sstables, _all, _all_runs, _use_level_metadata);
+    return std::make_unique<partitioned_sstable_set>(_schema, _unleveled_sstables, _leveled_sstables, _all, _all_runs, _use_level_metadata, _bytes_on_disk);
 }
 
 std::vector<shared_sstable> partitioned_sstable_set::select(const dht::partition_range& range) const {
@@ -347,7 +353,12 @@ bool partitioned_sstable_set::insert(shared_sstable sst) {
         // sst is already in the set, no further handling is required
         return false;
     }
-    auto undo_all_insert = defer([&] () { _all->erase(sst); });
+    auto n = sst->bytes_on_disk();
+    add_bytes_on_disk(n);
+    auto undo_all_insert = defer([&] () {
+        _all->erase(sst);
+        sub_bytes_on_disk(n);
+    });
 
     // If sstable doesn't satisfy disjoint invariant, then place it in a new sstable run.
     while (!_all_runs[sst->run_identifier()].insert(sst)) {
@@ -376,6 +387,9 @@ bool partitioned_sstable_set::erase(shared_sstable sst) {
         }
     }
     auto ret = _all->erase(sst) != 0;
+    if (ret) {
+        sub_bytes_on_disk(sst->bytes_on_disk());
+    }
     if (store_as_unleveled(sst)) {
         _unleveled_sstables.erase(std::remove(_unleveled_sstables.begin(), _unleveled_sstables.end(), sst), _unleveled_sstables.end());
     } else {
@@ -460,7 +474,8 @@ time_series_sstable_set::time_series_sstable_set(schema_ptr schema, bool enable_
 {}
 
 time_series_sstable_set::time_series_sstable_set(const time_series_sstable_set& s)
-    : _schema(s._schema)
+    : sstable_set_impl(s)
+    , _schema(s._schema)
     , _reversed_schema(s._reversed_schema)
     , _enable_optimized_twcs_queries(s._enable_optimized_twcs_queries)
     , _sstables(make_lw_shared(*s._sstables))
@@ -509,6 +524,7 @@ bool time_series_sstable_set::insert(shared_sstable sst) {
     auto min_pos = sst->min_position();
     auto max_pos_reversed = sst->max_position().reversed();
     _sstables->emplace(std::move(min_pos), sst);
+    add_bytes_on_disk(sst->bytes_on_disk());
     _sstables_reversed->emplace(std::move(max_pos_reversed), std::move(sst));
   } catch (...) {
     erase(sst);
@@ -527,6 +543,7 @@ bool time_series_sstable_set::erase(shared_sstable sst) {
         found = it != last;
         if (found) {
             _sstables->erase(it);
+            sub_bytes_on_disk(sst->bytes_on_disk());
         }
     }
 
@@ -1114,6 +1131,11 @@ bool compound_sstable_set::erase(shared_sstable sst) {
 size_t
 compound_sstable_set::size() const noexcept {
     return boost::accumulate(_sets | boost::adaptors::transformed(std::mem_fn(&sstable_set::size)), size_t(0));
+}
+
+uint64_t
+compound_sstable_set::bytes_on_disk() const noexcept {
+    return boost::accumulate(_sets | boost::adaptors::transformed(std::mem_fn(&sstable_set::bytes_on_disk)), uint64_t(0));
 }
 
 class compound_sstable_set::incremental_selector : public incremental_selector_impl {
