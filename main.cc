@@ -1446,7 +1446,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             supervisor::notify("initializing migration manager RPC verbs");
             mm.invoke_on_all(&service::migration_manager::init_messaging_service).get();
             supervisor::notify("initializing storage proxy RPC verbs");
-            proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(messaging), std::ref(gossiper), std::ref(mm)).get();
+            proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(messaging), std::ref(gossiper), std::ref(mm), std::ref(sys_ks)).get();
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
                 proxy.invoke_on_all(&service::storage_proxy::stop_remote).get();
             });

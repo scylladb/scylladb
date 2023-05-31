@@ -163,6 +163,7 @@ class storage_proxy::remote {
     netw::messaging_service& _ms;
     const gms::gossiper& _gossiper;
     migration_manager& _mm;
+    sharded<db::system_keyspace>& _sys_ks;
 
     netw::connection_drop_slot_t _connection_dropped;
     netw::connection_drop_registration_t _condrop_registration;
@@ -170,8 +171,8 @@ class storage_proxy::remote {
     bool _stopped{false};
 
 public:
-    remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm)
-        : _sp(sp), _ms(ms), _gossiper(g), _mm(mm)
+    remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm, sharded<db::system_keyspace>& sys_ks)
+        : _sp(sp), _ms(ms), _gossiper(g), _mm(mm), _sys_ks(sys_ks)
         , _connection_dropped(std::bind_front(&remote::connection_dropped, this))
         , _condrop_registration(_ms.when_connection_drops(_connection_dropped))
     {
@@ -207,6 +208,10 @@ public:
 
     bool is_alive(const gms::inet_address& ep) const {
         return _gossiper.is_alive(ep);
+    }
+
+    db::system_keyspace& system_keyspace() {
+        return _sys_ks.local();
     }
 
     // Note: none of the `send_*` functions use `remote` after yielding - by the first yield,
@@ -6233,8 +6238,8 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std:
     return remote().send_truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
 }
 
-void storage_proxy::start_remote(netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm) {
-    _remote = std::make_unique<struct remote>(*this, ms, g, mm);
+void storage_proxy::start_remote(netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm, sharded<db::system_keyspace>& sys_ks) {
+    _remote = std::make_unique<struct remote>(*this, ms, g, mm, sys_ks);
 }
 
 future<> storage_proxy::stop_remote() {
