@@ -831,12 +831,10 @@ query_processor::execute_internal(
     }
     if (cache) {
         auto p = prepare_internal(query_string);
-        p->statement->validate(*this, *_internal_state);
         return execute_with_params(std::move(p), cl, query_state, values);
     } else {
         auto p = parse_statement(query_string)->prepare(_db, _cql_stats);
         p->statement->raw_cql_statement = query_string;
-        p->statement->validate(*this, *_internal_state);
         auto checked_weak_ptr = p->checked_weak_from_this();
         return execute_with_params(std::move(checked_weak_ptr), cl, query_state, values).finally([p = std::move(p)] {});
     }
@@ -849,6 +847,7 @@ query_processor::execute_with_params(
         service::query_state& query_state,
         const std::initializer_list<data_value>& values) {
     auto opts = make_internal_options(p, values, cl);
+    p->statement->validate(*this, *_internal_state);
     auto msg = co_await p->statement->execute(*this, query_state, opts);
     co_return ::make_shared<untyped_result_set>(msg);
 }
