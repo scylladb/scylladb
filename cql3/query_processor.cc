@@ -731,7 +731,6 @@ statements::prepared_statement::checked_weak_ptr query_processor::prepare_intern
     if (p == nullptr) {
         auto np = parse_statement(query_string)->prepare(_db, _cql_stats);
         np->statement->raw_cql_statement = query_string;
-        np->statement->validate(*this, *_internal_state);
         p = std::move(np); // inserts it into map
     }
     return p->checked_weak_from_this();
@@ -773,6 +772,7 @@ future<> query_processor::for_each_cql_result(
 
 future<::shared_ptr<untyped_result_set>>
 query_processor::execute_paged_internal(internal_query_state& state) {
+    state.p->statement->validate(*this, *_internal_state);
     ::shared_ptr<cql_transport::messages::result_message> msg =
       co_await state.p->statement->execute(*this, *_internal_state, *state.opts);
 
@@ -830,7 +830,9 @@ query_processor::execute_internal(
         log.trace("execute_internal: {}\"{}\" ({})", cache ? "(cached) " : "", query_string, fmt::join(values, ", "));
     }
     if (cache) {
-        return execute_with_params(prepare_internal(query_string), cl, query_state, values);
+        auto p = prepare_internal(query_string);
+        p->statement->validate(*this, *_internal_state);
+        return execute_with_params(std::move(p), cl, query_state, values);
     } else {
         auto p = parse_statement(query_string)->prepare(_db, _cql_stats);
         p->statement->raw_cql_statement = query_string;
