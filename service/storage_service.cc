@@ -253,15 +253,15 @@ static future<> set_gossip_tokens(gms::gossiper& g,
  */
 future<> storage_service::wait_for_ring_to_settle(std::chrono::milliseconds delay) {
     // first sleep the delay to make sure we see *at least* one other node
-    for (int i = 0; i < delay.count() && _gossiper.get_live_members().size() < 2; i += 1000) {
-        co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
+    for (int i = 0; i < delay.count() && _gossiper.get_live_members().size() < 2; i += 10) {
+        co_await sleep_abortable(std::chrono::milliseconds(10), _abort_source);
     }
 
     auto t = gms::gossiper::clk::now();
     while (true) {
+        slogger.info("waiting for schema information to complete");
         while (!_migration_manager.local().have_schema_agreement()) {
-            slogger.info("waiting for schema information to complete");
-            co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
+            co_await sleep_abortable(std::chrono::milliseconds(10), _abort_source);
         }
         co_await update_topology_change_info("joining");
 
