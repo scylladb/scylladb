@@ -14,17 +14,19 @@ import pathlib
 import subprocess
 import shutil
 import time
+import tempfile
 import socket
 from io import BufferedWriter
 
 class MinioServer:
     log_file: BufferedWriter
 
-    def __init__(self, tempdir, hosts, logger):
+    def __init__(self, tempdir_base, hosts, logger):
         self.hosts = hosts
         self.srv_exe = shutil.which('minio')
         self.address = None
         self.port = 9000
+        tempdir = tempfile.mkdtemp(dir=tempdir_base, prefix="minio-")
         self.tempdir = pathlib.Path(tempdir)
         self.rootdir = self.tempdir / 'minio_root'
         self.mcdir = self.tempdir / 'mc'
@@ -113,4 +115,4 @@ class MinioServer:
         finally:
             self.logger.info('Killed minio server')
             self.cmd = None
-            shutil.rmtree(self.rootdir)
+            shutil.rmtree(self.tempdir)
