@@ -115,6 +115,13 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
         c.commitlog_flush_threshold_in_mb = cfg.commitlog_flush_threshold_in_mb();
     }
 
+    auto& copts = cfg.commitlog_compression();
+    if (!copts.class_name.empty()) {
+        std::map<sstring, sstring> tmp(copts.parameters.begin(), copts.parameters.end());
+        tmp["class_name"] = copts.class_name;
+        c.compressor = compressor::create(tmp, "class_name");
+    }
+
     return c;
 }
 
