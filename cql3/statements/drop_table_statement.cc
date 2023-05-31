@@ -39,11 +39,6 @@ future<> drop_table_statement::check_access(query_processor& qp, const service::
     }
 }
 
-void drop_table_statement::validate(query_processor&, const service::client_state& state) const
-{
-    // validated in prepare_schema_mutations()
-}
-
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 drop_table_statement::prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;

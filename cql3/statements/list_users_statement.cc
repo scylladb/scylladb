@@ -20,9 +20,6 @@ std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::list_use
     return std::make_unique<prepared_statement>(::make_shared<list_users_statement>(*this));
 }
 
-void cql3::statements::list_users_statement::validate(query_processor& qp, const service::client_state& state) const {
-}
-
 future<> cql3::statements::list_users_statement::check_access(query_processor& qp, const service::client_state& state) const {
     state.ensure_not_anonymous();
     return make_ready_future();

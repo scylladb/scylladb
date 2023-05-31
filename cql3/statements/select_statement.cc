@@ -225,10 +225,6 @@ future<> select_statement::check_access(query_processor& qp, const service::clie
     }
 }
 
-void select_statement::validate(query_processor&, const service::client_state& state) const {
-    // Nothing to do, all validation has been done by raw_statemet::prepare()
-}
-
 bool select_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const {
     return keyspace() == ks_name && (!cf_name || column_family() == *cf_name);
 }

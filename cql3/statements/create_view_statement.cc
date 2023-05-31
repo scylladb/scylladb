@@ -64,9 +64,6 @@ future<> create_view_statement::check_access(query_processor& qp, const service:
     return state.has_column_family_access(qp.db(), keyspace(), _base_name.get_column_family(), auth::permission::ALTER);
 }
 
-void create_view_statement::validate(query_processor& qp, const service::client_state& state) const {
-}
-
 static const column_definition* get_column_definition(const schema& schema, column_identifier::raw& identifier) {
     auto prepared = identifier.prepare(schema);
     assert(dynamic_pointer_cast<column_identifier>(prepared));

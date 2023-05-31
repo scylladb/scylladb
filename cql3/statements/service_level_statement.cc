@@ -21,11 +21,6 @@ bool service_level_statement::depends_on(std::string_view ks_name, std::optional
     return false;
 }
 
-void service_level_statement::validate(
-        query_processor&,
-        const service::client_state &state) const {
-}
-
 future<> service_level_statement::check_access(query_processor& qp, const service::client_state &state) const {
     return make_ready_future<>();
 }

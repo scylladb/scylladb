@@ -48,7 +48,6 @@ public:
     virtual uint32_t get_bound_terms() const override;
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
     virtual seastar::future<> check_access(query_processor& qp, const service::client_state& state) const override;
-    virtual void validate(query_processor&, const service::client_state& state) const override;
     virtual seastar::shared_ptr<const metadata> get_result_metadata() const override;
 
     virtual seastar::future<seastar::shared_ptr<cql_transport::messages::result_message>>

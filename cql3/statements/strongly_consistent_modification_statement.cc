@@ -119,10 +119,6 @@ future<> strongly_consistent_modification_statement::check_access(query_processo
     return f;
 }
 
-void strongly_consistent_modification_statement::validate(query_processor&, const service::client_state& state) const {
-    // Nothing to do, all validation has been done by prepare().
-}
-
 bool strongly_consistent_modification_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const {
     return _schema->ks_name() == ks_name && (!cf_name || _schema->cf_name() == *cf_name);
 }

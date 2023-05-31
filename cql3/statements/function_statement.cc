@@ -121,10 +121,6 @@ create_function_statement_base::create_function_statement_base(functions::functi
         std::vector<shared_ptr<cql3_type::raw>> raw_arg_types, bool or_replace, bool if_not_exists)
     : function_statement(std::move(name), std::move(raw_arg_types)), _or_replace(or_replace), _if_not_exists(if_not_exists) {}
 
-void create_function_statement_base::validate(query_processor& qp, const service::client_state& state) const {
-    // validation happens during execution
-}
-
 seastar::future<shared_ptr<functions::function>> create_function_statement_base::validate_while_executing(query_processor& qp) const {
     create_arg_types(qp);
     auto old = functions::functions::find(_name, _arg_types);
@@ -140,10 +136,6 @@ seastar::future<shared_ptr<functions::function>> create_function_statement_base:
 drop_function_statement_base::drop_function_statement_base(functions::function_name name,
         std::vector<shared_ptr<cql3_type::raw>> arg_types, bool args_present, bool if_exists)
     : function_statement(std::move(name), std::move(arg_types)), _args_present(args_present), _if_exists(if_exists) {}
-
-void drop_function_statement_base::validate(query_processor& qp, const service::client_state& state) const {
-    // validation happens during execution
-}
 
 seastar::future<shared_ptr<db::functions::function>> drop_function_statement_base::validate_while_executing(query_processor& qp) const {
     create_arg_types(qp);

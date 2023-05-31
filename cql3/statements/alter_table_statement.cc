@@ -50,11 +50,6 @@ future<> alter_table_statement::check_access(query_processor& qp, const service:
                                           _type == type::opts ? cdt::ALTER_WITH_OPTS : cdt::OTHER);
 }
 
-void alter_table_statement::validate(query_processor& qp, const service::client_state& state) const
-{
-    // validated in prepare_schema_mutations()
-}
-
 static data_type validate_alter(const schema& schema, const column_definition& def, const cql3_type& validator)
 {
     auto type = def.type->is_reversed() && !validator.get_type()->is_reversed()

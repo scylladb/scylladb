@@ -43,10 +43,6 @@ future<> drop_type_statement::check_access(query_processor& qp, const service::c
     return state.has_keyspace_access(qp.db(), keyspace(), auth::permission::DROP);
 }
 
-void drop_type_statement::validate(query_processor& qp, const service::client_state& state) const {
-    // validation is done at execution time
-}
-
 void drop_type_statement::validate_while_executing(query_processor& qp) const {
     try {
         auto&& ks = qp.db().find_keyspace(keyspace());

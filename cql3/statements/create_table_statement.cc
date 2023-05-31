@@ -56,10 +56,6 @@ future<> create_table_statement::check_access(query_processor& qp, const service
     return state.has_keyspace_access(qp.db(), keyspace(), auth::permission::CREATE);
 }
 
-void create_table_statement::validate(query_processor&, const service::client_state& state) const {
-    // validated in announceMigration()
-}
-
 // Column definitions
 std::vector<column_definition> create_table_statement::get_columns() const
 {

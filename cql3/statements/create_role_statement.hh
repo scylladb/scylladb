@@ -41,8 +41,6 @@ public:
 
     future<> grant_permissions_to_creator(const service::client_state&) const;
 
-    void validate(query_processor&, const service::client_state&) const override;
-
     virtual future<> check_access(query_processor& qp, const service::client_state&) const override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>

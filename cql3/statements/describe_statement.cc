@@ -424,8 +424,6 @@ future<> describe_statement::check_access(query_processor& qp, const service::cl
     co_return;
 }
 
-void describe_statement::validate(query_processor&, const service::client_state& state) const {}
-
 seastar::shared_ptr<const metadata> describe_statement::get_result_metadata() const {
     return ::make_shared<const metadata>(get_column_specifications());
 }

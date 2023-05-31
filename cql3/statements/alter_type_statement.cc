@@ -42,12 +42,6 @@ future<> alter_type_statement::check_access(query_processor& qp, const service::
     return state.has_keyspace_access(qp.db(), keyspace(), auth::permission::ALTER);
 }
 
-void alter_type_statement::validate(query_processor& qp, const service::client_state& state) const
-{
-    // Validation is left to announceMigration as it's easier to do it while constructing the updated type.
-    // It doesn't really change anything anyway.
-}
-
 const sstring& alter_type_statement::keyspace() const
 {
     return _name.get_keyspace();

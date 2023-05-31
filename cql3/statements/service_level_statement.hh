@@ -46,8 +46,6 @@ public:
     bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
     future<> check_access(query_processor& qp, const service::client_state& state) const override;
-
-    void validate(query_processor&, const service::client_state& state) const override;
 };
 
 }

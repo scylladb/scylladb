@@ -43,11 +43,6 @@ future<> alter_view_statement::check_access(query_processor& qp, const service::
     return make_ready_future<>();
 }
 
-void alter_view_statement::validate(query_processor&, const service::client_state& state) const
-{
-    // validated in prepare_schema_mutations()
-}
-
 view_ptr alter_view_statement::prepare_view(data_dictionary::database db) const {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     if (!schema->is_view()) {

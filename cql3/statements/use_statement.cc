@@ -54,10 +54,6 @@ future<> use_statement::check_access(query_processor& qp, const service::client_
     return make_ready_future<>();
 }
 
-void use_statement::validate(query_processor&, const service::client_state& state) const
-{
-}
-
 future<::shared_ptr<cql_transport::messages::result_message>>
 use_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
     state.get_client_state().set_keyspace(qp.db().real_database(), _keyspace);
