@@ -423,26 +423,31 @@ public:
         return b;
     }
 
-    // FIXME: Should provide strong exception safety guarantees
+    // Provides strong exception safety guarantees
     virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override {
+        auto tmp_size_per_level = _size_per_level;
         std::vector<sstables::shared_sstable> l0_old_ssts, l0_new_ssts;
         for (auto& sst : new_ssts) {
             auto level = sst->get_sstable_level();
-            _size_per_level[level] += sst->data_size();
+            tmp_size_per_level[level] += sst->data_size();
             if (level == 0) {
                 l0_new_ssts.push_back(std::move(sst));
             }
         }
         for (auto& sst : old_ssts) {
             auto level = sst->get_sstable_level();
-            _size_per_level[level] -= sst->data_size();
+            tmp_size_per_level[level] -= sst->data_size();
             if (level == 0) {
                 l0_old_ssts.push_back(std::move(sst));
             }
         }
         if (l0_old_ssts.size() || l0_new_ssts.size()) {
+            // stcs replace_sstables guarantees strong exception safety
             _l0_scts.replace_sstables(std::move(l0_old_ssts), std::move(l0_new_ssts));
         }
+        std::invoke([&] () noexcept {
+            _size_per_level = std::move(tmp_size_per_level);
+        });
     }
 };
 
