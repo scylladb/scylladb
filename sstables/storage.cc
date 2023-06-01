@@ -55,7 +55,9 @@ private:
     }
 
 public:
-    explicit filesystem_storage(sstring dir) : _dir(std::move(dir)) {}
+    explicit filesystem_storage(sstring dir, sstable_state state)
+        : _dir(make_path(dir, state).native())
+    {}
 
     virtual future<> seal(const sstable& sst) override;
     virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const override;
@@ -547,10 +549,10 @@ future<> s3_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs
     co_await coroutine::return_exception(std::runtime_error("Snapshotting S3 objects not implemented"));
 }
 
-std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstring dir) {
+std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstring dir, sstable_state state) {
     return std::visit(overloaded_functor {
-        [dir] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstables::storage> {
-            return std::make_unique<sstables::filesystem_storage>(std::move(dir));
+        [dir, state] (const data_dictionary::storage_options::local& loc) mutable -> std::unique_ptr<sstables::storage> {
+            return std::make_unique<sstables::filesystem_storage>(std::move(dir), state);
         },
         [dir, &manager] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstables::storage> {
             return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, std::move(dir));
