@@ -72,7 +72,7 @@ strongly_consistent_modification_statement::execute_without_checking_exception_m
     auto result = co_await qp.execute_broadcast_table_query(
         { evaluate_prepared(_query, options) }
     );
-    
+
     co_return co_await std::visit(make_visitor(
         [] (service::broadcast_tables::query_result_conditional_update& qr) -> future<::shared_ptr<cql_transport::messages::result_message>> {
             auto result_set = std::make_unique<cql3::result_set>(std::vector{
