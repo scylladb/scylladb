@@ -34,6 +34,7 @@ protected:
     db_clock::duration _tombstone_compaction_interval = DEFAULT_TOMBSTONE_COMPACTION_INTERVAL();
 public:
     static std::optional<sstring> get_value(const std::map<sstring, sstring>& options, const sstring& name);
+    static void validate_min_max_threshold(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 protected:
     compaction_strategy_impl() = default;
     explicit compaction_strategy_impl(const std::map<sstring, sstring>& options);

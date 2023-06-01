@@ -87,6 +87,25 @@ std::optional<sstring> compaction_strategy_impl::get_value(const std::map<sstrin
     return it->second;
 }
 
+void compaction_strategy_impl::validate_min_max_threshold(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options) {
+    auto min_threshold_key = "min_threshold", max_threshold_key = "max_threshold";
+
+    auto tmp_value = compaction_strategy_impl::get_value(options, min_threshold_key);
+    auto min_threshold = cql3::statements::property_definitions::to_long(min_threshold_key, tmp_value, DEFAULT_MIN_COMPACTION_THRESHOLD);
+    if (min_threshold < 2) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be bigger or equal to 2", min_threshold_key, min_threshold));
+    }
+
+    tmp_value = compaction_strategy_impl::get_value(options, max_threshold_key);
+    auto max_threshold = cql3::statements::property_definitions::to_long(max_threshold_key, tmp_value, DEFAULT_MAX_COMPACTION_THRESHOLD);
+    if (max_threshold < 2) {
+        throw exceptions::configuration_exception(fmt::format("{} value ({}) must be bigger or equal to 2", max_threshold_key, max_threshold));
+    }
+
+    unchecked_options.erase(min_threshold_key);
+    unchecked_options.erase(max_threshold_key);
+}
+
 compaction_strategy_impl::compaction_strategy_impl(const std::map<sstring, sstring>& options) {
     using namespace cql3::statements;
 
