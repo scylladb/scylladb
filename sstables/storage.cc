@@ -104,7 +104,7 @@ future<file> filesystem_storage::open_component(const sstable& sst, component_ty
     auto create_flags = open_flags::create | open_flags::exclusive;
     auto readonly = (flags & create_flags) != create_flags;
     auto tgt_dir = !readonly && temp_dir ? *temp_dir : dir;
-    auto name = sst.filename(tgt_dir, type);
+    auto name = tgt_dir + "/" + sst.component_basename(type);
 
     auto f = open_sstable_component_file_non_checked(name, flags, options, check_integrity);
 

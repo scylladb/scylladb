@@ -457,10 +457,7 @@ public:
 
 private:
     sstring filename(component_type f) const {
-        return filename(_storage->prefix(), f);
-    }
-
-    sstring filename(const sstring& dir, component_type f) const {
+        auto dir = _storage->prefix();
         return filename(dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
     }
 
