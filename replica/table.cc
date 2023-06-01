@@ -2591,7 +2591,7 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
             // completed first.
             // The _sstable_deletion_sem prevents list update on off-strategy completion and move_sstables_from_staging()
             // from stepping on each other's toe.
-            co_await sst->change_state(sstables::normal_dir, &delay_commit);
+            co_await sst->change_state(sstables::sstable_state::normal, &delay_commit);
             auto& cg = compaction_group_for_sstable(sst);
             if (get_compaction_manager().requires_cleanup(cg.as_table_state(), sst)) {
                 compaction_groups_to_notify.insert(&cg);

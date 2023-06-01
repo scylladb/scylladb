@@ -2038,11 +2038,11 @@ future<> sstable::snapshot(const sstring& dir) const {
     return _storage->snapshot(*this, dir, storage::absolute_path::yes);
 }
 
-future<> sstable::change_state(sstring to, delayed_commit_changes* delay_commit) {
+future<> sstable::change_state(sstable_state to, delayed_commit_changes* delay_commit) {
     co_await _storage->change_state(*this, to, _generation, delay_commit);
 }
 
-future<> sstable::pick_up_from_upload(sstring to, generation_type new_generation) {
+future<> sstable::pick_up_from_upload(sstable_state to, generation_type new_generation) {
     co_await _storage->change_state(*this, to, new_generation, nullptr);
     _generation = std::move(new_generation);
 }

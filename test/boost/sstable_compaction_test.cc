@@ -5172,7 +5172,7 @@ SEASTAR_TEST_CASE(test_sstables_excluding_staging_correctness) {
         auto sst_gen = env.make_sst_factory(s);
 
         auto staging_sst = make_sstable_containing(sst_gen, {*sorted_muts.begin()});
-        staging_sst->change_state(sstables::staging_dir).get();
+        staging_sst->change_state(sstables::sstable_state::staging).get();
         BOOST_REQUIRE(staging_sst->requires_view_building());
 
         auto regular_sst = make_sstable_containing(sst_gen, {*sorted_muts.rbegin()});

@@ -244,11 +244,11 @@ public:
     //
     // Known states are normal, staging, upload and quarantine.
     // It's up to the storage driver how to implement this.
-    future<> change_state(sstring to, delayed_commit_changes* delay = nullptr);
+    future<> change_state(sstable_state to, delayed_commit_changes* delay = nullptr);
 
     // Filesystem-specific call to grab an sstable from upload dir and
     // put it into the desired destination assigning the given generation
-    future<> pick_up_from_upload(sstring to, generation_type new_generation);
+    future<> pick_up_from_upload(sstable_state to, generation_type new_generation);
 
     generation_type generation() const {
         return _generation;

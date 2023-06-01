@@ -59,7 +59,7 @@ public:
 
     virtual future<> seal(const sstable& sst) override;
     virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const override;
-    virtual future<> change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay) override;
+    virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
     virtual future<> wipe(const sstable& sst, sync_dir) noexcept override;
@@ -358,7 +358,8 @@ future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generatio
     }
 }
 
-future<> filesystem_storage::change_state(const sstable& sst, sstring to, generation_type new_generation, delayed_commit_changes* delay_commit) {
+future<> filesystem_storage::change_state(const sstable& sst, sstable_state state, generation_type new_generation, delayed_commit_changes* delay_commit) {
+    auto to = state_to_dir(state);
     auto path = fs::path(_dir);
     auto current = path.filename().native();
 
@@ -443,7 +444,7 @@ public:
 
     virtual future<> seal(const sstable& sst) override;
     virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const override;
-    virtual future<> change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay) override;
+    virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
     virtual future<> wipe(const sstable& sst, sync_dir) noexcept override;
@@ -511,7 +512,7 @@ future<> s3_storage::seal(const sstable& sst) {
     co_await sst.manager().system_keyspace().sstables_registry_update_entry_status(_location, sst.generation(), status_sealed);
 }
 
-future<> s3_storage::change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay) {
+future<> s3_storage::change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) {
     // FIXME -- this "move" means changing sstable state, e.g. move from staging
     // or upload to base. To make this work the "status" part of the entry location
     // must be detached from the entry location itself, see PR#12707

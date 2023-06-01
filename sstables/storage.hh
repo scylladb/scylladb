@@ -26,6 +26,7 @@ class storage_options;
 
 namespace sstables {
 
+enum class sstable_state;
 class delayed_commit_changes;
 class sstable;
 class sstables_manager;
@@ -52,7 +53,7 @@ public:
 
     virtual future<> seal(const sstable& sst) = 0;
     virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const = 0;
-    virtual future<> change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay) = 0;
+    virtual future<> change_state(const sstable& sst, sstable_state to, generation_type generation, delayed_commit_changes* delay) = 0;
     // runs in async context
     virtual void open(sstable& sst) = 0;
     virtual future<> wipe(const sstable& sst, sync_dir) noexcept = 0;

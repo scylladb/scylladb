@@ -1735,7 +1735,7 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
 
     if (validation_errors != 0) {
         for (auto& sst : descriptor.sstables) {
-            co_await sst->change_state(sstables::quarantine_dir);
+            co_await sst->change_state(sstables::sstable_state::quarantine);
         }
     }
 
