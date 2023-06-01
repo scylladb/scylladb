@@ -89,7 +89,7 @@ distributed_loader::process_sstable_dir(sharded<sstables::sstable_directory>& di
     // and all its subdirectories, except for "snapshots"
     // as there could be a race with scylla-manager that might
     // delete snapshots concurrently
-    co_await dir.invoke_on(0, [] (const sstables::sstable_directory& d) -> future<> {
+    co_await dir.invoke_on(0, [flags] (sstables::sstable_directory& d) -> future<> {
         fs::path sstable_dir = d.sstable_dir();
         co_await utils::directories::verify_owner_and_mode(sstable_dir, utils::directories::recursive::no);
         co_await lister::scan_dir(sstable_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [] (fs::path dir, directory_entry de) -> future<> {
@@ -97,13 +97,10 @@ distributed_loader::process_sstable_dir(sharded<sstables::sstable_directory>& di
                 co_await utils::directories::verify_owner_and_mode(dir / de.name, utils::directories::recursive::yes);
             }
         });
+        if (flags.garbage_collect) {
+            co_await d.garbage_collect();
+        }
     });
-
-    if (flags.garbage_collect) {
-        co_await dir.invoke_on(0, [] (sstables::sstable_directory& d) {
-            return d.garbage_collect();
-        });
-    }
 
     co_await dir.invoke_on_all([&dir, flags] (sstables::sstable_directory& d) -> future<> {
         // Supposed to be called with the node either down or on behalf of maintenance tasks
