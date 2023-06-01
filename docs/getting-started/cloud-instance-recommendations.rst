@@ -140,6 +140,7 @@ Im4gn and Is4gen instances
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ScyllaDB supports Arm-based Im4gn and Is4gen instances. See  `Amazon EC2 Im4gn and Is4gen instances <https://aws.amazon.com/ec2/instance-types/i4g/>`_ for specification details. 
 
+.. _system-requirements-gcp:
 
 Google Compute Engine (GCE)
 -----------------------------------

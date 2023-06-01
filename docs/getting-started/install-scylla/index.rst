@@ -5,6 +5,7 @@ Install ScyllaDB
    :maxdepth: 2
    :hidden:
 
+   /getting-started/install-scylla/oss-install-gcp
    /getting-started/installation-common/scylla-web-installer
    /getting-started/installation-common/unified-installer
    /getting-started/installation-common/air-gapped-install
@@ -12,12 +13,20 @@ Install ScyllaDB
    /getting-started/installation-common/disable-housekeeping
    /getting-started/installation-common/dev-mod
 
+Keep your versions up-to-date. The two latest versions are supported. Also, always install the latest patches for your version.
+
 .. panel-box::
-  :title: Install ScyllaDB
+  :title: Cloud Deployment
   :id: "getting-started"
   :class: my-panel
 
-  Keep your versions up-to-date. The two latest versions are supported. Also always install the latest patches for your version. 
+  * :doc:`Launch ScyllaDB on GCP </getting-started/install-scylla/oss-install-gcp>`
+
+
+.. panel-box::
+  :title: On-premise Deployment
+  :id: "getting-started"
+  :class: my-panel
 
   * Download and install ScyllaDB Server, Drivers and Tools in `ScyllaDB Download Center <https://www.scylladb.com/download/#core>`_
   * :doc:`ScyllaDB Web Installer for Linux </getting-started/installation-common/scylla-web-installer>`
