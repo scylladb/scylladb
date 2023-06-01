@@ -427,7 +427,7 @@ class s3_storage : public sstables::storage {
     static constexpr auto status_sealed = "sealed";
     static constexpr auto status_removing = "removing";
 
-    sstring make_s3_object_name(const sstable& sst, component_type type);
+    sstring make_s3_object_name(const sstable& sst, component_type type) const;
 
     future<> ensure_remote_prefix(const sstable& sst);
 
@@ -460,7 +460,7 @@ public:
     virtual sstring prefix() const override { return _location; }
 };
 
-sstring s3_storage::make_s3_object_name(const sstable& sst, component_type type) {
+sstring s3_storage::make_s3_object_name(const sstable& sst, component_type type) const {
     return format("/{}/{}/{}", _bucket, *_remote_prefix, sstable_version_constants::get_component_map(sst.get_version()).at(type));
 }
 
