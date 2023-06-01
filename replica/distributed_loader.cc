@@ -332,9 +332,9 @@ public:
             return _global_table->disable_auto_compaction();
         });
 
-        co_await populate_subdir(sstables::staging_dir, allow_offstrategy_compaction::no);
-        co_await populate_subdir(sstables::quarantine_dir, allow_offstrategy_compaction::no, must_exist::no);
-        co_await populate_subdir("", allow_offstrategy_compaction::yes);
+        co_await populate_subdir(sstables::sstable_state::staging, allow_offstrategy_compaction::no);
+        co_await populate_subdir(sstables::sstable_state::quarantine, allow_offstrategy_compaction::no, must_exist::no);
+        co_await populate_subdir(sstables::sstable_state::normal, allow_offstrategy_compaction::yes);
     }
 
     future<> stop() {
@@ -351,7 +351,7 @@ private:
 
     using allow_offstrategy_compaction = bool_class<struct allow_offstrategy_compaction_tag>;
     using must_exist = bool_class<struct must_exist_tag>;
-    future<> populate_subdir(sstring subdir, allow_offstrategy_compaction, must_exist = must_exist::yes);
+    future<> populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction, must_exist = must_exist::yes);
 
     future<> start_subdir(sstring subdir);
 };
@@ -401,11 +401,12 @@ future<> table_populator::start_subdir(sstring subdir) {
     _highest_generation = std::max(generation, _highest_generation);
 }
 
-sstables::shared_sstable make_sstable(replica::table& table, fs::path dir, sstables::generation_type generation, sstables::sstable_version_types v) {
-    return table.get_sstables_manager().make_sstable(table.schema(), table.get_storage_options(), dir.native(), generation, v, sstables::sstable_format_types::big);
+sstables::shared_sstable make_sstable(replica::table& table, sstables::sstable_state state, sstables::generation_type generation, sstables::sstable_version_types v) {
+    return table.get_sstables_manager().make_sstable(table.schema(), table.dir(), table.get_storage_options(), generation, state, v, sstables::sstable_format_types::big);
 }
 
-future<> table_populator::populate_subdir(sstring subdir, allow_offstrategy_compaction do_allow_offstrategy_compaction, must_exist dir_must_exist) {
+future<> table_populator::populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction do_allow_offstrategy_compaction, must_exist dir_must_exist) {
+    auto subdir = state_to_dir(state);
     auto sstdir = get_path(subdir);
     dblog.debug("Populating {}/{}/{} allow_offstrategy_compaction={} must_exist={}", _ks, _cf, sstdir, do_allow_offstrategy_compaction, dir_must_exist);
 
@@ -418,12 +419,12 @@ future<> table_populator::populate_subdir(sstring subdir, allow_offstrategy_comp
 
     auto& directory = *_sstable_directories.at(subdir);
 
-    co_await distributed_loader::reshard(directory, _db, _ks, _cf, [this, sstdir] (shard_id shard) mutable {
+    co_await distributed_loader::reshard(directory, _db, _ks, _cf, [this, state] (shard_id shard) mutable {
         auto gen = smp::submit_to(shard, [this] () {
             return _global_table->calculate_generation_for_new_table();
         }).get0();
 
-        return make_sstable(*_global_table, sstdir, gen, _highest_version);
+        return make_sstable(*_global_table, state, gen, _highest_version);
     });
 
     // The node is offline at this point so we are very lenient with what we consider
@@ -438,9 +439,9 @@ future<> table_populator::populate_subdir(sstring subdir, allow_offstrategy_comp
         return sst->get_origin() != sstables::repair_origin;
     };
 
-    co_await distributed_loader::reshape(directory, _db, sstables::reshape_mode::relaxed, _ks, _cf, [this, sstdir] (shard_id shard) {
+    co_await distributed_loader::reshape(directory, _db, sstables::reshape_mode::relaxed, _ks, _cf, [this, state] (shard_id shard) {
         auto gen = _global_table->calculate_generation_for_new_table();
-        return make_sstable(*_global_table, sstdir, gen, _highest_version);
+        return make_sstable(*_global_table, state, gen, _highest_version);
     }, eligible_for_reshape_on_boot);
 
     co_await directory.invoke_on_all([this, &eligible_for_reshape_on_boot, do_allow_offstrategy_compaction] (sstables::sstable_directory& dir) -> future<> {
