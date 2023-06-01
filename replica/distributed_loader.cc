@@ -218,8 +218,8 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
             auto generation = sharded_gen.invoke_on(shard, [uuid_sstable_identifiers] (auto& gen) {
                 return gen(sstables::uuid_identifiers{uuid_sstable_identifiers});
             }).get();
-            return sstm.make_sstable(global_table->schema(), global_table->get_storage_options(),
-                                     upload.native(), generation, sstm.get_highest_supported_format(),
+            return sstm.make_sstable(global_table->schema(), global_table->dir(), global_table->get_storage_options(),
+                                     generation, sstables::sstable_state::upload, sstm.get_highest_supported_format(),
                                      sstables::sstable_format_types::big, gc_clock::now(), &error_handler_gen_for_upload_dir);
         };
         // Pass owned_ranges_ptr to reshard to piggy-back cleanup on the resharding compaction.
