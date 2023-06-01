@@ -6,6 +6,7 @@ Install ScyllaDB
    :hidden:
 
    /getting-started/install-scylla/oss-install-gcp
+   /getting-started/install-scylla/oss-install-azure
    /getting-started/installation-common/scylla-web-installer
    /getting-started/installation-common/unified-installer
    /getting-started/installation-common/air-gapped-install
@@ -21,6 +22,7 @@ Keep your versions up-to-date. The two latest versions are supported. Also, alwa
   :class: my-panel
 
   * :doc:`Launch ScyllaDB on GCP </getting-started/install-scylla/oss-install-gcp>`
+  * :doc:`Launch ScyllaDB on Azure </getting-started/install-scylla/oss-install-azure>`
 
 
 .. panel-box::
