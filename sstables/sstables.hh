@@ -134,6 +134,35 @@ constexpr auto table_subdirectories = std::to_array({
     pending_delete_dir,
 });
 
+enum class sstable_state {
+    normal,
+    staging,
+    quarantine,
+    upload,
+};
+
+inline sstring state_to_dir(sstable_state state) {
+    switch (state) {
+    case sstable_state::normal:
+        return normal_dir;
+    case sstable_state::staging:
+        return staging_dir;
+    case sstable_state::quarantine:
+        return quarantine_dir;
+    case sstable_state::upload:
+        return upload_dir;
+    }
+}
+
+// FIXME -- temporary, move to fs storage after patching the rest
+inline fs::path make_path(std::string_view table_dir, sstable_state state) {
+    fs::path ret(table_dir);
+    if (state != sstable_state::normal) {
+        ret /= state_to_dir(state).c_str();
+    }
+    return ret;
+}
+
 constexpr const char* repair_origin = "repair";
 
 class delayed_commit_changes {
