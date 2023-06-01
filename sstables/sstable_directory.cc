@@ -65,12 +65,13 @@ sstable_directory::sstable_directory(sstables_manager& manager,
         schema_ptr schema,
         const dht::sharder& sharder,
         lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
-        fs::path sstable_dir,
+        sstring table_dir,
+        sstable_state state,
         io_error_handler_gen error_handler_gen)
     : _manager(manager)
     , _schema(std::move(schema))
     , _storage_opts(std::move(storage_opts))
-    , _sstable_dir(std::move(sstable_dir))
+    , _sstable_dir(make_path(table_dir, state))
     , _error_handler_gen(error_handler_gen)
     , _lister(make_components_lister())
     , _sharder(sharder)

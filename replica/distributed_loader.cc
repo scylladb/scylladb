@@ -188,13 +188,12 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         auto stop_erms = deferred_stop(erms);
 
         sharded<sstables::sstable_directory> directory;
-        auto upload = fs::path(global_table->dir()) / sstables::upload_dir;
         directory.start(
             sharded_parameter([&global_table] { return std::ref(global_table->get_sstables_manager()); }),
             sharded_parameter([&global_table] { return global_table->schema(); }),
             sharded_parameter([&global_table, &erms] { return std::ref(erms.local()->get_sharder(*global_table->schema())); }),
             sharded_parameter([&global_table] { return global_table->get_storage_options_ptr(); }),
-            upload, &error_handler_gen_for_upload_dir
+            global_table->dir(), sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
         ).get();
 
         auto stop_directory = deferred_stop(directory);
@@ -254,7 +253,6 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
         auto global_table = get_table_on_all_shards(db, ks, cf).get0();
         sharded<sstables::sstable_directory> directory;
         auto table_id = global_table->schema()->id();
-        auto upload = fs::path(global_table->dir()) / sstables::upload_dir;
 
         sharded<locator::effective_replication_map_ptr> erms;
         erms.start(sharded_parameter([&global_table] {
@@ -267,7 +265,7 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
             sharded_parameter([&global_table] { return global_table->schema(); }),
             sharded_parameter([&global_table, &erms] { return std::ref(erms.local()->get_sharder(*global_table->schema())); }),
             sharded_parameter([&global_table] { return global_table->get_storage_options_ptr(); }),
-            upload, &error_handler_gen_for_upload_dir
+            global_table->dir(), sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
         ).get();
 
         auto stop = deferred_stop(directory);
@@ -323,8 +321,8 @@ public:
             return _global_table->get_effective_replication_map();
         }));
 
-        for (auto subdir : { "", sstables::staging_dir, sstables::quarantine_dir }) {
-            co_await start_subdir(subdir);
+        for (auto state : { sstables::sstable_state::normal, sstables::sstable_state::staging, sstables::sstable_state::quarantine }) {
+            co_await start_subdir(state);
         }
 
         co_await smp::invoke_on_all([this] {
@@ -353,10 +351,11 @@ private:
     using must_exist = bool_class<struct must_exist_tag>;
     future<> populate_subdir(sstables::sstable_state state, allow_offstrategy_compaction, must_exist = must_exist::yes);
 
-    future<> start_subdir(sstring subdir);
+    future<> start_subdir(sstables::sstable_state state);
 };
 
-future<> table_populator::start_subdir(sstring subdir) {
+future<> table_populator::start_subdir(sstables::sstable_state state) {
+    auto subdir = sstables::state_to_dir(state);
     sstring sstdir = get_path(subdir).native();
     if (!co_await file_exists(sstdir)) {
         co_return;
@@ -371,7 +370,7 @@ future<> table_populator::start_subdir(sstring subdir) {
         sharded_parameter([&global_table] { return global_table->schema(); }),
         sharded_parameter([this] { return std::ref(_erms.local()->get_sharder(*_global_table->schema())); }),
         sharded_parameter([&global_table] { return global_table->get_storage_options_ptr(); }),
-        fs::path(sstdir),
+        global_table->dir(), state,
         default_io_error_handler_gen()
     );
 

@@ -32,6 +32,7 @@ namespace db { class system_keyspace; }
 
 namespace sstables {
 
+enum class sstable_state;
 class sstables_manager;
 bool manifest_json_filter(const std::filesystem::path&, const directory_entry& entry);
 
@@ -188,7 +189,8 @@ public:
             schema_ptr schema,
             const dht::sharder& sharder,
             lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
-            std::filesystem::path sstable_dir,
+            sstring table_dir,
+            sstable_state state,
             io_error_handler_gen error_handler_gen);
 
     std::vector<sstables::shared_sstable>& get_unsorted_sstables() {
