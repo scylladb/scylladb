@@ -20,6 +20,7 @@
 #include "sstable_directory.hh"
 #include "utils/lister.hh"
 #include "utils/overloaded_functor.hh"
+#include "utils/directories.hh"
 #include "replica/database.hh"
 #include "db/system_keyspace.hh"
 
@@ -196,6 +197,22 @@ sstable_directory::highest_generation_seen() const {
 sstables::sstable_version_types
 sstable_directory::highest_version_seen() const {
     return _max_version_seen;
+}
+
+future<> sstable_directory::prepare(process_flags flags) {
+    // verify owner and mode on the sstables directory
+    // and all its subdirectories, except for "snapshots"
+    // as there could be a race with scylla-manager that might
+    // delete snapshots concurrently
+    co_await utils::directories::verify_owner_and_mode(_sstable_dir, utils::directories::recursive::no);
+    co_await lister::scan_dir(_sstable_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [] (fs::path dir, directory_entry de) -> future<> {
+        if (de.name != sstables::snapshots_dir) {
+            co_await utils::directories::verify_owner_and_mode(dir / de.name, utils::directories::recursive::yes);
+        }
+    });
+    if (flags.garbage_collect) {
+        co_await garbage_collect();
+    }
 }
 
 future<> sstable_directory::process_sstable_dir(process_flags flags) {

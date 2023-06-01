@@ -33,7 +33,6 @@
 #include <unordered_map>
 #include <boost/range/adaptor/map.hpp>
 #include "db/view/view_update_generator.hh"
-#include "utils/directories.hh"
 
 extern logging::logger dblog;
 
@@ -85,21 +84,8 @@ io_error_handler error_handler_gen_for_upload_dir(disk_error_signal_type& dummy)
 
 future<>
 distributed_loader::process_sstable_dir(sharded<sstables::sstable_directory>& dir, sstables::sstable_directory::process_flags flags) {
-    // verify owner and mode on the sstables directory
-    // and all its subdirectories, except for "snapshots"
-    // as there could be a race with scylla-manager that might
-    // delete snapshots concurrently
     co_await dir.invoke_on(0, [flags] (sstables::sstable_directory& d) -> future<> {
-        fs::path sstable_dir = d.sstable_dir();
-        co_await utils::directories::verify_owner_and_mode(sstable_dir, utils::directories::recursive::no);
-        co_await lister::scan_dir(sstable_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [] (fs::path dir, directory_entry de) -> future<> {
-            if (de.name != sstables::snapshots_dir) {
-                co_await utils::directories::verify_owner_and_mode(dir / de.name, utils::directories::recursive::yes);
-            }
-        });
-        if (flags.garbage_collect) {
-            co_await d.garbage_collect();
-        }
+        co_await d.prepare(flags);
     });
 
     co_await dir.invoke_on_all([&dir, flags] (sstables::sstable_directory& d) -> future<> {

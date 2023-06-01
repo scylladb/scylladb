@@ -206,6 +206,8 @@ public:
     // returns what is the highest version seen in this directory.
     sstables::sstable_version_types highest_version_seen() const;
 
+    future<> prepare(process_flags flags);
+
     // scans a directory containing SSTables. Every generation that is believed to belong to this
     // shard is processed, the ones that are not are skipped. Potential pertinence is decided as
     // generation % smp::count.
@@ -249,10 +251,6 @@ public:
 
     using can_be_remote = bool_class<struct can_be_remote_tag>;
     future<> collect_output_unshared_sstables(std::vector<sstables::shared_sstable> resharded_sstables, can_be_remote);
-
-    std::filesystem::path sstable_dir() const noexcept {
-        return _sstable_dir;
-    }
 
     // When we compact sstables, we have to atomically instantiate the new
     // sstable and delete the old ones.  Otherwise, if we compact A+B into C,
