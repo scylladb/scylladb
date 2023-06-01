@@ -1575,11 +1575,11 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     std::optional<cdc::generation_id> cdc_gen_id;
 
     if (_sys_ks.local().was_decommissioned()) {
-        if (_db.local().get_config().override_decommission()) {
+        if (_db.local().get_config().override_decommission() && !_db.local().get_config().consistent_cluster_management()) {
             slogger.warn("This node was decommissioned, but overriding by operator request.");
             co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
         } else {
-            auto msg = sstring("This node was decommissioned and will not rejoin the ring unless override_decommission=true has been set,"
+            auto msg = sstring("This node was decommissioned and will not rejoin the ring unless override_decommission=true has been set and consistent cluster management is not in use,"
                                "or all existing data is removed and the node is bootstrapped again");
             slogger.error("{}", msg);
             throw std::runtime_error(msg);
@@ -1726,6 +1726,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     co_await _gossiper.start_gossiping(generation_number, app_states, advertise);
 
     assert(_group0);
+    // if the node is bootstrapped the functin will do nothing since we already created group0 in main.cc
     co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, raft_replace_info, *this, qp, _migration_manager.local(), cdc_gen_service);
 
     raft::server* raft_server = co_await [this] () -> future<raft::server*> {
@@ -2724,24 +2725,24 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
     _group0 = &group0;
     _raft_topology_change_enabled = _group0->is_raft_enabled() && _db.local().get_config().check_experimental(db::experimental_features_t::feature::RAFT);
 
-    return seastar::async([this, &cdc_gen_service, &sys_dist_ks, &proxy, &qp] {
-        set_mode(mode::STARTING);
+    set_mode(mode::STARTING);
 
-        std::unordered_set<inet_address> loaded_endpoints;
-        if (_db.local().get_config().load_ring_state()) {
-            slogger.info("Loading persisted ring state");
-            auto loaded_tokens = _sys_ks.local().load_tokens().get0();
-            auto loaded_host_ids = _sys_ks.local().load_host_ids().get0();
-            auto loaded_dc_rack = _sys_ks.local().load_dc_rack_info().get0();
+    std::unordered_set<inet_address> loaded_endpoints;
+    if (_db.local().get_config().load_ring_state() && !_raft_topology_change_enabled) {
+        slogger.info("Loading persisted ring state");
+        auto loaded_tokens = co_await _sys_ks.local().load_tokens();
+        auto loaded_host_ids = co_await _sys_ks.local().load_host_ids();
+        auto loaded_dc_rack = co_await _sys_ks.local().load_dc_rack_info();
 
-            auto get_dc_rack = [&loaded_dc_rack] (inet_address ep) {
-                if (loaded_dc_rack.contains(ep)) {
-                    return loaded_dc_rack[ep];
-                } else {
-                    return locator::endpoint_dc_rack::default_location;
-                }
-            };
+        auto get_dc_rack = [&loaded_dc_rack] (inet_address ep) {
+            if (loaded_dc_rack.contains(ep)) {
+                return loaded_dc_rack[ep];
+            } else {
+                return locator::endpoint_dc_rack::default_location;
+            }
+        };
 
+        if (slogger.is_enabled(logging::log_level::debug)) {
             for (auto& x : loaded_tokens) {
                 slogger.debug("Loaded tokens: endpoint={}, tokens={}", x.first, x.second);
             }
@@ -2749,44 +2750,44 @@ future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
             for (auto& x : loaded_host_ids) {
                 slogger.debug("Loaded host_id: endpoint={}, uuid={}", x.first, x.second);
             }
+        }
 
-            auto tmlock = get_token_metadata_lock().get0();
-            auto tmptr = get_mutable_token_metadata_ptr().get0();
-            for (auto x : loaded_tokens) {
-                auto ep = x.first;
-                auto tokens = x.second;
-                if (ep == get_broadcast_address()) {
-                    // entry has been mistakenly added, delete it
-                    _sys_ks.local().remove_endpoint(ep).get();
-                } else {
-                    tmptr->update_topology(ep, get_dc_rack(ep), locator::node::state::normal);
-                    tmptr->update_normal_tokens(tokens, ep).get();
-                    if (loaded_host_ids.contains(ep)) {
-                        tmptr->update_host_id(loaded_host_ids.at(ep), ep);
-                    }
-                    loaded_endpoints.insert(ep);
-                    _gossiper.add_saved_endpoint(ep).get();
+        auto tmlock = co_await get_token_metadata_lock();
+        auto tmptr = co_await get_mutable_token_metadata_ptr();
+        for (auto x : loaded_tokens) {
+            auto ep = x.first;
+            auto tokens = x.second;
+            if (ep == get_broadcast_address()) {
+                // entry has been mistakenly added, delete it
+                co_await _sys_ks.local().remove_endpoint(ep);
+            } else {
+                tmptr->update_topology(ep, get_dc_rack(ep), locator::node::state::normal);
+                co_await tmptr->update_normal_tokens(tokens, ep);
+                if (loaded_host_ids.contains(ep)) {
+                    tmptr->update_host_id(loaded_host_ids.at(ep), ep);
                 }
+                loaded_endpoints.insert(ep);
+                co_await _gossiper.add_saved_endpoint(ep);
             }
-            replicate_to_all_cores(std::move(tmptr)).get();
         }
+        co_await replicate_to_all_cores(std::move(tmptr));
+    }
 
-        // Seeds are now only used as the initial contact point nodes. If the
-        // loaded_endpoints are empty which means this node is a completely new
-        // node, we use the nodes specified in seeds as the initial contact
-        // point nodes, otherwise use the peer nodes persisted in system table.
-        auto seeds = _gossiper.get_seeds();
-        auto initial_contact_nodes = loaded_endpoints.empty() ?
-            std::unordered_set<gms::inet_address>(seeds.begin(), seeds.end()) :
-            loaded_endpoints;
-        auto loaded_peer_features = _sys_ks.local().load_peer_features().get0();
-        slogger.info("initial_contact_nodes={}, loaded_endpoints={}, loaded_peer_features={}",
-                initial_contact_nodes, loaded_endpoints, loaded_peer_features.size());
-        for (auto& x : loaded_peer_features) {
-            slogger.info("peer={}, supported_features={}", x.first, x.second);
-        }
-        join_token_ring(cdc_gen_service, sys_dist_ks, proxy, std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), qp).get();
-    });
+    // Seeds are now only used as the initial contact point nodes. If the
+    // loaded_endpoints are empty which means this node is a completely new
+    // node, we use the nodes specified in seeds as the initial contact
+    // point nodes, otherwise use the peer nodes persisted in system table.
+    auto seeds = _gossiper.get_seeds();
+    auto initial_contact_nodes = loaded_endpoints.empty() ?
+        std::unordered_set<gms::inet_address>(seeds.begin(), seeds.end()) :
+        loaded_endpoints;
+    auto loaded_peer_features = co_await _sys_ks.local().load_peer_features();
+    slogger.info("initial_contact_nodes={}, loaded_endpoints={}, loaded_peer_features={}",
+            initial_contact_nodes, loaded_endpoints, loaded_peer_features.size());
+    for (auto& x : loaded_peer_features) {
+        slogger.info("peer={}, supported_features={}", x.first, x.second);
+    }
+    co_return co_await join_token_ring(cdc_gen_service, sys_dist_ks, proxy, std::move(initial_contact_nodes), std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), qp);
 }
 
 future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept {

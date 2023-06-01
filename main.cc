@@ -1603,6 +1603,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 group0_service.abort().get();
             });
 
+            // Setup group0 early in case the node is bootsrapped already and the group exists
+            // Need to do it before allowing incomming messaging service connections since
+            // storage proxy's and migration manager's verbs may access group0
+            group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local(), cdc_generation_service.local()).get();
+
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return messaging.invoke_on_all([&token_metadata] (auto& netw) {
                     return netw.start_listen(token_metadata.local());
