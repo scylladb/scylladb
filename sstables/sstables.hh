@@ -406,11 +406,11 @@ public:
         return filename(component_type::Index);
     }
 
-    bool requires_view_building() const;
+    bool requires_view_building() const noexcept { return _state == sstable_state::staging; }
 
-    bool is_quarantined() const noexcept;
+    bool is_quarantined() const noexcept { return _state == sstable_state::quarantine; }
 
-    bool is_uploaded() const noexcept;
+    bool is_uploaded() const noexcept { return _state == sstable_state::upload; }
 
     std::vector<std::pair<component_type, sstring>> all_components() const;
 
@@ -542,6 +542,7 @@ private:
 
     schema_ptr _schema;
     generation_type _generation{0};
+    sstable_state _state;
 
     std::unique_ptr<storage> _storage;
 
