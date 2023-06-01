@@ -126,13 +126,6 @@ read_monitor_generator& default_read_monitor_generator() {
     return noop_read_monitor_generator;
 }
 
-future<> sstable::rename_new_sstable_component_file(sstring from_name, sstring to_name) const {
-    return sstable_write_io_check(rename_file, from_name, to_name).handle_exception([from_name, to_name] (std::exception_ptr ep) {
-        sstlog.error("Could not rename SSTable component {} to {}. Found exception: {}", from_name, to_name, ep);
-        return make_exception_future<>(ep);
-    });
-}
-
 future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type type, open_flags flags, file_open_options options) noexcept {
   try {
     auto f = _storage->open_component(*this, type, flags, options, _manager.config().enable_sstable_data_integrity_check());
