@@ -180,9 +180,10 @@ public:
     using manager_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
 public:
     sstable(schema_ptr schema,
+            sstring table_dir,
             const data_dictionary::storage_options& storage,
-            sstring dir,
             generation_type generation,
+            sstable_state state,
             version_types v,
             format_types f,
             db::large_data_handler& large_data_handler,

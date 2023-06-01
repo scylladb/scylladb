@@ -2943,9 +2943,10 @@ mutation_source sstable::as_mutation_source() {
 }
 
 sstable::sstable(schema_ptr schema,
+        sstring table_dir,
         const data_dictionary::storage_options& storage,
-        sstring dir,
         generation_type generation,
+        sstable_state state,
         version_types v,
         format_types f,
         db::large_data_handler& large_data_handler,
@@ -2956,7 +2957,7 @@ sstable::sstable(schema_ptr schema,
     : sstable_buffer_size(buffer_size)
     , _schema(std::move(schema))
     , _generation(generation)
-    , _storage(make_storage(manager, storage, std::move(dir)))
+    , _storage(make_storage(manager, storage, make_path(table_dir, state).native()))
     , _version(v)
     , _format(f)
     , _index_cache(std::make_unique<partition_index_cache>(
