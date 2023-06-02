@@ -427,32 +427,6 @@ private:
     std::unordered_map<generation_type, compaction_read_monitor> _generated_monitors;
 };
 
-class formatted_sstables_list {
-    bool _include_origin = true;
-    std::vector<std::string> _ssts;
-public:
-    formatted_sstables_list() = default;
-    void reserve(size_t n) {
-        _ssts.reserve(n);
-    }
-    explicit formatted_sstables_list(const std::vector<shared_sstable>& ssts, bool include_origin) : _include_origin(include_origin) {
-        _ssts.reserve(ssts.size());
-        for (const auto& sst : ssts) {
-            *this += sst;
-        }
-    }
-    formatted_sstables_list& operator+=(const shared_sstable& sst) {
-        _ssts.emplace_back(to_string(sst, _include_origin));
-        return *this;
-    }
-    friend std::ostream& operator<<(std::ostream& os, const formatted_sstables_list& lst);
-};
-
-std::ostream& operator<<(std::ostream& os, const formatted_sstables_list& lst) {
-    fmt::print(os, "[{}]", fmt::join(lst._ssts, ","));
-    return os;
-}
-
 class compaction {
 protected:
     compaction_data& _cdata;
@@ -679,7 +653,7 @@ private:
 
     future<> setup() {
         auto ssts = make_lw_shared<sstables::sstable_set>(make_sstable_set_for_input());
-        formatted_sstables_list formatted_msg;
+        std::vector<std::string> formatted_msg;
         formatted_msg.reserve(_sstables.size());
         auto fully_expired = _table_s.fully_expired_sstables(_sstables, gc_clock::now());
         min_max_tracker<api::timestamp_type> timestamp_tracker;
@@ -695,7 +669,7 @@ private:
             _input_sstable_generations.push_back(sst->generation());
             _start_size += sst->bytes_on_disk();
             _cdata.total_partitions += sst->get_estimated_key_count();
-            formatted_msg += sst;
+            formatted_msg.emplace_back(cm_format<with_origin::yes>(sst));
 
             // Do not actually compact a sstable that is fully expired and can be safely
             // dropped without ressurrecting old data.
@@ -719,7 +693,7 @@ private:
             // compacted sstables anyway (CL should be clean by then).
             _rp = std::max(_rp, sst_stats.position);
         }
-        log_info("{} {}", report_start_desc(), formatted_msg);
+        log_info("{} [{}]", report_start_desc(), fmt::join(formatted_msg, ","));
         if (ssts->size() < _sstables.size()) {
             log_debug("{} out of {} input sstables are fully expired sstables that will not be actually compacted",
                       _sstables.size() - ssts->size(), _sstables.size());
