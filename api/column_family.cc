@@ -220,6 +220,10 @@ static json::json_return_type sum_map(const std::unordered_map<sstring, uint64_t
     return res;
 }
 
+static sstring sstable_location(const sstables::shared_sstable& sst) {
+    return sst->get_storage().location(*sst);
+}
+
 static future<json::json_return_type>  sum_sstable(http_context& ctx, const sstring name, bool total) {
     auto uuid = get_uuid(name, ctx.db.local());
     return ctx.db.map_reduce0([uuid, total](replica::database& db) {
@@ -227,7 +231,7 @@ static future<json::json_return_type>  sum_sstable(http_context& ctx, const sstr
         auto sstables = (total) ? db.find_column_family(uuid).get_sstables_including_compacted_undeleted() :
                 db.find_column_family(uuid).get_sstables();
         for (auto t : *sstables) {
-            m[t->get_filename()] = t->bytes_on_disk();
+            m[sstable_location(t)] = t->bytes_on_disk();
         }
         return m;
     }, std::unordered_map<sstring, uint64_t>(), merge_maps).
@@ -243,7 +247,7 @@ static future<json::json_return_type> sum_sstable(http_context& ctx, bool total)
         auto sstables = (total) ? cf.get_sstables_including_compacted_undeleted() :
                 cf.get_sstables();
         for (auto t : *sstables) {
-            m[t->get_filename()] = t->bytes_on_disk();
+            m[sstable_location(t)] = t->bytes_on_disk();
         }
         return m;
     },merge_maps).then([](const std::unordered_map<sstring, uint64_t>& val) {
@@ -1021,7 +1025,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
             return db.find_column_family(uuid).get_sstables_by_partition_key(key);
         }, std::unordered_set<sstring>(),
         [](std::unordered_set<sstring> a, std::unordered_set<sstables::shared_sstable>&& b) mutable {
-            auto names = b | boost::adaptors::transformed([] (auto s) { return s->get_filename(); });
+            auto names = b | boost::adaptors::transformed(sstable_location);
             a.insert(names.begin(), names.end());
             return a;
         }).then([](const std::unordered_set<sstring>& res) {
