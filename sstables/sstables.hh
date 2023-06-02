@@ -370,18 +370,6 @@ public:
         return component_basename(_schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
     }
 
-    sstring get_filename() const {
-        return filename(component_type::Data);
-    }
-
-    sstring toc_filename() const {
-        return filename(component_type::TOC);
-    }
-
-    sstring index_filename() const {
-        return filename(component_type::Index);
-    }
-
     bool requires_view_building() const;
 
     bool is_quarantined() const noexcept;
