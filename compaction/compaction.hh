@@ -133,4 +133,7 @@ get_fully_expired_sstables(const table_state& table_s, const std::vector<sstable
 // For tests, can drop after we virtualize sstables.
 flat_mutation_reader_v2 make_scrubbing_reader(flat_mutation_reader_v2 rd, compaction_type_options::scrub::mode scrub_mode, uint64_t& validation_errors);
 
+enum class with_origin { yes, no };
+template <with_origin ORIGIN> std::string cm_format(const shared_sstable& sst);
+
 }

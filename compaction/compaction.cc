@@ -75,6 +75,16 @@ static const std::unordered_map<compaction_type, sstring> compaction_types = {
     { compaction_type::Reshape, "RESHAPE" },
 };
 
+template <>
+std::string cm_format<with_origin::yes>(const shared_sstable& sst) {
+    return fmt::format("{:D}:level={:d}:origin={}", *sst, sst->get_sstable_level(), sst->get_origin());
+}
+
+template <>
+std::string cm_format<with_origin::no>(const shared_sstable& sst) {
+    return fmt::format("{:D}:level={:d}", *sst, sst->get_sstable_level());
+}
+
 sstring compaction_name(compaction_type type) {
     auto ret = compaction_types.find(type);
     if (ret != compaction_types.end()) {
@@ -797,8 +807,6 @@ protected:
 
         on_end_of_compaction();
 
-        formatted_sstables_list new_sstables_msg(ret.new_sstables, false);
-
         // FIXME: there is some missing information in the log message below.
         // look at CompactionTask::runMayThrow() in origin for reference.
         // - add support to merge summary (message: Partition merge counts were {%s}.).
@@ -806,7 +814,9 @@ protected:
         // By the time being, using estimated key count.
         log_info("{} {} sstables to {}. {} to {} (~{}% of original) in {}ms = {}. ~{} total partitions merged to {}.",
                 report_finish_desc(),
-                _input_sstable_generations.size(), new_sstables_msg, pretty_printed_data_size(_start_size), pretty_printed_data_size(_end_size), int(ratio * 100),
+                _input_sstable_generations.size(),
+                ret.new_sstables | boost::adaptors::transformed(cm_format<with_origin::no>),
+                pretty_printed_data_size(_start_size), pretty_printed_data_size(_end_size), int(ratio * 100),
                 std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), pretty_printed_throughput(_end_size, duration),
                 _cdata.total_partitions, _cdata.total_keys_written);
 
@@ -1161,7 +1171,9 @@ private:
             _new_unused_sstables.insert(_new_unused_sstables.end(), unused_gc_sstables.begin(), unused_gc_sstables.end());
 
             auto exhausted_ssts = std::vector<shared_sstable>(exhausted, _sstables.end());
-            log_debug("Replacing earlier exhausted sstable(s) {} by new sstable(s) {}", formatted_sstables_list(exhausted_ssts, false), formatted_sstables_list(_new_unused_sstables, true));
+            log_debug("Replacing earlier exhausted sstable(s) {} by new sstable(s) {}",
+                    exhausted_ssts | boost::adaptors::transformed(cm_format<with_origin::no>),
+                    _new_unused_sstables | boost::adaptors::transformed(cm_format<with_origin::yes>));
             _replacer(get_compaction_completion_desc(exhausted_ssts, std::move(_new_unused_sstables)));
             _sstables.erase(exhausted, _sstables.end());
             _monitor_generator.remove_exhausted_sstables(exhausted_ssts);
