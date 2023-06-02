@@ -895,7 +895,7 @@ public:
      * Return a set of the sstables names that contain the given
      * partition key in nodetool format
      */
-    future<std::unordered_set<sstring>> get_sstables_by_partition_key(const sstring& key) const;
+    future<std::unordered_set<sstables::shared_sstable>> get_sstables_by_partition_key(const sstring& key) const;
 
     const sstables::sstable_set& get_sstable_set() const;
     lw_shared_ptr<const sstable_list> get_sstables() const;
