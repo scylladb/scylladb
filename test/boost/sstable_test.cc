@@ -813,3 +813,12 @@ BOOST_AUTO_TEST_CASE(test_empty_key_view_comparison) {
     BOOST_CHECK_EQUAL(0, lf.size());
     BOOST_CHECK(lf.begin() == lf.end());
 }
+
+SEASTAR_TEST_CASE(test_sstable_formatter) {
+    return test_using_reusable_sst(uncompressed_schema(), uncompressed_dir(), 1, [] (auto& env, shared_sstable sstp) {
+        BOOST_CHECK_EQUAL(fmt::format("{}", *sstp), uncompressed_dir() + "/la-1-big-Data.db");
+        BOOST_CHECK_EQUAL(fmt::format("{:T}", *sstp), uncompressed_dir() + "/la-1-big-TOC.txt");
+        BOOST_CHECK_EQUAL(fmt::format("{:I}", *sstp), uncompressed_dir() + "/la-1-big-Index.db");
+        BOOST_CHECK_EQUAL(fmt::format("{:D}", *sstp), uncompressed_dir() + "/la-1-big-Data.db");
+    });
+}
