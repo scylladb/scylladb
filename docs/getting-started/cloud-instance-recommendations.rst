@@ -15,6 +15,7 @@ You can run your ScyllaDB workloads on AWS, GCE, and Azure using a ScyllaDB imag
 
     The following recommendations apply to self-managed deployments. See the `ScyllaDB Cloud documentation <https://cloud.docs.scylladb.com/>`_ to learn about ScyllaDB's fully managed database-as-a-service.
 
+.. _system-requirements-aws:
 
 Amazon Web Services (AWS)
 -----------------------------
