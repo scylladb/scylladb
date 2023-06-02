@@ -299,7 +299,7 @@ private:
             for (auto& sstable : get_level(i)) {
                 auto r = ::range<dht::decorated_key>::make(sstable->get_first_decorated_key(), sstable->get_last_decorated_key());
                 if (boundaries.contains(r, dht::ring_position_comparator(*_schema))) {
-                    logger.info("Adding high-level (L{}) {} to candidates", sstable->get_sstable_level(), sstable->get_filename());
+                    logger.info("Adding high-level (L{}) {:D} to candidates", sstable->get_sstable_level(), *sstable);
                     candidates.push_back(sstable);
                     break;
                 }

@@ -293,7 +293,7 @@ future<> filesystem_storage::check_create_links_replay(const sstable& sst, const
 /// \param generation - the generation of the destination sstable
 /// \param mark_for_removal - mark the sstable for removal after linking it to the destination dst_dir
 future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst_dir, generation_type generation, mark_for_removal mark_for_removal) const {
-    sstlog.trace("create_links: {} -> {} generation={} mark_for_removal={}", sst.get_filename(), dst_dir, generation, mark_for_removal);
+    sstlog.trace("create_links: {:D} -> {} generation={} mark_for_removal={}", sst, dst_dir, generation, mark_for_removal);
     auto comps = sst.all_components();
     co_await check_create_links_replay(sst, dst_dir, generation, comps);
     // TemporaryTOC is always first, TOC is always last
@@ -319,7 +319,7 @@ future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst
         co_await sst.sstable_write_io_check(remove_file, std::move(dst_temp_toc));
     }
     co_await sst.sstable_write_io_check(sync_directory, dst_dir);
-    sstlog.trace("create_links: {} -> {} generation={}: done", sst.get_filename(), dst_dir, generation);
+    sstlog.trace("create_links: {:D} -> {} generation={}: done", sst, dst_dir, generation);
 }
 
 future<> filesystem_storage::create_links(const sstable& sst, const sstring& dir) const {
@@ -337,8 +337,8 @@ future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_
 future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
     co_await touch_directory(new_dir);
     sstring old_dir = dir;
-    sstlog.debug("Moving {} old_generation={} to {} new_generation={} do_sync_dirs={}",
-            sst.get_filename(), sst._generation, new_dir, new_generation, delay_commit == nullptr);
+    sstlog.debug("Moving {:D} old_generation={} to {} new_generation={} do_sync_dirs={}",
+            sst, sst._generation, new_dir, new_generation, delay_commit == nullptr);
     co_await create_links_common(sst, new_dir, new_generation, mark_for_removal::yes);
     dir = new_dir;
     generation_type old_generation = sst._generation;
@@ -380,7 +380,7 @@ future<> filesystem_storage::change_state(const sstable& sst, sstring to, genera
         co_return; // Already there
     }
 
-    sstlog.info("Moving sstable {} to {}", sst.get_filename(), path);
+    sstlog.info("Moving sstable {:D} to {}", sst, path);
     co_await move(sst, path.native(), std::move(new_generation), delay_commit);
 }
 

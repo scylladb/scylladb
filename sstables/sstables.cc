@@ -923,7 +923,7 @@ void sstable::open_sstable(const io_priority_class& pc) {
 }
 
 void sstable::write_toc(file_writer w) {
-    sstlog.debug("Writing TOC file {} ", toc_filename());
+    sstlog.debug("Writing TOC file {:T} ", *this);
 
     do_write_simple(std::move(w), [&] (version_types v, file_writer& w) {
         for (auto&& key : _recognized_components) {
@@ -1066,8 +1066,8 @@ void sstable::validate_partitioner() {
     validation_metadata& v = *static_cast<validation_metadata *>(p.get());
     if (v.partitioner.value != to_bytes(_schema->get_partitioner().name())) {
         throw std::runtime_error(
-                fmt::format(FMT_STRING("SSTable {} uses {} partitioner which is different than {} partitioner used by the database"),
-                            get_filename(),
+                fmt::format(FMT_STRING("SSTable {:D} uses {} partitioner which is different than {} partitioner used by the database"),
+                            *this,
                             sstring(reinterpret_cast<char*>(v.partitioner.value.data()), v.partitioner.value.size()),
                             _schema->get_partitioner().name()));
     }
@@ -1240,7 +1240,7 @@ future<> sstable::load_first_and_last_position_in_partition() {
     // Allow loading to proceed even if we were unable to load this metadata as the lack of it
     // will not affect correctness.
     if (!first_pos_opt || !last_pos_opt) {
-        sstlog.warn("Unable to retrieve metadata for first and last keys of {}. Not a critical error.", get_filename());
+        sstlog.warn("Unable to retrieve metadata for first and last keys of {:D}. Not a critical error.", *this);
         co_return;
     }
 
@@ -1268,7 +1268,7 @@ void sstable::write_statistics(const io_priority_class& pc) {
 
 void sstable::rewrite_statistics() {
     auto file_path = filename(component_type::TemporaryStatistics);
-    sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
+    sstlog.debug("Rewriting statistics component of sstable {:D}", *this);
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
@@ -1473,7 +1473,7 @@ sstable::load_owner_shards(const io_priority_class& pc) {
     // If sharding metadata is not available, we must load first and last keys from summary
     // for sstable::compute_shards_for_this_sstable() to operate on them.
     if (!has_valid_sharding_metadata) {
-        sstlog.warn("Sharding metadata not available for {}, so Summary will be read to allow Scylla to compute shards owning the SSTable.", get_filename());
+        sstlog.warn("Sharding metadata not available for {:D}, so Summary will be read to allow Scylla to compute shards owning the SSTable.", *this);
         co_await read_summary(pc);
         set_first_and_last_keys();
     }
@@ -1639,7 +1639,7 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
     // sstable write may fail to generate empty metadata if mutation source has only data from other shard.
     // see https://github.com/scylladb/scylla/issues/2932 for details on how it can happen.
     if (sm.token_ranges.elements.empty()) {
-        throw std::runtime_error(format("Failed to generate sharding metadata for {}", get_filename()));
+        throw std::runtime_error(format("Failed to generate sharding metadata for {:D}", *this));
     }
 
     if (!_components->scylla_metadata) {
@@ -1899,7 +1899,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
 
 bool sstable::is_shared() const {
     if (_shards.empty()) {
-        on_internal_error(sstlog, format("Shards weren't computed for SSTable: {}", get_filename()));
+        on_internal_error(sstlog, format("Shards weren't computed for SSTable: {:D}", *this));
     }
     return _shards.size() > 1;
 }
@@ -1947,7 +1947,7 @@ void sstable::validate_originating_host_id() const {
         // Scylla always fills in originating host id when writing
         // sstables, so an ME-and-up sstable that does not have it is
         // invalid
-        throw std::runtime_error(format("No originating host id in SSTable: {}. Load foreign SSTables via the upload dir instead.", get_filename()));
+        throw std::runtime_error(format("No originating host id in SSTable: {:D}. Load foreign SSTables via the upload dir instead.", *this));
     }
 
     auto local_host_id = _manager.get_local_host_id();
@@ -1956,7 +1956,7 @@ void sstable::validate_originating_host_id() const {
         // (or generated and written to) system.local, but some system
         // sstable reads must happen before the bootstrap process gets
         // there, so, welp
-        auto msg = format("Unknown local host id while validating SSTable: {}", get_filename());
+        auto msg = format("Unknown local host id while validating SSTable: {:D}", *this);
         if (is_system_keyspace(_schema->ks_name())) {
             sstlog.trace("{}", msg);
         } else {
@@ -1967,7 +1967,7 @@ void sstable::validate_originating_host_id() const {
 
     if (*originating_host_id != local_host_id) {
         // FIXME refrain from throwing an exception because of #10148
-        sstlog.warn("Host id {} does not match local host id {} while validating SSTable: {}. Load foreign SSTables via the upload dir instead.", *originating_host_id, local_host_id, get_filename());
+        sstlog.warn("Host id {} does not match local host id {} while validating SSTable: {:D}. Load foreign SSTables via the upload dir instead.", *originating_host_id, local_host_id, *this);
     }
 }
 
@@ -2216,7 +2216,7 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_prior
 
     file f = make_tracked_file(_data_file, permit);
     if (trace_state) {
-        f = tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", get_filename()));
+        f = tracing::make_traced_file(std::move(f), std::move(trace_state), format("{:D}:", *this));
     }
 
     input_stream<char> stream;
@@ -2443,7 +2443,7 @@ void sstable::set_first_and_last_keys() {
     auto first = decorate_key("first", _components->summary.first_key.value);
     auto last = decorate_key("last", _components->summary.last_key.value);
     if (first.tri_compare(*_schema, last) > 0) {
-        throw malformed_sstable_exception(format("{}: first and last keys of summary are misordered: first={} > last={}", get_filename(), first, last));
+        throw malformed_sstable_exception(format("{:D}: first and last keys of summary are misordered: first={} > last={}", *this, first, last));
     }
     _first = std::move(first);
     _last = std::move(last);
@@ -2459,14 +2459,14 @@ const partition_key& sstable::get_last_partition_key() const {
 
 const dht::decorated_key& sstable::get_first_decorated_key() const {
     if (!_first) {
-        throw std::runtime_error(format("first key of {} wasn't set", get_filename()));
+        throw std::runtime_error(format("first key of {:D} wasn't set", *this));
     }
     return *_first;
 }
 
 const dht::decorated_key& sstable::get_last_decorated_key() const {
     if (!_last) {
-        throw std::runtime_error(format("last key of {} wasn't set", get_filename()));
+        throw std::runtime_error(format("last key of {:D} wasn't set", *this));
     }
     return *_last;
 }
@@ -2493,7 +2493,7 @@ void sstable::set_sstable_level(uint32_t new_level) {
         throw std::runtime_error("Statistics is malformed");
     }
     stats_metadata& s = *static_cast<stats_metadata *>(p.get());
-    sstlog.debug("set level of {} with generation {} from {} to {}", get_filename(), _generation, s.sstable_level, new_level);
+    sstlog.debug("set level of {:D} with generation {} from {} to {}", *this, _generation, s.sstable_level, new_level);
     s.sstable_level = new_level;
 }
 
@@ -2809,7 +2809,7 @@ sstable::unlink() noexcept {
         memory::scoped_critical_alloc_section _;
         // Just log and ignore failures to delete large data entries.
         // They are not critical to the operation of the database.
-        sstlog.warn("Failed to delete large data entry for {}: {}. Ignoring.", toc_filename(), std::current_exception());
+        sstlog.warn("Failed to delete large data entry for {:T}: {}. Ignoring.", *this, std::current_exception());
     }
 
     co_await std::move(remove_fut);
@@ -3030,7 +3030,7 @@ gc_clock::time_point sstable::get_gc_before_for_drop_estimation(const gc_clock::
     auto start = get_first_decorated_key().token();
     auto end = get_last_decorated_key().token();
     auto range = dht::token_range(dht::token_range::bound(start, true), dht::token_range::bound(end, true));
-    sstlog.trace("sstable={}, ks={}, cf={}, range={}, gc_state={}, estimate", get_filename(), s->ks_name(), s->cf_name(), range, bool(gc_state));
+    sstlog.trace("sstable={:D}, ks={}, cf={}, range={}, gc_state={}, estimate", *this, s->ks_name(), s->cf_name(), range, bool(gc_state));
     return gc_state.get_gc_before_for_range(s, range, compaction_time).max_gc_before;
 }
 
@@ -3047,15 +3047,15 @@ gc_clock::time_point sstable::get_gc_before_for_fully_expire(const gc_clock::tim
     auto s = get_schema();
     // No need to query gc_before for the sstable if the max_deletion_time is max()
     if (deletion_time == gc_clock::time_point(gc_clock::duration(std::numeric_limits<int>::max()))) {
-        sstlog.trace("sstable={}, ks={}, cf={}, get_max_local_deletion_time={}, min_timestamp={}, gc_grace_seconds={}, shortcut",
-                get_filename(), s->ks_name(), s->cf_name(), deletion_time, get_stats_metadata().min_timestamp, s->gc_grace_seconds().count());
+        sstlog.trace("sstable={:D}, ks={}, cf={}, get_max_local_deletion_time={}, min_timestamp={}, gc_grace_seconds={}, shortcut",
+                *this, s->ks_name(), s->cf_name(), deletion_time, get_stats_metadata().min_timestamp, s->gc_grace_seconds().count());
         return gc_clock::time_point::min();
     }
     auto start = get_first_decorated_key().token();
     auto end = get_last_decorated_key().token();
     auto range = dht::token_range(dht::token_range::bound(start, true), dht::token_range::bound(end, true));
-    sstlog.trace("sstable={}, ks={}, cf={}, range={}, get_max_local_deletion_time={}, min_timestamp={}, gc_grace_seconds={}, gc_state={}, query",
-            get_filename(), s->ks_name(), s->cf_name(), range, deletion_time, get_stats_metadata().min_timestamp, s->gc_grace_seconds().count(), bool(gc_state));
+    sstlog.trace("sstable={:D}, ks={}, cf={}, range={}, get_max_local_deletion_time={}, min_timestamp={}, gc_grace_seconds={}, gc_state={}, query",
+            *this, s->ks_name(), s->cf_name(), range, deletion_time, get_stats_metadata().min_timestamp, s->gc_grace_seconds().count(), bool(gc_state));
     auto res = gc_state.get_gc_before_for_range(s, range, compaction_time);
     return res.knows_entire_range ? res.min_gc_before : gc_clock::time_point::min();
 }

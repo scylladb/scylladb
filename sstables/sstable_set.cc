@@ -351,8 +351,8 @@ void partitioned_sstable_set::insert(shared_sstable sst) {
 
     // If sstable doesn't satisfy disjoint invariant, then place it in a new sstable run.
     while (!_all_runs[sst->run_identifier()].insert(sst)) {
-        sstlog.warn("Generating a new run identifier for SSTable {} as overlapping was detected when inserting it into SSTable run {}",
-                    sst->get_filename(), sst->run_identifier());
+        sstlog.warn("Generating a new run identifier for SSTable {:D} as overlapping was detected when inserting it into SSTable run {}",
+                    *sst, sst->run_identifier());
         sst->generate_new_run_identifier();
     }
     auto undo_all_runs_insert = defer([&] () { _all_runs[sst->run_identifier()].erase(sst); });

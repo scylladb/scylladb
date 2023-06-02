@@ -403,7 +403,7 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
 
     co_await dir.do_for_each_sstable([&table, needs_view_update, &new_sstables] (sstables::shared_sstable sst) -> future<> {
         auto gen = table.calculate_generation_for_new_table();
-        dblog.trace("Loading {} into {}, new generation {}", sst->get_filename(), needs_view_update ? "staging" : "base", gen);
+        dblog.trace("Loading {:D} into {}, new generation {}", *sst, needs_view_update ? "staging" : "base", gen);
         co_await sst->pick_up_from_upload(!needs_view_update ? sstables::normal_dir : sstables::staging_dir, gen);
             // When loading an imported sst, set level to 0 because it may overlap with existing ssts on higher levels.
             sst->set_sstable_level(0);

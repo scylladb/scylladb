@@ -2918,7 +2918,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
 
                 bool valid;
 
-                testlog.info("Validating intact {}", sst->get_filename());
+                testlog.info("Validating intact {:D}", *sst);
 
                 valid = sstables::validate_checksums(sst, permit).get();
                 BOOST_REQUIRE(valid);
@@ -2926,7 +2926,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 auto sst_file = open_file_dma(test(sst).filename(sstables::component_type::Data).native(), open_flags::wo).get();
                 auto close_sst_file = defer([&sst_file] { sst_file.close().get(); });
 
-                testlog.info("Validating corrupted {}", sst->get_filename());
+                testlog.info("Validating corrupted {:D}", *sst);
 
                 { // corrupt the sstable
                     const auto size = std::min(sst->ondisk_data_size() / 2, uint64_t(1024));
@@ -2938,7 +2938,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 valid = sstables::validate_checksums(sst, permit).get();
                 BOOST_REQUIRE(!valid);
 
-                testlog.info("Validating truncated {}", sst->get_filename());
+                testlog.info("Validating truncated {:D}", *sst);
 
                 { // truncate the sstable
                     sst_file.truncate(sst->ondisk_data_size() / 2).get();

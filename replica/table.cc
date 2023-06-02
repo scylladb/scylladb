@@ -446,7 +446,7 @@ lw_shared_ptr<sstables::sstable_set>
 compaction_group::do_add_sstable(lw_shared_ptr<sstables::sstable_set> sstables, sstables::shared_sstable sstable,
         enable_backlog_tracker backlog_tracker) {
     if (belongs_to_other_shard(sstable->get_shards_for_this_sstable())) {
-        on_internal_error(tlogger, format("Attempted to load the shared SSTable {} at table", sstable->get_filename()));
+        on_internal_error(tlogger, format("Attempted to load the shared SSTable {:D} at table", *sstable));
     }
     // allow in-progress reads to continue using old list
     auto new_sstables = make_lw_shared<sstables::sstable_set>(*sstables);
@@ -605,7 +605,7 @@ table::add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>
         try {
             co_await do_add_sstable_and_update_cache(sst, sstables::offstrategy::no);
         } catch (...) {
-            tlogger.error("Failed to load SSTable {}: {}", sst->toc_filename(), std::current_exception());
+            tlogger.error("Failed to load SSTable {:T}: {}", *sst, std::current_exception());
             throw;
         }
     }
@@ -884,7 +884,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
 
             auto newtab = make_sstable();
             newtabs.push_back(newtab);
-            tlogger.debug("Flushing to {}", newtab->get_filename());
+            tlogger.debug("Flushing to {:D}", *newtab);
 
             auto monitor = database_sstable_write_monitor(permit, newtab, cg,
                 old->get_max_timestamp());
@@ -910,7 +910,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
                 co_await std::move(f);
                 co_await coroutine::parallel_for_each(newtabs, [] (auto& newtab) -> future<> {
                     co_await newtab->open_data();
-                    tlogger.debug("Flushing to {} done", newtab->get_filename());
+                    tlogger.debug("Flushing to {:D} done", *newtab);
                 });
 
                 co_await with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, old, &newtabs, &cg] {
@@ -922,7 +922,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
             } catch (const std::exception& e) {
                 for (auto& newtab : newtabs) {
                     newtab->mark_for_deletion();
-                    tlogger.error("failed to write sstable {}: {}", newtab->get_filename(), e);
+                    tlogger.error("failed to write sstable {:D}: {}", *newtab, e);
                 }
                 _config.cf_stats->failed_memtables_flushes_count++;
                 // If we failed this write we will try the write again and that will create a new flush reader
@@ -1164,12 +1164,12 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
         auto shards = sst->get_shards_for_this_sstable();
         auto& schema = _t.schema();
         if (shards.size() > 1) {
-            throw std::runtime_error(format("A regular compaction for {}.{} INCORRECTLY used shared sstable {}. Only resharding work with those!",
-                schema->ks_name(), schema->cf_name(), sst->toc_filename()));
+            throw std::runtime_error(format("A regular compaction for {}.{} INCORRECTLY used shared sstable {:T}. Only resharding work with those!",
+                schema->ks_name(), schema->cf_name(), *sst));
         }
         if (!belongs_to_current_shard(shards)) {
-            throw std::runtime_error(format("A regular compaction for {}.{} INCORRECTLY used sstable {} which doesn't belong to this shard!",
-                schema->ks_name(), schema->cf_name(), sst->toc_filename()));
+            throw std::runtime_error(format("A regular compaction for {}.{} INCORRECTLY used sstable {:T} which doesn't belong to this shard!",
+                schema->ks_name(), schema->cf_name(), *sst));
         }
     }
 
@@ -2616,7 +2616,7 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
                 add_sstable_to_backlog_tracker(cg.get_backlog_tracker(), sst);
             }
         } catch (...) {
-            tlogger.warn("Failed to move sstable {} from staging: {}", sst->get_filename(), std::current_exception());
+            tlogger.warn("Failed to move sstable {:D} from staging: {}", *sst, std::current_exception());
             throw;
         }
     }

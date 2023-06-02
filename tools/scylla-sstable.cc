@@ -562,7 +562,7 @@ class dumping_consumer : public sstable_consumer {
             return make_ready_future<>();
         }
         virtual future<stop_iteration> consume_sstable_start(const sstables::sstable* const sst) override {
-            fmt::print("{{sstable_start{}}}\n", sst ? fmt::format(": filename {}", sst->get_filename()) : "");
+            fmt::print("{{sstable_start{}}}\n", sst ? fmt::format(": filename {:D}", *sst) : "");
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
         virtual future<stop_iteration> consume(partition_start&& ps) override {
@@ -949,7 +949,7 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
     abort_source abort;
     for (const auto& sst : sstables) {
         const auto errors = sst->validate(permit, default_priority_class(), abort, [] (sstring what) { sst_log.info("{}", what); }).get();
-        fmt::print("{}: {}\n", sst->get_filename(), errors == 0 ? "valid" : "invalid");
+        fmt::print("{:D}: {}\n", *sst, errors == 0 ? "valid" : "invalid");
     }
 }
 
@@ -1505,7 +1505,7 @@ void validate_checksums_operation(schema_ptr schema, reader_permit permit, const
 
     for (auto& sst : sstables) {
         const auto valid = sstables::validate_checksums(sst, permit).get();
-        sst_log.info("validated the checksums of {}: {}", sst->get_filename(), valid ? "valid" : "invalid");
+        sst_log.info("validated the checksums of {:D}: {}", *sst, valid ? "valid" : "invalid");
     }
 }
 
@@ -1517,7 +1517,7 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
 
     for (const auto& sst : sstables) {
         if (!sst->get_compression()) {
-            sst_log.info("Sstable {} is not compressed, nothing to do", sst->get_filename());
+            sst_log.info("Sstable {:D} is not compressed, nothing to do", *sst);
             continue;
         }
 
@@ -1540,7 +1540,7 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
         }).get();
         ostream.flush().get();
 
-        sst_log.info("Sstable {} decompressed into {}", sst->get_filename(), output_filename);
+        sst_log.info("Sstable {:D} decompressed into {}", *sst, output_filename);
     }
 }
 

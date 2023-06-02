@@ -144,7 +144,7 @@ future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry
     auto sst = co_await load_sstable(std::move(desc), flags.sstable_open_config);
     validate(sst, flags);
     if (flags.need_mutate_level) {
-        dirlog.trace("Mutating {} to level 0\n", sst->get_filename());
+        dirlog.trace("Mutating {:D} to level 0\n", *sst);
         co_await sst->mutate_sstable_level(0);
     }
     co_return sst;
@@ -367,7 +367,7 @@ future<>
 sstable_directory::remove_sstables(std::vector<sstables::shared_sstable> sstlist) {
     dirlog.debug("Removing {} SSTables", sstlist.size());
     return parallel_for_each(std::move(sstlist), [] (const sstables::shared_sstable& sst) {
-        dirlog.trace("Removing SSTable {}", sst->get_filename());
+        dirlog.trace("Removing SSTable {:D}", *sst);
         return sst->unlink().then([sst] {});
     });
 }
@@ -381,7 +381,7 @@ sstable_directory::collect_output_unshared_sstables(std::vector<sstables::shared
         auto shard = shards[0];
 
         if (shard == this_shard_id()) {
-            dirlog.trace("Collected output SSTable {} already local", sst->get_filename());
+            dirlog.trace("Collected output SSTable {:D} already local", *sst);
             _unshared_local_sstables.push_back(std::move(sst));
             return make_ready_future<>();
         }
@@ -390,7 +390,7 @@ sstable_directory::collect_output_unshared_sstables(std::vector<sstables::shared
             return make_exception_future<>(std::runtime_error("Unexpected remote sstable"));
         }
 
-        dirlog.trace("Collected output SSTable {} is remote. Storing it", sst->get_filename());
+        dirlog.trace("Collected output SSTable {:D} is remote. Storing it", *sst);
         _unshared_remote_sstables[shard].push_back(sstables::entry_descriptor::make_descriptor(_sstable_dir.native(), sst->component_basename(component_type::Data)));
         return make_ready_future<>();
     });

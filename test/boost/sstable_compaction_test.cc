@@ -2123,7 +2123,7 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
             auto scrubbed_mt = make_lw_shared<replica::memtable>(schema);
             auto sst = env.make_sstable(schema);
 
-            testlog.info("Writing sstable {}", sst->get_filename());
+            testlog.info("Writing sstable {:D}", *sst);
 
             const auto corrupt_fragments = write_corrupt_sstable(env, *sst, permit, [&, mut_builder = mutation_rebuilder_v2(schema)] (mutation_fragment_v2&& mf, bool) mutable {
                 if (mf.is_end_of_partition()) {
@@ -2135,7 +2135,7 @@ SEASTAR_TEST_CASE(sstable_scrub_validate_mode_test) {
 
             sst->load().get();
 
-            testlog.info("Loaded sstable {}", sst->get_filename());
+            testlog.info("Loaded sstable {:D}", *sst);
 
             auto table = env.make_table_for_tests(schema);
             auto close_cf = deferred_stop(table);
@@ -2325,11 +2325,11 @@ SEASTAR_TEST_CASE(sstable_scrub_skip_mode_test) {
                 }
             });
 
-            testlog.info("Writing sstable {}", sst->get_filename());
+            testlog.info("Writing sstable {:D}", *sst);
 
             sst->load().get();
 
-            testlog.info("Loaded sstable {}", sst->get_filename());
+            testlog.info("Loaded sstable {:D}", *sst);
 
             auto table = env.make_table_for_tests(schema);
             auto close_cf = deferred_stop(table);
@@ -2408,7 +2408,7 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
             auto scrubbed_mt = make_lw_shared<replica::memtable>(schema);
             auto sst = env.make_sstable(schema);
 
-            testlog.info("Writing sstable {}", sst->get_filename());
+            testlog.info("Writing sstable {:D}", *sst);
 
             const auto corrupt_fragments = write_corrupt_sstable(env, *sst, permit, [&, mut_builder = mutation_rebuilder_v2(schema)] (mutation_fragment_v2&& mf, bool) mutable {
                 if (mf.is_end_of_partition()) {
@@ -2420,7 +2420,7 @@ SEASTAR_TEST_CASE(sstable_scrub_segregate_mode_test) {
 
             sst->load().get();
 
-            testlog.info("Loaded sstable {}", sst->get_filename());
+            testlog.info("Loaded sstable {:D}", *sst);
 
             auto table = env.make_table_for_tests(schema);
             auto close_cf = deferred_stop(table);
@@ -2514,7 +2514,7 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
                 auto scrubbed_mt = make_lw_shared<replica::memtable>(schema);
                 auto sst = env.make_sstable(schema);
 
-                testlog.info("Writing sstable {}", sst->get_filename());
+                testlog.info("Writing sstable {:D}", *sst);
 
                 const auto corrupt_fragments = write_corrupt_sstable(env, *sst, permit, [&, mut_builder = mutation_rebuilder_v2(schema)] (mutation_fragment_v2&& mf, bool) mutable {
                     if (mf.is_end_of_partition()) {
@@ -2526,7 +2526,7 @@ SEASTAR_TEST_CASE(sstable_scrub_quarantine_mode_test) {
 
                 sst->load().get();
 
-                testlog.info("Loaded sstable {}", sst->get_filename());
+                testlog.info("Loaded sstable {:D}", *sst);
 
                 auto table = env.make_table_for_tests(schema);
                 auto close_cf = deferred_stop(table);

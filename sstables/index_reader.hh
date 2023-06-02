@@ -157,10 +157,10 @@ private:
 public:
     void verify_end_state() const {
         if (this->_remain > 0) {
-            throw malformed_sstable_exception(fmt::format("index_consume_entry_context (state={}): parsing ended but there is unconsumed data", _state), _sst.index_filename());
+            throw malformed_sstable_exception(fmt::format("index_consume_entry_context (state={}): parsing ended but there is unconsumed data", _state), fmt::format("{:I}", _sst));
         }
         if (_state != state::KEY_SIZE && _state != state::START) {
-            throw malformed_sstable_exception(fmt::format("index_consume_entry_context (state={}): cannot finish parsing current entry, no more data", _state), _sst.index_filename());
+            throw malformed_sstable_exception(fmt::format("index_consume_entry_context (state={}): cannot finish parsing current entry, no more data", _state), fmt::format("{:I}", _sst));
         }
     }
 
@@ -308,7 +308,7 @@ inline file make_tracked_index_file(sstable& sst, reader_permit permit, tracing:
     if (!trace_state) {
         return f;
     }
-    return tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", sst.index_filename()));
+    return tracing::make_traced_file(std::move(f), std::move(trace_state), format("{:I}:", sst));
 }
 
 inline
@@ -519,7 +519,7 @@ private:
                     std::exception_ptr ex;
                     if (f.failed()) {
                         ex = f.get_exception();
-                        sstlog.error("failed reading index for {}: {}", _sstable->get_filename(), ex);
+                        sstlog.error("failed reading index for {:D}: {}", *_sstable, ex);
                     }
                     if (ex) {
                         return make_exception_future<index_list>(std::move(ex));
@@ -541,7 +541,7 @@ private:
             bound.current_index_idx = 0;
             bound.current_pi_idx = 0;
             if (bound.current_list->empty()) {
-                throw malformed_sstable_exception(format("missing index entry for summary index {} (bound {})", summary_idx, fmt::ptr(&bound)), _sstable->index_filename());
+                throw malformed_sstable_exception(format("missing index entry for summary index {} (bound {})", summary_idx, fmt::ptr(&bound)), format("{:I}", *_sstable));
             }
             bound.data_file_position = bound.current_list->_entries[0]->position();
             bound.element = indexable_element::partition;
@@ -781,7 +781,7 @@ public:
         , _single_page_read(single_partition_read) // all entries for a given partition are within a single page
     {
         if (sstlog.is_enabled(logging::log_level::trace)) {
-            sstlog.trace("index {}: index_reader for {}", fmt::ptr(this), _sstable->get_filename());
+            sstlog.trace("index {}: index_reader for {:D}", fmt::ptr(this), *_sstable);
         }
     }
 

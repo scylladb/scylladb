@@ -3215,7 +3215,7 @@ static void compare_sstables(test_env& env, sstring table_name, sstable_version_
 
 static sstables::shared_sstable write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica::memtable> mt1, lw_shared_ptr<replica::memtable> mt2, sstable_version_types version) {
     auto sst = env.make_sstable(s, version);
-    BOOST_TEST_MESSAGE(format("write_sstable from two memtable: {}", sst->get_filename()));
+    BOOST_TEST_MESSAGE(format("write_sstable from two memtable: {:D}", *sst));
 
     sst->write_components(make_combined_reader(s,
         env.make_reader_permit(),
@@ -3235,7 +3235,7 @@ static sstables::shared_sstable write_and_compare_sstables(test_env& env, schema
 
 static sstables::shared_sstable write_sstables(test_env& env, schema_ptr s, lw_shared_ptr<replica::memtable> mt, sstable_version_types version) {
     auto sst = make_sstable_containing(env.make_sstable(s, version), mt);
-    BOOST_TEST_MESSAGE(format("write_sstable from memtable: {}", sst->get_filename()));
+    BOOST_TEST_MESSAGE(format("write_sstable from memtable: {:D}", *sst));
     return sst;
 }
 

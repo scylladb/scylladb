@@ -94,7 +94,7 @@ make_sstable_for_all_shards(replica::database& db, replica::table& table, fs::pa
     mt->clear_gently().get();
     // We can't write an SSTable with bad sharding, so pretend
     // it came from Cassandra
-    testlog.debug("make_sstable_for_all_shards: {}: rewriting TOC", sst->get_filename());
+    testlog.debug("make_sstable_for_all_shards: {:D}: rewriting TOC", *sst);
     sstables::test(sst).remove_component(sstables::component_type::Scylla).get();
     sstables::test(sst).rewrite_toc_without_scylla_component();
     return sst;

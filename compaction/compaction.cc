@@ -690,7 +690,7 @@ private:
             // Do not actually compact a sstable that is fully expired and can be safely
             // dropped without ressurrecting old data.
             if (tombstone_expiration_enabled() && fully_expired.contains(sst)) {
-                log_debug("Fully expired sstable {} will be dropped on compaction completion", sst->get_filename());
+                log_debug("Fully expired sstable {:D} will be dropped on compaction completion", *sst);
                 continue;
             }
 
@@ -856,7 +856,7 @@ private:
         // was either stopped abruptly (e.g. out of disk space) or deliberately
         // (e.g. nodetool stop COMPACTION).
         for (auto& sst : boost::range::join(_new_partial_sstables, _new_unused_sstables)) {
-            log_debug("Deleting sstable {} of interrupted compaction for {}.{}", sst->get_filename(), _schema->ks_name(), _schema->cf_name());
+            log_debug("Deleting sstable {:D} of interrupted compaction for {}.{}", *sst, _schema->ks_name(), _schema->cf_name());
             sst->mark_for_deletion();
         }
     }
@@ -1685,7 +1685,7 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
     uint64_t validation_errors = 0;
 
     for (const auto& sst : descriptor.sstables) {
-        clogger.info("Scrubbing in validate mode {}", sst->get_filename());
+        clogger.info("Scrubbing in validate mode {:D}", *sst);
 
         validation_errors += co_await sst->validate(permit, descriptor.io_priority, cdata.abort, [&schema] (sstring what) {
             scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, what);
@@ -1696,7 +1696,7 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
             throw compaction_stopped_exception(schema->ks_name(), schema->cf_name(), cdata.stop_requested);
         }
 
-        clogger.info("Finished scrubbing in validate mode {} - sstable is {}", sst->get_filename(), validation_errors == 0 ? "valid" : "invalid");
+        clogger.info("Finished scrubbing in validate mode {:D} - sstable is {}", *sst, validation_errors == 0 ? "valid" : "invalid");
     }
 
     if (validation_errors != 0) {
@@ -1783,8 +1783,8 @@ get_fully_expired_sstables(const table_state& table_s, const std::vector<sstable
         if (candidate->get_stats_metadata().max_timestamp >= min_timestamp) {
             it = candidates.erase(it);
         } else {
-            clogger.debug("Dropping expired SSTable {} (maxLocalDeletionTime={})",
-                    candidate->get_filename(), candidate->get_stats_metadata().max_local_deletion_time);
+            clogger.debug("Dropping expired SSTable {:D} (maxLocalDeletionTime={})",
+                    *candidate, candidate->get_stats_metadata().max_local_deletion_time);
             it++;
         }
     }
