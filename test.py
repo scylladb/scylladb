@@ -1365,7 +1365,12 @@ def write_consolidated_boost_junit_xml(tmpdir: str, mode: str) -> None:
         for test in suite.tests:
             if test.mode != mode:
                 continue
-            test_xml = test.get_junit_etree()
+            try:
+                test_xml = test.get_junit_etree()
+            except ET.ParseError as e:
+                print(
+                    palette.warn(f'Failed to parse XML for {test.uname} with error: {e}')
+                )
             if test_xml is not None:
                 xml.extend(test_xml.getroot().findall('.//TestSuite'))
     et = ET.ElementTree(xml)
