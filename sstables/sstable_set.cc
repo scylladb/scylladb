@@ -745,7 +745,7 @@ class incremental_reader_selector : public reader_selector {
     sstable_reader_factory_type _fn;
 
     flat_mutation_reader_v2 create_reader(shared_sstable sst) {
-        tracing::trace(_trace_state, "Reading partition range {} from sstable {}", *_pr, seastar::value_of([&sst] { return sst->get_filename(); }));
+        tracing::trace(_trace_state, "Reading partition range {} from sstable {:D}", *_pr, *sst);
         return _fn(sst, *_pr);
     }
 
@@ -899,7 +899,7 @@ sstable_set_impl::create_single_key_sstable_reader(
     auto readers = boost::copy_range<std::vector<flat_mutation_reader_v2>>(
         filter_sstable_for_reader_by_ck(std::move(selected_sstables), *cf, schema, slice)
         | boost::adaptors::transformed([&] (const shared_sstable& sstable) {
-            tracing::trace(trace_state, "Reading key {} from sstable {}", pos, seastar::value_of([&sstable] { return sstable->get_filename(); }));
+            tracing::trace(trace_state, "Reading key {} from sstable {:D}", pos, *sstable);
             return sstable->make_reader(schema, permit, pr, slice, pc, trace_state, fwd);
         })
     );
