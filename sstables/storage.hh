@@ -62,6 +62,7 @@ public:
     virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const = 0;
 
     virtual sstring prefix() const  = 0;
+    virtual sstring location(const sstable& sst, std::optional<component_type> f = std::nullopt) const = 0;
 };
 
 std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const data_dictionary::storage_options& s_opts, sstring dir);

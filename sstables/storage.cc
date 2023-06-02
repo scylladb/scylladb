@@ -71,6 +71,9 @@ public:
     }
 
     virtual sstring prefix() const override { return dir; }
+    virtual sstring location(const sstable& sst, std::optional<component_type> f = std::nullopt) const override {
+        return sst.filename(f.value_or(component_type::Data));
+    }
 };
 
 future<data_sink> filesystem_storage::make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) {
@@ -452,6 +455,16 @@ public:
     }
 
     virtual sstring prefix() const override { return _location; }
+    virtual sstring location(const sstable& sst, std::optional<component_type> f = std::nullopt) const override {
+        sstring ret = format("s3://{}/{}", _bucket, _remote_prefix.value_or(_location));
+        if (f) {
+            ret += sstable_version_constants::get_component_map(sst.get_version()).at(*f);
+        }
+        if (!_remote_prefix) {
+            ret += " (orphan)";
+        }
+        return ret;
+    }
 };
 
 sstring s3_storage::make_s3_object_name(const sstable& sst, component_type type) {
