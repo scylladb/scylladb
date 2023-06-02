@@ -1521,8 +1521,7 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
             continue;
         }
 
-        auto output_filename = sst->get_filename();
-        output_filename += ".decompressed";
+        auto output_filename = sst->get_storage().location(*sst) + ".decompressed";
 
         auto ofile = open_file_dma(output_filename, open_flags::wo | open_flags::create).get();
         file_output_stream_options options;

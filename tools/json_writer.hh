@@ -74,7 +74,7 @@ public:
         EndObject();
     }
     void SstableKey(const sstables::sstable& sst) {
-        Key(sst.get_filename());
+        Key(sst.get_storage().location(sst));
     }
     void SstableKey(const sstables::sstable* const sst) {
         if (sst) {

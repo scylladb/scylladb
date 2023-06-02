@@ -433,7 +433,7 @@ int sstable_index_l(lua_State* l) {
     auto& sst = pop_userdata_ref<const sstables::sstable>(l, 1);
     lua_pop(l, 2);
     if (strcmp(field, "filename") == 0) {
-        lua::push_sstring(l, sst.get_filename());
+        lua::push_sstring(l, sst.get_storage().location(sst));
         return 1;
     }
     return 0;
