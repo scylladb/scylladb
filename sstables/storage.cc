@@ -385,12 +385,12 @@ future<> filesystem_storage::change_state(const sstable& sst, sstring to, genera
 }
 
 future<> filesystem_storage::wipe(const sstable& sst) noexcept {
-    // We must be able to generate toc_filename()
+    // We must be able to generate TOC file name
     // in order to delete the sstable.
     // Running out of memory here will terminate.
     auto name = [&sst] () noexcept {
         memory::scoped_critical_alloc_section _;
-        return sst.toc_filename();
+        return sst.filename(component_type::TOC);
     }();
 
     try {
