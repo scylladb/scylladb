@@ -721,11 +721,11 @@ expression optimize_like(const expression& e);
  * Most caller should just call the is_assignable() method on the result, though functions have a use for
  * testing "strong" equality to decide the most precise overload to pick when multiple could match.
  */
-extern assignment_testable::test_result test_assignment(const expression& expr, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver);
+extern assignment_testable::test_result test_assignment(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver);
 
 // Test all elements of exprs for assignment. If all are exact match, return exact match. If any is not assignable,
 // return not assignable. Otherwise, return weakly assignable.
-extern assignment_testable::test_result test_assignment_all(const std::vector<expression>& exprs, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver);
+extern assignment_testable::test_result test_assignment_all(const std::vector<expression>& exprs, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver);
 
 extern shared_ptr<assignment_testable> as_assignment_testable(expression e);
 

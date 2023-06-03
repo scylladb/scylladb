@@ -328,6 +328,14 @@ functions::get(data_dictionary::database db,
     static const function_name TO_JSON_FUNCTION_NAME = function_name::native_function("tojson");
     static const function_name FROM_JSON_FUNCTION_NAME = function_name::native_function("fromjson");
 
+    auto schema = std::invoke([&] () -> schema_ptr {
+        if (receiver_cf.has_value() && db.has_schema(receiver_ks, *receiver_cf)) {
+            return db.find_schema(receiver_ks, *receiver_cf);
+        } else {
+            return nullptr;
+        }
+    });
+
     if (name.has_keyspace()
                 ? name == TOKEN_FUNCTION_NAME
                 : name.name == TOKEN_FUNCTION_NAME.name) {
@@ -335,8 +343,8 @@ functions::get(data_dictionary::database db,
         if (!receiver_cf.has_value()) {
             throw exceptions::invalid_request_exception("functions::get for token doesn't have a known column family");
         }
-        auto fun = ::make_shared<token_fct>(db.find_schema(receiver_ks, *receiver_cf));
-        validate_types(db, keyspace, fun, provided_args, receiver_ks, receiver_cf);
+        auto fun = ::make_shared<token_fct>(schema);
+        validate_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf);
         return fun;
     }
 
@@ -393,13 +401,13 @@ functions::get(data_dictionary::database db,
     // Fast path if there is only one choice
     if (candidates.size() == 1) {
         auto fun = std::move(candidates[0]);
-        validate_types(db, keyspace, fun, provided_args, receiver_ks, receiver_cf);
+        validate_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf);
         return fun;
     }
 
     std::vector<shared_ptr<function>> compatibles;
     for (auto&& to_test : candidates) {
-        auto r = match_arguments(db, keyspace, to_test, provided_args, receiver_ks, receiver_cf);
+        auto r = match_arguments(db, keyspace, schema.get(), to_test, provided_args, receiver_ks, receiver_cf);
         switch (r) {
             case assignment_testable::test_result::EXACT_MATCH:
                 // We always favor exact matches
@@ -504,6 +512,7 @@ functions::mock_get(const function_name &name, const std::vector<data_type>& arg
 void
 functions::validate_types(data_dictionary::database db,
                           const sstring& keyspace,
+                          const schema* schema_opt,
                           shared_ptr<function> fun,
                           const std::vector<shared_ptr<assignment_testable>>& provided_args,
                           const sstring& receiver_ks,
@@ -524,7 +533,7 @@ functions::validate_types(data_dictionary::database db,
         }
 
         auto&& expected = make_arg_spec(receiver_ks, receiver_cf, *fun, i);
-        if (!is_assignable(provided->test_assignment(db, keyspace, *expected))) {
+        if (!is_assignable(provided->test_assignment(db, keyspace, schema_opt, *expected))) {
             throw exceptions::invalid_request_exception(
                     format("Type error: {} cannot be passed as argument {:d} of function {} of type {}",
                             provided, i, fun->name(), expected->type->as_cql3_type()));
@@ -534,6 +543,7 @@ functions::validate_types(data_dictionary::database db,
 
 assignment_testable::test_result
 functions::match_arguments(data_dictionary::database db, const sstring& keyspace,
+        const schema* schema_opt,
         shared_ptr<function> fun,
         const std::vector<shared_ptr<assignment_testable>>& provided_args,
         const sstring& receiver_ks,
@@ -551,7 +561,7 @@ functions::match_arguments(data_dictionary::database db, const sstring& keyspace
             continue;
         }
         auto&& expected = make_arg_spec(receiver_ks, receiver_cf, *fun, i);
-        auto arg_res = provided->test_assignment(db, keyspace, *expected);
+        auto arg_res = provided->test_assignment(db, keyspace, schema_opt, *expected);
         if (arg_res == assignment_testable::test_result::NOT_ASSIGNABLE) {
             return assignment_testable::test_result::NOT_ASSIGNABLE;
         }
