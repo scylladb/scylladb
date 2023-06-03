@@ -1631,7 +1631,7 @@ void select_statement::maybe_jsonize_select_clause(data_dictionary::database db,
         selector_names.reserve(_select_clause.size());
         selector_types.reserve(_select_clause.size());
         auto selectables = selection::raw_selector::to_selectables(_select_clause, *schema);
-        selection::selector_factories factories(selection::raw_selector::to_selectables(_select_clause, *schema), db, schema, defs);
+        selection::selector_factories factories(selectables, db, schema, defs);
         auto selectors = factories.new_instances();
         for (size_t i = 0; i < selectors.size(); ++i) {
             if (_select_clause[i]->alias) {
