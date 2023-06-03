@@ -854,22 +854,16 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
             return fun;
         },
     }, fc.func);
-    if (fun->is_aggregate()) {
-        throw exceptions::invalid_request_exception("Aggregation function are not supported in the where clause");
-    }
-
-    // Can't use static_pointer_cast<> because function is a virtual base class of scalar_function
-    auto&& scalar_fun = dynamic_pointer_cast<functions::scalar_function>(fun);
 
     // Functions.get() will complain if no function "name" type check with the provided arguments.
     // We still have to validate that the return type matches however
-    if (receiver && !receiver->type->is_value_compatible_with(*scalar_fun->return_type())) {
+    if (receiver && !receiver->type->is_value_compatible_with(*fun->return_type())) {
         throw exceptions::invalid_request_exception(format("Type error: cannot assign result of function {} (type {}) to {} (type {})",
                                                     fun->name(), fun->return_type()->as_cql3_type(),
                                                     receiver->name, receiver->type->as_cql3_type()));
     }
 
-    if (scalar_fun->arg_types().size() != fc.args.size()) {
+    if (fun->arg_types().size() != fc.args.size()) {
         throw exceptions::invalid_request_exception(format("Incorrect number of arguments specified for function {} (expected {:d}, found {:d})",
                                                     fun->name(), fun->arg_types().size(), fc.args.size()));
     }
@@ -879,21 +873,21 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
     bool all_terminal = true;
     for (size_t i = 0; i < partially_prepared_args.size(); ++i) {
         expr::expression e = prepare_expression(partially_prepared_args[i], db, keyspace, schema_opt,
-                                                functions::functions::make_arg_spec(keyspace, cf_name, *scalar_fun, i));
+                                                functions::functions::make_arg_spec(keyspace, cf_name, *fun, i));
         if (!expr::is<expr::constant>(e)) {
             all_terminal = false;
         }
         parameters.push_back(std::move(e));
     }
 
-    // If all parameters are terminal and the function is pure, we can
+    // If all parameters are terminal and the function is pure and scalar, we can
     // evaluate it now, otherwise we'd have to wait execution time
     expr::function_call fun_call {
         .func = fun,
         .args = std::move(parameters),
         .lwt_cache_id = fc.lwt_cache_id
     };
-    if (all_terminal && scalar_fun->is_pure()) {
+    if (all_terminal && fun->is_pure() && !fun->is_aggregate()) {
         return constant(expr::evaluate(fun_call, query_options::DEFAULT), fun->return_type());
     } else {
         return fun_call;
