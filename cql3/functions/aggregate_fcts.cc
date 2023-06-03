@@ -18,6 +18,7 @@
 #include "aggregate_fcts.hh"
 #include "user_aggregate.hh"
 #include "functions.hh"
+#include "first_function.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/multiprecision_int.hh"
 #include <cstddef>
@@ -459,6 +460,45 @@ aggregate_fcts::make_min_function(data_type io_type) {
                 return args[0];
             }),
             .state_reduction_function = min,
+        }
+    );
+}
+
+function_name
+aggregate_fcts::first_function_name() {
+    return function_name::native_function("$$first$$");
+}
+
+shared_ptr<aggregate_function>
+aggregate_fcts::make_first_function(data_type io_type) {
+    io_type = io_type->without_reversed().shared_from_this();
+    // The function's state is a one-element tuple containing the value, if the tuple
+    // itself is null then the an input hasn't been seen yet
+    auto state_type = data_type(tuple_type_impl::get_instance({io_type}));
+    return ::make_shared<db::functions::aggregate_function>(
+        db::functions::stateless_aggregate_function{
+            .name = first_function_name(),
+            .state_type = state_type,
+            .result_type = io_type,
+            .argument_types = {io_type},
+            .initial_state = std::nullopt,
+            .aggregation_function = ::make_shared<internal_scalar_function>("first_agg", state_type, std::vector({state_type, io_type}), [] (std::span<const bytes_opt> args) -> bytes_opt {
+                if (!args[0]) {
+                    // First call: create a tuple with the input
+                    return tuple_type_impl::build_value(boost::make_iterator_range_n(&args[1], 1));
+                } else {
+                    // Second or later call: return result of first call
+                    return args[0];
+                }
+            }),
+            .state_to_result_function = ::make_shared<internal_scalar_function>("first_finalizer", io_type, std::vector({state_type}), [] (std::span<const bytes_opt> args) -> bytes_opt {
+                if (!args[0]) {
+                    return std::nullopt;
+                } else {
+                    return to_bytes_opt(get_nth_tuple_element(managed_bytes_view(*args[0]), 0));
+                }
+            }),
+            .state_reduction_function = ::make_shared<internal_scalar_function>("first_reducer", state_type, std::vector({state_type, state_type}), return_any_nonnull),
         }
     );
 }
