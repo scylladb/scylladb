@@ -11,6 +11,7 @@ import math
 from decimal import Decimal
 from util import new_test_table, unique_key_int, project, new_type
 from cassandra.util import Date
+from cassandra_tests.porting import assert_invalid_message
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -212,3 +213,7 @@ def test_avg_decimal_2(cql, table1, cassandra_bug):
     cql.execute(f"insert into {table1} (p, c, dc) values ({p}, 4, 3)")
     # Reproduces CASSANDRA-18470:
     assert [(Decimal('2'),)] == list(cql.execute(f"select avg(dc) from {table1} where p = {p}"))
+
+def test_reject_aggregates_in_where_clause(cql, table1):
+    assert_invalid_message(cql, table1, 'Aggregation',
+                           f'SELECT * FROM {table1} WHERE p = sum((int)4)')
