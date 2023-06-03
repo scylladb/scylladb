@@ -701,6 +701,9 @@ expression adjust_for_collection_as_maps(const expression& e);
 extern expression prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver);
 std::optional<expression> try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver);
 
+// Check that a prepared expression has no aggregate functions. Throws on error.
+void verify_no_aggregate_functions(const expression& expr, std::string_view context_for_errors);
+
 // Prepares a binary operator received from the parser.
 // Does some basic type checks but no advanced validation.
 extern binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::database db, const schema& table_schema);
