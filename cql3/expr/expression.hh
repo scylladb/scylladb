@@ -823,6 +823,11 @@ bytes_opt value_for(const column_definition&, const expression&, const query_opt
 bool contains_multi_column_restriction(const expression&);
 
 bool has_only_eq_binops(const expression&);
+
+/// Finds the data type of writetime(x) or ttl(x)
+data_type column_mutation_attribute_type(const column_mutation_attribute& e);
+
+
 } // namespace expr
 
 } // namespace cql3

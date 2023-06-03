@@ -2243,6 +2243,17 @@ size_t count_if(const expression& e, const noncopyable_function<bool (const bina
 }
 
 data_type
+column_mutation_attribute_type(const column_mutation_attribute& e) {
+    switch (e.kind) {
+    case column_mutation_attribute::attribute_kind::writetime:
+        return long_type;
+    case column_mutation_attribute::attribute_kind::ttl:
+        return int32_type;
+    }
+    on_internal_error(expr_logger, "evaluating type of illegal column mutation attribute kind");
+}
+
+data_type
 type_of(const expression& e) {
     return visit(overloaded_functor{
         [] (const conjunction& e) {
@@ -2259,13 +2270,7 @@ type_of(const expression& e) {
             on_internal_error(expr_logger, "evaluating type of unresolved_identifier");
         },
         [] (const column_mutation_attribute& e) {
-            switch (e.kind) {
-            case column_mutation_attribute::attribute_kind::writetime:
-                return long_type;
-            case column_mutation_attribute::attribute_kind::ttl:
-                return int32_type;
-            }
-            on_internal_error(expr_logger, "evaluating type of illegal column mutation attribute kind");
+            return column_mutation_attribute_type(e);
         },
         [] (const function_call& e) {
             return std::visit(overloaded_functor{
