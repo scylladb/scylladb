@@ -1089,7 +1089,7 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
             },
             [&] (const column_mutation_attribute& cma)  {
                 fmt::print(os, "{}({})",
-                        cma.kind == column_mutation_attribute::attribute_kind::ttl ? "TTL" : "WRITETIME",
+                        cma.kind,
                         to_printer(cma.column));
             },
             [&] (const function_call& fc)  {

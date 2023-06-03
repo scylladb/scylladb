@@ -881,3 +881,17 @@ struct fmt::formatter<cql3::expr::expression::printer> {
 template <cql3::expr::ExpressionElement E>
 struct fmt::formatter<E> : public fmt::formatter<cql3::expr::expression> {
 };
+
+template <>
+struct fmt::formatter<cql3::expr::column_mutation_attribute::attribute_kind> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(cql3::expr::column_mutation_attribute::attribute_kind k, FormatContext& ctx) const {
+        switch (k) {
+            case cql3::expr::column_mutation_attribute::attribute_kind::writetime:
+                return fmt::format_to(ctx.out(), "WRITETIME");
+            case cql3::expr::column_mutation_attribute::attribute_kind::ttl:
+                return fmt::format_to(ctx.out(), "TTL");
+        }
+        return fmt::format_to(ctx.out(), "unrecognized_attribute_kind({})", static_cast<int>(k));
+    }
+};
