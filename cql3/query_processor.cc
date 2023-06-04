@@ -525,16 +525,12 @@ query_processor::execute_direct_without_checking_exception_message(const sstring
             metrics.regularStatementsExecuted.inc();
 #endif
     tracing::trace(query_state.get_trace_state(), "Processing a statement");
-    return cql_statement->check_access(*this, query_state.get_client_state()).then(
-            [this, cql_statement, &query_state, &options, warnings = std::move(warnings)] () mutable {
-        return process_authorized_statement(std::move(cql_statement), query_state, options).then(
-                [warnings = std::move(warnings)] (::shared_ptr<result_message> m) {
-                    for (const auto& w : warnings) {
-                        m->add_warning(w);
-                    }
-                    return make_ready_future<::shared_ptr<result_message>>(m);
-                });
-    });
+    co_await cql_statement->check_access(*this, query_state.get_client_state());
+    auto m = co_await process_authorized_statement(std::move(cql_statement), query_state, options);
+    for (const auto& w : warnings) {
+        m->add_warning(w);
+    }
+    co_return std::move(m);
 }
 
 future<::shared_ptr<result_message>>
