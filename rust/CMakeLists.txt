@@ -1,6 +1,6 @@
 find_program(CARGO cargo)
 if(NOT CARGO)
-  message(FATAL "cargo is required")
+  message(FATAL_ERROR "cargo is required")
 endif()
 
 function(add_rust_library name)
@@ -26,7 +26,7 @@ endfunction(add_rust_library)
 
 find_program(CXXBRIDGE cxxbridge)
 if(NOT CXXBRIDGE)
-  message(FATAL "cxxbridge is required")
+  message(FATAL_ERROR "cxxbridge is required")
 endif()
 # Generate cxxbridge header and source
 function(generate_cxxbridge name)

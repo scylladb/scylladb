@@ -1,6 +1,6 @@
 find_program (ANTLR3 antlr3)
 if(NOT ANTLR3)
-  message(FATAL "antlr3 is required")
+  message(FATAL_ERROR "antlr3 is required")
 endif()
 
 # Parse antlr3 grammar files and generate C++ sources
