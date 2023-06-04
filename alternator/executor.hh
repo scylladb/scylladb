@@ -222,11 +222,11 @@ public:
         const query::result&,
         const std::optional<attrs_to_get>&);
 
-    static std::vector<rjson::value> describe_multi_item(schema_ptr schema,
-        const query::partition_slice& slice,
-        const cql3::selection::selection& selection,
-        const query::result& query_result,
-        const std::optional<attrs_to_get>& attrs_to_get);
+    static future<std::vector<rjson::value>> describe_multi_item(schema_ptr schema,
+        const query::partition_slice&& slice,
+        shared_ptr<cql3::selection::selection> selection,
+        foreign_ptr<lw_shared_ptr<query::result>> query_result,
+        shared_ptr<const std::optional<attrs_to_get>> attrs_to_get);
 
     static void describe_single_item(const cql3::selection::selection&,
         const std::vector<bytes_opt>&,
