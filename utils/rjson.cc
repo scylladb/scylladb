@@ -227,68 +227,62 @@ std::string print(const rjson::value& value, size_t max_nested_level) {
     return std::string(buffer.GetString());
 }
 
+// This class implements RapidJSON Handler and batches Put() calls into output_stream writes.
+class output_stream_buffer {
+    static constexpr size_t _buf_size = 512;
+    seastar::output_stream<char>& _os;
+    temporary_buffer<char> _buf = temporary_buffer<char>(_buf_size);
+    size_t _pos = 0;
+
+    future<> send(temporary_buffer<char> b) {
+        co_return co_await _os.write(b.get(), b.size());
+    }
+public:
+    output_stream_buffer(seastar::output_stream<char>& os) : _os(os) {}
+    using Ch = char; // Used by rjson internally
+    future<> f = make_ready_future<>();
+
+    void Flush() {
+        if (f.failed()) {
+            f.get0();
+        }
+        if (_pos == 0) {
+            return;
+        }
+        if (_pos < _buf_size) {
+            _buf.trim(_pos);  // Last flush may be shorter
+        }
+        // Either we call futures right away (if they are ready) or we start growing continuations
+        // chain as we don't have the ability to wait here because Flush() signature is set by rjson.
+        f = f.then([this, b = std::move(_buf)] () mutable {
+            return send(std::move(b));
+        });
+        _pos = 0;
+        _buf = temporary_buffer<char>(_buf_size);
+    }
+
+    void Put(Ch c) {
+        if (_pos == _buf_size) {
+            Flush();
+        }
+        // Note: Should consider writing directly to the buffer in output_stream
+        // instead of double buffering. But output_stream for a single char has higher
+        // overhead than the above check + once we hit a non-completed future, we'd have
+        // to revert to this method anyway...
+        *(_buf.get_write() + _pos) = c;
+        ++_pos;
+    }
+};
+
 future<> print(const rjson::value& value, seastar::output_stream<char>& os, size_t max_nested_level) {
-    struct os_buffer {
-        seastar::output_stream<char>& _os;
-        temporary_buffer<char> _buf;
-        size_t _pos = 0;
-        future<> _f = make_ready_future<>();
-
-        #pragma GCC diagnostic push
-        #pragma GCC diagnostic ignored "-Wunused-local-typedefs"
-        using Ch = char;
-        #pragma GCC diagnostic pop
-
-        void send(bool try_reuse = true) {
-            if (_f.failed()) {
-                _f.get0();
-            }
-            if (!_buf.empty() && _pos > 0) {
-                _buf.trim(_pos);
-                _pos = 0;
-                // Note: we're assuming we're writing to a buffered output_stream (hello http server).
-                // If we were not, or if (http) output_stream supported mixed buffered/packed content
-                // it might be a good idea to instead send our buffer as a packet directly. If so, the
-                // buffer size should probably increase (at least after first send()).
-                _f = _f.then([this, buf = std::move(_buf), &os = _os, try_reuse]() mutable -> future<> {
-                    return os.write(buf.get(), buf.size()).then([this, buf = std::move(buf), try_reuse]() mutable {
-                        // Chances are high we just copied this to output_stream buffer, and got here
-                        // immediately. If so, reuse the buffer.
-                        if (try_reuse && _buf.empty() && _pos == 0) {
-                            _buf = std::move(buf);
-                        }
-                    });
-                });
-            }
-        }
-        void Put(char c) {
-            if (_pos == _buf.size()) {
-                send();
-                if (_buf.empty()) {
-                    _buf = temporary_buffer<char>(512);
-                }
-            }
-            // Second note: Should consider writing directly to the buffer in output_stream
-            // instead of double buffering. But output_stream for a single char has higher
-            // overhead than the above check + once we hit a non-completed future, we'd have
-            // to revert to this method anyway...
-            *(_buf.get_write() + _pos) = c;
-            ++_pos;
-        }
-        void Flush() {
-            send();
-        }
-        future<> finish()&& {
-            send(false);
-            return std::move(_f);
-        }
-    };
-
-    os_buffer osb{ os };
-    using streamer = rapidjson::Writer<os_buffer, encoding, encoding, allocator>;
-    guarded_yieldable_json_handler<streamer, false, os_buffer> writer(osb, max_nested_level);
+    output_stream_buffer buf{ os };
+    using streamer = rapidjson::Writer<output_stream_buffer, encoding, encoding, allocator>;
+    guarded_yieldable_json_handler<streamer, false, output_stream_buffer> writer(buf, max_nested_level);
     value.Accept(writer);
-    co_return co_await std::move(osb).finish();
+    buf.Flush();
+    // This function has to be a coroutine otherwise buf gets destroyed before all its
+    // continuations from buf.f finish leading to use-after-free.
+    co_return co_await std::move(buf.f);
 }
 
 rjson::malformed_value::malformed_value(std::string_view name, const rjson::value& value)
