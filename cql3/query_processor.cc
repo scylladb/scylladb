@@ -542,19 +542,17 @@ query_processor::execute_prepared_without_checking_exception_message(
         bool needs_authorization) {
 
     ::shared_ptr<cql_statement> statement = prepared->statement;
-    future<> fut = make_ready_future<>();
-    if (needs_authorization) {
-        fut = statement->check_access(*this, query_state.get_client_state()).then([this, &query_state, prepared = std::move(prepared), cache_key = std::move(cache_key)] () mutable {
-            return _authorized_prepared_cache.insert(*query_state.get_client_state().user(), std::move(cache_key), std::move(prepared)).handle_exception([] (auto eptr) {
-                log.error("failed to cache the entry: {}", eptr);
-            });
-        });
-    }
-    log.trace("execute_prepared: \"{}\"", statement->raw_cql_statement);
 
-    return fut.then([this, statement = std::move(statement), &query_state, &options] () mutable {
-        return process_authorized_statement(std::move(statement), query_state, options);
-    });
+    if (needs_authorization) {
+        co_await statement->check_access(*this, query_state.get_client_state());
+        try {
+            co_await _authorized_prepared_cache.insert(*query_state.get_client_state().user(), std::move(cache_key), std::move(prepared));
+        } catch (...) {
+            log.error("failed to cache the entry: {}", std::current_exception());
+        }
+    }
+
+    co_return co_await process_authorized_statement(std::move(statement), query_state, options);
 }
 
 future<::shared_ptr<result_message>>
