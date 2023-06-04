@@ -1829,11 +1829,7 @@ with open(buildfile, 'w') as f:
             command = clang --target=wasm32 --no-standard-libraries -Wl,--export-all -Wl,--no-entry $in -o $out
             description = C2WASM $out
         rule rust2wasm
-            # The default stack size in Rust is 1MB, which causes oversized allocation warnings,
-            # because it's allocated in a single chunk as a part of a Wasm Linear Memory.
-            # We change the stack size to 128KB using the RUSTFLAGS environment variable
-            # in the command below.
-            command = RUSTFLAGS="-C link-args=-zstack-size=131072" cargo build --target=wasm32-wasi --example=$example --locked --manifest-path=test/resource/wasm/rust/Cargo.toml --target-dir=$builddir/wasm/ $
+            command = cargo build --target=wasm32-wasi --example=$example --locked --manifest-path=test/resource/wasm/rust/Cargo.toml --target-dir=$builddir/wasm/ $
                 && wasm-opt -Oz $builddir/wasm/wasm32-wasi/debug/examples/$example.wasm -o $builddir/wasm/$example.wasm $
                 && wasm-strip $builddir/wasm/$example.wasm
             description = RUST2WASM $out
@@ -1845,7 +1841,7 @@ with open(buildfile, 'w') as f:
         src = wasm_deps[binary]
         wasm = binary[:-4] + '.wasm'
         if src.endswith('.rs'):
-            f.write(f'build $builddir/{wasm}: rust2wasm {src} | test/resource/wasm/rust/Cargo.lock\n')
+            f.write(f'build $builddir/{wasm}: rust2wasm {src} | test/resource/wasm/rust/Cargo.lock test/resource/wasm/rust/build.rs\n')
             example_name = binary[binary.rindex('/')+1:-4]
             f.write(f'   example = {example_name}\n')
         else:
