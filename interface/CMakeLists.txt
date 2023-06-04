@@ -16,7 +16,7 @@ function(scylla_generate_thrift)
 
     find_program(THRIFT thrift)
     if(NOT THRIFT)
-      message(FATAL "thrift is required")
+      message(FATAL_ERROR "thrift is required")
     endif()
     execute_process(
         COMMAND "${THRIFT}" -version
