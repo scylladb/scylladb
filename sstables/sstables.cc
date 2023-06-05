@@ -1504,7 +1504,9 @@ future<> seal_summary(summary& s,
     s.header.size = s.entries.size();
     s.header.size_at_full_sampling = sstable::get_size_at_full_sampling(state.partition_count, s.header.min_index_interval);
 
-    assert(first_key); // assume non-empty sstable
+    if (!first_key) {
+        throw malformed_sstable_exception(format("Cannot seal summary because the SSTable has no keys written to it"));
+    }
     s.first_key.value = first_key->get_bytes();
 
     if (last_key) {
