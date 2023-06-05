@@ -3,6 +3,7 @@
 import sys
 sys.path.insert(1, sys.path[0] + '/../cql-pytest')
 import run
+from util import format_tuples
 
 import atexit
 import os
@@ -51,6 +52,7 @@ def teardown(pid):
     log = run.abort_run_with_dir(pid, test_tempdir)
     shutil.copyfileobj(log, sys.stdout.buffer)
 
+
 print(f'Start scylla (dir={test_tempdir}')
 pid = run.run_with_generated_dir(run_scylla_cmd, get_tempdir)
 atexit.register(lambda: teardown(pid))
@@ -61,7 +63,13 @@ run.wait_for_services(pid, [ lambda: check_cql(ip) ])
 print(f'Create keyspace (minio listening at {s3_server_address})')
 cluster = run.get_cql_cluster(ip)
 conn = cluster.connect()
-conn.execute("CREATE KEYSPACE test_ks WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': '1' } AND STORAGE = { 'type': 'S3', 'endpoint': '" + f'{s3_server_address}' + "', 'bucket': '" + f'{s3_public_bucket}' + "' };")
+replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
+                                  'replication_factor': '1'})
+storage_opts = format_tuples(type='S3',
+                             endpoint=s3_server_address,
+                             bucket=s3_public_bucket)
+conn.execute(("CREATE KEYSPACE test_ks WITH"
+              f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
 conn.execute("CREATE TABLE test_ks.test_cf ( name text primary key, value text );")
 conn.execute("INSERT INTO test_ks.test_cf ( name, value ) VALUES ('0', 'zero');")
 conn.execute("INSERT INTO test_ks.test_cf ( name, value ) VALUES ('1', 'one');")
