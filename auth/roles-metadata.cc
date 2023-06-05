@@ -55,6 +55,7 @@ future<bool> default_role_row_satisfies(
         return qp.execute_internal(
                 query,
                 db::consistency_level::ONE,
+                internal_distributed_query_state(),
                 {meta::DEFAULT_SUPERUSER_NAME},
                 cql3::query_processor::cache_internal::yes).then([&qp, &p](::shared_ptr<cql3::untyped_result_set> results) {
             if (results->empty()) {
