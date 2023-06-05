@@ -216,7 +216,7 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
                         std::move(strategy_options),
                         durable_writes,
                         std::move(cf_defs),
-                        user_types_metadata{},
+                        std::move(user_types),
                         storage_options{}) { }
 
 keyspace_metadata::keyspace_metadata(std::string_view name,
