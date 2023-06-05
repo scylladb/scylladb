@@ -18,7 +18,8 @@ import shutil
 import tempfile
 import time
 import traceback
-from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union
+from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, \
+                   Union, Awaitable
 import uuid
 from enum import Enum
 from io import BufferedWriter
@@ -951,19 +952,22 @@ class ScyllaClusterManager:
     # pylint: disable=too-many-instance-attributes
     cluster: ScyllaCluster
     site: aiohttp.web.UnixSite
-    is_after_test_ok: bool
 
-    def __init__(self, test_uname: str, clusters: Pool[ScyllaCluster], base_dir: str) -> None:
+    def __init__(self, test_uname: str,
+                 get_cluster: Callable[[Union[logging.Logger, logging.LoggerAdapter]], Awaitable[ScyllaCluster]],
+                 dispose_cluster: Callable[[ScyllaCluster, Union[logging.Logger, logging.LoggerAdapter], bool], Awaitable[None]],
+                 save_log_on_success: bool, base_dir: str) -> None:
         self.test_uname: str = test_uname
         logger = logging.getLogger(self.test_uname)
         self.logger = LogPrefixAdapter(logger, {'prefix': self.test_uname})
         # The currently running test case with self.test_uname prepended, e.g.
         # test_topology.1::test_add_server_add_column
         self.current_test_case_full_name: str = ''
-        self.clusters: Pool[ScyllaCluster] = clusters
+        self.get_cluster = get_cluster
+        self.dispose_cluster = dispose_cluster
+        self.save_log_on_success = save_log_on_success
         self.is_running: bool = False
         self.is_before_test_ok: bool = False
-        self.is_after_test_ok: bool = False
         # API
         # NOTE: need to make a safe temp dir as tempfile can't make a safe temp sock name
         # Put the socket in /tmp, not base_dir, to avoid going over the length
@@ -979,7 +983,7 @@ class ScyllaClusterManager:
         if self.is_running:
             self.logger.warning("ScyllaClusterManager already running")
             return
-        self.cluster = await self.clusters.get(self.logger)
+        self.cluster = await self.get_cluster(self.logger)
         self.logger.info("First Scylla cluster: %s", self.cluster)
         self.cluster.setLogger(self.logger)
         await self.runner.setup()
@@ -990,12 +994,9 @@ class ScyllaClusterManager:
     async def _before_test(self, test_case_name: str) -> str:
         self.current_test_case_full_name = f'{self.test_uname}::{test_case_name}'
         self.logger.info("Setting up %s", self.current_test_case_full_name)
-        if self.cluster.is_dirty:
-            self.logger.info(f"Current cluster %s is dirty after test %s, replacing with a new one...",
-                             self.cluster.name, self.current_test_case_full_name)
-            self.cluster = await self.clusters.replace_dirty(self.cluster, self.logger)
+        if not hasattr(self, "cluster"):
+            self.cluster = await self.get_cluster(self.logger)
             self.logger.info("Got new Scylla cluster: %s", self.cluster.name)
-        self.cluster.setLogger(self.logger)
         self.logger.info("Leasing Scylla cluster %s for test %s", self.cluster, self.current_test_case_full_name)
         self.cluster.before_test(self.current_test_case_full_name)
         self.is_before_test_ok = True
@@ -1008,14 +1009,10 @@ class ScyllaClusterManager:
         if hasattr(self, "site"):
             await self.site.stop()
             del self.site
-        if not self.cluster.is_dirty:
-            self.logger.info("Returning Scylla cluster %s for test %s", self.cluster, self.test_uname)
-            await self.clusters.put(self.cluster, is_dirty=False)
-        else:
-            self.logger.info("ScyllaManager: Scylla cluster %s is dirty after %s, stopping it",
-                            self.cluster, self.test_uname)
-            await self.clusters.put(self.cluster, is_dirty=True)
-        del self.cluster
+        if hasattr(self, "cluster"):
+            self.logger.info(f"Disposing cluster %s...", self.cluster.name)
+            await self.dispose_cluster(self.cluster, self.logger, not self.save_log_on_success)
+            del self.cluster
         if os.path.exists(self.manager_dir):
             shutil.rmtree(self.manager_dir)
         self.is_running = False
@@ -1043,6 +1040,7 @@ class ScyllaClusterManager:
 
         add_get('/up', self._manager_up)
         add_get('/cluster/up', self._cluster_up)
+        add_get('/cluster/new-cluster', self._new_cluster)
         add_get('/cluster/is-dirty', self._is_dirty)
         add_get('/cluster/replicas', self._cluster_replicas)
         add_get('/cluster/running-servers', self._cluster_running_servers)
@@ -1071,9 +1069,16 @@ class ScyllaClusterManager:
         """Is cluster running"""
         return aiohttp.web.Response(text=f"{self.cluster is not None and self.cluster.is_running}")
 
+    async def _new_cluster(self, _request) -> aiohttp.web.Response:
+        """If there is no current cluster, so a new one will be created for before test"""
+        # So client can know if it needs to cycle the driver
+        if not hasattr(self, "cluster"):
+            return aiohttp.web.Response(text=f"True")
+        return aiohttp.web.Response(text=f"False")
+
     async def _is_dirty(self, _request) -> aiohttp.web.Response:
         """Report if current cluster is dirty"""
-        if self.cluster is None:
+        if not hasattr(self, "cluster"):
             return aiohttp.web.Response(status=500, text="No cluster active")
         return aiohttp.web.Response(text=f"{self.cluster.is_dirty}")
 
@@ -1110,10 +1115,16 @@ class ScyllaClusterManager:
         try:
             self.cluster.after_test(self.current_test_case_full_name, success)
         finally:
+            # dispose cluster if test failed or if the test marked the cluster dirty
+            assert hasattr(self, "cluster")
+            if not success or self.cluster.is_dirty:
+                self.logger.info(f"Current cluster %s is dirty after test %s, replacing with a new one...",
+                                 self.cluster.name, self.current_test_case_full_name)
+                assert self.cluster is not None
+                await self.dispose_cluster(self.cluster, self.logger, not self.save_log_on_success)
+                del self.cluster
             self.current_test_case_full_name = ''
-        self.is_after_test_ok = True
-        cluster_str = str(self.cluster)
-        return aiohttp.web.Response(text=cluster_str)
+        return aiohttp.web.Response(status=200)
 
     async def _mark_dirty(self, _request) -> aiohttp.web.Response:
         """Mark current cluster dirty"""
@@ -1258,11 +1269,13 @@ class ScyllaClusterManager:
 
 
 @asynccontextmanager
-async def get_cluster_manager(test_uname: str, clusters: Pool[ScyllaCluster], test_path: str) \
-        -> AsyncIterator[ScyllaClusterManager]:
+async def get_cluster_manager(test_uname: str,
+                              get_cluster: Callable[[Union[logging.Logger, logging.LoggerAdapter]], Awaitable[ScyllaCluster]],
+                              dispose_cluster: Callable[[ScyllaCluster, Union[logging.Logger, logging.LoggerAdapter], bool], Awaitable[None]],
+                              save_log_on_success: bool, test_path: str) -> AsyncIterator[ScyllaClusterManager]:
     """Create a temporary manager for the active cluster used in a test
        and provide the cluster to the caller."""
-    manager = ScyllaClusterManager(test_uname, clusters, test_path)
+    manager = ScyllaClusterManager(test_uname, get_cluster, dispose_cluster, save_log_on_success, test_path)
     try:
         yield manager
     finally:

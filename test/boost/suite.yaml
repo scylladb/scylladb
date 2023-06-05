@@ -3,15 +3,58 @@ type: boost
 suite_load: 10
 # A list of long tests, which should be started early
 run_first:
-    - index_with_paging_test
+    - cql_functions_test
+    - database_test 
     - schema_changes_test
-    - sstable_conforms_to_mutation_source_test
-    - secondary_index_test
-    - mutation_reader_test
-    - multishard_combining_reader_as_mutation_source_test
-    - database_test
-    - cql_function_test
+    - index_with_paging_test
     - memtable_test
+    - mutation_reader_test
+    - secondary_index_test
+    - sstable_conforms_to_mutation_source_test
+    - mutation_fragment_test
+    - network_topology_strategy_test
+    - multishard_combining_reader_as_mutation_source_test
+    - aggregate_fcts_test
+    - sstable_3_x_test
+    - cql_query_test
+    - tablets_test
+    - reader_concurrency_semaphore_test
+    - virtual_table_mutation_source_test
+    - row_cache_test
+    - rate_limiter_test
+    - sstable_mutation_test
+    - sstable_compaction_test
+    - sstable_resharding_test
+    - view_build_test
+    - flat_mutation_reader_test
+    - sstable_datafile_test
+    - schema_change_test
+    - cdc_test
+    - multishard_mutation_query_test
+    - sstable_directory_test
+    - user_types_test
+test_memory:
+  default: 1800
+  index_with_paging_test: 5000
+  user_types_test: 3500
+  tablets_test: 3500
+  logalloc_standard_allocator_segment_pool_backend_test: 3200
+  database_test: 3000
+  memtable_test: 2800
+  secondary_index_test: 2800
+  sstable_mutation_test: 2800
+  mutation_reader_test: 2800
+  row_cache_test: 2600
+  mutation_writer_test: 2400
+  dirty_memory_manager_test: 2400
+  logalloc_test: 2400
+  multishard_combining_reader_as_mutation_source_test: 2200
+  view_build_test: 2200
+  cql_query_test: 2100
+  cql_functions_test: 2100
+  view_schema_test: 2000
+  aggregate_fcts_test: 2000
+
 # These test cannot work in case-by-case mode because
 # some test-cases depend on each other
 no_parallel_cases:

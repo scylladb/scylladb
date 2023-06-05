@@ -78,8 +78,7 @@ class ManagerClient():
     async def before_test(self, test_case_name: str) -> None:
         """Before a test starts check if cluster needs cycling and update driver connection"""
         logger.debug("before_test for %s", test_case_name)
-        dirty = await self.is_dirty()
-        if dirty:
+        if await self.new_cluster():
             self.driver_close()  # Close driver connection to old cluster
         try:
             cluster_str = await self.client.get_text(f"/cluster/before-test/{test_case_name}", timeout=600)
@@ -95,8 +94,7 @@ class ManagerClient():
     async def after_test(self, test_case_name: str, success: bool) -> None:
         """Tell harness this test finished"""
         logger.debug("after_test for %s (success: %s)", test_case_name, success)
-        cluster_str = await self.client.get_text(f"/cluster/after-test/{success}")
-        logger.info("Cluster after test %s: %s", test_case_name, cluster_str)
+        await self.client.get(f"/cluster/after-test/{success}")
 
     async def is_manager_up(self) -> bool:
         """Check if Manager server is up"""
@@ -107,6 +105,11 @@ class ManagerClient():
         """Check if cluster is up"""
         ret = await self.client.get_text("/cluster/up")
         return ret == "True"
+
+    async def new_cluster(self) -> bool:
+        """Check if there will be a new cluster for this test."""
+        new_cluster = await self.client.get_text("/cluster/new-cluster")
+        return new_cluster == "True"
 
     async def is_dirty(self) -> bool:
         """Check if current cluster dirty."""

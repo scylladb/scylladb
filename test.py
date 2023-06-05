@@ -29,17 +29,18 @@ import time
 import traceback
 import xml.etree.ElementTree as ET
 import yaml
+import psutil                                          # type: ignore
 
 from abc import ABC, abstractmethod
 from io import StringIO
 from scripts import coverage    # type: ignore
-from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.util import LogPrefixAdapter
 from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager, merge_cmdline_options
 from test.pylib.minio_server import MinioServer
-from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union, Tuple
+from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union, Tuple, \
+        Final, NamedTuple
 
 launch_time = time.monotonic()
 
@@ -48,7 +49,15 @@ output_is_a_tty = sys.stdout.isatty()
 all_modes = set(['debug', 'release', 'dev', 'sanitize', 'coverage'])
 debug_modes = set(['debug', 'sanitize'])
 # Slow modes to run first
-mode_run_order = ["debug", "release"]
+mode_run_order = ["dev", "sanitize", "coverage", "release", "debug"]
+mode_run_idx = collections.defaultdict(lambda: len(mode_run_order), \
+        {mode: index + 1 for index, mode in enumerate(mode_run_order)})
+# Required memory for each Scylla instance
+SCYLLA_MEMORY = collections.defaultdict(lambda: 2400, {"dev": 200, "release": 200})
+# Configuration specifies debug memory req, others are estimated with scale factor
+BOOST_TEST_MEM_MODE_SCALE = collections.defaultdict(lambda: .2, {"debug": 1.0})
+# How much load to account for a worker actively running tests in a test suite
+WORKER_FACTOR = .5
 
 
 def create_formatter(*decorators) -> Callable[[Any], str]:
@@ -83,13 +92,18 @@ class palette:
 class TestSuite(ABC):
     """A test suite is a folder with tests of the same type.
     E.g. it can be unit tests, boost tests, or CQL tests."""
+    # Precedence to run this suite  (lower goes first)
+    # A suite with less (or no) workers active has precedence over one with more active workers
+    # The more run first test pending the higher the priority, so use negative values
+    # After that the same for the remaining tests
+    # Scale all by the run mode precedence (e.g. debug before release)
+    precedence: List[int]
 
     # All existing test suites, one suite per path/mode.
     suites: Dict[str, 'TestSuite'] = dict()
-    artifacts = ArtifactRegistry()
     hosts = HostRegistry()
     FLAKY_RETRIES = 5
-    _next_id = collections.defaultdict(int) # (test_key -> id)
+    _next_id: collections.defaultdict = collections.defaultdict(int) # (test_key -> id)
 
     def __init__(self, path: str, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         self.suite_path = pathlib.Path(path)
@@ -98,20 +112,28 @@ class TestSuite(ABC):
         self.options = options
         self.mode = mode
         self.suite_key = os.path.join(path, mode)
+        self._runner_newid = itertools.count(start=1).__next__
+
         self.tests: List['Test'] = []
-        self.pending_test_count = 0
-        # The number of failed tests
-        self.n_failed = 0
+        # NOTE: there can be more multiple workers active on this suite
+        self._remaining: int = 0              # Remaining total tests to run
+        self._remaining_first: int = 0        # Remaining tests to run first (included in total)
+        self._workers: int = 0                # How many workers are waiting/running on this suite
+        self._mode_idx = mode_run_idx[mode]   # Run mode precedence for this suite
 
         # Relative load of suite, higher values will be scheduled to run first
-        self.load = cfg.get("suite_load", 1)
-        self.run_first_tests = set(cfg.get("run_first", []))
+        self.suite_load = cfg.get("suite_load", 1)
+        self.run_first_tests = cfg.get("run_first", [])
         self.no_parallel_cases = set(cfg.get("no_parallel_cases", []))
         # Skip tests disabled in suite.yaml
         self.disabled_tests = set(self.cfg.get("disable", []))
         # Skip tests disabled in specific mode.
         self.disabled_tests.update(self.cfg.get("skip_in_" + mode, []))
         self.flaky_tests = set(self.cfg.get("flaky", []))
+        # Per test extra memory
+        cfg_test_memory = self.cfg.get("test_memory", {})
+        cfg_test_memory_default = cfg_test_memory.get("default", 0.0)
+        self.test_memory = collections.defaultdict(lambda: cfg_test_memory_default, cfg_test_memory)
         # If this mode is one of the debug modes, and there are
         # tests disabled in a debug mode, add these tests to the skip list.
         if mode in debug_modes:
@@ -128,6 +150,45 @@ class TestSuite(ABC):
                 continue
             skip_in_m = set(self.cfg.get("run_in_" + a, []))
             self.disabled_tests.update(skip_in_m - run_in_m)
+
+    @property
+    def remaining(self):
+        return self._remaining
+
+    @remaining.setter
+    def remaining(self, remaining: int):
+        self._remaining = remaining
+        self._update_run_priority()
+
+    @property
+    def remaining_first(self):
+        return self._remaining_first
+
+    @remaining_first.setter
+    def remaining_first(self, remaining_first: int):
+        self._remaining_first = remaining_first
+        self._update_run_priority()
+
+    @property
+    def workers(self):
+        return self._workers
+
+    @workers.setter
+    def workers(self, workers: int):
+        self._workers = workers
+        self._update_run_priority()
+
+    def _update_run_priority(self):
+        """Set/update this suite's running state, and updates precedence tuple.
+           Scale the values by the mode execution index (debug > release > ...).
+           Make negative as lower gets scheduled earlier."""
+        # Make the values negative as PriorityQueue picks lower values first
+        precedence = [- (self._mode_idx * self.suite_load + self.remaining_first - self.workers), - self.remaining - self.workers]
+        self.precedence = [int(x / (self.workers * WORKER_FACTOR + 1)) for x in precedence]
+        # print(f"XXX _update_run_priority: {self.mode}/{self.name} _update_run_priority() w {self._workers} rem_f {self._remaining_first} rem {self._remaining}: prec {self.precedence}")
+
+    def __lt__(self, other: "TestSuite"):
+        return self.precedence < other.precedence
 
     # Generate a unique ID for `--repeat`ed tests
     # We want these tests to have different XML IDs so test result
@@ -182,19 +243,18 @@ class TestSuite(ABC):
         return suite
 
     @staticmethod
-    def sort_suites() -> None:
-        """Reorder suites by configured slowness factor"""
-        mode_index = {key: i for i, key in enumerate(mode_run_order)}
-        def key_mode_load(i: Tuple[str, TestSuite]):
-            """Order suites by mode (debug/release/dev) and load (config)"""
-            # Note: flip sign so higher load values go first
-            return mode_index.get(i[1].mode, len(mode_index)), - i[1].load
-        TestSuite.suites = dict(sorted(TestSuite.suites.items(), key=key_mode_load))
-
-    @staticmethod
     def all_tests() -> Iterable['Test']:
         return itertools.chain(*[suite.tests for suite in
                                  TestSuite.suites.values()])
+
+    @property
+    def min_memory(self) -> int:
+        """Minimum memory required by each runner of this suite"""
+        return 100
+
+    def _test_memory(self, shortname: str) -> int:
+        """Memory units used to calculate memory for each test"""
+        return 0
 
     @property
     @abstractmethod
@@ -205,22 +265,113 @@ class TestSuite(ABC):
     async def add_test(self, shortname: str) -> None:
         pass
 
-    async def run(self, test: 'Test', options: argparse.Namespace):
-        try:
-            for i in range(1, self.FLAKY_RETRIES):
-                if i > 1:
-                    test.is_flaky_failure = True
-                    logging.info("Retrying test %s after a flaky fail, retry %d", test.uname, i)
-                    test.reset()
-                await test.run(options)
-                if test.success or not test.is_flaky or test.is_cancelled:
-                    break
-        finally:
-            self.pending_test_count -= 1
-            self.n_failed += int(not test.success)
-            if self.pending_test_count == 0:
-                await TestSuite.artifacts.cleanup_after_suite(self, self.n_failed > 0)
-        return test
+    async def _run_init(self, logger) -> Dict[str, Any]:
+        """Initialize test runner, return extra test_args (e.g. cluster)"""
+        return {}
+
+    async def _run_after_test(self, logger, remove_logs: bool, last_test: bool = False,
+                              **test_args: Any) -> Dict[str, Any]:
+        """Handle after test bookkeeping. updates test_args (e.g. cluster)"""
+        return {}
+
+    async def _run_teardown(self, logger, remove_logs: bool = True, **test_args: Any) -> None:
+        pass
+
+    def skip_remaining(self, console: "TabularConsoleOutput"):
+        """Mark remaining tests SKIPped and print.
+           Worker tasks need to hold lock to call."""
+        while self.remaining:
+            test = self.tests[len(self.tests) - self.remaining]    # pick next test
+            test.is_skipped = True
+            console.print_progress(test)
+            self.remaining -= 1
+
+    async def run(self, lock: asyncio.Lock, console: "TabularConsoleOutput",
+                  memory_manager: "MemoryManager", worker_name: str) -> None:
+        """Run tests for this suite"""
+        runner_id = self._runner_newid()    # id for this running task for this specific suite
+        # logger for suite runner, tests will change cluster logger when they use it
+        loggerPrefix = f"{self.mode}/{self.name}-{runner_id}"
+        logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
+        # logger.info("starting test runner")
+        failed: int = 0   # failed tests
+        test_args = await self._run_init(logger)                   # runner setup (e.g. cluster)
+
+        # NOTE: an already running worker may complete this suite before memory is
+        #       available, so check if there are tests remaining to run
+        # Wait for minimum available memory before starting a runner for this suite
+        # print(f"XXX TestSuite.run() {worker_name} {runner_id} {self.mode}/{self.name} requesting initial memory {self.min_memory}")
+        if not await memory_manager.reserve(self.min_memory, lambda: self.remaining > 0):
+            async with lock:
+                if self.workers == 1 and self.remaining:
+                    # mark all tests skipped
+                    await self.skip_remaining(console)
+            return
+
+        while True:
+            # Get next test
+            async with lock:
+                if self.remaining:
+                    # print(f"XXX {worker_name} {runner_id} TestSuite.run() remaining={self.remaining} - len {len(self.tests)} - picking {len(self.tests) - self.remaining}")
+                    test = self.tests[len(self.tests) - self.remaining]    # pick next test
+                    logger.info("Suite %s - %s runner %s scheduling test %s  REMAINING=%s",
+                                   self.mode, self.name, runner_id, test.name, self.remaining)
+                    self.remaining -= 1
+                    self.remaining_first -= test.run_first
+                    # print(f"XXX {self.mode}/{self.name} TestSuite.run() {worker_name} {runner_id} scheduling test {test.name} run_first {test.run_first} remaining {self.remaining}")
+                    logger.info("Suite %s - %s runner %s scheduling test %s",
+                                self.mode, self.name, runner_id, test.name)
+                else:
+                    # print(f"XXX TestSuite.run() {worker_name} {runner_id} {self.mode}/{self.name} NO MORE TESTS")
+                    break   # no more tests for this suite
+
+            # Reserve extra memory for this test (if non-zero)
+            # XXX shortname is not really short name for Boost
+            #print(f"XXX TestSuite.run() {worker_name} {runner_id} {self.mode}/{self.name} test {test.shortname} going to reserve test memory {self._test_memory(test.shortname)}")
+            if not await memory_manager.reserve(self._test_memory(test.shortname)
+                                                , debugmsg=f"{worker_name}-{runner_id} {self.mode}/{self.name} test {test.shortname}"  # XXX debug
+                                                ):
+                test.is_skipped = True
+                async with lock:
+                    console.print_progress(test)
+                    self.remaining -= 1
+                continue     # next test
+
+            try:
+                for i in range(1, self.FLAKY_RETRIES):
+                    if i > 1:
+                        test.is_flaky_failure = True
+                        logger.info("Retrying test %s after a flaky fail, retry %d", test.uname, i)
+                        test.reset()
+                    # print(f"XXX {worker_name} {runner_id} TestSuite.run() starting: {test.uname} {test_args}")
+                    await test.run(self.options, **test_args)
+                    # print(f"XXX {worker_name} {runner_id} TestSuite.run: {test.uname} result {test.success}") # XXX
+                    if test.success or not test.is_flaky or test.is_cancelled:
+                        # print(f"XXX {worker_name} {runner_id} TestSuite.run: DONE {test.uname} result {test.success} is_cancelled {test.is_cancelled}") # XXX
+                        break
+            except Exception as e:
+                # print(f"XXX {worker_name} {runner_id} TestSuite.run: EXCEPTION {e} args {test_args} <<<<<<<<<<<<<<<< \n") # XXX
+                print(traceback.format_exc())
+                pass
+            finally:
+                async with lock:
+                    remaining = self.remaining
+                # XXX option keep log?
+                failed += not test.success
+                test_args = await self._run_after_test(logger, remove_logs = not test.success,
+                                                       last_test = (remaining == 0), **test_args)
+                async with lock:
+                    console.print_progress(test)
+                await memory_manager.release(self._test_memory(test.shortname))
+
+            if test.is_cancelled:   # XXX refactor
+                break
+
+        await memory_manager.release(self.min_memory)
+        await self._run_teardown(logger, remove_logs = not failed, **test_args)
+        # print(f"XXX {worker_name} {runner_id} TestSuite.run: DONE") # XXX
+        logger.info("finished")
+
 
     def junit_tests(self):
         """Tests which participate in a consolidated junit report"""
@@ -236,11 +387,8 @@ class TestSuite(ABC):
         if lst:
             # Some tests are long and are better to be started earlier,
             # move them to the front while preserving configuration order.
-            front_s = set(self.run_first_tests)
-            lst_s = set(lst)
-            l_front = [t for t in self.run_first_tests if t in lst_s]
-            l_back  = [t for t in lst if not t in front_s]
-            lst = l_front + l_back
+            index_dict = {test: index for index, test in enumerate(self.run_first_tests)}
+            lst.sort(key=lambda test: index_dict.get(test, len(index_dict)))
 
         pending = set()
         for shortname in lst:
@@ -257,7 +405,6 @@ class TestSuite(ABC):
                 # so that case cache has a chance to populate
                 for i in range(options.repeat):
                     await self.add_test(shortname)
-                    self.pending_test_count += 1
 
             for p in patterns:
                 if p in t:
@@ -271,6 +418,9 @@ class TestSuite(ABC):
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
             raise
+
+        self.remaining_first = sum(test.run_first for test in self.tests)
+        self.remaining = len(self.tests)
 
 
 class UnitTestSuite(TestSuite):
@@ -303,6 +453,14 @@ class UnitTestSuite(TestSuite):
         args = self.custom_args.get(shortname, ["-c2 -m2G"])
         for a in args:
             await self.create_test(shortname, self, a)
+
+    @property
+    def min_memory(self) -> int:
+        return 0
+
+    def _test_memory(self, shortname: str) -> int:
+        shortname = shortname.split('.')[0]   # remove test case if present
+        return float(self.test_memory[shortname] * BOOST_TEST_MEM_MODE_SCALE[self.mode])
 
     @property
     def pattern(self) -> str:
@@ -360,7 +518,7 @@ class BoostTestSuite(UnitTestSuite):
 
 
 class PythonTestSuite(TestSuite):
-    """A collection of Python pytests against a single Scylla instance"""
+    """A collection of Python pytests against a single Scylla cluster instance"""
 
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
@@ -370,31 +528,19 @@ class PythonTestSuite(TestSuite):
         else:
             self.scylla_env = dict()
         self.scylla_env['SCYLLA'] = self.scylla_exe
-
         cluster_cfg = self.cfg.get("cluster", {"initial_size": 1})
-        cluster_size = cluster_cfg["initial_size"]
-        pool_size = cfg.get("pool_size", 2)
+        self.cluster_size = cluster_cfg["initial_size"]
 
-        self.create_cluster = self.get_cluster_factory(cluster_size, options)
-        async def recycle_cluster(cluster: ScyllaCluster) -> None:
-            """When a dirty cluster is returned to the cluster pool,
-               stop it and release the used IPs. We don't necessarily uninstall() it yet,
-               which would delete the log file and directory - we might want to preserve
-               these if it came from a failed test.
-            """
-            await cluster.stop()
-            await cluster.release_ips()
+    async def _create_cluster(self, logger: Union[logging.Logger, logging.LoggerAdapter]) \
+            -> ScyllaCluster:
 
-        self.clusters = Pool(pool_size, self.create_cluster, recycle_cluster)
-
-    def get_cluster_factory(self, cluster_size: int, options: argparse.Namespace) -> Callable[..., Awaitable]:
         def create_server(create_cfg: ScyllaCluster.CreateServerParams):
             cmdline_options = self.cfg.get("extra_scylla_cmdline_options", [])
             if type(cmdline_options) == str:
                 cmdline_options = [cmdline_options]
             cmdline_options = merge_cmdline_options(cmdline_options, create_cfg.cmdline_from_test)
-            if options.x_log2_compaction_groups:
-                cmdline_options = merge_cmdline_options(cmdline_options, [ '--x-log2-compaction-groups={}'.format(options.x_log2_compaction_groups) ])
+            if self.options.x_log2_compaction_groups:
+                cmdline_options = merge_cmdline_options(cmdline_options, [ '--x-log2-compaction-groups={}'.format(self.options.x_log2_compaction_groups) ])
 
             # There are multiple sources of config options, with increasing priority
             # (if two sources provide the same config option, the higher priority one wins):
@@ -421,33 +567,33 @@ class PythonTestSuite(TestSuite):
 
             return server
 
-        async def create_cluster(logger: Union[logging.Logger, logging.LoggerAdapter]) -> ScyllaCluster:
-            cluster = ScyllaCluster(logger, self.hosts, cluster_size, create_server)
+        cluster = ScyllaCluster(logger, self.hosts, self.cluster_size, create_server)
+        await cluster.install_and_start()
+        logger.info("PythonTestSuite new cluster %s", cluster)
+        return cluster
 
-            async def stop() -> None:
-                await cluster.stop()
-
-            # Suite artifacts are removed when
-            # the entire suite ends successfully.
-            self.artifacts.add_suite_artifact(self, stop)
-            if not self.options.save_log_on_success:
-                # If a test fails, we might want to keep the data dirs.
-                async def uninstall() -> None:
-                    await cluster.uninstall()
-
-                self.artifacts.add_suite_artifact(self, uninstall)
-            self.artifacts.add_exit_artifact(self, stop)
-
-            await cluster.install_and_start()
-            return cluster
-
-        return create_cluster
+    async def _dispose_cluster(self, cluster: ScyllaCluster, logger: logging.LoggerAdapter,
+                               remove_logs: bool) -> None:
+        # print(f"XXX PythonTestSuite stopping cluster {cluster}")
+        logger.info("PythonTestSuite stopping cluster %s", cluster)
+        cluster.setLogger(logger)
+        await cluster.stop()
+        await cluster.release_ips()
+        if remove_logs:
+            await cluster.uninstall()
 
     def build_test_list(self) -> List[str]:
         """For pytest, search for directories recursively"""
         path = self.suite_path
         pytests = itertools.chain(path.rglob("*_test.py"), path.rglob("test_*.py"))
         return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in pytests]
+
+    @property
+    def min_memory(self) -> int:
+        return SCYLLA_MEMORY[self.mode] * self.cluster_size
+
+    def _test_memory(self, shortname: str) -> int:
+        return SCYLLA_MEMORY[self.mode] * self.test_memory[shortname]
 
     @property
     def pattern(self) -> str:
@@ -457,12 +603,41 @@ class PythonTestSuite(TestSuite):
         test = PythonTest(self.next_id((shortname, self.suite_key)), shortname, self)
         self.tests.append(test)
 
+    async def _run_init(self, logger) -> Dict[str, Any]:
+        """Setup a cluster to run PythonTests on"""
+        # print(f"XXX PythonTestSuite._run_init() starting cluster")
+        cluster = await self._create_cluster(logger)
+        # print(f"XXX PythonTestSuite._run_init() new cluster")
+        logger.info("PythonTestSuite new cluster %s", cluster)
+        return {"cluster": cluster}    # test_args for test
+
+    async def _run_after_test(self, logger, remove_logs: bool, last_test: bool = False,
+                              **test_args: Any) -> Dict[str, Any]:
+        if "cluster" in test_args:
+            old_cluster = test_args["cluster"]
+            assert isinstance(old_cluster, ScyllaCluster)
+            if old_cluster.is_dirty:
+                await self._dispose_cluster(old_cluster, logger, remove_logs)
+                if not last_test:
+                    new_cluster = await self._create_cluster(logger)
+                    test_args = {"cluster": new_cluster}
+                else:
+                    test_args = {}
+        return test_args
+
+    async def _run_teardown(self, logger, remove_logs: bool = True, **test_args: Any) -> None:
+        if "cluster" in test_args:
+            cluster = test_args["cluster"]
+            assert isinstance(cluster, ScyllaCluster)
+            await self._dispose_cluster(cluster, logger, remove_logs)
+
 
 class CQLApprovalTestSuite(PythonTestSuite):
     """Run CQL commands against a single Scylla instance"""
 
     def __init__(self, path, cfg, options: argparse.Namespace, mode) -> None:
         super().__init__(path, cfg, options, mode)
+        self.memory = SCYLLA_MEMORY[mode]    # Cluster of 1
 
     def build_test_list(self) -> List[str]:
         return TestSuite.build_test_list(self)
@@ -470,6 +645,10 @@ class CQLApprovalTestSuite(PythonTestSuite):
     async def add_test(self, shortname: str) -> None:
         test = CQLApprovalTest(self.next_id((shortname, self.suite_key)), shortname, self)
         self.tests.append(test)
+
+    @property
+    def memory_required(self) -> int:
+        return self.memory
 
     @property
     def pattern(self) -> str:
@@ -497,6 +676,15 @@ class TopologyTestSuite(PythonTestSuite):
         """Python pattern"""
         return "test_*.py"
 
+    async def _run_init(self, logger) -> Dict[str, Any]:
+        # Topology tests have a manager to create and dispose clusters
+        return {}
+
+    async def _run_after_test(self, logger, remove_logs: bool, last_test: bool = False,
+                              **test_args: Any) -> Dict[str, Any]:
+        # Topology tests have a manager to create and dispose clusters
+        return {}
+
 
 class RunTestSuite(TestSuite):
     """TestSuite for test directory with a 'run' script """
@@ -509,10 +697,15 @@ class RunTestSuite(TestSuite):
         else:
             self.scylla_env = dict()
         self.scylla_env['SCYLLA'] = self.scylla_exe
+        self.memory = SCYLLA_MEMORY[mode]     # Cluster of 1
 
     async def add_test(self, shortname) -> None:
         test = RunTest(self.next_id((shortname, self.suite_key)), shortname, self)
         self.tests.append(test)
+
+    @property
+    def memory_required(self) -> int:
+        return self.memory
 
     @property
     def pattern(self) -> str:
@@ -539,10 +732,15 @@ class Test:
         self.is_flaky = self.shortname in suite.flaky_tests
         # True if the test was retried after it failed
         self.is_flaky_failure = False
+        # True if for some reason (e.g. lack of memory) the test could not be run
+        self.is_skipped = False
         # True if the test was cancelled by a ctrl-c or timeout, so
         # shouldn't be retried, even if it is flaky
         self.is_cancelled = False
         Test._reset(self)
+        # Some tests are long and are better to be started earlier
+        self.run_first = shortname in suite.run_first_tests
+        self.test_memory: int = 0
 
     def reset(self) -> None:
         """Reset this object, including all derived state."""
@@ -558,7 +756,7 @@ class Test:
         self.time_end: float = 0
 
     @abstractmethod
-    async def run(self, options: argparse.Namespace) -> 'Test':
+    async def run(self, options: argparse.Namespace, **test_args: Any) -> 'Test':
         pass
 
     @abstractmethod
@@ -610,7 +808,7 @@ class UnitTest(Test):
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
         print(read_log(self.log_filename))
 
-    async def run(self, options) -> Test:
+    async def run(self, options, **test_args: Any) -> Test:
         self.success = await run_test(self, options, env=self.env)
         logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
@@ -680,7 +878,7 @@ class BoostTest(UnitTest):
         self.__parse_logger()
         super().check_log(trim)
 
-    async def run(self, options):
+    async def run(self, options, **test_args: Any):
         if options.random_seed:
             self.args += ['--random-seed', options.random_seed]
         if self.allows_compaction_groups and options.x_log2_compaction_groups:
@@ -729,7 +927,7 @@ class CQLApprovalTest(Test):
             "--output={}".format(self.tmpfile),
         ]
 
-    async def run(self, options: argparse.Namespace) -> Test:
+    async def run(self, options: argparse.Namespace, **test_args: Any) -> Test:
         self.success = False
         self.summary = "failed"
 
@@ -742,63 +940,62 @@ class CQLApprovalTest(Test):
             if self.server_log is not None:
                 logger.info("Server log:\n%s", self.server_log)
 
+        cluster = test_args["cluster"]
         # TODO: consider dirty_on_exception=True
-        async with (cm := self.suite.clusters.instance(False, logger)) as cluster:
-            try:
-                cluster.before_test(self.uname)
-                logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-                self.args.insert(1, "--host={}".format(cluster.endpoint()))
-                # If pre-check fails, e.g. because Scylla failed to start
-                # or crashed between two tests, fail entire test.py
-                self.is_before_test_ok = True
-                cluster.take_log_savepoint()
-                self.is_executed_ok = await run_test(self, options, env=self.env)
-                cluster.after_test(self.uname, self.is_executed_ok)
-                cm.dirty = cluster.is_dirty
-                self.is_after_test_ok = True
+        try:
+            cluster.before_test(self.uname)
+            logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
+            self.args.insert(1, "--host={}".format(cluster.endpoint()))
+            # If pre-check fails, e.g. because Scylla failed to start
+            # or crashed between two tests, fail entire test.py
+            self.is_before_test_ok = True
+            cluster.take_log_savepoint()
+            self.is_executed_ok = await run_test(self, options, env=self.env)
+            cluster.after_test(self.uname, self.is_executed_ok)
+            self.is_after_test_ok = True
 
-                if self.is_executed_ok is False:
-                    set_summary("""returned non-zero return status.\n
+            if self.is_executed_ok is False:
+                set_summary("""returned non-zero return status.\n
 Check test log at {}.""".format(self.log_filename))
-                elif not os.path.isfile(self.tmpfile):
-                    set_summary("failed: no output file")
-                elif not os.path.isfile(self.result):
-                    set_summary("failed: no result file")
-                    self.is_new = True
+            elif not os.path.isfile(self.tmpfile):
+                set_summary("failed: no output file")
+            elif not os.path.isfile(self.result):
+                set_summary("failed: no result file")
+                self.is_new = True
+            else:
+                self.is_equal_result = filecmp.cmp(self.result, self.tmpfile)
+                if self.is_equal_result is False:
+                    self.unidiff = format_unidiff(str(self.result), self.tmpfile)
+                    set_summary("failed: test output does not match expected result")
+                    assert self.unidiff is not None
+                    logger.info("\n{}".format(palette.nocolor(self.unidiff)))
                 else:
-                    self.is_equal_result = filecmp.cmp(self.result, self.tmpfile)
-                    if self.is_equal_result is False:
-                        self.unidiff = format_unidiff(str(self.result), self.tmpfile)
-                        set_summary("failed: test output does not match expected result")
-                        assert self.unidiff is not None
-                        logger.info("\n{}".format(palette.nocolor(self.unidiff)))
-                    else:
-                        self.success = True
-                        set_summary("succeeded")
-            except Exception as e:
-                # Server log bloats the output if we produce it in all
-                # cases. So only grab it when it's relevant:
-                # 1) failed pre-check, e.g. start failure
-                # 2) failed test execution.
-                if self.is_executed_ok is False:
-                    self.server_log = cluster.read_server_log()
-                    self.server_log_filename = cluster.server_log_filename()
-                    if self.is_before_test_ok is False:
-                        set_summary("pre-check failed: {}".format(e))
-                        print("Test {} {}".format(self.name, self.summary))
-                        print("Server log  of the first server:\n{}".format(self.server_log))
-                        # Don't try to continue if the cluster is broken
-                        raise
-                set_summary("failed: {}".format(e))
-            finally:
-                if os.path.exists(self.tmpfile):
-                    if self.is_executed_ok and (self.is_new or self.is_equal_result is False):
-                        # Move the .reject file close to the .result file
-                        # so that it's easy to analyze the diff or overwrite .result
-                        # with .reject.
-                        shutil.move(self.tmpfile, self.reject)
-                    else:
-                        pathlib.Path(self.tmpfile).unlink()
+                    self.success = True
+                    set_summary("succeeded")
+        except Exception as e:
+            # Server log bloats the output if we produce it in all
+            # cases. So only grab it when it's relevant:
+            # 1) failed pre-check, e.g. start failure
+            # 2) failed test execution.
+            if self.is_executed_ok is False:
+                self.server_log = cluster.read_server_log()
+                self.server_log_filename = cluster.server_log_filename()
+                if self.is_before_test_ok is False:
+                    set_summary("pre-check failed: {}".format(e))
+                    print("Test {} {}".format(self.name, self.summary))
+                    print("Server log  of the first server:\n{}".format(self.server_log))
+                    # Don't try to continue if the cluster is broken
+                    raise
+            set_summary("failed: {}".format(e))
+        finally:
+            if os.path.exists(self.tmpfile):
+                if self.is_executed_ok and (self.is_new or self.is_equal_result is False):
+                    # Move the .reject file close to the .result file
+                    # so that it's easy to analyze the diff or overwrite .result
+                    # with .reject.
+                    shutil.move(self.tmpfile, self.reject)
+                else:
+                    pathlib.Path(self.tmpfile).unlink()
 
         return self
 
@@ -847,7 +1044,7 @@ class RunTest(Test):
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
         print(read_log(self.log_filename))
 
-    async def run(self, options: argparse.Namespace) -> Test:
+    async def run(self, options: argparse.Namespace, **test_args: Any) -> Test:
         # This test can and should be killed gently, with SIGTERM, not with SIGKILL
         self.success = await run_test(self, options, gentle_kill=True, env=self.suite.scylla_env)
         logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
@@ -894,15 +1091,18 @@ class PythonTest(Test):
             print("Server log of the first server:")
             print(self.server_log)
 
-    async def run(self, options: argparse.Namespace) -> Test:
+    async def run(self, options: argparse.Namespace, **test_args: Any) -> Test:
+        """Run tests in this suite"""
 
         self._prepare_pytest_params(options)
 
         loggerPrefix = self.mode + '/' + self.uname
         logger = LogPrefixAdapter(logging.getLogger(loggerPrefix), {'prefix': loggerPrefix})
-        cluster = await self.suite.clusters.get(logger)
+        cluster = test_args["cluster"]
+        assert isinstance(cluster, ScyllaCluster)
         try:
             cluster.before_test(self.uname)
+            # print(f"\nXXX PythonTest.run() Leasing Scylla cluster {cluster} for test {self.uname}")  # XXX
             logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
             self.args.insert(0, "--host={}".format(cluster.endpoint()))
             self.is_before_test_ok = True
@@ -922,7 +1122,6 @@ class PythonTest(Test):
                 print("Test {} post-check failed: {}".format(self.name, str(e)))
                 print("Server log of the first server:\n{}".format(self.server_log))
                 logger.info(f"Discarding cluster after failed test %s...", self.name)
-        await self.suite.clusters.put(cluster, is_dirty=cluster.is_dirty)
         logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
 
@@ -940,13 +1139,15 @@ class TopologyTest(PythonTest):
     def __init__(self, test_no: int, shortname: str, suite) -> None:
         super().__init__(test_no, shortname, suite)
 
-    async def run(self, options: argparse.Namespace) -> Test:
+    async def run(self, options: argparse.Namespace, **test_args: Any) -> Test:
 
         self._prepare_pytest_params(options)
-
         test_path = os.path.join(self.suite.options.tmpdir, self.mode)
-        async with get_cluster_manager(self.mode + '/' + self.uname, self.suite.clusters, test_path) as manager:
+        async with get_cluster_manager(self.mode + '/' + self.uname, self.suite._create_cluster,
+                                       self.suite._dispose_cluster,
+                                       self.suite.options.save_log_on_success, test_path) as manager:
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
+            print(f"XXX TopologyTest.run() starting: {self.uname}")
 
             try:
                 # Note: start manager here so cluster (and its logs) is availale in case of failure
@@ -994,6 +1195,8 @@ class TabularConsoleOutput:
                 status = palette.warn("[ FLKY ]")
             else:
                 status = palette.ok("[ PASS ]")
+        elif test.is_skipped:
+            status = palette.warn("[ SKIP ]")
         else:
             status = palette.fail("[ FAIL ]")
         msg = "{:10s} {:^8s} {:^7s} {:8s} {}".format(
@@ -1060,6 +1263,9 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             if options.cpus:
                 path = 'taskset'
                 args = ['-c', options.cpus, test.path, *test.args]
+            # # XXX added for stats
+            # path = '/usr/bin/time'
+            # args = ['-v', test.path, *test.args]
             process = await asyncio.create_subprocess_exec(
                 path, *args,
                 stderr=log,
@@ -1075,7 +1281,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
                          ),
                 preexec_fn=os.setsid,
             )
-            stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
+            await asyncio.wait_for(process.communicate(), options.timeout)
             test.time_end = time.time()
             if process.returncode not in test.valid_exit_codes:
                 report_error('Test exited with code {code}\n'.format(code=process.returncode))
@@ -1197,11 +1403,8 @@ def parse_cmd_line() -> argparse.Namespace:
                 ['taskset', '-c', args.cpus, 'python3', '-c',
                  'import os; print(len(os.sched_getaffinity(0)))']))
 
-        cpus_per_test_job = 1
-        sysmem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
-        testmem = 6e9 if os.sysconf('SC_PAGE_SIZE') > 4096 else 2e9
-        default_num_jobs_mem = ((sysmem - 4e9) // testmem)
-        args.jobs = min(default_num_jobs_mem, nr_cpus // cpus_per_test_job)
+        # Note: Contention is memory, not CPU. Also, this scale should be revised upwards.
+        args.jobs = nr_cpus * 4
 
     if not output_is_a_tty:
         args.verbose = True
@@ -1265,54 +1468,171 @@ async def find_tests(options: argparse.Namespace) -> None:
     print("Found {} tests.".format(TestSuite.test_count()))
 
 
+class MemoryManager:
+    """Memory allocation concurrency control.
+       Workers wait until the required memory is available (in MiB).
+       Exponential retry delay is controlled with base_delay and max_delay.
+       No-op if reserving/releasing zero mb.
+       Note: do not hold the lock when calling reserve() and release()
+    """
+    def __init__(self, lock: asyncio.Lock, base_delay: float = 0.1, max_delay: float = 4.):
+        self.lock: Final[asyncio.Lock] = lock
+        self.mb_available: Final[float] = psutil.virtual_memory().available / 1024 ** 2
+        # print(f"XXX MemoryManager.__init__(available {self.mb_available:.02f} <<<")
+        self.mb_reserved: float = 0.
+        self.base_delay: Final[float] = base_delay
+        self.max_delay: Final[float] = max_delay
+
+    async def reserve(self, mb_required: int, check: Callable[[], bool] = lambda: True,
+                      debugmsg: str = "???"   # XXX debug
+                      ) -> bool:
+        """Try to reserve memory while the condition check() is true.
+           If condition check() fails, returns False.
+        """
+        if mb_required == 0:
+            return True
+        if mb_required > self.mb_available:
+            return False                   # Requires more memory than available
+
+        # print(f"XXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}), prev reserved {self.mb_reserved}, total {self.mb_available:.02f} <<<")
+
+        actual = psutil.virtual_memory().available / 1024 ** 2
+        expected = self.mb_available - self.mb_reserved
+        if actual < expected * .8:
+            # print(f"\n\nXXX MemoryManager() total available {self.mb_available:.02f} - reserved {self.mb_reserved:.02f} = expected {expected:.02f} vs. actual {actual:02f} <<<<<<<<<\n")
+            return False   # XXX debug
+
+        retries = 0
+        delay = self.base_delay
+        while True:
+            async with self.lock:
+                # print(f"\nXXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) TRY {retries}")
+                if not check():
+                    print(f"\nXXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) TRY {retries} FAILED CHECK RETURNING")
+                    return False     # Condition no longer valid, stop trying to reserve
+                if mb_required < (self.mb_available - self.mb_reserved):
+                    # print(f"\nXXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) TRY {retries} 1")
+                    # Verify if there is sufficient available memory
+                    # if mb_required < psutil.virtual_memory().available / 1024 ** 2:
+                    if mb_required < actual:
+                        self.mb_reserved += mb_required
+                        # print(f"\nXXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) mb_reserved={self.mb_reserved} SUCCESS")
+                        return True
+                    else:
+                        print(f"\nXXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) TRY {retries} 2")
+                else:
+                    print(f"\nXXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}) TRY {retries} 3")
+            delay = min(self.max_delay, delay * 2**retries)
+            retries += 1
+            print(f"\nXXX MemoryManager(mb_required={mb_required}) > {self.mb_available - self.mb_reserved:.02f} available, SLEEPing for {delay:.02f} <<")
+            await asyncio.sleep(delay)
+
+    async def release(self, mb_reserved: int):
+        # print(f"\nXXX MemoryManager.release(mb_reserved={mb_reserved}) <<")
+        if mb_reserved > 0:
+            async with self.lock:
+                # XXX ARGH THIS DUPE LINE WAS TAKING IT TO ZERO self.mb_reserved -= mb_reserved
+                self.mb_reserved = max(0, self.mb_reserved - mb_reserved)
+
+
 async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) -> None:
+    """Create a pool of worker tasks picking (ordered) TestSuites to run from a PriorityQueue.
+       Create as many workers as options.jobs. Track memory usage. If a worker needs more memory
+       than available to run the suite it picked, it waits.
+       There can be more than 1 worker running tests on the same suite.
+       The goal is to utilize as much memory/cpu as available while scheduling long running tests
+       first and not wasting with over-parallelizing a suite if there are other suites to run.
+    """
+    logger = LogPrefixAdapter(logging.getLogger('run_all_tests'), {'prefix': 'run_all_tests'})
     console = TabularConsoleOutput(options.verbose, TestSuite.test_count())
-    signaled_task = asyncio.create_task(signaled.wait())
-    pending = set([signaled_task])
-
-    async def cancel(pending):
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
-        print("... done.")
-        raise asyncio.CancelledError
-
-    async def reap(done, pending, signaled):
-        nonlocal console
-        if signaled.is_set():
-            await cancel(pending)
-        for coro in done:
-            result = coro.result()
-            if isinstance(result, bool):
-                continue    # skip signaled task result
-            console.print_progress(result)
+    console.print_start_blurb()
 
     ms = MinioServer(options.tmpdir, TestSuite.hosts, LogPrefixAdapter(logging.getLogger('minio'), {'prefix': 'minio'}))
     await ms.start()
-    TestSuite.artifacts.add_exit_artifact(None, ms.stop)
 
-    console.print_start_blurb()
-    try:
-        TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
-        for test in TestSuite.all_tests():
-            # +1 for 'signaled' event
-            if len(pending) > options.jobs:
-                # Wait for some task to finish
-                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-                await reap(done, pending, signaled)
-            pending.add(asyncio.create_task(test.suite.run(test, options)))
-        # Wait & reap ALL tasks but signaled_task
-        # Do not use asyncio.ALL_COMPLETED to print a nice progress report
-        while len(pending) > 1:
-            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-            await reap(done, pending, signaled)
+    # PriorityQueue of TestSuites to run
+    work_pq: asyncio.PriorityQueue = asyncio.PriorityQueue()
+    suites_with_tests = [suite for suite in TestSuite.suites.values() if suite.tests]
+    total_tests = sum(len(suite.tests) for suite in suites_with_tests)
+    worker_lock: asyncio.Lock = asyncio.Lock()         # Lock across *all* workers/suites
 
-    except asyncio.CancelledError:
-        return
-    finally:
-        await TestSuite.artifacts.cleanup_before_exit()
+    memory_manager = MemoryManager(worker_lock)
+    for suite in suites_with_tests:
+        if suite.tests:
+            if suite.min_memory > memory_manager.mb_available:
+                suite.skip_remaining(console)    # Not enough memory for suite
+            else:
+                await work_pq.put(suite)
+
+    class Worker:
+        def __init__(self, name: str, queue: asyncio.PriorityQueue):
+            self.name = name
+            self.queue = queue
+
+        async def run(self):
+            nonlocal console, signaled
+            logger = LogPrefixAdapter(logging.getLogger(self.name), {'prefix': self.name})
+            while True:
+                try:
+                    # print(f"{self.name} get() <<<<<<<<<<<<<\n")
+                    suite = await self.queue.get()
+                    assert isinstance(suite, TestSuite)
+
+                    # print(f"XXX {self.name} starting test runner for {suite.mode} {suite.name}        workers {suite.workers}      prec {suite.precedence}") # XXX
+                    # If there's more than 1 test remaining, other workers can work on this suite
+                    async with worker_lock:
+                        suite.workers += 1
+                        # TODO: this should be suite-specific to avoid excessive parallelism
+                        if suite.remaining > suite.workers:
+                            # print(f"XXX {self.name} putting suite {suite.mode}/{suite.name} back in, remaining={suite.remaining}, workers={suite.workers} precedence {suite.precedence}")
+                            await self.queue.put(suite)
+                        else:
+                            print(f"XXX {self.name} NOT putting suite {suite.mode}/{suite.name} back in, remaining={suite.remaining}, workers={suite.workers} ----")
+
+                    # NOTE asyncio.CancelledError is caught at run_test()
+                    # to print failures and so this loop can release the reserved memory
+                    # print(f"XXX {self.name} running suite {suite.mode}/{suite.name}")
+                    await suite.run(worker_lock, console, memory_manager, self.name)   # START TEST RUNNER
+                    async with worker_lock:
+                        suite.workers -= 1
+                    # print(f"XXX {self.name} done test runner for {suite.mode} {suite.name}")
+
+                    self.queue.task_done()     # Notify the queue that the task is complete.
+                except asyncio.CancelledError as e:
+                    # print(f"XXX {self.name} cancel exception {e}")
+                    break
+                except Exception as e:
+                    print(traceback.format_exc())
+                    print(f"\nXXX {self.name} got unexpected exception {e} {type(e)}\n")
+                    raise e
+                if signaled.is_set():
+                    print(f"XXX {self.name} signaled is set, break 3")
+                    break
+                # print(f"XXX {self.name} loop again 4 (qsize {self.queue.qsize()}")
+
+    workers = [Worker(f"worker-{i}", work_pq) for i in range(min(total_tests, options.jobs))]
+    worker_tasks = [asyncio.create_task(worker.run()) for worker in workers]
+    print(f"XXX total tests {total_tests} jobs {options.jobs} -> {len(workers)} workers ")
+
+
+    signaled_task: asyncio.Task = asyncio.create_task(signaled.wait())
+    pq_task: asyncio.Task = asyncio.create_task(work_pq.join())
+    await asyncio.wait([pq_task, signaled_task], return_when=asyncio.FIRST_COMPLETED)
+
+    if signaled.is_set():
+        print("XXX Signal received, cancelling tasks...")
+        signaled_task.cancel()
+        for task in worker_tasks:
+            task.cancel()
+        # print("XXX waiting queue to join 1")
+        # await asyncio.wait([pq_task], return_when=asyncio.FIRST_COMPLETED)
+        # done, pending = await asyncio.wait(worker_tasks, return_when=asyncio.FIRST_COMPLETED)
+        # print(f"XXX got done {done} pending {pending}")
+        await asyncio.gather(*worker_tasks, pq_task, return_exceptions=True)  # XXX XXX XXX HANGS!
+        # print("XXX 3")
 
     console.print_end_blurb()
+    await ms.stop()
 
 
 def read_log(log_filename: pathlib.Path) -> str:
@@ -1512,8 +1832,6 @@ async def main() -> int:
     open_log(options.tmpdir, f"test.py.{'-'.join(options.modes)}.log", options.log_level)
 
     await find_tests(options)
-
-    TestSuite.sort_suites()
 
     if options.list_tests:
         print('\n'.join([f"{t.suite.mode:<8} {type(t.suite).__name__[:-9]:<11} {t.name}"

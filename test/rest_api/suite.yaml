@@ -1,5 +1,4 @@
 type: Python
-pool_size: 1
 
 skip_in_release:
     - test_task_manager

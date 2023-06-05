@@ -15,3 +15,8 @@ skip_in_debug:
   - test_shutdown_hang
   - test_replace_ignore_nodes
   - test_old_ip_notification_repro
+  - test_change_ip_repro
+# Tests with bigger than initial_size clusters
+cluster_max:
+  test_topology_smp: 3
+  test_shutdown_hang: 2

@@ -25,4 +25,3 @@ run_first:
     - cassandra_tests/validation/entities/uf_types_test
     - test_sstable_validation
     - cassandra_tests/validation/operations/select_order_by_test
-pool_size: 4
