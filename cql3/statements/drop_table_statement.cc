@@ -15,6 +15,7 @@
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "mutation/mutation.hh"
+#include "cdc/log.hh"
 
 namespace cql3 {
 
@@ -43,6 +44,13 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
 drop_table_statement::prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
+
+    if (cdc::is_log_for_some_table(qp.db().real_database(), keyspace(), column_family())) {
+        // we should really throw invalid_request_exception but for legacy reasons
+        // with throw unauthorized_exception here
+        co_return coroutine::exception(std::make_exception_ptr(exceptions::unauthorized_exception(
+                   format("Cannot DROP cdc log table {}", column_family()))));
+    }
 
     try {
         m = co_await mm.prepare_column_family_drop_announcement(keyspace(), column_family(), ts);

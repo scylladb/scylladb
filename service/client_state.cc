@@ -20,7 +20,6 @@
 #include "tracing/trace_keyspace_helper.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "replica/database.hh"
-#include "cdc/log.hh"
 #include "utils/overloaded_functor.hh"
 #include <seastar/core/coroutine.hh>
 
@@ -179,13 +178,6 @@ future<> service::client_state::has_access(data_dictionary::database db, const s
     if (cmd.resource.kind() == auth::resource_kind::data) {
         const auto resource_view = auth::data_resource_view(cmd.resource);
         if (resource_view.table()) {
-            if (cmd.permission == auth::permission::DROP) {
-                if (cdc::is_log_for_some_table(db.real_database(), ks, *resource_view.table())) {
-                    return make_exception_future<>(exceptions::unauthorized_exception(
-                            format("Cannot {} cdc log table {}", auth::permissions::to_string(cmd.permission), cmd.resource)));
-                }
-            }
-
             static constexpr auto cdc_topology_description_forbidden_permissions = auth::permission_set::of<
                     auth::permission::ALTER, auth::permission::DROP>();
 
