@@ -60,7 +60,11 @@ schema_ptr schema_registry::learn(const schema_ptr& s) {
     }
     auto i = _entries.find(s->version());
     if (i != _entries.end()) {
-        return i->second->get_schema();
+        schema_registry_entry& e = *i->second;
+        if (e._state == schema_registry_entry::state::LOADING) {
+            e.load(s);
+        }
+        return e.get_schema();
     }
     slogger.debug("Learning about version {} of {}.{}", s->version(), s->ks_name(), s->cf_name());
     auto e_ptr = make_lw_shared<schema_registry_entry>(s->version(), *this);
