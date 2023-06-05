@@ -1,17 +1,9 @@
-.. |VERSION| replace:: 5.2
-.. |IMAGE-DEFINITION| replace:: scylla-5.2
-.. |IMAGE-VERSION| replace:: 5.2.1
-.. |GALLERY-NAME| replace:: 6c268694-47ab-43ab-b306-3c5514bc4112
-
 ==========================
 Launch ScyllaDB on Azure
 ==========================
 
 This article will guide you through self-managed ScyllaDB deployment on Azure. For a fully-managed deployment of ScyllaDB 
 as-a-service, see `ScyllaDB Cloud documentation <https://cloud.docs.scylladb.com/>`_.
-
-With the right setting, ScyllaDB image can be used for production. For the ScyllaDB Image documentation, see 
-the `ScyllaDB Machine Image project <https://github.com/scylladb/scylla-machine-image>`_.
 
 .. note::
     The article covers launching a ScyllaDB image from CLI. As an alternative, you can launch a ScyllaDB instance from 
@@ -24,14 +16,6 @@ Prerequisites
 * Active Azure account
 * `Azure CLI <https://learn.microsoft.com/en-us/cli/azure/install-azure-cli>`_
 * ScyllaDB Image requires at least 2 vCPU servers.
-
-ScyllaDB |VERSION| Image Information
----------------------------------------
-
-* gallery-image-definition: |IMAGE-DEFINITION|
-* gallery-image-version: |IMAGE-VERSION|
-* public-gallery-name: |GALLERY-NAME|
-
 
 Launching ScyllaDB on Azure
 ------------------------------
@@ -54,14 +38,25 @@ Launching ScyllaDB on Azure
     
         az group create --name my-group --location eastus
 
-#. Get the ScyllaDB image ID:
+#. Go to `ScyllaDB for Azure <https://www.scylladb.com/download/?platform=azure#open-source>`_ in ScyllaDB's download center to obtain the image information:
+
+   * gallery-image-definition
+   * gallery-image-version
+   * public-gallery-name
+
+#. Get the ScyllaDB image ID using the information from the previous step:
 
    .. code-block:: console
       :substitutions:
     
-        scyllaImageID=$(az sig image-version show-community --location eastus --gallery-image-definition |IMAGE-DEFINITION| --gallery-image-version |IMAGE-VERSION| --public-gallery-name |GALLERY-NAME| --query ['uniqueId'] --output tsv)
+        scyllaImageID=$(az sig image-version show-community --location <your region name> --gallery-image-definition <ScyllaDB gallery-image-definition> --gallery-image-version <ScyllaDB gallery-image-version> --public-gallery-name <ScyllDB public-gallery-name> --query ['uniqueId'] --output tsv)
 
-   The example above assumes that your region name is ``eastus``.
+   For example:
+
+   .. code-block:: console
+      :substitutions:
+    
+        scyllaImageID=$(az sig image-version show-community --location eastus --gallery-image-definition scylla-5.2 --gallery-image-version 5.2.1 --public-gallery-name 6c268694-47ab-43ab-b306-3c5514bc4112 --query ['uniqueId'] --output tsv)
 
 #. Create VM using `az vm create <https://learn.microsoft.com/en-us/cli/azure/vm?view=azure-cli-latest#az-vm-create>`_, providing the ScyllaDB image ID from the previous step:
 
@@ -90,7 +85,7 @@ Launching ScyllaDB on Azure
         nodetool status
 
 Next Steps
-===========
+------------------
 
 * :doc:`Configure ScyllaDB </getting-started/system-configuration>`
 * Manage your clusters with `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_
