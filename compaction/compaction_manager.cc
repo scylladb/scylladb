@@ -371,7 +371,7 @@ future<sstables::compaction_result> compaction_task_executor::compact_sstables(s
             }
         }
         if (!sstables_requiring_cleanup.empty()) {
-            cmlog.info("The following SSTables require cleaned up in this compaction: {}", sstables_requiring_cleanup);
+            cmlog.info("The following SSTables require cleanup in this compaction: {}", sstables_requiring_cleanup);
             if (!cs.owned_ranges_ptr) {
                 on_internal_error_noexcept(cmlog, "SSTables require cleanup but compaction state has null owned ranges");
             }
