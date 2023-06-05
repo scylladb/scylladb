@@ -53,7 +53,7 @@ create_table_statement::create_table_statement(cf_name name,
 }
 
 future<> create_table_statement::check_access(query_processor& qp, const service::client_state& state) const {
-    return state.has_keyspace_access(qp.db(), keyspace(), auth::permission::CREATE);
+    return state.has_keyspace_access(keyspace(), auth::permission::CREATE);
 }
 
 // Column definitions

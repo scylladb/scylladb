@@ -220,7 +220,7 @@ future<> select_statement::check_access(query_processor& qp, const service::clie
         std::vector<::shared_ptr<functions::function>> used_functions = _selection->used_functions();
         for (const auto& used_function : used_functions) {
             sstring encoded_signature = auth::encode_signature(used_function->name().name, used_function->arg_types());
-            co_await state.has_function_access(qp.db(), used_function->name().keyspace, encoded_signature, auth::permission::EXECUTE);
+            co_await state.has_function_access(used_function->name().keyspace, encoded_signature, auth::permission::EXECUTE);
         }
     }
 }

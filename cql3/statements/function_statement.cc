@@ -22,12 +22,12 @@ namespace statements {
 future<> function_statement::check_access(query_processor& qp, const service::client_state& state) const { return make_ready_future<>(); }
 
 future<> create_function_statement_base::check_access(query_processor& qp, const service::client_state& state) const {
-    co_await state.has_functions_access(qp.db(), _name.keyspace, auth::permission::CREATE);
+    co_await state.has_functions_access(_name.keyspace, auth::permission::CREATE);
     if (_or_replace) {
         create_arg_types(qp);
         sstring encoded_signature = auth::encode_signature(_name.name, _arg_types);
 
-        co_await state.has_function_access(qp.db(), _name.keyspace, encoded_signature, auth::permission::ALTER);
+        co_await state.has_function_access(_name.keyspace, encoded_signature, auth::permission::ALTER);
     }
 }
 
@@ -57,7 +57,7 @@ future<> drop_function_statement_base::check_access(query_processor& qp, const s
     sstring encoded_signature = auth::encode_signature(_name.name, func->arg_types());
 
     try {
-        return state.has_function_access(qp.db(), _name.keyspace, encoded_signature, auth::permission::DROP);
+        return state.has_function_access(_name.keyspace, encoded_signature, auth::permission::DROP);
     } catch (exceptions::invalid_request_exception&) {
         return make_ready_future();
     }

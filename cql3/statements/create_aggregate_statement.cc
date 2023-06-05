@@ -99,12 +99,12 @@ seastar::future<> create_aggregate_statement::check_access(query_processor &qp, 
     std::vector<data_type> sfunc_args = _arg_types;
     data_type stype = prepare_type(qp, *_stype);
     sfunc_args.insert(sfunc_args.begin(), stype);
-    co_await state.has_function_access(qp.db(), ks, auth::encode_signature(_sfunc,sfunc_args), auth::permission::EXECUTE);
+    co_await state.has_function_access(ks, auth::encode_signature(_sfunc,sfunc_args), auth::permission::EXECUTE);
     if (_rfunc) {
-        co_await state.has_function_access(qp.db(), ks, auth::encode_signature(*_rfunc,{stype, stype}), auth::permission::EXECUTE);
+        co_await state.has_function_access(ks, auth::encode_signature(*_rfunc,{stype, stype}), auth::permission::EXECUTE);
     }
     if (_ffunc) {
-        co_await state.has_function_access(qp.db(), ks, auth::encode_signature(*_ffunc,{stype}), auth::permission::EXECUTE);
+        co_await state.has_function_access(ks, auth::encode_signature(*_ffunc,{stype}), auth::permission::EXECUTE);
     }
 }
 
