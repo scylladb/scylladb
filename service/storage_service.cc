@@ -256,7 +256,13 @@ static future<> set_gossip_tokens(gms::gossiper& g,
 future<> storage_service::wait_for_ring_to_settle() {
     // Make sure we see at least one other node.
     logger::rate_limit rate_limit{std::chrono::seconds{5}};
-    auto timeout = gms::gossiper::clk::now() + std::chrono::minutes{5};
+#ifdef SEASTAR_DEBUG
+    // Account for debug slowness. 3 minutes is probably overkill but we don't want flaky tests.
+    constexpr auto timeout_delay = std::chrono::minutes{3};
+#else
+    constexpr auto timeout_delay = std::chrono::seconds{30};
+#endif
+    auto timeout = gms::gossiper::clk::now() + timeout_delay;
     while (_gossiper.get_live_members().size() < 2) {
         if (timeout <= gms::gossiper::clk::now()) {
             auto err = ::format("Timed out waiting for other live nodes to show up in gossip during initial boot");
