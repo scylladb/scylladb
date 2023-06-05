@@ -68,15 +68,17 @@ replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
 storage_opts = format_tuples(type='S3',
                              endpoint=s3_server_address,
                              bucket=s3_public_bucket)
-conn.execute(("CREATE KEYSPACE test_ks WITH"
+ks = 'test_ks'
+cf = 'test_cf'
+conn.execute((f"CREATE KEYSPACE {ks} WITH"
               f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
-conn.execute("CREATE TABLE test_ks.test_cf ( name text primary key, value text );")
-conn.execute("INSERT INTO test_ks.test_cf ( name, value ) VALUES ('0', 'zero');")
-conn.execute("INSERT INTO test_ks.test_cf ( name, value ) VALUES ('1', 'one');")
-conn.execute("INSERT INTO test_ks.test_cf ( name, value ) VALUES ('2', 'two');")
-res = conn.execute("SELECT * FROM test_ks.test_cf;")
+conn.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+conn.execute(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('0', 'zero');")
+conn.execute(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('1', 'one');")
+conn.execute(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('2', 'two');")
+res = conn.execute(f"SELECT * FROM {ks}.{cf};")
 
-r = requests.post(f'http://{ip}:10000/storage_service/keyspace_flush/test_ks', timeout=60)
+r = requests.post(f'http://{ip}:10000/storage_service/keyspace_flush/{ks}', timeout=60)
 if r.status_code != 200:
     print(f'Error flushing keyspace: {r}')
     success = False
@@ -100,7 +102,7 @@ run.wait_for_services(pid, [ lambda: check_cql(ip) ])
 
 cluster = run.get_cql_cluster(ip)
 conn = cluster.connect()
-res = conn.execute("SELECT * FROM test_ks.test_cf;")
+res = conn.execute(f"SELECT * FROM {ks}.{cf};")
 want_res = { '0': 'zero', '1': 'one', '2': 'two' }
 have_res = { x.name: x.value for x in res }
 if want_res != have_res:
@@ -108,7 +110,7 @@ if want_res != have_res:
     success = False
 
 print('Drop table')
-conn.execute("DROP TABLE test_ks.test_cf;")
+conn.execute(f"DROP TABLE {ks}.{cf};")
 # Check that the ownership table is de-populated
 res = conn.execute("SELECT * FROM system.sstables;")
 for row in res:
