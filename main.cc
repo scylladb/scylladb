@@ -895,13 +895,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             //     lifecycle_notifier.stop().get();
             // });
 
-            supervisor::notify("creating tracing");
-            sharded<tracing::tracing>& tracing = tracing::tracing::tracing_instance();
-            tracing.start(sstring("trace_keyspace_helper")).get();
-            auto destroy_tracing = defer_verbose_shutdown("tracing instance", [] {
-                tracing::tracing::tracing_instance().stop().get();
-            });
-
             auto api_addr = utils::resolve(cfg->api_address || cfg->rpc_address, family, preferred).get0();
             supervisor::notify("starting API server");
             ctx.http_server.start("API").get();
@@ -1258,6 +1251,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
             qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::ref(group0_client), std::move(wasm_ctx)).get();
+
+            supervisor::notify("creating tracing");
+            sharded<tracing::tracing>& tracing = tracing::tracing::tracing_instance();
+            tracing.start(sstring("trace_keyspace_helper")).get();
+            auto destroy_tracing = defer_verbose_shutdown("tracing instance", [&tracing] {
+                tracing.stop().get();
+            });
 
             ss.invoke_on_all([&] (service::storage_service& ss) {
                 ss.set_query_processor(qp.local());
