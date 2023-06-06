@@ -12,7 +12,8 @@
 #include "reader_permit.hh"
 #include "sstables/index_reader.hh"
 #include "sstables/shared_sstable.hh"
-#include "tracing/trace_state.hh"
+
+namespace tracing { class trace_state_ptr; }
 
 namespace sstables {
 namespace mx {

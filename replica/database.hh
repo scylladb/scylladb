@@ -41,7 +41,6 @@
 #include "compaction/compaction_strategy.hh"
 #include "utils/estimated_histogram.hh"
 #include <seastar/core/metrics_registration.hh>
-#include "tracing/trace_state.hh"
 #include "db/view/view_stats.hh"
 #include "db/view/view_update_backlog.hh"
 #include "db/view/row_locking.hh"
@@ -75,6 +74,7 @@ class mutation;
 class frozen_mutation;
 class reconcilable_result;
 
+namespace tracing { class trace_state_ptr; }
 namespace s3 { struct endpoint_config; }
 
 namespace service {
