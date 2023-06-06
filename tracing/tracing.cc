@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (AGPL-3.0-or-later and Apache-2.0)
  */
 #include <seastar/core/metrics.hh>
+#include <seastar/core/coroutine.hh>
 #include "tracing/tracing.hh"
 #include "tracing/trace_state.hh"
 #include "utils/class_registrator.hh"
@@ -155,10 +156,9 @@ future<> tracing::start(cql3::query_processor& qp, service::migration_manager& m
         throw;
     }
 
-    return _tracing_backend_helper_ptr->start(qp, mm).then([this] {
-        _down = false;
-        _write_timer.arm(write_period);
-    });
+    co_await _tracing_backend_helper_ptr->start(qp, mm);
+    _down = false;
+    _write_timer.arm(write_period);
 }
 
 void tracing::write_timer_callback() {
@@ -180,9 +180,8 @@ future<> tracing::shutdown() {
     write_pending_records();
     _down = true;
     _write_timer.cancel();
-    return _tracing_backend_helper_ptr->shutdown().then([] {
-        tracing_logger.info("Tracing is down");
-    });
+    co_await _tracing_backend_helper_ptr->shutdown();
+    tracing_logger.info("Tracing is down");
 }
 
 future<> tracing::stop() {
@@ -190,7 +189,7 @@ future<> tracing::stop() {
         throw std::logic_error("tracing: stop() called before shutdown()");
     }
 
-    return make_ready_future<>();
+    co_return;
 }
 
 void tracing::set_trace_probability(double p) {
