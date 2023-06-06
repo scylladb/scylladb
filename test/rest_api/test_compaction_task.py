@@ -35,9 +35,9 @@ def check_compaction_task(cql, this_dc, rest_api, run_compaction, compaction_typ
                     check_child_parent_relationship(rest_api, top_level_task, depth)
 
 def test_major_keyspace_compaction_task(cql, this_dc, rest_api):
+    # keyspace major compaction
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_compaction/{keyspace}"), "major compaction", 2)
-
-def test_major_column_family_compaction_task(cql, this_dc, rest_api):
+    # column family major compaction
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"column_family/major_compaction/{keyspace}:{table}"), "major compaction", 2)
 
 def test_cleanup_keyspace_compaction_task(cql, this_dc, rest_api):
@@ -47,7 +47,7 @@ def test_offstrategy_keyspace_compaction_task(cql, this_dc, rest_api):
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_offstrategy_compaction/{keyspace}"), "offstrategy compaction", 2)
 
 def test_rewrite_sstables_keyspace_compaction_task(cql, this_dc, rest_api):
+    # upgrade sstables compaction
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("GET", f"storage_service/keyspace_upgrade_sstables/{keyspace}"), "rewrite sstables compaction", 2)
-
-def test_scrub_sstables_compaction_task(cql, this_dc, rest_api):
+    # scrub sstables compaction
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}"), "rewrite sstables compaction", 2)
