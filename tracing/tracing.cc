@@ -68,13 +68,6 @@ tracing::tracing(sstring tracing_backend_helper_class_name)
     });
 }
 
-future<> tracing::stop_tracing() {
-    return tracing_instance().invoke_on_all([] (tracing& local_tracing) {
-        // It might have been shut down while draining
-        return local_tracing.shutdown();
-    });
-}
-
 bool tracing::may_create_new_session(const std::optional<utils::UUID>& session_id) {
     // Don't create a session if its records are likely to be dropped
     if (!have_records_budget(exp_trace_events_per_session) || _active_sessions >= max_pending_sessions + write_event_sessions_threshold) {

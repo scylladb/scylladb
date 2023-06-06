@@ -1690,8 +1690,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             supervisor::notify("starting tracing");
             tracing.invoke_on_all(&tracing::tracing::start, std::ref(qp), std::ref(mm)).get();
-            auto stop_tracing = defer_verbose_shutdown("tracing", [] {
-                tracing::tracing::stop_tracing().get();
+            auto stop_tracing = defer_verbose_shutdown("tracing", [&tracing] {
+                tracing.invoke_on_all(&tracing::tracing::shutdown).get();
             });
 
             startlog.info("SSTable data integrity checker is {}.",

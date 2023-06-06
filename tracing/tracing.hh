@@ -420,7 +420,6 @@ public:
         return !_down;
     }
 
-    static future<> stop_tracing();
     tracing(sstring tracing_backend_helper_class_name);
 
     // Initialize a tracing backend (e.g. tracing_keyspace or logstash)
