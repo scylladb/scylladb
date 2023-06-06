@@ -246,7 +246,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
     co_return;
 }
 
-// For more details, see the commends on column_family::load_new_sstables
+// For more details, see distributed_loader::process_upload_dir().
 // All the global operations are going to happen here, and just the reloading happens
 // in there.
 future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
