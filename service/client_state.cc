@@ -95,9 +95,8 @@ future<> service::client_state::has_function_access(const sstring& ks, const sst
 
 future<> service::client_state::has_column_family_access(const sstring& ks,
                 const sstring& cf, auth::permission p, auth::command_desc::type t) const {
-    return do_with(ks, auth::make_data_resource(ks, cf), [this, p, t](const auto& ks, const auto& r) {
-        return has_access(ks, {p, r, t});
-    });
+    auto r = auth::make_data_resource(ks, cf);
+    co_return co_await has_access(ks, {p, r, t});
 }
 
 future<> service::client_state::has_schema_access(const schema& s, auth::permission p) const {
