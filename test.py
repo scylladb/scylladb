@@ -1338,29 +1338,67 @@ def format_unidiff(fromfile: str, tofile: str) -> str:
         return buf.getvalue()
 
 
+def update_junit_suite(suite, test):
+    tests = int(suite.get('tests', '0'))
+    failures = int(suite.get('failures', '0'))
+    duration = float(suite.get('time', '0'))
+
+    tests += 1
+    if not test.success:
+        failures += 1
+    duration += test.time_end - test.time_start
+
+    suite.set('tests', f'{tests}')
+    suite.set('failures', f'{failures}')
+    suite.set('time', f'{duration:.3f}')
+
+
 def write_junit_report(tmpdir: str, mode: str) -> None:
+    tests = filter(lambda test: test.mode == mode,
+                   itertools.chain.from_iterable(suite.junit_tests()
+                                                 for suite in TestSuite.suites.values()))
+
+    testsuites = ET.Element("testsuites")
+    for test in tests:
+        # normalize the name, as Java class name does not contain '-'
+        suite_name = test.suite.name.replace('-', '_')
+        suite = testsuites.find(f"./testsuite[@name='{suite_name}']")
+        if suite is None:
+            suite = ET.SubElement(testsuites, 'testsuite',
+                                  name=suite_name,
+                                  error='0')
+        # please note, as we run the tests on the per-file basis, i.e., execute
+        # "run", or execute "pytest <a-file-name-found-by-glob>", we cannot tell
+        # one test from another, so misuse the "classname" for the shortname,
+        # and "name" for mode and test.id.
+        shortname = test.shortname.replace(os.path.sep, '.')
+        classname = f'{suite_name}.{shortname}'
+        parts = shortname.rsplit('.', 1)
+        subsuite = None
+        if len(parts) > 1:
+            mid_name, _ = parts
+            subsuite_name = f'{suite_name}.{mid_name}'
+            subsuite = suite.find(f"./testsuite[@name='{subsuite_name}']")
+            if subsuite is None:
+                subsuite = ET.SubElement(suite, 'testsuite',
+                                         name=subsuite_name,
+                                         error='0')
+            update_junit_suite(suite, test)
+            update_junit_suite(subsuite, test)
+            suite = subsuite
+        else:
+            update_junit_suite(suite, test)
+
+        duration = test.time_end - test.time_start
+        testcase = ET.SubElement(suite, 'testcase',
+                                 classname=classname,
+                                 name=f"{mode}.{test.id}",
+                                 time=f"{duration:.3f}")
+        if not test.success:
+            test.write_junit_failure_report(testcase)
+
     junit_filename = os.path.join(tmpdir, mode, "xml", "junit.xml")
-    total = 0
-    failed = 0
-    xml_results = ET.Element("testsuite", name="non-boost tests", errors="0")
-    for suite in TestSuite.suites.values():
-        for test in suite.junit_tests():
-            if test.mode != mode:
-                continue
-            total += 1
-            # add the suite name to disambiguate tests named "run"
-            xml_res = ET.SubElement(xml_results, 'testcase',
-                                    name="{}.{}.{}.{}".format(test.suite.name, test.shortname, mode, test.id))
-            if test.success is True:
-                continue
-            failed += 1
-            test.write_junit_failure_report(xml_res)
-    if total == 0:
-        return
-    xml_results.set("tests", str(total))
-    xml_results.set("failures", str(failed))
-    with open(junit_filename, "w") as f:
-        ET.ElementTree(xml_results).write(f, encoding="unicode")
+    ET.ElementTree(testsuites).write(junit_filename, encoding="unicode")
 
 
 def summarize_tests(tests):
