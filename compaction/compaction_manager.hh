@@ -439,6 +439,8 @@ public:
 private:
     future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t);
 
+    // Add sst to or remove it from the respective compaction_state.sstables_requiring_cleanup set.
+    bool update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges);
 public:
     // Submit a table to be upgraded and wait for its termination.
     future<> perform_sstable_upgrade(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, bool exclude_current_version);
@@ -538,9 +540,6 @@ public:
     const tombstone_gc_state& get_tombstone_gc_state() const noexcept {
         return _tombstone_gc_state;
     };
-
-    // Add sst to or remove it from the respective compaction_state.sstables_requiring_cleanup set.
-    bool update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges);
 
     // Uncoditionally erase sst from `sstables_requiring_cleanup`
     // Returns true iff sst was found and erased.

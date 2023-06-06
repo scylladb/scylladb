@@ -2733,12 +2733,6 @@ table::as_data_dictionary() const {
     return _impl.wrap(*this);
 }
 
-bool table::update_sstable_cleanup_state(const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges) {
-    // FIXME: it's possible that the sstable belongs to multiple compaction_groups
-    auto& cg = compaction_group_for_sstable(sst);
-    return get_compaction_manager().update_sstable_cleanup_state(cg.as_table_state(), sst, sorted_owned_ranges);
-}
-
 bool table::erase_sstable_cleanup_state(const sstables::shared_sstable& sst) {
     // FIXME: it's possible that the sstable belongs to multiple compaction_groups
     auto& cg = compaction_group_for_sstable(sst);

@@ -1559,6 +1559,10 @@ bool needs_cleanup(const sstables::shared_sstable& sst,
 
 bool compaction_manager::update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges) {
     auto& cs = get_compaction_state(&t);
+    if (sst->is_shared()) {
+        throw std::runtime_error(format("Shared SSTable {} cannot be marked as requiring cleanup, as it can only be processed by resharding",
+                                        sst->get_filename()));
+    }
     if (needs_cleanup(sst, sorted_owned_ranges)) {
         cs.sstables_requiring_cleanup.insert(sst);
         return true;
