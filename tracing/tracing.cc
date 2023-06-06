@@ -129,7 +129,7 @@ trace_state_ptr tracing::create_session(const trace_info& secondary_session_info
     }
 }
 
-future<> tracing::start(cql3::query_processor& qp) {
+future<> tracing::start() {
     try {
         _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(_tracing_backend_helper_class_name, *this);
     } catch (no_such_class& e) {
@@ -139,7 +139,7 @@ future<> tracing::start(cql3::query_processor& qp) {
         throw;
     }
 
-    co_await _tracing_backend_helper_ptr->start(qp);
+    co_await _tracing_backend_helper_ptr->start(_qp);
     _down = false;
     _write_timer.arm(write_period);
 }

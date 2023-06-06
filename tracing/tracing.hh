@@ -420,7 +420,7 @@ public:
     tracing(cql3::query_processor& qp, sstring tracing_backend_helper_class_name);
 
     // Initialize a tracing backend (e.g. tracing_keyspace or logstash)
-    future<> start(cql3::query_processor& qp);
+    future<> start();
 
     future<> stop();
 
