@@ -139,7 +139,7 @@ future<> tracing::start() {
         throw;
     }
 
-    co_await _tracing_backend_helper_ptr->start(_qp);
+    co_await _tracing_backend_helper_ptr->start();
     _down = false;
     _write_timer.arm(write_period);
 }

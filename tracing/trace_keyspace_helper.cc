@@ -208,8 +208,8 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
     });
 }
 
-future<> trace_keyspace_helper::start(cql3::query_processor& qp) {
-    return table_helper::setup_keyspace(qp, KEYSPACE_NAME, "2", _dummy_query_state, { &_sessions, &_sessions_time_idx, &_events, &_slow_query_log, &_slow_query_log_time_idx });
+future<> trace_keyspace_helper::start() {
+    return table_helper::setup_keyspace(qp(), KEYSPACE_NAME, "2", _dummy_query_state, { &_sessions, &_sessions_time_idx, &_events, &_slow_query_log, &_slow_query_log_time_idx });
 }
 
 void trace_keyspace_helper::write_one_session_records(lw_shared_ptr<one_session_records> records) {
