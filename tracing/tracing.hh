@@ -416,7 +416,6 @@ public:
         return !_down;
     }
 
-    static future<> create_tracing(sstring tracing_backend_helper_class_name);
     static future<> start_tracing(sharded<cql3::query_processor>& qp);
     static future<> stop_tracing();
     tracing(sstring tracing_backend_helper_class_name);
