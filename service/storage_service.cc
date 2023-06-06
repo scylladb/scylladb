@@ -2718,12 +2718,14 @@ future<> storage_service::uninit_messaging_service_part() {
     return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
 }
 
-future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
-        sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, raft_group0& group0, cql3::query_processor& qp) {
-    assert(this_shard_id() == 0);
-
+void storage_service::set_group0(raft_group0& group0) {
     _group0 = &group0;
     _raft_topology_change_enabled = _group0->is_raft_enabled() && _db.local().get_config().check_experimental(db::experimental_features_t::feature::RAFT);
+}
+
+future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
+        sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, cql3::query_processor& qp) {
+    assert(this_shard_id() == 0);
 
     set_mode(mode::STARTING);
 
