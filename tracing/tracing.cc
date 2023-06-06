@@ -68,12 +68,6 @@ tracing::tracing(sstring tracing_backend_helper_class_name)
     });
 }
 
-future<> tracing::start_tracing(sharded<cql3::query_processor>& qp, sharded<service::migration_manager>& mm) {
-    return tracing_instance().invoke_on_all([&qp, &mm] (tracing& local_tracing) {
-        return local_tracing.start(qp.local(), mm.local());
-    });
-}
-
 future<> tracing::stop_tracing() {
     return tracing_instance().invoke_on_all([] (tracing& local_tracing) {
         // It might have been shut down while draining
