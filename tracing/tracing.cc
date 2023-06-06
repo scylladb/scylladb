@@ -30,7 +30,6 @@ tracing::tracing(cql3::query_processor& qp, sstring tracing_backend_helper_class
         : _qp(qp)
         , _write_timer([this] { write_timer_callback(); })
         , _thread_name(seastar::format("shard {:d}", this_shard_id()))
-        , _tracing_backend_helper_class_name(std::move(tracing_backend_helper_class_name))
         , _gen(std::random_device()())
         , _slow_query_duration_threshold(default_slow_query_duraion_threshold)
         , _slow_query_record_ttl(default_slow_query_record_ttl) {
@@ -38,9 +37,9 @@ tracing::tracing(cql3::query_processor& qp, sstring tracing_backend_helper_class
 
     std::unique_ptr<i_tracing_backend_helper> helper;
     try {
-        helper = create_object<i_tracing_backend_helper>(_tracing_backend_helper_class_name, *this);
+        helper = create_object<i_tracing_backend_helper>(tracing_backend_helper_class_name, *this);
     } catch (no_such_class& e) {
-        tracing_logger.error("Can't create tracing backend helper {}: not supported", _tracing_backend_helper_class_name);
+        tracing_logger.error("Can't create tracing backend helper {}: not supported", tracing_backend_helper_class_name);
         throw;
     } catch (...) {
         throw;
