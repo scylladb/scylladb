@@ -3325,13 +3325,20 @@ future<> storage_service::update_pending_ranges(sstring reason, acquire_merge_lo
 }
 
 future<> storage_service::keyspace_changed(const sstring& ks_name) {
+    // The keyspace_changed notification is called on all shards
+    // after any keyspace schema change, but we need to mutate_token_metadata
+    // once after all shards are done with database::update_keyspace.
+    // mutate_token_metadata (via update_topology_change_info) will update the
+    // token metadata and effective_replication_map on all shards.
+    if (this_shard_id() != 0) {
+        return make_ready_future<>();
+    }
     // Update pending ranges since keyspace can be changed after we calculate pending ranges.
     sstring reason = format("keyspace {}", ks_name);
-    return container().invoke_on(0, [reason = std::move(reason)] (auto& ss) mutable {
-        return ss.update_pending_ranges(reason, acquire_merge_lock::no).handle_exception([reason = std::move(reason)] (auto ep) {
+    // FIXME: indentation
+        return update_pending_ranges(reason, acquire_merge_lock::no).handle_exception([reason = std::move(reason)] (auto ep) {
             slogger.warn("Failure to update pending ranges for {} ignored", reason);
         });
-    });
 }
 
 future<> storage_service::snitch_reconfigured() {
