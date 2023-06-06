@@ -178,14 +178,18 @@ double size_tiered_backlog_tracker::backlog(const compaction_backlog_tracker::on
 void size_tiered_backlog_tracker::replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) {
     for (auto& sst : old_ssts) {
         if (sst->data_size() > 0) {
-            _total_bytes -= sst->data_size();
-            _all.erase(sst);
+            auto erased = _all.erase(sst);
+            if (erased) {
+                _total_bytes -= sst->data_size();
+            }
         }
     }
     for (auto& sst : new_ssts) {
         if (sst->data_size() > 0) {
-            _total_bytes += sst->data_size();
-            _all.insert(std::move(sst));
+            auto [_, inserted] = _all.insert(sst);
+            if (inserted) {
+                _total_bytes += sst->data_size();
+            }
         }
     }
     refresh_sstables_backlog_contribution();
