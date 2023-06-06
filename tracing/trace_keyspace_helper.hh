@@ -60,7 +60,7 @@ public:
     // requested during the initialization phase.
     virtual future<> start(cql3::query_processor& qp) override;
 
-    virtual future<> stop() override {
+    virtual future<> shutdown() override {
         return _pending_writes.close().then([this] { _qp_anchor = nullptr; });
     };
 
