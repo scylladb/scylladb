@@ -1626,7 +1626,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             supervisor::notify("starting tracing");
-            tracing::tracing::start_tracing(qp).get();
+            tracing.invoke_on_all(&tracing::tracing::start, std::ref(qp)).get();
             auto stop_tracing = defer_verbose_shutdown("tracing", [] {
                 tracing::tracing::stop_tracing().get();
             });
