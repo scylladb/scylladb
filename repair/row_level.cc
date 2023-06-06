@@ -177,6 +177,7 @@ struct row_level_repair_metrics {
     uint64_t row_from_disk_bytes{0};
     uint64_t tx_hashes_nr{0};
     uint64_t rx_hashes_nr{0};
+    uint64_t row_skip_expired_nr{0};
     row_level_repair_metrics() {
         namespace sm = seastar::metrics;
         _metrics.add_group("repair", {
@@ -196,6 +197,8 @@ struct row_level_repair_metrics {
                             sm::description("Total number of rows read from disk on this shard.")),
             sm::make_counter("row_from_disk_bytes", row_from_disk_bytes,
                             sm::description("Total bytes of rows read from disk on this shard.")),
+            sm::make_counter("row_skip_expired_nr", row_skip_expired_nr,
+                            sm::description("Total number of expired rows being skipped to write on this shard.")),
         });
     }
 };
@@ -650,18 +653,59 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, sche
     co_return std::move(row_list);
 }
 
+std::unordered_set<dht::token> get_tokens_from_repair_row_list(const std::list<repair_row>& rows) {
+    std::unordered_set<dht::token> ret;
+    for (auto& row : rows) {
+        // Get the tokens for the rows that are read from the node itself and
+        // ignore the rows received from peer nodes. A row with dirty_on_master
+        // flag set comes from peer node. See to_repair_rows_list.
+        if (!row.dirty_on_master()) {
+            ret.insert(row.get_dk_with_hash()->dk.token());
+        }
+    }
+    return ret;
+}
+
+// Check if the row is expired and it does not shadow any data read from the local node.
+bool can_skip_expired_mf(schema_ptr s, const dht::token& t, mutation_fragment& mf,
+        const std::list<repair_row>& rows,
+        std::optional<std::unordered_set<dht::token>>& keys_from_local_node) {
+    bool skip_write_mf = false;
+    if (mf.is_clustering_row()) {
+        auto& cr = mf.as_clustering_row();
+        auto live = cr.is_live(*s, tombstone(), gc_clock::now());
+        if (!live) {
+            if (!keys_from_local_node) {
+                keys_from_local_node = get_tokens_from_repair_row_list(rows);
+            }
+            bool found_key_in_working_row_buf = keys_from_local_node->contains(t);
+            if (!found_key_in_working_row_buf) {
+                skip_write_mf = true;
+            }
+        }
+    }
+    return skip_write_mf;
+}
+
 void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer) {
     auto cmp = position_in_partition::tri_compare(*s);
     lw_shared_ptr<mutation_fragment> last_mf;
     lw_shared_ptr<const decorated_key_with_hash> last_dk;
+    std::optional<std::unordered_set<dht::token>> keys_from_local_node;
     for (auto& r : rows) {
         thread::maybe_yield();
         if (!r.dirty_on_master()) {
             continue;
         }
-        writer->create_writer();
         auto mf = r.get_mutation_fragment_ptr();
         const auto& dk = r.get_dk_with_hash()->dk;
+
+        if (can_skip_expired_mf(s, dk.token(), *mf, rows, keys_from_local_node)) {
+            _metrics.row_skip_expired_nr++;
+            continue;
+        }
+
+        writer->create_writer();
         if (last_mf && last_dk &&
                 cmp(last_mf->position(), mf->position()) == 0 &&
                 dk.tri_compare(*s, last_dk->dk) == 0 &&
@@ -1218,9 +1262,6 @@ private:
     future<std::list<repair_row>>
     get_row_diff(repair_hash_set set_diff, needs_all_rows_t needs_all_rows = needs_all_rows_t::no) {
         if (needs_all_rows) {
-            if (!_repair_master || _nr_peer_nodes == 1) {
-                return make_ready_future<std::list<repair_row>>(std::move(_working_row_buf));
-            }
             return copy_rows_from_working_row_buf();
         } else {
             return copy_rows_from_working_row_buf_within_set_diff(std::move(set_diff));
@@ -1228,10 +1269,9 @@ private:
     }
 
     future<> do_apply_rows(std::list<repair_row>&& row_diff, update_working_row_buf update_buf) {
-        return do_with(std::move(row_diff), [this, update_buf] (std::list<repair_row>& row_diff) {
-            return with_semaphore(_repair_writer->sem(), 1, [this, update_buf, &row_diff] {
-                _repair_writer->create_writer();
-                return repeat([this, update_buf, &row_diff] () mutable {
+        return do_with(std::move(row_diff), std::optional<std::unordered_set<dht::token>>(), [this, update_buf] (std::list<repair_row>& row_diff, std::optional<std::unordered_set<dht::token>>& keys_from_local_node) {
+            return with_semaphore(_repair_writer->sem(), 1, [this, update_buf, &row_diff, &keys_from_local_node] {
+                return repeat([this, update_buf, &row_diff, &keys_from_local_node] () mutable {
                     if (row_diff.empty()) {
                         return make_ready_future<stop_iteration>(stop_iteration::yes);
                     }
@@ -1244,6 +1284,12 @@ private:
                     // to_repair_rows_list above where the repair_row is created.
                     mutation_fragment mf = std::move(r.get_mutation_fragment());
                     auto dk_with_hash = r.get_dk_with_hash();
+                    if (can_skip_expired_mf(_schema, dk_with_hash->dk.token(), mf, _working_row_buf, keys_from_local_node)) {
+                        _metrics.row_skip_expired_nr++;
+                        row_diff.pop_front();
+                        return make_ready_future<stop_iteration>(stop_iteration::no);
+                    }
+                    _repair_writer->create_writer();
                     return _repair_writer->do_write(std::move(dk_with_hash), std::move(mf)).then([&row_diff] {
                         row_diff.pop_front();
                         return make_ready_future<stop_iteration>(stop_iteration::no);
