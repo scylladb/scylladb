@@ -36,6 +36,17 @@ tracing::tracing(cql3::query_processor& qp, sstring tracing_backend_helper_class
         , _slow_query_record_ttl(default_slow_query_record_ttl) {
     namespace sm = seastar::metrics;
 
+    std::unique_ptr<i_tracing_backend_helper> helper;
+    try {
+        helper = create_object<i_tracing_backend_helper>(_tracing_backend_helper_class_name, *this);
+    } catch (no_such_class& e) {
+        tracing_logger.error("Can't create tracing backend helper {}: not supported", _tracing_backend_helper_class_name);
+        throw;
+    } catch (...) {
+        throw;
+    }
+
+    _tracing_backend_helper_ptr = std::move(helper);
     _metrics.add_group("tracing", {
         sm::make_counter("dropped_sessions", stats.dropped_sessions,
                         sm::description("Counts a number of dropped sessions due to too many pending sessions/records. "
@@ -130,15 +141,6 @@ trace_state_ptr tracing::create_session(const trace_info& secondary_session_info
 }
 
 future<> tracing::start() {
-    try {
-        _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(_tracing_backend_helper_class_name, *this);
-    } catch (no_such_class& e) {
-        tracing_logger.error("Can't create tracing backend helper {}: not supported", _tracing_backend_helper_class_name);
-        throw;
-    } catch (...) {
-        throw;
-    }
-
     co_await _tracing_backend_helper_ptr->start();
     _down = false;
     _write_timer.arm(write_period);
