@@ -145,10 +145,9 @@ future<> tracing::start(cql3::query_processor& qp) {
         throw;
     }
 
-    return _tracing_backend_helper_ptr->start(qp).then([this] {
-        _down = false;
-        _write_timer.arm(write_period);
-    });
+    co_await _tracing_backend_helper_ptr->start(qp);
+    _down = false;
+    _write_timer.arm(write_period);
 }
 
 void tracing::write_timer_callback() {
@@ -170,9 +169,8 @@ future<> tracing::shutdown() {
     write_pending_records();
     _down = true;
     _write_timer.cancel();
-    return _tracing_backend_helper_ptr->shutdown().then([] {
-        tracing_logger.info("Tracing is down");
-    });
+    co_await _tracing_backend_helper_ptr->shutdown();
+    tracing_logger.info("Tracing is down");
 }
 
 future<> tracing::stop() {
@@ -180,7 +178,7 @@ future<> tracing::stop() {
         throw std::logic_error("tracing: stop() called before shutdown()");
     }
 
-    return make_ready_future<>();
+    co_return;
 }
 
 void tracing::set_trace_probability(double p) {
