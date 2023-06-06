@@ -29,15 +29,7 @@ drop_table_statement::drop_table_statement(cf_name cf_name, bool if_exists)
 
 future<> drop_table_statement::check_access(query_processor& qp, const service::client_state& state) const
 {
-    // invalid_request_exception is only thrown synchronously.
-    try {
-        return state.has_column_family_access(qp.db(), keyspace(), column_family(), auth::permission::DROP);
-    } catch (exceptions::invalid_request_exception&) {
-        if (!_if_exists) {
-            throw;
-        }
-        return make_ready_future();
-    }
+    return state.has_column_family_access(keyspace(), column_family(), auth::permission::DROP);
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
@@ -63,7 +55,7 @@ drop_table_statement::prepare_schema_mutations(query_processor& qp, service::mig
                 this->column_family());
     } catch (const exceptions::configuration_exception& e) {
         if (!_if_exists) {
-            co_return coroutine::exception(std::current_exception());
+            co_return coroutine::exception(std::make_exception_ptr(exceptions::invalid_request_exception(e.get_message())));
         }
     }
 

@@ -44,7 +44,7 @@ future<> drop_index_statement::check_access(query_processor& qp, const service::
     if (!cfm) {
         return make_ready_future<>();
     }
-    return state.has_column_family_access(qp.db(), cfm->ks_name(), cfm->cf_name(), auth::permission::ALTER);
+    return state.has_column_family_access(cfm->ks_name(), cfm->cf_name(), auth::permission::ALTER);
 }
 
 void drop_index_statement::validate(query_processor& qp, const service::client_state& state) const

@@ -33,7 +33,7 @@ future<> drop_view_statement::check_access(query_processor& qp, const service::c
         const data_dictionary::database db = qp.db();
         auto&& s = db.find_schema(keyspace(), column_family());
         if (s->is_view()) {
-            return state.has_column_family_access(db, keyspace(), s->view_info()->base_name(), auth::permission::ALTER);
+            return state.has_column_family_access(keyspace(), s->view_info()->base_name(), auth::permission::ALTER);
         }
     } catch (const data_dictionary::no_such_column_family& e) {
         // Will be validated afterwards.

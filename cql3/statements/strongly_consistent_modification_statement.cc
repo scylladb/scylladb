@@ -109,11 +109,10 @@ uint32_t strongly_consistent_modification_statement::get_bound_terms() const {
 }
 
 future<> strongly_consistent_modification_statement::check_access(query_processor& qp, const service::client_state& state) const {
-    const data_dictionary::database db = qp.db();
-    auto f = state.has_column_family_access(db, _schema->ks_name(), _schema->cf_name(), auth::permission::MODIFY);
+    auto f = state.has_column_family_access(_schema->ks_name(), _schema->cf_name(), auth::permission::MODIFY);
     if (_query.value_condition.has_value()) {
-        f = f.then([this, &state, db] {
-           return state.has_column_family_access(db, _schema->ks_name(), _schema->cf_name(), auth::permission::SELECT);
+        f = f.then([this, &state] {
+           return state.has_column_family_access(_schema->ks_name(), _schema->cf_name(), auth::permission::SELECT);
         });
     }
     return f;

@@ -93,13 +93,8 @@ future<> service::client_state::has_function_access(const sstring& ks, const sst
     co_return co_await has_access(ks, {p, r});
 }
 
-future<> service::client_state::has_column_family_access(data_dictionary::database db, const sstring& ks,
+future<> service::client_state::has_column_family_access(const sstring& ks,
                 const sstring& cf, auth::permission p, auth::command_desc::type t) const {
-    // NOTICE: callers of this function tend to assume that this error will be thrown
-    // synchronously and will be intercepted in a try-catch block. Thus, this function can only
-    // be translated to a coroutine after all such callers are inspected and amended first.
-    validation::validate_column_family(db, ks, cf);
-
     return do_with(ks, auth::make_data_resource(ks, cf), [this, p, t](const auto& ks, const auto& r) {
         return has_access(ks, {p, r, t});
     });
