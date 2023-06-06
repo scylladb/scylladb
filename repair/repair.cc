@@ -471,7 +471,7 @@ void repair::task_manager_module::abort_all_repairs() {
             (void)impl.abort();
         }
     }
-    rlogger.info0("Aborted {} repair job(s), aborted={}", _aborted_pending_repairs.size(), _aborted_pending_repairs);
+    rlogger.info0("Started to abort repair jobs={}, nr_jobs={}", _aborted_pending_repairs, _aborted_pending_repairs.size());
 }
 
 float repair::task_manager_module::report_progress(streaming::stream_reason reason) {
@@ -590,9 +590,9 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
 void repair::shard_repair_task_impl::check_failed_ranges() {
     rlogger.info("repair[{}]: stats: repair_reason={}, keyspace={}, tables={}, ranges_nr={}, {}",
         global_repair_id.uuid(), _reason, _status.keyspace, table_names(), ranges.size(), _stats.get_stats());
-    if (nr_failed_ranges) {
-        auto msg = format("repair[{}]: {} out of {} ranges failed, keyspace={}, tables={}, repair_reason={}, nodes_down_during_repair={}",
-                global_repair_id.uuid(), nr_failed_ranges, ranges_size(), _status.keyspace, table_names(), _reason, nodes_down);
+    if (nr_failed_ranges || _aborted || _failed) {
+        auto msg = format("repair[{}]: {} out of {} ranges failed, keyspace={}, tables={}, repair_reason={}, nodes_down_during_repair={}, aborted_by_user={}",
+                global_repair_id.uuid(), nr_failed_ranges, ranges_size(), _status.keyspace, table_names(), _reason, nodes_down, _aborted);
         rlogger.warn("{}", msg);
         throw std::runtime_error(msg);
     } else {
@@ -605,7 +605,16 @@ void repair::shard_repair_task_impl::check_failed_ranges() {
 }
 
 void repair::shard_repair_task_impl::check_in_abort_or_shutdown() {
-    _as.check();
+    try {
+        _as.check();
+    } catch (...) {
+        if (!_aborted) {
+            _aborted = true;
+            rlogger.warn("repair[{}]: Repair job aborted by user, job={}, keyspace={}, tables={}",
+                global_repair_id.uuid(), global_repair_id.uuid(), _status.keyspace, table_names());;
+        }
+        throw;
+    }
 }
 
 repair_neighbors repair::shard_repair_task_impl::get_repair_neighbors(const dht::token_range& range) {
@@ -986,14 +995,17 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
 // same nodes as replicas.
 future<> repair::shard_repair_task_impl::run() {
     rs.get_repair_module().add_shard_task_id(global_repair_id.id, _status.id);
-    return do_repair_ranges().then([this] {
-        check_failed_ranges();
+    try {
+        co_await do_repair_ranges();
         rs.get_repair_module().remove_shard_task_id(global_repair_id.id);
-        return make_ready_future<>();
-    }).handle_exception([this] (std::exception_ptr eptr) {
-        rs.get_repair_module().remove_shard_task_id(_status.sequence_number);
-        return make_exception_future<>(std::move(eptr));
-    });
+    } catch (...) {
+        _failed = true;
+        rlogger.debug("repair[{}]: got error in do_repair_ranges: {}",
+            global_repair_id.uuid(), std::current_exception());
+        rs.get_repair_module().remove_shard_task_id(global_repair_id.id);
+    }
+    check_failed_ranges();
+    co_return;
 }
 
 // repair_start() can run on any cpu; It runs on cpu0 the function
@@ -1246,7 +1258,7 @@ future<> repair::user_requested_repair_task_impl::run() {
             return make_ready_future<>();
         }).get();
     }).handle_exception([id] (std::exception_ptr ep) {
-        rlogger.warn("repair[{}]: repair_tracker run failed: {}", id.uuid(), ep);
+        rlogger.warn("repair[{}]: user-requested repair failed: {}", id.uuid(), ep);
         return make_exception_future<>(ep);
     });
 }
