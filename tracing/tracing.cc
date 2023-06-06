@@ -26,8 +26,9 @@ std::vector<sstring> trace_type_names = {
     "REPAIR"
 };
 
-tracing::tracing(sstring tracing_backend_helper_class_name)
-        : _write_timer([this] { write_timer_callback(); })
+tracing::tracing(cql3::query_processor& qp, sstring tracing_backend_helper_class_name)
+        : _qp(qp)
+        , _write_timer([this] { write_timer_callback(); })
         , _thread_name(seastar::format("shard {:d}", this_shard_id()))
         , _tracing_backend_helper_class_name(std::move(tracing_backend_helper_class_name))
         , _gen(std::random_device()())
