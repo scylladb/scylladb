@@ -1,4 +1,6 @@
 
+.. _networking-ports:
+
 ScyllaDB uses the following ports:
 
 ======  ============================================  ========

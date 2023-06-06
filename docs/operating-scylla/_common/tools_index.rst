@@ -12,7 +12,7 @@
 * sstablemetadata - Prints metadata about a specified SSTable.
 * sstablerepairedset - Mark specific SSTables as repaired or unrepaired.
 * `scyllatop <https://www.scylladb.com/2016/03/22/scyllatop/>`_ - A terminal base top-like tool for scylladb collectd/prometheus metrics.
-* :doc:`scylla_dev_mode_setup</getting-started/install-scylla/dev-mod>` - run Scylla in Developer Mode.
+* :doc:`scylla_dev_mode_setup</getting-started/installation-common/dev-mod>` - run Scylla in Developer Mode.
 * :doc:`perftune</operating-scylla/admin-tools/perftune>` - performance configuration.
 
 Run each tool with ``-h``, ``--help`` for full options description.
