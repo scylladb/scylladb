@@ -14,12 +14,13 @@
 #include "mutation/mutation_fragment.hh"
 #include "query-request.hh"
 #include "schema/schema_fwd.hh"
-#include "tracing/tracing.hh"
 
 #include <boost/range/iterator_range.hpp>
 
 #include <iterator>
 #include <memory>
+
+namespace tracing { class trace_state_ptr; }
 
 namespace db::view {
 

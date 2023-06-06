@@ -13,10 +13,11 @@
 #include "query-request.hh"
 #include "schema/schema_fwd.hh"
 #include "secondary_index_manager.hh"
-#include "tracing/tracing.hh"
 #include "view_info.hh"
 
 #include <memory>
+
+namespace tracing { class trace_state_ptr; }
 
 namespace db::index {
 

@@ -19,7 +19,6 @@
 #include "utils/phased_barrier.hh"
 #include "utils/histogram.hh"
 #include "mutation/partition_version.hh"
-#include "tracing/trace_state.hh"
 #include <seastar/core/metrics_registration.hh>
 #include "mutation/mutation_cleaner.hh"
 #include "utils/double-decker.hh"
@@ -36,6 +35,8 @@ class flat_mutation_reader_v2;
 namespace replica {
 class memtable_entry;
 }
+
+namespace tracing { class trace_state_ptr; }
 
 namespace cache {
 
