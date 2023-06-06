@@ -180,7 +180,7 @@ future<> tracing::shutdown() {
     write_pending_records();
     _down = true;
     _write_timer.cancel();
-    return _tracing_backend_helper_ptr->stop().then([] {
+    return _tracing_backend_helper_ptr->shutdown().then([] {
         tracing_logger.info("Tracing is down");
     });
 }

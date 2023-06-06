@@ -156,7 +156,7 @@ public:
     i_tracing_backend_helper(tracing& tr) : _local_tracing(tr) {}
     virtual ~i_tracing_backend_helper() {}
     virtual future<> start(cql3::query_processor& qp, service::migration_manager& mm) = 0;
-    virtual future<> stop() = 0;
+    virtual future<> shutdown() = 0;
 
     /**
      * Write a bulk of tracing records.
