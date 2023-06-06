@@ -81,7 +81,7 @@ future<> tracing::start_tracing(sharded<cql3::query_processor>& qp, sharded<serv
 future<> tracing::stop_tracing() {
     return tracing_instance().invoke_on_all([] (tracing& local_tracing) {
         // It might have been shut down while draining
-        return local_tracing._down ? make_ready_future<>() : local_tracing.shutdown();
+        return local_tracing.shutdown();
     });
 }
 
@@ -172,11 +172,11 @@ void tracing::write_timer_callback() {
 }
 
 future<> tracing::shutdown() {
-    tracing_logger.info("Asked to shut down");
     if (_down) {
-        throw std::logic_error("tracing: shutdown() called for the service that is already down");
+        co_return;
     }
 
+    tracing_logger.info("Asked to shut down");
     write_pending_records();
     _down = true;
     _write_timer.cancel();
@@ -185,11 +185,7 @@ future<> tracing::shutdown() {
 }
 
 future<> tracing::stop() {
-    if (!_down) {
-        throw std::logic_error("tracing: stop() called before shutdown()");
-    }
-
-    co_return;
+    co_await shutdown();
 }
 
 void tracing::set_trace_probability(double p) {
