@@ -145,6 +145,8 @@ struct i_tracing_backend_helper {
 
 protected:
     tracing& _local_tracing;
+    cql3::query_processor& qp() noexcept;
+    const cql3::query_processor& qp() const noexcept;
 
 public:
     using ptr_type = std::unique_ptr<i_tracing_backend_helper>;
@@ -287,6 +289,7 @@ private:
 };
 
 class tracing : public seastar::async_sharded_service<tracing> {
+    friend class i_tracing_backend_helper;
 public:
     static const gc_clock::duration write_period;
     // maximum number of sessions pending for write per shard
@@ -658,4 +661,13 @@ inline span_id span_id::make_span_id() {
     // make sure the value is always greater than 0
     return 1 + (tracing::get_local_tracing_instance().get_next_rand_uint64() << 1);
 }
+
+inline cql3::query_processor& i_tracing_backend_helper::qp() noexcept {
+    return _local_tracing._qp;
+}
+
+inline const cql3::query_processor& i_tracing_backend_helper::qp() const noexcept {
+    return _local_tracing._qp;
+}
+
 }
