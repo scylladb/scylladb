@@ -203,7 +203,6 @@ public:
         inet_address_vector_replica_set endpoints;
         // How many participants are required for a quorum (i.e. is it SERIAL or LOCAL_SERIAL).
         size_t required_participants;
-        bool has_dead_endpoints;
     };
 
     gms::feature_service& features() noexcept { return _features; }
