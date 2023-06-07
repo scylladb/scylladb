@@ -1373,11 +1373,6 @@ future<> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metada
 }
 
 future<>
-database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory) {
-    return create_keyspace(ksm, erm_factory, false, system_keyspace::no);
-}
-
-future<>
 database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, bool is_bootstrap, system_keyspace system) {
     if (_keyspaces.contains(ksm->name())) {
         co_return;
@@ -1396,6 +1391,14 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
     if (datadir != "") {
         co_await io_check([&datadir] { return touch_directory(datadir); });
     }
+}
+
+future<> database::create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ks_metadata) {
+    co_await sharded_db.invoke_on_all([&] (replica::database& db) -> future<> {
+        auto ksm = keyspace_metadata::new_keyspace(ks_metadata);
+        co_await db.create_keyspace(ksm, proxy.local().get_erm_factory(), false, system_keyspace::no);
+        co_await db.get_notifier().create_keyspace(ksm);
+    });
 }
 
 future<>
