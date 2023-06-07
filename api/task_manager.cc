@@ -155,16 +155,15 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
 
     tm::get_task_status.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
-        // FIXME: fix indentation
         tasks::task_manager::foreign_task_ptr task;
         try {
-        task = co_await tasks::task_manager::invoke_on_task(ctx.tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
-            auto state = task->get_status().state;
-            if (state == tasks::task_manager::task_state::done || state == tasks::task_manager::task_state::failed) {
-                task->unregister_task();
-            }
-            co_return std::move(task);
-        }));
+            task = co_await tasks::task_manager::invoke_on_task(ctx.tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
+                auto state = task->get_status().state;
+                if (state == tasks::task_manager::task_state::done || state == tasks::task_manager::task_state::failed) {
+                    task->unregister_task();
+                }
+                co_return std::move(task);
+            }));
         } catch (tasks::task_manager::task_not_found& e) {
             throw bad_param_exception(e.what());
         }
@@ -174,14 +173,13 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
 
     tm::abort_task.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
-        // FIXME: fix indentation
         try {
-        co_await tasks::task_manager::invoke_on_task(ctx.tm, id, [] (tasks::task_manager::task_ptr task) -> future<> {
-            if (!task->is_abortable()) {
-                co_await coroutine::return_exception(std::runtime_error("Requested task cannot be aborted"));
-            }
-            co_await task->abort();
-        });
+            co_await tasks::task_manager::invoke_on_task(ctx.tm, id, [] (tasks::task_manager::task_ptr task) -> future<> {
+                if (!task->is_abortable()) {
+                    co_await coroutine::return_exception(std::runtime_error("Requested task cannot be aborted"));
+                }
+                co_await task->abort();
+            });
         } catch (tasks::task_manager::task_not_found& e) {
             throw bad_param_exception(e.what());
         }
@@ -190,16 +188,15 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
 
     tm::wait_task.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->param["task_id"]}};
-        // FIXME: fix indentation
         tasks::task_manager::foreign_task_ptr task;
         try {
-        task = co_await tasks::task_manager::invoke_on_task(ctx.tm, id, std::function([] (tasks::task_manager::task_ptr task) {
-            return task->done().then_wrapped([task] (auto f) {
-                task->unregister_task();
-                f.get();
-                return make_foreign(task);
-            });
-        }));
+            task = co_await tasks::task_manager::invoke_on_task(ctx.tm, id, std::function([] (tasks::task_manager::task_ptr task) {
+                return task->done().then_wrapped([task] (auto f) {
+                    task->unregister_task();
+                    f.get();
+                    return make_foreign(task);
+                });
+            }));
         } catch (tasks::task_manager::task_not_found& e) {
             throw bad_param_exception(e.what());
         }
@@ -213,17 +210,16 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
         std::queue<tasks::task_manager::foreign_task_ptr> q;
         utils::chunked_vector<full_task_status> res;
 
-        // FIXME: fix indentation
         tasks::task_manager::foreign_task_ptr task;
         try {
-        // Get requested task.
-        task = co_await tasks::task_manager::invoke_on_task(_ctx.tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
-            auto state = task->get_status().state;
-            if (state == tasks::task_manager::task_state::done || state == tasks::task_manager::task_state::failed) {
-                task->unregister_task();
-            }
-            co_return task;
-        }));
+            // Get requested task.
+            task = co_await tasks::task_manager::invoke_on_task(_ctx.tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
+                auto state = task->get_status().state;
+                if (state == tasks::task_manager::task_state::done || state == tasks::task_manager::task_state::failed) {
+                    task->unregister_task();
+                }
+                co_return task;
+            }));
         } catch (tasks::task_manager::task_not_found& e) {
             throw bad_param_exception(e.what());
         }
@@ -256,9 +252,8 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
 
     tm::get_and_update_ttl.set(r, [&cfg] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         uint32_t ttl = cfg.task_ttl_seconds();
-        // FIXME: fix indentation
         try {
-        co_await cfg.task_ttl_seconds.set_value_on_all_shards(req->query_parameters["ttl"], utils::config_file::config_source::API);
+            co_await cfg.task_ttl_seconds.set_value_on_all_shards(req->query_parameters["ttl"], utils::config_file::config_source::API);
         } catch (...) {
             throw bad_param_exception(fmt::format("{}", std::current_exception()));
         }
