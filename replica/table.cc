@@ -1403,27 +1403,21 @@ int64_t table::get_unleveled_sstables() const {
     return 0;
 }
 
-future<std::unordered_set<sstring>> table::get_sstables_by_partition_key(const sstring& key) const {
-    return do_with(std::unordered_set<sstring>(), make_lw_shared<sstables::sstable_set::incremental_selector>(get_sstable_set().make_incremental_selector()),
-            partition_key(partition_key::from_nodetool_style_string(_schema, key)),
-            [this] (std::unordered_set<sstring>& filenames, lw_shared_ptr<sstables::sstable_set::incremental_selector>& sel, partition_key& pk) {
-        return do_with(dht::decorated_key(dht::decorate_key(*_schema, pk)),
-                [this, &filenames, &sel](dht::decorated_key& dk) mutable {
-            const auto& sst = sel->select(dk).sstables;
-            auto hk = sstables::sstable::make_hashed_key(*_schema, dk.key());
+future<std::unordered_set<sstables::shared_sstable>> table::get_sstables_by_partition_key(const sstring& key) const {
+    auto pk = partition_key::from_nodetool_style_string(_schema, key);
+    auto dk = dht::decorate_key(*_schema, pk);
+    auto hk = sstables::sstable::make_hashed_key(*_schema, dk.key());
 
-            return do_for_each(sst, [&filenames, &dk, hk = std::move(hk)] (std::vector<sstables::shared_sstable>::const_iterator::reference s) mutable {
-                auto name = s->get_filename();
-                return s->has_partition_key(hk, dk).then([name = std::move(name), &filenames] (bool contains) mutable {
-                    if (contains) {
-                        filenames.insert(name);
-                    }
-                });
-            });
-        }).then([&filenames] {
-            return make_ready_future<std::unordered_set<sstring>>(filenames);
-        });
-    });
+    auto sel = make_lw_shared<sstables::sstable_set::incremental_selector>(get_sstable_set().make_incremental_selector());
+    const auto& sst = sel->select(dk).sstables;
+
+    std::unordered_set<sstables::shared_sstable> ssts;
+    for (auto s : sst) {
+        if (co_await s->has_partition_key(hk, dk)) {
+            ssts.insert(s);
+        }
+    }
+    co_return ssts;
 }
 
 const sstables::sstable_set& table::get_sstable_set() const {
