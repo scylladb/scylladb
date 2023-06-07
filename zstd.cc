@@ -24,56 +24,18 @@ static const sstring COMPRESSOR_NAME = compressor::namespace_prefix + "ZstdCompr
 static const size_t DCTX_SIZE = ZSTD_estimateDCtxSize();
 
 class zstd_processor : public compressor {
-    int _compression_level = 3;
-    size_t _cctx_size;
+    int _compression_level;
 
-    static auto with_dctx(std::invocable<ZSTD_DCtx*> auto f) {
-        // The decompression context has a fixed size of ~128 KiB,
-        // so we don't bother ever resizing it the way we do with
-        // the compression context.
-        static thread_local std::unique_ptr<char[]> buf = std::invoke([&] {
-            auto ptr = std::unique_ptr<char[]>(new char[DCTX_SIZE]);
-            auto dctx = ZSTD_initStaticDCtx(ptr.get(), DCTX_SIZE);
-            if (!dctx) {
-                // Barring a bug, this should never happen.
-                throw std::runtime_error("Unable to initialize ZSTD decompression context");
-            }
-            return ptr;
-        });
-        return f(reinterpret_cast<ZSTD_DCtx*>(buf.get()));
-    }
+    // Note: std::shared_ptr because seastar ones do not allow
+    // custom deleter objects, and lw_shared does not allow adopting
+    // opaque structures.
+    std::shared_ptr<ZSTD_CCtx> _cctx;
+    std::shared_ptr<ZSTD_DCtx> _dctx;
 
-    static auto with_cctx(size_t cctx_size, std::invocable<ZSTD_CCtx*> auto f) {
-        // See the comments to reusable_buffer for a rationale of using it for compression.
-        static thread_local utils::reusable_buffer<lowres_clock> buf(std::chrono::seconds(600));
-        static thread_local size_t last_seen_reallocs = buf.reallocs();
-        auto guard = utils::reusable_buffer_guard(buf);
-        // Note that the compression context isn't initialized with a particular
-        // compression config, but only with a particular size. As long as
-        // it is big enough, we can reuse a context initialized by an
-        // unrelated instance of zstd_processor without reinitializing it.
-        //
-        // If the existing context isn't big enough, the reusable buffer will
-        // be resized by the next line, and the following `if` will notice that
-        // and reinitialize the context.
-        auto view = guard.get_temporary_buffer(cctx_size);
-        if (last_seen_reallocs != buf.reallocs()) {
-            // Either the buffer just grew because we requested a buffer bigger
-            // than its last capacity, or it was shrunk some time ago by a timer.
-            // Either way, the resize destroyed the contents of the buffer and
-            // we have to initialize the context anew.
-            auto cctx = ZSTD_initStaticCCtx(view.data(), buf.size());
-            if (!cctx) {
-                // Barring a bug, this should never happen.
-                throw std::runtime_error("Unable to initialize ZSTD compression context");
-            }
-            last_seen_reallocs = buf.reallocs();
-        }
-        return f(reinterpret_cast<ZSTD_CCtx*>(view.data()));
-    }
-
+    static int read_compression_level(const opt_getter&);
 public:
     zstd_processor(const opt_getter&);
+    zstd_processor(const zstd_processor&, int);
 
     size_t uncompress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
@@ -88,11 +50,58 @@ public:
 };
 
 zstd_processor::zstd_processor(const opt_getter& opts)
-    : compressor(COMPRESSOR_NAME) {
-    auto level = opts(COMPRESSION_LEVEL);
+    : compressor(COMPRESSOR_NAME)
+    // Code here was very clever, trying to minimize allocated zctx sizes
+    // based on (maybe) set chunk size from sstables. However, doing so
+    // severely hampers our ability to do arbitrary sized "streaming" compression
+    // using the same context. While we can use ZSTD_estimateCStreamSize_usingCParams
+    // and set chunk size to 0 (allow anything), the end result is not much better
+    // in footprint than just letting the compressor allocate as it prefers.
+    // And I can't even get dstream inited to a proper size to work with
+    // varying compressed streams as source.
+    // So, in the interest of keeping it both simple and working, it seems
+    // that ensuring we instead re-use compressor objects seem like a better
+    // option to reduce footprint. (See compressor.cc)
+    , _compression_level(read_compression_level(opts))
+    , _cctx(ZSTD_createCCtx(), &ZSTD_freeCCtx)
+    , _dctx(ZSTD_createDCtx(), &ZSTD_freeDCtx)
+{
+
+    if (!_cctx) {
+        throw std::runtime_error("Unable to initialize ZSTD compression context");
+    }
+    if (!_dctx) {
+        throw std::runtime_error("Unable to initialize ZSTD decompression context");
+    }
+}
+
+zstd_processor::zstd_processor(const zstd_processor& p, int cl)
+    : compressor(COMPRESSOR_NAME)
+    , _compression_level(cl)
+    , _cctx(p._cctx)
+    , _dctx(p._dctx)
+{}
+
+/**
+ * Implement this, as we do in fact have _one_ relevant parameter, 
+ * which should be respected. If compression level differs, we simply
+ * create another instance of us sharing the zcontexts.
+*/
+zstd_processor::ptr_type zstd_processor::replace(const opt_getter& opts) const {
+    auto l = read_compression_level(opts);
+    if (l != _compression_level) {
+        return make_shared<zstd_processor>(*this, l);
+    }
+    return {};
+}
+
+int zstd_processor::read_compression_level(const opt_getter& opts) {
+    int compression_level = 3;
+
+    auto level = opts ? opts(COMPRESSION_LEVEL) : std::nullopt;
     if (level) {
         try {
-            _compression_level = std::stoi(*level);
+            compression_level = std::stoi(*level);
         } catch (const std::exception& e) {
             throw exceptions::syntax_exception(
                 format("Invalid integer value {} for {}", *level, COMPRESSION_LEVEL));
@@ -100,53 +109,24 @@ zstd_processor::zstd_processor(const opt_getter& opts)
 
         auto min_level = ZSTD_minCLevel();
         auto max_level = ZSTD_maxCLevel();
-        if (min_level > _compression_level || _compression_level > max_level) {
+        if (min_level > compression_level || compression_level > max_level) {
             throw exceptions::configuration_exception(
-                format("{} must be between {} and {}, got {}", COMPRESSION_LEVEL, min_level, max_level, _compression_level));
+                format("{} must be between {} and {}, got {}", COMPRESSION_LEVEL, min_level, max_level, compression_level));
         }
     }
-
-    auto chunk_len_kb = opts(compression_parameters::CHUNK_LENGTH_KB);
-    if (!chunk_len_kb) {
-        chunk_len_kb = opts(compression_parameters::CHUNK_LENGTH_KB_ERR);
-    }
-    auto chunk_len = chunk_len_kb
-       // This parameter has already been validated.
-       ? std::stoi(*chunk_len_kb) * 1024
-       : compression_parameters::DEFAULT_CHUNK_LENGTH;
-
-    // We assume that the uncompressed input length is always <= chunk_len.
-    auto cparams = ZSTD_getCParams(_compression_level, chunk_len, 0);
-    _cctx_size = ZSTD_estimateCCtxSize_usingCParams(cparams);
-}
-
-/**
- * Implement this, as we do in fact have relevant parameters, 
- * which should be respected. 
-*/
-zstd_processor::ptr_type zstd_processor::replace(const opt_getter& opts) const {
-    auto tmp = ::make_shared<zstd_processor>(opts);
-    if (tmp->_cctx_size != _cctx_size || tmp->_compression_level != _compression_level) {
-        return tmp;
-    }
-    return {};
+    return compression_level;
 }
 
 size_t zstd_processor::uncompress(const char* input, size_t input_len, char* output, size_t output_len) const {
-    auto ret = with_dctx([&] (ZSTD_DCtx* dctx) {
-        return ZSTD_decompressDCtx(dctx, output, output_len, input, input_len);
-    });
+    auto ret = ZSTD_decompressDCtx(_dctx.get(), output, output_len, input, input_len);
     if (ZSTD_isError(ret)) {
         throw std::runtime_error( format("ZSTD decompression failure: {}", ZSTD_getErrorName(ret)));
     }
     return ret;
 }
 
-
 size_t zstd_processor::compress(const char* input, size_t input_len, char* output, size_t output_len) const {
-    auto ret = with_cctx(_cctx_size, [&] (ZSTD_CCtx* cctx) {
-        return ZSTD_compressCCtx(cctx, output, output_len, input, input_len, _compression_level);
-    });
+    auto ret = ZSTD_compressCCtx(_cctx.get(), output, output_len, input, input_len, _compression_level);
     if (ZSTD_isError(ret)) {
         throw std::runtime_error( format("ZSTD compression failure: {}", ZSTD_getErrorName(ret)));
     }
