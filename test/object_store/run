@@ -12,45 +12,48 @@ import shutil
 import signal
 import yaml
 from contextlib import contextmanager
+from dataclasses import dataclass
 
-print('Scylla is: ' + run.find_scylla() + '.')
 success = True
 
 ssl = '--ssl' in sys.argv
-if ssl:
-    cmd = run.run_scylla_ssl_cql_cmd
-    check_cql = run.check_ssl_cql
-else:
-    cmd = run.run_scylla_cmd
-    check_cql = run.check_cql
 
 test_tempdir = run.pid_to_dir(os.getpid())
 os.mkdir(test_tempdir)
-s3_server_address = os.environ['S3_SERVER_ADDRESS_FOR_TEST']
-s3_server_port = int(os.environ['S3_SERVER_PORT_FOR_TEST'])
-s3_public_bucket = os.environ['S3_PUBLIC_BUCKET_FOR_TEST']
 
 
-with open(test_tempdir + '/object_storage.yaml', 'w') as config_file:
-    yaml.dump({ 'endpoints': [
-            {
-                'name': s3_server_address,
-                'port': s3_server_port,
-            }
-        ]
-    }, config_file)
+@dataclass
+class S3_Server:
+    address: str
+    port: int
+    bucket_name: str
 
-def run_scylla_cmd(pid, dir):
-    global cmd
-    (c, e) = cmd(pid, dir)
-    c += ['--object-storage-config-file', test_tempdir + '/object_storage.yaml']
-    return (c, e)
 
 def teardown():
     sys.stdout.flush()
     log = open(os.path.join(test_tempdir, 'log'), 'rb')
     shutil.copyfileobj(log, sys.stdout.buffer)
     shutil.rmtree(test_tempdir)
+
+
+def get_scylla_with_s3_cmd(tempdir, ssl, s3_server):
+    '''return the command args and environmental variables for running scylla'''
+    scylla = run.find_scylla()
+    print('Scylla under test:', scylla)
+    def make_run_cmd(pid, d):
+        if ssl:
+            cmd, env = run.run_scylla_ssl_cql_cmd(pid, d)
+        else:
+            cmd, env = run.run_scylla_cmd(pid, d)
+
+        os_conf_path = os.path.join(tempdir, 'object_storage.yaml')
+        with open(os_conf_path, 'w', encoding='utf-8') as os_config_file:
+            s3_endpoint = {'name': s3_server.address,
+                           'port': s3_server.port}
+            yaml.dump({'endpoints': [s3_endpoint]}, os_config_file)
+        cmd += ['--object-storage-config-file', os_conf_path]
+        return cmd, env
+    return make_run_cmd
 
 
 def check_with_cql(ip, ssl):
@@ -100,8 +103,9 @@ def kill_with_dir(old_pid, run_dir):
 
 
 @contextmanager
-def managed_cluster(run_dir, ssl):
+def managed_cluster(run_dir, ssl, s3_server):
     '''return scylla's pid, IP and a connection to it'''
+    run_scylla_cmd = get_scylla_with_s3_cmd(run_dir, ssl, s3_server)
     pid = run_with_dir(run_scylla_cmd, run_dir)
     ip = run.pid_to_ip(pid)
     run.wait_for_services(pid, [check_with_cql(ip, ssl)])
@@ -121,15 +125,19 @@ rows = [('0', 'zero'),
         ('2', 'two')]
 
 
-with managed_cluster(test_tempdir, ssl) \
+s3_server = S3_Server(os.environ['S3_SERVER_ADDRESS_FOR_TEST'],
+                      int(os.environ['S3_SERVER_PORT_FOR_TEST']),
+                      os.environ['S3_PUBLIC_BUCKET_FOR_TEST'])
+
+with managed_cluster(test_tempdir, ssl, s3_server) \
      as (ip, cluster):
     atexit.register(teardown)
-    print(f'Create keyspace (minio listening at {s3_server_address})')
+    print(f'Create keyspace (minio listening at {s3_server.address})')
     replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
                                       'replication_factor': '1'})
     storage_opts = format_tuples(type='S3',
-                                 endpoint=s3_server_address,
-                                 bucket=s3_public_bucket)
+                                 endpoint=s3_server.address,
+                                 bucket=s3_server.bucket_name)
 
     conn = cluster.connect()
     conn.execute((f"CREATE KEYSPACE {ks} WITH"
@@ -156,7 +164,7 @@ with managed_cluster(test_tempdir, ssl) \
             success = False
 
 print('Restart scylla')
-with managed_cluster(test_tempdir, ssl) \
+with managed_cluster(test_tempdir, ssl, s3_server) \
      as (ip, cluster):
     conn = cluster.connect()
     res = conn.execute(f"SELECT * FROM {ks}.{cf};")
