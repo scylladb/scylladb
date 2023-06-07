@@ -71,10 +71,15 @@ void set_task_manager_test(http_context& ctx, routes& r) {
 
     tmt::unregister_test_task.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->query_parameters["task_id"]}};
+        // FIXME: fix indentation
+        try {
         co_await tasks::task_manager::invoke_on_task(ctx.tm, id, [] (tasks::task_manager::task_ptr task) -> future<> {
             tasks::test_task test_task{task};
             co_await test_task.unregister_task();
         });
+        } catch (tasks::task_manager::task_not_found& e) {
+            throw bad_param_exception(e.what());
+        }
         co_return json_void();
     });
 
@@ -84,6 +89,8 @@ void set_task_manager_test(http_context& ctx, routes& r) {
         bool fail = it != req->query_parameters.end();
         std::string error = fail ? it->second : "";
 
+        // FIXME: fix indentation
+        try {
         co_await tasks::task_manager::invoke_on_task(ctx.tm, id, [fail, error = std::move(error)] (tasks::task_manager::task_ptr task) {
             tasks::test_task test_task{task};
             if (fail) {
@@ -93,6 +100,9 @@ void set_task_manager_test(http_context& ctx, routes& r) {
             }
             return make_ready_future<>();
         });
+        } catch (tasks::task_manager::task_not_found& e) {
+            throw bad_param_exception(e.what());
+        }
         co_return json_void();
     });
 }
