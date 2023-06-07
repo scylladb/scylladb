@@ -98,7 +98,7 @@ The dump contains the following information:
 * Limit of memory resources: 209715200;
 * Dump of the permit states;
 
-Permits are grouped by table, operation, and state, while groups are sorted by memory consumption.
+Permits are grouped by table, operation (see below), and state, while groups are sorted by memory consumption.
 The first group in this example contains 34 permits, all for reads against table `ks1.table1_mv_0`, all data-query reads and in state `active/await`.
 
 The dump can reveal what the bottleneck holding up the reads is:
@@ -107,3 +107,29 @@ The dump can reveal what the bottleneck holding up the reads is:
 * Memory - memory resource is maxed out (usually even above the limit);
 
 There might be inactive reads if CPU is a bottleneck; otherwise, there shouldn't be any (they should be evicted to free up resources).
+
+### Operations
+
+Table of all permit operations possibly contained in disgnostic dumps, from the user or system semaphore:
+
+| Operation name                                | Description                                                                                                                  |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `counter-read-before-write`                   | Read-before-write done on counter writes.                                                                                    |
+| `data-query`                                  | Regular single-partition query.                                                                                              |
+| `multishard-mutation-query`                   | Part of a range-scan, which runs on the coordinator-shard of the scan.                                                       |
+| `mutation-query`                              | Single-partition read done on behalf of a read-repair.                                                                       |
+| `push-view-updates-1`                         | Reader which reads the applied base-table mutation, when it needs view update generation (no read-before-write needed).      |
+| `push-view-updates-2`                         | Reader which reads the applied base-table mutation, when it needs view update generation (read-before-write is also needed). |
+| `shard-reader`                                | Part of a range-scan, which runs on replica-shards.                                                                          |
+
+
+Table of all permit operations possibly contained in disgnostic dumps, from the streaming semaphore:
+
+| Operation name                                | Description                                                                                                                  |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `repair-meta`                                 | Repair reader.                                                                                                               |
+| `sstables_loader::load_and_stream()`          | Sstable reader, reading sstables on behalf of load-and-stream.                                                               |
+| `stream-session`                              | Permit created for streaming (reciever side).                                                                                |
+| `stream-transfer-task`                        | Permit created for streaming (sender side).                                                                                  |
+| `view_builder`                                | Permit created for the view-builder service.                                                                                 |
+| `view_update_generator`                       | Reader which reads the staging sstables, for which view updates have to be generated.                                        |
