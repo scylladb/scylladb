@@ -438,14 +438,14 @@ private:
      * @note This method is allowed to throw.
      * @param msg the trace message to store
      */
-    void trace_internal(sstring msg);
+    void trace_internal(std::string&& msg);
 
     /**
      * Add a single trace entry - a special case for a simple string.
      *
      * @param msg trace message
      */
-    void trace(sstring msg) noexcept {
+    void trace(std::string&& msg) noexcept {
         try {
             trace_internal(std::move(msg));
         } catch (...) {
@@ -453,9 +453,10 @@ private:
             ++_local_tracing_ptr->stats.trace_errors;
         }
     }
+
     void trace(const char* msg) noexcept {
         try {
-            trace_internal(sstring(msg));
+            trace_internal(std::string(msg));
         } catch (...) {
             // Bump up an error counter and ignore
             ++_local_tracing_ptr->stats.trace_errors;
@@ -486,7 +487,7 @@ private:
     template <typename... T>
     friend void trace(const trace_state_ptr& p, fmt::format_string<T...>, T&&... args) noexcept;
 
-    friend void trace(const trace_state_ptr& p, const sstring& msg) noexcept;
+    friend void trace(const trace_state_ptr& p, std::string&& msg) noexcept;
 
     friend void set_page_size(const trace_state_ptr& p, int32_t val);
     friend void set_request_size(const trace_state_ptr& p, size_t s) noexcept;
@@ -530,7 +531,7 @@ public:
     }
 };
 
-inline void trace_state::trace_internal(sstring message) {
+inline void trace_state::trace_internal(std::string&& message) {
     if (is_in_state(state::inactive)) {
         throw std::logic_error("trying to use a trace() before begin() for \"" + message + "\" tracepoint");
     }
@@ -715,9 +716,9 @@ inline void trace(const trace_state_ptr& p, fmt::format_string<T...> fmt, T&&...
     }
 }
 
-inline void trace(const trace_state_ptr& p, const sstring& msg) noexcept {
+inline void trace(const trace_state_ptr& p, std::string&& msg) noexcept {
     if (p && !p->ignore_events()) {
-        p->trace(msg);
+        p->trace(std::move(msg));
     }
 }
 
