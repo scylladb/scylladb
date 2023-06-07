@@ -1603,6 +1603,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 group0_service.abort().get();
             });
 
+            // Set up group0 service earlier since it is needed by group0 setup just below
+            ss.local().set_group0(group0_service);
+
             // Setup group0 early in case the node is bootsrapped already and the group exists
             // Need to do it before allowing incomming messaging service connections since
             // storage proxy's and migration manager's verbs may access group0
@@ -1615,7 +1618,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return ss.local().join_cluster(cdc_generation_service.local(), sys_dist_ks, proxy, group0_service, qp.local());
+                return ss.local().join_cluster(cdc_generation_service.local(), sys_dist_ks, proxy, qp.local());
             }).get();
 
             sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {

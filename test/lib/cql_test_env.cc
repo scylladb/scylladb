@@ -917,8 +917,10 @@ public:
                 group0_service.abort().get();
             });
 
+            ss.local().set_group0(group0_service);
+
             try {
-                ss.local().join_cluster(cdc_generation_service.local(), sys_dist_ks, proxy, group0_service, qp.local()).get();
+                ss.local().join_cluster(cdc_generation_service.local(), sys_dist_ks, proxy, qp.local()).get();
             } catch (std::exception& e) {
                 // if any of the defers crashes too, we'll never see
                 // the error
