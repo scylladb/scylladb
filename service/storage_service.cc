@@ -3335,10 +3335,7 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
     }
     // Update pending ranges since keyspace can be changed after we calculate pending ranges.
     sstring reason = format("keyspace {}", ks_name);
-    // FIXME: indentation
-        return update_pending_ranges(reason, acquire_merge_lock::no).handle_exception([reason = std::move(reason)] (auto ep) {
-            slogger.warn("Failure to update pending ranges for {} ignored", reason);
-        });
+    return update_pending_ranges(reason, acquire_merge_lock::no);
 }
 
 future<> storage_service::snitch_reconfigured() {
