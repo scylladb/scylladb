@@ -5059,10 +5059,7 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
     }
     // Update pending ranges since keyspace can be changed after we calculate pending ranges.
     sstring reason = ::format("keyspace {}", ks_name);
-    // FIXME: indentation
-        return update_topology_change_info(reason, acquire_merge_lock::no).handle_exception([reason = std::move(reason)] (auto ep) {
-            slogger.warn("Failure to update pending ranges for {} ignored", reason);
-        });
+    return update_topology_change_info(reason, acquire_merge_lock::no);
 }
 
 void storage_service::on_update_tablet_metadata() {
