@@ -407,7 +407,11 @@ public:
     future<> apply(const std::vector<raft::command_cref> commands) override {
         auto n = _apply(_id, commands, hasher);
         _seen += n;
-        if (n && _seen == _apply_entries) {
+        if (n && _seen >= _apply_entries) {
+            if (_seen > _apply_entries) {
+                // Retrying `commit_status_unknown` may lead to this. Ref: #14072
+                tlogger.warn("sm::apply[{}]: _seen ({}) overshot _apply_entries ({})", _id, _seen, _apply_entries);
+            }
             _done.set_value();
         }
         tlogger.debug("sm::apply[{}] got {}/{} entries", _id, _seen, _apply_entries);
