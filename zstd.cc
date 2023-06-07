@@ -81,6 +81,8 @@ public:
                     size_t output_len) const override;
     size_t compress_max_size(size_t input_len) const override;
 
+    ptr_type replace(const opt_getter&) const override;
+
     std::set<sstring> option_names() const override;
     std::map<sstring, sstring> options() const override;
 };
@@ -116,7 +118,18 @@ zstd_processor::zstd_processor(const opt_getter& opts)
     // We assume that the uncompressed input length is always <= chunk_len.
     auto cparams = ZSTD_getCParams(_compression_level, chunk_len, 0);
     _cctx_size = ZSTD_estimateCCtxSize_usingCParams(cparams);
+}
 
+/**
+ * Implement this, as we do in fact have relevant parameters, 
+ * which should be respected. 
+*/
+zstd_processor::ptr_type zstd_processor::replace(const opt_getter& opts) const {
+    auto tmp = ::make_shared<zstd_processor>(opts);
+    if (tmp->_cctx_size != _cctx_size || tmp->_compression_level != _compression_level) {
+        return tmp;
+    }
+    return {};
 }
 
 size_t zstd_processor::uncompress(const char* input, size_t input_len, char* output, size_t output_len) const {

@@ -90,6 +90,17 @@ std::map<sstring, sstring> compressor::options() const {
     return {};
 }
 
+/**
+ * This method allows a compressor to do (shallow) object replace
+ * of a cached compressor object, typically to be able to share 
+ * expensive payloads, such as the compression library objects,
+ * buffers, whatnot, yet maintain shallow holders for differing
+ * parameters/options set by compressor parameters.
+ **/
+compressor::ptr_type compressor::replace(const opt_getter&) const {
+    return nullptr;
+}
+
 compressor::ptr_type compressor::create(const sstring& name, const opt_getter& opts) {
     if (name.empty()) {
         return {};
@@ -103,7 +114,35 @@ compressor::ptr_type compressor::create(const sstring& name, const opt_getter& o
         }
     }
 
-    return compressor_registry::create(qn, opts);
+    static thread_local std::unordered_map<sstring, ptr_type> named_compressors;
+
+    ptr_type res = nullptr;
+
+    auto i = named_compressors.find(name);
+    if (i != named_compressors.end()) {
+        res = i->second;
+        /**
+         * If we have a cached compressor, we need to potentially
+         * (shallow) replace it to ensure we respect the compressor
+         * parameters set by "opts" (or lack thereof).
+         * Implementations can handle this in "replace", and either
+         * make an expensive replacement, or, more likely, a very cheap one...
+         * (zstd).
+        */
+        auto rep = res->replace(opts);
+        if (rep) {
+            res = std::move(rep);
+        }
+    }
+
+    if (!res) {
+        res = compressor_registry::create(qn, opts);
+        if (res) {
+            named_compressors.emplace(name, res);
+        }
+    }
+
+    return res;
 }
 
 shared_ptr<compressor> compressor::create(const std::map<sstring, sstring>& options, const sstring& class_opt) {

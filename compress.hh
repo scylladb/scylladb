@@ -126,6 +126,8 @@ public:
     static thread_local const ptr_type deflate;
 
     static const sstring namespace_prefix;
+private:
+    virtual ptr_type replace(const opt_getter&) const;
 };
 
 template<typename BaseType, typename... Args>
