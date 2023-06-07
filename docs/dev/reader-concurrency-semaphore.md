@@ -1,5 +1,4 @@
-Reader concurrency semaphore
-============================
+# Reader concurrency semaphore
 
 The role of the reader concurrency semaphore is to keep resource consumption of reads under a given limit.
 The semaphore manages two kinds of resources: memory and "count". The former is a kind of "don't go crazy" limit on the maximum number of concurrent reads.
@@ -11,8 +10,7 @@ There is a separate reader concurrency semaphore for each scheduling group:
 
 On enterprise releases, the `statement` scheduling group is broken up into a per workload prioritization group semaphore. Each such semaphore has 100 count resources and a share of the memory limit proportional to its shares.
 
-Admission
----------
+## Admission
 
 Reads interact with the semaphore via a permit object. The permit is created when the read starts on the replica. Creating the permit involves waiting for the conditions to be appropriate for allowing the read to start, this is called admission.
 When the permit object is returned to the read, it is said to be admitted. The read can start at that point.
@@ -28,8 +26,7 @@ API wise, there are 3 main ways to create permits:
 
 For more details on the reader concurrency semaphore's API, check [reader_concurrency_semaphore.hh](../../reader_concurrency_semaphore.hh).
 
-Inactive Reads
---------------
+## Inactive Reads
 
 Permits can be registered as "inactive". This means that the reader object associated with the permit will be kept around only as long as resource consumption is below the semaphore's limit. Otherwise, the reader object will be evicted (destroyed) to free up resources. Evicted permits have to be re-admitted to continue the read.
 
@@ -38,8 +35,7 @@ Making reads inactive is also used to prevent deadlocks, where a single process 
 
 Inactive reads are only evicted when their eviction can potentially allow for permits currently waiting on admission to be admitted. So for example if admission is blocked by lack of memory, inactive reads will be evicted. If admission is blocked by some permit being marked as `need_cpu`, inactive readers will not be evicted.
 
-Anti-OOM Protection
--------------------
+## Anti-OOM Protection
 
 The semaphore has anti-OOM protection measures. This is governed by two limits:
 * `serialize_limit_multiplier`
@@ -52,8 +48,7 @@ Note that participation in this is opt-in for reads, in that there is a separate
 
 When reaching the kill limit, the semaphore will start throwing `std::bad_alloc` from all memory consumption registering API calls. This is a drastic measure which will result in reads being killed. This is meant to provide a hard upper limit on the memory consumption of all reads.
 
-Permit States
--------------
+## Permit States
 
 Permits are in one of the following states:
 * `waiting_for_admission` - the permit is waiting for admission;
@@ -83,7 +78,7 @@ When a read waiting to obtain a permit times out, or if the wait queue of the re
 Example diagnostics dump:
 
     [shard 1] reader_concurrency_semaphore - Semaphore _read_concurrency_sem with 35/100 count and 14858525/209715200 memory resources: timed out, dumping permit diagnostics:
-    permits count   memory  table/description/state
+    permits count   memory  table/operation/state
     34  34  14M ks1.table1_mv_0/data-query/active/await
     1   1   16K ks1.table1_mv_0/data-query/active/need_cpu
     7   0   0B  ks1.table1/data-query/waiting
@@ -103,7 +98,7 @@ The dump contains the following information:
 * Limit of memory resources: 209715200;
 * Dump of the permit states;
 
-Permits are grouped by table, description, and state, while groups are sorted by memory consumption.
+Permits are grouped by table, operation (see below), and state, while groups are sorted by memory consumption.
 The first group in this example contains 34 permits, all for reads against table `ks1.table1_mv_0`, all data-query reads and in state `active/await`.
 
 The dump can reveal what the bottleneck holding up the reads is:
@@ -112,3 +107,29 @@ The dump can reveal what the bottleneck holding up the reads is:
 * Memory - memory resource is maxed out (usually even above the limit);
 
 There might be inactive reads if CPU is a bottleneck; otherwise, there shouldn't be any (they should be evicted to free up resources).
+
+### Operations
+
+Table of all permit operations possibly contained in disgnostic dumps, from the user or system semaphore:
+
+| Operation name                                | Description                                                                                                                  |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `counter-read-before-write`                   | Read-before-write done on counter writes.                                                                                    |
+| `data-query`                                  | Regular single-partition query.                                                                                              |
+| `multishard-mutation-query`                   | Part of a range-scan, which runs on the coordinator-shard of the scan.                                                       |
+| `mutation-query`                              | Single-partition read done on behalf of a read-repair.                                                                       |
+| `push-view-updates-1`                         | Reader which reads the applied base-table mutation, when it needs view update generation (no read-before-write needed).      |
+| `push-view-updates-2`                         | Reader which reads the applied base-table mutation, when it needs view update generation (read-before-write is also needed). |
+| `shard-reader`                                | Part of a range-scan, which runs on replica-shards.                                                                          |
+
+
+Table of all permit operations possibly contained in disgnostic dumps, from the streaming semaphore:
+
+| Operation name                                | Description                                                                                                                  |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `repair-meta`                                 | Repair reader.                                                                                                               |
+| `sstables_loader::load_and_stream()`          | Sstable reader, reading sstables on behalf of load-and-stream.                                                               |
+| `stream-session`                              | Permit created for streaming (reciever side).                                                                                |
+| `stream-transfer-task`                        | Permit created for streaming (sender side).                                                                                  |
+| `view_builder`                                | Permit created for the view-builder service.                                                                                 |
+| `view_update_generator`                       | Reader which reads the staging sstables, for which view updates have to be generated.                                        |

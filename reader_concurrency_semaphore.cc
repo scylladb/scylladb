@@ -736,7 +736,7 @@ static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const pe
         fmt::print(os, "{}\t{}\t{}\t{}\n", col1, col2, col3, col4);
     };
 
-    print_line("permits", "count", "memory", "table/description/state");
+    print_line("permits", "count", "memory", "table/operation/state");
     for (const auto& summary : permit_summaries) {
         total.permits += summary.permits;
         total.resources += summary.resources;
