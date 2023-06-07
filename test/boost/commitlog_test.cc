@@ -1115,8 +1115,8 @@ SEASTAR_TEST_CASE(test_commitlog_entry_offsets) {
 
         auto rp = h.release();
 
-        // verify the first rp is at file offset 32 (file header + chunk header)
-        BOOST_CHECK_EQUAL(rp.pos, 24 + 8); // TODO: export these sizes for tests. 
+        // verify the first rp is at file offset 36 (file header + chunk header + n_attr (0))
+        BOOST_CHECK_EQUAL(rp.pos, 24 + 8 + 4); // TODO: export these sizes for tests. 
 
         co_await log.sync_all_segments();
 

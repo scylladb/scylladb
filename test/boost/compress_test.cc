@@ -11,6 +11,10 @@
 #include <boost/test/unit_test.hpp>
 
 #include "sstables/compress.hh"
+#include "compress.hh"
+#include "utils/hashers.hh"
+#include "utils/managed_bytes.hh"
+#include "utils/fragment_range.hh"
 
 BOOST_AUTO_TEST_CASE(segmented_offsets_basic_functionality) {
     sstables::compression::segmented_offsets offsets;
@@ -142,4 +146,145 @@ BOOST_AUTO_TEST_CASE(segmented_offsets_corner_cases) {
     // incremental at() to read the next offset.
     BOOST_REQUIRE(accessor.at(4079) == 4079);
     BOOST_REQUIRE(accessor.at(4080) == 4080);
+}
+
+// generates data that is not repetetive, yet predictable. I.e. 
+// same every run. Because random fails s**s.
+bytes generate_data(std::string_view seed, size_t size) {
+    bytes res(bytes::initialized_later{}, size);
+
+    sha256_hasher sha1;
+
+    auto o = res.begin();
+    auto e = res.end();
+    auto src = seed;
+
+    while (o != e) {
+        auto tmp = sha256_hasher::calculate(src);
+        auto n = std::copy_n(tmp.begin(), std::min<size_t>(tmp.size(), std::distance(o, e)), o);
+        src = std::string_view(reinterpret_cast<const char*>(&*o), reinterpret_cast<const char*>(&*n));
+        o = n;
+    }
+
+    return res;
+}
+
+static fragmented_temporary_buffer make_fragmented(const bytes_ostream& src) {
+    fragmented_temporary_buffer res = fragmented_temporary_buffer::allocate_to_fit(src.size_bytes());
+    auto out = res.get_ostream();
+    for (auto&& v : src.fragments()) {
+        out.write(reinterpret_cast<const char*>(v.data()), v.size());
+    }
+    return res;
+}
+
+static managed_bytes make_managed(const bytes_ostream& src) {
+    managed_bytes res(managed_bytes::initialized_later(), src.size_bytes());
+    managed_bytes_mutable_view view(res);
+    for (auto&& v : src.fragments()) {
+        while (!v.empty()) {
+            auto frag = view.current_fragment();
+            auto n = std::min(frag.size(), v.size());
+            std::copy_n(v.begin(), n, frag.begin());
+            view.remove_prefix(n);
+            v.remove_prefix(n);
+        }
+    }
+    return res;
+}
+
+static void test_compressor(const compressor& c) {
+    static std::string_view sources[] = {
+        "babiankaka",
+        "somethingisrottenindenmark",
+        "IcantDanceAlone", 
+    };
+    // ensure some source data sets are greater than 128k to force actual fragmentation
+    static size_t sizes[] = { 837, 4975, 87623, 314 * 1024, 792 * 1024 };
+
+    for (auto&& src : sources) {
+        for (auto size : sizes) {
+            bytes data = generate_data(src, size);
+
+            // step 1: compress/decompress linear
+
+            {
+                auto req_size = c.compress_max_size(data.size());
+                bytes tmp1(bytes::initialized_later{}, req_size);
+                bytes tmp2(bytes::initialized_later{}, size);
+
+                auto n = c.compress(reinterpret_cast<const char*>(data.data()), data.size(), reinterpret_cast<char*>(tmp1.data()), tmp1.size());
+                c.uncompress(reinterpret_cast<const char*>(tmp1.data()), n, reinterpret_cast<char*>(tmp2.data()), tmp2.size());
+
+                BOOST_REQUIRE_EQUAL(data, tmp2);
+            }
+
+            // step 2: compress/decompress fragmented_temporary_buffer
+            {
+                fragmented_temporary_buffer tmp(reinterpret_cast<const char*>(data.data()), data.size());
+                bytes_ostream os;
+
+                c.compress(tmp, os);
+
+                {
+                    auto ftb = make_fragmented(os);
+                    bytes_ostream os1;
+                    c.uncompress(ftb, os1);
+
+                    auto res = os1.linearize();
+                    BOOST_REQUIRE_EQUAL(data, res);
+                }
+                {
+                    auto mb = make_managed(os);
+                    bytes_ostream os1;
+                    c.uncompress(mb, os1);
+
+                    auto res = os1.linearize();
+                    BOOST_REQUIRE_EQUAL(data, res);
+                }
+            }
+
+            // step 3: compress/decompress managed_bytes
+            {
+                managed_bytes tmp(data);
+                bytes_ostream os;
+
+                c.compress(tmp, os);
+
+                {
+                    auto ftb = make_fragmented(os);
+                    bytes_ostream os1;
+                    c.uncompress(ftb, os1);
+
+                    auto res = os1.linearize();
+                    BOOST_REQUIRE_EQUAL(data, res);
+                }
+                {
+                    auto mb = make_managed(os);
+                    bytes_ostream os1;
+                    c.uncompress(mb, os1);
+
+                    auto res = os1.linearize();
+                    BOOST_REQUIRE_EQUAL(data, res);
+                }
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_deflate_compressor) {
+    test_compressor(*compressor::deflate);
+}
+
+BOOST_AUTO_TEST_CASE(test_lz4_compressor) {
+    test_compressor(*compressor::lz4);
+}
+
+BOOST_AUTO_TEST_CASE(test_snappy_compressor) {
+    test_compressor(*compressor::snappy);
+}
+
+BOOST_AUTO_TEST_CASE(test_zstd_compressor) {
+    auto z = compressor::create("ZstdCompressor", [](auto&&) { return std::nullopt; });
+    test_compressor(*z);
 }
