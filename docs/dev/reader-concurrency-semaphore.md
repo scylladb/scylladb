@@ -83,7 +83,7 @@ When a read waiting to obtain a permit times out, or if the wait queue of the re
 Example diagnostics dump:
 
     [shard 1] reader_concurrency_semaphore - Semaphore _read_concurrency_sem with 35/100 count and 14858525/209715200 memory resources: timed out, dumping permit diagnostics:
-    permits count   memory  table/description/state
+    permits count   memory  table/operation/state
     34  34  14M ks1.table1_mv_0/data-query/active/await
     1   1   16K ks1.table1_mv_0/data-query/active/need_cpu
     7   0   0B  ks1.table1/data-query/waiting
@@ -103,7 +103,7 @@ The dump contains the following information:
 * Limit of memory resources: 209715200;
 * Dump of the permit states;
 
-Permits are grouped by table, description, and state, while groups are sorted by memory consumption.
+Permits are grouped by table, operation, and state, while groups are sorted by memory consumption.
 The first group in this example contains 34 permits, all for reads against table `ks1.table1_mv_0`, all data-query reads and in state `active/await`.
 
 The dump can reveal what the bottleneck holding up the reads is:
