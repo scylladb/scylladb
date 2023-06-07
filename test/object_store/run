@@ -10,6 +10,7 @@ import os
 import requests
 import shutil
 import yaml
+from contextlib import contextmanager
 
 print('Scylla is: ' + run.find_scylla() + '.')
 success = True
@@ -53,73 +54,87 @@ def teardown(pid):
     shutil.copyfileobj(log, sys.stdout.buffer)
 
 
-print(f'Start scylla (dir={test_tempdir}')
-pid = run.run_with_generated_dir(run_scylla_cmd, get_tempdir)
-atexit.register(lambda: teardown(pid))
+def check_with_cql(ip, ssl):
+    '''return a checker which checks the readiness of scylla'''
+    def checker():
+        if ssl:
+            return run.check_ssl_cql(ip)
+        else:
+            return run.check_cql(ip)
+    return checker
 
-ip = run.pid_to_ip(pid)
-run.wait_for_services(pid, [ lambda: check_cql(ip) ])
 
-print(f'Create keyspace (minio listening at {s3_server_address})')
-cluster = run.get_cql_cluster(ip)
-conn = cluster.connect()
-replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
-                                  'replication_factor': '1'})
-storage_opts = format_tuples(type='S3',
-                             endpoint=s3_server_address,
-                             bucket=s3_public_bucket)
+@contextmanager
+def managed_cluster(pid, ssl):
+    '''return scylla's pid, IP and a connection to it'''
+    ip = run.pid_to_ip(pid)
+    run.wait_for_services(pid, [check_with_cql(ip, ssl)])
+    cluster = run.get_cql_cluster(ip)
+    try:
+        yield pid, ip, cluster
+    finally:
+        cluster.shutdown()
+
+
+old_pid = None
 ks = 'test_ks'
 cf = 'test_cf'
 rows = [('0', 'zero'),
         ('1', 'one'),
         ('2', 'two')]
 
-conn.execute((f"CREATE KEYSPACE {ks} WITH"
-              f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
-conn.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
-for row in rows:
-    cql_fmt = "INSERT INTO {}.{} ( name, value ) VALUES ('{}', '{}');"
-    conn.execute(cql_fmt.format(ks, cf, *row))
-res = conn.execute(f"SELECT * FROM {ks}.{cf};")
+print(f'Start scylla (dir={test_tempdir}')
+with managed_cluster(run.run_with_generated_dir(run_scylla_cmd, get_tempdir), ssl) \
+     as (pid, ip, cluster):
+    old_pid = pid
+    atexit.register(lambda: teardown(old_pid))
+    print(f'Create keyspace (minio listening at {s3_server_address})')
+    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
+                                      'replication_factor': '1'})
+    storage_opts = format_tuples(type='S3',
+                                 endpoint=s3_server_address,
+                                 bucket=s3_public_bucket)
 
-r = requests.post(f'http://{ip}:10000/storage_service/keyspace_flush/{ks}', timeout=60)
-if r.status_code != 200:
-    print(f'Error flushing keyspace: {r}')
-    success = False
+    conn = cluster.connect()
+    conn.execute((f"CREATE KEYSPACE {ks} WITH"
+                  f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
+    conn.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+    for row in rows:
+        cql_fmt = "INSERT INTO {}.{} ( name, value ) VALUES ('{}', '{}');"
+        conn.execute(cql_fmt.format(ks, cf, *row))
+    res = conn.execute(f"SELECT * FROM {ks}.{cf};")
 
-# Check that the ownership table is populated properly
-res = conn.execute("SELECT * FROM system.sstables;")
-for row in res:
-    if not row.location.startswith(test_tempdir):
-        print(f'Unexpected entry location in registry: {row.location}')
+    r = requests.post(f'http://{ip}:10000/storage_service/keyspace_flush/{ks}', timeout=60)
+    if r.status_code != 200:
+        print(f'Error flushing keyspace: {r}')
         success = False
-    if row.status != 'sealed':
-        print(f'Unexpected entry status in registry: {row.status}')
-        success = False
 
-cluster.shutdown()
+    # Check that the ownership table is populated properly
+    res = conn.execute("SELECT * FROM system.sstables;")
+    for row in res:
+        if not row.location.startswith(test_tempdir):
+            print(f'Unexpected entry location in registry: {row.location}')
+            success = False
+        if row.status != 'sealed':
+            print(f'Unexpected entry status in registry: {row.status}')
+            success = False
 
 print('Restart scylla')
-pid = run.restart_with_dir(pid, run_scylla_cmd, test_tempdir)
-ip = run.pid_to_ip(pid)
-run.wait_for_services(pid, [ lambda: check_cql(ip) ])
+with managed_cluster(run.restart_with_dir(old_pid, run_scylla_cmd, test_tempdir), ssl) \
+     as (pid, ip, cluster):
+    conn = cluster.connect()
+    res = conn.execute(f"SELECT * FROM {ks}.{cf};")
+    have_res = { x.name: x.value for x in res }
+    if have_res != dict(rows):
+        print(f'Unexpected table content: {have_res}')
+        success = False
 
-cluster = run.get_cql_cluster(ip)
-conn = cluster.connect()
-res = conn.execute(f"SELECT * FROM {ks}.{cf};")
-have_res = { x.name: x.value for x in res }
-if have_res != dict(rows):
-    print(f'Unexpected table content: {have_res}')
-    success = False
-
-print('Drop table')
-conn.execute(f"DROP TABLE {ks}.{cf};")
-# Check that the ownership table is de-populated
-res = conn.execute("SELECT * FROM system.sstables;")
-for row in res:
-    print(f'Unexpected entry in registry: {row.location} {row.status}')
-    success = False
-
-cluster.shutdown()
+    print('Drop table')
+    conn.execute(f"DROP TABLE {ks}.{cf};")
+    # Check that the ownership table is de-populated
+    res = conn.execute("SELECT * FROM system.sstables;")
+    for row in res:
+        print(f'Unexpected entry in registry: {row.location} {row.status}')
+        success = False
 
 sys.exit(0 if success else 1)
