@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/seastar.hh>
+#include <seastar/core/coroutine.hh>
 #include "init.hh"
 #include "supervisor.hh"
 #include "directories.hh"

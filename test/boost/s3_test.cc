@@ -14,6 +14,7 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
+#include <seastar/http/exception.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/log.hh"
@@ -91,7 +92,9 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
     cln->delete_object(name).get();
 
     testlog.info("Verify it's gone\n");
-    BOOST_REQUIRE_EXCEPTION(cln->get_object_size(name).get(), std::runtime_error, seastar::testing::exception_predicate::message_contains("404 Not Found"));
+    BOOST_REQUIRE_EXCEPTION(cln->get_object_size(name).get(), seastar::httpd::unexpected_status_error, [] (const seastar::httpd::unexpected_status_error& ex) {
+        return ex.status() == http::reply::status_type::not_found;
+    });
 
     testlog.info("Closing\n");
     cln->close().get();
