@@ -54,24 +54,9 @@ struct query_processor::remote {
     seastar::gate gate;
 };
 
-class query_processor::internal_state {
-    service::query_state _qs;
-public:
-    internal_state() : _qs(service::client_state::for_internal_calls(), empty_service_permit()) {
-    }
-    operator service::query_state&() {
-        return _qs;
-    }
-    operator const service::query_state&() const {
-        return _qs;
-    }
-    operator service::client_state&() {
-        return _qs.get_client_state();
-    }
-    operator const service::client_state&() const {
-        return _qs.get_client_state();
-    }
-};
+static service::query_state query_state_for_internal_call() {
+    return {service::client_state::for_internal_calls(), empty_service_permit()};
+}
 
 query_processor::query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, std::optional<wasm::startup_context> wasm_ctx)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
@@ -80,7 +65,6 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
         , _mnotifier(mn)
         , _mcfg(mcfg)
         , _cql_config(cql_cfg)
-        , _internal_state(new internal_state())
         , _prepared_cache(prep_cache_log, _mcfg.prepared_statment_cache_size)
         , _authorized_prepared_cache(std::move(auth_prep_cache_cfg), authorized_prepared_statements_cache_log)
         , _auth_prepared_cache_cfg_cb([this] (uint32_t) { (void) _authorized_prepared_cache_config_action.trigger_later(); })
@@ -766,9 +750,10 @@ future<> query_processor::for_each_cql_result(
 
 future<::shared_ptr<untyped_result_set>>
 query_processor::execute_paged_internal(internal_query_state& state) {
-    state.p->statement->validate(*this, *_internal_state);
+    state.p->statement->validate(*this, service::client_state::for_internal_calls());
+    auto qs = query_state_for_internal_call();
     ::shared_ptr<cql_transport::messages::result_message> msg =
-      co_await state.p->statement->execute(*this, *_internal_state, *state.opts);
+      co_await state.p->statement->execute(*this, qs, *state.opts);
 
     class visitor : public result_message::visitor_base {
         internal_query_state& _state;
@@ -809,7 +794,8 @@ query_processor::execute_internal(
         db::consistency_level cl,
         const std::initializer_list<data_value>& values,
         cache_internal cache) {
-    return execute_internal(query_string, cl, *_internal_state, values, cache);
+    auto qs = query_state_for_internal_call();
+    co_return co_await execute_internal(query_string, cl, qs, values, cache);
 }
 
 future<::shared_ptr<untyped_result_set>>
@@ -841,7 +827,7 @@ query_processor::execute_with_params(
         service::query_state& query_state,
         const std::initializer_list<data_value>& values) {
     auto opts = make_internal_options(p, values, cl);
-    p->statement->validate(*this, *_internal_state);
+    p->statement->validate(*this, service::client_state::for_internal_calls());
     auto msg = co_await p->statement->execute(*this, query_state, opts);
     co_return ::make_shared<untyped_result_set>(msg);
 }

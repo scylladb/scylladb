@@ -117,9 +117,6 @@ private:
 
     seastar::metrics::metric_groups _metrics;
 
-    class internal_state;
-    std::unique_ptr<internal_state> _internal_state;
-
     prepared_statements_cache _prepared_cache;
     authorized_prepared_statements_cache _authorized_prepared_cache;
 
