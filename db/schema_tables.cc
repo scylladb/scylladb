@@ -1203,19 +1203,18 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
         slogger.info("Altering keyspace {}", key);
         altered.emplace_back(key);
     }
-    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
+    auto& sharded_db = proxy.local().get_db();
+    co_await sharded_db.invoke_on_all([&] (replica::database& db) -> future<> {
         for (auto&& val : created) {
             auto scylla_specific_rs = co_await extract_scylla_specific_keyspace_info(proxy, val);
             auto ksm = create_keyspace_from_schema_partition(val, std::move(scylla_specific_rs));
             co_await db.create_keyspace(ksm, proxy.local().get_erm_factory());
             co_await db.get_notifier().create_keyspace(ksm);
         }
-        {
-            for (auto& name : altered) {
-                co_await db.update_keyspace(proxy, name);
-            };
-        }
     });
+    for (auto& name : altered) {
+        co_await replica::database::update_keyspace_on_all_shards(sharded_db, proxy, name);
+    }
     co_return dropped;
 }
 
