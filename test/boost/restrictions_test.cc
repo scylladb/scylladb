@@ -952,3 +952,99 @@ SEASTAR_THREAD_TEST_CASE(strict_allow_filtering_live_update) {
                 exception_predicate::message_contains("use ALLOW FILTERING"));
     }, cfg).get();
 }
+
+// Ok - only view primary key columns are restricted by IS NOT NULL
+static const char* good_is_not_null_in_views_query =
+    "CREATE MATERIALIZED VIEW t_view AS SELECT p, c, a, b FROM t "
+    "WHERE p IS NOT NULL and c IS NOT NULL and a IS NOT NULL PRIMARY KEY (a, c, p)";
+
+// Bad - b IS NOT NULL is an invalid restriction, as b isn't a part of the view's primary key
+sstring bad_is_not_null_in_views_query(int bad_view_index = 0) {
+    return fmt::format(
+        "CREATE MATERIALIZED VIEW t_badview_{} AS SELECT p, c, a, b FROM t "
+        "WHERE p IS NOT NULL and c IS NOT NULL and a IS NOT NULL AND b IS NOT NULL PRIMARY KEY (a, c, p)",
+        bad_view_index);
+}
+
+static bool contains_is_not_null_warning(const cql_transport::messages::result_message& result_msg) {
+    const std::vector<sstring>& warnings = result_msg.warnings();
+
+    auto found_warning = std::find_if(warnings.begin(), warnings.end(), [&](const sstring& warning) -> bool {
+        return warning.find("IS NOT NULL") != std::string::npos;
+    });
+
+    return found_warning != warnings.end();
+}
+
+// Test that setting strict_is_not_null_in_views=true doesn't allow invalid IS NOT NULL in views.
+SEASTAR_THREAD_TEST_CASE(strict_is_not_null_in_views_true) {
+    auto cfg = make_shared<db::config>();
+    cfg->strict_is_not_null_in_views(db::tri_mode_restriction_t::mode::TRUE);
+    do_with_cql_env_thread([&](cql_test_env& e) {
+            cquery_nofail(e, "CREATE TABLE t (p int, c int, a int, b int, PRIMARY KEY (p, c))");
+            cquery_nofail(e, good_is_not_null_in_views_query);
+
+            BOOST_REQUIRE_EXCEPTION(e.execute_cql(bad_is_not_null_in_views_query()).get(),
+                                    exceptions::invalid_request_exception,
+                                    exception_predicate::message_contains("IS NOT NULL"));
+    }, cfg).get();
+}
+
+// Test that setting strict_is_not_null_in_views=warn allows invalid IS NOT NULL in views, but throws a warning.
+SEASTAR_THREAD_TEST_CASE(strict_is_not_null_in_views_warn) {
+    auto cfg = make_shared<db::config>();
+    cfg->strict_is_not_null_in_views(db::tri_mode_restriction_t::mode::WARN);
+    do_with_cql_env_thread([&](cql_test_env& e) {
+            cquery_nofail(e, "CREATE TABLE t (p int, c int, a int, b int, PRIMARY KEY (p, c))");
+            cquery_nofail(e, good_is_not_null_in_views_query);
+
+            shared_ptr<cql_transport::messages::result_message> bad_res =
+                e.execute_cql(bad_is_not_null_in_views_query()).get();
+            BOOST_REQUIRE(contains_is_not_null_warning(*bad_res));
+    }, cfg).get();
+}
+
+// Test that setting strict_is_not_null_in_views=false allows invalid IS NOT NULL in views without any warnings.
+SEASTAR_THREAD_TEST_CASE(strict_is_not_null_in_views_false) {
+    auto cfg = make_shared<db::config>();
+    cfg->strict_is_not_null_in_views(db::tri_mode_restriction_t::mode::FALSE);
+    do_with_cql_env_thread([&](cql_test_env& e) {
+            cquery_nofail(e, "CREATE TABLE t (p int, c int, a int, b int, PRIMARY KEY (p, c))");
+            cquery_nofail(e, good_is_not_null_in_views_query);
+
+            shared_ptr<cql_transport::messages::result_message> bad_res =
+                e.execute_cql(bad_is_not_null_in_views_query()).get();
+            BOOST_REQUIRE(!contains_is_not_null_warning(*bad_res));
+    }, cfg).get();
+}
+
+// Test that the strict_is_not_null_in_views flag handles live updates properly.
+SEASTAR_THREAD_TEST_CASE(strict_is_not_null_in_views_live_update) {
+    auto cfg = make_shared<db::config>();
+    cfg->strict_is_not_null_in_views(db::tri_mode_restriction_t::mode::FALSE);
+    do_with_cql_env_thread([&](cql_test_env& e) {
+            cquery_nofail(e, "CREATE TABLE t (p int, c int, a int, b int, PRIMARY KEY (p, c))");
+            cquery_nofail(e, good_is_not_null_in_views_query);
+
+            shared_ptr<cql_transport::messages::result_message> bad_res_with_false =
+                e.execute_cql(bad_is_not_null_in_views_query(0)).get();
+            BOOST_REQUIRE(!contains_is_not_null_warning(*bad_res_with_false));
+
+            cfg->strict_is_not_null_in_views(db::tri_mode_restriction_t::mode::WARN);
+
+            shared_ptr<cql_transport::messages::result_message> bad_res_with_warn =
+                e.execute_cql(bad_is_not_null_in_views_query(1)).get();
+            BOOST_REQUIRE(contains_is_not_null_warning(*bad_res_with_warn));
+
+            cfg->strict_is_not_null_in_views(db::tri_mode_restriction_t::mode::TRUE);
+            BOOST_REQUIRE_EXCEPTION(e.execute_cql(bad_is_not_null_in_views_query(2)).get(),
+                                    exceptions::invalid_request_exception,
+                                    exception_predicate::message_contains("IS NOT NULL"));
+    }, cfg).get();
+}
+
+// Test that the default value for the strict_is_not_null_in_views flag is `warn`.
+SEASTAR_THREAD_TEST_CASE(strict_is_not_null_in_views_default_value) {
+    auto cfg = make_shared<db::config>();
+    BOOST_REQUIRE(cfg->strict_is_not_null_in_views() == db::tri_mode_restriction_t::mode::WARN);
+}

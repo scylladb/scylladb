@@ -70,12 +70,15 @@ schema_altering_statement::execute0(query_processor& qp, service::query_state& s
                     std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()));
     }
 
+    cql3::cql_warnings_vec warnings;
+
     auto retries = mm.get_concurrent_ddl_retries();
     while (true) {
         try {
             auto group0_guard = co_await mm.start_group0_operation();
 
-            auto [ret, m] = co_await prepare_schema_mutations(qp, group0_guard.write_timestamp());
+            auto [ret, m, cql_warnings] = co_await prepare_schema_mutations(qp, group0_guard.write_timestamp());
+            warnings = std::move(cql_warnings);
 
             if (!m.empty()) {
                 auto description = format("CQL DDL statement: \"{}\"", raw_cql_statement);
@@ -96,11 +99,18 @@ schema_altering_statement::execute0(query_processor& qp, service::query_state& s
 
     // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
     // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)
+    ::shared_ptr<messages::result_message> result;
     if (!ce) {
-        co_return ::make_shared<messages::result_message::void_message>();
+        result = ::make_shared<messages::result_message::void_message>();
     } else {
-        co_return ::make_shared<messages::result_message::schema_change>(ce);
+        result = ::make_shared<messages::result_message::schema_change>(ce);
     }
+
+    for (const sstring& warning : warnings) {
+        result->add_warning(warning);
+    }
+
+    co_return result;
 }
 
 future<::shared_ptr<messages::result_message>>

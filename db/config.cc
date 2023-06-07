@@ -911,6 +911,20 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , cdc_dont_rewrite_streams(this, "cdc_dont_rewrite_streams", value_status::Used, false,
             "Disable rewriting streams from cdc_streams_descriptions to cdc_streams_descriptions_v2. Should not be necessary, but the procedure is expensive and prone to failures; this config option is left as a backdoor in case some user requires manual intervention.")
     , strict_allow_filtering(this, "strict_allow_filtering", liveness::LiveUpdate, value_status::Used, strict_allow_filtering_default(), "Match Cassandra in requiring ALLOW FILTERING on slow queries. Can be true, false, or warn. When false, Scylla accepts some slow queries even without ALLOW FILTERING that Cassandra rejects. Warn is same as false, but with warning.")
+    , strict_is_not_null_in_views(this, "strict_is_not_null_in_views", liveness::LiveUpdate, value_status::Used,db::tri_mode_restriction_t::mode::WARN, 
+        "In materialized views, restrictions are allowed only on the view's primary key columns.\n"
+        "In old versions Scylla mistakenly allowed IS NOT NULL restrictions on columns which were not part of the view's"
+        " primary key. These invalid restrictions were ignored.\n"
+        "This option controls the behavior when someone tries to create a view with such invalid IS NOT NULL restrictions.\n\n"
+        "Can be true, false, or warn:\n"
+        " * `true`: IS NOT NULL is allowed only on the view's primary key columns, "
+        "trying to use it on other columns will cause an error, as it should.\n"
+        " * `false`: Scylla accepts IS NOT NULL restrictions on regular columns, but they're silently ignored. "
+        "It's useful for backwards compatibility.\n"
+        " * `warn`: The same as false, but there's a warning about invalid view restrictions.\n\n"
+        "To preserve backwards compatibility on old clusters, Scylla's default setting is `warn`. "
+        "New clusters have this option set to `true` by scylla.yaml (which overrides the default `warn`), "
+        "to make sure that trying to create an invalid view causes an error.")
     , reversed_reads_auto_bypass_cache(this, "reversed_reads_auto_bypass_cache", liveness::LiveUpdate, value_status::Used, false,
             "Bypass in-memory data cache (the row cache) when performing reversed queries.")
     , enable_optimized_reversed_reads(this, "enable_optimized_reversed_reads", liveness::LiveUpdate, value_status::Used, true,

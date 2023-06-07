@@ -112,7 +112,7 @@ static bool validate_primary_key(
     return new_non_pk_column;
 }
 
-view_ptr create_view_statement::prepare_view(data_dictionary::database db) const {
+std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(data_dictionary::database db) const {
     // We need to make sure that:
     //  - primary key includes all columns in base table's primary key
     //  - make sure that the select statement does not have anything other than columns
@@ -121,6 +121,8 @@ view_ptr create_view_statement::prepare_view(data_dictionary::database db) const
     //  - make sure there is no where clause in the select statement
     //  - make sure there is not currently a table or view
     //  - make sure base_table gc_grace_seconds > 0
+
+    cql3::cql_warnings_vec warnings;
 
     auto schema_extensions = _properties.properties()->make_schema_extensions(db.extensions());
     _properties.validate(db, keyspace(), schema_extensions);
@@ -299,6 +301,35 @@ view_ptr create_view_statement::prepare_view(data_dictionary::database db) const
                 column_family(), column_names));
     }
 
+    // IS NOT NULL restrictions are handled separately from other restrictions.
+    // They need a separate check as they won't be included in non_pk_restrictions.
+    std::vector<std::string_view> invalid_not_null_column_names;
+    for (const column_definition* not_null_cdef : restrictions->get_not_null_columns()) {
+        if (!target_primary_keys.contains(not_null_cdef)) {
+            invalid_not_null_column_names.push_back(not_null_cdef->name_as_text());
+        }
+    }
+
+    if (!invalid_not_null_column_names.empty() &&
+        db.get_config().strict_is_not_null_in_views() == db::tri_mode_restriction_t::mode::TRUE) {
+        throw exceptions::invalid_request_exception(
+            fmt::format("The IS NOT NULL restriction is allowed only columns which are part of the view's primary key,"
+                        " found columns: {}. The flag strict_is_not_null_in_views can be used to turn this error "
+                        "into a warning, or to silence it. (true - error, warn - warning, false - silent)",
+                        fmt::join(invalid_not_null_column_names, ", ")));
+    }
+
+    if (!invalid_not_null_column_names.empty() &&
+        db.get_config().strict_is_not_null_in_views() == db::tri_mode_restriction_t::mode::WARN) {
+        sstring warning_text = fmt::format(
+            "The IS NOT NULL restriction is allowed only columns which are part of the view's primary key,"
+            " found columns: {}. Restrictions on these columns will be silently ignored. "
+            "The flag strict_is_not_null_in_views can be used to turn this warning into an error, or to silence it. "
+            "(true - error, warn - warning, false - silent)",
+            fmt::join(invalid_not_null_column_names, ", "));
+        warnings.emplace_back(std::move(warning_text));
+    }
+
     schema_builder builder{keyspace(), column_family()};
     auto add_columns = [this, &builder] (std::vector<const column_definition*>& defs, column_kind kind) mutable {
         for (auto* def : defs) {
@@ -334,14 +365,14 @@ view_ptr create_view_statement::prepare_view(data_dictionary::database db) const
     auto where_clause_text = util::relations_to_where_clause(_where_clause);
     builder.with_view_info(schema->id(), schema->cf_name(), included.empty(), std::move(where_clause_text));
 
-    return view_ptr(builder.build());
+    return std::make_pair(view_ptr(builder.build()), std::move(warnings));
 }
 
-future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 create_view_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
-    auto definition = prepare_view(qp.db());
+    auto [definition, warnings] = prepare_view(qp.db());
     try {
         m = co_await qp.get_migration_manager().prepare_new_view_announcement(std::move(definition), ts);
         using namespace cql_transport;
@@ -356,7 +387,7 @@ create_view_statement::prepare_schema_mutations(query_processor& qp, api::timest
         }
     }
 
-    co_return std::make_pair(std::move(ret), std::move(m));
+    co_return std::make_tuple(std::move(ret), std::move(m), std::move(warnings));
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

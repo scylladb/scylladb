@@ -180,6 +180,10 @@ public:
         return _clustering_columns_restrictions;
     }
 
+    // Get a set of columns restricted by the IS NOT NULL restriction.
+    // IS NOT NULL is a special case that is handled separately from other restrictions.
+    const std::unordered_set<const column_definition*> get_not_null_columns() const;
+
     bool has_token_restrictions() const {
         return has_partition_token(_partition_key_restrictions, *_schema);
     }

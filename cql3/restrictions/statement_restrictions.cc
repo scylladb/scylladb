@@ -1990,5 +1990,10 @@ void statement_restrictions::validate_primary_key(const query_options& options) 
     validate_primary_key_restrictions(options, _clustering_prefix_restrictions);
 }
 
+
+const std::unordered_set<const column_definition*> statement_restrictions::get_not_null_columns() const {
+    return _not_null_columns;
+}
+
 } // namespace restrictions
 } // namespace cql3

@@ -74,7 +74,7 @@ std::vector<column_definition> create_table_statement::get_columns() const
     return column_defs;
 }
 
-future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 create_table_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
@@ -94,7 +94,7 @@ create_table_statement::prepare_schema_mutations(query_processor& qp, api::times
         }
     }
 
-    co_return std::make_pair(std::move(ret), std::move(m));
+    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
 }
 
 /**

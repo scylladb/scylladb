@@ -385,7 +385,7 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
     return make_pair(std::move(cfm), std::move(view_updates));
 }
 
-future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 alter_table_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
   data_dictionary::database db = qp.db();
   auto& mm = qp.get_migration_manager();
@@ -399,7 +399,7 @@ alter_table_statement::prepare_schema_mutations(query_processor& qp, api::timest
             keyspace(),
             column_family());
 
-  co_return std::make_pair(std::move(ret), std::move(m));
+  co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
