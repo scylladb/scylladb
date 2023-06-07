@@ -407,7 +407,11 @@ public:
     future<> apply(const std::vector<raft::command_cref> commands) override {
         auto n = _apply(_id, commands, hasher);
         _seen += n;
-        if (n && _seen == _apply_entries) {
+        if (n && _seen >= _apply_entries) {
+            if (_seen > _apply_entries) {
+                // Retrying `commit_status_unknown` may lead to this. Ref: #14072
+                tlogger.warn("sm::apply[{}]: _seen ({}) overshot _apply_entries ({})", _id, _seen, _apply_entries);
+            }
             _done.set_value();
         }
         tlogger.debug("sm::apply[{}] got {}/{} entries", _id, _seen, _apply_entries);
@@ -950,6 +954,13 @@ future<> raft_cluster<Clock>::add_entry(size_t val, std::optional<size_t> server
             co_await at->add_entry(create_command(val), raft::wait_type::committed);
             break;
         } catch (raft::commit_status_unknown& e) {
+            // FIXME: in some cases when we get `commit_status_unknown` the entry may have been applied.
+            // Retrying it could lead to double application which causes hard to debug failures, e.g. #14029.
+            // For now we leave a warning so the logs give a hint if such a failure happens and we need
+            // to debug it. Ideally we would never have to handle `commit_status_unknown` but some replication
+            // tests rely on retrying it during leader changes etc.
+            tlogger.warn("replication_test: got `commit_status_unknown` from `add_entry`"
+                    ", val: {}, server: {}", val, server);
         } catch (raft::dropped_entry& e) {
             // retry if an entry is dropped because the leader have changed after it was submitted
         }
