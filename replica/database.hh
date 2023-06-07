@@ -1416,6 +1416,7 @@ private:
     void update_write_metrics_for_timed_out_write();
     future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, bool is_bootstrap, system_keyspace system);
     void remove(const table&) noexcept;
+    void drop_keyspace(const sstring& name);
 public:
     static table_schema_version empty_version;
 
@@ -1505,7 +1506,7 @@ public:
     void validate_keyspace_update(keyspace_metadata& ksm);
     void validate_new_keyspace(keyspace_metadata& ksm);
     future<> update_keyspace(sharded<service::storage_proxy>& proxy, const sstring& name);
-    void drop_keyspace(const sstring& name);
+    static future<> drop_keyspace_on_all_shards(sharded<database>& sharded_db, const sstring& name);
     std::vector<sstring> get_non_system_keyspaces() const;
     std::vector<sstring> get_user_keyspaces() const;
     std::vector<sstring> get_all_keyspaces() const;
