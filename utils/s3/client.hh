@@ -31,7 +31,7 @@ class client : public enable_shared_from_this<client> {
     class readable_file;
     std::string _host;
     endpoint_config_ptr _cfg;
-    http::experimental::client _http;
+    std::unordered_map<seastar::scheduling_group, http::experimental::client> _https;
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
 

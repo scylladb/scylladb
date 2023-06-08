@@ -16,6 +16,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/coroutine/all.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/net/dns.hh>
 #include <seastar/net/tls.hh>
 #include <seastar/util/short_streams.hh>
@@ -110,7 +111,6 @@ public:
 client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
-        , _http(std::make_unique<dns_connection_factory>(_host, _cfg->port, _cfg->use_https))
         , _gf(std::move(gf))
 {
 }
@@ -169,7 +169,16 @@ void client::authorize(http::request& req) {
 
 future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, http::reply::status_type expected) {
     authorize(req);
-    return _http.make_request(std::move(req), std::move(handle), expected);
+    auto sg = current_scheduling_group();
+    auto it = _https.find(sg);
+    if (it == _https.end()) [[unlikely]] {
+        auto factory = std::make_unique<dns_connection_factory>(_host, _cfg->port, _cfg->use_https);
+        it = _https.emplace(std::piecewise_construct,
+            std::forward_as_tuple(sg),
+            std::forward_as_tuple(std::move(factory))
+        ).first;
+    }
+    return it->second.make_request(std::move(req), std::move(handle), expected);
 }
 
 future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler) {
@@ -766,7 +775,9 @@ file client::make_readable_file(sstring object_name) {
 }
 
 future<> client::close() {
-    co_await _http.close();
+    co_await coroutine::parallel_for_each(_https, [] (auto& it) -> future<> {
+        co_await it.second.close();
+    });
 }
 
 } // s3 namespace
