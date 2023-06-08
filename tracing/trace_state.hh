@@ -438,14 +438,14 @@ private:
      * @note This method is allowed to throw.
      * @param msg the trace message to store
      */
-    void trace_internal(sstring msg);
+    void trace_internal(std::string&& msg);
 
     /**
      * Add a single trace entry - a special case for a simple string.
      *
      * @param msg trace message
      */
-    void trace(sstring msg) noexcept {
+    void trace(std::string&& msg) noexcept {
         try {
             trace_internal(std::move(msg));
         } catch (...) {
@@ -453,9 +453,10 @@ private:
             ++_local_tracing_ptr->stats.trace_errors;
         }
     }
+
     void trace(const char* msg) noexcept {
         try {
-            trace_internal(sstring(msg));
+            trace_internal(std::string(msg));
         } catch (...) {
             // Bump up an error counter and ignore
             ++_local_tracing_ptr->stats.trace_errors;
@@ -477,14 +478,16 @@ private:
      * @param fmt format string
      * @param a positional parameters
      */
-    template <typename... A>
-    void trace(const char* fmt, A&&... a) noexcept;
+    template <typename... T>
+    void trace(fmt::format_string<T...> fmt, T&&... args) noexcept;
 
     template <typename... A>
     friend void begin(const trace_state_ptr& p, A&&... a);
 
-    template <typename... A>
-    friend void trace(const trace_state_ptr& p, A&&... a) noexcept;
+    template <typename... T>
+    friend void trace(const trace_state_ptr& p, fmt::format_string<T...>, T&&... args) noexcept;
+
+    friend void trace(const trace_state_ptr& p, std::string&& msg) noexcept;
 
     friend void set_page_size(const trace_state_ptr& p, int32_t val);
     friend void set_request_size(const trace_state_ptr& p, size_t s) noexcept;
@@ -528,7 +531,7 @@ public:
     }
 };
 
-inline void trace_state::trace_internal(sstring message) {
+inline void trace_state::trace_internal(std::string&& message) {
     if (is_in_state(state::inactive)) {
         throw std::logic_error("trying to use a trace() before begin() for \"" + message + "\" tracepoint");
     }
@@ -573,10 +576,10 @@ inline void trace_state::trace_internal(sstring message) {
     }
 }
 
-template <typename... A>
-void trace_state::trace(const char* fmt, A&&... a) noexcept {
+template <typename... T>
+void trace_state::trace(fmt::format_string<T...> fmt, T&&... args) noexcept {
     try {
-        trace_internal(seastar::format(fmt, std::forward<A>(a)...));
+        trace_internal(fmt::format(fmt, std::forward<T>(args)...));
     } catch (...) {
         // Bump up an error counter and ignore
         ++_local_tracing_ptr->stats.trace_errors;
@@ -702,14 +705,20 @@ inline void begin(const trace_state_ptr& p, A&&... a) {
  * that positional parameters are both copiable and that the copy is not
  * expensive.
  *
- * @param A
+ * @param args
  * @param p trace state handle
  * @param a trace message format string with optional parameters
  */
-template <typename... A>
-inline void trace(const trace_state_ptr& p, A&&... a) noexcept {
+template <typename... T>
+inline void trace(const trace_state_ptr& p, fmt::format_string<T...> fmt, T&&... args) noexcept {
     if (p && !p->ignore_events()) {
-        p->trace(std::forward<A>(a)...);
+        p->trace(fmt, std::forward<T>(args)...);
+    }
+}
+
+inline void trace(const trace_state_ptr& p, std::string&& msg) noexcept {
+    if (p && !p->ignore_events()) {
+        p->trace(std::move(msg));
     }
 }
 

@@ -171,7 +171,7 @@ private:
 };
 
 struct event_record {
-    sstring message;
+    std::string message;
     elapsed_clock::duration elapsed;
     i_tracing_backend_helper::wall_clock::time_point event_time_point;
 
