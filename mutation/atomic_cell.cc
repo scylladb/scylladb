@@ -79,10 +79,6 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
         return left.is_live() ? std::strong_ordering::less : std::strong_ordering::greater;
     }
     if (left.is_live()) {
-        auto c = compare_unsigned(left.value(), right.value()) <=> 0;
-        if (c != 0) {
-            return c;
-        }
         if (left.is_live_and_has_ttl() != right.is_live_and_has_ttl()) {
             // prefer expiring cells.
             return left.is_live_and_has_ttl() ? std::strong_ordering::greater : std::strong_ordering::less;
@@ -90,12 +86,13 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
         if (left.is_live_and_has_ttl()) {
             if (left.expiry() != right.expiry()) {
                 return left.expiry() <=> right.expiry();
-            } else {
+            } else if (right.ttl() != left.ttl()) {
                 // prefer the cell that was written later,
                 // so it survives longer after it expires, until purged.
                 return right.ttl() <=> left.ttl();
             }
         }
+        return compare_unsigned(left.value(), right.value());
     } else {
         // Both are deleted
 
