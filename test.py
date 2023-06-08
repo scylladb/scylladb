@@ -643,12 +643,16 @@ class BoostTest(UnitTest):
             test.attrib['mode'] = self.mode
             return test
 
-        root = ET.parse(self.xmlout).getroot()
-        # only keep the tests which actually ran, the skipped ones do not have
-        # TestingTime tag in the corresponding TestCase tag.
-        self.__test_case_elements = map(attach_path_and_mode,
-                                        root.findall(".//TestCase[TestingTime]"))
-        os.unlink(self.xmlout)
+        try:
+            root = ET.parse(self.xmlout).getroot()
+            # only keep the tests which actually ran, the skipped ones do not have
+            # TestingTime tag in the corresponding TestCase tag.
+            self.__test_case_elements = map(attach_path_and_mode,
+                                            root.findall(".//TestCase[TestingTime]"))
+            os.unlink(self.xmlout)
+        except ET.ParseError as e:
+            message = palette.crit(f"failed to parse XML output '{self.xmlout}': {e}")
+            print(f"error: {self.name}: {message}")
 
     def check_log(self, trim: bool) -> None:
         self.__parse_logger()
