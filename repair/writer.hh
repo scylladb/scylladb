@@ -89,6 +89,7 @@ class repair_writer : public enable_lw_shared_from_this<repair_writer> {
     bool _partition_opened;
     named_semaphore _sem{1, named_semaphore_exception_factory{"repair_writer"}};
     bool _created_writer = false;
+    uint64_t _estimated_partitions = 0;
 public:
     class impl {
     public:
@@ -110,6 +111,15 @@ public:
             , _impl(std::move(impl))
             , _mq(&_impl->queue())
     {}
+
+
+    void set_estimated_partitions(uint64_t estimated_partitions) {
+        _estimated_partitions = estimated_partitions;
+    }
+
+    uint64_t get_estimated_partitions() {
+        return _estimated_partitions;
+    }
 
     void create_writer() {
         _impl->create_writer(shared_from_this());
@@ -141,7 +151,6 @@ private:
 lw_shared_ptr<repair_writer> make_repair_writer(
             schema_ptr schema,
             reader_permit permit,
-            uint64_t estimated_partitions,
             streaming::stream_reason reason,
             sharded<replica::database>& db,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
