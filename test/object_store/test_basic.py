@@ -121,35 +121,25 @@ async def test_basic(test_tempdir, s3_server, ssl):
         res = conn.execute(f"SELECT * FROM {ks}.{cf};")
 
         r = requests.post(f'http://{ip}:10000/storage_service/keyspace_flush/{ks}', timeout=60)
-        if r.status_code != 200:
-            print(f'Error flushing keyspace: {r}')
-            success = False
+        assert r.status_code == 200, f"Error flushing keyspace: {r}"
 
         # Check that the ownership table is populated properly
         res = conn.execute("SELECT * FROM system.sstables;")
         for row in res:
-            if not row.location.startswith(test_tempdir):
-                print(f'Unexpected entry location in registry: {row.location}')
-                success = False
-            if row.status != 'sealed':
-                print(f'Unexpected entry status in registry: {row.status}')
-                success = False
+            assert row.location.startswith(test_tempdir), \
+                f'Unexpected entry location in registry: {row.location}'
+            assert row.status == 'sealed', f'Unexpected entry status in registry: {row.status}'
 
     print('Restart scylla')
     with managed_cluster(test_tempdir, ssl, s3_server) as (ip, cluster):
         conn = cluster.connect()
         res = conn.execute(f"SELECT * FROM {ks}.{cf};")
         have_res = { x.name: x.value for x in res }
-        if have_res != dict(rows):
-            print(f'Unexpected table content: {have_res}')
-            success = False
+        assert have_res == dict(rows), f'Unexpected table content: {have_res}'
 
         print('Drop table')
         conn.execute(f"DROP TABLE {ks}.{cf};")
         # Check that the ownership table is de-populated
         res = conn.execute("SELECT * FROM system.sstables;")
-        for row in res:
-            print(f'Unexpected entry in registry: {row.location} {row.status}')
-            success = False
-
-    assert success
+        rows = "\n".join(f"{row.location} {row.status}" for row in res)
+        assert not rows, 'Unexpected entries in registry'
