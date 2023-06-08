@@ -12,7 +12,7 @@
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <seastar/core/coroutine.hh>
-#include <seastar/core/semaphore.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/coroutine/all.hh>
@@ -310,14 +310,12 @@ future<> client::delete_object(sstring object_name) {
 }
 
 class client::upload_sink_base : public data_sink_impl {
-    static constexpr int flush_concurrency = 3;
-
 protected:
     shared_ptr<client> _client;
     sstring _object_name;
     sstring _upload_id;
     utils::chunked_vector<sstring> _part_etags;
-    semaphore _flush_sem{flush_concurrency};
+    gate _bg_flushes;
 
     future<> start_upload();
     future<> finalize_upload();
@@ -475,9 +473,8 @@ future<> client::upload_sink_base::upload_part(memory_data_sink_buffers bufs) {
     });
 
     // Do upload in the background so that several parts could go in parallel.
-    // The semaphore is used for two things -- control the concurrency and let
-    // the finalize_upload() wait in any background activity before checking
-    // the progress.
+    // The gate lets the finalize_upload() wait in any background activity
+    // before checking the progress.
     //
     // Upload parallelizm is managed per-sched-group -- client maintains a set
     // of http clients each with its own max-connections. When upload happens it
@@ -486,7 +483,7 @@ future<> client::upload_sink_base::upload_part(memory_data_sink_buffers bufs) {
     //
     // In case part upload goes wrong and doesn't happen, the _part_etags[part]
     // is not set, so the finalize_upload() sees it and aborts the whole thing.
-    auto units = co_await get_units(_flush_sem, 1);
+    auto gh = _bg_flushes.hold();
     (void)_client->make_request(std::move(req), [this, part_number] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         auto etag = rep.get_header("ETag");
         s3l.trace("uploaded {} part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
@@ -495,7 +492,7 @@ future<> client::upload_sink_base::upload_part(memory_data_sink_buffers bufs) {
     }).handle_exception([this, part_number] (auto ex) {
         // ... the exact exception only remains in logs
         s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
-    }).finally([units = std::move(units)] {});
+    }).finally([gh = std::move(gh)] {});
 }
 
 future<> client::upload_sink_base::abort_upload() {
@@ -507,7 +504,7 @@ future<> client::upload_sink_base::abort_upload() {
 
 future<> client::upload_sink_base::finalize_upload() {
     s3l.trace("wait for {} parts to complete (upload id {})", _part_etags.size(), _upload_id);
-    co_await _flush_sem.wait(flush_concurrency);
+    co_await _bg_flushes.close();
 
     unsigned parts_xml_len = prepare_multipart_upload_parts(_part_etags);
     if (parts_xml_len == 0) {
@@ -530,9 +527,9 @@ future<> client::upload_sink_base::close() {
         // If we got here, we need to pick up any background activity as it may
         // still trying to handle successful request and 'this' should remain alive
         //
-        // The semaphore is not waited by finalize_upload() (i.e. -- no self-lock),
+        // The gate is not closed by finalize_upload() (i.e. -- no double-close),
         // because otherwise the upload_started() would return false
-        co_await _flush_sem.wait(flush_concurrency);
+        co_await _bg_flushes.close();
         co_await abort_upload();
     } else {
         s3l.trace("closing multipart upload");
@@ -593,12 +590,12 @@ future<> client::upload_sink_base::upload_part(std::unique_ptr<upload_sink> piec
     req._headers["x-amz-copy-source"] = piece._object_name;
 
     // See comment in upload_part(memory_data_sink_buffers) overload regarding the
-    // _flush_sem usage and _part_etags assignments
+    // _bg_flushes usage and _part_etags assignments
     //
     // Before the piece's object can be copied into the target one, it should be
     // flushed and closed. After the object is copied, it can be removed. If copy
     // goes wrong, the object should be removed anyway.
-    auto units = co_await get_units(_flush_sem, 1);
+    auto gh = _bg_flushes.hold();
     (void)piece.flush().then([&piece] () {
         return piece.close();
     }).then([this, part_number, req = std::move(req)] () mutable {
@@ -622,7 +619,7 @@ future<> client::upload_sink_base::upload_part(std::unique_ptr<upload_sink> piec
         return _client->delete_object(piece._object_name).handle_exception([&piece] (auto ex) {
             s3l.warn("failed to remove copy-upload piece {}", piece._object_name);
         });
-    }).finally([units = std::move(units), piece_ptr = std::move(piece_ptr)] {});
+    }).finally([gh = std::move(gh), piece_ptr = std::move(piece_ptr)] {});
 }
 
 class client::upload_jumbo_sink final : public upload_sink_base {
