@@ -255,11 +255,11 @@ static shared_ptr<function> get_dynamic_aggregate(const function_name &name, con
             [&] (const std::vector<shared_ptr<assignment_testable>>& args) {
                 std::vector<data_type> arg_types;
                 for (const auto& arg : args) {
-                    selection::selector *sp = dynamic_cast<selection::selector*>(arg.get());
-                    if (!sp) {
-                        throw exceptions::invalid_request_exception(format("{}() function is only valid in SELECT clause", function_name));
+                    auto arg_type_opt = arg->assignment_testable_type_opt();
+                    if (!arg_type_opt) {
+                        throw exceptions::invalid_request_exception(format("{}() function is only valid when argument types are known", function_name));
                     }
-                    arg_types.push_back(sp->get_type());
+                    arg_types.push_back(*arg_type_opt);
                 }
                 return arg_types;
             }
@@ -354,11 +354,11 @@ functions::get(data_dictionary::database db,
         if (provided_args.size() != 1) {
             throw exceptions::invalid_request_exception("toJson() accepts 1 argument only");
         }
-        selection::selector *sp = dynamic_cast<selection::selector *>(provided_args[0].get());
-        if (!sp) {
-            throw exceptions::invalid_request_exception("toJson() is only valid in SELECT clause");
+        auto arg_type_opt = provided_args[0]->assignment_testable_type_opt();
+        if (!arg_type_opt) {
+            throw exceptions::invalid_request_exception("toJson() is only valid when its argument type is known");
         }
-        return make_to_json_function(sp->get_type());
+        return make_to_json_function(*arg_type_opt);
     }
 
     if (name.has_keyspace()

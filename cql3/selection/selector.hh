@@ -90,6 +90,10 @@ public:
             return assignment_testable::test_result::NOT_ASSIGNABLE;
         }
     }
+
+    virtual std::optional<data_type> assignment_testable_type_opt() const override {
+        return get_type();
+    }
 };
 
 /**

@@ -46,6 +46,8 @@ public:
      */
     virtual test_result test_assignment(data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver) const = 0;
 
+    virtual std::optional<data_type> assignment_testable_type_opt() const = 0;
+
     // for error reporting
     virtual sstring assignment_testable_source_context() const = 0;
 };

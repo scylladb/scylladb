@@ -1183,7 +1183,10 @@ public:
     virtual sstring assignment_testable_source_context() const override {
         return fmt::format("{}", _e);
     }
-
+    virtual std::optional<data_type> assignment_testable_type_opt() const override {
+        // FIXME: we could try to prepare the expression and see if we get a type
+        return std::nullopt;
+    }
 };
 
 ::shared_ptr<assignment_testable> as_assignment_testable(expression e) {
