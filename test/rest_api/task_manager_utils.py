@@ -56,7 +56,7 @@ def check_status_correctness(status, expected_status):
 
 def assert_task_does_not_exist(rest_api, task_id):
     resp = rest_api.send("GET", f"task_manager/task_status/{task_id}")
-    assert resp.status_code == requests.codes.internal_server_error, f"Task {task_id} is kept in memory"
+    assert resp.status_code == requests.codes.bad_request, f"Task {task_id} is kept in memory"
 
 def check_child_parent_relationship(rest_api, parent, tree_depth, depth=0):
     assert parent["children_ids"], "Child tasks were not created"

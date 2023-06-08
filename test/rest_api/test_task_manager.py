@@ -158,3 +158,8 @@ def test_task_manager_recursive_status(rest_api):
                     check_field_correctness("id", tasks[1], { "id" : f"{task1}" })
                     check_field_correctness("id", tasks[2], { "id" : f"{task3}" })
                     check_field_correctness("id", tasks[3], { "id" : f"{task2}" })
+
+def test_module_not_exists(rest_api):
+    module_name = "module_that_does_not_exist"
+    resp = rest_api.send("GET", f"task_manager/list_module_tasks/{module_name}", )
+    assert resp.status_code == requests.codes.bad_request, f"Invalid response status code: {resp.status_code}"
