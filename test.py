@@ -221,8 +221,12 @@ class TestSuite(ABC):
         lst = self.build_test_list()
         if lst:
             # Some tests are long and are better to be started earlier,
-            # so pop them up while sorting the list
-            lst.sort(key=lambda x: (x not in self.run_first_tests, x))
+            # move them to the front while preserving configuration order.
+            front_s = set(self.run_first_tests)
+            lst_s = set(lst)
+            l_front = [t for t in self.run_first_tests if t in lst_s]
+            l_back  = [t for t in lst if not t in front_s]
+            lst = l_front + l_back
 
         pending = set()
         for shortname in lst:
