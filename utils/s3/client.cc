@@ -548,10 +548,11 @@ future<> client::upload_sink_base::upload_part(memory_data_sink_buffers bufs) {
     _part_etags.emplace_back();
     s3l.trace("PUT part {} {} bytes in {} buffers (upload id {})", part_number, bufs.size(), bufs.buffers().size(), _upload_id);
     auto req = http::request::make("PUT", _client->_host, _object_name);
-    req._headers["Content-Length"] = format("{}", bufs.size());
+    auto size = bufs.size();
+    req._headers["Content-Length"] = format("{}", size);
     req.query_parameters["partNumber"] = format("{}", part_number + 1);
     req.query_parameters["uploadId"] = _upload_id;
-    req.write_body("bin", bufs.size(), [this, part_number, bufs = std::move(bufs)] (output_stream<char>&& out_) mutable -> future<> {
+    req.write_body("bin", size, [this, part_number, bufs = std::move(bufs)] (output_stream<char>&& out_) mutable -> future<> {
         auto out = std::move(out_);
         std::exception_ptr ex;
         s3l.trace("upload {} part data (upload id {})", part_number, _upload_id);
