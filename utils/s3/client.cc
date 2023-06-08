@@ -301,7 +301,6 @@ class client::upload_sink_base : public data_sink_impl {
 
 protected:
     shared_ptr<client> _client;
-    http::experimental::client& _http;
     sstring _object_name;
     sstring _upload_id;
     utils::chunked_vector<sstring> _part_etags;
@@ -320,7 +319,6 @@ protected:
 public:
     upload_sink_base(shared_ptr<client> cln, sstring object_name)
         : _client(std::move(cln))
-        , _http(_client->_http)
         , _object_name(std::move(object_name))
     {
     }
@@ -670,7 +668,6 @@ data_sink client::make_upload_jumbo_sink(sstring object_name, std::optional<unsi
 
 class client::readable_file : public file_impl {
     shared_ptr<client> _client;
-    http::experimental::client& _http;
     sstring _object_name;
 
     [[noreturn]] void unsupported() {
@@ -680,7 +677,6 @@ class client::readable_file : public file_impl {
 public:
     readable_file(shared_ptr<client> cln, sstring object_name)
         : _client(std::move(cln))
-        , _http(_client->_http)
         , _object_name(std::move(object_name))
     {
     }
