@@ -167,11 +167,15 @@ void client::authorize(http::request& req) {
     req._headers["Authorization"] = format("AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}", _cfg->aws->key, time_point_st, _cfg->aws->region, signed_headers_list, sig);
 }
 
+future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, http::reply::status_type expected) {
+    authorize(req);
+    return _http.make_request(std::move(req), std::move(handle), expected);
+}
+
 future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler) {
     s3l.trace("HEAD {}", object_name);
     auto req = http::request::make("HEAD", _host, object_name);
-    authorize(req);
-    return _http.make_request(std::move(req), std::move(handler));
+    return make_request(std::move(req), std::move(handler));
 }
 
 future<uint64_t> client::get_object_size(sstring object_name) {
@@ -220,8 +224,7 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
 
     size_t off = 0;
     std::optional<temporary_buffer<char>> ret;
-    authorize(req);
-    co_await _http.make_request(std::move(req), [&off, &ret, &object_name] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+    co_await make_request(std::move(req), [&off, &ret, &object_name] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         auto in = std::move(in_);
         ret = temporary_buffer<char>(rep.content_length);
         s3l.trace("Consume {} bytes for {}", ret->size(), object_name);
@@ -261,8 +264,7 @@ future<> client::put_object(sstring object_name, temporary_buffer<char> buf) {
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
     });
-    authorize(req);
-    co_await _http.make_request(std::move(req), ignore_reply);
+    co_await make_request(std::move(req));
 }
 
 future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs) {
@@ -285,15 +287,13 @@ future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
     });
-    authorize(req);
-    co_await _http.make_request(std::move(req), ignore_reply);
+    co_await make_request(std::move(req));
 }
 
 future<> client::delete_object(sstring object_name) {
     s3l.trace("DELETE {}", object_name);
     auto req = http::request::make("DELETE", _host, object_name);
-    authorize(req);
-    co_await _http.make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
+    co_await make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
 }
 
 class client::upload_sink_base : public data_sink_impl {
@@ -422,8 +422,7 @@ future<> client::upload_sink_base::start_upload() {
     s3l.trace("POST uploads {}", _object_name);
     auto rep = http::request::make("POST", _client->_host, _object_name);
     rep.query_parameters["uploads"] = "";
-    _client->authorize(rep);
-    co_await _http.make_request(std::move(rep), [this] (const http::reply& rep, input_stream<char>&& in_) -> future<> {
+    co_await _client->make_request(std::move(rep), [this] (const http::reply& rep, input_stream<char>&& in_) -> future<> {
         auto in = std::move(in_);
         auto body = co_await util::read_entire_stream_contiguous(in);
         _upload_id = parse_multipart_upload_id(body);
@@ -471,9 +470,8 @@ future<> client::upload_sink_base::upload_part(memory_data_sink_buffers bufs) {
     //
     // In case part upload goes wrong and doesn't happen, the _part_etags[part]
     // is not set, so the finalize_upload() sees it and aborts the whole thing.
-    _client->authorize(req);
     auto units = co_await get_units(_flush_sem, 1);
-    (void)_http.make_request(std::move(req), [this, part_number] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+    (void)_client->make_request(std::move(req), [this, part_number] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         auto etag = rep.get_header("ETag");
         s3l.trace("uploaded {} part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
         _part_etags[part_number] = std::move(etag);
@@ -488,8 +486,7 @@ future<> client::upload_sink_base::abort_upload() {
     s3l.trace("DELETE upload {}", _upload_id);
     auto req = http::request::make("DELETE", _client->_host, _object_name);
     req.query_parameters["uploadId"] = std::exchange(_upload_id, ""); // now upload_started() returns false
-    _client->authorize(req);
-    co_await _http.make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
+    co_await _client->make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
 }
 
 future<> client::upload_sink_base::finalize_upload() {
@@ -508,8 +505,7 @@ future<> client::upload_sink_base::finalize_upload() {
     req.write_body("xml", parts_xml_len, [this] (output_stream<char>&& out) -> future<> {
         return dump_multipart_upload_parts(std::move(out), _part_etags);
     });
-    _client->authorize(req);
-    co_await _http.make_request(std::move(req), ignore_reply);
+    co_await _client->make_request(std::move(req));
 }
 
 future<> client::upload_sink_base::close() {
@@ -586,12 +582,11 @@ future<> client::upload_sink_base::upload_part(std::unique_ptr<upload_sink> piec
     // Before the piece's object can be copied into the target one, it should be
     // flushed and closed. After the object is copied, it can be removed. If copy
     // goes wrong, the object should be removed anyway.
-    _client->authorize(req);
     auto units = co_await get_units(_flush_sem, 1);
     (void)piece.flush().then([&piece] () {
         return piece.close();
     }).then([this, part_number, req = std::move(req)] () mutable {
-        return _http.make_request(std::move(req), [this, part_number] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+        return _client->make_request(std::move(req), [this, part_number] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
             return do_with(std::move(in_), [this, part_number] (auto& in) mutable {
                 return util::read_entire_stream_contiguous(in).then([this, part_number] (auto body) mutable {
                     auto etag = parse_multipart_copy_upload_etag(body);

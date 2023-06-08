@@ -22,6 +22,8 @@ struct range {
     size_t len;
 };
 
+future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_);
+
 class client : public enable_shared_from_this<client> {
     class upload_sink_base;
     class upload_sink;
@@ -36,6 +38,7 @@ class client : public enable_shared_from_this<client> {
     struct private_tag {};
 
     void authorize(http::request&);
+    future<> make_request(http::request req, http::experimental::client::reply_handler handle = ignore_reply, http::reply::status_type expected = http::reply::status_type::ok);
 
     future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler);
 public:
