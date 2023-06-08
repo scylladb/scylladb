@@ -39,10 +39,10 @@ def run_with_generated_dir(run_cmd_generator, run_dir_generator):
     pid = os.fork()
     if pid == 0:
         # Child
-        run_with_temporary_dir_pids = set() # no children to clean up on child
+        run_with_temporary_dir_pids = {} # no children to clean up on child
         run_pytest_pids = set()
         pid = os.getpid()
-        dir = run_dir_generator(pid)
+        dir = run_dir_generator(pid, do_create=True)
         (cmd, env) = run_cmd_generator(pid, dir)
         # redirect stdout and stderr to log file, as in a shell's >log 2>&1:
         log = os.path.join(dir, 'log')
@@ -61,34 +61,37 @@ def run_with_generated_dir(run_cmd_generator, run_dir_generator):
         # execve will not return. If it cannot run the program, it will raise
         # an exception.
     # Parent
-    run_with_temporary_dir_pids.add(pid)
+    run_with_temporary_dir_pids[pid] = run_dir_generator
     signal.pthread_sigmask(signal.SIG_SETMASK, mask)
     return pid
 
-def make_new_tempdir(pid):
+def make_new_tempdir(pid, do_create):
     dir = pid_to_dir(pid)
-    os.mkdir(dir)
+    if do_create:
+        os.mkdir(dir)
     return dir
 
 def run_with_temporary_dir(run_cmd_generator):
     return run_with_generated_dir(run_cmd_generator, make_new_tempdir)
 
-def restart_with_dir(old_pid, run_cmd_generator, dir):
+def restart_with_dir(old_pid, run_cmd_generator, run_dir_generator):
     try:
         os.killpg(old_pid, 2)
         os.waitpid(old_pid, 0)
     except ProcessLookupError:
         pass
 
-    scylla_link = os.path.join(dir, 'test_scylla')
+    run_dir = run_dir_generator(old_pid, do_create=False)
+    scylla_link = os.path.join(run_dir, 'test_scylla')
     os.unlink(scylla_link)
-    return run_with_generated_dir(run_cmd_generator, lambda pid : dir)
+    return run_with_generated_dir(run_cmd_generator, run_dir_generator)
 
-# run_with_temporary_dir_pids is a set of process ids previously created
-# by run_with_temporary_dir(). On exit, the processes listed here are
-# cleaned up. Note that there is a known mapping (pid_to_dir()) from each
-# pid to the temporary directory - which will also be removed.
-run_with_temporary_dir_pids = set()
+# run_with_temporary_dir_pids is a dict of process ids and the functions
+# to create their temporary directory, these process ids are previously
+# created by run_with_generated_dir(). On exit, the processes listed here
+# are cleaned up. The corresponding  temporary directories will also be
+# removed only if they are created using make_new_tempdir()
+run_with_temporary_dir_pids = {}
 
 # abort_run_with_temporary_dir() kills a process started earlier by
 # run_with_temporary_directory, and and removes its temporary directory.
@@ -96,7 +99,7 @@ run_with_temporary_dir_pids = set()
 # it to the standard output even after the directory is removed. In the
 # future we may want to change this - and save the log somewhere instead
 # of copying it to stdout.
-def abort_run_with_dir(pid, tmpdir):
+def abort_run_with_dir(pid, tmpdir_gen):
     try:
         os.killpg(pid, 9)
         os.waitpid(pid, 0) # don't leave an annoying zombie
@@ -107,16 +110,15 @@ def abort_run_with_dir(pid, tmpdir):
     # to not happen in that case. So we need to open the log file first,
     # delete the directory (the open file will not be really deleted unti we
     # close it) - and only then start showing the log file.
+    tmpdir = tmpdir_gen(pid, do_create=False)
     f = open(os.path.join(tmpdir, 'log'), 'rb')
     # Be paranoid about rmtree accidentally removing the entire disk...
     # TODO: check tmpdir is actually in TMPDIR and refuse to remove it
     # if not.
-    if tmpdir != '/':
-        shutil.rmtree(tmpdir)
+    if tmpdir_gen is make_new_tempdir:
+        if tmpdir != '/':
+            shutil.rmtree(tmpdir)
     return f
-
-def abort_run_with_temporary_dir(pid):
-    return abort_run_with_dir(pid, pid_to_dir(pid))
 
 summary=''
 run_pytest_pids = set()
@@ -134,8 +136,8 @@ def cleanup_all():
             os.waitpid(pid, 0) # don't leave an annoying zombie
         except ProcessLookupError:
             pass
-    for pid in run_with_temporary_dir_pids:
-        f = abort_run_with_temporary_dir(pid)
+    for pid, tempdir_gen in run_with_temporary_dir_pids.items():
+        f = abort_run_with_dir(pid, tempdir_gen)
         print('\nSubprocess output:\n')
         sys.stdout.flush()
         shutil.copyfileobj(f, sys.stdout.buffer)
@@ -389,7 +391,7 @@ def run_pytest(pytest_dir, additional_parameters):
     pid = os.fork()
     if pid == 0:
         # child:
-        run_with_temporary_dir_pids = set() # no children to clean up on child
+        run_with_temporary_dir_pids = {} # no children to clean up on child
         run_pytest_pids = set()
         os.chdir(pytest_dir)
         os.setsid()

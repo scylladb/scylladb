@@ -28,8 +28,11 @@ s3_server_address = os.environ['S3_SERVER_ADDRESS_FOR_TEST']
 s3_server_port = int(os.environ['S3_SERVER_PORT_FOR_TEST'])
 s3_public_bucket = os.environ['S3_PUBLIC_BUCKET_FOR_TEST']
 
-def get_tempdir(pid):
-    return test_tempdir
+def get_make_run_dir(run_dir):
+    '''return a function which returns the run_dir'''
+    def make_run_dir(pid, do_create):
+        return run_dir
+    return make_run_dir
 
 with open(test_tempdir + '/object_storage.yaml', 'w') as config_file:
     yaml.dump({ 'endpoints': [
@@ -53,8 +56,10 @@ def teardown(pid):
     shutil.copyfileobj(log, sys.stdout.buffer)
 
 
+make_run_dir = get_make_run_dir(test_tempdir)
+
 print(f'Start scylla (dir={test_tempdir}')
-pid = run.run_with_generated_dir(run_scylla_cmd, get_tempdir)
+pid = run.run_with_generated_dir(run_scylla_cmd, make_run_dir)
 atexit.register(lambda: teardown(pid))
 
 ip = run.pid_to_ip(pid)
@@ -100,7 +105,7 @@ for row in res:
 cluster.shutdown()
 
 print('Restart scylla')
-pid = run.restart_with_dir(pid, run_scylla_cmd, test_tempdir)
+pid = run.restart_with_dir(pid, run_scylla_cmd, make_run_dir)
 ip = run.pid_to_ip(pid)
 run.wait_for_services(pid, [ lambda: check_cql(ip) ])
 

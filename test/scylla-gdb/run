@@ -38,7 +38,7 @@ def run_pytest_in_gdb(pytest_dir, additional_parameters):
     pid = os.fork()
     if pid == 0:
         # child:
-        run.run_with_temporary_dir_pids = set() # no children to clean up on child
+        run.run_with_temporary_dir_pids = {} # no children to clean up on child
         run.run_pytest_pids = set()
         os.chdir(pytest_dir)
         pytest_args = ['-o', 'junit_family=xunit2'] + additional_parameters
