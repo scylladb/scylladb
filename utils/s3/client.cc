@@ -173,9 +173,13 @@ future<> client::make_request(http::request req, http::experimental::client::rep
     auto it = _https.find(sg);
     if (it == _https.end()) [[unlikely]] {
         auto factory = std::make_unique<dns_connection_factory>(_host, _cfg->port, _cfg->use_https);
+        // Limit the maximum number of connections this group's http client
+        // may have proportional to its shares. Shares are typically in the
+        // range of 100...1000, thus resulting in 1..10 connections
+        auto max_connections = std::max((unsigned)(sg.get_shares() / 100), 1u);
         it = _https.emplace(std::piecewise_construct,
             std::forward_as_tuple(sg),
-            std::forward_as_tuple(std::move(factory))
+            std::forward_as_tuple(std::move(factory), max_connections)
         ).first;
     }
     return it->second.make_request(std::move(req), std::move(handle), expected);
@@ -474,6 +478,11 @@ future<> client::upload_sink_base::upload_part(memory_data_sink_buffers bufs) {
     // The semaphore is used for two things -- control the concurrency and let
     // the finalize_upload() wait in any background activity before checking
     // the progress.
+    //
+    // Upload parallelizm is managed per-sched-group -- client maintains a set
+    // of http clients each with its own max-connections. When upload happens it
+    // will naturally be limited with the relevant http client's connections
+    // limit not affecting other groups' requests concurrency
     //
     // In case part upload goes wrong and doesn't happen, the _part_etags[part]
     // is not set, so the finalize_upload() sees it and aborts the whole thing.
