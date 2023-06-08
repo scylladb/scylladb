@@ -74,7 +74,7 @@ def make_new_tempdir(pid, do_create):
 def run_with_temporary_dir(run_cmd_generator):
     return run_with_generated_dir(run_cmd_generator, make_new_tempdir)
 
-def restart_with_dir(old_pid, run_cmd_generator, run_dir_generator):
+def kill_with_generated_dir(old_pid, run_dir_generator):
     try:
         os.killpg(old_pid, 2)
         os.waitpid(old_pid, 0)
@@ -84,7 +84,6 @@ def restart_with_dir(old_pid, run_cmd_generator, run_dir_generator):
     run_dir = run_dir_generator(old_pid, do_create=False)
     scylla_link = os.path.join(run_dir, 'test_scylla')
     os.unlink(scylla_link)
-    return run_with_generated_dir(run_cmd_generator, run_dir_generator)
 
 # run_with_temporary_dir_pids is a dict of process ids and the functions
 # to create their temporary directory, these process ids are previously

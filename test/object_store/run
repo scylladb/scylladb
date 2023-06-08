@@ -103,9 +103,10 @@ for row in res:
         success = False
 
 cluster.shutdown()
+run.kill_with_generated_dir(pid, make_run_dir)
 
 print('Restart scylla')
-pid = run.restart_with_dir(pid, run_scylla_cmd, make_run_dir)
+pid = run.run_with_generated_dir(run_scylla_cmd, make_run_dir)
 ip = run.pid_to_ip(pid)
 run.wait_for_services(pid, [ lambda: check_cql(ip) ])
 
