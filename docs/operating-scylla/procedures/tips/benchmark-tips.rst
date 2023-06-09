@@ -175,12 +175,6 @@ However, if a query can return many rows, then the unpaged query can lead to a h
 With a paged query, the execution collects a page's worth of data and new pages are retrieved on demand, leading to smaller memory bubbles.
 Read about `More Efficient Query Paging <https://www.scylladb.com/2018/07/13/efficient-query-paging/>`_.
 
-Don’t Use Reverse Queries
-=========================
-
-When using a query with an ORDER BY clause, you need to make sure that the order is the same as the order in the data model.
-Otherwise you run into a problem called :doc:`reverse queries </troubleshooting/reverse-queries/>` which can cause unbound memory usage and killed queries.
-
 Use Workload Prioritization
 ===========================
 
