@@ -9,7 +9,6 @@
  */
 
 #include "maps.hh"
-#include "cql3/abstract_marker.hh"
 #include "operation.hh"
 #include "update_parameters.hh"
 #include "exceptions/exceptions.hh"
