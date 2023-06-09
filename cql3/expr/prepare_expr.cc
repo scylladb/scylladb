@@ -10,7 +10,6 @@
 #include "cql3/functions/functions.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/constants.hh"
-#include "cql3/abstract_marker.hh"
 #include "cql3/lists.hh"
 #include "cql3/sets.hh"
 #include "cql3/user_types.hh"

@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include "cql3/abstract_marker.hh"
 #include "operation.hh"
 #include "update_parameters.hh"
 #include "constants.hh"

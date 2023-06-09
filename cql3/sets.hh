@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include "cql3/abstract_marker.hh"
 #include "maps.hh"
 #include "column_specification.hh"
 #include "column_identifier.hh"
