@@ -290,25 +290,27 @@ struct aggregate_type_for<time_native_type> {
     using type = time_native_type::primary_type;
 };
 
+} // anonymous namespace
+
 /**
  * Creates a COUNT function for the specified type.
  *
- * @param inputType the function input type
+ * @param input_type the function input type
  * @return a COUNT function for the specified type.
  */
-template <typename Type>
-static shared_ptr<aggregate_function> make_count_function() {
+shared_ptr<aggregate_function>
+aggregate_fcts::make_count_function(data_type input_type) {
     return make_shared<db::functions::aggregate_function>(
         db::functions::stateless_aggregate_function{
             .name = function_name::native_function("count"),
             .state_type = long_type,
             .result_type = long_type,
-            .argument_types = {data_type_for<Type>()},
+            .argument_types = {input_type},
             .initial_state = data_value(int64_t(0)).serialize(),
             .aggregation_function = ::make_shared<internal_scalar_function>(
                     "count_step",
                     long_type,
-                    std::vector<data_type>({long_type, data_type_for<Type>()}),
+                    std::vector<data_type>({long_type, input_type}),
                     [] (std::span<const bytes_opt> args) {
                         if (!args[1]) {
                             return args[0];
@@ -320,7 +322,6 @@ static shared_ptr<aggregate_function> make_count_function() {
             .state_to_result_function = make_internal_scalar_function("count_finalizer", return_any_nonnull, [] (int64_t count) { return count; }),
             .state_reduction_function = make_internal_scalar_function("count_reducer", return_any_nonnull, [] (int64_t c1, int64_t c2) { return c1 + c2; }),
         });
-}
 }
 
 // Drops the first arg type from the types declaration (which denotes the accumulator)
@@ -465,44 +466,6 @@ aggregate_fcts::make_min_function(data_type io_type) {
 
 void cql3::functions::add_agg_functions(declared_t& funcs) {
     auto declare = [&funcs] (shared_ptr<function> f) { funcs.emplace(f->name(), f); };
-
-    declare(make_count_function<int8_t>());
-
-    declare(make_count_function<int16_t>());
-
-    declare(make_count_function<int32_t>());
-
-    declare(make_count_function<int64_t>());
-
-    declare(make_count_function<utils::multiprecision_int>());
-
-    declare(make_count_function<big_decimal>());
-
-    declare(make_count_function<float>());
-
-    declare(make_count_function<double>());
-
-    declare(make_count_function<sstring>());
-
-    declare(make_count_function<ascii_native_type>());
-
-    declare(make_count_function<simple_date_native_type>());
-
-    declare(make_count_function<db_clock::time_point>());
-
-    declare(make_count_function<timeuuid_native_type>());
-
-    declare(make_count_function<time_native_type>());
-
-    declare(make_count_function<utils::UUID>());
-
-    declare(make_count_function<bytes>());
-
-    declare(make_count_function<bool>());
-
-    declare(make_count_function<net::inet_address>());
-
-    // FIXME: more count/min/max
 
     declare(make_sum_function<int8_t>());
     declare(make_sum_function<int16_t>());
