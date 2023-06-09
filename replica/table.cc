@@ -1408,7 +1408,7 @@ future<std::unordered_set<sstables::shared_sstable>> table::get_sstables_by_part
     auto dk = dht::decorate_key(*_schema, pk);
     auto hk = sstables::sstable::make_hashed_key(*_schema, dk.key());
 
-    auto sel = make_lw_shared<sstables::sstable_set::incremental_selector>(get_sstable_set().make_incremental_selector());
+    auto sel = std::make_unique<sstables::sstable_set::incremental_selector>(get_sstable_set().make_incremental_selector());
     const auto& sst = sel->select(dk).sstables;
 
     std::unordered_set<sstables::shared_sstable> ssts;
