@@ -454,15 +454,6 @@ private:
         }
     }
 
-    void trace(const char* msg) noexcept {
-        try {
-            trace_internal(std::string(msg));
-        } catch (...) {
-            // Bump up an error counter and ignore
-            ++_local_tracing_ptr->stats.trace_errors;
-        }
-    }
-
     /**
      * Add a single trace entry - printf-like version
      *
@@ -713,12 +704,6 @@ template <typename... T>
 inline void trace(const trace_state_ptr& p, fmt::format_string<T...> fmt, T&&... args) noexcept {
     if (p && !p->ignore_events()) {
         p->trace(fmt, std::forward<T>(args)...);
-    }
-}
-
-inline void trace(const trace_state_ptr& p, std::string&& msg) noexcept {
-    if (p && !p->ignore_events()) {
-        p->trace(std::move(msg));
     }
 }
 

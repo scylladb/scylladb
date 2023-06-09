@@ -424,7 +424,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     co_await client_state.maybe_update_per_service_level_params();
 
     tracing::trace_state_ptr trace_state = maybe_trace_query(client_state, username, op, content);
-    tracing::trace(trace_state, std::move(op));
+    tracing::trace(trace_state, "{}", op);
     rjson::value json_request = co_await _json_parser.parse(std::move(content));
     co_return co_await callback_it->second(_executor, client_state, trace_state,
             make_service_permit(std::move(units)), std::move(json_request), std::move(req));
