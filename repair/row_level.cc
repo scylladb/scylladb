@@ -943,8 +943,8 @@ public:
     }
 
 private:
-    future<uint64_t> do_estimate_partitions_on_all_shards() {
-        return estimate_partitions(_db, _schema->ks_name(), _schema->cf_name(), _range);
+    future<uint64_t> do_estimate_partitions_on_all_shards(const dht::token_range& range) {
+        return estimate_partitions(_db, _schema->ks_name(), _schema->cf_name(), range);
     }
 
     future<uint64_t> do_estimate_partitions_on_local_shard() {
@@ -966,7 +966,7 @@ private:
                 return repeat([this, &sharder, &partitions_sum] () mutable {
                     auto shard_range = sharder.next();
                     if (shard_range) {
-                        return do_estimate_partitions_on_all_shards().then([this, &partitions_sum] (uint64_t partitions) mutable {
+                        return do_estimate_partitions_on_all_shards(*shard_range).then([&partitions_sum] (uint64_t partitions) mutable {
                             partitions_sum += partitions;
                             return make_ready_future<stop_iteration>(stop_iteration::no);
                         });
