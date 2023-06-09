@@ -295,9 +295,7 @@ static shared_ptr<function> get_dynamic_aggregate(const function_name &name, con
         }
 
         auto& arg = arg_types[0];
-        if (arg->is_collection() || arg->is_tuple() || arg->is_user_type()) {
-            return aggregate_fcts::make_count_rows_function();
-        }
+        return aggregate_fcts::make_count_function(arg);
     } else if (name.has_keyspace()
                 ? name == COUNT_ROWS_NAME
                 : name.name == COUNT_ROWS_NAME.name) {
