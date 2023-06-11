@@ -775,7 +775,7 @@ cast_test_assignment(const cast& c, data_dictionary::database db, const sstring&
 // This limitation simplifies things - we can just reinterpret the value as the destination type.
 static
 std::optional<expression>
-cast_prepare_expression(const cast& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
+c_cast_prepare_expression(const cast& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
     data_type cast_type = cast_get_prepared_type(c, db, keyspace);
 
     if (!receiver) {
@@ -809,9 +809,27 @@ cast_prepare_expression(const cast& c, data_dictionary::database db, const sstri
     // Using the original receiver wouldn't work in such cases - it would complain
     // that untyped_constant(1234) isn't a valid blob constant.
     return cast{
+        .style = cast::cast_style::c,
         .arg = prepare_expression(c.arg, db, keyspace, schema_opt, cast_type_receiver),
         .type = receiver->type,
     };
+}
+
+static
+std::optional<expression>
+sql_cast_prepare_expression(const cast& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
+    on_internal_error(expr_logger, "don't yet know how to prepare sql-style cast");
+}
+
+std::optional<expression>
+cast_prepare_expression(const cast& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
+    switch (c.style) {
+    case cast::cast_style::c:
+        return c_cast_prepare_expression(c, db, keyspace, schema_opt, std::move(receiver));
+    case cast::cast_style::sql:
+        return sql_cast_prepare_expression(c, db, keyspace, schema_opt, std::move(receiver));
+    }
+    on_internal_error(expr_logger, "Illegal cast style");
 }
 
 std::optional<expression>

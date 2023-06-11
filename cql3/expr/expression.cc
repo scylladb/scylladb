@@ -1107,14 +1107,23 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                 }
             },
             [&] (const cast& c)  {
-                std::visit(overloaded_functor{
+                auto type_str = std::visit(overloaded_functor{
                     [&] (const cql3_type& t) {
-                        fmt::print(os, "({} AS {})", to_printer(c.arg), t);
+                        return fmt::format("{}", t);
                     },
                     [&] (const shared_ptr<cql3_type::raw>& t) {
-                        fmt::print(os, "({}) {}", t, to_printer(c.arg));
-                    },
-                }, c.type);
+                        return fmt::format("{}", t);
+                    }}, c.type);
+
+                switch (c.style) {
+                case cast::cast_style::sql:
+                    fmt::print(os, "({} AS {})", to_printer(c.arg), type_str);
+                    return;
+                case cast::cast_style::c:
+                    fmt::print(os, "({}) {}", type_str, to_printer(c.arg));
+                    return;
+                }
+                on_internal_error(expr_logger, "unexpected cast_style");
             },
             [&] (const field_selection& fs)  {
                 fmt::print(os, "({}.{})", to_printer(fs.structure), fs.field);
@@ -1418,7 +1427,7 @@ expression search_and_replace(const expression& e,
                     };
                 },
                 [&] (const cast& c) -> expression {
-                    return cast{recurse(c.arg), c.type};
+                    return cast{c.style, recurse(c.arg), c.type};
                 },
                 [&] (const field_selection& fs) -> expression {
                     return field_selection{recurse(fs.structure), fs.field};
@@ -1674,6 +1683,15 @@ cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
             on_internal_error(expr_logger, "Can't evaluate a column_mutation_attribute");
         },
         [&](const cast& c) -> cql3::raw_value {
+            // std::invoke trick allows us to use "return" in switch can have the compiler warn us if we missed an enum
+            std::invoke([&] {
+                switch (c.style) {
+                case cast::cast_style::c: return;
+                case cast::cast_style::sql: on_internal_error(expr_logger, "SQL-style cast should have been converted to a function_call");
+                }
+                on_internal_error(expr_logger, "illegal cast_style");
+            });
+
             auto ret = evaluate(c.arg, inputs);
             auto type = std::get_if<data_type>(&c.type);
             if (!type) {

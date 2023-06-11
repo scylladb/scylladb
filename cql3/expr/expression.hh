@@ -316,6 +316,8 @@ struct function_call {
 };
 
 struct cast {
+    enum class cast_style { c, sql };
+    cast_style style;
     expression arg;
     std::variant<data_type, shared_ptr<cql3_type::raw>> type;
 
