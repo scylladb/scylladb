@@ -51,6 +51,7 @@
 #include "readers/empty_v2.hh"
 #include "readers/evictable.hh"
 #include "readers/queue.hh"
+#include "readers/filtering.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 #include "repair/hash.hh"
 #include "repair/decorated_key_with_hash.hh"
@@ -260,8 +261,22 @@ repair_hash repair_hasher::do_hash_for_mf(const decorated_key_with_hash& dk_with
 
 class repair_reader {
 public:
-using is_local_reader = bool_class<class is_local_reader_tag>;
-
+    enum class read_strategy {
+        local,
+        multishard_split,
+        multishard_filter
+    };
+    friend std::ostream& operator<<(std::ostream& out, read_strategy s) {
+        switch (s) {
+            case read_strategy::local:
+                return out << "local";
+            case read_strategy::multishard_split:
+                return out << "multishard_split";
+            case read_strategy::multishard_filter:
+                return out << "multishard_filter";
+        };
+        return out << "unknown";
+    }
 private:
     schema_ptr _schema;
     reader_permit _permit;
@@ -285,20 +300,23 @@ private:
     flat_mutation_reader_v2 make_reader(
             seastar::sharded<replica::database>& db,
             replica::column_family& cf,
-            is_local_reader local_reader) {
-        if (local_reader) {
-            auto ms = mutation_source([&cf] (
-                        schema_ptr s,
-                        reader_permit permit,
-                        const dht::partition_range& pr,
-                        const query::partition_slice& ps,
-                        tracing::trace_state_ptr,
-                        streamed_mutation::forwarding,
-                        mutation_reader::forwarding fwd_mr) {
-                return cf.make_streaming_reader(std::move(s), std::move(permit), pr, ps, fwd_mr);
-            });
-            flat_mutation_reader_v2 rd(nullptr);
-            std::tie(rd, _reader_handle) = make_manually_paused_evictable_reader_v2(
+            read_strategy strategy,
+            const dht::sharder& remote_sharder,
+            unsigned remote_shard) {
+        switch (strategy) {
+            case read_strategy::local: {
+                auto ms = mutation_source([&cf] (
+                    schema_ptr s,
+                    reader_permit permit,
+                    const dht::partition_range& pr,
+                    const query::partition_slice& ps,
+                    tracing::trace_state_ptr,
+                    streamed_mutation::forwarding,
+                    mutation_reader::forwarding fwd_mr) {
+                    return cf.make_streaming_reader(std::move(s), std::move(permit), pr, ps, fwd_mr);
+                });
+                flat_mutation_reader_v2 rd(nullptr);
+                std::tie(rd, _reader_handle) = make_manually_paused_evictable_reader_v2(
                     std::move(ms),
                     _schema,
                     _permit,
@@ -306,19 +324,34 @@ private:
                     _schema->full_slice(),
                     {},
                     mutation_reader::forwarding::no);
-            return rd;
-        } else {
-            // We can't have two permits with count resource for 1 repair.
-            // So we release the one on _permit so the only one is the one the
-            // shard reader will obtain.
-            _permit.release_base_resources();
-            return make_multishard_streaming_reader(db, _schema, _permit, [this] {
-                auto shard_range = _sharder.next();
-                if (shard_range) {
-                    return std::optional<dht::partition_range>(dht::to_partition_range(*shard_range));
-                }
-                return std::optional<dht::partition_range>();
-            });
+                return rd;
+            }
+            case read_strategy::multishard_split: {
+                // We can't have two permits with count resource for 1 repair.
+                // So we release the one on _permit so the only one is the one the
+                // shard reader will obtain.
+                _permit.release_base_resources();
+                return make_multishard_streaming_reader(db, _schema, _permit, [this] {
+                    auto shard_range = _sharder.next();
+                    if (shard_range) {
+                        return std::optional<dht::partition_range>(dht::to_partition_range(*shard_range));
+                    }
+                    return std::optional<dht::partition_range>();
+                });
+            }
+            case read_strategy::multishard_filter: {
+                // We can't have two permits with count resource for 1 repair.
+                // So we release the one on _permit so the only one is the one the
+                // shard reader will obtain.
+                _permit.release_base_resources();
+                return make_filtering_reader(make_multishard_streaming_reader(db, _schema, _permit, _range),
+                    [&remote_sharder, remote_shard](const dht::decorated_key& k) {
+                        return remote_sharder.shard_of(k.token()) == remote_shard;
+                    });
+            }
+            default:
+                on_internal_error(rlogger,
+                    format("make_reader: unexpected read_strategy {}", static_cast<int>(strategy)));
         }
     }
 
@@ -332,14 +365,14 @@ public:
             const dht::sharder& remote_sharder,
             unsigned remote_shard,
             uint64_t seed,
-            is_local_reader local_reader)
+            read_strategy strategy)
             : _schema(s)
             , _permit(std::move(permit))
             , _range(dht::to_partition_range(range))
             , _sharder(remote_sharder, range, remote_shard)
             , _seed(seed)
-            , _local_read_op(local_reader ? std::optional(cf.read_in_progress()) : std::nullopt)
-            , _reader(make_reader(db, cf, local_reader))
+            , _local_read_op(strategy == read_strategy::local ? std::optional(cf.read_in_progress()) : std::nullopt)
+            , _reader(make_reader(db, cf, strategy, remote_sharder, remote_shard))
     { }
 
     future<mutation_fragment_opt>
@@ -709,6 +742,11 @@ private:
     // sharding info of repair master
     dht::sharder _remote_sharder;
     bool _same_sharding_config = false;
+    struct local_range_estimation {
+        size_t master_subranges_count;
+        size_t partitions_count;
+    };
+    std::optional<local_range_estimation> _local_range_estimation;
     uint64_t _estimated_partitions = 0;
     // For repair master nr peers is the number of repair followers, for repair
     // follower nr peers is always one because repair master is the only peer.
@@ -947,10 +985,11 @@ private:
         if (_repair_master || _same_sharding_config) {
             return do_estimate_partitions_on_local_shard();
         } else {
-            return do_with(dht::selective_token_range_sharder(_remote_sharder, _range, _master_node_shard_config.shard), uint64_t(0), [this] (auto& sharder, auto& partitions_sum) mutable {
-                return repeat([this, &sharder, &partitions_sum] () mutable {
+            return do_with(dht::selective_token_range_sharder(_remote_sharder, _range, _master_node_shard_config.shard), uint64_t(0), uint64_t(0), [this] (auto& sharder, auto& partitions_sum, auto& subranges) mutable {
+                return repeat([this, &sharder, &partitions_sum, &subranges] () mutable {
                     auto shard_range = sharder.next();
                     if (shard_range) {
+                        ++subranges;
                         return do_estimate_partitions_on_all_shards().then([&partitions_sum] (uint64_t partitions) mutable {
                             partitions_sum += partitions;
                             return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -958,7 +997,11 @@ private:
                     } else {
                         return make_ready_future<stop_iteration>(stop_iteration::yes);
                     }
-                }).then([&partitions_sum] {
+                }).then([this, &partitions_sum, &subranges] {
+                    _local_range_estimation = local_range_estimation {
+                        .master_subranges_count = subranges,
+                        .partitions_count = partitions_sum
+                    };
                     return partitions_sum;
                 });
             });
@@ -1051,7 +1094,53 @@ private:
                 _remote_sharder,
                 _master_node_shard_config.shard,
                 _seed,
-                repair_reader::is_local_reader(_repair_master || _same_sharding_config));
+                std::invoke([this]() {
+                    if (_repair_master || _same_sharding_config) {
+                        rlogger.debug("repair_reader: meta_id={}, _repair_master={}, _same_sharding_config={},"
+                                      "read_strategy {} is chosen",
+                           _repair_meta_id, _repair_master, _same_sharding_config,
+                           repair_reader::read_strategy::local);
+                        return repair_reader::read_strategy::local;
+                    }
+
+                    // multishard_filter means load all the data in the range and apply
+                    // filter by master shard on top, discarding partitions from other shards.
+                    // multishard_split means split the range into multiple subranges,
+                    // each containing only the required data from the master shard.
+                    // For situations with a sparse data set spread across numerous ranges,
+                    // the overhead from continuously switching between these ranges,
+                    // specifically during the fast_forward_to function on the multishard_reader,
+                    // can become the main factor in performance.
+                    // Similarly, with multishard_filter, reading all the partitions within
+                    // the range can lead to the next_partition cost dominating the overall cost.
+                    // The heuristic here chooses the strategy with minimal such cost.
+                    // Note that with multishard_filter we don't read entire partitions which
+                    // can be a huge waste. We only fill the buffer inside
+                    // flat_mutation_reader_v2, if a partition is found to belong to the incorrect
+                    // master shard, we call next_partition(), which effectively clears
+                    // the buffer until the next partition is reached.
+
+                    if (!_local_range_estimation) {
+                        // this should not normally happen since the master
+                        // calls get_estimated_partitions before get_sync_boundary
+                        rlogger.warn("repair_reader: meta_id={}, no _local_range_estimation, "
+                                     "read_strategy {} is chosen",
+                            _repair_meta_id, repair_reader::read_strategy::multishard_split);
+                        return repair_reader::read_strategy::multishard_split;
+                    }
+
+                    const auto read_strategy =
+                        _local_range_estimation->partitions_count <= _local_range_estimation->master_subranges_count
+                        ? repair_reader::read_strategy::multishard_filter
+                        : repair_reader::read_strategy::multishard_split;
+                    rlogger.debug("repair_reader: meta_id={}, _local_range_estimation: partitions_count={}, "
+                                  "master_subranges_count={}, read_strategy {} is chosen",
+                        _repair_meta_id,
+                        _local_range_estimation->partitions_count,
+                        _local_range_estimation->master_subranges_count,
+                        read_strategy);
+                    return read_strategy;
+                }));
         }
         try {
             while (cur_size < _max_row_buf_size) {
