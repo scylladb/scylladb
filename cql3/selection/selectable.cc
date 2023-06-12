@@ -76,27 +76,6 @@ selectable::writetime_or_ttl::to_string() const {
     return format("{}({})", _is_writetime ? "writetime" : "ttl", _id->to_string());
 }
 
-shared_ptr<selector::factory>
-selectable::with_function::new_selector_factory(data_dictionary::database db, schema_ptr s, std::vector<const column_definition*>& defs) {
-    auto&& factories = selector_factories::create_factories_and_collect_column_definitions(_args, db, s, defs);
-
-    // resolve built-in functions before user defined functions
-    auto&& fun = functions::functions::get(db, s->ks_name(), _function_name, factories->new_instances(), s->ks_name(), s->cf_name());
-    if (!fun) {
-        throw exceptions::invalid_request_exception(format("Unknown function '{}'", _function_name));
-    }
-    if (!fun->return_type()) {
-        throw exceptions::invalid_request_exception(format("Unknown function {} called in selection clause", _function_name));
-    }
-
-    return abstract_function_selector::new_factory(std::move(fun), std::move(factories));
-}
-
-sstring
-selectable::with_function::to_string() const {
-    return format("{}({})", _function_name.name, fmt::join(_args, ", "));
-}
-
 expr::expression
 make_count_rows_function_expression() {
     return expr::function_call{
@@ -125,32 +104,13 @@ selectable::with_field_selection::new_selector_factory(data_dictionary::database
     }
 
     auto ut = static_pointer_cast<const user_type_impl>(type->underlying_type());
-    auto idx = ut->idx_of_field(_field->bytes_);
-    if (!idx) {
-        throw exceptions::invalid_request_exception(format("{} of type {} has no field {}",
-                                                           _selected->to_string(), ut->as_cql3_type(), _field));
-    }
 
-    return field_selector::new_factory(std::move(ut), *idx, std::move(factory));
+    return field_selector::new_factory(std::move(ut), _field_idx, std::move(factory));
 }
 
 sstring
 selectable::with_field_selection::to_string() const {
     return format("{}.{}", _selected->to_string(), _field->to_string());
-}
-
-shared_ptr<selector::factory>
-selectable::with_cast::new_selector_factory(data_dictionary::database db, schema_ptr s, std::vector<const column_definition*>& defs) {
-    std::vector<shared_ptr<selectable>> args{_arg};
-    auto&& factories = selector_factories::create_factories_and_collect_column_definitions(args, db, s, defs);
-    auto&& fun = functions::castas_functions::get(_type, factories->new_instances());
-
-    return abstract_function_selector::new_factory(std::move(fun), std::move(factories));
-}
-
-sstring
-selectable::with_cast::to_string() const {
-    return format("cast({} as {})", _arg->to_string(), cql3_type(_type).to_string());
 }
 
 static
@@ -188,7 +148,7 @@ do_prepare_selectable(const schema& s, const expr::expression& selectable_expr) 
             }
             return std::visit(overloaded_functor{
                 [&] (const functions::function_name& named) -> shared_ptr<selectable> {
-                    return ::make_shared<selectable::with_function>(named, std::move(prepared_args));
+                    on_internal_error(slogger, "function name should have been resolved by prepare");
                 },
                 [&] (const shared_ptr<functions::function>& anon) -> shared_ptr<selectable> {
                     return ::make_shared<selectable::with_anonymous_function>(anon, std::move(prepared_args));
@@ -196,18 +156,14 @@ do_prepare_selectable(const schema& s, const expr::expression& selectable_expr) 
             }, fc.func);
         },
         [&] (const expr::cast& c) -> shared_ptr<selectable> {
-            auto t = std::get_if<data_type>(&c.type);
-            if (!t) {
-                // FIXME: adjust prepare_seletable() signature so we can prepare the type too
-                on_internal_error(slogger, "unprepared type in selector type cast");
-            }
-            return ::make_shared<selectable::with_cast>(do_prepare_selectable(s, c.arg), *t);
+            on_internal_error(slogger, "cast should have been converted to a function call");
         },
         [&] (const expr::field_selection& fs) -> shared_ptr<selectable> {
             // static_pointer_cast<> needed due to lack of covariant return type
             // support with smart pointers
             return make_shared<selectable::with_field_selection>(do_prepare_selectable(s, fs.structure),
-                    fs.field->prepare(s));
+                    fs.field->prepare(s),
+                    fs.field_idx);
         },
         [&] (const expr::bind_variable&) -> shared_ptr<selectable> {
             on_internal_error(slogger, "bind_variable found its way to selector context");
