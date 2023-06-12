@@ -2,6 +2,7 @@ etc/default/scylla-server
 etc/default/scylla-housekeeping
 etc/scylla.d/*.conf
 etc/bash_completion.d/nodetool-completion
+opt/scylladb/share/p11-kit/modules/*
 opt/scylladb/share/doc/scylla/*
 opt/scylladb/share/doc/scylla/licenses/
 usr/lib/systemd/system/*.timer
