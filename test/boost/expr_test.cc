@@ -2519,6 +2519,42 @@ BOOST_AUTO_TEST_CASE(prepare_constant_with_receiver) {
     BOOST_REQUIRE_EQUAL(prepared_int_blob, expected_blob);
 }
 
+BOOST_AUTO_TEST_CASE(prepare_writetime_ttl) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    auto prep = [&, db = db] (const expression& e, std::optional<data_type> receiver_type = std::nullopt) {
+        auto receiver = receiver_type
+                ? make_lw_shared<column_specification>("foo", "bar", make_shared<column_identifier>("ci", false), *receiver_type)
+                : nullptr;
+        return prepare_expression(e, db, "test_ks", table_schema.get(), receiver);
+    };
+
+    for (auto kind : {column_mutation_attribute::attribute_kind::ttl, column_mutation_attribute::attribute_kind::writetime}) {
+        auto expected_type = kind == column_mutation_attribute::attribute_kind::ttl ? int32_type : long_type;
+
+        auto ok1 = prep(column_mutation_attribute{kind, make_column("r")});
+        BOOST_REQUIRE_EQUAL(ok1, (column_mutation_attribute{kind, column_value{&table_schema->regular_column_at(0)}}));
+        BOOST_REQUIRE(type_of(ok1) == expected_type);
+
+        // now try with a receiver
+        auto ok2 = prep(column_mutation_attribute{kind, make_column("r")}, expected_type);
+        BOOST_REQUIRE_EQUAL(ok1, (column_mutation_attribute{kind, column_value{&table_schema->regular_column_at(0)}}));
+        BOOST_REQUIRE(type_of(ok1) == expected_type);
+
+        // now try with a receiver of the wrong type
+        BOOST_REQUIRE_THROW(prep(column_mutation_attribute{kind, make_column("r")}, utf8_type), exceptions::invalid_request_exception);
+
+        // Try a partition key component
+        BOOST_REQUIRE_THROW(prep(column_mutation_attribute{kind, make_column("p")}), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(prep(column_mutation_attribute{kind, make_column("c")}), exceptions::invalid_request_exception);
+
+        // Try something that isn't a column_value
+        BOOST_REQUIRE_THROW(prep(column_mutation_attribute{kind, bind_variable{}}), exceptions::invalid_request_exception);
+    }
+}
+
+
 // Test how evaluating a given binary operator behaves when null is present.
 // A binary with null on either side should evaluate to null.
 static void test_evaluate_binop_null(oper_t op, expression valid_lhs, expression valid_rhs) {

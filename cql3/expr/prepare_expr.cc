@@ -1084,6 +1084,38 @@ std::optional<expression> prepare_conjunction(const conjunction& conj,
     return result;
 }
 
+static
+std::optional<expression>
+prepare_column_mutation_attribute(
+        const column_mutation_attribute& cma,
+        data_dictionary::database db,
+        const sstring& keyspace,
+        const schema* schema_opt,
+        lw_shared_ptr<column_specification> receiver) {
+    auto result_type = expr::column_mutation_attribute_type(cma);
+    if (receiver.get() != nullptr && receiver->type->without_reversed().get_kind() != result_type->get_kind()) {
+        throw exceptions::invalid_request_exception(
+            format("A {} produces a {} value, which doesn't match the type: {} of {}",
+                    cma.kind, result_type->name(),
+                    receiver->type->name(), receiver->name->text()));
+    }
+    auto column = prepare_expression(cma.column, db, keyspace, schema_opt, nullptr);
+    auto cval = expr::as_if<column_value>(&column);
+    if (!cval) {
+        throw exceptions::invalid_request_exception(fmt::format("{} expects a column, but {} is a general expression", cma.kind, column));
+    }
+    if (!cval->col->is_atomic()) {
+        throw exceptions::invalid_request_exception(fmt::format("{} expects an atomic column, but {} is a non-frozen collection", cma.kind, column));
+    }
+    if (cval->col->is_primary_key()) {
+        throw exceptions::invalid_request_exception(fmt::format("{} is not legal on partition key component {}", cma.kind, column));
+    }
+    return column_mutation_attribute{
+        .kind = cma.kind,
+        .column = std::move(column),
+    };
+}
+
 std::optional<expression>
 try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
     return expr::visit(overloaded_functor{
@@ -1160,8 +1192,8 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
             }
             return resolve_column(unin, *schema_opt);
         },
-        [&] (const column_mutation_attribute&) -> std::optional<expression> {
-            on_internal_error(expr_logger, "column_mutation_attributes are not yet reachable via prepare_expression()");
+        [&] (const column_mutation_attribute& cma) -> std::optional<expression> {
+            return prepare_column_mutation_attribute(cma, db, keyspace, schema_opt, std::move(receiver));
         },
         [&] (const function_call& fc) -> std::optional<expression> {
             return prepare_function_call(fc, db, keyspace, schema_opt, std::move(receiver));
@@ -1195,6 +1227,13 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
     }, expr);
 }
 
+static
+assignment_testable::test_result
+column_mutation_attribute_test_assignment(const column_mutation_attribute& cma, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver) {
+    auto type = column_mutation_attribute_type(cma);
+    return expression_test_assignment(std::move(type), std::move(receiver));
+}
+
 assignment_testable::test_result
 test_assignment(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver) {
     using test_result = assignment_testable::test_result;
@@ -1217,8 +1256,8 @@ test_assignment(const expression& expr, data_dictionary::database db, const sstr
         [&] (const unresolved_identifier&) -> test_result {
             on_internal_error(expr_logger, "unresolved_identifiers are not yet reachable via test_assignment()");
         },
-        [&] (const column_mutation_attribute&) -> test_result {
-            on_internal_error(expr_logger, "column_mutation_attributes are not yet reachable via test_assignment()");
+        [&] (const column_mutation_attribute& cma) -> test_result {
+            return column_mutation_attribute_test_assignment(cma, db, keyspace, schema_opt, receiver);
         },
         [&] (const function_call& fc) -> test_result {
             return test_assignment_function_call(fc, db, keyspace, schema_opt, receiver);
