@@ -1033,7 +1033,7 @@ test_assignment_function_call(const cql3::expr::function_call& fc, data_dictiona
 
 static assignment_testable::test_result expression_test_assignment(const data_type& expr_type,
                                                                    const column_specification& receiver) {
-    if (receiver.type->underlying_type() == expr_type->underlying_type()) {
+    if (receiver.type->underlying_type() == expr_type->underlying_type() || (receiver.type == long_type && expr_type->is_counter())) {
         return assignment_testable::test_result::EXACT_MATCH;
     } else if (receiver.type->is_value_compatible_with(*expr_type)) {
         return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
