@@ -205,7 +205,8 @@ class ScyllaServer:
                  logger: Union[logging.Logger, logging.LoggerAdapter],
                  cluster_name: str, ip_addr: str, seeds: List[str],
                  cmdline_options: List[str],
-                 config_options: Dict[str, Any]) -> None:
+                 config_options: Dict[str, Any],
+                 property_file: Dict[str, Any]) -> None:
         # pylint: disable=too-many-arguments
         self.server_id = ServerNum(ScyllaServer.newid())
         self.exe = pathlib.Path(exe).resolve()
@@ -223,6 +224,7 @@ class ScyllaServer:
         self.workdir = self.vardir / shortname
         self.log_filename = (self.vardir / shortname).with_suffix(".log")
         self.config_filename = self.workdir / "conf/scylla.yaml"
+        self.property_filename = self.workdir / "conf/cassandra-rackdc.properties"
         # Sum of basic server configuration and the user-provided config options.
         self.config = make_scylla_conf(
                 workdir = self.workdir,
@@ -230,6 +232,7 @@ class ScyllaServer:
                 seed_addrs = self.seeds,
                 cluster_name = self.cluster_name) \
             | config_options
+        self.property_file = property_file
 
     def change_ip(self, ip_addr: IPAddress) -> None:
         """Change IP address of the current server. Pre: the server is
@@ -561,6 +564,9 @@ class ScyllaServer:
     def _write_config_file(self) -> None:
         with self.config_filename.open('w') as config_file:
             yaml.dump(self.config, config_file)
+        if self.property_file:
+            with self.property_filename.open('w') as property_file:
+                yaml.dump(self.property_file, property_file)
 
 
 class ScyllaCluster:
@@ -578,6 +584,7 @@ class ScyllaCluster:
         cluster_name: str
         ip_addr: IPAddress
         seeds: List[str]
+        property_file: dict[str, Any]
         config_from_test: dict[str, Any]
         cmdline_from_test: List[str]
 
@@ -665,7 +672,11 @@ class ScyllaCluster:
     def _seeds(self) -> List[str]:
         return [server.ip_addr for server in self.running.values()]
 
-    async def add_server(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None, config: Optional[dict[str, Any]] = None, start: bool = True) -> ServerInfo:
+    async def add_server(self, replace_cfg: Optional[ReplaceConfig] = None,
+                         cmdline: Optional[List[str]] = None,
+                         config: Optional[dict[str, Any]] = None,
+                         property_file: Optional[dict[str, Any]] = None,
+                         start: bool = True) -> ServerInfo:
         """Add a new server to the cluster"""
         self.is_dirty = True
 
@@ -711,6 +722,7 @@ class ScyllaCluster:
             cluster_name = self.name,
             ip_addr = ip_addr,
             seeds = seeds,
+            property_file = property_file,
             config_from_test = extra_config,
             cmdline_from_test = cmdline or []
         )
@@ -1161,7 +1173,8 @@ class ScyllaClusterManager:
         assert self.cluster
         data = await request.json()
         replace_cfg = ReplaceConfig(**data["replace_cfg"]) if "replace_cfg" in data else None
-        s_info = await self.cluster.add_server(replace_cfg, data.get('cmdline'), data.get('config'), data.get('start', True))
+        s_info = await self.cluster.add_server(replace_cfg, data.get('cmdline'), data.get('config'),
+                                               data.get('property_file'), data.get('start', True))
         return aiohttp.web.json_response({"server_id" : s_info.server_id,
                                           "ip_addr": s_info.ip_addr})
 

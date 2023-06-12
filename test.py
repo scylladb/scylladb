@@ -398,7 +398,8 @@ class PythonTestSuite(TestSuite):
                 ip_addr=create_cfg.ip_addr,
                 seeds=create_cfg.seeds,
                 cmdline_options=cmdline_options,
-                config_options=config_options)
+                config_options=config_options,
+                property_file=create_cfg.property_file)
 
             return server
 

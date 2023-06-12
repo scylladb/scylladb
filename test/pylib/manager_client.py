@@ -170,7 +170,11 @@ class ManagerClient():
         logger.debug("ManagerClient unpausing %s", server_id)
         await self.client.get(f"/cluster/server/{server_id}/unpause")
 
-    async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None, config: Optional[dict[str, Any]] = None, start: bool = True) -> ServerInfo:
+    async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None,
+                         cmdline: Optional[List[str]] = None,
+                         config: Optional[dict[str, Any]] = None,
+                         property_file: Optional[dict[str, Any]] = None,
+                         start: bool = True) -> ServerInfo:
         """Add a new server"""
         try:
             data: dict[str, Any] = {'start': start}
@@ -180,6 +184,8 @@ class ManagerClient():
                 data['cmdline'] = cmdline
             if config:
                 data['config'] = config
+            if property_file:
+                data['property_file'] = property_file
             server_info = await self.client.put_json("/cluster/addserver", data, response_type="json",
                                                      timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         except Exception as exc:
