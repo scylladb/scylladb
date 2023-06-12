@@ -996,7 +996,7 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
         .args = std::move(parameters),
         .lwt_cache_id = fc.lwt_cache_id
     };
-    if (all_terminal && fun->is_pure() && !fun->is_aggregate()) {
+    if (all_terminal && fun->is_pure() && !fun->is_aggregate() && !fun->requires_thread()) {
         return constant(expr::evaluate(fun_call, query_options::DEFAULT), fun->return_type());
     } else {
         return fun_call;
