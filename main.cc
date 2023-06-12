@@ -1603,6 +1603,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 group0_service.abort().get();
             });
 
+            load_address_map(sys_ks.local(), raft_address_map.local()).get();
+
             // Set up group0 service earlier since it is needed by group0 setup just below
             ss.local().set_group0(group0_service);
 
