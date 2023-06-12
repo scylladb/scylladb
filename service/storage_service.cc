@@ -608,6 +608,7 @@ topology_node_mutation_builder& topology_node_mutation_builder::set(const char* 
             cm.cells.emplace_back(vtype->decompose(value.to_sstring()), atomic_cell::make_live(*bytes_type, _builder._ts, bytes_view()));
         }
 
+        cm.tomb = tombstone(_builder._ts - 1, gc_clock::now());
         _r.cells().apply(*cdef, cm.serialize(*cdef->type));
     } else {
         del(cell);
