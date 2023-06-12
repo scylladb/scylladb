@@ -1117,7 +1117,11 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                 }, c.type);
             },
             [&] (const field_selection& fs)  {
-                fmt::print(os, "({}.{})", to_printer(fs.structure), fs.field);
+                if (pr.debug_mode) {
+                    fmt::print(os, "({}.{})", to_printer(fs.structure), fs.field);
+                } else {
+                    fmt::print(os, "{}.{}", to_printer(fs.structure), fs.field);
+                }
             },
             [&] (const bind_variable&) {
                 // FIXME: store and present bind variable name
