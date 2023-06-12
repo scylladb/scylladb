@@ -918,6 +918,21 @@ field_selection_test_assignment(const field_selection& fs, data_dictionary::data
     return expression_test_assignment(field_type, receiver);
 }
 
+static
+std::vector<::shared_ptr<assignment_testable>>
+prepare_function_args_for_type_inference(std::span<const expression> args, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt) {
+    // Prepare the arguments that can be prepared without a receiver.
+    // Prepared expressions have a known type, which helps with finding the right function.
+    std::vector<shared_ptr<assignment_testable>> partially_prepared_args;
+    for (const expression& argument : args) {
+        std::optional<expression> prepared_arg_opt = try_prepare_expression(argument, db, keyspace, schema_opt, nullptr);
+        auto type = prepared_arg_opt ? std::optional(type_of(*prepared_arg_opt)) : std::nullopt;
+        auto expr = prepared_arg_opt ? std::move(*prepared_arg_opt) : argument;
+        partially_prepared_args.emplace_back(as_assignment_testable(std::move(argument), std::move(type)));
+    }
+    return partially_prepared_args;
+}
+
 std::optional<expression>
 prepare_function_call(const expr::function_call& fc, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
     // Try to extract a column family name from the available information.
@@ -934,24 +949,14 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
 
     // Prepare the arguments that can be prepared without a receiver.
     // Prepared expressions have a known type, which helps with finding the right function.
-    std::vector<expression> partially_prepared_args;
-    for (const expression& argument : fc.args) {
-        std::optional<expression> prepared_arg_opt = try_prepare_expression(argument, db, keyspace, schema_opt, nullptr);
-        if (prepared_arg_opt.has_value()) {
-            partially_prepared_args.emplace_back(*prepared_arg_opt);
-        } else {
-            partially_prepared_args.push_back(argument);
-        }
-    }
+    auto partially_prepared_args = prepare_function_args_for_type_inference(fc.args, db, keyspace, schema_opt);
 
     auto&& fun = std::visit(overloaded_functor{
         [] (const shared_ptr<functions::function>& func) {
             return func;
         },
         [&] (const functions::function_name& name) {
-            auto args = boost::copy_range<std::vector<::shared_ptr<assignment_testable>>>(
-                    partially_prepared_args | boost::adaptors::transformed(expr::as_assignment_testable));
-            auto fun = functions::functions::get(db, keyspace, name, args, keyspace, cf_name, receiver.get());
+            auto fun = functions::functions::get(db, keyspace, name, partially_prepared_args, keyspace, cf_name, receiver.get());
             if (!fun) {
                 throw exceptions::invalid_request_exception(format("Unknown function {} called", name));
             }
@@ -976,7 +981,7 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
     parameters.reserve(partially_prepared_args.size());
     bool all_terminal = true;
     for (size_t i = 0; i < partially_prepared_args.size(); ++i) {
-        expr::expression e = prepare_expression(partially_prepared_args[i], db, keyspace, schema_opt,
+        expr::expression e = prepare_expression(fc.args[i], db, keyspace, schema_opt,
                                                 functions::functions::make_arg_spec(keyspace, cf_name, *fun, i));
         if (!expr::is<expr::constant>(e)) {
             all_terminal = false;
@@ -1007,7 +1012,7 @@ test_assignment_function_call(const cql3::expr::function_call& fc, data_dictiona
     try {
         auto&& fun = std::visit(overloaded_functor{
             [&] (const functions::function_name& name) {
-                auto args = boost::copy_range<std::vector<::shared_ptr<assignment_testable>>>(fc.args | boost::adaptors::transformed(expr::as_assignment_testable));
+                auto args = prepare_function_args_for_type_inference(fc.args, db, keyspace, schema_opt);
                 return functions::functions::get(db, keyspace, name, args, receiver.ks_name, receiver.cf_name, &receiver);
             },
             [] (const shared_ptr<functions::function>& func) {
@@ -1325,8 +1330,9 @@ test_assignment_all(const std::vector<expression>& to_test, data_dictionary::dat
 
 class assignment_testable_expression : public assignment_testable {
     expression _e;
+    std::optional<data_type> _type_opt;
 public:
-    explicit assignment_testable_expression(expression e) : _e(std::move(e)) {}
+    explicit assignment_testable_expression(expression e, std::optional<data_type> type_opt) : _e(std::move(e)), _type_opt(std::move(type_opt)) {}
     virtual test_result test_assignment(data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver) const override {
         return expr::test_assignment(_e, db, keyspace, schema_opt, receiver);
     }
@@ -1334,13 +1340,12 @@ public:
         return fmt::format("{}", _e);
     }
     virtual std::optional<data_type> assignment_testable_type_opt() const override {
-        // FIXME: we could try to prepare the expression and see if we get a type
-        return std::nullopt;
+        return _type_opt;
     }
 };
 
-::shared_ptr<assignment_testable> as_assignment_testable(expression e) {
-    return ::make_shared<assignment_testable_expression>(std::move(e));
+::shared_ptr<assignment_testable> as_assignment_testable(expression e, std::optional<data_type> type_opt) {
+    return ::make_shared<assignment_testable_expression>(std::move(e), std::move(type_opt));
 }
 
 // Finds column_defintion for given column name in the schema.

@@ -730,7 +730,7 @@ extern assignment_testable::test_result test_assignment(const expression& expr, 
 // return not assignable. Otherwise, return weakly assignable.
 extern assignment_testable::test_result test_assignment_all(const std::vector<expression>& exprs, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver);
 
-extern shared_ptr<assignment_testable> as_assignment_testable(expression e);
+extern shared_ptr<assignment_testable> as_assignment_testable(expression e, std::optional<data_type> type_opt);
 
 inline oper_t pick_operator(statements::bound b, bool inclusive) {
     return is_start(b) ?
