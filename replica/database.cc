@@ -2916,6 +2916,21 @@ flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::da
             std::move(range_generator), std::move(full_slice), {}, mutation_reader::forwarding::no);
 }
 
+flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::database>& db,
+        schema_ptr schema, reader_permit permit, const dht::partition_range& range)
+{
+    const auto table_id = schema->id();
+    const auto& full_slice = schema->full_slice();
+    auto erm = db.local().find_column_family(schema).get_effective_replication_map();
+    return make_multishard_combining_reader_v2(
+        make_shared<replica::streaming_reader_lifecycle_policy>(db, table_id),
+        std::move(schema),
+        std::move(erm),
+        std::move(permit),
+        range,
+        full_slice);
+}
+
 std::ostream& operator<<(std::ostream& os, gc_clock::time_point tp) {
     auto sec = std::chrono::duration_cast<std::chrono::seconds>(tp.time_since_epoch()).count();
     std::ostream tmp(os.rdbuf());

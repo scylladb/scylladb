@@ -1767,4 +1767,7 @@ future<> start_large_data_handler(sharded<replica::database>& db);
 flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::database>& db, schema_ptr schema, reader_permit permit,
         std::function<std::optional<dht::partition_range>()> range_generator);
 
+flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::database>& db,
+    schema_ptr schema, reader_permit permit, const dht::partition_range& range);
+
 bool is_internal_keyspace(std::string_view name);
