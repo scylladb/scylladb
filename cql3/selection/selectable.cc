@@ -153,8 +153,9 @@ selectable::with_cast::to_string() const {
     return format("cast({} as {})", _arg->to_string(), cql3_type(_type).to_string());
 }
 
+static
 shared_ptr<selectable>
-prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
+do_prepare_selectable(const schema& s, const expr::expression& selectable_expr) {
     return expr::visit(overloaded_functor{
         [&] (const expr::constant&) -> shared_ptr<selectable> {
             on_internal_error(slogger, "no way to express SELECT constant in the grammar yet");
@@ -166,26 +167,24 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
             on_internal_error(slogger, "no way to express 'SELECT a binop b' in the grammar yet");
         },
         [&] (const expr::column_value& column) -> shared_ptr<selectable> {
-            // There is no path that reaches here, but expr::column_value and selectable_column are logically the same,
-            // so bridge them.
             return ::make_shared<selectable_column>(column_identifier(column.col->name(), column.col->name_as_text()));
         },
         [&] (const expr::subscript& sub) -> shared_ptr<selectable> {
             on_internal_error(slogger, "no way to express 'SELECT a[b]' in the grammar yet");
         },
         [&] (const expr::unresolved_identifier& ui) -> shared_ptr<selectable> {
-            return make_shared<selectable_column>(*ui.ident->prepare(s));
+            on_internal_error(slogger, "prepare_selectable() on an unresolved_identifier");
         },
         [&] (const expr::column_mutation_attribute& cma) -> shared_ptr<selectable> {
-            auto unresolved_id = expr::as<expr::unresolved_identifier>(cma.column);
+            auto column = expr::as<expr::column_value>(cma.column);
             bool is_writetime = cma.kind == expr::column_mutation_attribute::attribute_kind::writetime;
-            return make_shared<selectable::writetime_or_ttl>(unresolved_id.ident->prepare_column_identifier(s), is_writetime);
+            return make_shared<selectable::writetime_or_ttl>(make_shared<column_identifier>(column.col->name(), column.col->name_as_text()), is_writetime);
         },
         [&] (const expr::function_call& fc) -> shared_ptr<selectable> {
             std::vector<shared_ptr<selectable>> prepared_args;
             prepared_args.reserve(fc.args.size());
             for (auto&& arg : fc.args) {
-                prepared_args.push_back(prepare_selectable(s, arg));
+                prepared_args.push_back(do_prepare_selectable(s, arg));
             }
             return std::visit(overloaded_functor{
                 [&] (const functions::function_name& named) -> shared_ptr<selectable> {
@@ -202,12 +201,12 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
                 // FIXME: adjust prepare_seletable() signature so we can prepare the type too
                 on_internal_error(slogger, "unprepared type in selector type cast");
             }
-            return ::make_shared<selectable::with_cast>(prepare_selectable(s, c.arg), *t);
+            return ::make_shared<selectable::with_cast>(do_prepare_selectable(s, c.arg), *t);
         },
         [&] (const expr::field_selection& fs) -> shared_ptr<selectable> {
             // static_pointer_cast<> needed due to lack of covariant return type
             // support with smart pointers
-            return make_shared<selectable::with_field_selection>(prepare_selectable(s, fs.structure),
+            return make_shared<selectable::with_field_selection>(do_prepare_selectable(s, fs.structure),
                     fs.field->prepare(s));
         },
         [&] (const expr::bind_variable&) -> shared_ptr<selectable> {
@@ -225,7 +224,15 @@ prepare_selectable(const schema& s, const expr::expression& raw_selectable) {
         [&] (const expr::usertype_constructor&) -> shared_ptr<selectable> {
             on_internal_error(slogger, "usertype_constructor found its way to selector context");
         },
-    }, raw_selectable);
+    }, selectable_expr);
+}
+
+shared_ptr<selectable>
+prepare_selectable(const schema& s, const expr::expression& raw_selectable, data_dictionary::database db, const sstring& keyspace) {
+    // do_prepare_selectable() calls itself recursively, so the prepare_expression step
+    // has to be done outside.
+    auto prepared = expr::prepare_expression(raw_selectable, db, keyspace, &s, nullptr);
+    return do_prepare_selectable(s, prepared);
 }
 
 bool
