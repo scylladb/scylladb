@@ -1229,6 +1229,13 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
 
 static
 assignment_testable::test_result
+unresolved_identifier_test_assignment(const unresolved_identifier& ui, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver) {
+    auto prepared = prepare_expression(ui, db, keyspace, schema_opt, make_lw_shared<column_specification>(receiver));
+    return test_assignment(prepared, db, keyspace, schema_opt, receiver);
+}
+
+static
+assignment_testable::test_result
 column_mutation_attribute_test_assignment(const column_mutation_attribute& cma, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver) {
     auto type = column_mutation_attribute_type(cma);
     return expression_test_assignment(std::move(type), std::move(receiver));
@@ -1253,8 +1260,8 @@ test_assignment(const expression& expr, data_dictionary::database db, const sstr
         [&] (const subscript&) -> test_result {
             on_internal_error(expr_logger, "subscripts are not yet reachable via test_assignment()");
         },
-        [&] (const unresolved_identifier&) -> test_result {
-            on_internal_error(expr_logger, "unresolved_identifiers are not yet reachable via test_assignment()");
+        [&] (const unresolved_identifier& ui) -> test_result {
+            return unresolved_identifier_test_assignment(ui, db, keyspace, schema_opt, receiver);
         },
         [&] (const column_mutation_attribute& cma) -> test_result {
             return column_mutation_attribute_test_assignment(cma, db, keyspace, schema_opt, receiver);
