@@ -3205,6 +3205,79 @@ BOOST_AUTO_TEST_CASE(evaluate_conjunction_of_conjunctions_with_invalid) {
     BOOST_REQUIRE_THROW(evaluate(conj_of_conjs, inputs), exceptions::invalid_request_exception);
 }
 
+BOOST_AUTO_TEST_CASE(evaluate_field_selection) {
+    // The user defined type has 5 fields:
+    // CREATE TYPE test_ks.my_type (
+    //   int_field int,
+    //   float_field float,
+    //   text_field text,
+    //   bigint_field bigint,
+    //   int_field2 int,
+    // )
+    shared_ptr<const user_type_impl> udt_type = user_type_impl::get_instance(
+        "test_ks", "my_type", {"int_field", "float_field", "text_field", "bigint_field", "int_field2"},
+        {int32_type, float_type, utf8_type, long_type, int32_type}, true);
+
+    // Create a UDT value:
+    // {int_field: 123, float_field: null, text_field: 'abcdef', bigint_field: blobasbigint(0x), int_field2: 1337}
+    usertype_constructor::elements_map_type udt_value_elements;
+    udt_value_elements.emplace(column_identifier("int_field", false), make_int_const(123));
+    udt_value_elements.emplace(column_identifier("float_field", false), constant::make_null(float_type));
+    udt_value_elements.emplace(column_identifier("text_field", false), make_text_const("abcdef"));
+    udt_value_elements.emplace(column_identifier("bigint_field", false), make_empty_const(long_type));
+    udt_value_elements.emplace(column_identifier("int_field2", false), make_int_const(1337));
+    expression udt_value =
+        constant(evaluate(usertype_constructor{.elements = std::move(udt_value_elements), .type = udt_type},
+                          evaluation_inputs{}),
+                 udt_type);
+
+    auto make_field_selection = [&](expression value, const char* selected_field) -> expression {
+        return field_selection{
+            .structure = value, .field = make_shared<column_identifier_raw>(selected_field, true), .type = udt_type};
+    };
+
+    // Evaluate the fields, check that field values are correct
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(udt_value, "int_field"), evaluation_inputs{}), make_int_raw(123));
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(udt_value, "float_field"), evaluation_inputs{}),
+                        cql3::raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(udt_value, "text_field"), evaluation_inputs{}),
+                        make_text_raw("abcdef"));
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(udt_value, "bigint_field"), evaluation_inputs{}),
+                        make_empty_raw());
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(udt_value, "int_field2"), evaluation_inputs{}),
+                        make_int_raw(1337));
+
+    // Evaluate a nonexistent field, should throw an exception
+    BOOST_REQUIRE_THROW(evaluate(make_field_selection(udt_value, "field_testing"), evaluation_inputs{}),
+                        exceptions::invalid_request_exception);
+
+    // Create a UDT value with values for the first 3 fields.
+    // There's no value for the 4th and 5th field, so they should be NULL.
+    // This is normal behavior, some fields might not have a value if the UDT value was serialized before
+    // adding new fields to the type.
+    // {int_field: 123, float_field: null, text_field: ''}
+    expression short_udt_value =
+        constant(make_tuple_raw({make_int_raw(123), cql3::raw_value::make_null(), make_text_raw("")}), udt_type);
+
+    // Evaluate the first 3 fields, check that the value is correct
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(short_udt_value, "int_field"), evaluation_inputs{}),
+                        make_int_raw(123));
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(short_udt_value, "float_field"), evaluation_inputs{}),
+                        cql3::raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(short_udt_value, "text_field"), evaluation_inputs{}),
+                        make_text_raw(""));
+
+    // The serialized value doesn't contain any data for the 4th or 5th field, so they should be NULL.
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(short_udt_value, "bigint_field"), evaluation_inputs{}),
+                        cql3::raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(short_udt_value, "int_field2"), evaluation_inputs{}),
+                        cql3::raw_value::make_null());
+
+    // Evaluate a nonexistent field, should throw an exception
+    BOOST_REQUIRE_THROW(evaluate(make_field_selection(short_udt_value, "field_testing"), evaluation_inputs{}),
+                        exceptions::invalid_request_exception);
+}
+
 // It should be possible to prepare an empty conjunction
 BOOST_AUTO_TEST_CASE(prepare_conjunction_empty) {
     schema_ptr table_schema = make_simple_test_schema();
