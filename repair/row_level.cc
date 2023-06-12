@@ -714,7 +714,7 @@ private:
     // follower nr peers is always one because repair master is the only peer.
     size_t _nr_peer_nodes= 1;
     repair_stats _stats;
-    repair_reader _repair_reader;
+    std::optional<repair_reader> _repair_reader;
     lw_shared_ptr<repair_writer> _repair_writer;
     // Contains rows read from disk
     std::list<repair_row> _row_buf;
@@ -814,17 +814,6 @@ public:
             , _remote_sharder(make_remote_sharder())
             , _same_sharding_config(is_same_sharding_config())
             , _nr_peer_nodes(nr_peer_nodes)
-            , _repair_reader(
-                    _db,
-                    _cf,
-                    _schema,
-                    _permit,
-                    _range,
-                    _remote_sharder,
-                    _master_node_shard_config.shard,
-                    _seed,
-                    repair_reader::is_local_reader(_repair_master || _same_sharding_config)
-              )
             , _repair_writer(make_repair_writer(_schema, _permit, _reason, _db, _sys_dist_ks, _view_update_generator))
             , _sink_source_for_get_full_row_hashes(_repair_meta_id, _nr_peer_nodes,
                     [&rs] (uint32_t repair_meta_id, netw::messaging_service::msg_addr addr) {
@@ -935,7 +924,7 @@ public:
     }
 
     future<> close() noexcept {
-        return _repair_reader.close();
+        return _repair_reader ? _repair_reader->close() : make_ready_future<>();
     }
 
 private:
@@ -1025,17 +1014,17 @@ private:
     void handle_mutation_fragment(mutation_fragment& mf, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
         if (mf.is_partition_start()) {
             auto& start = mf.as_partition_start();
-            _repair_reader.set_current_dk(start.key());
+            _repair_reader->set_current_dk(start.key());
             if (!start.partition_tombstone()) {
                 // Ignore partition_start with empty partition tombstone
                 return;
             }
         } else if (mf.is_end_of_partition()) {
-            _repair_reader.clear_current_dk();
+            _repair_reader->clear_current_dk();
             return;
         }
-        auto hash = _repair_hasher.do_hash_for_mf(*_repair_reader.get_current_dk(), mf);
-        repair_row r(freeze(*_schema, mf), position_in_partition(mf.position()), _repair_reader.get_current_dk(), hash, is_dirty_on_master::no);
+        auto hash = _repair_hasher.do_hash_for_mf(*_repair_reader->get_current_dk(), mf);
+        repair_row r(freeze(*_schema, mf), position_in_partition(mf.position()), _repair_reader->get_current_dk(), hash, is_dirty_on_master::no);
         rlogger.trace("Reading: r.boundary={}, r.hash={}", r.boundary(), r.hash());
         _metrics.row_from_disk_nr++;
         _metrics.row_from_disk_bytes += r.size();
@@ -1053,12 +1042,23 @@ private:
         size_t new_rows_size = 0;
         std::list<repair_row> cur_rows;
         std::exception_ptr ex;
+        if (!_repair_reader) {
+            _repair_reader.emplace(_db,
+                _cf,
+                _schema,
+                _permit,
+                _range,
+                _remote_sharder,
+                _master_node_shard_config.shard,
+                _seed,
+                repair_reader::is_local_reader(_repair_master || _same_sharding_config));
+        }
         try {
             while (cur_size < _max_row_buf_size) {
                 _gate.check();
-                mutation_fragment_opt mfopt = co_await _repair_reader.read_mutation_fragment();
+                mutation_fragment_opt mfopt = co_await _repair_reader->read_mutation_fragment();
                 if (!mfopt) {
-                    co_await _repair_reader.on_end_of_stream();
+                    co_await _repair_reader->on_end_of_stream();
                     break;
                 }
                 handle_mutation_fragment(*mfopt, cur_size, new_rows_size, cur_rows);
@@ -1067,10 +1067,10 @@ private:
             ex = std::current_exception();
         }
         if (ex) {
-            co_await _repair_reader.on_end_of_stream();
+            co_await _repair_reader->on_end_of_stream();
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
-        _repair_reader.pause();
+        _repair_reader->pause();
         co_return value_type(std::move(cur_rows), new_rows_size);
     }
 
