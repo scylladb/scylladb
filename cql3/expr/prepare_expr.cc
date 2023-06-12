@@ -822,7 +822,27 @@ c_cast_prepare_expression(const cast& c, data_dictionary::database db, const sst
 static
 std::optional<expression>
 sql_cast_prepare_expression(const cast& c, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
-    on_internal_error(expr_logger, "don't yet know how to prepare sql-style cast");
+    data_type cast_type = cast_get_prepared_type(c, db, keyspace);
+
+    if (!receiver) {
+        sstring receiver_name = format("cast({}){:user}", cast_type->cql3_type_name(), c.arg);
+        receiver = make_lw_shared<column_specification>(
+            keyspace, "unknown_cf", ::make_shared<column_identifier>(receiver_name, true), cast_type);
+    }
+
+    auto prepared_arg = try_prepare_expression(c.arg, db, keyspace, schema_opt, nullptr);
+    if (!prepared_arg) {
+        throw exceptions::invalid_request_exception(fmt::format("Could not infer type of cast argument {}", c.arg));
+    }
+
+    // This will throw if a cast is impossible
+    auto fun = functions::get_castas_fctn_as_cql3_function(cast_type, type_of(*prepared_arg));
+
+    // We implement the cast to a function_call.
+    return function_call{
+        .func = std::move(fun),
+        .args = std::vector({*prepared_arg}),
+    };
 }
 
 std::optional<expression>
