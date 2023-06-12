@@ -60,7 +60,7 @@ This package installs all required packages for ScyllaDB,  including
 %if 0%{housekeeping}
 install_arg="--housekeeping"
 %endif
-./install.sh --packaging --root "$RPM_BUILD_ROOT" $install_arg
+./install.sh --packaging --root "$RPM_BUILD_ROOT" --p11-trust-paths /etc/pki/ca-trust/source:/usr/share/pki/ca-trust-source $install_arg
 
 %clean
 rm -rf $RPM_BUILD_ROOT
@@ -111,6 +111,7 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 %config(noreplace) %{_sysconfdir}/sysconfig/scylla-housekeeping
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla.d
 %config(noreplace) %{_sysconfdir}/scylla.d/*.conf
+/opt/scylladb/share/p11-kit/modules/*
 /opt/scylladb/share/doc/scylla/*
 %{_unitdir}/scylla-fstrim.service
 %{_unitdir}/scylla-housekeeping-daily.service
