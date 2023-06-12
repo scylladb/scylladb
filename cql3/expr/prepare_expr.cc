@@ -26,6 +26,10 @@ namespace cql3::expr {
 
 static const column_value resolve_column(const unresolved_identifier& col_ident, const schema& schema);
 
+static assignment_testable::test_result expression_test_assignment(const data_type& expr_type,
+                                                                   const column_specification& receiver);
+
+
 static
 lw_shared_ptr<column_specification>
 column_specification_of(const expression& e) {
@@ -833,6 +837,68 @@ cast_prepare_expression(const cast& c, data_dictionary::database db, const sstri
 }
 
 std::optional<expression>
+field_selection_prepare_expression(const field_selection& fs, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
+    // We can't infer the type of the user defined type from the field being selected
+    auto prepared_structure = try_prepare_expression(fs.structure, db, keyspace, schema_opt, nullptr);
+    if (!prepared_structure) {
+        throw exceptions::invalid_request_exception(fmt::format("Cannot infer type of {}", fs.structure));
+    }
+    auto type = type_of(*prepared_structure);
+    if (!type->underlying_type()->is_user_type()) {
+        throw exceptions::invalid_request_exception(
+                format("Invalid field selection: {} of type {} is not a user type", fs.structure, type->as_cql3_type()));
+    }
+
+    auto ut = static_pointer_cast<const user_type_impl>(type->underlying_type());
+    // FIXME: this check is artificial: prepare() below requires a schema even though one isn't
+    // necessary for to prepare a field name. Luckily we'll always have a schema here, since there's
+    // no way to get a user-defined type value other than by reading it from a table.
+    if (!schema_opt) {
+        throw exceptions::invalid_request_exception(fmt::format("Unable to prepare {} without schema", *fs.field));
+    }
+    auto prepared_field = fs.field->prepare(*schema_opt);
+    auto idx = ut->idx_of_field(prepared_field->bytes_);
+    if (!idx) {
+        throw exceptions::invalid_request_exception(format("{} of type {} has no field {}",
+                                                           fs.structure, ut->as_cql3_type(), fs.field));
+    }
+    return field_selection{
+        .structure = std::move(*prepared_structure),
+        .field = fs.field,  
+        .field_idx = *idx,
+        .type = ut->type(*idx),
+    };
+}
+
+assignment_testable::test_result
+field_selection_test_assignment(const field_selection& fs, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver) {
+    auto prepared_structure = try_prepare_expression(fs.structure, db, keyspace, schema_opt, make_lw_shared<column_specification>(receiver));
+    if (!prepared_structure) {
+        throw exceptions::invalid_request_exception(fmt::format("Cannot infer type of {}", fs.structure));
+    }
+    auto type = type_of(*prepared_structure);
+    if (!type->underlying_type()->is_user_type()) {
+        throw exceptions::invalid_request_exception(
+                format("Invalid field selection: {} of type {} is not a user type", fs.structure, type->as_cql3_type()));
+    }
+    auto ut = static_pointer_cast<const user_type_impl>(type->underlying_type());
+    // FIXME: this check is artificial: prepare() below requires a schema even though one isn't
+    // necessary for to prepare a field name. Luckily we'll always have a schema here, since there's
+    // no way to get a user-defined type value other than by reading it from a table.
+    if (!schema_opt) {
+        throw exceptions::invalid_request_exception(fmt::format("Unable to prepare {} without schema", *fs.field));
+    }
+    auto prepared_field = fs.field->prepare(*schema_opt);
+    auto idx = ut->idx_of_field(prepared_field->bytes_);
+    if (!idx) {
+        throw exceptions::invalid_request_exception(format("{} of type {} has no field {}",
+                                                           fs.structure, ut->as_cql3_type(), fs.field));
+    }
+    auto field_type = ut->type(*idx);
+    return expression_test_assignment(field_type, receiver);
+}
+
+std::optional<expression>
 prepare_function_call(const expr::function_call& fc, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
     // Try to extract a column family name from the available information.
     // Most functions can be prepared without information about the column family, usually just the keyspace is enough.
@@ -1083,8 +1149,8 @@ try_prepare_expression(const expression& expr, data_dictionary::database db, con
         [&] (const cast& c) -> std::optional<expression> {
             return cast_prepare_expression(c, db, keyspace, schema_opt, receiver);
         },
-        [&] (const field_selection&) -> std::optional<expression> {
-            on_internal_error(expr_logger, "field_selections are not yet reachable via prepare_expression()");
+        [&] (const field_selection& fs) -> std::optional<expression> {
+            return field_selection_prepare_expression(fs, db, keyspace, schema_opt, receiver);
         },
         [&] (const bind_variable& bv) -> std::optional<expression> {
             return bind_variable_prepare_expression(bv, db, keyspace, receiver);
@@ -1140,8 +1206,8 @@ test_assignment(const expression& expr, data_dictionary::database db, const sstr
         [&] (const cast& c) -> test_result {
             return cast_test_assignment(c, db, keyspace, schema_opt, receiver);
         },
-        [&] (const field_selection&) -> test_result {
-            on_internal_error(expr_logger, "field_selections are not yet reachable via test_assignment()");
+        [&] (const field_selection& fs) -> test_result {
+            return field_selection_test_assignment(fs, db, keyspace, schema_opt, receiver);
         },
         [&] (const bind_variable& bv) -> test_result {
             return bind_variable_test_assignment(bv, db, keyspace, receiver);

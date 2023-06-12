@@ -327,6 +327,7 @@ struct cast {
 struct field_selection {
     expression structure;
     shared_ptr<column_identifier_raw> field;
+    size_t field_idx = 0; // invalid before prepare
     data_type type; // may be null before prepare
 
     friend bool operator==(const field_selection&, const field_selection&) = default;
