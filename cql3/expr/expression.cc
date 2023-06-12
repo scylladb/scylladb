@@ -1659,6 +1659,41 @@ cql3::raw_value evaluate(const conjunction& conj, const evaluation_inputs& input
     return raw_value::make_value(boolean_type->decompose(true));
 }
 
+cql3::raw_value evaluate(const field_selection& field_select, const evaluation_inputs& inputs) {
+    const user_type_impl* udt_type = dynamic_cast<const user_type_impl*>(&field_select.type->without_reversed());
+    if (udt_type == nullptr) {
+        on_internal_error(expr_logger, "evaluate(field_selection): type is not a user defined type");
+    }
+
+    const sstring& selected_field_name = field_select.field->text();
+    std::optional<std::size_t> selected_field_idx = udt_type->idx_of_field(to_bytes_view(selected_field_name));
+    if (!selected_field_idx.has_value()) {
+        throw exceptions::invalid_request_exception(
+            format("Unknown field '{}' in expression {}, user type {} doesn't have a field with this name.",
+                   selected_field_name, field_select, udt_type->get_name_as_string()));
+    }
+
+    cql3::raw_value udt_value = evaluate(field_select.structure, inputs);
+    if (udt_value.is_null()) {
+        // `<null>.field` should evaluate to NULL.
+        return cql3::raw_value::make_null();
+    }
+
+    cql3::raw_value field_value = udt_value.view().with_value(
+        [&](const FragmentedView auto& udt_serialized_bytes) -> cql3::raw_value {
+            // std::optional<FragmentedView> read_field
+            auto read_field = read_nth_user_type_field(udt_serialized_bytes, *selected_field_idx);
+
+            if (read_field.has_value()) {
+                return cql3::raw_value::make_value(managed_bytes(*read_field));
+            } else {
+                return cql3::raw_value::make_null();
+            }
+    });
+
+    return field_value;
+}
+
 cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
     return expr::visit(overloaded_functor {
         [&](const binary_operator& binop) -> cql3::raw_value {
@@ -1681,8 +1716,8 @@ cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
             }
             return ret;
         },
-        [](const field_selection&) -> cql3::raw_value {
-            on_internal_error(expr_logger, "Can't evaluate a field_selection");
+        [&](const field_selection& field_select) -> cql3::raw_value {
+            return evaluate(field_select, inputs);
         },
 
         [&](const column_value& cv) -> cql3::raw_value {
