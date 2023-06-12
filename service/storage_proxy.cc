@@ -2736,6 +2736,10 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, gms::gossiper& 
 }
 
 struct storage_proxy::remote& storage_proxy::remote() {
+    return const_cast<struct remote&>(const_cast<const storage_proxy*>(this)->remote());
+}
+
+const struct storage_proxy::remote& storage_proxy::remote() const {
     return *_remote;
 }
 
