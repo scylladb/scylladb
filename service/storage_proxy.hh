@@ -482,8 +482,10 @@ public:
         }
         return next;
     }
-    void init_messaging_service(netw::messaging_service&, gms::gossiper&, migration_manager&);
-    future<> uninit_messaging_service();
+
+    // Start/stop the remote part of `storage_proxy` that is required for performing distributed queries.
+    void start_remote(netw::messaging_service&, gms::gossiper&, migration_manager&);
+    future<> stop_remote();
 
 private:
     // Throws an error if remote is not initialized.

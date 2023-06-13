@@ -1453,10 +1453,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
             supervisor::notify("initializing storage proxy RPC verbs");
             proxy.invoke_on_all([&messaging, &gossiper, &mm] (service::storage_proxy& proxy) {
-                proxy.init_messaging_service(messaging.local(), gossiper.local(), mm.local());
+                proxy.start_remote(messaging.local(), gossiper.local(), mm.local());
             }).get();
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
-                proxy.invoke_on_all(&service::storage_proxy::uninit_messaging_service).get();
+                proxy.invoke_on_all(&service::storage_proxy::stop_remote).get();
             });
 
             debug::the_stream_manager = &stream_manager;

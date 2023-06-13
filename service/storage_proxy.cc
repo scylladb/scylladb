@@ -6128,11 +6128,11 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std:
     return remote().send_truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
 }
 
-void storage_proxy::init_messaging_service(netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm) {
+void storage_proxy::start_remote(netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm) {
     _remote = std::make_unique<struct remote>(*this, ms, g, mm);
 }
 
-future<> storage_proxy::uninit_messaging_service() {
+future<> storage_proxy::stop_remote() {
     co_await _remote->stop();
     _remote = nullptr;
 }
