@@ -64,7 +64,6 @@
 #include "utils/serialized_action.hh"
 #include "compaction/compaction_fwd.hh"
 #include "utils/disk-error-handler.hh"
-#include "rust/wasmtime_bindings.hh"
 
 class cell_locker;
 class cell_locker_stats;
