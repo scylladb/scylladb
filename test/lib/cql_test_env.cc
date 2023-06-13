@@ -709,8 +709,11 @@ public:
             sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
 
             auto sys_ks = seastar::sharded<db::system_keyspace>();
-            sys_ks.start(std::ref(qp), std::ref(db)).get();
+            sys_ks.start(std::ref(qp), std::ref(db), std::ref(snitch)).get();
             auto stop_sys_kd = defer([&sys_ks] { sys_ks.stop().get(); });
+            for (const auto p: all_system_table_load_phases) {
+                replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, *cfg, p).get();
+            }
 
             // don't start listening so tests can be run in parallel
             ms.start(listen, std::move(7000)).get();
@@ -814,10 +817,6 @@ public:
                 qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
             });
 
-            sys_ks.invoke_on_all([&snitch] (auto& sys_ks) {
-                return sys_ks.start(snitch.local());
-            }).get();
-
             db::batchlog_manager_config bmcfg;
             bmcfg.replay_rate = 100000000;
             bmcfg.write_request_timeout = 2s;
@@ -845,10 +844,6 @@ public:
             ss.invoke_on_all([&] (service::storage_service& ss) {
                 ss.set_query_processor(qp.local());
             }).get();
-
-            for (const auto p: all_system_table_load_phases) {
-                replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, *cfg, p).get();
-            }
             sys_ks.invoke_on_all([&db, &ss, &gossiper, &raft_gr, &cfg] (db::system_keyspace& sys_ks) {
                 return sys_ks.initialize_virtual_tables(db, ss, gossiper, raft_gr, *cfg);
             }).get();

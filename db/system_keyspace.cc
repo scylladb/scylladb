@@ -3747,17 +3747,12 @@ sstring system_keyspace_name() {
     return system_keyspace::NAME;
 }
 
-system_keyspace::system_keyspace(cql3::query_processor& qp, replica::database& db) noexcept
-        : _qp(qp)
-        , _db(db)
-        , _cache(std::make_unique<local_cache>())
+system_keyspace::system_keyspace(
+        cql3::query_processor& qp, replica::database& db, const locator::snitch_ptr& snitch) noexcept
+    : _qp(qp)
+    , _db(db)
+    , _cache(std::make_unique<local_cache>())
 {
-}
-
-system_keyspace::~system_keyspace() {
-}
-
-future<> system_keyspace::start(const locator::snitch_ptr& snitch) {
     if (this_shard_id() == 0) {
         qctx = std::make_unique<query_context>(_qp.container());
     }
@@ -3770,16 +3765,13 @@ future<> system_keyspace::start(const locator::snitch_ptr& snitch) {
     // but it doesn't call system_keyspace::setup() and thus ::setup_version() either
     _cache->_local_dc_rack_info.dc = snitch->get_datacenter();
     _cache->_local_dc_rack_info.rack = snitch->get_rack();
+}
 
-    co_return;
+system_keyspace::~system_keyspace() {
 }
 
 future<> system_keyspace::shutdown() {
     _db.unplug_system_keyspace();
-    co_return;
-}
-
-future<> system_keyspace::stop() {
     co_return;
 }
 

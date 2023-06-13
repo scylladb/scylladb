@@ -496,10 +496,8 @@ public:
     future<bool> get_must_synchronize_topology();
     future<> set_must_synchronize_topology(bool);
 
-    system_keyspace(cql3::query_processor& qp, replica::database& db) noexcept;
+    system_keyspace(cql3::query_processor& qp, replica::database& db, const locator::snitch_ptr&) noexcept;
     ~system_keyspace();
-    future<> start(const locator::snitch_ptr&);
-    future<> stop();
     future<> shutdown();
 
 private:
