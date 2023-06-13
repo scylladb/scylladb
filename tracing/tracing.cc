@@ -26,15 +26,26 @@ std::vector<sstring> trace_type_names = {
     "REPAIR"
 };
 
-tracing::tracing(sstring tracing_backend_helper_class_name)
-        : _write_timer([this] { write_timer_callback(); })
+tracing::tracing(cql3::query_processor& qp, sstring tracing_backend_helper_class_name)
+        : _qp(qp)
+        , _write_timer([this] { write_timer_callback(); })
         , _thread_name(seastar::format("shard {:d}", this_shard_id()))
-        , _tracing_backend_helper_class_name(std::move(tracing_backend_helper_class_name))
         , _gen(std::random_device()())
         , _slow_query_duration_threshold(default_slow_query_duraion_threshold)
         , _slow_query_record_ttl(default_slow_query_record_ttl) {
     namespace sm = seastar::metrics;
 
+    std::unique_ptr<i_tracing_backend_helper> helper;
+    try {
+        helper = create_object<i_tracing_backend_helper>(tracing_backend_helper_class_name, *this);
+    } catch (no_such_class& e) {
+        tracing_logger.error("Can't create tracing backend helper {}: not supported", tracing_backend_helper_class_name);
+        throw;
+    } catch (...) {
+        throw;
+    }
+
+    _tracing_backend_helper_ptr = std::move(helper);
     _metrics.add_group("tracing", {
         sm::make_counter("dropped_sessions", stats.dropped_sessions,
                         sm::description("Counts a number of dropped sessions due to too many pending sessions/records. "
@@ -64,23 +75,6 @@ tracing::tracing(sstring tracing_backend_helper_class_name)
         sm::make_gauge("flushing_records", _flushing_records,
                         sm::description(seastar::format("Holds a number of tracing records that currently being written to the I/O backend. "
                                                         "If sum of this metric, cached_records and pending_for_write_records is close to {} we are likely to start dropping tracing records.", max_pending_trace_records + write_event_records_threshold))),
-    });
-}
-
-future<> tracing::create_tracing(sstring tracing_backend_class_name) {
-    return tracing_instance().start(std::move(tracing_backend_class_name));
-}
-
-future<> tracing::start_tracing(sharded<cql3::query_processor>& qp) {
-    return tracing_instance().invoke_on_all([&qp] (tracing& local_tracing) {
-        return local_tracing.start(qp.local());
-    });
-}
-
-future<> tracing::stop_tracing() {
-    return tracing_instance().invoke_on_all([] (tracing& local_tracing) {
-        // It might have been shut down while draining
-        return local_tracing._down ? make_ready_future<>() : local_tracing.shutdown();
     });
 }
 
@@ -145,20 +139,10 @@ trace_state_ptr tracing::create_session(const trace_info& secondary_session_info
     }
 }
 
-future<> tracing::start(cql3::query_processor& qp) {
-    try {
-        _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(_tracing_backend_helper_class_name, *this);
-    } catch (no_such_class& e) {
-        tracing_logger.error("Can't create tracing backend helper {}: not supported", _tracing_backend_helper_class_name);
-        throw;
-    } catch (...) {
-        throw;
-    }
-
-    return _tracing_backend_helper_ptr->start(qp).then([this] {
-        _down = false;
-        _write_timer.arm(write_period);
-    });
+future<> tracing::start() {
+    co_await _tracing_backend_helper_ptr->start();
+    _down = false;
+    _write_timer.arm(write_period);
 }
 
 void tracing::write_timer_callback() {
@@ -172,25 +156,20 @@ void tracing::write_timer_callback() {
 }
 
 future<> tracing::shutdown() {
-    tracing_logger.info("Asked to shut down");
     if (_down) {
-        throw std::logic_error("tracing: shutdown() called for the service that is already down");
+        co_return;
     }
 
+    tracing_logger.info("Asked to shut down");
     write_pending_records();
     _down = true;
     _write_timer.cancel();
-    return _tracing_backend_helper_ptr->stop().then([] {
-        tracing_logger.info("Tracing is down");
-    });
+    co_await _tracing_backend_helper_ptr->shutdown();
+    tracing_logger.info("Tracing is down");
 }
 
 future<> tracing::stop() {
-    if (!_down) {
-        throw std::logic_error("tracing: stop() called before shutdown()");
-    }
-
-    return make_ready_future<>();
+    co_await shutdown();
 }
 
 void tracing::set_trace_probability(double p) {
