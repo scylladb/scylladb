@@ -2947,30 +2947,13 @@ future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::
     }
 
     auto& db = dist_db.local();
-    auto& db_config = db.get_config();
-    bool durable = db_config.data_file_directories().size() > 0;
-    for (auto&& table : system_keyspace::all_tables(db_config)) {
+    for (auto&& table : system_keyspace::all_tables(db.get_config())) {
         if (table->static_props().load_phase != phase) {
             continue;
         }
-        auto ks_name = table->ks_name();
-        if (!db.has_keyspace(ks_name)) {
-            auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
-                    "org.apache.cassandra.locator.LocalStrategy",
-                    std::map<sstring, sstring>{},
-                    durable
-                    );
-            co_await db.create_keyspace(ksm, dist_ss.local().get_erm_factory(), replica::database::system_keyspace::yes);
-        }
-        auto& ks = db.find_keyspace(ks_name);
-        auto cfg = ks.make_column_family_config(*table, db);
-        if (maybe_write_in_user_memory(table)) {
-            cfg.dirty_memory_manager = &db._dirty_memory_manager;
-        } else {
-            cfg.memtable_scheduling_group = default_scheduling_group();
-            cfg.memtable_to_cache_scheduling_group = default_scheduling_group();
-        }
-        db.add_column_family(ks, table, std::move(cfg));
+
+        co_await db.create_local_system_table(
+            table, maybe_write_in_user_memory(table), dist_ss.local().get_erm_factory());
     }
 
     if (phase == system_table_load_phase::phase1) {

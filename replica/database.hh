@@ -1499,7 +1499,14 @@ public:
     service::migration_notifier& get_notifier() { return _mnotifier; }
     const service::migration_notifier& get_notifier() const { return _mnotifier; }
 
-    void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
+    // Setup in-memory data structures for this table (`table` and, if it doesn't exist yet, `keyspace` object).
+    // Create the keyspace data directories if the keyspace wasn't created yet.
+    //
+    // Note: 'system table' does not necessarily mean it sits in `system` keyspace, it could also be `system_schema`;
+    // in general we mean local tables created by the system (not the user).
+    future<> create_local_system_table(
+            schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory&);
+
     void maybe_init_schema_commitlog();
     future<> add_column_family_and_make_directory(schema_ptr schema);
 
@@ -1671,6 +1678,7 @@ public:
 public:
     bool update_column_family(schema_ptr s);
 private:
+    void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
     future<> detach_column_family(table& cf);
 
     struct table_truncate_state;

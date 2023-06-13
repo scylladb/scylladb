@@ -944,6 +944,29 @@ void database::maybe_init_schema_commitlog() {
     }).release();
 }
 
+future<> database::create_local_system_table(
+        schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory& erm_factory) {
+    auto ks_name = table->ks_name();
+    if (!has_keyspace(ks_name)) {
+        bool durable = _cfg.data_file_directories().size() > 0;
+        auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
+                "org.apache.cassandra.locator.LocalStrategy",
+                std::map<sstring, sstring>{},
+                durable
+                );
+        co_await create_keyspace(ksm, erm_factory, replica::database::system_keyspace::yes);
+    }
+    auto& ks = find_keyspace(ks_name);
+    auto cfg = ks.make_column_family_config(*table, *this);
+    if (write_in_user_memory) {
+        cfg.dirty_memory_manager = &_dirty_memory_manager;
+    } else {
+        cfg.memtable_scheduling_group = default_scheduling_group();
+        cfg.memtable_to_cache_scheduling_group = default_scheduling_group();
+    }
+    add_column_family(ks, table, std::move(cfg));
+}
+
 void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg) {
     schema = local_schema_registry().learn(schema);
     schema->registry_entry()->mark_synced();
