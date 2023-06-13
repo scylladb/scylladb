@@ -68,6 +68,10 @@ atomic_cell::atomic_cell(const abstract_type& type, atomic_cell_view other)
 
 // Based on Cassandra's resolveRegular function:
 //  - https://github.com/apache/cassandra/blob/e4f31b73c21b04966269c5ac2d3bd2562e5f6c63/src/java/org/apache/cassandra/db/rows/Cells.java#L79-L119
+//
+// Note: the ordering algorithm for cell is the same as for rows,
+// except that the cell value is used to break a tie in case all other attributes are equal.
+// See compare_row_marker_for_merge.
 std::strong_ordering
 compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
     // Largest write timestamp wins.
