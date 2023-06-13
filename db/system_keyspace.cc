@@ -2960,10 +2960,6 @@ future<> system_keyspace::make(
         co_await db.create_local_system_table(
             table, maybe_write_in_user_memory(table), dist_ss.local().get_erm_factory());
     }
-
-    if (phase == system_table_load_phase::phase1) {
-        co_await initialize_virtual_tables(dist_db, dist_ss, dist_gossiper, dist_raft_gr, cfg);
-    }
 }
 
 future<> system_keyspace::initialize_virtual_tables(

@@ -1232,6 +1232,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // described here: https://github.com/scylladb/scylla/issues/1014
             supervisor::notify("loading system sstables");
             replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, raft_gr, *cfg, system_table_load_phase::phase1).get();
+            supervisor::notify("initializing virtual tables");
+            sys_ks.invoke_on_all([&db, &ss, &gossiper, &raft_gr, &cfg] (db::system_keyspace& sys_ks) {
+                return sys_ks.initialize_virtual_tables(db, ss, gossiper, raft_gr, *cfg);
+            }).get();
+
             supervisor::notify("starting forward service");
             forward_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(token_metadata)).get();
             auto stop_forward_service_handlers = defer_verbose_shutdown("forward service", [&forward_service] {
