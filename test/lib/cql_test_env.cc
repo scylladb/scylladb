@@ -668,6 +668,32 @@ public:
             proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory)).get();
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
+            sharded<cql3::cql_config> cql_config;
+            cql_config.start(cql3::cql_config::default_tag{}).get();
+            auto stop_cql_config = defer([&] { cql_config.stop().get(); });
+
+            cql3::query_processor::memory_config qp_mcfg;
+            if (cfg_in.qp_mcfg) {
+                qp_mcfg = *cfg_in.qp_mcfg;
+            } else {
+                qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
+            }
+            auto local_data_dict = seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db));
+
+            utils::loading_cache_config auth_prep_cache_config;
+            auth_prep_cache_config.max_size = qp_mcfg.authorized_prepared_cache_size;
+            auth_prep_cache_config.expiry = std::min(std::chrono::milliseconds(cfg->permissions_validity_in_ms()),
+                                                     std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));
+            auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
+
+            std::optional<wasm::startup_context> wasm_ctx;
+            if (cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF)) {
+                wasm_ctx.emplace(*cfg, dbcfg);
+            }
+
+            qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notif), qp_mcfg, std::ref(cql_config), auth_prep_cache_config, wasm_ctx).get();
+            auto stop_qp = defer([&qp] { qp.stop().get(); });
+
             sharded<service::endpoint_lifecycle_notifier> elc_notif;
             elc_notif.start().get();
             auto stop_elc_notif = defer([&elc_notif] { elc_notif.stop().get(); });
@@ -727,10 +753,6 @@ public:
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
 
-            sharded<cql3::cql_config> cql_config;
-            cql_config.start(cql3::cql_config::default_tag{}).get();
-            auto stop_cql_config = defer([&] { cql_config.stop().get(); });
-
             sharded<db::view::view_update_generator> view_update_generator;
             sharded<cdc::generation_service> cdc_generation_service;
             sharded<repair_service> repair;
@@ -784,28 +806,6 @@ public:
             auto stop_tablet_allocator = defer([&] {
                 the_tablet_allocator.stop().get();
             });
-
-            cql3::query_processor::memory_config qp_mcfg;
-            if (cfg_in.qp_mcfg) {
-                qp_mcfg = *cfg_in.qp_mcfg;
-            } else {
-                qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
-            }
-            auto local_data_dict = seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db));
-
-            utils::loading_cache_config auth_prep_cache_config;
-            auth_prep_cache_config.max_size = qp_mcfg.authorized_prepared_cache_size;
-            auth_prep_cache_config.expiry = std::min(std::chrono::milliseconds(cfg->permissions_validity_in_ms()),
-                                                     std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));
-            auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
-
-            std::optional<wasm::startup_context> wasm_ctx;
-            if (cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF)) {
-                wasm_ctx.emplace(*cfg, dbcfg);
-            }
-
-            qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notif), qp_mcfg, std::ref(cql_config), auth_prep_cache_config, wasm_ctx).get();
-            auto stop_qp = defer([&qp] { qp.stop().get(); });
 
             qp.invoke_on_all([&mm, &forward_service, &group0_client] (cql3::query_processor& qp) {
                 qp.start_remote(mm.local(), forward_service.local(), group0_client);

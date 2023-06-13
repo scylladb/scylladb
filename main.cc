@@ -1014,6 +1014,27 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
 
+            static sharded<cql3::cql_config> cql_config;
+            cql_config.start(std::ref(*cfg)).get();
+
+            supervisor::notify("starting query processor");
+            cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
+            debug::the_query_processor = &qp;
+            auto local_data_dict = seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db));
+
+            utils::loading_cache_config auth_prep_cache_config;
+            auth_prep_cache_config.max_size = qp_mcfg.authorized_prepared_cache_size;
+            auth_prep_cache_config.expiry = std::min(std::chrono::milliseconds(cfg->permissions_validity_in_ms()),
+                                                     std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));
+            auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
+
+            std::optional<wasm::startup_context> wasm_ctx;
+            if (cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF)) {
+                wasm_ctx.emplace(*cfg, dbcfg);
+            }
+
+            qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notifier), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::move(wasm_ctx)).get();
+
             supervisor::notify("starting lifecycle notifier");
             lifecycle_notifier.start().get();
             // storage_service references this notifier and is not stopped yet
@@ -1118,9 +1139,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
             static sharded<db::system_keyspace> sys_ks;
             static sharded<db::view::view_update_generator> view_update_generator;
-            static sharded<cql3::cql_config> cql_config;
             static sharded<cdc::generation_service> cdc_generation_service;
-            cql_config.start(std::ref(*cfg)).get();
 
             supervisor::notify("starting system keyspace");
             // FIXME -- the query processor is not started yet and is thus not usable. It starts later
@@ -1204,11 +1223,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 ss.stop().get();
             });
 
-            std::optional<wasm::startup_context> wasm_ctx;
-            if (cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF)) {
-                wasm_ctx.emplace(*cfg, dbcfg);
-            }
-
             // Initialization of a keyspace is done by shard 0 only. For system
             // keyspace, the procedure  will go through the hardcoded column
             // families, and in each of them, it will load the sstables for all
@@ -1245,19 +1259,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_raft = defer_verbose_shutdown("Raft", [&raft_gr] {
                 raft_gr.stop().get();
             });
-
-            supervisor::notify("starting query processor");
-            cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
-            debug::the_query_processor = &qp;
-            auto local_data_dict = seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db));
-
-            utils::loading_cache_config auth_prep_cache_config;
-            auth_prep_cache_config.max_size = qp_mcfg.authorized_prepared_cache_size;
-            auth_prep_cache_config.expiry = std::min(std::chrono::milliseconds(cfg->permissions_validity_in_ms()),
-                                                     std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));
-            auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
-
-            qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notifier), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::move(wasm_ctx)).get();
 
             supervisor::notify("initializing query processor remote part");
             // TODO: do this together with proxy.start_remote(...)
