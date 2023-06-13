@@ -2711,6 +2711,7 @@ for more information on this operation.
 )",
             {},
             validate_operation},
+/* validate-checksums */
     {"validate-checksums",
             "Validate the checksums of the sstable(s)",
 R"(
@@ -2721,6 +2722,7 @@ See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#valida
 for more information on this operation.
 )",
             validate_checksums_operation},
+/* decompress */
     {"decompress",
             "Decompress sstable(s)",
 R"(
@@ -2734,6 +2736,7 @@ the output will be:
     md-12311-big-Data.db.decompressed
 )",
             decompress_operation},
+/* write */
     {"write",
             "Write an sstable",
 R"(
@@ -2761,6 +2764,7 @@ for more information on this operation, including the schema of the JSON input.
 )",
             {"input-file", "output-dir", "generation", "validation-level"},
             write_operation},
+/* script */
     {"script",
             "Run a script on content of an sstable",
 R"(
