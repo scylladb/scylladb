@@ -977,6 +977,43 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             db.local().init_commitlog().get();
             db.invoke_on_all(&replica::database::start).get();
 
+            smp::invoke_on_all([blocked_reactor_notify_ms] {
+                engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
+            }).get();
+
+            debug::the_storage_proxy = &proxy;
+            supervisor::notify("starting storage proxy");
+            service::storage_proxy::config spcfg {
+                .hints_directory_initializer = hints_dir_initializer,
+            };
+            spcfg.hinted_handoff_enabled = hinted_handoff_enabled;
+            spcfg.available_memory = memory::stats().total_memory();
+            smp_service_group_config storage_proxy_smp_service_group_config;
+            // Assuming less than 1kB per queued request, this limits storage_proxy submit_to() queues to 5MB or less
+            storage_proxy_smp_service_group_config.max_nonlocal_requests = 5000;
+            spcfg.read_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
+            spcfg.write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
+            spcfg.hints_write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
+            spcfg.write_ack_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
+            static db::view::node_update_backlog node_backlog(smp::count, 10ms);
+            scheduling_group_key_config storage_proxy_stats_cfg =
+                    make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
+            storage_proxy_stats_cfg.constructor = [plain_constructor = storage_proxy_stats_cfg.constructor] (void* ptr) {
+                plain_constructor(ptr);
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats();
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local();
+            };
+            storage_proxy_stats_cfg.rename = [] (void* ptr) {
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats();
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local();
+            };
+            proxy.start(std::ref(db), spcfg, std::ref(node_backlog),
+                    scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
+                    std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory)).get();
+
+            // #293 - do not stop anything
+            // engine().at_exit([&proxy] { return proxy.stop(); });
+
             supervisor::notify("starting lifecycle notifier");
             lifecycle_notifier.start().get();
             // storage_service references this notifier and is not stopped yet
@@ -1180,40 +1217,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // described here: https://github.com/scylladb/scylla/issues/1014
             supervisor::notify("loading system sstables");
             replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, raft_gr, *cfg, system_table_load_phase::phase1).get();
-
-            smp::invoke_on_all([blocked_reactor_notify_ms] {
-                engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
-            }).get();
-
-            debug::the_storage_proxy = &proxy;
-            supervisor::notify("starting storage proxy");
-            service::storage_proxy::config spcfg {
-                .hints_directory_initializer = hints_dir_initializer,
-            };
-            spcfg.hinted_handoff_enabled = hinted_handoff_enabled;
-            spcfg.available_memory = memory::stats().total_memory();
-            smp_service_group_config storage_proxy_smp_service_group_config;
-            // Assuming less than 1kB per queued request, this limits storage_proxy submit_to() queues to 5MB or less
-            storage_proxy_smp_service_group_config.max_nonlocal_requests = 5000;
-            spcfg.read_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
-            spcfg.write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
-            spcfg.hints_write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
-            spcfg.write_ack_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
-            static db::view::node_update_backlog node_backlog(smp::count, 10ms);
-            scheduling_group_key_config storage_proxy_stats_cfg =
-                    make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
-            storage_proxy_stats_cfg.constructor = [plain_constructor = storage_proxy_stats_cfg.constructor] (void* ptr) {
-                plain_constructor(ptr);
-                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats();
-                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local();
-            };
-            storage_proxy_stats_cfg.rename = [] (void* ptr) {
-                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats();
-                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local();
-            };
-            proxy.start(std::ref(db), spcfg, std::ref(node_backlog),
-                    scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
-                    std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory)).get();
             supervisor::notify("starting forward service");
             forward_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(token_metadata)).get();
             auto stop_forward_service_handlers = defer_verbose_shutdown("forward service", [&forward_service] {
@@ -1227,9 +1230,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_tablet_allocator = defer_verbose_shutdown("tablet allocator", [&tablet_allocator] {
                 tablet_allocator.stop().get();
             });
-
-            // #293 - do not stop anything
-            // engine().at_exit([&proxy] { return proxy.stop(); });
 
             supervisor::notify("starting migration manager");
             debug::the_migration_manager = &mm;
