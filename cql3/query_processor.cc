@@ -15,6 +15,7 @@
 #include "lang/wasm_alien_thread_runner.hh"
 #include "lang/wasm_instance_cache.hh"
 #include "service/storage_proxy.hh"
+#include "service/migration_manager.hh"
 #include "service/forward_service.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "cql3/CqlParser.hpp"
@@ -849,6 +850,59 @@ query_processor::execute_batch_without_checking_exception_message(
             return batch->execute(*this, query_state, options);
         });
     });
+}
+
+future<::shared_ptr<messages::result_message>>
+query_processor::execute_schema_statement(const statements::schema_altering_statement& stmt, service::query_state& state, const query_options& options) {
+    ::shared_ptr<cql_transport::event::schema_change> ce;
+
+    if (this_shard_id() != 0) {
+        // execute all schema altering statements on a shard zero since this is where raft group 0 is
+        co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0,
+                    std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()));
+    }
+
+    cql3::cql_warnings_vec warnings;
+
+    auto retries = _mm.get_concurrent_ddl_retries();
+    while (true) {
+        try {
+            auto group0_guard = co_await _mm.start_group0_operation();
+
+            auto [ret, m, cql_warnings] = co_await stmt.prepare_schema_mutations(*this, _mm, group0_guard.write_timestamp());
+            warnings = std::move(cql_warnings);
+
+            if (!m.empty()) {
+                auto description = format("CQL DDL statement: \"{}\"", stmt.raw_cql_statement);
+                co_await _mm.announce(std::move(m), std::move(group0_guard), description);
+            }
+
+            ce = std::move(ret);
+        } catch (const service::group0_concurrent_modification&) {
+            log.warn("Failed to execute DDL statement \"{}\" due to concurrent group 0 modification.{}.",
+                    stmt.raw_cql_statement, retries ? " Retrying" : " Number of retries exceeded, giving up");
+            if (retries--) {
+                continue;
+            }
+            throw;
+        }
+        break;
+    }
+
+    // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
+    // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)
+    ::shared_ptr<messages::result_message> result;
+    if (!ce) {
+        result = ::make_shared<messages::result_message::void_message>();
+    } else {
+        result = ::make_shared<messages::result_message::schema_change>(ce);
+    }
+
+    for (const sstring& warning : warnings) {
+        result->add_warning(warning);
+    }
+
+    co_return result;
 }
 
 query_processor::migration_subscriber::migration_subscriber(query_processor* qp) : _qp{qp} {

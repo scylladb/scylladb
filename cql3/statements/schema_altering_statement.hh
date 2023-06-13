@@ -39,8 +39,6 @@ class schema_altering_statement : public raw::cf_statement, public cql_statement
 private:
     const bool _is_column_family_level;
 
-    future<::shared_ptr<messages::result_message>>
-    execute0(query_processor& qp, service::query_state& state, const query_options& options) const;
 protected:
     explicit schema_altering_statement(timeout_config_selector timeout_selector = &timeout_config::other_timeout);
 
@@ -60,10 +58,11 @@ protected:
 
     virtual void prepare_keyspace(const service::client_state& state) override;
 
-    virtual future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type) const = 0;
-
     virtual future<::shared_ptr<messages::result_message>>
     execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
+
+public:
+    virtual future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type) const = 0;
 };
 
 }

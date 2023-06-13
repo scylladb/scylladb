@@ -41,6 +41,7 @@ namespace cql3 {
 
 namespace statements {
 class batch_statement;
+class schema_altering_statement;
 
 namespace raw {
 
@@ -399,6 +400,9 @@ public:
             service::query_state& query_state,
             query_options& options,
             std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries);
+
+    future<::shared_ptr<cql_transport::messages::result_message>>
+    execute_schema_statement(const statements::schema_altering_statement&, service::query_state& state, const query_options& options);
 
     std::unique_ptr<statements::prepared_statement> get_statement(
             const std::string_view& query,
