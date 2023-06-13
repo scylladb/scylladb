@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.abspath(".."))
 # -- Global variables
 
 # Set the base URL for the documentation site.
-BASE_URL = 'https://docs.scylladb.com'
+BASE_URL = 'https://opensource.scylladb.com'
 # Build documentation for the following tags and branches.
 TAGS = []
 BRANCHES = ["master", "branch-5.1", "branch-5.2", "branch-5.3"]
