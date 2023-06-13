@@ -140,7 +140,7 @@ void size_tiered_backlog_tracker::refresh_sstables_backlog_contribution() {
         if (!size_tiered_compaction_strategy::is_bucket_interesting(bucket, threshold)) {
             continue;
         }
-        contrib.value += boost::accumulate(bucket | boost::adaptors::transformed([this] (const shared_sstable& sst) -> double {
+        contrib.value += boost::accumulate(bucket | boost::adaptors::transformed([] (const shared_sstable& sst) -> double {
             return sst->data_size() * log4(sst->data_size());
         }), double(0.0f));
         // Controller is disabled if exception is caught during add / remove calls, so not making any effort to make this exception safe
