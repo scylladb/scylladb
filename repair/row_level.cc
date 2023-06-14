@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <exception>
 #include <seastar/util/defer.hh>
 #include "repair/repair.hh"
 #include "message/messaging_service.hh"
@@ -1049,30 +1050,31 @@ private:
     future<std::tuple<std::list<repair_row>, size_t>>
     read_rows_from_disk(size_t cur_size) {
         using value_type = std::tuple<std::list<repair_row>, size_t>;
-        return do_with(cur_size, size_t(0), std::list<repair_row>(), [this] (size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
-            return repeat([this, &cur_size, &cur_rows, &new_rows_size] () mutable {
-                if (cur_size >= _max_row_buf_size) {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
+        size_t new_rows_size = 0;
+        std::list<repair_row> cur_rows;
+        std::exception_ptr ex;
+        try {
+            while (cur_size < _max_row_buf_size) {
                 _gate.check();
-                return _repair_reader.read_mutation_fragment().then([this, &cur_size, &new_rows_size, &cur_rows] (mutation_fragment_opt mfopt) mutable {
-                    if (!mfopt) {
-                      return _repair_reader.on_end_of_stream().then([] {
-                        return stop_iteration::yes;
-                      });
-                    }
-                    return make_ready_future<stop_iteration>(handle_mutation_fragment(*mfopt, cur_size, new_rows_size, cur_rows));
-                });
-            }).then_wrapped([this, &cur_rows, &new_rows_size] (future<> fut) mutable {
-                if (fut.failed()) {
-                    return make_exception_future<value_type>(fut.get_exception()).finally([this] {
-                        return _repair_reader.on_end_of_stream();
-                    });
+                mutation_fragment_opt mfopt = co_await _repair_reader.read_mutation_fragment();
+                if (!mfopt) {
+                    co_await _repair_reader.on_end_of_stream();
+                    break;
                 }
-                _repair_reader.pause();
-                return make_ready_future<value_type>(value_type(std::move(cur_rows), new_rows_size));
-            });
-        });
+                if (handle_mutation_fragment(*mfopt, cur_size, new_rows_size, cur_rows) ==
+                    stop_iteration::yes) {
+                    break;
+                }
+            }
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        if (ex) {
+            co_await _repair_reader.on_end_of_stream();
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+        _repair_reader.pause();
+        co_return value_type(std::move(cur_rows), new_rows_size);
     }
 
     future<> clear_row_buf() {
