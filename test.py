@@ -19,6 +19,7 @@ import multiprocessing
 import os
 import pathlib
 import re
+import resource
 import shlex
 import shutil
 import signal
@@ -39,6 +40,8 @@ from test.pylib.util import LogPrefixAdapter
 from test.pylib.scylla_cluster import ScyllaServer, ScyllaCluster, get_cluster_manager, merge_cmdline_options
 from test.pylib.minio_server import MinioServer
 from typing import Dict, List, Callable, Any, Iterable, Optional, Awaitable, Union
+
+launch_time = time.monotonic()
 
 output_is_a_tty = sys.stdout.isatty()
 
@@ -1306,6 +1309,11 @@ def read_log(log_filename: pathlib.Path) -> str:
 
 
 def print_summary(failed_tests, options: argparse.Namespace) -> None:
+    rusage = resource.getrusage(resource.RUSAGE_CHILDREN)
+    cpu_used = rusage.ru_stime + rusage.ru_utime
+    cpu_available = (time.monotonic() - launch_time) * multiprocessing.cpu_count()
+    utilization = cpu_used / cpu_available
+    print(f"CPU utilization: {utilization*100:.1f}%")
     if failed_tests:
         print("The following test(s) have failed: {}".format(
             palette.path(" ".join([t.name for t in failed_tests]))))
