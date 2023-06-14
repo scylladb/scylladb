@@ -770,10 +770,12 @@ private:
     std::optional<shared_future<>> _rebuild_result;
     std::unordered_map<raft::server_id, std::optional<shared_future<>>> _remove_result;
     struct {
+        raft::term_t term{0};
+        uint64_t last_index{0};
         semaphore _operation_mutex{1};
     } _raft_topology_cmd_handler_state;
 
-    future<raft_topology_cmd_result> raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, const raft_topology_cmd& cmd);
+    future<raft_topology_cmd_result> raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd);
 
     future<> raft_bootstrap(raft::server&);
     future<> raft_decomission();

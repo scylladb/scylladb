@@ -671,7 +671,7 @@ topology_node_mutation_builder& topology_mutation_builder::with_node(raft::serve
 }
 
 using raft_topology_cmd_handler_type = noncopyable_function<future<raft_topology_cmd_result>(
-        sharded<db::system_distributed_keyspace>&, raft::term_t, const raft_topology_cmd&)>;
+        sharded<db::system_distributed_keyspace>&, raft::term_t, uint64_t, const raft_topology_cmd&)>;
 
 class topology_coordinator {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
@@ -685,7 +685,8 @@ class topology_coordinator {
     abort_source& _as;
 
     raft::server& _raft;
-    raft::term_t _term;
+    const raft::term_t _term;
+    uint64_t _last_cmd_index = 0;
 
     raft_topology_cmd_handler_type _raft_topology_cmd_handler;
 
@@ -846,19 +847,21 @@ class topology_coordinator {
         return {};
     }
 
-    future<> exec_direct_command_helper(raft::server_id id, const raft_topology_cmd& cmd) {
+    future<> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, const raft_topology_cmd& cmd) {
         auto ip = _address_map.find(id);
         if (!ip) {
-            slogger.info("raft topology: cannot send command {} to {} because mapping to ip is not available",
-                         cmd.cmd, id);
+            slogger.info("raft topology: cannot send command {} with term {} and index {} "
+                         "to {} because mapping to ip is not available",
+                         cmd.cmd, _term, cmd_index, id);
             co_await coroutine::exception(std::make_exception_ptr(
                     std::runtime_error(::format("no ip address mapping for {}", id))));
         }
-        slogger.trace("raft topology: send {} command to {}/{}", cmd.cmd, id, *ip);
+        slogger.trace("raft topology: send {} command with term {} and index {} to {}/{}",
+            cmd.cmd, _term, cmd_index, id, *ip);
         auto result = utils::fb_utilities::is_me(*ip) ?
-                    co_await _raft_topology_cmd_handler(_sys_dist_ks, _term, cmd) :
+                    co_await _raft_topology_cmd_handler(_sys_dist_ks, _term, cmd_index, cmd) :
                     co_await ser::storage_service_rpc_verbs::send_raft_topology_cmd(
-                            &_messaging, netw::msg_addr{*ip}, _term, cmd);
+                            &_messaging, netw::msg_addr{*ip}, _term, cmd_index, cmd);
         if (result.status == raft_topology_cmd_result::command_status::fail) {
             co_await coroutine::exception(std::make_exception_ptr(
                     std::runtime_error(::format("failed status returned from {}/{}", id, *ip))));
@@ -868,14 +871,16 @@ class topology_coordinator {
     future<node_to_work_on> exec_direct_command(node_to_work_on&& node, const raft_topology_cmd& cmd) {
         auto id = node.id;
         release_node(std::move(node));
-        co_await exec_direct_command_helper(id, cmd);
+        const auto cmd_index = ++_last_cmd_index;
+        co_await exec_direct_command_helper(id, cmd_index, cmd);
         co_return retake_node(co_await start_operation(), id);
     };
 
     future<bool> exec_global_command_helper(auto nodes, const raft_topology_cmd& cmd) {
+        const auto cmd_index = ++_last_cmd_index;
         auto f = co_await coroutine::as_future(
-                seastar::parallel_for_each(std::move(nodes), [this, &cmd] (raft::server_id id) {
-            return exec_direct_command_helper(id, cmd);
+                seastar::parallel_for_each(std::move(nodes), [this, &cmd, cmd_index] (raft::server_id id) {
+            return exec_direct_command_helper(id, cmd_index, cmd);
         }));
 
         if (f.failed()) {
@@ -4876,7 +4881,7 @@ future<> storage_service::snitch_reconfigured() {
     }
 }
 
-future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, const raft_topology_cmd& cmd) {
+future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd) {
     raft_topology_cmd_result result;
     slogger.trace("raft topology: topology cmd rpc {} is called", cmd.cmd);
 
@@ -4909,11 +4914,22 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
            co_return result;
         }
 
-            // We capture the topology version right after the checks
-            // above, before any yields. This is crucial since _topology_state_machine._topology
-            // might be altered concurrently while this method is running,
-            // which can cause the fence command to apply an invalid fence version.
-            const auto version = _topology_state_machine._topology.version;
+        {
+            auto& state = _raft_topology_cmd_handler_state;
+            if (state.term != term) {
+                state.term = term;
+            } else if (cmd_index <= state.last_index) {
+                // Return an error since the command is outdated
+                co_return result;
+            }
+            state.last_index = cmd_index;
+        }
+
+        // We capture the topology version right after the checks
+        // above, before any yields. This is crucial since _topology_state_machine._topology
+        // might be altered concurrently while this method is running,
+        // which can cause the fence command to apply an invalid fence version.
+        const auto version = _topology_state_machine._topology.version;
 
         switch (cmd.cmd) {
             case raft_topology_cmd::command::barrier:
@@ -5116,9 +5132,9 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
             return ss.node_ops_cmd_handler(coordinator, std::move(req));
         });
     });
-    ser::storage_service_rpc_verbs::register_raft_topology_cmd(&_messaging.local(), [this, &sys_dist_ks] (raft::term_t term, raft_topology_cmd cmd) {
-        return container().invoke_on(0, [&sys_dist_ks, cmd = std::move(cmd), term] (auto& ss) {
-            return ss.raft_topology_cmd_handler(sys_dist_ks, term, cmd);
+    ser::storage_service_rpc_verbs::register_raft_topology_cmd(&_messaging.local(), [this, &sys_dist_ks] (raft::term_t term, uint64_t cmd_index, raft_topology_cmd cmd) {
+        return container().invoke_on(0, [&sys_dist_ks, cmd = std::move(cmd), term, cmd_index] (auto& ss) {
+            return ss.raft_topology_cmd_handler(sys_dist_ks, term, cmd_index, cmd);
         });
     });
     ser::storage_service_rpc_verbs::register_raft_pull_topology_snapshot(&_messaging.local(), [this, &proxy] (raft_topology_pull_params params) {
