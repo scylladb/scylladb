@@ -37,11 +37,11 @@ private:
     //       and chunk::frag_size refers to the currently occupied space in the chunk.
     //       After building, the first chunk::size is the whole object size, and chunk::frag_size
     //       doesn't change. This fits with managed_bytes interpretation.
-    using chunk = blob_storage;
+    using chunk = multi_chunk_blob_storage;
     static constexpr size_type default_chunk_size{512};
     static constexpr size_type max_alloc_size() { return 128 * 1024; }
 private:
-    blob_storage::ref_type _begin;
+    chunk::ref_type _begin;
     chunk* _current;
     size_type _size;
     size_type _initial_chunk_size = default_chunk_size;
@@ -55,7 +55,7 @@ public:
         using reference = bytes_view&;
 
         struct implementation {
-            blob_storage* current_chunk;
+            chunk* current_chunk;
         };
     private:
         chunk* _current = nullptr;

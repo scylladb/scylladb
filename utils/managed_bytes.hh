@@ -10,12 +10,10 @@
 #pragma once
 
 #include <stdint.h>
-#include <memory>
 #include "bytes.hh"
 #include "utils/allocation_strategy.hh"
 #include "utils/fragment_range.hh"
 #include <seastar/util/alloc_failure_injector.hh>
-#include <unordered_map>
 #include <type_traits>
 #include <utility>
 
@@ -26,26 +24,48 @@ class managed_bytes_basic_view;
 using managed_bytes_view = managed_bytes_basic_view<mutable_view::no>;
 using managed_bytes_mutable_view = managed_bytes_basic_view<mutable_view::yes>;
 
-struct blob_storage {
+// Used to store managed_bytes data in layout 3. (See the doc comment of managed_bytes).
+// Also used as the underlying storage for bytes_ostream.
+//
+// The storage for these "fragmented buffer" types is provided by a chain
+// (linked list) of multi_chunk_blob_storage objects.
+struct multi_chunk_blob_storage {
+    // Stored inline in managed_bytes.
     struct [[gnu::packed]] ref_type {
-        blob_storage* ptr = nullptr;
+        multi_chunk_blob_storage* ptr = nullptr;
 
         ref_type() {}
-        ref_type(blob_storage* ptr) : ptr(ptr) {}
-        operator blob_storage*() const { return ptr; }
-        blob_storage* operator->() const { return ptr; }
-        blob_storage& operator*() const { return *ptr; }
+        ref_type(multi_chunk_blob_storage* ptr) : ptr(ptr) {}
+        operator multi_chunk_blob_storage*() const { return ptr; }
+        multi_chunk_blob_storage* operator->() const { return ptr; }
+        multi_chunk_blob_storage& operator*() const { return *ptr; }
     };
     using size_type = uint32_t;
     using char_type = bytes_view::value_type;
 
+    // Backref is needed to update the parent's pointer to us when we are
+    // migrated during memory defragmentation.
+    // (See the docs of allocation_strategy).
     ref_type* backref;
+
+    // These fields have two different meanings:
+    // 1. In bytes_ostream:
+    // - `size` is the size of this fragment (== the size of the trailing data[] below).
+    // - `frag_size` is the number of *used* (written) bytes in fragment.
+    // 2. In managed_bytes:
+    // - `size` in the first multi_chunk_blob_storage in the list is the size of the entire fragmented
+    // buffer (the sum of all data[]s in the chain).
+    // - `frag_size` is the data[] size of the current fragment (this multi_chunk_blob_storage).
     size_type size;
     size_type frag_size;
+
+    // Pointer to the next fragment in the list. If we are the last fragment, it's null.
     ref_type next;
+
+    // The storage provided by this fragment.
     char_type data[];
 
-    blob_storage(ref_type* backref, size_type size, size_type frag_size) noexcept
+    multi_chunk_blob_storage(ref_type* backref, size_type size, size_type frag_size) noexcept
         : backref(backref)
         , size(size)
         , frag_size(frag_size)
@@ -54,7 +74,7 @@ struct blob_storage {
         *backref = this;
     }
 
-    blob_storage(blob_storage&& o) noexcept
+    multi_chunk_blob_storage(multi_chunk_blob_storage&& o) noexcept
         : backref(o.backref)
         , size(o.size)
         , frag_size(o.frag_size)
@@ -68,34 +88,117 @@ struct blob_storage {
         memcpy(data, o.data, frag_size);
     }
 
+    // Valid only in the managed_bytes interpretation.
+    // As long as bytes_ostream is always allocated in the standard allocator,
+    // and storage_size() is never called on objects in the standard allocator,
+    // it's okay.
     size_t storage_size() const noexcept {
         return sizeof(*this) + frag_size;
     }
 } __attribute__((packed));
 
+// Used to store managed_bytes data in layout 2. (See the docs of managed_bytes).
+struct [[gnu::packed]] single_chunk_blob_storage {
+    using size_type = uint32_t;
+    using char_type = bytes_view::value_type;
+
+    // Stored inline in managed_bytes.
+    // Note the [[packed]]. It allows ref_type to be stored unaligned
+    // in the `union` in managed_bytes. (It wouldn't fit otherwise).
+    struct [[gnu::packed]] ref_type {
+        // managed_bytes has enough spare bytes to store the size inline,
+        // so we do that to save a few bytes in the external allocation.
+        single_chunk_blob_storage* ptr = nullptr;
+        size_type size = 0;
+    };
+
+    // Backref is needed to update the parent's pointer to us when we are
+    // migrated during memory defragmentation.
+    // (See the docs of allocation_strategy).
+    ref_type* backref;
+
+    // The storage provided by this fragment.
+    char_type data[];
+
+    single_chunk_blob_storage(ref_type* backref, size_type size) noexcept
+        : backref(backref)
+    {
+        backref->ptr = this;
+        backref->size = size;
+    }
+
+    single_chunk_blob_storage(single_chunk_blob_storage&& o) noexcept
+        : backref(o.backref)
+    {
+        backref->ptr = this;
+        memcpy(data, o.data, backref->size);
+    }
+
+    size_t storage_size() const noexcept {
+        return sizeof(*this) + backref->size;
+    }
+};
+
 // A managed version of "bytes" (can be used with LSA).
+//
+// Sometimes also used as a general-purpose fragmented buffer outside of LSA context,
+// but this is not recommended, because it's too easy to accidentally destroy it
+// in a different allocator than it was allocated in, which can break the program
+// in a hard-to-predict way.
+//
+// managed_bytes has three storage layouts:
+// 1. Inline.
+//    Used for data which fits into max_inline_size.
+// 2. External contiguous. (Single-allocation).
+//    Used for data which fits into preferred_max_contiguous_allocation().
+//    (At the moment of writing: 128 kiB and 12.8 kiB in LSA).
+//    The storage is a single single_chunk_blob_storage object.
+// 3. External fragmented. (Multi-allocation).
+//    Used for everything else.
+//    The storage is a chain of multi_chunk_blob_storage objects.
+//
+// Layout 2 exists as an optimization for the most common allocation sizes (several bytes).
+// There is nothing which prevents implementing these with layout 3, but layout 3 stores slightly
+// more metadata in the allocated buffer (pointer to the next fragment, size of the current fragment),
+// which adds up to a big overhead when used with small allocations.
+// E.g. 8-byte values are allocated externally -- each has additional 1 byte of flags and 8 bytes
+// of timestamp, so it's 17 bytes in total and that doesn't fit into inline storage.
+// And adding 16 bytes to each 17-byte cell is a big waste.
+//
+// The code of `class managed_bytes` is responsible for allocating and freeing the storage.
+// Code responsible for reading and writing it is in managed_bytes_basic_view.
+// The implementation details of these two classes are entangled.
 class managed_bytes {
     friend class bytes_ostream;
     static constexpr size_t max_inline_size = 15;
-    struct small_blob {
-        bytes_view::value_type data[max_inline_size];
-        int8_t size; // -1 -> use blob_storage
-    };
+
+    // The current layout is discerned by `inline_size`:
+    // >0 -> layout 1 (inline). In this case, the value of `inline_size` holds the data size.
+    // -1 -> layout 2 (single_chunk_blob_storage)
+    // -2 -> layout 3 (multi_chunk_blob_storage)
     union u {
         u() {}
         ~u() {}
-        blob_storage::ref_type ptr;
-        small_blob small;
+        bytes_view::value_type inline_data[max_inline_size]; // Stores the data directly. Size is in inline_size.
+        single_chunk_blob_storage::ref_type single_chunk_ref; // Points to external storage and stores the data size.
+        multi_chunk_blob_storage::ref_type multi_chunk_ref; // Points to external storage.
     } _u;
-    static_assert(sizeof(small_blob) > sizeof(blob_storage*), "inline size too small");
+    int8_t _inline_size = 0;
+
 private:
-    bool external() const noexcept {
-        return _u.small.size < 0;
+    bool is_multi_chunk() const noexcept {
+        return _inline_size < -1;
+    }
+    bool is_single_chunk() const noexcept {
+        return _inline_size == -1;
+    }
+    bool is_inline() const noexcept {
+        return _inline_size >= 0;
     }
     size_t max_seg(allocation_strategy& alctr) {
-        return alctr.preferred_max_contiguous_allocation() - sizeof(blob_storage);
+        return alctr.preferred_max_contiguous_allocation() - std::max(sizeof(multi_chunk_blob_storage), sizeof(single_chunk_blob_storage));
     }
-    void free_chain(blob_storage* p) noexcept {
+    void free_chain(multi_chunk_blob_storage* p) noexcept {
         auto& alctr = current_allocator();
         while (p) {
             auto n = p->next;
@@ -104,20 +207,18 @@ private:
         }
     }
 
-    explicit managed_bytes(blob_storage* data) {
-        _u.small.size = -1;
-        _u.ptr.ptr = data;
-        data->backref = &_u.ptr;
+    explicit managed_bytes(multi_chunk_blob_storage* data) {
+        _inline_size = -2;
+        _u.multi_chunk_ref.ptr = data;
+        data->backref = &_u.multi_chunk_ref;
     }
 public:
-    using size_type = blob_storage::size_type;
+    using size_type = multi_chunk_blob_storage::size_type;
     struct initialized_later {};
 
-    managed_bytes() {
-        _u.small.size = 0;
-    }
+    managed_bytes() = default;
 
-    managed_bytes(const blob_storage::char_type* ptr, size_type size)
+    managed_bytes(const multi_chunk_blob_storage::char_type* ptr, size_type size)
         : managed_bytes(bytes_view(ptr, size)) {}
 
     explicit managed_bytes(const bytes& b) : managed_bytes(static_cast<bytes_view>(b)) {}
@@ -128,27 +229,34 @@ public:
     managed_bytes(initialized_later, size_type size) {
         memory::on_alloc_point();
         if (size <= max_inline_size) {
-            _u.small.size = size;
+            _inline_size = size;
         } else {
-            _u.small.size = -1;
-            auto& alctr = current_allocator();
+          auto& alctr = current_allocator();
+          auto maxseg = max_seg(alctr);
+          if (size < maxseg) {
+            _inline_size = -1;
+            void* p = alctr.alloc<single_chunk_blob_storage>(sizeof(single_chunk_blob_storage) + size);
+            new (p) single_chunk_blob_storage(&_u.single_chunk_ref, size);
+          } else {
+            _inline_size = -2;
             auto maxseg = max_seg(alctr);
             auto now = std::min(size_t(size), maxseg);
-            void* p = alctr.alloc<blob_storage>(sizeof(blob_storage) + now);
-            auto first = new (p) blob_storage(&_u.ptr, size, now);
+            void* p = alctr.alloc<multi_chunk_blob_storage>(sizeof(multi_chunk_blob_storage) + now);
+            auto first = new (p) multi_chunk_blob_storage(&_u.multi_chunk_ref, size, now);
             auto last = first;
             size -= now;
             try {
                 while (size) {
                     auto now = std::min(size_t(size), maxseg);
-                    void* p = alctr.alloc<blob_storage>(sizeof(blob_storage) + now);
-                    last = new (p) blob_storage(&last->next, 0, now);
+                    void* p = alctr.alloc<multi_chunk_blob_storage>(sizeof(multi_chunk_blob_storage) + now);
+                    last = new (p) multi_chunk_blob_storage(&last->next, 0, now);
                     size -= now;
                 }
             } catch (...) {
                 free_chain(first);
                 throw;
             }
+          }
         }
     }
 
@@ -157,21 +265,27 @@ public:
     managed_bytes(std::initializer_list<bytes::value_type> b) : managed_bytes(b.begin(), b.size()) {}
 
     ~managed_bytes() noexcept {
-        if (external()) {
-            free_chain(_u.ptr);
+        if (is_multi_chunk()) {
+            free_chain(_u.multi_chunk_ref);
+        } else if (is_single_chunk()) {
+            auto& alctr = current_allocator();
+            alctr.destroy(_u.single_chunk_ref.ptr);
         }
     }
 
+    // Defined later in the file because it depends on managed_bytes_mutable_view.
     managed_bytes(const managed_bytes& o);
 
-    managed_bytes(managed_bytes&& o) noexcept
-        : _u(o._u)
-    {
-        if (external()) {
-            // _u.ptr cannot be null
-            _u.ptr->backref = &_u.ptr;
+    managed_bytes(managed_bytes&& o) noexcept {
+        // Microoptimization: we use memcpy instead of assigments because
+        // the compiler refuses the merge the load/stores otherwise for some reason.
+        std::memcpy(reinterpret_cast<char*>(this), &o, sizeof(managed_bytes));
+        o._inline_size = 0;
+        if (is_multi_chunk()) {
+            _u.multi_chunk_ref.ptr->backref = &_u.multi_chunk_ref;
+        } else if (is_single_chunk()) {
+            _u.single_chunk_ref.ptr->backref = &_u.single_chunk_ref;
         }
-        o._u.small.size = 0;
     }
 
     managed_bytes& operator=(managed_bytes&& o) noexcept {
@@ -191,33 +305,37 @@ public:
         return *this;
     }
 
+    // Defined later in the file because these depend on managed_bytes_mutable_view.
     bool operator==(const managed_bytes& o) const;
-
     bytes_view::value_type& operator[](size_type index);
     const bytes_view::value_type& operator[](size_type index) const;
 
     size_type size() const {
-        if (external()) {
-            return _u.ptr->size;
+        if (is_multi_chunk()) {
+            return _u.multi_chunk_ref->size;
+        } else if (is_single_chunk()) {
+            return _u.single_chunk_ref.size;
         } else {
-            return _u.small.size;
+            return _inline_size;
         }
     }
 
     bool empty() const {
-        return _u.small.size == 0;
+        return _inline_size == 0;
     }
 
     // Returns the amount of external memory used.
     size_t external_memory_usage() const noexcept {
-        if (external()) {
+        if (is_multi_chunk()) {
             size_t mem = 0;
-            blob_storage* blob = _u.ptr;
+            multi_chunk_blob_storage* blob = _u.multi_chunk_ref;
             while (blob) {
-                mem += blob->frag_size + sizeof(blob_storage);
+                mem += blob->frag_size + sizeof(multi_chunk_blob_storage);
                 blob = blob->next;
             }
             return mem;
+        } else if (is_single_chunk()) {
+            return _u.single_chunk_ref.size + sizeof(single_chunk_blob_storage);
         }
         return 0;
     }
@@ -227,19 +345,22 @@ public:
     // In other words, it returns the amount of external memory that would used by this
     // managed_bytes if all data was allocated in one big fragment.
     size_t minimal_external_memory_usage() const noexcept {
-        if (external()) {
-            return sizeof(blob_storage) + _u.ptr->size;
-        } else {
+        if (is_inline()) {
             return 0;
+        } else {
+            return sizeof(single_chunk_blob_storage) + size();
         }
     }
 
+    // Defined later in the file because it depends on managed_bytes_mutable_view.
     template <std::invocable<bytes_view> Func>
     std::invoke_result_t<Func, bytes_view> with_linearized(Func&& func) const;
 
     template <mutable_view is_mutable_view>
     friend class managed_bytes_basic_view;
 };
+// Sanity check.
+static_assert(sizeof(managed_bytes) == 16);
 
 template <mutable_view is_mutable>
 class managed_bytes_basic_view {
@@ -250,10 +371,10 @@ public:
     using value_type_maybe_const = std::conditional_t<is_mutable == mutable_view::yes, value_type, const value_type>;
 private:
     fragment_type _current_fragment = {};
-    blob_storage* _next_fragments = nullptr;
+    multi_chunk_blob_storage* _next_fragments = nullptr;
     size_t _size = 0;
 private:
-    managed_bytes_basic_view(fragment_type current_fragment, blob_storage* next_fragments, size_t size)
+    managed_bytes_basic_view(fragment_type current_fragment, multi_chunk_blob_storage* next_fragments, size_t size)
         : _current_fragment(current_fragment)
         , _next_fragments(next_fragments)
         , _size(size) {
@@ -262,11 +383,16 @@ public:
     managed_bytes_basic_view() = default;
     managed_bytes_basic_view(const managed_bytes_basic_view&) = default;
     managed_bytes_basic_view(owning_type& mb) {
-        if (mb._u.small.size != -1) {
-            _current_fragment = fragment_type(mb._u.small.data, mb._u.small.size);
-            _size = mb._u.small.size;
+        if (mb.is_inline()) {
+            _current_fragment = fragment_type(mb._u.inline_data, mb._inline_size);
+            _size = mb._inline_size;
+        } else if (mb.is_single_chunk()) {
+            auto p = mb._u.single_chunk_ref.ptr;
+            _current_fragment = fragment_type(p->data, mb._u.single_chunk_ref.size);
+            _next_fragments = nullptr;
+            _size = _current_fragment.size();
         } else {
-            auto p = mb._u.ptr;
+            multi_chunk_blob_storage* p = mb._u.multi_chunk_ref;
             _current_fragment = fragment_type(p->data, p->frag_size);
             _next_fragments = p->next;
             _size = p->size;
@@ -349,7 +475,7 @@ public:
         return func(bv);
     }
 
-    friend managed_bytes_basic_view<mutable_view::no> build_managed_bytes_view_from_internals(bytes_view current_fragment, blob_storage* next_fragment, size_t size);
+    friend managed_bytes_basic_view<mutable_view::no> build_managed_bytes_view_from_internals(bytes_view current_fragment, multi_chunk_blob_storage* next_fragment, size_t size);
 };
 static_assert(FragmentedView<managed_bytes_view>);
 static_assert(FragmentedMutableView<managed_bytes_mutable_view>);
@@ -388,7 +514,7 @@ inline managed_bytes::managed_bytes(View v) : managed_bytes(initialized_later(),
 
 inline
 managed_bytes_view
-build_managed_bytes_view_from_internals(bytes_view current_fragment, blob_storage* next_fragment, size_t size) {
+build_managed_bytes_view_from_internals(bytes_view current_fragment, multi_chunk_blob_storage* next_fragment, size_t size) {
     return managed_bytes_view(current_fragment, next_fragment, size);
 }
 
@@ -397,11 +523,14 @@ inline bytes_view::value_type& managed_bytes::operator[](size_type index) {
 }
 
 inline const bytes_view::value_type& managed_bytes::operator[](size_type index) const {
-    if (!external()) {
-        return _u.small.data[index];
+    if (is_inline()) {
+        return _u.inline_data[index];
+    } else if (is_single_chunk()) {
+        return _u.single_chunk_ref.ptr->data[index];
+    } else {
+        managed_bytes_view self(*this);
+        return self[index];
     }
-    managed_bytes_view self(*this);
-    return self[index];
 }
 
 template <std::invocable<bytes_view> Func>
@@ -413,9 +542,17 @@ inline bool managed_bytes::operator==(const managed_bytes& o) const {
     return managed_bytes_view(*this) == managed_bytes_view(o);
 }
 
-inline managed_bytes::managed_bytes(const managed_bytes& o) : managed_bytes() {
-    if (!o.external()) {
+inline managed_bytes::managed_bytes(const managed_bytes& o) {
+    if (o.is_inline()) {
+        _inline_size = o._inline_size;
         _u = o._u;
+    } else if (o.is_single_chunk()) {
+        memory::on_alloc_point();
+        auto& alctr = current_allocator();
+        void* p = alctr.alloc<single_chunk_blob_storage>(sizeof(single_chunk_blob_storage) + o._u.single_chunk_ref.size);
+        new (p) single_chunk_blob_storage(&_u.single_chunk_ref, o._u.single_chunk_ref.size);
+        memcpy(_u.single_chunk_ref.ptr->data, o._u.single_chunk_ref.ptr->data, o._u.single_chunk_ref.size);
+        _inline_size = -1;
     } else {
         *this = managed_bytes(initialized_later(), o.size());
         managed_bytes_mutable_view self(*this);

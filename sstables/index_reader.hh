@@ -76,7 +76,7 @@ public:
                             e.promoted_index->promoted_index_size,
                             e.promoted_index->num_blocks);
                 }
-                auto key = managed_bytes(reinterpret_cast<const blob_storage::char_type*>(e.key.get()), e.key.size());
+                auto key = managed_bytes(reinterpret_cast<const bytes::value_type*>(e.key.get()), e.key.size());
                 indexes._entries.emplace_back(make_managed<index_entry>(std::move(key), e.data_file_offset, std::move(pi)));
             });
         });
