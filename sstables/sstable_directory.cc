@@ -37,18 +37,9 @@ bool manifest_json_filter(const fs::path&, const directory_entry& entry) {
 }
 
 sstable_directory::filesystem_components_lister::filesystem_components_lister(std::filesystem::path dir)
-        : _lister(dir, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter)
+        : _directory(dir)
         , _state(std::make_unique<scan_state>())
 {
-}
-
-future<sstring> sstable_directory::filesystem_components_lister::get() {
-    auto de = co_await _lister.get();
-    co_return sstring(de ? de->name : "");
-}
-
-future<> sstable_directory::filesystem_components_lister::close() {
-    return _lister.close();
 }
 
 sstable_directory::system_keyspace_components_lister::system_keyspace_components_lister(db::system_keyspace& sys_ks, sstring location)
@@ -207,10 +198,10 @@ sstable_directory::highest_version_seen() const {
 
 future<> sstable_directory::process_sstable_dir(process_flags flags) {
     dirlog.debug("Start processing directory {} for SSTables (storage {})", _sstable_dir, _storage_opts->type_string());
-    return _lister->process(*this, _sstable_dir, flags);
+    return _lister->process(*this, flags);
 }
 
-future<> sstable_directory::filesystem_components_lister::process(sstable_directory& directory, fs::path location, process_flags flags) {
+future<> sstable_directory::filesystem_components_lister::process(sstable_directory& directory, process_flags flags) {
     // It seems wasteful that each shard is repeating this scan, and to some extent it is.
     // However, we still want to open the files and especially call process_dir() in a distributed
     // fashion not to overload any shard. Also in the common case the SSTables will all be
@@ -223,22 +214,23 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     // - If all shards scan in parallel, they can start loading sooner. That is faster than having
     //   a separate step to fetch all files, followed by another step to distribute and process.
 
+    directory_lister lister(_directory, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter);
     std::exception_ptr ex;
     try {
         while (true) {
-            sstring name = co_await get();
-            if (name == "") {
+            auto de = co_await lister.get();
+            if (!de) {
                 break;
             }
-            auto comps = sstables::entry_descriptor::make_descriptor(location.native(), name);
-            handle(std::move(comps), location / name);
+            auto comps = sstables::entry_descriptor::make_descriptor(_directory.native(), de->name);
+            handle(std::move(comps), _directory / de->name);
         }
     } catch (...) {
         ex = std::current_exception();
     }
-    co_await close();
+    co_await lister.close();
     if (ex) {
-        dirlog.debug("Could not process sstable directory {}: {}", location, ex);
+        dirlog.debug("Could not process sstable directory {}: {}", _directory, ex);
         // FIXME: waiting for https://github.com/scylladb/seastar/pull/1090
         // co_await coroutine::return_exception(std::move(ex));
         std::rethrow_exception(std::move(ex));
@@ -259,7 +251,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     }
 
     auto msg = format("After {} scanned, {} descriptors found, {} different files found",
-            location, _state->descriptors.size(), _state->generations_found.size());
+            _directory, _state->descriptors.size(), _state->generations_found.size());
 
     if (!_state->generations_found.empty()) {
         // FIXME: for now set _max_generation_seen is any generation were found
@@ -292,16 +284,16 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     // log and proceed.
     for (auto& path : _state->generations_found | boost::adaptors::map_values) {
         if (flags.throw_on_missing_toc) {
-            throw sstables::malformed_sstable_exception(format("At directory: {}: no TOC found for SSTable {}!. Refusing to boot", location.native(), path.native()));
+            throw sstables::malformed_sstable_exception(format("At directory: {}: no TOC found for SSTable {}!. Refusing to boot", _directory.native(), path.native()));
         } else {
-            dirlog.info("Found incomplete SSTable {} at directory {}. Removing", path.native(), location.native());
+            dirlog.info("Found incomplete SSTable {} at directory {}. Removing", path.native(), _directory.native());
             _state->files_for_removal.insert(path.native());
         }
     }
 }
 
-future<> sstable_directory::system_keyspace_components_lister::process(sstable_directory& directory, fs::path location, process_flags flags) {
-    return _sys_ks.sstables_registry_list(location.native(), [this, flags, &directory] (utils::UUID uuid, sstring status, entry_descriptor desc) {
+future<> sstable_directory::system_keyspace_components_lister::process(sstable_directory& directory, process_flags flags) {
+    return _sys_ks.sstables_registry_list(_location, [this, flags, &directory] (utils::UUID uuid, sstring status, entry_descriptor desc) {
         if (status != "sealed") {
             // FIXME -- handle
             return make_ready_future<>();
@@ -329,6 +321,11 @@ future<> sstable_directory::filesystem_components_lister::commit() {
 
 future<> sstable_directory::system_keyspace_components_lister::commit() {
     return make_ready_future<>();
+}
+
+future<> sstable_directory::system_keyspace_components_lister::garbage_collect() {
+    // FIXME -- implement
+    co_return;
 }
 
 future<>
@@ -548,7 +545,7 @@ future<> sstable_directory::delete_with_pending_deletion_log(std::vector<shared_
 
 // FIXME: Go through maybe_delete_large_partitions_entry on recovery since
 // this is an indication we crashed in the middle of delete_with_pending_deletion_log
-future<> sstable_directory::replay_pending_delete_log(fs::path pending_delete_log) {
+future<> sstable_directory::filesystem_components_lister::replay_pending_delete_log(fs::path pending_delete_log) {
     sstlog.debug("Reading pending_deletes log file {}", pending_delete_log);
     fs::path pending_delete_dir = pending_delete_log.parent_path();
     try {
@@ -570,15 +567,19 @@ future<> sstable_directory::replay_pending_delete_log(fs::path pending_delete_lo
 }
 
 future<> sstable_directory::garbage_collect() {
+    return _lister->garbage_collect();
+}
+
+future<> sstable_directory::filesystem_components_lister::garbage_collect() {
     // First pass, cleanup temporary sstable directories and sstables pending delete.
     co_await cleanup_column_family_temp_sst_dirs();
     co_await handle_sstables_pending_delete();
 }
 
-future<> sstable_directory::cleanup_column_family_temp_sst_dirs() {
+future<> sstable_directory::filesystem_components_lister::cleanup_column_family_temp_sst_dirs() {
     std::vector<future<>> futures;
 
-    co_await lister::scan_dir(_sstable_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [&] (fs::path sstdir, directory_entry de) {
+    co_await lister::scan_dir(_directory, lister::dir_entry_types::of<directory_entry_type::directory>(), [&] (fs::path sstdir, directory_entry de) {
         // push futures that remove files/directories into an array of futures,
         // so that the supplied callback will not block scan_dir() from
         // reading the next entry in the directory.
@@ -593,8 +594,8 @@ future<> sstable_directory::cleanup_column_family_temp_sst_dirs() {
     co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
 }
 
-future<> sstable_directory::handle_sstables_pending_delete() {
-    auto pending_delete_dir = _sstable_dir / sstables::pending_delete_dir;
+future<> sstable_directory::filesystem_components_lister::handle_sstables_pending_delete() {
+    auto pending_delete_dir = _directory / sstables::pending_delete_dir;
     auto exists = co_await file_exists(pending_delete_dir.native());
     if (!exists) {
         co_return;
