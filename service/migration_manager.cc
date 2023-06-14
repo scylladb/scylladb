@@ -318,20 +318,14 @@ future<> migration_manager::submit_migration_task(const gms::inet_address& endpo
 future<> migration_manager::do_merge_schema_from(netw::messaging_service::msg_addr id)
 {
     mlogger.info("Pulling schema from {}", id);
-    return _messaging.send_migration_request(std::move(id), netw::schema_pull_options{}).then([this, id] (
-            rpc::tuple<std::vector<frozen_mutation>, rpc::optional<std::vector<canonical_mutation>>> frozen_and_canonical_mutations) {
-        auto&& [mutations, canonical_mutations] = frozen_and_canonical_mutations;
-        if (canonical_mutations) {
-            return do_with(std::move(*canonical_mutations), [this, id] (std::vector<canonical_mutation>& mutations) {
-                return this->merge_schema_from(id, mutations);
-            });
-        }
-        return do_with(std::move(mutations), [this, id] (auto&& mutations) {
-            return this->merge_schema_from(id, mutations);
-        });
-    }).then([id] {
-        mlogger.info("Schema merge with {} completed", id);
-    });
+    auto frozen_and_canonical_mutations = co_await _messaging.send_migration_request(id, netw::schema_pull_options{});
+    auto&& [mutations, canonical_mutations] = frozen_and_canonical_mutations;
+    if (canonical_mutations) {
+        co_await merge_schema_from(id, *canonical_mutations);
+    } else {
+        co_await merge_schema_from(id, mutations);
+    }
+    mlogger.info("Schema merge with {} completed", id);
 }
 
 future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr id)
