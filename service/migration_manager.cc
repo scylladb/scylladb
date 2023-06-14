@@ -1201,20 +1201,20 @@ future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version 
 
 future<> migration_manager::sync_schema(const replica::database& db, const std::vector<gms::inet_address>& nodes) {
     using schema_and_hosts = std::unordered_map<table_schema_version, std::vector<gms::inet_address>>;
-    return do_with(schema_and_hosts(), db.get_version(), [this, &nodes] (schema_and_hosts& schema_map, table_schema_version& my_version) {
-        return parallel_for_each(nodes, [this, &schema_map, &my_version] (const gms::inet_address& node) {
-            return _messaging.send_schema_check(netw::msg_addr(node)).then([node, &schema_map, &my_version] (table_schema_version remote_version) {
-                if (my_version != remote_version) {
-                    schema_map[remote_version].emplace_back(node);
-                }
-            });
-        }).then([this, &schema_map] {
-            return parallel_for_each(schema_map, [this] (auto& x) {
-                mlogger.debug("Pulling schema {} from {}", x.first, x.second.front());
-                bool can_ignore_down_node = false;
-                return submit_migration_task(x.second.front(), can_ignore_down_node);
-            });
-        });
+    schema_and_hosts schema_map;
+    co_await coroutine::parallel_for_each(nodes, [this, &schema_map, &db] (const gms::inet_address& node) -> future<> {
+        const auto& my_version = db.get_version();
+        auto remote_version = co_await _messaging.send_schema_check(netw::msg_addr(node));
+        if (my_version != remote_version) {
+            schema_map[remote_version].emplace_back(node);
+        }
+    });
+    co_await coroutine::parallel_for_each(schema_map, [this] (auto& x) -> future<> {
+        auto& [schema, hosts] = x;
+        const auto& src = hosts.front();
+        mlogger.debug("Pulling schema {} from {}", schema, src);
+        bool can_ignore_down_node = false;
+        return submit_migration_task(src, can_ignore_down_node);
     });
 }
 
