@@ -335,16 +335,11 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
     }
 
     mlogger.info("Requesting schema pull from {}", id);
-    auto i = _schema_pulls.find(id);
-    if (i == _schema_pulls.end()) {
-        // FIXME: Drop entries for removed nodes (or earlier).
-        i = _schema_pulls.emplace(std::piecewise_construct,
-                std::tuple<netw::messaging_service::msg_addr>(id),
-                std::tuple<std::function<future<>()>>([id, this] {
-                    return do_merge_schema_from(id);
-                })).first;
-    }
-    return i->second.trigger();
+    // FIXME: Drop entries for removed nodes (or earlier).
+    auto res = _schema_pulls.try_emplace(id, [id, this] {
+        return do_merge_schema_from(id);
+    });
+    return res.first->second.trigger();
 }
 
 future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr src, const std::vector<canonical_mutation>& canonical_mutations) {
