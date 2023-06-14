@@ -1692,3 +1692,49 @@ def test_index_non_eq_relation(cql, test_keyspace):
         cql.execute(f'INSERT INTO {table} (a,b,c) VALUES (2,2,4)')
         assert [(3,),(4,)] == sorted(cql.execute(f"SELECT c FROM {table} WHERE a>0 and b=2 ALLOW FILTERING"))
         assert [(4,)] == sorted(cql.execute(f"SELECT c FROM {table} WHERE a>=2 ALLOW FILTERING"))
+
+# A reproducer for issue #12762: When scan with a PER PARTITION LIMIT uses
+# a secondary index for its filtering, it still needs apply the PER PARTITION
+# LIMIT (and considering the original base-table partitions for this, not the
+# index partition).
+# With issue #12762, this test used to pass without an index (use_index=False)
+# but failed with an index (use_index=True) - it seems the PER PARTITION LIMIT
+# request was just ignored.
+@pytest.mark.parametrize("use_index", [
+        pytest.param(True, marks=pytest.mark.xfail(reason="#12762")), False])
+def test_index_filtering_scan_and_per_partition_limit(cql, test_keyspace, use_index):
+    with new_test_table(cql, test_keyspace, "p int, c int, v int, PRIMARY KEY (p, c)") as table:
+        if use_index:
+            cql.execute(f"CREATE INDEX ON {table}(v)")
+        stmt = cql.prepare(f'INSERT INTO {table} (p, c, v) VALUES (?, ?, ?)')
+        cql.execute(stmt, [0, 0, 0])
+        cql.execute(stmt, [0, 1, 0])
+        cql.execute(stmt, [1, 0, 0])
+        cql.execute(stmt, [1, 1, 0])
+        # ALLOW FILTERING isn't needed if there's an index. Scylla must
+        # use the index when it's available (otherwise the query v=0 won't
+        # be efficient), but shouldn't forget also the PER PARTITION LIMIT.
+        allow_filtering = '' if use_index else 'ALLOW FILTERING'
+        assert {(0,0,0), (1, 0, 0)} == set(cql.execute(f'SELECT * FROM {table} WHERE v=0 PER PARTITION LIMIT 1 {allow_filtering}'))
+
+# Similar to above test with PER PARTITION LIMIT, but also adds further
+# filtering which eliminates some result candidates retrieved by the index.
+# The count that PER PARTITION LIMIT limits should be post-filtering, so that
+# PER PARTITION LIMIT 1 should *return* one result per partition, and if the
+# first result happens not to match the filter it needs to continue trying
+# the second result, and so on, and not skip to the next partition until
+# we have one post-filtered result.
+@pytest.mark.parametrize("use_index", [
+        pytest.param(True, marks=pytest.mark.xfail(reason="#12762")), False])
+def test_index_filtering2_scan_and_per_partition_limit(cql, test_keyspace, use_index):
+    with new_test_table(cql, test_keyspace, "p int, c int, v int, z int, PRIMARY KEY (p, c)") as table:
+        if use_index:
+            cql.execute(f"CREATE INDEX ON {table}(v)")
+        stmt = cql.prepare(f'INSERT INTO {table} (p, c, v, z) VALUES (?, ?, ?, ?)')
+        cql.execute(stmt, [0, 0, 0, 0])
+        cql.execute(stmt, [0, 1, 0, 1])
+        cql.execute(stmt, [0, 2, 0, 1])
+        cql.execute(stmt, [1, 0, 0, 0])
+        cql.execute(stmt, [1, 1, 0, 1])
+        cql.execute(stmt, [1, 2, 0, 1])
+        assert {(0, 1, 0, 1), (1, 1, 0, 1)} == set(cql.execute(f'SELECT * FROM {table} WHERE v=0 AND z=1 PER PARTITION LIMIT 1 ALLOW FILTERING'))
