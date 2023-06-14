@@ -1090,35 +1090,28 @@ private:
     // Calculate the total size of the rows in _row_buf
     future<get_sync_boundary_response>
     get_sync_boundary(std::optional<repair_sync_boundary> skipped_sync_boundary) {
-        auto f = make_ready_future<>();
         if (skipped_sync_boundary) {
             _current_sync_boundary = skipped_sync_boundary;
-            f = clear_row_buf();
+            co_await clear_row_buf();
         }
         // Here is the place we update _last_sync_boundary
         rlogger.trace("SET _last_sync_boundary from {} to {}", _last_sync_boundary, _current_sync_boundary);
         _last_sync_boundary = _current_sync_boundary;
-      return f.then([this, sb = std::move(skipped_sync_boundary)] () mutable {
-       return clear_working_row_buf().then([this, sb = sb] () mutable {
-        return row_buf_size().then([this, sb = std::move(sb)] (size_t cur_size) {
-            return read_rows_from_disk(cur_size).then_unpack([this, sb = std::move(sb)] (std::list<repair_row> new_rows, size_t new_rows_size) mutable {
-                size_t new_rows_nr = new_rows.size();
-                _row_buf.splice(_row_buf.end(), new_rows);
-                return row_buf_csum().then([this, new_rows_size, new_rows_nr, sb = std::move(sb)] (repair_hash row_buf_combined_hash) {
-                    return row_buf_size().then([this, new_rows_size, new_rows_nr, row_buf_combined_hash, sb = std::move(sb)] (size_t row_buf_bytes) {
-                        std::optional<repair_sync_boundary> sb_max;
-                        if (!_row_buf.empty()) {
-                            sb_max = _row_buf.back().boundary();
-                        }
-                        rlogger.debug("get_sync_boundary: Got nr={} rows, sb_max={}, row_buf_size={}, repair_hash={}, skipped_sync_boundary={}",
-                                new_rows_nr, sb_max, row_buf_bytes, row_buf_combined_hash, sb);
-                        return get_sync_boundary_response{sb_max, row_buf_combined_hash, row_buf_bytes, new_rows_size, new_rows_nr};
-                    });
-                });
-            });
-        });
-       });
-      });
+        co_await clear_working_row_buf();
+        size_t cur_size = co_await row_buf_size();
+        auto rows = co_await read_rows_from_disk(cur_size);
+        auto&& [new_rows, new_rows_size] = rows;
+        size_t new_rows_nr = new_rows.size();
+        _row_buf.splice(_row_buf.end(), new_rows);
+        repair_hash row_buf_combined_hash = co_await row_buf_csum();
+        size_t row_buf_bytes = co_await row_buf_size();
+        std::optional<repair_sync_boundary> sb_max;
+        if (!_row_buf.empty()) {
+            sb_max = _row_buf.back().boundary();
+        }
+        rlogger.debug("get_sync_boundary: Got nr={} rows, sb_max={}, row_buf_size={}, repair_hash={}, skipped_sync_boundary={}",
+                      new_rows_nr, sb_max, row_buf_bytes, row_buf_combined_hash, skipped_sync_boundary);
+        co_return get_sync_boundary_response{sb_max, row_buf_combined_hash, row_buf_bytes, new_rows_size, new_rows_nr};
     }
 
     future<> move_row_buf_to_working_row_buf() {
