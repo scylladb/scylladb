@@ -2538,19 +2538,19 @@ public:
     typed_option(const char* name, const char* description) : basic_option(name, description) { }
 };
 
-class option {
+class operation_option {
     shared_ptr<basic_option> _opt; // need copy to support convenient range declaration of std::vector<option>
 
 public:
     template <typename T>
-    option(typed_option<T> opt) : _opt(make_shared<typed_option<T>>(std::move(opt))) { }
+    operation_option(typed_option<T> opt) : _opt(make_shared<typed_option<T>>(std::move(opt))) { }
 
     const char* name() const { return _opt->name; }
     const char* description() const { return _opt->description; }
     void add_option(bpo::options_description& opts) const { _opt->add_option(opts); }
 };
 
-const std::vector<option> all_options {
+const std::vector<operation_option> all_options {
     typed_option<std::vector<sstring>>("partition", "partition(s) to filter for, partitions are expected to be in the hex format"),
     typed_option<sstring>("partitions-file", "file containing partition(s) to filter for, partitions are expected to be in the hex format"),
     typed_option<>("merge", "merge all sstables into a single mutation fragment stream (use a combining reader over all sstable readers)"),
@@ -2906,7 +2906,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
     if (found_op) {
         bpo::options_description op_desc(found_op->name());
         for (const auto& opt_name : found_op->available_options()) {
-            auto it = std::find_if(all_options.begin(), all_options.end(), [&] (const option& opt) { return opt.name() == opt_name; });
+            auto it = std::find_if(all_options.begin(), all_options.end(), [&] (const operation_option& opt) { return opt.name() == opt_name; });
             assert(it != all_options.end());
             it->add_option(op_desc);
         }
