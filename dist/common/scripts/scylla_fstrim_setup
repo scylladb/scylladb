@@ -16,7 +16,7 @@ if __name__ == '__main__':
     if os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
-    systemd_unit('scylla-fstrim.timer').unmask()
     systemd_unit('scylla-fstrim.timer').enable()
+    systemd_unit('scylla-fstrim.timer').start()
     if is_redhat_variant() or is_arch() or is_suse_variant():
         systemd_unit('fstrim.timer').disable()
