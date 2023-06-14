@@ -13,6 +13,7 @@
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/sort.hpp>
 
+#include "seastar/core/loop.hh"
 #include "sstables.hh"
 
 #include "compatible_ring_position.hh"
@@ -187,6 +188,38 @@ sstable_set::size() const noexcept {
     return _impl->size();
 }
 
+std::unique_ptr<sstable_set_impl> sstable_set_impl::clone_excluding(const std::vector<shared_sstable>& excluded_sstables) const {
+    std::unique_ptr<sstable_set_impl> cloned;
+    if (excluded_sstables.size() < size() / 2) {
+        // Typically, the number of excluded sstables is expected to be much less than the
+        // total number of sstables.
+        // Clone the whole set and erase the excluded sstables from the clone
+        cloned = clone();
+        for (const auto& sst : excluded_sstables) {
+            cloned->erase(sst);
+        }
+    } else {
+        // Make an empty set and insert to it all sstables that aren't excluded.
+        auto excluded = std::unordered_set<shared_sstable>(excluded_sstables.begin(), excluded_sstables.end());
+        auto cloned = clone_empty();
+        for_each_sstable_until([&] (const shared_sstable& sst) {
+            if (!excluded.contains(sst)) {
+                cloned->insert(sst);
+            }
+            return stop_iteration::no;
+        });
+    }
+    return cloned;
+}
+
+sstable_set sstable_set::clone_empty() const {
+    return sstable_set(_impl->clone_empty(), _schema);
+}
+
+sstable_set sstable_set::clone_excluding(const std::vector<shared_sstable>& excluded_sstables) const {
+    return sstable_set(_impl->clone_excluding(excluded_sstables), _schema);
+}
+
 sstable_set::~sstable_set() = default;
 
 sstable_set::incremental_selector::incremental_selector(std::unique_ptr<incremental_selector_impl> impl, const schema& s)
@@ -303,6 +336,10 @@ partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const std::v
 
 std::unique_ptr<sstable_set_impl> partitioned_sstable_set::clone() const {
     return std::make_unique<partitioned_sstable_set>(_schema, _unleveled_sstables, _leveled_sstables, _all, _all_runs, _use_level_metadata);
+}
+
+std::unique_ptr<sstable_set_impl> partitioned_sstable_set::clone_empty() const {
+    return std::make_unique<partitioned_sstable_set>(_schema, _use_level_metadata);
 }
 
 std::vector<shared_sstable> partitioned_sstable_set::select(const dht::partition_range& range) const {
@@ -467,6 +504,10 @@ time_series_sstable_set::time_series_sstable_set(const time_series_sstable_set& 
 
 std::unique_ptr<sstable_set_impl> time_series_sstable_set::clone() const {
     return std::make_unique<time_series_sstable_set>(*this);
+}
+
+std::unique_ptr<sstable_set_impl> time_series_sstable_set::clone_empty() const {
+    return std::make_unique<time_series_sstable_set>(_schema, _enable_optimized_twcs_queries);
 }
 
 std::vector<shared_sstable> time_series_sstable_set::select(const dht::partition_range& range) const {
@@ -1011,6 +1052,24 @@ std::unique_ptr<sstable_set_impl> compound_sstable_set::clone() const {
         cloned_sets.push_back(std::move(cloned_set));
     }
     return std::make_unique<compound_sstable_set>(_schema, std::move(cloned_sets));
+}
+
+std::unique_ptr<sstable_set_impl> compound_sstable_set::clone_empty() const {
+    std::vector<lw_shared_ptr<sstable_set>> cloned_sets;
+    cloned_sets.reserve(_sets.size());
+    for (const auto& set : _sets) {
+        cloned_sets.push_back(make_lw_shared(set->clone_empty()));
+    }
+    return std::make_unique<compound_sstable_set>(_schema);
+}
+
+std::unique_ptr<sstable_set_impl> compound_sstable_set::clone_excluding(const std::vector<shared_sstable>& excluded_sstables) const {
+    std::vector<lw_shared_ptr<sstable_set>> cloned_sets;
+    cloned_sets.reserve(_sets.size());
+    for (const auto& set : _sets) {
+        cloned_sets.push_back(make_lw_shared(set->clone_excluding(excluded_sstables)));
+    }
+    return std::make_unique<compound_sstable_set>(_schema);
 }
 
 std::vector<shared_sstable> compound_sstable_set::select(const dht::partition_range& range) const {

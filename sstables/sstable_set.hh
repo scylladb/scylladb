@@ -59,6 +59,8 @@ class sstable_set_impl {
 public:
     virtual ~sstable_set_impl() {}
     virtual std::unique_ptr<sstable_set_impl> clone() const = 0;
+    virtual std::unique_ptr<sstable_set_impl> clone_empty() const = 0;
+    virtual std::unique_ptr<sstable_set_impl> clone_excluding(const std::vector<shared_sstable>& excluded_sstables) const;
     virtual std::vector<shared_sstable> select(const dht::partition_range& range) const = 0;
     virtual std::vector<sstable_run> select_sstable_runs(const std::vector<shared_sstable>& sstables) const;
     virtual lw_shared_ptr<const sstable_list> all() const = 0;
@@ -121,6 +123,8 @@ public:
     void insert(shared_sstable sst);
     void erase(shared_sstable sst);
     size_t size() const noexcept;
+    sstable_set clone_empty() const;
+    sstable_set clone_excluding(const std::vector<shared_sstable>& excluded_sstables) const;
 
     // Used to incrementally select sstables from sstable set using ring-position.
     // sstable set must be alive during the lifetime of the selector.
