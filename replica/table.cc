@@ -2190,9 +2190,13 @@ void table::set_hit_rate(gms::inet_address addr, cache_temperature rate) {
     e.last_updated = lowres_clock::now();
 }
 
+table::cache_hit_rate table::get_my_hit_rate() const {
+    return cache_hit_rate { _global_cache_hit_rate, lowres_clock::now()};
+}
+
 table::cache_hit_rate table::get_hit_rate(const gms::gossiper& gossiper, gms::inet_address addr) {
     if (utils::fb_utilities::get_broadcast_address() == addr) {
-        return cache_hit_rate { _global_cache_hit_rate, lowres_clock::now()};
+        return get_my_hit_rate();
     }
     auto it = _cluster_cache_hit_rates.find(addr);
     if (it == _cluster_cache_hit_rates.end()) {

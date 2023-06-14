@@ -330,6 +330,9 @@ private:
     db::hints::manager& hints_manager_for(db::write_type type);
     void sort_endpoints_by_proximity(const locator::topology& topo, inet_address_vector_replica_set& eps) const;
     inet_address_vector_replica_set get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const;
+    inet_address_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, inet_address_vector_replica_set live_endpoints, const inet_address_vector_replica_set& preferred_endpoints, db::read_repair_decision, std::optional<gms::inet_address>* extra, replica::column_family*) const;
+    // As above with read_repair_decision=NONE, extra=nullptr.
+    inet_address_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, const inet_address_vector_replica_set& live_endpoints, const inet_address_vector_replica_set& preferred_endpoints, replica::column_family*) const;
     bool is_alive(const gms::inet_address&) const;
     db::read_repair_decision new_read_repair_decision(const schema& s);
     result<::shared_ptr<abstract_read_executor>> get_read_executor(lw_shared_ptr<query::read_command> cmd,
@@ -445,11 +448,9 @@ private:
         inet_address_vector_replica_set& l2) const;
 
 public:
-    storage_proxy(distributed<replica::database>& db, gms::gossiper& gossiper, config cfg, db::view::node_update_backlog& max_view_update_backlog,
-            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory, netw::messaging_service& ms);
+    storage_proxy(distributed<replica::database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
+            scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory);
     ~storage_proxy();
-
-    remote& remote();
 
     const distributed<replica::database>& get_db() const {
         return _db;
@@ -481,10 +482,16 @@ public:
         }
         return next;
     }
-    void init_messaging_service(migration_manager*);
-    future<> uninit_messaging_service();
+
+    // Start/stop the remote part of `storage_proxy` that is required for performing distributed queries.
+    void start_remote(netw::messaging_service&, gms::gossiper&, migration_manager&);
+    future<> stop_remote();
 
 private:
+    // Throws an error if remote is not initialized.
+    const struct remote& remote() const;
+    struct remote& remote();
+
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info);
