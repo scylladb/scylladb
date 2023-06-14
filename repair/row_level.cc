@@ -57,6 +57,7 @@
 #include "repair/decorated_key_with_hash.hh"
 #include "repair/row.hh"
 #include "repair/writer.hh"
+#include "repair/reader.hh"
 #include "compaction/compaction_manager.hh"
 #include "utils/xx_hasher.hh"
 
@@ -258,184 +259,139 @@ repair_hash repair_hasher::do_hash_for_mf(const decorated_key_with_hash& dk_with
     return repair_hash(h.finalize_uint64());
 }
 
-
-class repair_reader {
-public:
-    enum class read_strategy {
-        local,
-        multishard_split,
-        multishard_filter
-    };
-    friend std::ostream& operator<<(std::ostream& out, read_strategy s) {
-        switch (s) {
-            case read_strategy::local:
-                return out << "local";
-            case read_strategy::multishard_split:
-                return out << "multishard_split";
-            case read_strategy::multishard_filter:
-                return out << "multishard_filter";
-        };
-        return out << "unknown";
-    }
-private:
-    schema_ptr _schema;
-    reader_permit _permit;
-    dht::partition_range _range;
-    // Used to find the range that repair master will work on
-    dht::selective_token_range_sharder _sharder;
-    // Seed for the repair row hashing
-    uint64_t _seed;
-    // Pin the table while the reader is alive.
-    // Only needed for local readers, the multishard reader takes care
-    // of pinning tables on used shards.
-    std::optional<utils::phased_barrier::operation> _local_read_op;
-    std::optional<evictable_reader_handle_v2> _reader_handle;
-    // Fragment stream of either local or multishard reader for the range
-    mutation_fragment_v1_stream _reader;
-    // Current partition read from disk
-    lw_shared_ptr<const decorated_key_with_hash> _current_dk;
-    uint64_t _reads_issued = 0;
-    uint64_t _reads_finished = 0;
-
-    flat_mutation_reader_v2 make_reader(
-            seastar::sharded<replica::database>& db,
-            replica::column_family& cf,
-            read_strategy strategy,
-            const dht::sharder& remote_sharder,
-            unsigned remote_shard) {
-        switch (strategy) {
-            case read_strategy::local: {
-                auto ms = mutation_source([&cf] (
-                    schema_ptr s,
-                    reader_permit permit,
-                    const dht::partition_range& pr,
-                    const query::partition_slice& ps,
-                    tracing::trace_state_ptr,
-                    streamed_mutation::forwarding,
-                    mutation_reader::forwarding fwd_mr) {
-                    return cf.make_streaming_reader(std::move(s), std::move(permit), pr, ps, fwd_mr);
-                });
-                flat_mutation_reader_v2 rd(nullptr);
-                std::tie(rd, _reader_handle) = make_manually_paused_evictable_reader_v2(
-                    std::move(ms),
-                    _schema,
-                    _permit,
-                    _range,
-                    _schema->full_slice(),
-                    {},
-                    mutation_reader::forwarding::no);
-                return rd;
-            }
-            case read_strategy::multishard_split: {
-                // We can't have two permits with count resource for 1 repair.
-                // So we release the one on _permit so the only one is the one the
-                // shard reader will obtain.
-                _permit.release_base_resources();
-                return make_multishard_streaming_reader(db, _schema, _permit, [this] {
-                    auto shard_range = _sharder.next();
-                    if (shard_range) {
-                        return std::optional<dht::partition_range>(dht::to_partition_range(*shard_range));
-                    }
-                    return std::optional<dht::partition_range>();
-                });
-            }
-            case read_strategy::multishard_filter: {
-                // We can't have two permits with count resource for 1 repair.
-                // So we release the one on _permit so the only one is the one the
-                // shard reader will obtain.
-                _permit.release_base_resources();
-                return make_filtering_reader(make_multishard_streaming_reader(db, _schema, _permit, _range),
-                    [&remote_sharder, remote_shard](const dht::decorated_key& k) {
-                        return remote_sharder.shard_of(k.token()) == remote_shard;
-                    });
-            }
-            default:
-                on_internal_error(rlogger,
-                    format("make_reader: unexpected read_strategy {}", static_cast<int>(strategy)));
+flat_mutation_reader_v2 repair_reader::make_reader(
+    seastar::sharded<replica::database>& db,
+    replica::column_family& cf,
+    read_strategy strategy,
+    const dht::sharder& remote_sharder,
+    unsigned remote_shard) {
+    switch (strategy) {
+        case read_strategy::local: {
+            auto ms = mutation_source([&cf] (
+                schema_ptr s,
+                reader_permit permit,
+                const dht::partition_range& pr,
+                const query::partition_slice& ps,
+                tracing::trace_state_ptr,
+                streamed_mutation::forwarding,
+                mutation_reader::forwarding fwd_mr) {
+                return cf.make_streaming_reader(std::move(s), std::move(permit), pr, ps, fwd_mr);
+            });
+            flat_mutation_reader_v2 rd(nullptr);
+            std::tie(rd, _reader_handle) = make_manually_paused_evictable_reader_v2(
+                std::move(ms),
+                _schema,
+                _permit,
+                _range,
+                _schema->full_slice(),
+                {},
+                mutation_reader::forwarding::no);
+            return rd;
         }
+        case read_strategy::multishard_split: {
+            // We can't have two permits with count resource for 1 repair.
+            // So we release the one on _permit so the only one is the one the
+            // shard reader will obtain.
+            _permit.release_base_resources();
+            return make_multishard_streaming_reader(db, _schema, _permit, [this] {
+                auto shard_range = _sharder.next();
+                if (shard_range) {
+                    return std::optional<dht::partition_range>(dht::to_partition_range(*shard_range));
+                }
+                return std::optional<dht::partition_range>();
+            });
+        }
+        case read_strategy::multishard_filter: {
+            // We can't have two permits with count resource for 1 repair.
+            // So we release the one on _permit so the only one is the one the
+            // shard reader will obtain.
+            _permit.release_base_resources();
+            return make_filtering_reader(make_multishard_streaming_reader(db, _schema, _permit, _range),
+                [&remote_sharder, remote_shard](const dht::decorated_key& k) {
+                    return remote_sharder.shard_of(k.token()) == remote_shard;
+                });
+        }
+        default:
+            on_internal_error(rlogger,
+                format("make_reader: unexpected read_strategy {}", static_cast<int>(strategy)));
     }
+}
 
-public:
-    repair_reader(
-            seastar::sharded<replica::database>& db,
-            replica::column_family& cf,
-            schema_ptr s,
-            reader_permit permit,
-            dht::token_range range,
-            const dht::sharder& remote_sharder,
-            unsigned remote_shard,
-            uint64_t seed,
-            read_strategy strategy)
-            : _schema(s)
-            , _permit(std::move(permit))
-            , _range(dht::to_partition_range(range))
-            , _sharder(remote_sharder, range, remote_shard)
-            , _seed(seed)
-            , _local_read_op(strategy == read_strategy::local ? std::optional(cf.read_in_progress()) : std::nullopt)
-            , _reader(make_reader(db, cf, strategy, remote_sharder, remote_shard))
-    { }
+repair_reader::repair_reader(
+    seastar::sharded<replica::database>& db,
+    replica::column_family& cf,
+    schema_ptr s,
+    reader_permit permit,
+    dht::token_range range,
+    const dht::sharder& remote_sharder,
+    unsigned remote_shard,
+    uint64_t seed,
+    read_strategy strategy)
+    : _schema(s)
+    , _permit(std::move(permit))
+    , _range(dht::to_partition_range(range))
+    , _sharder(remote_sharder, range, remote_shard)
+    , _seed(seed)
+    , _local_read_op(strategy == read_strategy::local ? std::optional(cf.read_in_progress()) : std::nullopt)
+    , _reader(make_reader(db, cf, strategy, remote_sharder, remote_shard))
+{ }
 
-    future<mutation_fragment_opt>
-    read_mutation_fragment() {
-        ++_reads_issued;
-        // Use a very long timeout for the reader to break out any eventual
-        // deadlock within the reader. Thirty minutes should be more than
-        // enough to read a single mutation fragment.
-        auto timeout = db::timeout_clock::now() + std::chrono::minutes(30);
-        _reader.set_timeout(timeout);   // reset to db::no_timeout in pause()
-        return _reader().then_wrapped([this] (future<mutation_fragment_opt> f) {
-            try {
-                auto mfopt = f.get0();
-                ++_reads_finished;
-                return mfopt;
-            } catch (seastar::timed_out_error& e) {
-                rlogger.warn("Failed to read a fragment from the reader, keyspace={}, table={}, range={}: {}",
-                    _schema->ks_name(), _schema->cf_name(), _range, e);
-                throw;
-            } catch (...) {
-                throw;
-            }
-        });
-    }
+future<mutation_fragment_opt>
+repair_reader::read_mutation_fragment() {
+    ++_reads_issued;
+    // Use a very long timeout for the reader to break out any eventual
+    // deadlock within the reader. Thirty minutes should be more than
+    // enough to read a single mutation fragment.
+    auto timeout = db::timeout_clock::now() + std::chrono::minutes(30);
+    _reader.set_timeout(timeout);   // reset to db::no_timeout in pause()
+    return _reader().then_wrapped([this] (future<mutation_fragment_opt> f) {
+        try {
+            auto mfopt = f.get0();
+            ++_reads_finished;
+            return mfopt;
+        } catch (seastar::timed_out_error& e) {
+            rlogger.warn("Failed to read a fragment from the reader, keyspace={}, table={}, range={}: {}",
+                _schema->ks_name(), _schema->cf_name(), _range, e);
+            throw;
+        } catch (...) {
+            throw;
+        }
+    });
+}
 
-    future<> on_end_of_stream() noexcept {
-      return _reader.close().then([this] {
+future<> repair_reader::on_end_of_stream() noexcept {
+    return _reader.close().then([this] {
         _reader = mutation_fragment_v1_stream(make_empty_flat_reader_v2(_schema, _permit));
         _reader_handle.reset();
-      });
-    }
+    });
+}
 
-    future<> close() noexcept {
-      return _reader.close().then([this] {
+future<> repair_reader::close() noexcept {
+    return _reader.close().then([this] {
         _reader_handle.reset();
-      });
-    }
+    });
+}
 
-    lw_shared_ptr<const decorated_key_with_hash>& get_current_dk() {
-        return _current_dk;
-    }
+void repair_reader::set_current_dk(const dht::decorated_key& key) {
+    _current_dk = make_lw_shared<const decorated_key_with_hash>(*_schema, key, _seed);
+}
 
-    void set_current_dk(const dht::decorated_key& key) {
-        _current_dk = make_lw_shared<const decorated_key_with_hash>(*_schema, key, _seed);
-    }
+void repair_reader::clear_current_dk() {
+    _current_dk = {};
+}
 
-    void clear_current_dk() {
-        _current_dk = {};
+void repair_reader::check_current_dk() {
+    if (!_current_dk) {
+        throw std::runtime_error("Current partition_key is unknown");
     }
+}
 
-    void check_current_dk() {
-        if (!_current_dk) {
-            throw std::runtime_error("Current partition_key is unknown");
-        }
+void repair_reader::pause() {
+    _reader.set_timeout(db::no_timeout);
+    if (_reader_handle) {
+        _reader_handle->pause();
     }
-
-    void pause() {
-        _reader.set_timeout(db::no_timeout);
-        if (_reader_handle) {
-            _reader_handle->pause();
-        }
-    }
-};
+}
 
 class repair_writer_impl : public repair_writer::impl {
     schema_ptr _schema;
