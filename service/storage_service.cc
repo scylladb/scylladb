@@ -850,7 +850,7 @@ class topology_coordinator {
     future<> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, const raft_topology_cmd& cmd) {
         auto ip = _address_map.find(id);
         if (!ip) {
-            slogger.info("raft topology: cannot send command {} with term {} and index {} "
+            slogger.warn("raft topology: cannot send command {} with term {} and index {} "
                          "to {} because mapping to ip is not available",
                          cmd.cmd, _term, cmd_index, id);
             co_await coroutine::exception(std::make_exception_ptr(
