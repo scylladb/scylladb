@@ -721,15 +721,15 @@ class topology_coordinator {
                     | boost::adaptors::transformed([&] (const raft::config_member& m) { return m.addr.id; })
                     | boost::adaptors::filtered([&] (const raft::server_id& id) { return topo.left_nodes.contains(id); }));
             if (!to_remove.empty()) {
-                        // Remove from group 0 nodes that left. They may failed to do so by themselves
-                        try {
-                            slogger.trace("raft topology: topology coordinator fiber removing {}"
-                                          " from raft since they are in `left` state", to_remove);
-                            co_await _group0.group0_server().modify_config({}, to_remove, &_as);
-                        } catch (const raft::commit_status_unknown&) {
-                            slogger.trace("raft topology: topology coordinator fiber got unknown status"
-                                          " while removing {} from raft", to_remove);
-                        }
+                // Remove from group 0 nodes that left. They may failed to do so by themselves
+                try {
+                    slogger.trace("raft topology: topology coordinator fiber removing {}"
+                                  " from raft since they are in `left` state", to_remove);
+                    co_await _group0.group0_server().modify_config({}, to_remove, &_as);
+                } catch (const raft::commit_status_unknown&) {
+                    slogger.trace("raft topology: topology coordinator fiber got unknown status"
+                                  " while removing {} from raft", to_remove);
+                }
             }
         }
     }
