@@ -994,14 +994,15 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
 // same nodes as replicas.
 future<> repair::shard_repair_task_impl::run() {
     rs.get_repair_module().add_shard_task_id(global_repair_id.id, _status.id);
+    auto remove_shard_task_id = defer([this] {
+        rs.get_repair_module().remove_shard_task_id(global_repair_id.id);
+    });
     try {
         co_await do_repair_ranges();
-        rs.get_repair_module().remove_shard_task_id(global_repair_id.id);
     } catch (...) {
         _failed = true;
         rlogger.debug("repair[{}]: got error in do_repair_ranges: {}",
             global_repair_id.uuid(), std::current_exception());
-        rs.get_repair_module().remove_shard_task_id(global_repair_id.id);
     }
     check_failed_ranges();
     co_return;
