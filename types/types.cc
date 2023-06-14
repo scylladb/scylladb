@@ -2023,6 +2023,26 @@ data_value deserialize_aux(const tuple_type_impl& t, View v) {
     return data_value::make(t.shared_from_this(), std::make_unique<tuple_type_impl::native_type>(std::move(ret)));
 }
 
+template <FragmentedView View>
+std::optional<std::optional<View>> read_nth_tuple_element(View serialized_tuple, std::size_t element_index) {
+    for (std::size_t i = 0; serialized_tuple.size_bytes() > 0; i++) {
+        // element being std::nullopt means that its value is NULL.
+        std::optional<View> element = read_tuple_element(serialized_tuple);
+
+        if (i == element_index) {
+            return std::make_optional(element);
+        }
+    }
+
+    return std::nullopt;
+}
+
+template std::optional<std::optional<managed_bytes_view>> read_nth_tuple_element(managed_bytes_view serialized_tuple,
+                                                                              std::size_t element_index);
+template std::optional<std::optional<fragmented_temporary_buffer::view>> read_nth_tuple_element(
+    fragmented_temporary_buffer::view serialized_tuple,
+    std::size_t element_index);
+
 template<FragmentedView View>
 utils::multiprecision_int deserialize_value(const varint_type_impl&, View v) {
     if (v.empty()) {

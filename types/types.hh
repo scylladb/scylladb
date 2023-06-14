@@ -962,6 +962,16 @@ utils::chunked_vector<managed_bytes_opt> partially_deserialize_listlike(View in)
 template <FragmentedView View>
 std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(View in);
 
+
+// Given a serialized tuple value, reads the nth element and returns it.
+// Returns std::nullopt when there's no element with such index.
+// The second std::nullopt signifies whether the value is NULL or not.
+// make_optional(make_optional(some bytes...)) - a non-null value with these bytes
+// make_optional(std::nullopt) - a null value
+// std::nullopt - no element with this index
+template <FragmentedView View>
+std::optional<std::optional<View>> read_nth_tuple_element(View serialized_tuple, std::size_t element_index);
+
 using user_type = shared_ptr<const user_type_impl>;
 using tuple_type = shared_ptr<const tuple_type_impl>;
 
