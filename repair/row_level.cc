@@ -2686,7 +2686,7 @@ private:
                 });
 
             } else {
-                ns.state = repair_state::put_row_diff_finished;
+                ns.state = repair_state::put_row_diff_started;
                 return master.put_row_diff(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx]).then([&ns] {
                     ns.state = repair_state::put_row_diff_finished;
                 }).handle_exception([this, &node] (std::exception_ptr ep) {
