@@ -134,7 +134,7 @@ std::pair<sstring, sstring> get_keyspace_and_table_options(const bpo::variables_
     auto k_it = app_config.find("keyspace");
     auto t_it = app_config.find("table");
     if (k_it == app_config.end() || t_it == app_config.end()) {
-        throw std::runtime_error("don't know which schema to load: --keyspace and/or --table are not provided");
+        throw std::invalid_argument("don't know which schema to load: --keyspace and/or --table are not provided");
     }
     return std::pair(k_it->second.as<sstring>(), t_it->second.as<sstring>());
 }
@@ -163,11 +163,11 @@ schema_ptr try_load_schema_from_user_provided_source(const bpo::variables_map& a
             return tools::load_schema_from_schema_tables(std::filesystem::path(cfg.data_file_directories()[0]), keyspace_name, table_name).get();
         }
     } catch (...) {
-        fmt::print(std::cerr, "error: could not load schema via {}: {}\n", schema_source_opt, std::current_exception());
+        fmt::print(std::cerr, "error processing arguments: could not load schema via {}: {}\n", schema_source_opt, std::current_exception());
         return nullptr;
     }
     // Should not happen, but if it does (we all know it will), let's at least have a message printed.
-    fmt::print(std::cerr, "error: could not load schema from known schema sources: unknown error\n");
+    fmt::print(std::cerr, "error processing arguments: could not load schema from known schema sources: unknown error\n");
     return nullptr;
 }
 
@@ -235,10 +235,10 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
 
         if (const auto ftype_opt = co_await file_type(sst_path.c_str(), follow_symlink::yes)) {
             if (!ftype_opt) {
-                throw std::invalid_argument(fmt::format("error: failed to determine type of file pointed to by provided sstable path {}", sst_path.c_str()));
+                throw std::invalid_argument(fmt::format("failed to determine type of file pointed to by provided sstable path {}", sst_path.c_str()));
             }
             if (*ftype_opt != directory_entry_type::regular) {
-                throw std::invalid_argument(fmt::format("error: file pointed to by provided sstable path {} is not a regular file", sst_path.c_str()));
+                throw std::invalid_argument(fmt::format("file pointed to by provided sstable path {} is not a regular file", sst_path.c_str()));
             }
         }
 
@@ -293,7 +293,7 @@ output_format get_output_format_from_options(const bpo::variables_map& opts, out
         } else if (value == "json") {
             return output_format::json;
         } else {
-            throw std::invalid_argument(fmt::format("error: invalid value for dump option output-format: {}", value));
+            throw std::invalid_argument(fmt::format("invalid value for dump option output-format: {}", value));
         }
     }
     return default_format;
@@ -766,7 +766,7 @@ public:
             } else if (value == "hours") {
                 _bucket = bucket::hours;
             } else {
-                throw std::invalid_argument(fmt::format("error: invalid value for writetime-histogram option bucket: {}", value));
+                throw std::invalid_argument(fmt::format("invalid value for writetime-histogram option bucket: {}", value));
             }
         }
     }
@@ -943,7 +943,7 @@ public:
 void validate_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
     if (sstables.empty()) {
-        throw std::runtime_error("error: no sstables specified on the command line");
+        throw std::invalid_argument("no sstables specified on the command line");
     }
 
     abort_source abort;
@@ -956,7 +956,7 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
 void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const bpo::variables_map&) {
     if (sstables.empty()) {
-        throw std::runtime_error("error: no sstables specified on the command line");
+        throw std::invalid_argument("no sstables specified on the command line");
     }
 
     json_writer writer;
@@ -995,7 +995,7 @@ sstring disk_string_to_string(const sstables::disk_string<Integer>& ds) {
 void dump_compression_info_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const bpo::variables_map&) {
     if (sstables.empty()) {
-        throw std::runtime_error("error: no sstables specified on the command line");
+        throw std::invalid_argument("no sstables specified on the command line");
     }
 
     json_writer writer;
@@ -1033,7 +1033,7 @@ void dump_compression_info_operation(schema_ptr schema, reader_permit permit, co
 void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const bpo::variables_map&) {
     if (sstables.empty()) {
-        throw std::runtime_error("error: no sstables specified on the command line");
+        throw std::invalid_argument("no sstables specified on the command line");
     }
 
     json_writer writer;
@@ -1304,7 +1304,7 @@ void dump_serialization_header(json_writer& writer, sstables::sstable_version_ty
 void dump_statistics_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const bpo::variables_map&) {
     if (sstables.empty()) {
-        throw std::runtime_error("error: no sstables specified on the command line");
+        throw std::invalid_argument("no sstables specified on the command line");
     }
 
     auto to_string = [] (sstables::metadata_type t) {
@@ -1476,7 +1476,7 @@ public:
 void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const bpo::variables_map&) {
     if (sstables.empty()) {
-        throw std::runtime_error("error: no sstables specified on the command line");
+        throw std::invalid_argument("no sstables specified on the command line");
     }
 
     json_writer writer;
@@ -1500,7 +1500,7 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
 void validate_checksums_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const bpo::variables_map&) {
     if (sstables.empty()) {
-        throw std::runtime_error("error: no sstables specified on the command line");
+        throw std::invalid_argument("no sstables specified on the command line");
     }
 
     for (auto& sst : sstables) {
@@ -1512,7 +1512,7 @@ void validate_checksums_operation(schema_ptr schema, reader_permit permit, const
 void decompress_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
     if (sstables.empty()) {
-        throw std::runtime_error("error: no sstables specified on the command line");
+        throw std::invalid_argument("no sstables specified on the command line");
     }
 
     for (const auto& sst : sstables) {
@@ -2419,10 +2419,10 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
         {"clustering_key", mutation_fragment_stream_validation_level::clustering_key},
     };
     if (!sstables.empty()) {
-        throw std::invalid_argument("error: write operation does not operate on input sstables");
+        throw std::invalid_argument("write operation does not operate on input sstables");
     }
     if (!vm.count("input-file")) {
-        throw std::invalid_argument("error: missing required option '--input-file'");
+        throw std::invalid_argument("missing required option '--input-file'");
     }
     mutation_fragment_stream_validation_level validation_level;
     {
@@ -2431,14 +2431,14 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
             return v.first == vl_name;
         });
         if (vl_it == valid_validation_levels.end()) {
-            throw std::invalid_argument(fmt::format("error: invalid validation-level {}", vl_name));
+            throw std::invalid_argument(fmt::format("invalid validation-level {}", vl_name));
         }
         validation_level = vl_it->second;
     }
     auto input_file = vm["input-file"].as<std::string>();
     auto output_dir = vm["output-dir"].as<std::string>();
     if (!vm.count("generation")) {
-        throw std::invalid_argument("error: missing required option '--generation'");
+        throw std::invalid_argument("missing required option '--generation'");
     }
     auto generation = sstables::generation_type(vm["generation"].as<int64_t>());
     auto format = sstables::sstable_format_types::big;
@@ -2447,7 +2447,7 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
     {
         auto sst_name = sstables::sstable::filename(output_dir, schema->ks_name(), schema->cf_name(), version, generation, format, component_type::Data);
         if (file_exists(sst_name).get()) {
-            throw std::runtime_error(fmt::format("error: cannot create output sstable {}, file already exists", sst_name));
+            throw std::invalid_argument(fmt::format("cannot create output sstable {}, file already exists", sst_name));
         }
     }
 
@@ -2466,12 +2466,12 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
 void script_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& manager, const bpo::variables_map& vm) {
     if (sstables.empty()) {
-        throw std::runtime_error("error: no sstables specified on the command line");
+        throw std::invalid_argument("no sstables specified on the command line");
     }
     const auto merge = vm.count("merge");
     const auto partitions = partition_set(0, {}, decorated_key_equal(*schema));
     if (!vm.count("script-file")) {
-        throw std::invalid_argument("error: missing required option '--script-file'");
+        throw std::invalid_argument("missing required option '--script-file'");
     }
     const auto script_file = vm["script-file"].as<std::string>();
     auto script_params = vm["script-arg"].as<program_options::string_map>();
@@ -2487,7 +2487,7 @@ template <typename SstableConsumer>
 void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
     if (sstables.empty()) {
-        throw std::runtime_error("error: no sstables specified on the command line");
+        throw std::invalid_argument("no sstables specified on the command line");
     }
     const auto merge = vm.count("merge");
     const auto no_skips = vm.count("no-skips");
@@ -2963,7 +2963,15 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
             const auto permit = rcs_sem.make_tracking_only_permit(schema.get(), app_name, db::no_timeout, {});
 
-            operation(schema, permit, sstables, sst_man, app_config);
+            try {
+                operation(schema, permit, sstables, sst_man, app_config);
+            } catch (std::invalid_argument& e) {
+                fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
+                return 1;
+            } catch (...) {
+                fmt::print(std::cerr, "error running operation: {}\n", std::current_exception());
+                return 2;
+            }
 
             return 0;
         });
