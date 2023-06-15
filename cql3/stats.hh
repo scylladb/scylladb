@@ -80,6 +80,11 @@ struct cql_stats {
     int64_t select_partition_range_scan_no_bypass_cache = 0;
     int64_t select_parallelized = 0;
 
+    uint64_t minimum_replication_factor_fail_violations = 0;
+    uint64_t minimum_replication_factor_warn_violations = 0;
+    uint64_t maximum_replication_factor_warn_violations = 0;
+    uint64_t maximum_replication_factor_fail_violations = 0;
+
 private:
     uint64_t _unpaged_select_queries[(size_t)ks_selector::SIZE] = {0ul};
     uint64_t _query_cnt[(size_t)source_selector::SIZE]
