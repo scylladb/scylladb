@@ -18,6 +18,8 @@ from cassandra.cluster import Session, ResponseFuture                    # type:
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore # pylint: disable=no-name-in-module
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
+from cassandra.policies import TokenAwarePolicy                          # type: ignore
+from cassandra.policies import WhiteListRoundRobinPolicy                 # type: ignore
 from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
 from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
 
@@ -36,6 +38,26 @@ def pytest_addoption(parser):
                      help='CQL server port to connect to')
     parser.addoption('--ssl', action='store_true',
                      help='Connect to CQL via an encrypted TLSv1.2 connection')
+
+
+# This is a constant used in `pytest_runtest_makereport` below to store a flag
+# indicating test failure in a stash which can then be accessed from fixtures.
+FAILED_KEY = pytest.StashKey[bool]()
+
+
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """This is a post-test hook execucted by the pytest library.
+    Use it to access the test result and store a flag indicating failure
+    so we can later retrieve it in our fixtures like `manager`.
+
+    `item.stash` is the same stash as `request.node.stash` (in the `request`
+    fixture provided by pytest).
+    """
+    outcome = yield
+    report = outcome.get_result()
+    item.stash[FAILED_KEY] = report.when == "call" and report.failed
+
 
 # Change default pytest-asyncio event_loop fixture scope to session to
 # allow async fixtures with scope larger than function. (e.g. manager fixture)
@@ -105,6 +127,11 @@ def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool):
         # See issue #11289.
         # NOTE: request_timeout is the main cause of timeouts, even if logs say heartbeat
         request_timeout=200)
+    whitelist_profile = ExecutionProfile(
+        load_balancing_policy=TokenAwarePolicy(WhiteListRoundRobinPolicy(hosts)),
+        consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+        serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
+        request_timeout=200)
     if use_ssl:
         # Scylla does not support any earlier TLS protocol. If you try,
         # you will get mysterious EOF errors (see issue #6971) :-(
@@ -112,7 +139,7 @@ def cluster_con(hosts: List[IPAddress], port: int, use_ssl: bool):
     else:
         ssl_context = None
 
-    return Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
+    return Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile, 'whitelist': whitelist_profile},
                    contact_points=hosts,
                    port=port,
                    # TODO: make the protocol version an option, to allow testing with
@@ -159,7 +186,10 @@ async def manager(request, manager_internal):
     test_case_name = request.node.name
     await manager_internal.before_test(test_case_name)
     yield manager_internal
-    await manager_internal.after_test(test_case_name)
+    # `request.node.stash` contains a flag stored in `pytest_runtest_makereport`
+    # that indicates test failure.
+    failed = request.node.stash[FAILED_KEY]
+    await manager_internal.after_test(test_case_name, not failed)
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # Since connection is managed by manager just return that object
@@ -192,9 +222,21 @@ def fails_without_consistent_cluster_management(request, check_pre_consistent_cl
 
 
 # "random_tables" fixture: Creates and returns a temporary RandomTables object
-# used in tests to make schema changes. Tables are dropped after finished.
+# used in tests to make schema changes. Tables are dropped after test finishes
+# unless the cluster is dirty or the test has failed.
 @pytest.fixture(scope="function")
-def random_tables(request, manager):
-    tables = RandomTables(request.node.name, manager, unique_name())
+async def random_tables(request, manager):
+    rf_marker = request.node.get_closest_marker("replication_factor")
+    replication_factor = rf_marker.args[0] if rf_marker is not None else 3  # Default 3
+    tables = RandomTables(request.node.name, manager, unique_name(), replication_factor)
     yield tables
-    tables.drop_all()
+
+    # Don't drop tables at the end if we failed or the cluster is dirty - it may be impossible
+    # (e.g. the cluster is completely dead) and it doesn't matter (we won't reuse the cluster
+    # anyway).
+    # The cluster will be marked as dirty if the test failed, but that happens
+    # at the end of `manager` fixture which we depend on (so these steps will be
+    # executed after us) - so at this point, we need to check for failure ourselves too.
+    failed = request.node.stash[FAILED_KEY]
+    if not failed and not await manager.is_dirty():
+        tables.drop_all()

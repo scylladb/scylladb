@@ -6,11 +6,15 @@
 import time
 import asyncio
 import logging
+import pathlib
+import os
+import pytest
 
 from typing import Callable, Awaitable, Optional, TypeVar, Generic
 
-from cassandra.cluster import NoHostAvailable, Session  # type: ignore # pylint: disable=no-name-in-module
-from cassandra.pool import Host                         # type: ignore # pylint: disable=no-name-in-module
+from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore # pylint: disable=no-name-in-module
+from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=no-name-in-module
+from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 
 from test.pylib.internal_types import ServerInfo
 
@@ -75,6 +79,46 @@ async def wait_for_cql_and_get_hosts(cql: Session, servers: list[ServerInfo], de
     await asyncio.gather(*(wait_for_cql(cql, h, deadline) for h in hosts))
 
     return hosts
+
+def read_last_line(file_path: pathlib.Path, max_line_bytes = 512):
+    file_size = os.stat(file_path).st_size
+    with file_path.open('rb') as f:
+        f.seek(max(0, file_size - max_line_bytes), os.SEEK_SET)
+        line_bytes = f.read()
+    line_str = line_bytes.decode('utf-8', errors='ignore')
+    linesep = os.linesep
+    if line_str.endswith(linesep):
+        line_str = line_str[:-len(linesep)]
+    linesep_index = line_str.rfind(linesep)
+    if linesep_index != -1:
+        line_str = line_str[linesep_index + len(linesep):]
+    elif file_size > max_line_bytes:
+        line_str = '...' + line_str
+    return line_str
+
+
+async def get_available_host(cql: Session, deadline: float) -> Host:
+    hosts = cql.cluster.metadata.all_hosts()
+    async def find_host():
+        for h in hosts:
+            try:
+                await cql.run_async(
+                    "select key from system.local where key = 'local'", host=h)
+            except NoHostAvailable:
+                logging.debug(f"get_available_host: {h} not available")
+                continue
+            return h
+        return None
+    return await wait_for(find_host, deadline)
+
+
+async def read_barrier(cql: Session, host: Host):
+    """To issue a read barrier it is sufficient to attempt dropping a
+    non-existing table. We need to use `if exists`, otherwise the statement
+    would fail on prepare/validate step which happens before a read barrier is
+    performed.
+    """
+    await cql.run_async("drop table if exists nosuchkeyspace.nosuchtable", host = host)
 
 
 unique_name.last_ms = 0

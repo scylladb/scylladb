@@ -15,7 +15,7 @@ import logging
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient
 from test.pylib.util import wait_for
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo
-from test.pylib.scylla_cluster import ReplaceConfig
+from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer
 from cassandra.cluster import Session as CassandraSession  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pylint: disable=no-name-in-module
 import aiohttp
@@ -48,10 +48,11 @@ class ManagerClient():
         """Close driver"""
         self.driver_close()
 
-    async def driver_connect(self) -> None:
+    async def driver_connect(self, server: Optional[ServerInfo] = None) -> None:
         """Connect to cluster"""
         if self.con_gen is not None:
-            servers = [s_info.ip_addr for s_info in await self.running_servers()]
+            targets = [server] if server else await self.running_servers()
+            servers = [s_info.ip_addr for s_info in targets]
             logger.debug("driver connecting to %s", servers)
             self.ccluster = self.con_gen(servers, self.port, self.use_ssl)
             self.cql = self.ccluster.connect()
@@ -81,15 +82,17 @@ class ManagerClient():
             logger.info(f"Using cluster: {cluster_str} for test {test_case_name}")
         except aiohttp.ClientError as exc:
             raise RuntimeError(f"Failed before test check {exc}") from exc
-        if self.cql is None:
+        servers = await self.running_servers()
+        if self.cql is None and servers:
             # TODO: if cluster is not up yet due to taking long and HTTP timeout, wait for it
             # await self._wait_for_cluster()
             await self.driver_connect()  # Connect driver to new cluster
 
-    async def after_test(self, test_case_name: str) -> None:
+    async def after_test(self, test_case_name: str, success: bool) -> None:
         """Tell harness this test finished"""
-        logger.debug("after_test for %s", test_case_name)
-        await self.client.get(f"/cluster/after-test")
+        logger.debug("after_test for %s (success: %s)", test_case_name, success)
+        cluster_str = await self.client.get_text(f"/cluster/after-test/{success}")
+        logger.info("Cluster after test %s: %s", test_case_name, cluster_str)
 
     async def is_manager_up(self) -> bool:
         """Check if Manager server is up"""
@@ -118,7 +121,7 @@ class ManagerClient():
         except RuntimeError as exc:
             raise Exception("Failed to get list of running servers") from exc
         assert isinstance(server_info_list, list), "running_servers got unknown data type"
-        return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]), HostID(info[2]))
+        return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]))
                 for info in server_info_list]
 
     async def mark_dirty(self) -> None:
@@ -136,37 +139,47 @@ class ManagerClient():
         logger.debug("ManagerClient stopping gracefully %s", server_id)
         await self.client.get_text(f"/cluster/server/{server_id}/stop_gracefully")
 
-    async def server_start(self, server_id: ServerNum) -> None:
-        """Start specified server"""
+    async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None,
+                           wait_others: int = 0, wait_interval: float = 45) -> None:
+        """Start specified server and optionally wait for it to learn of other servers"""
         logger.debug("ManagerClient starting %s", server_id)
-        await self.client.get_text(f"/cluster/server/{server_id}/start")
+        params = {'expected_error': expected_error} if expected_error is not None else None
+        await self.client.get_text(f"/cluster/server/{server_id}/start", params=params)
+        await self.server_sees_others(server_id, wait_others, interval = wait_interval)
         self._driver_update()
 
-    async def server_restart(self, server_id: ServerNum) -> None:
-        """Restart specified server"""
+    async def server_restart(self, server_id: ServerNum, wait_others: int = 0,
+                             wait_interval: float = 45) -> None:
+        """Restart specified server and optionally wait for it to learn of other servers"""
         logger.debug("ManagerClient restarting %s", server_id)
         await self.client.get_text(f"/cluster/server/{server_id}/restart")
+        await self.server_sees_others(server_id, wait_others, interval = wait_interval)
         self._driver_update()
 
-    async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None) -> ServerInfo:
+    async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None, config: Optional[dict[str, str]] = None, start: bool = True) -> ServerInfo:
         """Add a new server"""
         try:
-            data: dict[str, Any] = {}
+            data: dict[str, Any] = {'start': start}
             if replace_cfg:
                 data['replace_cfg'] = replace_cfg._asdict()
             if cmdline:
                 data['cmdline'] = cmdline
-            server_info = await self.client.put_json("/cluster/addserver", data, response_type="json")
+            if config:
+                data['config'] = config
+            server_info = await self.client.put_json("/cluster/addserver", data, response_type="json",
+                                                     timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         except Exception as exc:
             raise Exception("Failed to add server") from exc
         try:
             s_info = ServerInfo(ServerNum(int(server_info["server_id"])),
-                                IPAddress(server_info["ip_addr"]),
-                                HostID(server_info["host_id"]))
+                                IPAddress(server_info["ip_addr"]))
         except Exception as exc:
             raise RuntimeError(f"server_add got invalid server data {server_info}") from exc
         logger.debug("ManagerClient added %s", s_info)
-        self._driver_update()
+        if self.cql:
+            self._driver_update()
+        else:
+            await self.driver_connect()
         return s_info
 
     async def remove_node(self, initiator_id: ServerNum, server_id: ServerNum,
@@ -174,13 +187,15 @@ class ManagerClient():
         """Invoke remove node Scylla REST API for a specified server"""
         logger.debug("ManagerClient remove node %s on initiator %s", server_id, initiator_id)
         data = {"server_id": server_id, "ignore_dead": ignore_dead}
-        await self.client.put_json(f"/cluster/remove-node/{initiator_id}", data)
+        await self.client.put_json(f"/cluster/remove-node/{initiator_id}", data,
+                                   timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         self._driver_update()
 
     async def decommission_node(self, server_id: ServerNum) -> None:
         """Tell a node to decommission with Scylla REST API"""
         logger.debug("ManagerClient decommission %s", server_id)
-        await self.client.get_text(f"/cluster/decommission-node/{server_id}")
+        await self.client.get_text(f"/cluster/decommission-node/{server_id}",
+                                   timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         self._driver_update()
 
     async def server_get_config(self, server_id: ServerNum) -> dict[str, object]:
@@ -224,3 +239,32 @@ class ManagerClient():
         except Exception as exc:
             raise Exception(f"Failed to get local host id address for server {server_id}") from exc
         return HostID(host_id)
+
+    async def server_sees_others(self, server_id: ServerNum, count: int, interval: float = 45.):
+        """Wait till a server sees a minimum given count of other servers"""
+        if count < 1:
+            return
+        server_ip = await self.get_host_ip(server_id)
+        async def _sees_min_others():
+            alive_nodes = await self.api.get_alive_endpoints(server_ip)
+            if len(alive_nodes) > count:
+                return True
+        await wait_for(_sees_min_others, time() + interval, period=.1)
+
+    async def server_sees_other_server(self, server_ip: IPAddress, other_ip: IPAddress,
+                                       interval: float = 45.):
+        """Wait till a server sees another specific server IP as alive"""
+        async def _sees_another_server():
+            alive_nodes = await self.api.get_alive_endpoints(server_ip)
+            if other_ip in alive_nodes:
+                return True
+        await wait_for(_sees_another_server, time() + interval, period=.1)
+
+    async def server_not_sees_other_server(self, server_ip: IPAddress, other_ip: IPAddress,
+                                           interval: float = 45.):
+        """Wait till a server sees another specific server IP as dead"""
+        async def _not_sees_another_server():
+            alive_nodes = await self.api.get_alive_endpoints(server_ip)
+            if not other_ip in alive_nodes:
+                return True
+        await wait_for(_not_sees_another_server, time() + interval, period=.1)

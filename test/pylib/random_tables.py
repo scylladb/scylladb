@@ -35,10 +35,12 @@ import itertools
 import logging
 import random
 import uuid
+import time
 from typing import Optional, Type, List, Set, Union, TYPE_CHECKING
 if TYPE_CHECKING:
     from cassandra.cluster import Session as CassandraSession            # type: ignore
     from test.pylib.manager_client import ManagerClient
+from test.pylib.util import get_available_host, read_barrier
 
 
 logger = logging.getLogger('random_tables')
@@ -173,10 +175,11 @@ class RandomTable():
         return await self.manager.cql.run_async(cql_stmt)
 
     async def add_column(self, name: str = None, ctype: Type[ValueType] = None, column: Column = None):
+        """Add a value column to the table"""
         if column is not None:
             assert type(column) is Column, "Wrong column type to add_column"
         else:
-            name = name if name is not None else f"c_{self.next_clustering_id():02}"
+            name = name if name is not None else f"v_{self.next_value_id():02}"
             ctype = ctype if ctype is not None else TextType
             column = Column(name, ctype=ctype)
         self.columns.append(column)
@@ -244,7 +247,8 @@ class RandomTable():
 
 class RandomTables():
     """A list of managed random tables"""
-    def __init__(self, test_name: str, manager: ManagerClient, keyspace: str):
+    def __init__(self, test_name: str, manager: ManagerClient, keyspace: str,
+                 replication_factor: int):
         self.test_name = test_name
         self.manager = manager
         self.keyspace = keyspace
@@ -252,7 +256,8 @@ class RandomTables():
         self.removed_tables: List[RandomTable] = []
         assert self.manager.cql is not None
         self.manager.cql.execute(f"CREATE KEYSPACE {keyspace} WITH REPLICATION = "
-                                 "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
+                                 "{ 'class' : 'NetworkTopologyStrategy', "
+                                 f"'replication_factor' : {replication_factor} }}")
 
     async def add_tables(self, ntables: int = 1, ncolumns: int = 5, if_not_exists: bool = False) -> None:
         """Add random tables to the list.
@@ -297,7 +302,7 @@ class RandomTables():
         assert self.manager.cql is not None
         self.manager.cql.execute(f"DROP KEYSPACE {self.keyspace}")
 
-    async def verify_schema(self, table: Union[RandomTable, str] = None) -> None:
+    async def verify_schema(self, table: Union[RandomTable, str] = None, do_read_barrier: bool = True) -> None:
         """Verify schema of all active managed random tables"""
         if isinstance(table, RandomTable):
             tables = {table.name}
@@ -315,8 +320,18 @@ class RandomTables():
                         f"WHERE keyspace_name = '{self.keyspace}'"
 
         logger.debug(cql_stmt1)
-        assert self.manager.cql is not None
-        res1 = {row.table_name for row in await self.manager.cql.run_async(cql_stmt1)}
+
+        cql = self.manager.cql
+        assert cql
+
+        host = await get_available_host(cql, time.time() + 60)
+        if do_read_barrier:
+            # Issue a read barrier on some node and then keep using that node to do the queries.
+            # This ensures that the queries return recent data (at least all data committed
+            # when `verify_schema` was called).
+            await read_barrier(cql, host)
+
+        res1 = {row.table_name for row in await cql.run_async(cql_stmt1, host=host)}
         assert not tables - res1, f"Tables {tables - res1} not present"
 
         for table_name in tables:
@@ -326,8 +341,7 @@ class RandomTables():
             cql_stmt2 = f"SELECT column_name, position, kind, type FROM system_schema.columns " \
                         f"WHERE keyspace_name = '{self.keyspace}' AND table_name = '{table_name}'"
             logger.debug(cql_stmt2)
-            assert self.manager.cql is not None
-            res2 = {row.column_name: row for row in await self.manager.cql.run_async(cql_stmt2)}
+            res2 = {row.column_name: row for row in await cql.run_async(cql_stmt2, host=host)}
             assert res2.keys() == cols.keys(), f"Column names for {table_name} do not match " \
                                                f"expected ({', '.join(cols.keys())}) " \
                                                f"got ({', '.join(res2.keys())})"

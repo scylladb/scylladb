@@ -16,7 +16,7 @@ from cassandra.pool import Host                         # type: ignore # pylint:
 
 from test.pylib.manager_client import ManagerClient, IPAddress, ServerInfo
 from test.pylib.random_tables import RandomTables
-from test.pylib.rest_client import ScyllaRESTAPIClient, inject_error
+from test.pylib.rest_client import ScyllaRESTAPIClient, inject_error_one_shot
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 
 
@@ -110,6 +110,7 @@ def log_run_time(f):
 
 @pytest.mark.asyncio
 @log_run_time
+@pytest.mark.replication_factor(1)
 async def test_raft_upgrade_basic(manager: ManagerClient, random_tables: RandomTables):
     """
     kbr-: the test takes about 7 seconds in dev mode on my laptop.
@@ -144,6 +145,7 @@ async def test_raft_upgrade_basic(manager: ManagerClient, random_tables: RandomT
 
 @pytest.mark.asyncio
 @log_run_time
+@pytest.mark.replication_factor(1)
 async def test_recover_stuck_raft_upgrade(manager: ManagerClient, random_tables: RandomTables):
     """
     We enable Raft on every server and the upgrade procedure starts.  All servers join group 0. Then one
@@ -163,42 +165,41 @@ async def test_recover_stuck_raft_upgrade(manager: ManagerClient, random_tables:
 
     # TODO error injection should probably be done through ScyllaClusterManager (we may need to mark the cluster as dirty).
     # In this test the cluster is dirty anyway due to a restart so it's safe.
-    async with inject_error(manager.api, srv1.ip_addr, 'group0_upgrade_before_synchronize',
-                            one_shot=True):
-        logging.info(f"Enabling Raft on {others} and restarting")
-        await asyncio.gather(*(enable_raft_and_restart(manager, srv) for srv in others))
-        cql = await reconnect_driver(manager)
+    await inject_error_one_shot(manager.api, srv1.ip_addr, 'group0_upgrade_before_synchronize')
+    logging.info(f"Enabling Raft on {others} and restarting")
+    await asyncio.gather(*(enable_raft_and_restart(manager, srv) for srv in others))
+    cql = await reconnect_driver(manager)
 
-        logging.info(f"Cluster restarted, waiting until driver reconnects to {others}")
-        hosts = await wait_for_cql_and_get_hosts(cql, others, time.time() + 60)
-        logging.info(f"Driver reconnected, hosts: {hosts}")
+    logging.info(f"Cluster restarted, waiting until driver reconnects to {others}")
+    hosts = await wait_for_cql_and_get_hosts(cql, others, time.time() + 60)
+    logging.info(f"Driver reconnected, hosts: {hosts}")
 
-        logging.info(f"Waiting until {hosts} enter 'synchronize' state")
-        await asyncio.gather(*(wait_for_upgrade_state('synchronize', cql, h, time.time() + 60) for h in hosts))
-        logging.info(f"{hosts} entered synchronize")
+    logging.info(f"Waiting until {hosts} enter 'synchronize' state")
+    await asyncio.gather(*(wait_for_upgrade_state('synchronize', cql, h, time.time() + 60) for h in hosts))
+    logging.info(f"{hosts} entered synchronize")
 
-        # TODO ensure that srv1 failed upgrade - look at logs?
-        # '[shard 0] raft_group0_upgrade - Raft upgrade failed: std::runtime_error (error injection before group 0 upgrade enters synchronize).'
+    # TODO ensure that srv1 failed upgrade - look at logs?
+    # '[shard 0] raft_group0_upgrade - Raft upgrade failed: std::runtime_error (error injection before group 0 upgrade enters synchronize).'
 
-        logging.info(f"Setting recovery state on {hosts}")
-        for host in hosts:
-            await cql.run_async(
-                    "update system.scylla_local set value = 'recovery' where key = 'group0_upgrade_state'",
-                    host=host)
+    logging.info(f"Setting recovery state on {hosts}")
+    for host in hosts:
+        await cql.run_async(
+                "update system.scylla_local set value = 'recovery' where key = 'group0_upgrade_state'",
+                host=host)
 
-        logging.info(f"Restarting {others}")
-        await asyncio.gather(*(restart(manager, srv) for srv in others))
-        cql = await reconnect_driver(manager)
+    logging.info(f"Restarting {others}")
+    await asyncio.gather(*(restart(manager, srv) for srv in others))
+    cql = await reconnect_driver(manager)
 
-        logging.info(f"{others} restarted, waiting until driver reconnects to them")
-        hosts = await wait_for_cql_and_get_hosts(cql, others, time.time() + 60)
+    logging.info(f"{others} restarted, waiting until driver reconnects to them")
+    hosts = await wait_for_cql_and_get_hosts(cql, others, time.time() + 60)
 
-        logging.info(f"Checking if {hosts} are in recovery state")
-        for host in hosts:
-            rs = await cql.run_async(
-                    "select value from system.scylla_local where key = 'group0_upgrade_state'",
-                    host=host)
-            assert rs[0].value == 'recovery'
+    logging.info(f"Checking if {hosts} are in recovery state")
+    for host in hosts:
+        rs = await cql.run_async(
+                "select value from system.scylla_local where key = 'group0_upgrade_state'",
+                host=host)
+        assert rs[0].value == 'recovery'
 
     logging.info("Creating a table while in recovery state")
     table = await random_tables.add_table(ncolumns=5)
@@ -229,6 +230,7 @@ async def test_recover_stuck_raft_upgrade(manager: ManagerClient, random_tables:
 
 @pytest.mark.asyncio
 @log_run_time
+@pytest.mark.replication_factor(1)
 async def test_recovery_after_majority_loss(manager: ManagerClient, random_tables: RandomTables):
     """
     We successfully upgrade a cluster. Eventually however all servers but one fail - group 0

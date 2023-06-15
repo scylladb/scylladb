@@ -94,15 +94,15 @@ class RESTClient(metaclass=ABCMeta):
 
     async def post(self, resource_uri: str, host: Optional[str] = None,
                    port: Optional[int] = None, params: Optional[Mapping[str, str]] = None,
-                   json: Mapping = None) -> None:
+                   json: Mapping = None, timeout: Optional[float] = None) -> None:
         await self._fetch("POST", resource_uri, host = host, port = port, params = params,
-                          json = json)
+                          json = json, timeout = timeout)
 
     async def put_json(self, resource_uri: str, data: Mapping, host: Optional[str] = None,
                        port: Optional[int] = None, params: Optional[dict[str, str]] = None,
-                       response_type: Optional[str] = None) -> Any:
+                       response_type: Optional[str] = None, timeout: Optional[float] = None) -> Any:
         ret = await self._fetch("PUT", resource_uri, response_type = response_type, host = host,
-                                port = port, params = params, json = data)
+                                port = port, params = params, json = data, timeout = timeout)
         return ret
 
     async def delete(self, resource_uri: str, host: Optional[str] = None,
@@ -161,19 +161,20 @@ class ScyllaRESTAPIClient():
         return result
 
     async def remove_node(self, initiator_ip: IPAddress, host_id: HostID,
-                          ignore_dead: list[IPAddress]) -> None:
+                          ignore_dead: list[IPAddress], timeout: float) -> None:
         """Initiate remove node of host_id in initiator initiator_ip"""
         logger.info("remove_node for %s on %s", host_id, initiator_ip)
         await self.client.post("/storage_service/remove_node",
                                params = {"host_id": host_id,
                                          "ignore_nodes": ",".join(ignore_dead)},
-                               host = initiator_ip)
+                               host = initiator_ip, timeout = timeout)
         logger.debug("remove_node for %s finished", host_id)
 
-    async def decommission_node(self, host_ip: str) -> None:
+    async def decommission_node(self, host_ip: str, timeout: float) -> None:
         """Initiate decommission node of host_ip"""
         logger.debug("decommission_node %s", host_ip)
-        await self.client.post("/storage_service/decommission", host = host_ip)
+        await self.client.post("/storage_service/decommission", host = host_ip,
+                               timeout = timeout)
         logger.debug("decommission_node %s finished", host_ip)
 
     async def get_gossip_generation_number(self, node_ip: str, target_ip: str) -> int:
@@ -186,6 +187,12 @@ class ScyllaRESTAPIClient():
     async def get_joining_nodes(self, node_ip: str) -> list:
         """Get the list of joining nodes according to `node_ip`."""
         data = await self.client.get_json(f"/storage_service/nodes/joining", host=node_ip)
+        assert(type(data) == list)
+        return data
+
+    async def get_alive_endpoints(self, node_ip: str) -> list:
+        """Get the list of alive nodes according to `node_ip`."""
+        data = await self.client.get_json(f"/gossiper/endpoint/live", host=node_ip)
         assert(type(data) == list)
         return data
 
@@ -217,12 +224,13 @@ class ScyllaRESTAPIClient():
 
 
 @asynccontextmanager
-async def inject_error(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: str,
-                       one_shot: bool):
+async def inject_error(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: str):
     """Attempts to inject an error. Works only in specific build modes: debug,dev,sanitize.
        It will trigger a test to be skipped if attempting to enable an injection has no effect.
+       This is a context manager for enabling and disabling when done, therefore it can't be
+       used for one shot.
     """
-    await api.enable_injection(node_ip, injection, one_shot)
+    await api.enable_injection(node_ip, injection, False)
     enabled = await api.get_enabled_injections(node_ip)
     logging.info(f"Error injections enabled on {node_ip}: {enabled}")
     if not enabled:
@@ -232,3 +240,15 @@ async def inject_error(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: 
     finally:
         logger.info(f"Disabling error injection {injection}")
         await api.disable_injection(node_ip, injection)
+
+
+async def inject_error_one_shot(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: str):
+    """Attempts to inject an error. Works only in specific build modes: debug,dev,sanitize.
+       It will trigger a test to be skipped if attempting to enable an injection has no effect.
+       This is a one-shot injection enable.
+    """
+    await api.enable_injection(node_ip, injection, True)
+    enabled = await api.get_enabled_injections(node_ip)
+    logging.info(f"Error injections enabled on {node_ip}: {enabled}")
+    if not enabled:
+        pytest.skip("Error injection not enabled in Scylla - try compiling in dev/debug/sanitize mode")
