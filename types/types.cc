@@ -2043,6 +2043,27 @@ template std::optional<std::optional<fragmented_temporary_buffer::view>> read_nt
     fragmented_temporary_buffer::view serialized_tuple,
     std::size_t element_index);
 
+template <FragmentedView View>
+std::optional<View> read_nth_user_type_field(View serialized_user_type, std::size_t element_index) {
+    // UDT is serialized as a tuple of field values, so we can use read_nth_tuple_element to read
+    // the value of nth UDT field.
+    std::optional<std::optional<View>> read_field = read_nth_tuple_element(serialized_user_type, element_index);
+
+    if (!read_field.has_value()) {
+        // There is no field with this index, assume that this field is NULL.
+        return std::nullopt;
+    }
+
+    // Field value found, return it.
+    return *read_field;
+}
+
+template std::optional<managed_bytes_view> read_nth_user_type_field(managed_bytes_view serialized_user_type,
+                                                                    std::size_t element_index);
+template std::optional<fragmented_temporary_buffer::view> read_nth_user_type_field(
+    fragmented_temporary_buffer::view serialized_user_type,
+    std::size_t element_index);
+
 template<FragmentedView View>
 utils::multiprecision_int deserialize_value(const varint_type_impl&, View v) {
     if (v.empty()) {

@@ -972,6 +972,16 @@ std::vector<std::pair<managed_bytes, managed_bytes>> partially_deserialize_map(V
 template <FragmentedView View>
 std::optional<std::optional<View>> read_nth_tuple_element(View serialized_tuple, std::size_t element_index);
 
+// Given a serialized user defined type value, reads the nth field and returns it.
+// When the field has a NULL value, it returns std::nullopt, otherwise it returns make_optional(nth field bytes...).
+// When there's no field with the requested index, it's assumed that this field has a NULL value.
+// This is standard behavior for UDTs. It could be that a UDT value was serialized in the past,
+// but later new fields were added to the UDT using ALTER TYPE. Old values are not updated on ALTER TYPE,
+// so they contain less fields than the new version of this type. If the serialized value
+// has 3 fields, but the current version of the UDT has 5 fields, we can assume that fields #4 and #5 are NULL.
+template <FragmentedView View>
+std::optional<View> read_nth_user_type_field(View serialized_user_type, std::size_t element_index);
+
 using user_type = shared_ptr<const user_type_impl>;
 using tuple_type = shared_ptr<const tuple_type_impl>;
 
