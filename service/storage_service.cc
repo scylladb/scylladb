@@ -876,7 +876,7 @@ class topology_coordinator {
         co_return retake_node(co_await start_operation(), id);
     };
 
-    future<bool> exec_global_command_helper(auto nodes, const raft_topology_cmd& cmd) {
+    future<> exec_global_command_helper(auto nodes, const raft_topology_cmd& cmd) {
         const auto cmd_index = ++_last_cmd_index;
         auto f = co_await coroutine::as_future(
                 seastar::parallel_for_each(std::move(nodes), [this, &cmd, cmd_index] (raft::server_id id) {
@@ -884,14 +884,13 @@ class topology_coordinator {
         }));
 
         if (f.failed()) {
-            slogger.error("raft topology: send_raft_topology_cmd({}) failed with {}", cmd.cmd, f.get_exception());
-            co_return false;
-        } else {
-            co_return true;
+            co_await coroutine::return_exception(std::runtime_error(
+                ::format("raft topology: exec_global_command({}) failed with {}",
+                    cmd.cmd, f.get_exception())));
         }
     };
 
-    future<std::pair<group0_guard, bool>> exec_global_command(
+    future<group0_guard> exec_global_command(
             group0_guard guard, const raft_topology_cmd& cmd,
             const utils::small_vector<raft::server_id, 2>& exclude_nodes) {
         auto nodes = _topo_sm._topology.normal_nodes | boost::adaptors::filtered(
@@ -903,18 +902,18 @@ class topology_coordinator {
             // release guard
             auto _ = std::move(guard);
         }
-        bool res = co_await exec_global_command_helper(std::move(nodes), cmd);
-        co_return std::pair{co_await start_operation(), res};
+        co_await exec_global_command_helper(std::move(nodes), cmd);
+        co_return co_await start_operation();
     }
 
-    future<std::pair<node_to_work_on, bool>> exec_global_command(
+    future<node_to_work_on> exec_global_command(
             node_to_work_on&& node, const raft_topology_cmd& cmd, bool include_local) {
         utils::small_vector<raft::server_id, 2> exclude_nodes{parse_replaced_node(node)};
         if (!include_local) {
             exclude_nodes.push_back(_raft.id());
         }
-        auto [guard, res] = co_await exec_global_command(std::move(node.guard), cmd, exclude_nodes);
-        co_return std::pair{retake_node(std::move(guard), node.id), res};
+        auto guard = co_await exec_global_command(std::move(node.guard), cmd, exclude_nodes);
+        co_return retake_node(std::move(guard), node.id);
     };
 
     struct bootstrapping_info {
@@ -1027,7 +1026,6 @@ class topology_coordinator {
             co_return false;
         }
 
-        bool exec_command_res;
         switch (*tstate) {
             case topology::transition_state::commit_cdc_generation: {
                 // make sure all nodes know about new topology and have the new CDC generation data
@@ -1035,10 +1033,16 @@ class topology_coordinator {
                 // Note: if there was a replace or removenode going on, we'd need to put the replaced/removed
                 // node into `exclude_nodes` parameter in `exec_global_command`, but CDC generations are never
                 // introduced during replace/remove.
-                std::tie(guard, exec_command_res) = co_await exec_global_command(
-                        std::move(guard), raft_topology_cmd{raft_topology_cmd::command::barrier}, {_raft.id()});
-                if (!exec_command_res) {
-                    break;
+                {
+                    auto f = co_await coroutine::as_future(exec_global_command(std::move(guard),
+                        raft_topology_cmd{raft_topology_cmd::command::barrier},
+                        {_raft.id()}));
+                    if (f.failed()) {
+                        slogger.error("raft topology: transition_state::commit_cdc_generation, "
+                                      "raft_topology_cmd::command::barrier failed, error {}", f.get_exception());
+                        break;
+                    }
+                    guard = std::move(f).get();
                 }
 
                 // We don't need to add delay to the generation timestamp if this is the first generation.
@@ -1121,20 +1125,27 @@ class topology_coordinator {
                 auto node = get_node_to_work_on(std::move(guard));
 
                 // make sure all nodes know about new topology (we require all nodes to be alive for topo change for now)
-                std::tie(node, exec_command_res) = co_await exec_global_command(
-                        std::move(node), raft_topology_cmd{raft_topology_cmd::command::barrier}, false);
-                if (!exec_command_res) {
-                    break;
+                {
+                    auto f = co_await coroutine::as_future(exec_global_command(
+                        std::move(node), raft_topology_cmd{raft_topology_cmd::command::barrier}, false));
+                    if (f.failed()) {
+                        slogger.error("raft topology: transition_state::write_both_read_old, "
+                                      "raft_topology_cmd::command::barrier failed, error {}",
+                                      f.get_exception());
+                        break;
+                    }
                 }
 
                 raft_topology_cmd cmd{raft_topology_cmd::command::stream_ranges};
                 if (node.rs->state == node_state::removing) {
                     // tell all nodes to stream data of the removed node to new range owners
-                    std::tie(node, exec_command_res) = co_await exec_global_command(std::move(node), cmd, true);
-                    if (!exec_command_res) {
-                        slogger.error("raft topology: send_raft_topology_cmd(stream_ranges) failed during removenode");
+                    auto f = co_await coroutine::as_future(exec_global_command(std::move(node), cmd, true));
+                    if (f.failed()) {
+                        slogger.error("raft topology: send_raft_topology_cmd(stream_ranges) failed "
+                                      "during removenode, error {}", f.get_exception());
                         break;
                     }
+                    node = std::move(f).get();
                 } else {
                     // Tell joining/leaving/replacing node to stream its ranges
                     try {
@@ -1159,10 +1170,16 @@ class topology_coordinator {
 
                 // In this state writes goes to old and new replicas but reads start to be done from new replicas
                 // Before we stop writing to old replicas we need to wait for all previous reads to complete
-                std::tie(node, exec_command_res) = co_await exec_global_command(
-                        std::move(node), raft_topology_cmd{raft_topology_cmd::command::fence_old_reads}, true);
-                if (!exec_command_res) {
-                    break;
+                {
+                    auto f = co_await coroutine::as_future(exec_global_command(
+                        std::move(node), raft_topology_cmd{raft_topology_cmd::command::fence_old_reads}, true));
+                    if (f.failed()) {
+                        slogger.error("raft topology: transition_state::write_both_read_new, "
+                                      "raft_topology_cmd::command::fence_old_reads failed, error {}",
+                                      f.get_exception());
+                        break;
+                    }
+                    node = std::move(f).get();
                 }
                 switch(node.rs->state) {
                 case node_state::bootstrapping: {
