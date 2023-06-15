@@ -303,7 +303,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
     cmlog.debug("{}: started", *task);
 
     try {
-        auto&& res = co_await task->run();
+        auto&& res = co_await task->run_compaction();
         cmlog.debug("{}: done", *task);
         co_return res;
     } catch (sstables::compaction_stopped_exception& e) {
@@ -616,7 +616,7 @@ sstables_task_executor::~sstables_task_executor() {
     _cm._stats.pending_tasks -= _sstables.size() - (_state == state::pending);
 }
 
-future<compaction_manager::compaction_stats_opt> compaction_task_executor::run() noexcept {
+future<compaction_manager::compaction_stats_opt> compaction_task_executor::run_compaction() noexcept {
     try {
         _compaction_done = do_run();
         return compaction_done();
@@ -703,7 +703,7 @@ void compaction_task_executor::finish_compaction(state finish_state) noexcept {
     _compaction_state.compaction_done.signal();
 }
 
-void compaction_task_executor::stop(sstring reason) noexcept {
+void compaction_task_executor::stop_compaction(sstring reason) noexcept {
     _compaction_data.stop(std::move(reason));
 }
 
@@ -865,7 +865,7 @@ future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_e
     // let's stop all tasks before the deferring point below.
     for (auto& t : tasks) {
         cmlog.debug("Stopping {}", *t);
-        t->stop(reason);
+        t->stop_compaction(reason);
     }
     co_await coroutine::parallel_for_each(tasks, [] (auto& task) -> future<> {
         try {
@@ -885,7 +885,7 @@ future<> compaction_manager::stop_ongoing_compactions(sstring reason, table_stat
     try {
         auto ongoing_compactions = get_compactions(t).size();
         auto tasks = boost::copy_range<std::vector<shared_ptr<compaction_task_executor>>>(_tasks | boost::adaptors::filtered([t, type_opt] (auto& task) {
-            return (!t || task->compacting_table() == t) && (!type_opt || task->type() == *type_opt);
+            return (!t || task->compacting_table() == t) && (!type_opt || task->compaction_type() == *type_opt);
         }));
         logging::log_level level = tasks.empty() ? log_level::debug : log_level::info;
         if (cmlog.is_enabled(level)) {
@@ -1650,7 +1650,7 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
 future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, table_state& t) {
     auto check_for_cleanup = [this, &t] {
         return boost::algorithm::any_of(_tasks, [&t] (auto& task) {
-            return task->compacting_table() == &t && task->type() == sstables::compaction_type::Cleanup;
+            return task->compacting_table() == &t && task->compaction_type() == sstables::compaction_type::Cleanup;
         });
     };
     if (check_for_cleanup()) {
@@ -1804,7 +1804,7 @@ const std::vector<sstables::compaction_info> compaction_manager::get_compactions
     auto to_info = [] (const shared_ptr<compaction_task_executor>& task) {
         sstables::compaction_info ret;
         ret.compaction_uuid = task->compaction_data().compaction_uuid;
-        ret.type = task->type();
+        ret.type = task->compaction_type();
         ret.ks_name = task->compacting_table()->schema()->ks_name();
         ret.cf_name = task->compacting_table()->schema()->cf_name();
         ret.total_partitions = task->compaction_data().total_partitions;

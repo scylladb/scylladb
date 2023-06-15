@@ -178,7 +178,7 @@ protected:
 future<> compaction_manager_test::run(sstables::run_id output_run_id, table_state& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job) {
     auto task = make_shared<compaction_manager_test_task>(_cm, table_s, output_run_id, std::move(job));
     auto& cdata = register_compaction(task);
-    return task->run().discard_result().finally([this, &cdata] {
+    return task->run_compaction().discard_result().finally([this, &cdata] {
         deregister_compaction(cdata);
     });
 }

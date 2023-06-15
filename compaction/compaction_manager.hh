@@ -505,13 +505,13 @@ protected:
         return ct == sstables::compaction_type::Compaction;
     }
 public:
-    future<compaction_manager::compaction_stats_opt> run() noexcept;
+    future<compaction_manager::compaction_stats_opt> run_compaction() noexcept;
 
     const ::compaction::table_state* compacting_table() const noexcept {
         return _compacting_table;
     }
 
-    sstables::compaction_type type() const noexcept {
+    sstables::compaction_type compaction_type() const noexcept {
         return _type;
     }
 
@@ -546,7 +546,7 @@ public:
         return _compaction_data.abort.abort_requested();
     }
 
-    void stop(sstring reason) noexcept;
+    void stop_compaction(sstring reason) noexcept;
 
     sstables::compaction_stopped_exception make_compaction_stopped_exception() const;
 
