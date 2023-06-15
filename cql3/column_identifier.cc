@@ -94,6 +94,10 @@ bool column_identifier_raw::operator==(const column_identifier_raw& other) const
     return _text == other._text;
 }
 
+const sstring& column_identifier_raw::text() const {
+    return _text;
+}
+
 sstring column_identifier_raw::to_string() const {
     return _text;
 }
