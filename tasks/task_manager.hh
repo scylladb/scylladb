@@ -121,7 +121,7 @@ public:
 
             friend task;
         };
-        using task_impl_ptr = std::unique_ptr<impl>;
+        using task_impl_ptr = shared_ptr<impl>;
     protected:
         task_impl_ptr _impl;
     public:
@@ -179,7 +179,7 @@ public:
         future<task_id> make_task(unsigned shard, task_id id, std::string keyspace, std::string table, std::string entity, task_info parent_d) {
             return _tm.container().invoke_on(shard, [id, module = _name, keyspace = std::move(keyspace), table = std::move(table), entity = std::move(entity), parent_d] (task_manager& tm) {
                 auto module_ptr = tm.find_module(module);
-                auto task_impl_ptr = std::make_unique<T>(module_ptr, id ? id : task_id::create_random_id(), parent_d ? 0 : module_ptr->new_sequence_number(), std::move(keyspace), std::move(table), std::move(entity), parent_d.id);
+                auto task_impl_ptr = seastar::make_shared<T>(module_ptr, id ? id : task_id::create_random_id(), parent_d ? 0 : module_ptr->new_sequence_number(), std::move(keyspace), std::move(table), std::move(entity), parent_d.id);
                 return module_ptr->make_task(std::move(task_impl_ptr), parent_d).then([] (auto task) {
                     return task->id();
                 });
@@ -198,7 +198,7 @@ public:
             {TaskImpl(module, std::forward<Args>(args)...)} -> std::same_as<TaskImpl>;
         }
         future<task_ptr> make_and_start_task(tasks::task_info parent_info, Args&&... args) {
-            auto task_impl_ptr = std::make_unique<TaskImpl>(shared_from_this(), std::forward<Args>(args)...);
+            auto task_impl_ptr = seastar::make_shared<TaskImpl>(shared_from_this(), std::forward<Args>(args)...);
             auto task = co_await make_task(std::move(task_impl_ptr), parent_info);
             task->start();
             co_return task;
