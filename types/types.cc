@@ -3000,9 +3000,9 @@ bool abstract_type::is_value_compatible_with(const abstract_type& other) const {
 }
 
 std::optional<size_t>
-user_type_impl::idx_of_field(const bytes& name) const {
+user_type_impl::idx_of_field(const bytes_view& name) const {
     for (size_t i = 0; i < _field_names.size(); ++i) {
-        if (name == _field_names[i]) {
+        if (name == bytes_view(_field_names[i])) {
             return {i};
         }
     }
