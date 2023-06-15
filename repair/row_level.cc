@@ -1022,17 +1022,17 @@ private:
         });
     }
 
-    stop_iteration handle_mutation_fragment(mutation_fragment& mf, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
+    void handle_mutation_fragment(mutation_fragment& mf, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
         if (mf.is_partition_start()) {
             auto& start = mf.as_partition_start();
             _repair_reader.set_current_dk(start.key());
             if (!start.partition_tombstone()) {
                 // Ignore partition_start with empty partition tombstone
-                return stop_iteration::no;
+                return;
             }
         } else if (mf.is_end_of_partition()) {
             _repair_reader.clear_current_dk();
-            return stop_iteration::no;
+            return;
         }
         auto hash = _repair_hasher.do_hash_for_mf(*_repair_reader.get_current_dk(), mf);
         repair_row r(freeze(*_schema, mf), position_in_partition(mf.position()), _repair_reader.get_current_dk(), hash, is_dirty_on_master::no);
@@ -1042,7 +1042,6 @@ private:
         cur_size += r.size();
         new_rows_size += r.size();
         cur_rows.push_back(std::move(r));
-        return stop_iteration::no;
     }
 
     // Read rows from sstable until the size of rows exceeds _max_row_buf_size  - current_size
@@ -1062,10 +1061,7 @@ private:
                     co_await _repair_reader.on_end_of_stream();
                     break;
                 }
-                if (handle_mutation_fragment(*mfopt, cur_size, new_rows_size, cur_rows) ==
-                    stop_iteration::yes) {
-                    break;
-                }
+                handle_mutation_fragment(*mfopt, cur_size, new_rows_size, cur_rows);
             }
         } catch (...) {
             ex = std::current_exception();
