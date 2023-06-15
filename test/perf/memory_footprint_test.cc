@@ -204,7 +204,7 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& se
 
     tmpdir sstable_dir;
     sstables::test_env::do_with_async([&] (sstables::test_env& env) {
-        for (auto v  : sstables::all_sstable_versions) {
+        for (auto v  : sstables::writable_sstable_versions) {
             auto sst = env.make_sstable(s, v);
             auto mt2 = make_lw_shared<replica::memtable>(s);
             mt2->apply(*mt, env.make_reader_permit()).get();
