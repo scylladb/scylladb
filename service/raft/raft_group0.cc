@@ -33,6 +33,7 @@
 #include <seastar/util/log.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/rpc/rpc_types.hh>
+#include <stdexcept>
 
 #include "idl/group0.dist.hh"
 
@@ -582,6 +583,10 @@ future<> raft_group0::setup_group0(
     group0_log.info("setup_group0: joining group 0...");
     co_await join_group0(std::move(seeds), false /* non-voter */, ss, qp, mm, cdc_gen_service);
     group0_log.info("setup_group0: successfully joined group 0.");
+
+    utils::get_local_injector().inject("stop_after_joining_group0", [&] {
+        throw std::runtime_error{"injection: stop_after_joining_group0"};
+    });
 
     if (replace_info) {
         // Insert the replaced node's (Raft ID, IP address) pair into `raft_address_map`.
