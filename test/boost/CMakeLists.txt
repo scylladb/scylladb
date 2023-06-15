@@ -258,6 +258,8 @@ add_scylla_test(sstable_3_x_test
   KIND SEASTAR)
 add_scylla_test(sstable_datafile_test
   KIND SEASTAR)
+add_scylla_test(sstable_generation_test
+  KIND BOOST)
 add_scylla_test(sstable_mutation_test
   KIND SEASTAR)
 add_scylla_test(sstable_partition_index_cache_test

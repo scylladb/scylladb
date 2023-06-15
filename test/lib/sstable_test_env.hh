@@ -69,7 +69,7 @@ class test_env {
         impl(const impl&) = delete;
 
         sstables::generation_type new_generation() noexcept {
-            return gen();
+            return gen(sstables::uuid_identifiers::no);
         }
     };
     std::unique_ptr<impl> _impl;
