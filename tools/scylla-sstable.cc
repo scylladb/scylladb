@@ -2413,6 +2413,7 @@ public:
 void write_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& manager, const bpo::variables_map& vm) {
     static const std::vector<std::pair<std::string, mutation_fragment_stream_validation_level>> valid_validation_levels{
+        {"none", mutation_fragment_stream_validation_level::none},
         {"partition_region", mutation_fragment_stream_validation_level::partition_region},
         {"token", mutation_fragment_stream_validation_level::token},
         {"partition_key", mutation_fragment_stream_validation_level::partition_key},
