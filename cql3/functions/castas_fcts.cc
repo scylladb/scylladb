@@ -374,6 +374,12 @@ castas_fctn get_castas_fctn(data_type to_type, data_type from_type) {
     throw exceptions::invalid_request_exception(format("{} cannot be cast to {}", from_type->name(), to_type->name()));
 }
 
+shared_ptr<function>
+get_castas_fctn_as_cql3_function(data_type to_type, data_type from_type) {
+    auto f = get_castas_fctn(to_type, from_type->without_reversed().shared_from_this());
+    return make_castas_function(to_type, from_type, f);
+}
+
 shared_ptr<function> castas_functions::get(data_type to_type, const std::vector<shared_ptr<cql3::selection::selector>>& provided_args) {
     if (provided_args.size() != 1) {
         throw exceptions::invalid_request_exception("Invalid CAST expression");

@@ -22,9 +22,10 @@ class selectable::with_field_selection : public selectable {
 public:
     shared_ptr<selectable> _selected;
     shared_ptr<column_identifier> _field;
+    size_t _field_idx;
 public:
-    with_field_selection(shared_ptr<selectable> selected, shared_ptr<column_identifier> field)
-            : _selected(std::move(selected)), _field(std::move(field)) {
+    with_field_selection(shared_ptr<selectable> selected, shared_ptr<column_identifier> field, size_t field_idx)
+            : _selected(std::move(selected)), _field(std::move(field)), _field_idx(field_idx) {
     }
 
     virtual sstring to_string() const override;

@@ -428,7 +428,7 @@ unaliasedSelector returns [expression s]
        | K_TTL       '(' c=cident ')'              { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::ttl,
                                                                                               unresolved_identifier{std::move(c)}}; }
        | f=functionName args=selectionFunctionArgs { tmp = function_call{std::move(f), std::move(args)}; }
-       | K_CAST      '(' arg=unaliasedSelector K_AS t=native_type ')'  { tmp = cast{std::move(arg), std::move(t)}; }
+       | K_CAST      '(' arg=unaliasedSelector K_AS t=native_type ')'  { tmp = cast{.style = cast::cast_style::sql, .arg = std::move(arg), .type = std::move(t)}; }
        )
        ( '.' fi=cident { tmp = field_selection{std::move(tmp), std::move(fi)}; } )*
     { $s = tmp; }
@@ -1632,7 +1632,7 @@ functionArgs returns [std::vector<expression> a]
 term returns [expression term1]
     : v=value                          { $term1 = std::move(v); }
     | f=functionName args=functionArgs { $term1 = function_call{std::move(f), std::move(args)}; }
-    | '(' c=comparatorType ')' t=term  { $term1 = cast{std::move(t), c}; }
+    | '(' c=comparatorType ')' t=term  { $term1 = cast{.style = cast::cast_style::c, .arg = std::move(t), .type = c}; }
     ;
 
 columnOperation[operations_type& operations]

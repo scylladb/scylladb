@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <vector>
 #include "cql3/selection/selector.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "schema/schema.hh"
 #include "query-request.hh"
 

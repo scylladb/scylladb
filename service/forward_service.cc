@@ -359,7 +359,7 @@ static shared_ptr<cql3::selection::selection> mock_selection(
         raw_selectors.emplace_back(mock_singular_selection(functions[i], request.reduction_types[i], info));
     }
 
-    return cql3::selection::selection::from_selectors(db.as_data_dictionary(), schema, std::move(raw_selectors));
+    return cql3::selection::selection::from_selectors(db.as_data_dictionary(), schema, schema->ks_name(), std::move(raw_selectors));
 }
 
 future<query::forward_result> forward_service::dispatch_to_shards(

@@ -87,10 +87,6 @@ public:
         return _type;
     }
 
-    virtual sstring assignment_testable_source_context() const override {
-        return _column_name;
-    }
-
 #if 0
     @Override
     public String toString()

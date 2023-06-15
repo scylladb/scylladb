@@ -1089,7 +1089,7 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
             },
             [&] (const column_mutation_attribute& cma)  {
                 fmt::print(os, "{}({})",
-                        cma.kind == column_mutation_attribute::attribute_kind::ttl ? "TTL" : "WRITETIME",
+                        cma.kind,
                         to_printer(cma.column));
             },
             [&] (const function_call& fc)  {
@@ -1107,14 +1107,23 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                 }
             },
             [&] (const cast& c)  {
-                std::visit(overloaded_functor{
+                auto type_str = std::visit(overloaded_functor{
                     [&] (const cql3_type& t) {
-                        fmt::print(os, "({} AS {})", to_printer(c.arg), t);
+                        return fmt::format("{}", t);
                     },
                     [&] (const shared_ptr<cql3_type::raw>& t) {
-                        fmt::print(os, "({}) {}", t, to_printer(c.arg));
-                    },
-                }, c.type);
+                        return fmt::format("{}", t);
+                    }}, c.type);
+
+                switch (c.style) {
+                case cast::cast_style::sql:
+                    fmt::print(os, "({} AS {})", to_printer(c.arg), type_str);
+                    return;
+                case cast::cast_style::c:
+                    fmt::print(os, "({}) {}", type_str, to_printer(c.arg));
+                    return;
+                }
+                on_internal_error(expr_logger, "unexpected cast_style");
             },
             [&] (const field_selection& fs)  {
                 fmt::print(os, "({}.{})", to_printer(fs.structure), fs.field);
@@ -1418,7 +1427,7 @@ expression search_and_replace(const expression& e,
                     };
                 },
                 [&] (const cast& c) -> expression {
-                    return cast{recurse(c.arg), c.type};
+                    return cast{c.style, recurse(c.arg), c.type};
                 },
                 [&] (const field_selection& fs) -> expression {
                     return field_selection{recurse(fs.structure), fs.field};
@@ -1674,6 +1683,15 @@ cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
             on_internal_error(expr_logger, "Can't evaluate a column_mutation_attribute");
         },
         [&](const cast& c) -> cql3::raw_value {
+            // std::invoke trick allows us to use "return" in switch can have the compiler warn us if we missed an enum
+            std::invoke([&] {
+                switch (c.style) {
+                case cast::cast_style::c: return;
+                case cast::cast_style::sql: on_internal_error(expr_logger, "SQL-style cast should have been converted to a function_call");
+                }
+                on_internal_error(expr_logger, "illegal cast_style");
+            });
+
             auto ret = evaluate(c.arg, inputs);
             auto type = std::get_if<data_type>(&c.type);
             if (!type) {
@@ -2243,6 +2261,17 @@ size_t count_if(const expression& e, const noncopyable_function<bool (const bina
 }
 
 data_type
+column_mutation_attribute_type(const column_mutation_attribute& e) {
+    switch (e.kind) {
+    case column_mutation_attribute::attribute_kind::writetime:
+        return long_type;
+    case column_mutation_attribute::attribute_kind::ttl:
+        return int32_type;
+    }
+    on_internal_error(expr_logger, "evaluating type of illegal column mutation attribute kind");
+}
+
+data_type
 type_of(const expression& e) {
     return visit(overloaded_functor{
         [] (const conjunction& e) {
@@ -2259,13 +2288,7 @@ type_of(const expression& e) {
             on_internal_error(expr_logger, "evaluating type of unresolved_identifier");
         },
         [] (const column_mutation_attribute& e) {
-            switch (e.kind) {
-            case column_mutation_attribute::attribute_kind::writetime:
-                return long_type;
-            case column_mutation_attribute::attribute_kind::ttl:
-                return int32_type;
-            }
-            on_internal_error(expr_logger, "evaluating type of illegal column mutation attribute kind");
+            return column_mutation_attribute_type(e);
         },
         [] (const function_call& e) {
             return std::visit(overloaded_functor{
@@ -2643,5 +2666,25 @@ bool is_partition_token_for_schema(const expression& maybe_token, const schema& 
 
     return is_partition_token_for_schema(*fun_call, table_schema);
 }
+
+void
+verify_no_aggregate_functions(const expression& expr, std::string_view context_for_errors) {
+    auto find_agg = overloaded_functor{
+            [] (const functions::function_name& f) -> bool {
+                on_internal_error(expr_logger, "verify_no_aggregate_functions: unprepared function_call");
+            },
+            [] (const shared_ptr<functions::function> f) -> bool {
+                return f->is_aggregate();
+            }
+        };
+    bool found_agg = find_in_expression<function_call>(expr, [find_agg] (const function_call& fc) {
+        return std::visit(find_agg, fc.func);
+    });
+    if (found_agg) {
+        throw exceptions::invalid_request_exception(fmt::format("Aggregation function are not supported in the {}", context_for_errors));
+    }
+}
+
+
 } // namespace expr
 } // namespace cql3
