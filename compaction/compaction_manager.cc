@@ -470,7 +470,7 @@ protected:
 
 }
 
-future<> compaction_manager::perform_major_compaction(table_state& t) {
+future<> compaction_manager::perform_major_compaction(table_state& t, tasks::task_info info) {
     if (_state != state::enabled) {
         return make_ready_future<>();
     }
