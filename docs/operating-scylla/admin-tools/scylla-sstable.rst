@@ -512,6 +512,8 @@ The content is dumped in JSON, using the following schema:
         "above_threshold": Uint
     }
 
+.. _scylla-sstable-validate-operation:
+
 validate
 ^^^^^^^^
 
@@ -526,6 +528,25 @@ The following things are validated:
 * The stream ends with a partition-end fragment.
 
 Any errors found will be logged with error level to ``stderr``.
+
+scrub
+^^^^^
+
+Rewrites the SStable, skipping or fixing corrupt parts. Not all kinds of corruption can be skipped or fixed by scrub.
+It is limited to ordering issues on the partition, row, or mutation-fragment level. See `sstable content <scylla-sstable-sstable-content_>`_ for more details.
+
+Scrub has several modes:
+
+* **abort** - Aborts the scrub as soon as any error is found (recognized or not). This mode is only included for the sake of completeness. We recommend using the **validate** mode so that all errors are reported.
+* **skip** - Skips over any corruptions found, thus omitting them from the output. Note that this mode can result in omitting more than is strictly necessary, but it guarantees that all detectable corruptions will be omitted.
+* **segregate** - Fixes partition/row/mutation-fragment out-of-order errors by segregating the output into as many SStables as required so that the content of each output SStable is properly ordered.
+* **validate** - Validates the content of the SStable, reporting any corruptions found. Writes no output SStables. In this mode, scrub has the same outcome as the `validate operation <scylla-sstable-validate-operation_>`_ - and the validate operation is recommended over scrub.
+
+Output SStables are written to the directory specified via ``--output-directory``. They will be written with the ``BIG`` format and the highest supported SStable format, with generations chosen by scylla-sstable. Generations are chosen such
+that they are unique among the SStables written by the current scrub.
+
+The output directory must be empty; otherwise, scylla-sstable will abort scrub. You can allow writing to a non-empty directory by setting the ``--unsafe-accept-nonempty-output-dir`` command line flag.
+Note that scrub will be aborted if an SStable cannot be written because its generation clashes with a pre-existing SStable in the output directory.
 
 validate-checksums
 ^^^^^^^^^^^^^^^^^^
