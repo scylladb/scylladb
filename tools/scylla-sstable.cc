@@ -16,6 +16,8 @@
 #include <seastar/util/closeable.hh>
 
 #include "compaction/compaction.hh"
+#include "compaction/compaction_strategy.hh"
+#include "compaction/compaction_strategy_state.hh"
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
 #include "gms/feature_service.hh"
@@ -912,6 +914,94 @@ void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstab
     }
 }
 
+class scylla_sstable_table_state : public compaction::table_state {
+    struct dummy_compaction_backlog_tracker : public compaction_backlog_tracker::impl {
+        virtual void replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) override { }
+        virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override { return 0.0; }
+    };
+
+private:
+    schema_ptr _schema;
+    reader_permit _permit;
+    sstables::sstables_manager& _sst_man;
+    std::string _output_dir;
+    sstables::sstable_set _main_set;
+    sstables::sstable_set _maintenance_set;
+    std::vector<sstables::shared_sstable> _compacted_undeleted_sstables;
+    mutable sstables::compaction_strategy _compaction_strategy;
+    compaction_strategy_state _compaction_strategy_state;
+    tombstone_gc_state _tombstone_gc_state;
+    compaction_backlog_tracker _backlog_tracker;
+    std::string _group_id;
+    condition_variable _staging_done_condition;
+    mutable sstable_generation_generator _generation_generator;
+
+private:
+    sstables::shared_sstable do_make_sstable() const {
+        const auto format = sstables::sstable_format_types::big;
+        const auto version = sstables::get_highest_sstable_version();
+        auto generation = _generation_generator();
+        auto sst_name = sstables::sstable::filename(_output_dir, _schema->ks_name(), _schema->cf_name(), version, generation, format, component_type::Data);
+        if (file_exists(sst_name).get()) {
+            throw std::runtime_error(fmt::format("cannot create output sstable {}, file already exists", sst_name));
+        }
+        data_dictionary::storage_options local;
+        return _sst_man.make_sstable(_schema, local, _output_dir, generation, version, format);
+    }
+    sstables::sstable_writer_config do_configure_writer(sstring origin) const {
+        return _sst_man.configure_writer(std::move(origin));
+    }
+
+public:
+    scylla_sstable_table_state(schema_ptr schema, reader_permit permit, sstables::sstables_manager& sst_man, std::string output_dir)
+        : _schema(std::move(schema))
+        , _permit(std::move(permit))
+        , _sst_man(sst_man)
+        , _output_dir(std::move(output_dir))
+        , _main_set(sstables::make_partitioned_sstable_set(_schema, false))
+        , _maintenance_set(sstables::make_partitioned_sstable_set(_schema, false))
+        , _compaction_strategy(compaction::make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
+        , _compaction_strategy_state(compaction::compaction_strategy_state::make(_compaction_strategy))
+        , _tombstone_gc_state(nullptr)
+        , _backlog_tracker(std::make_unique<dummy_compaction_backlog_tracker>())
+        , _group_id("dummy-group")
+        , _generation_generator(0)
+    { }
+    virtual const schema_ptr& schema() const noexcept override { return _schema; }
+    virtual unsigned min_compaction_threshold() const noexcept override { return _schema->min_compaction_threshold(); }
+    virtual bool compaction_enforce_min_threshold() const noexcept override { return false; }
+    virtual const sstables::sstable_set& main_sstable_set() const override { return _main_set; }
+    virtual const sstables::sstable_set& maintenance_sstable_set() const override { return _maintenance_set; }
+    virtual std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point compaction_time) const override { return {}; }
+    virtual const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept override { return _compacted_undeleted_sstables; }
+    virtual sstables::compaction_strategy& get_compaction_strategy() const noexcept override { return _compaction_strategy; }
+    virtual compaction_strategy_state& get_compaction_strategy_state() noexcept override { return _compaction_strategy_state; }
+    virtual reader_permit make_compaction_reader_permit() const override { return _permit; }
+    virtual sstables::sstables_manager& get_sstables_manager() noexcept override { return _sst_man; }
+    virtual sstables::shared_sstable make_sstable() const override { return do_make_sstable(); }
+    virtual sstables::sstable_writer_config configure_writer(sstring origin) const override { return do_configure_writer(std::move(origin)); }
+    virtual api::timestamp_type min_memtable_timestamp() const override { return api::min_timestamp; }
+    virtual future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override { return make_ready_future<>(); }
+    virtual bool is_auto_compaction_disabled_by_user() const noexcept override { return false; }
+    virtual bool tombstone_gc_enabled() const noexcept override { return false; }
+    virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept override { return _tombstone_gc_state; }
+    virtual compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
+    virtual const std::string& get_group_id() const noexcept override { return _group_id; }
+    virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }
+};
+
+void validate_output_dir(std::filesystem::path output_dir, bool accept_nonempty_output_dir) {
+    auto fd = open_file_dma(output_dir.native(), open_flags::ro).get();
+    unsigned entries = 0;
+    fd.list_directory([&entries] (directory_entry) {
+        ++entries;
+        return make_ready_future<>();
+    }).done().get();
+    if (entries && !accept_nonempty_output_dir) {
+        throw std::invalid_argument("output-directory is not empty, pass --unsafe-accept-nonempty-output-dir if you are sure you want to write into this directory");
+    }
+}
+
 using operation_func = void(*)(schema_ptr, reader_permit, const std::vector<sstables::shared_sstable>&, sstables::sstables_manager&, const bpo::variables_map&);
 
 class operation {
@@ -951,6 +1041,49 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
         const auto errors = sst->validate(permit, abort, [] (sstring what) { sst_log.info("{}", what); }).get();
         fmt::print("{}: {}\n", sst->get_filename(), errors == 0 ? "valid" : "invalid");
     }
+}
+
+void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
+    static const std::vector<std::pair<std::string, compaction_type_options::scrub::mode>> scrub_modes{
+        {"abort", compaction_type_options::scrub::mode::abort},
+        {"skip", compaction_type_options::scrub::mode::skip},
+        {"segregate", compaction_type_options::scrub::mode::segregate},
+        {"validate", compaction_type_options::scrub::mode::validate},
+    };
+
+    if (sstables.empty()) {
+        throw std::invalid_argument("no sstables specified on the command line");
+    }
+    compaction_type_options::scrub::mode scrub_mode;
+    {
+        if (!vm.count("scrub-mode")) {
+            throw std::invalid_argument("missing mandatory command-line argument --scrub-mode");
+        }
+        const auto mode_name = vm["scrub-mode"].as<std::string>();
+        auto mode_it = boost::find_if(scrub_modes, [&mode_name] (const std::pair<std::string, compaction_type_options::scrub::mode>& v) {
+            return v.first == mode_name;
+        });
+        if (mode_it == scrub_modes.end()) {
+            throw std::invalid_argument(fmt::format("invalid scrub-mode: {}", mode_name));
+        }
+        scrub_mode = mode_it->second;
+    }
+    auto output_dir = vm["output-dir"].as<std::string>();
+    if (scrub_mode != compaction_type_options::scrub::mode::validate) {
+        validate_output_dir(output_dir, vm.count("unsafe-accept-nonempty-output-dir"));
+    }
+
+    scylla_sstable_table_state table_state(schema, permit, sst_man, output_dir);
+
+    auto compaction_descriptor = sstables::compaction_descriptor(std::move(sstables));
+    compaction_descriptor.options = sstables::compaction_type_options::make_scrub(scrub_mode);
+    compaction_descriptor.creator = [&table_state] (shard_id) { return table_state.make_sstable(); };
+    compaction_descriptor.replacer = [] (sstables::compaction_completion_desc) { };
+
+    auto compaction_data = sstables::compaction_data{};
+
+    sstables::compact_sstables(std::move(compaction_descriptor), compaction_data, table_state).get();
 }
 
 void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
@@ -2564,6 +2697,8 @@ const std::vector<operation_option> all_options {
     typed_option<std::string>("validation-level", "clustering_key", "degree of validation on the output, one of (partition_region, token, partition_key, clustering_key)"),
     typed_option<std::string>("script-file", "script file to load and execute"),
     typed_option<program_options::string_map>("script-arg", {}, "parameter(s) for the script"),
+    typed_option<std::string>("scrub-mode", "scrub mode to use, one of (abort, skip, segregate, validate)"),
+    typed_option<>("unsafe-accept-nonempty-output-dir", "allow the operation to write into a non-empty output directory, acknowledging the risk that this may result in sstable clash"),
 };
 
 const std::vector<operation> operations{
@@ -2712,6 +2847,27 @@ for more information on this operation.
 )",
             {},
             validate_operation},
+/* scrub */
+    {"scrub",
+            "Scrub the sstable(s), in the specified mode",
+R"(
+Read and re-write the sstable, getting rid of or fixing broken parts, depending
+on the selected mode.
+Output sstables are written to the directory specified via `--output-directory`.
+They will be written with the BIG format and the highest supported sstable
+format, with generations choosen by scylla-sstable. Generations are chosen such
+that they are unique between the sstables written by the current scrub.
+The output directory is expected to be empty, if it isn't scylla-sstable will
+abort the scrub. This can be overriden by the
+`--unsafe-accept-nonempty-output-dir` command line flag, but note that scrub will
+be aborted if an sstable cannot be written because its generation clashes with
+pre-existing sstables in the directory.
+
+See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#scrub
+for more information on this operation, including what the different modes do.
+)",
+            {"scrub-mode", "output-dir", "unsafe-accept-nonempty-output-dir"},
+            scrub_operation},
 /* validate-checksums */
     {"validate-checksums",
             "Validate the checksums of the sstable(s)",
