@@ -118,10 +118,12 @@ def abort_run_with_dir(pid, tmpdir):
 def abort_run_with_temporary_dir(pid):
     return abort_run_with_dir(pid, pid_to_dir(pid))
 
+omit_scylla_output = False
 summary=''
 run_pytest_pids = set()
 
 def cleanup_all():
+    global omit_scylla_output
     global summary
     global run_with_temporary_dir_pids
     global run_pytest_pids
@@ -136,9 +138,10 @@ def cleanup_all():
             pass
     for pid in run_with_temporary_dir_pids:
         f = abort_run_with_temporary_dir(pid)
-        print('\nSubprocess output:\n')
-        sys.stdout.flush()
-        shutil.copyfileobj(f, sys.stdout.buffer)
+        if not omit_scylla_output:
+            print('\nSubprocess output:\n')
+            sys.stdout.flush()
+            shutil.copyfileobj(f, sys.stdout.buffer)
     scylla_set = set()
     print(summary)
 
