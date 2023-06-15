@@ -77,11 +77,20 @@ def test_chunk_length_invalid(cql, test_keyspace, garbage):
 # result in unbounded allocations and potentially crashing Scylla. Therefore,
 # there ought to be some limit for the configured chunk length. Let's check it
 # by trying a ridiculously large value, which shouldn't be legal.
+# This test fails on Cassandra, which doesn't have protection against huge
+# chunk sizes, so the test is marked a "cassandra_bug".
 # Reproduces #9933.
-@pytest.mark.skip(reason="#9933")
-def test_huge_chunk_length(cql, test_keyspace):
-    with new_test_table(cql, test_keyspace, "p int primary key, v int", "with compression = { '" + sstable_compression + "': 'LZ4Compressor', 'chunk_length_in_kb': 1048576 }") as table:
-        # Write something and flush it, to have sstable compression actually
-        # be used
-        cql.execute(f'INSERT INTO {table} (p, v) VALUES (1, 2)')
-        nodetool.flush(cql, table)
+def test_huge_chunk_length(cql, test_keyspace, cassandra_bug):
+    with pytest.raises(ConfigurationException, match='chunk_length_in_kb'):
+        with new_test_table(cql, test_keyspace, "p int primary key, v int", "with compression = { '" + sstable_compression + "': 'LZ4Compressor', 'chunk_length_in_kb': 1048576 }") as table:
+            # At this point, the test already failed, as we expected the table
+            # creation to have failed with ConfigurationException. But if we
+            # reached here, let's really demonstrate the bug - write
+            # something and flush it, to have sstable compression actually
+            # be used.
+            cql.execute(f'INSERT INTO {table} (p, v) VALUES (1, 2)')
+            nodetool.flush(cql, table)
+    # Also check the same for ALTER TABLE
+    with new_test_table(cql, test_keyspace, "p int primary key, v int") as table:
+        with pytest.raises(ConfigurationException, match='chunk_length_in_kb'):
+            cql.execute("ALTER TABLE " + table + " with compression = { '" + sstable_compression + "': 'LZ4Compressor', 'chunk_length_in_kb': 1048576 }")
