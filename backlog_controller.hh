@@ -37,9 +37,8 @@
 // The constants q1 and q2 are used to determine the proportional factor at each stage.
 class backlog_controller {
 public:
-    struct scheduling_group {
-        seastar::scheduling_group cpu = default_scheduling_group();
-    };
+    using scheduling_group = seastar::scheduling_group;
+
     future<> shutdown() {
         _update_timer.cancel();
         return std::move(_inflight_update);
