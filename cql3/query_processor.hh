@@ -26,6 +26,7 @@
 #include "transport/messages/result_message.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/client_state.hh"
+#include "service/broadcast_tables/experimental/query_result.hh"
 #include "utils/observable.hh"
 #include "lang/wasm_alien_thread_runner.hh"
 
@@ -35,6 +36,10 @@ class migration_manager;
 class query_state;
 class forward_service;
 class raft_group0_client;
+
+namespace broadcast_tables {
+struct query;
+}
 }
 
 namespace cql3 {
@@ -207,10 +212,6 @@ public:
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const prepared_cache_key_type& key) {
         return _prepared_cache.find(key);
-    }
-
-    service::raft_group0_client& get_group0_client() {
-        return _group0_client;
     }
 
     inline
@@ -398,6 +399,9 @@ public:
             query_options& options,
             std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries);
 
+    future<service::broadcast_tables::query_result>
+    execute_broadcast_table_query(const service::broadcast_tables::query&);
+
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_schema_statement(const statements::schema_altering_statement&, service::query_state& state, const query_options& options);
 
@@ -421,6 +425,7 @@ public:
 
 private:
     service::migration_manager& get_migration_manager() noexcept { return _mm; }
+    service::raft_group0_client& get_group0_client() { return _group0_client; }
 
     query_options make_internal_options(
             const statements::prepared_statement::checked_weak_ptr& p,

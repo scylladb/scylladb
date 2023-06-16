@@ -62,15 +62,14 @@ evaluate_prepared(
             : std::nullopt
     };
 }
-    
+
 future<::shared_ptr<cql_transport::messages::result_message>>
 strongly_consistent_modification_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const {
     if (this_shard_id() != 0) {
         co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0, cql3::computed_function_values{});
     }
 
-    auto result = co_await service::broadcast_tables::execute(
-        qp.get_group0_client(),
+    auto result = co_await qp.execute_broadcast_table_query(
         { evaluate_prepared(_query, options) }
     );
     

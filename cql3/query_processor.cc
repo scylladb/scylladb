@@ -852,6 +852,11 @@ query_processor::execute_batch_without_checking_exception_message(
     });
 }
 
+future<service::broadcast_tables::query_result>
+query_processor::execute_broadcast_table_query(const service::broadcast_tables::query& query) {
+    return service::broadcast_tables::execute(get_group0_client(), query);
+}
+
 future<::shared_ptr<messages::result_message>>
 query_processor::execute_schema_statement(const statements::schema_altering_statement& stmt, service::query_state& state, const query_options& options) {
     ::shared_ptr<cql_transport::event::schema_change> ce;
