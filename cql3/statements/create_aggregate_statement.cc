@@ -79,13 +79,13 @@ std::unique_ptr<prepared_statement> create_aggregate_statement::prepare(data_dic
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
-create_aggregate_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+create_aggregate_statement::prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
     auto aggregate = dynamic_pointer_cast<functions::user_aggregate>(co_await validate_while_executing(qp));
     if (aggregate) {
-        m = co_await qp.get_migration_manager().prepare_new_aggregate_announcement(aggregate, ts);
+        m = co_await mm.prepare_new_aggregate_announcement(aggregate, ts);
         ret = create_schema_change(*aggregate, true);
     }
 

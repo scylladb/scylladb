@@ -26,6 +26,7 @@
 #include "transport/messages/result_message.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/client_state.hh"
+#include "service/broadcast_tables/experimental/query_result.hh"
 #include "utils/observable.hh"
 #include "lang/wasm_alien_thread_runner.hh"
 
@@ -35,12 +36,17 @@ class migration_manager;
 class query_state;
 class forward_service;
 class raft_group0_client;
+
+namespace broadcast_tables {
+struct query;
+}
 }
 
 namespace cql3 {
 
 namespace statements {
 class batch_statement;
+class schema_altering_statement;
 
 namespace raw {
 
@@ -94,13 +100,13 @@ public:
 private:
     std::unique_ptr<migration_subscriber> _migration_subscriber;
     service::storage_proxy& _proxy;
-    service::forward_service& _forwarder;
     data_dictionary::database _db;
     service::migration_notifier& _mnotifier;
-    service::migration_manager& _mm;
     memory_config _mcfg;
     const cql_config& _cql_config;
-    service::raft_group0_client& _group0_client;
+
+    struct remote;
+    std::unique_ptr<remote> _remote;
 
     struct stats {
         uint64_t prepare_invocations = 0;
@@ -143,9 +149,12 @@ public:
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
     static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries);
 
-    query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, service::raft_group0_client& group0_client, std::optional<wasm::startup_context> wasm_ctx);
+    query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, std::optional<wasm::startup_context> wasm_ctx);
 
     ~query_processor();
+
+    void start_remote(service::migration_manager&, service::forward_service&, service::raft_group0_client&);
+    future<> stop_remote();
 
     data_dictionary::database db() {
         return _db;
@@ -158,13 +167,6 @@ public:
     service::storage_proxy& proxy() {
         return _proxy;
     }
-
-    service::forward_service& forwarder() {
-        return _forwarder;
-    }
-
-    const service::migration_manager& get_migration_manager() const noexcept { return _mm; }
-    service::migration_manager& get_migration_manager() noexcept { return _mm; }
 
     cql_stats& get_cql_stats() {
         return _cql_stats;
@@ -209,10 +211,6 @@ public:
 
     statements::prepared_statement::checked_weak_ptr get_prepared(const prepared_cache_key_type& key) {
         return _prepared_cache.find(key);
-    }
-
-    service::raft_group0_client& get_group0_client() {
-        return _group0_client;
     }
 
     inline
@@ -400,6 +398,22 @@ public:
             query_options& options,
             std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries);
 
+    future<service::broadcast_tables::query_result>
+    execute_broadcast_table_query(const service::broadcast_tables::query&);
+
+    // Splits given `forward_request` and distributes execution of resulting subrequests across a cluster.
+    future<query::forward_result>
+    forward(query::forward_request, tracing::trace_state_ptr);
+
+    future<::shared_ptr<cql_transport::messages::result_message>>
+    execute_schema_statement(const statements::schema_altering_statement&, service::query_state& state, const query_options& options);
+
+    future<std::string>
+    execute_thrift_schema_command(
+            std::function<future<std::vector<mutation>>(
+                service::migration_manager&, data_dictionary::database, api::timestamp_type)
+            > prepare_schema_mutations);
+
     std::unique_ptr<statements::prepared_statement> get_statement(
             const std::string_view& query,
             const service::client_state& client_state);
@@ -413,6 +427,9 @@ public:
     void reset_cache();
 
 private:
+    // Keep the holder until you stop using the `remote` services.
+    std::pair<std::reference_wrapper<remote>, gate::holder> remote();
+
     query_options make_internal_options(
             const statements::prepared_statement::checked_weak_ptr& p,
             const std::initializer_list<data_value>&,

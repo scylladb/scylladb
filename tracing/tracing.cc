@@ -71,9 +71,9 @@ future<> tracing::create_tracing(sstring tracing_backend_class_name) {
     return tracing_instance().start(std::move(tracing_backend_class_name));
 }
 
-future<> tracing::start_tracing(sharded<cql3::query_processor>& qp) {
-    return tracing_instance().invoke_on_all([&qp] (tracing& local_tracing) {
-        return local_tracing.start(qp.local());
+future<> tracing::start_tracing(sharded<cql3::query_processor>& qp, sharded<service::migration_manager>& mm) {
+    return tracing_instance().invoke_on_all([&qp, &mm] (tracing& local_tracing) {
+        return local_tracing.start(qp.local(), mm.local());
     });
 }
 
@@ -145,7 +145,7 @@ trace_state_ptr tracing::create_session(const trace_info& secondary_session_info
     }
 }
 
-future<> tracing::start(cql3::query_processor& qp) {
+future<> tracing::start(cql3::query_processor& qp, service::migration_manager& mm) {
     try {
         _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(_tracing_backend_helper_class_name, *this);
     } catch (no_such_class& e) {
@@ -155,7 +155,7 @@ future<> tracing::start(cql3::query_processor& qp) {
         throw;
     }
 
-    return _tracing_backend_helper_ptr->start(qp).then([this] {
+    return _tracing_backend_helper_ptr->start(qp, mm).then([this] {
         _down = false;
         _write_timer.arm(write_period);
     });

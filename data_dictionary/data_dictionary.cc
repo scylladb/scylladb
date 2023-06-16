@@ -58,6 +58,11 @@ keyspace::get_replication_strategy() const {
     return _ops->get_replication_strategy(*this);
 }
 
+const table_schema_version&
+database::get_version() const {
+    return _ops->get_version(*this);
+}
+
 std::optional<keyspace>
 database::try_find_keyspace(std::string_view name) const {
     return _ops->try_find_keyspace(*this, name);
