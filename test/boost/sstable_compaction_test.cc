@@ -1203,16 +1203,13 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                                          make_atomic_cell(utf8_type, bytes(""), ttl, last_expiry));
                     mt->apply(std::move(m));
                 };
-                auto get_usable_sst = [&] (lw_shared_ptr<replica::memtable> mt) {
-                    return make_sstable_containing(sst_gen, mt);
-                };
 
                 mutation m(s, partition_key::from_exploded(*s, {to_bytes("deletetest")}));
                 for (auto i = 0; i < 5; i++) {
                     add_row(m, to_bytes("deletecolumn" + to_sstring(i)), 100);
                 }
                 add_row(m, to_bytes("todelete"), 1000);
-                auto sst1 = get_usable_sst(mt);
+                auto sst1 = make_sstable_containing(sst_gen, mt);
                 BOOST_REQUIRE(last_expiry == sst1->get_stats_metadata().max_local_deletion_time);
 
                 mt = make_lw_shared<replica::memtable>(s);
@@ -1220,7 +1217,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                 tombstone tomb(api::new_timestamp(), now);
                 m.partition().apply_delete(*s, clustering_key::from_exploded(*s, {to_bytes("todelete")}), tomb);
                 mt->apply(std::move(m));
-                auto sst2 = get_usable_sst(mt);
+                auto sst2 = make_sstable_containing(sst_gen, mt);
                 BOOST_REQUIRE(now.time_since_epoch().count() == sst2->get_stats_metadata().max_local_deletion_time);
 
                 auto creator = sst_gen;
