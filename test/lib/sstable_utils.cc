@@ -25,6 +25,22 @@
 using namespace sstables;
 using namespace std::chrono_literals;
 
+lw_shared_ptr<replica::memtable> make_memtable(schema_ptr s, const std::vector<mutation>& muts) {
+    auto mt = make_lw_shared<replica::memtable>(s);
+
+    std::size_t i{0};
+    for (auto&& m : muts) {
+        mt->apply(m);
+        // Give the reactor some time to breathe
+        if (++i == 10) {
+            seastar::thread::yield();
+            i = 0;
+        }
+    }
+
+    return mt;
+}
+
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, lw_shared_ptr<replica::memtable> mt) {
     return make_sstable_containing(sst_factory(), std::move(mt));
 }
@@ -44,21 +60,7 @@ sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, s
     tests::reader_concurrency_semaphore_wrapper semaphore;
 
     schema_ptr s = muts[0].schema();
-    auto mt = make_lw_shared<replica::memtable>(s);
-
-    std::size_t i{0};
-    for (auto&& m : muts) {
-        mt->apply(m);
-        ++i;
-
-        // Give the reactor some time to breathe
-        if(i == 10) {
-            seastar::thread::yield();
-            i = 0;
-        }
-    }
-
-    make_sstable_containing(sst, mt);
+    make_sstable_containing(sst, make_memtable(s, muts));
 
     std::set<mutation, mutation_decorated_key_less_comparator> merged;
     for (auto&& m : muts) {
@@ -84,13 +86,8 @@ sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, s
 
 shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
         sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time) {
-    auto mt = make_lw_shared<replica::memtable>(s);
     fs::path dir_path(dir);
-
-    for (auto&& m : mutations) {
-        mt->apply(m);
-    }
-
+    auto mt = make_memtable(s, mutations);
     auto sst = env.make_sstable(s, dir_path.string(), env.new_generation(), version, sstable_format_types::big, default_sstable_buffer_size, query_time);
     auto mr = mt->make_flat_reader(s, env.make_reader_permit());
     sst->write_components(std::move(mr), mutations.size(), s, cfg, mt->get_encoding_stats()).get();
