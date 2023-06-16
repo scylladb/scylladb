@@ -9,7 +9,6 @@
 #pragma once
 
 #include "../../reader_concurrency_semaphore.hh"
-#include "query_class_config.hh"
 
 namespace tests {
 

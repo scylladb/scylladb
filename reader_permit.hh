@@ -14,7 +14,12 @@
 #include "db/timeout_clock.hh"
 #include "schema/schema_fwd.hh"
 #include "tracing/trace_state.hh"
-#include "query_class_config.hh"
+
+namespace query {
+
+struct max_result_size;
+
+}
 
 namespace seastar {
     class file;
