@@ -499,11 +499,42 @@ future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
    co_await _db.local().apply(freeze(muts), db::no_timeout);
 }
 
+template<typename Builder>
+class topology_mutation_builder_base {
+private:
+    Builder& self() {
+        return *static_cast<Builder*>(this);
+    }
+
+protected:
+    enum class collection_apply_mode {
+        overwrite,
+        update,
+    };
+
+    using builder_base = topology_mutation_builder_base<Builder>;
+
+    Builder& apply_atomic(const char* cell, const data_value& value);
+    template<std::ranges::range C>
+    requires std::convertible_to<std::ranges::range_value_t<C>, data_value>
+    Builder& apply_set(const char* cell, collection_apply_mode apply_mode, const C& c);
+    Builder& del(const char* cell);
+};
+
 class topology_mutation_builder;
 
-class topology_node_mutation_builder {
+class topology_node_mutation_builder
+        : public topology_mutation_builder_base<topology_node_mutation_builder> {
+
+    friend builder_base;
+
     topology_mutation_builder& _builder;
     deletable_row& _r;
+
+private:
+    row& row();
+    api::timestamp_type timestamp() const;
+    const schema& schema() const;
 
 public:
     topology_node_mutation_builder(topology_mutation_builder&, raft::server_id);
@@ -521,7 +552,10 @@ public:
     canonical_mutation build();
 };
 
-class topology_mutation_builder {
+class topology_mutation_builder
+        : public topology_mutation_builder_base<topology_mutation_builder> {
+
+    friend builder_base;
     friend class topology_node_mutation_builder;
 
     schema_ptr _s;
@@ -529,6 +563,12 @@ class topology_mutation_builder {
     api::timestamp_type _ts;
 
     std::optional<topology_node_mutation_builder> _node_builder;
+
+private:
+    row& row();
+    api::timestamp_type timestamp() const;
+    const schema& schema() const;
+
 public:
     topology_mutation_builder(api::timestamp_type ts);
     topology_mutation_builder& set_transition_state(topology::transition_state);
@@ -551,6 +591,67 @@ topology_node_mutation_builder::topology_node_mutation_builder(topology_mutation
         _builder(builder),
         _r(_builder._m.partition().clustered_row(*_builder._s, clustering_key::from_singular(*_builder._s, id.uuid()))) {
     _r.apply(row_marker(_builder._ts));
+}
+
+template<typename Builder>
+Builder& topology_mutation_builder_base<Builder>::apply_atomic(const char* cell, const data_value& value) {
+    const column_definition* cdef = self().schema().get_column_definition(cell);
+    assert(cdef);
+    self().row().apply(*cdef, atomic_cell::make_live(*cdef->type, self().timestamp(), cdef->type->decompose(value)));
+    return self();
+}
+
+template<typename Builder>
+template<std::ranges::range C>
+requires std::convertible_to<std::ranges::range_value_t<C>, data_value>
+Builder& topology_mutation_builder_base<Builder>::apply_set(const char* cell, collection_apply_mode apply_mode, const C& c) {
+    const column_definition* cdef = self().schema().get_column_definition(cell);
+    assert(cdef);
+    auto vtype = static_pointer_cast<const set_type_impl>(cdef->type)->get_elements_type();
+
+    std::set<bytes, serialized_compare> cset(vtype->as_less_comparator());
+    for (const auto& v : c) {
+        cset.insert(vtype->decompose(data_value(v)));
+    }
+
+    collection_mutation_description cm;
+    cm.cells.reserve(cset.size());
+    for (const bytes& raw : cset) {
+        cm.cells.emplace_back(raw, atomic_cell::make_live(*bytes_type, self().timestamp(), bytes_view()));
+    }
+
+    if (apply_mode == collection_apply_mode::overwrite) {
+        cm.tomb = tombstone(self().timestamp() - 1, gc_clock::now());
+    }
+
+    self().row().apply(*cdef, cm.serialize(*cdef->type));
+    return self();
+}
+
+template<typename Builder>
+Builder& topology_mutation_builder_base<Builder>::del(const char* cell) {
+    auto cdef = self().schema().get_column_definition(cell);
+    assert(cdef);
+    if (!cdef->type->is_multi_cell()) {
+        self().row().apply(*cdef, atomic_cell::make_dead(self().timestamp(), gc_clock::now()));
+    } else {
+        collection_mutation_description cm;
+        cm.tomb = tombstone{self().timestamp(), gc_clock::now()};
+        self().row().apply(*cdef, cm.serialize(*cdef->type));
+    }
+    return self();
+}
+
+row& topology_node_mutation_builder::row() {
+    return _r.cells();
+}
+
+api::timestamp_type topology_node_mutation_builder::timestamp() const {
+    return _builder._ts;
+}
+
+const schema& topology_node_mutation_builder::schema() const {
+    return *_builder._s;
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const sstring& value) {
@@ -618,6 +719,18 @@ topology_node_mutation_builder& topology_node_mutation_builder::set(const char* 
 
 canonical_mutation topology_node_mutation_builder::build() {
     return canonical_mutation{std::move(_builder._m)};
+}
+
+row& topology_mutation_builder::row() {
+    return _m.partition().static_row().maybe_create();
+}
+
+api::timestamp_type topology_mutation_builder::timestamp() const {
+    return _ts;
+}
+
+const schema& topology_mutation_builder::schema() const {
+    return *_s;
 }
 
 topology_mutation_builder& topology_mutation_builder::set_transition_state(topology::transition_state value) {
