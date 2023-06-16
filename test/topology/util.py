@@ -9,12 +9,25 @@ Test consistency of schema changes with topology changes.
 import logging
 import pytest
 import time
+from cassandra.cluster import Session  # type: ignore # pylint: disable=no-name-in-module
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, read_barrier
 
 
 logger = logging.getLogger(__name__)
+
+
+async def reconnect_driver(manager: ManagerClient) -> Session:
+    """Workaround for scylladb/python-driver#170 and scylladb/python-driver#230:
+       the existing driver session may not reconnect, create a new one.
+    """
+    logging.info(f"Reconnecting driver")
+    manager.driver_close()
+    await manager.driver_connect()
+    cql = manager.cql
+    assert(cql)
+    return cql
 
 
 async def get_token_ring_host_ids(manager: ManagerClient, srv: ServerInfo) -> set[str]:
