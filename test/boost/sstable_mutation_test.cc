@@ -393,14 +393,14 @@ SEASTAR_TEST_CASE(read_partial_range_2) {
 
 static
 mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
-        sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
-    return as_mutation_source(make_sstable(env, s, dir, std::move(mutations), cfg, version, query_time));
+        sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
+    return as_mutation_source(make_sstable(env, s, dir, std::move(mutations), env.manager().configure_writer(), version, query_time));
 }
 
 static
 mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr s, std::vector<mutation> mutations,
-        sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
-    return make_sstable_mutation_source(env, std::move(s), env.tempdir().path().native(), std::move(mutations), std::move(cfg), version, query_time);
+        sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
+    return make_sstable_mutation_source(env, std::move(s), env.tempdir().path().native(), std::move(mutations), version, query_time);
 }
 
 SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
@@ -1245,7 +1245,7 @@ SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
             ss.add_row(m2, ss.make_ckey(5), "v");
             ss.add_row(m2, ss.make_ckey(6), "v");
 
-            auto ms = make_sstable_mutation_source(env, s, {m1, m2}, env.manager().configure_writer(), version);
+            auto ms = make_sstable_mutation_source(env, s, {m1, m2}, version);
 
             auto index_accesses = [] {
                 auto&& stats = sstables::partition_index_cache::shard_stats();
@@ -1577,8 +1577,7 @@ SEASTAR_TEST_CASE(test_static_compact_tables_are_read) {
             std::vector<mutation> muts = {m1, m2};
             boost::sort(muts, mutation_decorated_key_less_comparator{});
 
-            sstable_writer_config cfg = env.manager().configure_writer();
-            auto ms = make_sstable_mutation_source(env, s, muts, cfg, version);
+            auto ms = make_sstable_mutation_source(env, s, muts, version);
 
             assert_that(ms.make_reader_v2(s, env.make_reader_permit()))
                 .produces(muts[0])
