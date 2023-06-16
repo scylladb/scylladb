@@ -88,7 +88,7 @@ def managed_cluster(run_dir, ssl, s3_server):
     run.wait_for_services(pid, [check_with_cql(ip, ssl)])
     cluster = run.get_cql_cluster(ip)
     try:
-        yield ip, cluster
+        yield cluster
     finally:
         cluster.shutdown()
         kill_with_dir(pid, run_dir)
@@ -103,7 +103,7 @@ async def test_basic(test_tempdir, s3_server, ssl):
             ('1', 'one'),
             ('2', 'two')]
 
-    with managed_cluster(test_tempdir, ssl, s3_server) as (ip, cluster):
+    with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
         print(f'Create keyspace (minio listening at {s3_server.address})')
         replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
                                           'replication_factor': '1'})
@@ -120,6 +120,7 @@ async def test_basic(test_tempdir, s3_server, ssl):
             conn.execute(cql_fmt.format(ks, cf, *row))
         res = conn.execute(f"SELECT * FROM {ks}.{cf};")
 
+        ip = cluster.contact_points[0]
         r = requests.post(f'http://{ip}:10000/storage_service/keyspace_flush/{ks}', timeout=60)
         assert r.status_code == 200, f"Error flushing keyspace: {r}"
 
@@ -131,7 +132,7 @@ async def test_basic(test_tempdir, s3_server, ssl):
             assert row.status == 'sealed', f'Unexpected entry status in registry: {row.status}'
 
     print('Restart scylla')
-    with managed_cluster(test_tempdir, ssl, s3_server) as (ip, cluster):
+    with managed_cluster(test_tempdir, ssl, s3_server) as cluster:
         conn = cluster.connect()
         res = conn.execute(f"SELECT * FROM {ks}.{cf};")
         have_res = { x.name: x.value for x in res }
