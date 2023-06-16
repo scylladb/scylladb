@@ -46,11 +46,11 @@ def run_scylla_cmd(pid, dir):
     c += ['--object-storage-config-file', test_tempdir + '/object_storage.yaml']
     return (c, e)
 
-def teardown(pid):
-    print('Kill scylla')
+def teardown():
     sys.stdout.flush()
-    log = run.abort_run_with_dir(pid, test_tempdir)
+    log = open(os.path.join(test_tempdir, 'log'), 'rb')
     shutil.copyfileobj(log, sys.stdout.buffer)
+    shutil.rmtree(test_tempdir)
 
 
 def check_with_cql(ip, ssl):
@@ -88,27 +88,29 @@ def run_with_dir(run_cmd_gen, run_dir):
     return pid
 
 
-def restart_with_dir(old_pid, run_cmd_gen, run_dir):
+def kill_with_dir(old_pid, run_dir):
     try:
+        print('Kill scylla')
         os.killpg(old_pid, 2)
         os.waitpid(old_pid, 0)
     except ProcessLookupError:
         pass
     scylla_link = os.path.join(run_dir, 'test_scylla')
     os.unlink(scylla_link)
-    return run_with_dir(run_cmd_gen, run_dir)
 
 
 @contextmanager
-def managed_cluster(pid, ssl):
+def managed_cluster(run_dir, ssl):
     '''return scylla's pid, IP and a connection to it'''
+    pid = run_with_dir(run_scylla_cmd, run_dir)
     ip = run.pid_to_ip(pid)
     run.wait_for_services(pid, [check_with_cql(ip, ssl)])
     cluster = run.get_cql_cluster(ip)
     try:
-        yield pid, ip, cluster
+        yield ip, cluster
     finally:
         cluster.shutdown()
+        kill_with_dir(pid, run_dir)
 
 
 old_pid = None
@@ -119,10 +121,9 @@ rows = [('0', 'zero'),
         ('2', 'two')]
 
 
-with managed_cluster(run_with_dir(run_scylla_cmd, test_tempdir), ssl) \
-     as (pid, ip, cluster):
-    old_pid = pid
-    atexit.register(lambda: teardown(old_pid))
+with managed_cluster(test_tempdir, ssl) \
+     as (ip, cluster):
+    atexit.register(teardown)
     print(f'Create keyspace (minio listening at {s3_server_address})')
     replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
                                       'replication_factor': '1'})
@@ -155,8 +156,8 @@ with managed_cluster(run_with_dir(run_scylla_cmd, test_tempdir), ssl) \
             success = False
 
 print('Restart scylla')
-with managed_cluster(restart_with_dir(old_pid, run_scylla_cmd, test_tempdir), ssl) \
-     as (pid, ip, cluster):
+with managed_cluster(test_tempdir, ssl) \
+     as (ip, cluster):
     conn = cluster.connect()
     res = conn.execute(f"SELECT * FROM {ks}.{cf};")
     have_res = { x.name: x.value for x in res }
