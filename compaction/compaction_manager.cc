@@ -291,11 +291,11 @@ compaction_task_executor::compaction_task_executor(compaction_manager& mgr, tabl
     , _compacting_table(t)
     , _compaction_state(_cm.get_compaction_state(t))
     , _type(type)
-    , _gate_holder(_compaction_state.gate.hold())
     , _description(std::move(desc))
 {}
 
 future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task) {
+    gate::holder gate_holder = task->_compaction_state.gate.hold();
     _tasks.push_back(task);
     auto unregister_task = defer([this, task] {
         _tasks.remove(task);

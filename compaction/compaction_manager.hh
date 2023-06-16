@@ -462,7 +462,6 @@ private:
     exponential_backoff_retry _compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
     sstables::compaction_type _type;
     sstables::run_id _output_run_identifier;
-    gate::holder _gate_holder;
     sstring _description;
 
 public:
@@ -551,6 +550,8 @@ public:
     sstables::compaction_stopped_exception make_compaction_stopped_exception() const;
 
     std::string describe() const;
+
+    friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task);
 };
 
 std::ostream& operator<<(std::ostream& os, compaction::compaction_task_executor::state s);
