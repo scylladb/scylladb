@@ -1143,20 +1143,14 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type);
         auto sst_gen = env.make_sst_factory(s);
 
-        auto mt = make_lw_shared<replica::memtable>(s);
-
         const column_definition& r1_col = *s->get_column_definition("r1");
 
         auto key_for_this_shard = tests::generate_partition_keys(1, s);
-        auto apply_key = [mt, s, &r1_col] (const dht::decorated_key& key) {
-            auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
-            mutation m(s, key);
-            m.set_clustered_cell(c_key, r1_col, make_atomic_cell(utf8_type, bytes("a")));
-            mt->apply(std::move(m));
-        };
-        apply_key(key_for_this_shard[0]);
+        auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
+        mutation mut(s, key_for_this_shard[0]);
+        mut.set_clustered_cell(c_key, r1_col, make_atomic_cell(utf8_type, bytes("a")));
 
-        auto sstp = make_sstable_containing(sst_gen, mt);
+        auto sstp = make_sstable_containing(sst_gen, {std::move(mut)});
         auto key = key_for_this_shard[0];
         std::vector<sstables::shared_sstable> new_tables;
         auto creator = [&] {
