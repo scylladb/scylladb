@@ -3153,10 +3153,10 @@ SEASTAR_TEST_CASE(find_first_position_in_partition_from_sstable_test) {
     });
 }
 
-SEASTAR_TEST_CASE(test_sstable_bytes_on_disk_correctness) {
-    return test_env::do_with_async([] (test_env& env) {
+future<> test_sstable_bytes_correctness(sstring tname, test_env_config cfg) {
+    return test_env::do_with_async([tname] (test_env& env) {
         auto random_spec = tests::make_random_schema_specification(
-                get_name(),
+                tname,
                 std::uniform_int_distribution<size_t>(1, 4),
                 std::uniform_int_distribution<size_t>(2, 4),
                 std::uniform_int_distribution<size_t>(2, 8),
@@ -3185,5 +3185,13 @@ SEASTAR_TEST_CASE(test_sstable_bytes_on_disk_correctness) {
         testlog.info("expected={}, actual={}", expected_bytes_on_disk, sst->bytes_on_disk());
 
         BOOST_REQUIRE(sst->bytes_on_disk() == expected_bytes_on_disk);
-    });
+    }, std::move(cfg));
+}
+
+SEASTAR_TEST_CASE(test_sstable_bytes_on_disk_correctness) {
+    return test_sstable_bytes_correctness(get_name() + "_disk", {});
+}
+
+SEASTAR_TEST_CASE(test_sstable_bytes_on_s3_correctness) {
+    return test_sstable_bytes_correctness(get_name() + "_s3", test_env_config{ .storage = make_test_object_storage_options() });
 }
