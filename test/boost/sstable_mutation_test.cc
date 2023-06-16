@@ -853,10 +853,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
         auto cell = atomic_cell::make_live(*int32_type, 1, int32_type->decompose(17), { });
         m.set_clustered_cell(ck, *s->get_column_definition("v"), std::move(cell));
 
-        auto mt = make_lw_shared<replica::memtable>(s);
-        mt->apply(std::move(m));
-
-        auto sst = make_sstable_containing(env.make_sstable(s, version), mt);
+        auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)});
         auto mut = with_closeable(sst->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice()), [] (auto& mr) {
             return read_mutation_from_flat_mutation_reader(mr);
         }).get0();
@@ -881,10 +878,7 @@ SEASTAR_TEST_CASE(test_has_partition_key) {
             auto cell = atomic_cell::make_live(*int32_type, 1, int32_type->decompose(17), { });
             m.set_clustered_cell(ck, *s->get_column_definition("v"), std::move(cell));
 
-            auto mt = make_lw_shared<replica::memtable>(s);
-            mt->apply(std::move(m));
-
-            auto sst = make_sstable_containing(env.make_sstable(s, version), mt);
+            auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)});
             auto hk = sstables::sstable::make_hashed_key(*s, dk.key());
             auto mr = sst->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
             auto close_mr = deferred_close(mr);

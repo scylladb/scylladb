@@ -159,8 +159,6 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
     for (auto i : idx) {
         // create 4 sstables of similar size to be compacted later on.
 
-        auto mt = make_lw_shared<replica::memtable>(s);
-
         const column_definition& r1_col = *s->get_column_definition("r1");
 
         sstring k = "key" + to_sstring(i);
@@ -169,9 +167,8 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
 
         mutation m(s, key);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
-        mt->apply(std::move(m));
 
-        auto sst = make_sstable_containing(sst_gen, mt);
+        auto sst = make_sstable_containing(sst_gen, {std::move(m)});
         column_family_test(cf).add_sstable(sst).get();
     }
 
@@ -326,8 +323,6 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
 
         if (create_sstables) {
             for (auto i = 0; i < create_sstables; i++) {
-                auto mt = make_lw_shared<replica::memtable>(s);
-
                 const column_definition& r1_col = *s->get_column_definition("r1");
 
                 auto sst = sst_gen();
@@ -337,9 +332,8 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
 
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(utf8_type, bytes(min_sstable_size, 'a')));
-                mt->apply(std::move(m));
 
-                sst = make_sstable_containing(sst, mt);
+                sst = make_sstable_containing(sst, {std::move(m)});
                 sstables.push_back(sst);
             }
         }
@@ -1306,12 +1300,10 @@ SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
         auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
         auto sst_gen = env.make_sst_factory(s);
 
-        auto mt = make_lw_shared<replica::memtable>(s);
         mutation m(s, key);
         tombstone tomb(api::new_timestamp(), gc_clock::now() - std::chrono::seconds(3600));
         m.partition().apply_delete(*s, c_key, tomb);
-        mt->apply(std::move(m));
-        auto sst = make_sstable_containing(sst_gen, mt);
+        auto sst = make_sstable_containing(sst_gen, {std::move(m)});
 
         auto cf = env.make_table_for_tests(s);
         auto close_cf = deferred_stop(cf);
