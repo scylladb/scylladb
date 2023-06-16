@@ -422,13 +422,23 @@ public:
     virtual ~sstables_task_executor();
 };
 
-class major_compaction_task_executor : public compaction_task_executor {
+class major_compaction_task_executor : public compaction_task_executor, public major_compaction_task_impl {
 public:
-    major_compaction_task_executor(compaction_manager& mgr, table_state* t)
+    major_compaction_task_executor(compaction_manager& mgr,
+            table_state* t,
+            tasks::task_id parent_id)
         : compaction_task_executor(mgr, t, sstables::compaction_type::Compaction, "Major compaction")
+        , major_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
     {}
 
+    virtual tasks::is_internal is_internal() const noexcept override {
+        return tasks::is_internal::yes;
+    }
 protected:
+    virtual future<> run() override {
+        return compaction_done().discard_result();
+    }
+
     // first take major compaction semaphore, then exclusely take compaction lock for table.
     // it cannot be the other way around, or minor compaction for this table would be
     // prevented while an ongoing major compaction doesn't release the semaphore.
@@ -472,9 +482,16 @@ protected:
 
 future<> compaction_manager::perform_major_compaction(table_state& t, tasks::task_info info) {
     if (_state != state::enabled) {
-        return make_ready_future<>();
+        co_return;
     }
-    return perform_task(make_shared<major_compaction_task_executor>(*this, &t)).discard_result();;
+    auto task_executor = make_shared<major_compaction_task_executor>(*this, &t, info.id);
+    if (info) {
+        auto task = co_await _task_manager_module->make_task(task_executor, info);
+        task->start();
+        // We do not need to wait for the task to be done as compaction_task_executor side will take care of that.
+    }
+
+    co_await perform_task(std::move(task_executor)).discard_result();
 }
 
 namespace compaction {
