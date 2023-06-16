@@ -57,9 +57,8 @@ sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, s
             i = 0;
         }
     }
-    write_memtable_to_sstable_for_test(*mt, sst).get();
-    sstable_open_config cfg { .load_first_and_last_position_metadata = true };
-    sst->open_data(cfg).get();
+
+    make_sstable_containing(sst, mt);
 
     std::set<mutation, mutation_decorated_key_less_comparator> merged;
     for (auto&& m : muts) {
