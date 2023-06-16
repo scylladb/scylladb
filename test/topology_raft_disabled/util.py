@@ -17,18 +17,6 @@ from test.pylib.manager_client import ManagerClient, IPAddress, ServerInfo
 from test.pylib.util import wait_for
 
 
-async def reconnect_driver(manager: ManagerClient) -> Session:
-    """Workaround for scylladb/python-driver#170:
-       the existing driver session may not reconnect, create a new one.
-    """
-    logging.info(f"Reconnecting driver")
-    manager.driver_close()
-    await manager.driver_connect()
-    cql = manager.cql
-    assert(cql)
-    return cql
-
-
 async def restart(manager: ManagerClient, server: ServerInfo) -> None:
     logging.info(f"Stopping {server} gracefully")
     await manager.server_stop_gracefully(server.server_id)
