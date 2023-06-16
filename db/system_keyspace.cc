@@ -1555,6 +1555,13 @@ future<db_clock::time_point> system_keyspace::get_truncated_at(table_id cf_id) {
     });
 }
 
+static set_type_impl::native_type deserialize_set_column(const schema& s, const cql3::untyped_result_set_row& row, const char* name) {
+    auto blob = row.get_blob(name);
+    auto cdef = s.get_column_definition(name);
+    auto deserialized = cdef->type->deserialize(blob);
+    return value_cast<set_type_impl::native_type>(deserialized);
+}
+
 static set_type_impl::native_type prepare_tokens(const std::unordered_set<dht::token>& tokens) {
     set_type_impl::native_type tset;
     for (auto& t: tokens) {
@@ -1563,7 +1570,7 @@ static set_type_impl::native_type prepare_tokens(const std::unordered_set<dht::t
     return tset;
 }
 
-std::unordered_set<dht::token> decode_tokens(set_type_impl::native_type& tokens) {
+std::unordered_set<dht::token> decode_tokens(const set_type_impl::native_type& tokens) {
     std::unordered_set<dht::token> tset;
     for (auto& t: tokens) {
         auto str = value_cast<sstring>(t);
@@ -1594,11 +1601,7 @@ future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> sy
         for (auto& row : *cql_result) {
             auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
             if (row.has("tokens")) {
-                auto blob = row.get_blob("tokens");
-                auto cdef = peers()->get_column_definition("tokens");
-                auto deserialized = cdef->type->deserialize(blob);
-                auto tokens = value_cast<set_type_impl::native_type>(deserialized);
-                ret.emplace(peer, decode_tokens(tokens));
+                ret.emplace(peer, decode_tokens(deserialize_set_column(*peers(), row, "tokens")));
             }
         }
         return ret;
@@ -1792,12 +1795,8 @@ future<std::unordered_set<dht::token>> system_keyspace::get_saved_tokens() {
             return make_ready_future<std::unordered_set<dht::token>>();
         }
 
-        auto blob = msg->one().get_blob("tokens");
-        auto cdef = local()->get_column_definition("tokens");
-        auto deserialized = cdef->type->deserialize(blob);
-        auto tokens = value_cast<set_type_impl::native_type>(deserialized);
-
-        return make_ready_future<std::unordered_set<dht::token>>(decode_tokens(tokens));
+        auto decoded_tokens = decode_tokens(deserialize_set_column(*local(), msg->one(), "tokens"));
+        return make_ready_future<std::unordered_set<dht::token>>(std::move(decoded_tokens));
     });
 }
 
@@ -3495,11 +3494,7 @@ future<service::topology> system_keyspace::load_topology_state() {
 
         std::optional<service::ring_slice> ring_slice;
         if (row.has("tokens")) {
-            auto blob = row.get_blob("tokens");
-            auto cdef = topology()->get_column_definition("tokens");
-            auto deserialized = cdef->type->deserialize(blob);
-            auto ts = value_cast<set_type_impl::native_type>(deserialized);
-            auto tokens = decode_tokens(ts);
+            auto tokens = decode_tokens(deserialize_set_column(*topology(), row, "tokens"));
 
             if (tokens.empty()) {
                 on_fatal_internal_error(slogger, format(
