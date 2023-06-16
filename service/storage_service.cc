@@ -724,27 +724,22 @@ class topology_coordinator {
     future<> cleanup_group0_config_if_needed() {
         auto& topo = _topo_sm._topology;
         auto rconf = _group0.group0_server().get_configuration();
-        if (rconf.current.size() > topo.normal_nodes.size() + topo.new_nodes.size() + topo.transition_nodes.size()) {
-            // Raft config is larger than the sum of all nodes not in 'left' state.
+        if (!rconf.is_joint()) {
             // Find nodes that 'left' but still in the config and remove them
-            size_t found = 0;
-            co_await coroutine::parallel_for_each(topo.left_nodes | boost::adaptors::filtered(
-                    [&rconf] (raft::server_id id) { return rconf.contains(id); }),
-                    [&] (raft::server_id id) -> future<> {
-                        found++;
-                        // Remove from group 0 nodes that left. They may failed to do so by themselves
-                        try {
-                            slogger.trace("raft topology: topology coordinator fiber removing {}"
-                                          " from the raft since it is in `left` state", id);
-                            co_await _group0.group0_server().modify_config({}, {id}, &_as);
-                        } catch (const raft::commit_status_unknown&) {
-                            slogger.trace("raft topology: topology coordinator fiber got unknown status"
-                                          " while removing {} from the raft", id);
-                        }
-                    });
-            if (!found) {
-                slogger.warn("raft topology: raft config is larger then sum of all nodes"
-                             " in non left state but no nodes in left state were found");
+            auto to_remove = boost::copy_range<std::vector<raft::server_id>>(
+                    rconf.current
+                    | boost::adaptors::transformed([&] (const raft::config_member& m) { return m.addr.id; })
+                    | boost::adaptors::filtered([&] (const raft::server_id& id) { return topo.left_nodes.contains(id); }));
+            if (!to_remove.empty()) {
+                // Remove from group 0 nodes that left. They may failed to do so by themselves
+                try {
+                    slogger.trace("raft topology: topology coordinator fiber removing {}"
+                                  " from raft since they are in `left` state", to_remove);
+                    co_await _group0.group0_server().modify_config({}, to_remove, &_as);
+                } catch (const raft::commit_status_unknown&) {
+                    slogger.trace("raft topology: topology coordinator fiber got unknown status"
+                                  " while removing {} from raft", to_remove);
+                }
             }
         }
     }
