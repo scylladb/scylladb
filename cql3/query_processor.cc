@@ -857,6 +857,11 @@ query_processor::execute_broadcast_table_query(const service::broadcast_tables::
     return service::broadcast_tables::execute(get_group0_client(), query);
 }
 
+future<query::forward_result>
+query_processor::forward(query::forward_request req, tracing::trace_state_ptr tr_state) {
+    return forwarder().dispatch(std::move(req), std::move(tr_state));
+}
+
 future<::shared_ptr<messages::result_message>>
 query_processor::execute_schema_statement(const statements::schema_altering_statement& stmt, service::query_state& state, const query_options& options) {
     ::shared_ptr<cql_transport::event::schema_change> ce;

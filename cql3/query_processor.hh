@@ -165,10 +165,6 @@ public:
         return _proxy;
     }
 
-    service::forward_service& forwarder() {
-        return _forwarder;
-    }
-
     cql_stats& get_cql_stats() {
         return _cql_stats;
     }
@@ -402,6 +398,10 @@ public:
     future<service::broadcast_tables::query_result>
     execute_broadcast_table_query(const service::broadcast_tables::query&);
 
+    // Splits given `forward_request` and distributes execution of resulting subrequests across a cluster.
+    future<query::forward_result>
+    forward(query::forward_request, tracing::trace_state_ptr);
+
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_schema_statement(const statements::schema_altering_statement&, service::query_state& state, const query_options& options);
 
@@ -426,6 +426,7 @@ public:
 private:
     service::migration_manager& get_migration_manager() noexcept { return _mm; }
     service::raft_group0_client& get_group0_client() { return _group0_client; }
+    service::forward_service& forwarder() { return _forwarder; }
 
     query_options make_internal_options(
             const statements::prepared_statement::checked_weak_ptr& p,
