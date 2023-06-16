@@ -454,6 +454,8 @@ public:
     static future<bool> group0_history_contains(utils::UUID state_id);
 
     static future<service::topology> load_topology_state();
+    future<int64_t> get_topology_fence_version();
+    future<> update_topology_fence_version(int64_t value);
 
     // Read CDC generation data with the given UUID as key.
     // Precondition: the data is known to be present in the table (because it was committed earlier through group 0).

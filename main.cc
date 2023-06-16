@@ -1542,6 +1542,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_ss_msg = defer_verbose_shutdown("storage service messaging", [&ss] {
                 ss.local().uninit_messaging_service_part().get();
             });
+
+            // It's essential to load fencing_version prior to starting the messaging service,
+            // since incoming messages may require fencing.
+            ss.local().update_fence_version(sys_ks.local().get_topology_fence_version().get()).get();
+
             api::set_server_messaging_service(ctx, messaging).get();
             auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
                 api::unset_server_messaging_service(ctx).get();

@@ -75,6 +75,10 @@ struct topology {
 
     std::optional<transition_state> tstate;
 
+    using version_t = int64_t;
+    static constexpr version_t initial_version = 1;
+    version_t version = initial_version;
+
     // Nodes that are normal members of the ring
     std::unordered_map<raft::server_id, replica_state> normal_nodes;
     // Nodes that are left
@@ -130,10 +134,11 @@ struct topology_state_machine {
 // Raft leader uses this command to drive bootstrap process on other nodes
 struct raft_topology_cmd {
       enum class command: uint16_t {
-          barrier,         // request to wait for the latest topology
-          stream_ranges,   // reqeust to stream data, return when streaming is
-                           // done
-          fence_old_reads  // wait for all reads started before to complete
+          barrier,              // request to wait for the latest topology
+          barrier_and_drain,    // same + drain requests which use previous versions
+          stream_ranges,        // reqeust to stream data, return when streaming is
+                                // done
+          fence                 // erect the fence against requests with stale versions
       };
       command cmd;
 };
@@ -147,6 +152,19 @@ struct raft_topology_cmd_result {
     command_status status = command_status::fail;
 };
 
+// This class is used in RPC's signatures to hold the topology_version of the caller.
+// The reason why we wrap the topology_version in this class is that we anticipate
+// other versions to occur in the future, such as the schema version.
+struct fencing_token {
+    topology::version_t topology_version{0};
+    // topology_version == 0 means the caller is not aware about
+    // the fencing or doesn't use it for some reason.
+    explicit operator bool() const {
+        return topology_version != 0;
+    }
+};
+
+std::ostream& operator<<(std::ostream& os, const fencing_token& fencing_token);
 std::ostream& operator<<(std::ostream& os, topology::transition_state s);
 topology::transition_state transition_state_from_string(const sstring& s);
 std::ostream& operator<<(std::ostream& os, node_state s);

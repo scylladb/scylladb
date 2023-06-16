@@ -502,7 +502,14 @@ private:
     // Applies mutations on this node.
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(std::vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info);
-
+    // Confirm whether the topology version from the token is greater than or equal
+    // to the current fencing_version sourced from shared_token_metadata.
+    // If it is not, the function will return an engaged optional.
+    std::optional<replica::stale_topology_exception> apply_fence(fencing_token token,
+        gms::inet_address caller_address) const noexcept;
+    // Do the same when the future is resolved without exception.
+    template <typename T>
+    future<T> apply_fence(future<T> future, fencing_token fence, gms::inet_address caller_address) const;
 public:
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
