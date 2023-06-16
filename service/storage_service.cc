@@ -655,66 +655,28 @@ const schema& topology_node_mutation_builder::schema() const {
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const sstring& value) {
-    auto cdef = _builder._s->get_column_definition(cell);
-    assert(cdef);
-    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _builder._ts, cdef->type->decompose(value)));
-    return *this;
+    return apply_atomic(cell, value);
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const raft::server_id& value) {
-    auto cdef = _builder._s->get_column_definition(cell);
-    assert(cdef);
-    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _builder._ts, cdef->type->decompose(value.uuid())));
-    return *this;
+    return apply_atomic(cell, value.uuid());
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const uint32_t& value) {
-    auto cdef = _builder._s->get_column_definition(cell);
-    assert(cdef);
-    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _builder._ts, cdef->type->decompose(int32_t(value))));
-    return *this;
+    return apply_atomic(cell, int32_t(value));
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(
         const char* cell, const utils::UUID& value) {
-    auto cdef = _builder._s->get_column_definition(cell);
-    assert(cdef);
-    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _builder._ts, cdef->type->decompose(value)));
-    return *this;
+    return apply_atomic(cell, value);
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::del(const char* cell) {
-    auto cdef = _builder._s->get_column_definition(cell);
-    assert(cdef);
-    if (!cdef->type->is_multi_cell()) {
-        _r.cells().apply(*cdef, atomic_cell::make_dead(_builder._ts, gc_clock::now()));
-    } else {
-        collection_mutation_description cm;
-        cm.tomb = tombstone{_builder._ts, gc_clock::now()};
-        _r.cells().apply(*cdef, cm.serialize(*cdef->type));
-    }
-    return *this;
+    return builder_base::del(cell);
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const std::unordered_set<dht::token>& tokens) {
-    auto cdef = _builder._s->get_column_definition(cell);
-    assert(cdef);
-    collection_mutation_description cm;
-    if (tokens.size()) {
-        auto vtype = static_pointer_cast<const set_type_impl>(cdef->type)->get_elements_type();
-
-        cm.cells.reserve(tokens.size());
-
-        for (auto&& value : tokens) {
-            cm.cells.emplace_back(vtype->decompose(value.to_sstring()), atomic_cell::make_live(*bytes_type, _builder._ts, bytes_view()));
-        }
-
-        cm.tomb = tombstone(_builder._ts - 1, gc_clock::now());
-        _r.cells().apply(*cdef, cm.serialize(*cdef->type));
-    } else {
-        del(cell);
-    }
-    return *this;
+    return apply_set(cell, collection_apply_mode::overwrite, tokens | boost::adaptors::transformed([] (const auto& t) { return t.to_sstring(); }));
 }
 
 canonical_mutation topology_node_mutation_builder::build() {
@@ -734,40 +696,31 @@ const schema& topology_mutation_builder::schema() const {
 }
 
 topology_mutation_builder& topology_mutation_builder::set_transition_state(topology::transition_state value) {
-    _m.set_static_cell("transition_state", ::format("{}", value), _ts);
-    return *this;
+    return apply_atomic("transition_state", ::format("{}", value));
 }
 
 topology_mutation_builder& topology_mutation_builder::del_transition_state() {
-    auto cdef = _s->get_column_definition("transition_state");
-    assert(cdef);
-    _m.partition().static_row().apply(*cdef, atomic_cell::make_dead(_ts, gc_clock::now()));
-    return *this;
+    return del("transition_state");
 }
 
 topology_mutation_builder& topology_mutation_builder::set_current_cdc_generation_id(
         const cdc::generation_id_v2& value) {
-    _m.set_static_cell("current_cdc_generation_timestamp", value.ts, _ts);
-    _m.set_static_cell("current_cdc_generation_uuid", value.id, _ts);
+    apply_atomic("current_cdc_generation_timestamp", value.ts);
+    apply_atomic("current_cdc_generation_uuid", value.id);
     return *this;
 }
 
 topology_mutation_builder& topology_mutation_builder::set_new_cdc_generation_data_uuid(
         const utils::UUID& value) {
-    _m.set_static_cell("new_cdc_generation_data_uuid", value, _ts);
-    return *this;
+    return apply_atomic("new_cdc_generation_data_uuid", value);
 }
 
 topology_mutation_builder& topology_mutation_builder::set_global_topology_request(global_topology_request value) {
-    _m.set_static_cell("global_topology_request", ::format("{}", value), _ts);
-    return *this;
+    return apply_atomic("global_topology_request", ::format("{}", value));
 }
 
 topology_mutation_builder& topology_mutation_builder::del_global_topology_request() {
-    auto cdef = _s->get_column_definition("global_topology_request");
-    assert(cdef);
-    _m.partition().static_row().apply(*cdef, atomic_cell::make_dead(_ts, gc_clock::now()));
-    return *this;
+    return del("global_topology_request");
 }
 
 topology_node_mutation_builder& topology_mutation_builder::with_node(raft::server_id n) {
