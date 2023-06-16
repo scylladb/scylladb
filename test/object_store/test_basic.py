@@ -5,36 +5,13 @@ sys.path.insert(1, sys.path[0] + '/../cql-pytest')
 import run
 from util import format_tuples
 
-import atexit
 import os
 import requests
-import shutil
 import signal
 import yaml
+import pytest
+
 from contextlib import contextmanager
-from dataclasses import dataclass
-
-success = True
-
-ssl = '--ssl' in sys.argv
-
-test_tempdir = run.pid_to_dir(os.getpid())
-os.mkdir(test_tempdir)
-
-
-@dataclass
-class S3_Server:
-    address: str
-    port: int
-    bucket_name: str
-
-
-def teardown():
-    sys.stdout.flush()
-    log = open(os.path.join(test_tempdir, 'log'), 'rb')
-    shutil.copyfileobj(log, sys.stdout.buffer)
-    shutil.rmtree(test_tempdir)
-
 
 def get_scylla_with_s3_cmd(tempdir, ssl, s3_server):
     '''return the command args and environmental variables for running scylla'''
@@ -117,68 +94,62 @@ def managed_cluster(run_dir, ssl, s3_server):
         kill_with_dir(pid, run_dir)
 
 
-old_pid = None
-ks = 'test_ks'
-cf = 'test_cf'
-rows = [('0', 'zero'),
-        ('1', 'one'),
-        ('2', 'two')]
+@pytest.mark.asyncio
+async def test_basic(test_tempdir, s3_server, ssl):
+    '''verify ownership table is updated, and tables written to S3 can be read after scylla restarts'''
+    ks = 'test_ks'
+    cf = 'test_cf'
+    rows = [('0', 'zero'),
+            ('1', 'one'),
+            ('2', 'two')]
 
+    with managed_cluster(test_tempdir, ssl, s3_server) as (ip, cluster):
+        print(f'Create keyspace (minio listening at {s3_server.address})')
+        replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
+                                          'replication_factor': '1'})
+        storage_opts = format_tuples(type='S3',
+                                     endpoint=s3_server.address,
+                                     bucket=s3_server.bucket_name)
 
-s3_server = S3_Server(os.environ['S3_SERVER_ADDRESS_FOR_TEST'],
-                      int(os.environ['S3_SERVER_PORT_FOR_TEST']),
-                      os.environ['S3_PUBLIC_BUCKET_FOR_TEST'])
+        conn = cluster.connect()
+        conn.execute((f"CREATE KEYSPACE {ks} WITH"
+                      f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
+        conn.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+        for row in rows:
+            cql_fmt = "INSERT INTO {}.{} ( name, value ) VALUES ('{}', '{}');"
+            conn.execute(cql_fmt.format(ks, cf, *row))
+        res = conn.execute(f"SELECT * FROM {ks}.{cf};")
 
-with managed_cluster(test_tempdir, ssl, s3_server) \
-     as (ip, cluster):
-    atexit.register(teardown)
-    print(f'Create keyspace (minio listening at {s3_server.address})')
-    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
-                                      'replication_factor': '1'})
-    storage_opts = format_tuples(type='S3',
-                                 endpoint=s3_server.address,
-                                 bucket=s3_server.bucket_name)
-
-    conn = cluster.connect()
-    conn.execute((f"CREATE KEYSPACE {ks} WITH"
-                  f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
-    conn.execute(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
-    for row in rows:
-        cql_fmt = "INSERT INTO {}.{} ( name, value ) VALUES ('{}', '{}');"
-        conn.execute(cql_fmt.format(ks, cf, *row))
-    res = conn.execute(f"SELECT * FROM {ks}.{cf};")
-
-    r = requests.post(f'http://{ip}:10000/storage_service/keyspace_flush/{ks}', timeout=60)
-    if r.status_code != 200:
-        print(f'Error flushing keyspace: {r}')
-        success = False
-
-    # Check that the ownership table is populated properly
-    res = conn.execute("SELECT * FROM system.sstables;")
-    for row in res:
-        if not row.location.startswith(test_tempdir):
-            print(f'Unexpected entry location in registry: {row.location}')
-            success = False
-        if row.status != 'sealed':
-            print(f'Unexpected entry status in registry: {row.status}')
+        r = requests.post(f'http://{ip}:10000/storage_service/keyspace_flush/{ks}', timeout=60)
+        if r.status_code != 200:
+            print(f'Error flushing keyspace: {r}')
             success = False
 
-print('Restart scylla')
-with managed_cluster(test_tempdir, ssl, s3_server) \
-     as (ip, cluster):
-    conn = cluster.connect()
-    res = conn.execute(f"SELECT * FROM {ks}.{cf};")
-    have_res = { x.name: x.value for x in res }
-    if have_res != dict(rows):
-        print(f'Unexpected table content: {have_res}')
-        success = False
+        # Check that the ownership table is populated properly
+        res = conn.execute("SELECT * FROM system.sstables;")
+        for row in res:
+            if not row.location.startswith(test_tempdir):
+                print(f'Unexpected entry location in registry: {row.location}')
+                success = False
+            if row.status != 'sealed':
+                print(f'Unexpected entry status in registry: {row.status}')
+                success = False
 
-    print('Drop table')
-    conn.execute(f"DROP TABLE {ks}.{cf};")
-    # Check that the ownership table is de-populated
-    res = conn.execute("SELECT * FROM system.sstables;")
-    for row in res:
-        print(f'Unexpected entry in registry: {row.location} {row.status}')
-        success = False
+    print('Restart scylla')
+    with managed_cluster(test_tempdir, ssl, s3_server) as (ip, cluster):
+        conn = cluster.connect()
+        res = conn.execute(f"SELECT * FROM {ks}.{cf};")
+        have_res = { x.name: x.value for x in res }
+        if have_res != dict(rows):
+            print(f'Unexpected table content: {have_res}')
+            success = False
 
-sys.exit(0 if success else 1)
+        print('Drop table')
+        conn.execute(f"DROP TABLE {ks}.{cf};")
+        # Check that the ownership table is de-populated
+        res = conn.execute("SELECT * FROM system.sstables;")
+        for row in res:
+            print(f'Unexpected entry in registry: {row.location} {row.status}')
+            success = False
+
+    assert success
