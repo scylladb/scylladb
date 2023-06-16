@@ -35,7 +35,7 @@ def check_compaction_task(cql, this_dc, rest_api, run_compaction, compaction_typ
                     check_child_parent_relationship(rest_api, top_level_task, depth)
 
 def test_major_keyspace_compaction_task(cql, this_dc, rest_api):
-    task_tree_depth = 2
+    task_tree_depth = 3
     # keyspace major compaction
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("POST", f"storage_service/keyspace_compaction/{keyspace}"), "major compaction", task_tree_depth)
     # column family major compaction
