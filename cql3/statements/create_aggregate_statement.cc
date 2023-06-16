@@ -19,6 +19,8 @@
 #include "mutation/mutation.hh"
 #include "cql3/query_processor.hh"
 #include "gms/feature_service.hh"
+#include <boost/range/adaptor/transformed.hpp>
+
 
 namespace cql3 {
 
@@ -38,10 +40,11 @@ seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement:
     acc_types.insert(acc_types.end(), _arg_types.begin(), _arg_types.end());
     auto state_func = dynamic_pointer_cast<functions::scalar_function>(functions::functions::find(functions::function_name{_name.keyspace, _sfunc}, acc_types));
     if (!state_func) {
-        throw exceptions::invalid_request_exception(format("State function not found: {}", _sfunc));
+        auto acc_type_names = acc_types | boost::adaptors::transformed([] (auto&& t) { return t->cql3_type_name(); });
+        throw exceptions::invalid_request_exception(format("State function {}({}) not found", _sfunc, fmt::join(acc_type_names, ", ")));
     }
     if (state_func->return_type() != state_type) {
-        throw exceptions::invalid_request_exception(format("State function '{}' doesn't return state", _sfunc));
+        throw exceptions::invalid_request_exception(format("State function '{}' doesn't return state ({})", _sfunc, state_type->cql3_type_name()));
     }
 
     ::shared_ptr<cql3::functions::scalar_function> reduce_func = nullptr;
@@ -59,7 +62,7 @@ seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement:
     if (_ffunc) {
         final_func = dynamic_pointer_cast<functions::scalar_function>(functions::functions::find(functions::function_name{_name.keyspace, _ffunc.value()}, {state_type}));
         if (!final_func) {
-            throw exceptions::invalid_request_exception(format("Final function not found: {}", _ffunc.value()));
+            throw exceptions::invalid_request_exception(format("Final function {}({}) not found", _ffunc.value(), state_type->cql3_type_name()));
         }
     }
 
