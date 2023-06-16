@@ -17,6 +17,7 @@ from cassandra.pool import Host        # type: ignore # pylint: disable=no-name-
 from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature, get_supported_features, get_enabled_features
+from test.topology.util import reconnect_driver
 import pytest
 
 
@@ -157,8 +158,11 @@ async def test_downgrade_after_successful_upgrade_fails(manager: ManagerClient) 
     servers = await manager.running_servers()
     await change_support_for_test_feature_and_restart(manager, servers, enable=True)
 
+    # Workaround for scylladb/python-driver#230 - the driver might not
+    # reconnect after all nodes are stopped at once.
+    cql = await reconnect_driver(manager)
+
     # Wait until the feature is considered enabled by all nodes
-    cql = manager.cql
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     logging.info(f"Waiting until {TEST_FEATURE_NAME} is enabled on all nodes")
     await asyncio.gather(*(wait_for_feature(TEST_FEATURE_NAME, cql, h, time.time() + 60) for h in hosts))
