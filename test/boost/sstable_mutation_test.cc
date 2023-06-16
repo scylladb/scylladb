@@ -392,15 +392,9 @@ SEASTAR_TEST_CASE(read_partial_range_2) {
 }
 
 static
-mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
-        sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
-    return as_mutation_source(make_sstable(env, s, dir, std::move(mutations), env.manager().configure_writer(), version, query_time));
-}
-
-static
 mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr s, std::vector<mutation> mutations,
         sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
-    return make_sstable_mutation_source(env, std::move(s), env.tempdir().path().native(), std::move(mutations), version, query_time);
+    return as_mutation_source(make_sstable(env, s, std::move(mutations), env.manager().configure_writer(), version, query_time));
 }
 
 SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
