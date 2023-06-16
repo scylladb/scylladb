@@ -223,10 +223,6 @@ public:
         co_await _sst->_storage->move(*_sst, std::move(new_dir), new_generation, nullptr);
         _sst->_generation = std::move(new_generation);
     }
-
-    sstring storage_prefix() const {
-        return _sst->_storage->prefix();
-    }
 };
 
 inline auto replacer_fn_no_op() {
