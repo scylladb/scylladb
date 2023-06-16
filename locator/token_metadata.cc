@@ -1192,13 +1192,22 @@ void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {
 
 void shared_token_metadata::update_fence_version(token_metadata::version_t version) {
     if (const auto current_version = _shared->get_version(); version > current_version) {
+        // The token_metadata::version under no circumstance can go backwards.
+        // Even in case of topology change coordinator moving to another node
+        // this condition must hold, that is why we treat its violation
+        // as an internal error.
         on_internal_error(tlogger,
             format("shared_token_metadata: invalid new fence version, can't be greater than the current version, "
                    "current version {}, new fence version {}", current_version, version));
     }
     if (version < _fence_version) {
-        on_internal_error(tlogger,
-            format("shared_token_metadata: must not set decreasing fence version: {} -> {}", _fence_version, version));
+        // If topology change coordinator moved to another node,
+        // it can get ahead and increment the fence version
+        // while we are handling raft_topology_cmd::command::fence,
+        // so we just throw an error in this case.
+        throw std::runtime_error(
+            format("shared_token_metadata: can't set decreasing fence version: {} -> {}",
+                _fence_version, version));
     }
     _fence_version = version;
 }
