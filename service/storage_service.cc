@@ -539,10 +539,8 @@ private:
 public:
     topology_node_mutation_builder(topology_mutation_builder&, raft::server_id);
 
-    template<typename T>
-    topology_node_mutation_builder& set(const char* cell, const T& value) {
-        return set(cell, sstring{::format("{}", value)});
-    }
+    topology_node_mutation_builder& set(const char* cell, node_state value);
+    topology_node_mutation_builder& set(const char* cell, topology_request value);
     topology_node_mutation_builder& set(const char* cell, const sstring& value);
     topology_node_mutation_builder& set(const char* cell, const raft::server_id& value);
     topology_node_mutation_builder& set(const char* cell, const std::unordered_set<dht::token>& value);
@@ -652,6 +650,14 @@ api::timestamp_type topology_node_mutation_builder::timestamp() const {
 
 const schema& topology_node_mutation_builder::schema() const {
     return *_builder._s;
+}
+
+topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, node_state value) {
+    return apply_atomic(cell, sstring{::format("{}", value)});
+}
+
+topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, topology_request value) {
+    return apply_atomic(cell, sstring{::format("{}", value)});
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const sstring& value) {
