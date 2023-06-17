@@ -36,6 +36,30 @@ bool topology::contains(raft::server_id id) {
            left_nodes.contains(id);
 }
 
+std::set<sstring> topology::calculate_not_yet_enabled_features() const {
+    std::set<sstring> to_enable;
+    bool first = true;
+
+    for (const auto& [_, rs] : normal_nodes) {
+        if (!first && to_enable.empty()) {
+            break;
+        }
+
+        if (first) {
+            // This is the first node that we process.
+            // Calculate the set of features that this node understands
+            // but are not enabled yet.
+            std::ranges::set_difference(rs.supported_features, enabled_features, std::inserter(to_enable, to_enable.begin()));
+            first = false;
+        } else {
+            // Erase the elements that this node doesn't support
+            std::erase_if(to_enable, [&rs = rs] (const sstring& f) { return !rs.supported_features.contains(f); });
+        }
+    }
+
+    return to_enable;
+}
+
 std::ostream& operator<<(std::ostream& os, const fencing_token& fencing_token) {
     return os << "{" << fencing_token.topology_version << "}";
 }
