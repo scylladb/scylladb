@@ -286,8 +286,7 @@ modes = {
         'cxx_ld_flags': '',
         'stack-usage-threshold': 1024*40,
         # -fasan -Og breaks some coroutines on aarch64, use -O0 instead
-        # also, -Og was seen to make all variables "optimized out"
-        'optimization-level': '0',
+        'optimization-level': ('0' if platform.machine() == 'aarch64' else 'g'),
         'per_src_extra_cxxflags': {},
         'cmake_build_type': 'Debug',
         'can_have_debug_info': True,
