@@ -2023,6 +2023,47 @@ data_value deserialize_aux(const tuple_type_impl& t, View v) {
     return data_value::make(t.shared_from_this(), std::make_unique<tuple_type_impl::native_type>(std::move(ret)));
 }
 
+template <FragmentedView View>
+std::optional<std::optional<View>> read_nth_tuple_element(View serialized_tuple, std::size_t element_index) {
+    for (std::size_t i = 0; serialized_tuple.size_bytes() > 0; i++) {
+        // element being std::nullopt means that its value is NULL.
+        std::optional<View> element = read_tuple_element(serialized_tuple);
+
+        if (i == element_index) {
+            return std::make_optional(element);
+        }
+    }
+
+    return std::nullopt;
+}
+
+template std::optional<std::optional<managed_bytes_view>> read_nth_tuple_element(managed_bytes_view serialized_tuple,
+                                                                              std::size_t element_index);
+template std::optional<std::optional<fragmented_temporary_buffer::view>> read_nth_tuple_element(
+    fragmented_temporary_buffer::view serialized_tuple,
+    std::size_t element_index);
+
+template <FragmentedView View>
+std::optional<View> read_nth_user_type_field(View serialized_user_type, std::size_t element_index) {
+    // UDT is serialized as a tuple of field values, so we can use read_nth_tuple_element to read
+    // the value of nth UDT field.
+    std::optional<std::optional<View>> read_field = read_nth_tuple_element(serialized_user_type, element_index);
+
+    if (!read_field.has_value()) {
+        // There is no field with this index, assume that this field is NULL.
+        return std::nullopt;
+    }
+
+    // Field value found, return it.
+    return *read_field;
+}
+
+template std::optional<managed_bytes_view> read_nth_user_type_field(managed_bytes_view serialized_user_type,
+                                                                    std::size_t element_index);
+template std::optional<fragmented_temporary_buffer::view> read_nth_user_type_field(
+    fragmented_temporary_buffer::view serialized_user_type,
+    std::size_t element_index);
+
 template<FragmentedView View>
 utils::multiprecision_int deserialize_value(const varint_type_impl&, View v) {
     if (v.empty()) {
@@ -2959,9 +3000,9 @@ bool abstract_type::is_value_compatible_with(const abstract_type& other) const {
 }
 
 std::optional<size_t>
-user_type_impl::idx_of_field(const bytes& name) const {
+user_type_impl::idx_of_field(const bytes_view& name) const {
     for (size_t i = 0; i < _field_names.size(); ++i) {
-        if (name == _field_names[i]) {
+        if (name == bytes_view(_field_names[i])) {
             return {i};
         }
     }
