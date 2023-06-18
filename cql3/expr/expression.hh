@@ -14,6 +14,7 @@
 #include <variant>
 #include <concepts>
 #include <numeric>
+#include <span>
 
 #include "bytes.hh"
 #include "cql3/statements/bound.hh"
@@ -476,6 +477,8 @@ struct evaluation_inputs {
     const std::vector<managed_bytes_opt>* static_and_regular_columns = nullptr; // indexes match `selection` member
     const cql3::selection::selection* selection = nullptr;
     const query_options* options = nullptr;
+    std::span<const api::timestamp_type> static_and_regular_timestamps;  // indexes match `selection` member
+    std::span<const int32_t> static_and_regular_ttls;  // indexes match `selection` member
 };
 
 /// Helper for generating evaluation_inputs::static_and_regular_columns
