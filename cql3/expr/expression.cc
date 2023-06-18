@@ -2747,7 +2747,7 @@ verify_no_aggregate_functions(const expression& expr, std::string_view context_f
         return std::visit(find_agg, fc.func);
     });
     if (found_agg) {
-        throw exceptions::invalid_request_exception(fmt::format("Aggregation function are not supported in the {}", context_for_errors));
+        throw exceptions::invalid_request_exception(fmt::format("Aggregation functions are not supported in the {}", context_for_errors));
     }
 }
 
