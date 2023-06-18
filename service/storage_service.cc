@@ -1158,6 +1158,46 @@ class topology_coordinator {
         }
     }
 
+    // Preconditions:
+    // - There are no nodes that are trying to join and there are no topology
+    //   operations in progress
+    // - `features_to_enable` represents a set of features that are currently
+    //   marked as supported by all normal nodes and it is not empty
+    future<> enable_features(group0_guard guard, std::set<sstring> features_to_enable) {
+        if (!_topo_sm._topology.new_nodes.empty() || !_topo_sm._topology.transition_nodes.empty()) {
+            on_internal_error(slogger,
+                    "topology coordinator attempted to enable features even though there are"
+                    " joining nodes or topology operations in progress");
+        }
+
+        // If we are here, then we noticed that all nodes support some features
+        // that are not enabled yet. Perform a global barrier to make sure that:
+        //
+        // 1. All nodes saw (and persisted) a view of the system.topology table
+        //    that is equal to what the topology coordinator sees (or newer,
+        //    but in that case updating the topology state will fail),
+        // 2. None of the nodes is restarting at the moment and trying to
+        //    update its corresponding `supported_features` column (that's why
+        //    we use `barrier_after_feature_update` instead of regular `barrier`).
+        //
+        // After we get a successful confirmation from each node, we have
+        // a guarantee that they won't attempt to revoke support for those
+        // features. That's because we do not allow nodes to boot without
+        // a feature that is supported by all nodes in the cluster, even if
+        // the feature is not enabled yet.
+        guard = co_await exec_global_command(std::move(guard),
+                raft_topology_cmd{raft_topology_cmd::command::barrier_after_feature_update},
+                {_raft.id()},
+                drop_guard_and_retake::no);
+
+        topology_mutation_builder builder(guard.write_timestamp());
+        builder.add_enabled_features(features_to_enable);
+        auto reason = ::format("enabling features: {}", features_to_enable);
+        co_await update_topology_state(std::move(guard), {builder.build()}, reason);
+
+        slogger.info("raft topology: enabled features: {}", features_to_enable);
+    }
+
     future<node_to_work_on> global_token_metadata_barrier(node_to_work_on&& node) {
         node = co_await exec_global_command(std::move(node),
             raft_topology_cmd::command::barrier_and_drain,
@@ -1411,11 +1451,16 @@ class topology_coordinator {
                 co_await handle_global_request(std::move(guard));
                 co_return true;
             }
+
+            if (auto feats = _topo_sm._topology.calculate_not_yet_enabled_features(); !feats.empty()) {
+                co_await enable_features(std::move(guard), std::move(feats));
+                co_return true;
+            }
+            
             // If there is no other work, evaluate load and start tablet migration if there is imbalance.
             if (co_await maybe_start_tablet_migration(std::move(guard))) {
                 co_return true;
             }
-
             co_return false;
         }
 
