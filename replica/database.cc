@@ -797,7 +797,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto scylla_specific_rs = co_await db::schema_tables::extract_scylla_specific_keyspace_info(proxy, v);
         auto ksm = create_keyspace_from_schema_partition(v, scylla_specific_rs);
-        co_return co_await create_keyspace(ksm, proxy.local().get_erm_factory(), true /* bootstrap. do not mark populated yet */, system_keyspace::no);
+        co_return co_await create_keyspace(ksm, proxy.local().get_erm_factory(), system_keyspace::no);
     }));
     co_await do_parse_schema_tables(proxy, db::schema_tables::TYPES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto& ks = this->find_keyspace(v.first);
@@ -942,6 +942,29 @@ void database::maybe_init_schema_commitlog() {
         (void)_column_families[id]->flush(pos);
 
     }).release();
+}
+
+future<> database::create_local_system_table(
+        schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory& erm_factory) {
+    auto ks_name = table->ks_name();
+    if (!has_keyspace(ks_name)) {
+        bool durable = _cfg.data_file_directories().size() > 0;
+        auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
+                "org.apache.cassandra.locator.LocalStrategy",
+                std::map<sstring, sstring>{},
+                durable
+                );
+        co_await create_keyspace(ksm, erm_factory, replica::database::system_keyspace::yes);
+    }
+    auto& ks = find_keyspace(ks_name);
+    auto cfg = ks.make_column_family_config(*table, *this);
+    if (write_in_user_memory) {
+        cfg.dirty_memory_manager = &_dirty_memory_manager;
+    } else {
+        cfg.memtable_scheduling_group = default_scheduling_group();
+        cfg.memtable_to_cache_scheduling_group = default_scheduling_group();
+    }
+    add_column_family(ks, table, std::move(cfg));
 }
 
 void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg) {
@@ -1246,7 +1269,7 @@ keyspace::create_replication_strategy(const locator::shared_token_metadata& stm,
             abstract_replication_strategy::create_replication_strategy(
                 _metadata->strategy_name(), options);
     rslogger.debug("replication strategy for keyspace {} is {}, opts={}", _metadata->name(), _metadata->strategy_name(), options);
-    auto erm = co_await get_erm_factory().create_effective_replication_map(_replication_strategy, stm.get());
+    auto erm = co_await _erm_factory.create_effective_replication_map(_replication_strategy, stm.get());
     update_effective_replication_map(std::move(erm));
 }
 
@@ -1383,11 +1406,11 @@ future<> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metada
 
 future<>
 database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory) {
-    return create_keyspace(ksm, erm_factory, false, system_keyspace::no);
+    return create_keyspace(ksm, erm_factory, system_keyspace::no);
 }
 
 future<>
-database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, bool is_bootstrap, system_keyspace system) {
+database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system) {
     if (_keyspaces.contains(ksm->name())) {
         co_return;
     }

@@ -1142,13 +1142,19 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             static sharded<cdc::generation_service> cdc_generation_service;
 
             supervisor::notify("starting system keyspace");
-            // FIXME -- the query processor is not started yet and is thus not usable. It starts later
-            // on (look up the qp.start() thing) and cannot be started earlier, before proxy does. The
-            // plan is to equip system keyspace with its own instance of the query processor that doesn't
-            // need storage proxy to work, but uses some other local replica access mechanism. Similar
-            // thing for database -- it's not yet started and should be replaced with the aforementioned
-            // replica accessor.
-            sys_ks.start(std::ref(qp), std::ref(db)).get();
+            sys_ks.start(std::ref(qp), std::ref(db), std::ref(snitch)).get();
+            // TODO: stop()?
+
+            // Initialization of a keyspace is done by shard 0 only. For system
+            // keyspace, the procedure  will go through the hardcoded column
+            // families, and in each of them, it will load the sstables for all
+            // shards using distributed database object.
+            // Iteration through column family directory for sstable loading is
+            // done only by shard 0, so we'll no longer face race conditions as
+            // described here: https://github.com/scylladb/scylla/issues/1014
+            supervisor::notify("loading system sstables");
+            replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, *cfg, system_table_load_phase::phase1).get();
+            cfg->host_id = sys_ks.local().load_local_host_id().get0();
 
             supervisor::notify("starting gossiper");
             gms::gossip_config gcfg;
@@ -1222,16 +1228,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
                 ss.stop().get();
             });
+            supervisor::notify("initializing virtual tables");
+            sys_ks.invoke_on_all([&db, &ss, &gossiper, &raft_gr, &cfg] (db::system_keyspace& sys_ks) {
+                return sys_ks.initialize_virtual_tables(db, ss, gossiper, raft_gr, *cfg);
+            }).get();
 
-            // Initialization of a keyspace is done by shard 0 only. For system
-            // keyspace, the procedure  will go through the hardcoded column
-            // families, and in each of them, it will load the sstables for all
-            // shards using distributed database object.
-            // Iteration through column family directory for sstable loading is
-            // done only by shard 0, so we'll no longer face race conditions as
-            // described here: https://github.com/scylladb/scylla/issues/1014
-            supervisor::notify("loading system sstables");
-            replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, raft_gr, *cfg, system_table_load_phase::phase1).get();
             supervisor::notify("starting forward service");
             forward_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(token_metadata)).get();
             auto stop_forward_service_handlers = defer_verbose_shutdown("forward service", [&forward_service] {
@@ -1277,12 +1278,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // engine().at_exit([&qp] { return qp.stop(); });
             sstables::init_metrics().get();
 
-            // FIXME -- this sys_ks start should really be up above, where its instance
-            // start, but we only have query processor started that late
-            sys_ks.invoke_on_all([&snitch] (auto& sys_ks) {
-                return sys_ks.start(snitch.local());
-            }).get();
-            cfg->host_id = sys_ks.local().load_local_host_id().get0();
             shared_token_metadata::mutate_on_all_shards(token_metadata, [hostid = cfg->host_id, endpoint = utils::fb_utilities::get_broadcast_address()] (locator::token_metadata& tm) {
                 tm.get_topology().add_or_update_endpoint(endpoint, hostid);
                 return make_ready_future<>();
@@ -1314,7 +1309,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // because table construction consults enabled features.
             // Needs to be before system_keyspace::setup(), which writes to schema tables.
             supervisor::notify("loading system_schema sstables");
-            replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, raft_gr, *cfg, system_table_load_phase::phase2).get();
+            replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, *cfg, system_table_load_phase::phase2).get();
 
             if (raft_gr.local().is_enabled()) {
                 if (!db.local().uses_schema_commitlog()) {
