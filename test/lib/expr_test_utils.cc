@@ -382,7 +382,7 @@ std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evalu
         throw std::runtime_error(final_msg);
     };
 
-    auto get_col_val = [&](const column_definition& col) -> const raw_value& {
+    auto get_col_val = [&](const column_definition& col) -> const mutation_column_value& {
         auto col_value_iter = column_vals.find(col.name_as_text());
         if (col_value_iter == column_vals.end()) {
             throw_error("no value for column {}", col.name_as_text());
@@ -392,7 +392,7 @@ std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evalu
 
     std::vector<bytes> partition_key;
     for (const column_definition& pk_col : table_schema->partition_key_columns()) {
-        const raw_value& col_value = get_col_val(pk_col);
+        const raw_value& col_value = get_col_val(pk_col).value;
 
         if (col_value.is_null()) {
             throw_error("Passed NULL as value for {}. This is not allowed for partition key columns.",
@@ -403,7 +403,7 @@ std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evalu
 
     std::vector<bytes> clustering_key;
     for (const column_definition& ck_col : table_schema->clustering_key_columns()) {
-        const raw_value& col_value = get_col_val(ck_col);
+        const raw_value& col_value = get_col_val(ck_col).value;
 
         if (col_value.is_null()) {
             throw_error("Passed NULL as value for {}. This is not allowed for clustering key columns.",
@@ -424,17 +424,25 @@ std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evalu
         cql3::selection::selection::for_columns(table_schema, std::move(selection_columns));
     std::vector<managed_bytes_opt> static_and_regular_columns(table_schema->regular_columns_count() +
                                                               table_schema->static_columns_count());
+    std::vector<api::timestamp_type> static_and_regular_column_timestamps(static_and_regular_columns.size());
+    std::vector<int32_t> static_and_regular_column_ttls(static_and_regular_columns.size());
 
     for (const column_definition& col : table_schema->regular_columns()) {
-        const raw_value& col_value = get_col_val(col);
+        auto& mut_value = get_col_val(col);
+        const raw_value& col_value = mut_value.value;
         int32_t index = selection->index_of(col);
         static_and_regular_columns[index] = raw_value(col_value).to_managed_bytes_opt();
+        static_and_regular_column_timestamps[index] = mut_value.timestamp;
+        static_and_regular_column_ttls[index] = mut_value.ttl;
     }
 
     for (const column_definition& col : table_schema->static_columns()) {
-        const raw_value& col_value = get_col_val(col);
+        auto& mut_value = get_col_val(col);
+        const raw_value& col_value = mut_value.value;
         int32_t index = selection->index_of(col);
         static_and_regular_columns[index] = raw_value(col_value).to_managed_bytes_opt();
+        static_and_regular_column_timestamps[index] = mut_value.timestamp;
+        static_and_regular_column_ttls[index] = mut_value.ttl;
     }
 
     query_options options(default_cql_config, db::consistency_level::ONE, std::nullopt, bind_marker_values, true,
@@ -445,13 +453,18 @@ std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evalu
                                .clustering_key = std::move(clustering_key),
                                .static_and_regular_columns = std::move(static_and_regular_columns),
                                .selection = std::move(selection),
-                               .options = std::move(options)});
+                               .options = std::move(options),
+                               .timestamps = std::move(static_and_regular_column_timestamps),
+                               .ttls = std::move(static_and_regular_column_ttls)});
 
     evaluation_inputs inputs{.partition_key = &data->partition_key,
                              .clustering_key = &data->clustering_key,
                              .static_and_regular_columns = &data->static_and_regular_columns,
                              .selection = data->selection.get(),
-                             .options = &data->options};
+                             .options = &data->options,
+                             .static_and_regular_timestamps = data->timestamps,
+                             .static_and_regular_ttls = data->ttls,
+                             };
 
     return std::pair(std::move(inputs), std::move(data));
 }
