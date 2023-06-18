@@ -27,6 +27,7 @@ struct fencing_token {
 struct raft_topology_cmd {
     enum class command: uint8_t {
         barrier,
+        barrier_after_feature_update,
         barrier_and_drain,
         stream_ranges,
         fence

@@ -2030,6 +2030,11 @@ future<> storage_service::raft_bootstrap(raft::server& raft_server) {
 }
 
 future<> storage_service::update_topology_with_local_metadata(raft::server& raft_server) {
+    co_await do_update_topology_with_local_metadata(raft_server);
+    _topology_updated_with_local_metadata = true;
+}
+
+future<> storage_service::do_update_topology_with_local_metadata(raft::server& raft_server) {
     // TODO: include more metadata here
     auto local_shard_count = smp::count;
     auto local_ignore_msb = _db.local().get_config().murmur3_partitioner_ignore_msb_bits();
@@ -5469,6 +5474,17 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(shar
         switch (cmd.cmd) {
             case raft_topology_cmd::command::barrier:
                 // we already did read barrier above
+                result.status = raft_topology_cmd_result::command_status::success;
+            break;
+            case raft_topology_cmd::command::barrier_after_feature_update:
+                // we already did the barrier, but we need to check
+                // whether the node has updated its supported_features column
+                // after start
+                if (!_topology_updated_with_local_metadata) {
+                    co_await coroutine::return_exception(std::runtime_error(
+                            "raft topology: command::barrier_after_feature_update, node might not have updated "
+                            "its supported features column yet"));
+                }
                 result.status = raft_topology_cmd_result::command_status::success;
             break;
             case raft_topology_cmd::command::barrier_and_drain: {

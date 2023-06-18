@@ -143,6 +143,8 @@ struct topology_state_machine {
 struct raft_topology_cmd {
       enum class command: uint16_t {
           barrier,              // request to wait for the latest topology
+          barrier_after_feature_update, // same as `barrier` but only succeeds after
+                                        // supported features were updated by the node
           barrier_and_drain,    // same + drain requests which use previous versions
           stream_ranges,        // reqeust to stream data, return when streaming is
                                 // done

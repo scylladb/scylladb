@@ -167,6 +167,9 @@ std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd
         case raft_topology_cmd::command::barrier:
             os << "barrier";
             break;
+        case raft_topology_cmd::command::barrier_after_feature_update:
+            os << "barrier_after_feature_update";
+            break;
         case raft_topology_cmd::command::barrier_and_drain:
             os << "barrier_and_drain";
             break;
