@@ -3314,6 +3314,52 @@ BOOST_AUTO_TEST_CASE(evaluate_field_selection) {
                         exceptions::invalid_request_exception);
 }
 
+BOOST_AUTO_TEST_CASE(evaluate_column_mutation_attribute) {
+    auto s = make_simple_test_schema();
+    auto ttls = std::array{ int32_t(1), int32_t(2) };
+    auto timestamps = std::array{ int64_t(12345), int64_t(23456) };
+    auto ttl_of_s = column_mutation_attribute{
+        .kind = column_mutation_attribute::attribute_kind::ttl,
+        .column = column_value(&s->static_column_at(0)),
+    };
+    auto writetime_of_s = column_mutation_attribute{
+        .kind = column_mutation_attribute::attribute_kind::writetime,
+        .column = column_value(&s->static_column_at(0)),
+    };
+    auto ttl_of_r = column_mutation_attribute{
+        .kind = column_mutation_attribute::attribute_kind::ttl,
+        .column = column_value(&s->regular_column_at(0)),
+    };
+    auto writetime_of_r = column_mutation_attribute{
+        .kind = column_mutation_attribute::attribute_kind::writetime,
+        .column = column_value(&s->regular_column_at(0)),
+    };
+
+    auto null = cql3::raw_value::make_null();
+
+    auto [inputs1, inputs_data1] = make_evaluation_inputs(s, {
+        {"pk", mutation_column_value{make_int_raw(3)}},
+        {"ck", mutation_column_value{make_int_raw(4)}},
+        {"s", mutation_column_value{make_int_raw(3), 12345, 7}},
+        {"r", mutation_column_value{make_int_raw(3), 23456, 8}}});
+    BOOST_REQUIRE_EQUAL(evaluate(ttl_of_s, inputs1), make_int_raw(7));
+    BOOST_REQUIRE_EQUAL(evaluate(writetime_of_s, inputs1), make_bigint_raw(12345));
+    BOOST_REQUIRE_EQUAL(evaluate(ttl_of_r, inputs1), make_int_raw(8));
+    BOOST_REQUIRE_EQUAL(evaluate(writetime_of_r, inputs1), make_bigint_raw(23456));
+
+    auto [inputs2, inputs_data2] = make_evaluation_inputs(s, {
+        {"pk", make_int_raw(3)},
+        {"ck", make_int_raw(4)},
+        {"s", null},
+        {"r", null}});
+
+    BOOST_REQUIRE_EQUAL(evaluate(ttl_of_s, inputs2), null);
+    BOOST_REQUIRE_EQUAL(evaluate(writetime_of_s, inputs2), null);
+    BOOST_REQUIRE_EQUAL(evaluate(ttl_of_r, inputs2), null);
+    BOOST_REQUIRE_EQUAL(evaluate(writetime_of_r, inputs2), null);
+
+}
+
 // It should be possible to prepare an empty conjunction
 BOOST_AUTO_TEST_CASE(prepare_conjunction_empty) {
     schema_ptr table_schema = make_simple_test_schema();
