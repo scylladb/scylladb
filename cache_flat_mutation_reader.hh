@@ -894,7 +894,7 @@ void cache_flat_mutation_reader::add_to_buffer(const partition_snapshot_row_curs
     if (!row.dummy()) {
         _read_context.cache().on_row_hit();
         if (_read_context.digest_requested()) {
-            row.latest_row().cells().prepare_hash(table_schema(), column_kind::regular_column);
+            row.latest_row_prepare_hash();
         }
         add_clustering_row_to_buffer(mutation_fragment_v2(*_schema, _permit, row.row()));
     } else {

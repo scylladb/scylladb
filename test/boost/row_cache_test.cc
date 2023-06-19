@@ -4521,3 +4521,70 @@ SEASTAR_THREAD_TEST_CASE(test_population_of_subrange_of_expired_partition) {
         .produces(m1)
         .produces_end_of_stream();
 }
+
+// Reproducer for #14110.
+// Forces a scenario where digest is calculated for rows in old MVCC
+// versions, incompatible with the current schema.
+// In the original issue, this crashed the node with an assert failure,
+// because the digest calculation was passed the current schema,
+// instead of the row's actual old schema.
+SEASTAR_THREAD_TEST_CASE(test_digest_read_during_schema_upgrade) {
+    // The test will insert a row into the cache,
+    // then drop a column, and read the old row with the new schema.
+    // If the old row was processed with the new schema,
+    // the test would fail because one of the row's columns would
+    // have no definition.
+    auto s1 = schema_builder("ks", "cf")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("ck", utf8_type, column_kind::clustering_key)
+        .with_column("v1", utf8_type, column_kind::regular_column)
+        .build();
+    auto s2 = schema_builder(s1)
+        .remove_column("v1")
+        .build();
+
+    // Create a mutation with one row, with inconsequential keys and values.
+    auto pk = partition_key::from_single_value(*s1, serialized(0));
+    auto m1 = std::invoke([s1, pk] {
+        auto x = mutation(s1, pk);
+        auto ck = clustering_key::from_single_value(*s1, serialized(0));
+        x.set_clustered_cell(ck, "v1", "v1_value", api::new_timestamp());
+        return x;
+    });
+
+    // Populate the cache with m1.
+    memtable_snapshot_source underlying(s1);
+    underlying.apply(m1);
+    cache_tracker tracker;
+    row_cache cache(s1, snapshot_source([&] { return underlying(); }), tracker);
+    populate_range(cache);
+
+    // A schema upgrade of a MVCC version happens by adding an empty version
+    // with the new schema next to it, and merging the old-schema version into
+    // the new-schema version.
+    //
+    // We want to test a read of rows which are still in the old-schema
+    // version. To ensure that, we have to prevent mutation_cleaner from
+    // merging the versions until the test is done.
+    auto pause_background_merges = tracker.cleaner().pause();
+
+    // Upgrade the cache
+    cache.set_schema(s2);
+
+    // Create a digest-requesting reader for the tested partition.
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto pr = dht::partition_range::make_singular(dht::decorate_key(*s1, pk));
+    auto slice = partition_slice_builder(*s2)
+        .with_option<query::partition_slice::option::with_digest>()
+        .build();
+    auto rd = cache.make_reader(s2, semaphore.make_permit(), pr, slice);
+    auto close_rd = deferred_close(rd);
+
+    // In the original issue reproduced by this test, the read would crash
+    // on an assert.
+    // So what we are really testing below is that the read doesn't crash.
+    // The comparison with m2 is just a sanity check.
+    auto m2 = m1;
+    m2.upgrade(s2);
+    assert_that(std::move(rd)).produces(m2);
+}
