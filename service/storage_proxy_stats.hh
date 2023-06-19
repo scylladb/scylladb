@@ -44,6 +44,7 @@ private:
     // whether to register per-endpoint metrics automatically
     bool _auto_register_metrics;
 
+    scheduling_group _sg;
 public:
     /**
      * @param category a statistics category, e.g. "client" or "replica"
