@@ -2519,6 +2519,42 @@ BOOST_AUTO_TEST_CASE(prepare_constant_with_receiver) {
     BOOST_REQUIRE_EQUAL(prepared_int_blob, expected_blob);
 }
 
+BOOST_AUTO_TEST_CASE(prepare_writetime_ttl) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    auto prep = [&, db = db] (const expression& e, std::optional<data_type> receiver_type = std::nullopt) {
+        auto receiver = receiver_type
+                ? make_lw_shared<column_specification>("foo", "bar", make_shared<column_identifier>("ci", false), *receiver_type)
+                : nullptr;
+        return prepare_expression(e, db, "test_ks", table_schema.get(), receiver);
+    };
+
+    for (auto kind : {column_mutation_attribute::attribute_kind::ttl, column_mutation_attribute::attribute_kind::writetime}) {
+        auto expected_type = kind == column_mutation_attribute::attribute_kind::ttl ? int32_type : long_type;
+
+        auto ok1 = prep(column_mutation_attribute{kind, make_column("r")});
+        BOOST_REQUIRE_EQUAL(ok1, (column_mutation_attribute{kind, column_value{&table_schema->regular_column_at(0)}}));
+        BOOST_REQUIRE(type_of(ok1) == expected_type);
+
+        // now try with a receiver
+        auto ok2 = prep(column_mutation_attribute{kind, make_column("r")}, expected_type);
+        BOOST_REQUIRE_EQUAL(ok1, (column_mutation_attribute{kind, column_value{&table_schema->regular_column_at(0)}}));
+        BOOST_REQUIRE(type_of(ok1) == expected_type);
+
+        // now try with a receiver of the wrong type
+        BOOST_REQUIRE_THROW(prep(column_mutation_attribute{kind, make_column("r")}, utf8_type), exceptions::invalid_request_exception);
+
+        // Try a partition key component
+        BOOST_REQUIRE_THROW(prep(column_mutation_attribute{kind, make_column("p")}), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(prep(column_mutation_attribute{kind, make_column("c")}), exceptions::invalid_request_exception);
+
+        // Try something that isn't a column_value
+        BOOST_REQUIRE_THROW(prep(column_mutation_attribute{kind, bind_variable{}}), exceptions::invalid_request_exception);
+    }
+}
+
+
 // Test how evaluating a given binary operator behaves when null is present.
 // A binary with null on either side should evaluate to null.
 static void test_evaluate_binop_null(oper_t op, expression valid_lhs, expression valid_rhs) {
@@ -3203,6 +3239,79 @@ BOOST_AUTO_TEST_CASE(evaluate_conjunction_of_conjunctions_with_invalid) {
     expression conj_of_conjs = conjunction{.children = {conj1, conj2, conj3, conj4}};
 
     BOOST_REQUIRE_THROW(evaluate(conj_of_conjs, inputs), exceptions::invalid_request_exception);
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_field_selection) {
+    // The user defined type has 5 fields:
+    // CREATE TYPE test_ks.my_type (
+    //   int_field int,
+    //   float_field float,
+    //   text_field text,
+    //   bigint_field bigint,
+    //   int_field2 int,
+    // )
+    shared_ptr<const user_type_impl> udt_type = user_type_impl::get_instance(
+        "test_ks", "my_type", {"int_field", "float_field", "text_field", "bigint_field", "int_field2"},
+        {int32_type, float_type, utf8_type, long_type, int32_type}, true);
+
+    // Create a UDT value:
+    // {int_field: 123, float_field: null, text_field: 'abcdef', bigint_field: blobasbigint(0x), int_field2: 1337}
+    usertype_constructor::elements_map_type udt_value_elements;
+    udt_value_elements.emplace(column_identifier("int_field", false), make_int_const(123));
+    udt_value_elements.emplace(column_identifier("float_field", false), constant::make_null(float_type));
+    udt_value_elements.emplace(column_identifier("text_field", false), make_text_const("abcdef"));
+    udt_value_elements.emplace(column_identifier("bigint_field", false), make_empty_const(long_type));
+    udt_value_elements.emplace(column_identifier("int_field2", false), make_int_const(1337));
+    expression udt_value =
+        constant(evaluate(usertype_constructor{.elements = std::move(udt_value_elements), .type = udt_type},
+                          evaluation_inputs{}),
+                 udt_type);
+
+    auto make_field_selection = [&](expression value, const char* selected_field) -> expression {
+        return field_selection{
+            .structure = value, .field = make_shared<column_identifier_raw>(selected_field, true), .type = udt_type};
+    };
+
+    // Evaluate the fields, check that field values are correct
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(udt_value, "int_field"), evaluation_inputs{}), make_int_raw(123));
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(udt_value, "float_field"), evaluation_inputs{}),
+                        cql3::raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(udt_value, "text_field"), evaluation_inputs{}),
+                        make_text_raw("abcdef"));
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(udt_value, "bigint_field"), evaluation_inputs{}),
+                        make_empty_raw());
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(udt_value, "int_field2"), evaluation_inputs{}),
+                        make_int_raw(1337));
+
+    // Evaluate a nonexistent field, should throw an exception
+    BOOST_REQUIRE_THROW(evaluate(make_field_selection(udt_value, "field_testing"), evaluation_inputs{}),
+                        exceptions::invalid_request_exception);
+
+    // Create a UDT value with values for the first 3 fields.
+    // There's no value for the 4th and 5th field, so they should be NULL.
+    // This is normal behavior, some fields might not have a value if the UDT value was serialized before
+    // adding new fields to the type.
+    // {int_field: 123, float_field: null, text_field: ''}
+    expression short_udt_value =
+        constant(make_tuple_raw({make_int_raw(123), cql3::raw_value::make_null(), make_text_raw("")}), udt_type);
+
+    // Evaluate the first 3 fields, check that the value is correct
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(short_udt_value, "int_field"), evaluation_inputs{}),
+                        make_int_raw(123));
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(short_udt_value, "float_field"), evaluation_inputs{}),
+                        cql3::raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(short_udt_value, "text_field"), evaluation_inputs{}),
+                        make_text_raw(""));
+
+    // The serialized value doesn't contain any data for the 4th or 5th field, so they should be NULL.
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(short_udt_value, "bigint_field"), evaluation_inputs{}),
+                        cql3::raw_value::make_null());
+    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(short_udt_value, "int_field2"), evaluation_inputs{}),
+                        cql3::raw_value::make_null());
+
+    // Evaluate a nonexistent field, should throw an exception
+    BOOST_REQUIRE_THROW(evaluate(make_field_selection(short_udt_value, "field_testing"), evaluation_inputs{}),
+                        exceptions::invalid_request_exception);
 }
 
 // It should be possible to prepare an empty conjunction

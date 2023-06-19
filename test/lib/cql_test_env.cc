@@ -573,6 +573,10 @@ public:
 
             auto stop_configurables = defer([&] { notify_set.notify_all(configurable::system_state::stopped).get(); });
 
+            gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg, cfg_in.disabled_features);
+            feature_service.start(fcfg).get();
+            auto stop_feature_service = defer([&] { feature_service.stop().get(); });
+
             sharded<locator::snitch_ptr> snitch;
             snitch.start(locator::snitch_config{}).get();
             auto stop_snitch = defer([&snitch] { snitch.stop().get(); });
@@ -593,108 +597,6 @@ public:
             sharded<service::migration_notifier> mm_notif;
             mm_notif.start().get();
             auto stop_mm_notify = defer([&mm_notif] { mm_notif.stop().get(); });
-
-            sharded<service::endpoint_lifecycle_notifier> elc_notif;
-            elc_notif.start().get();
-            auto stop_elc_notif = defer([&elc_notif] { elc_notif.stop().get(); });
-
-            sharded<auth::service> auth_service;
-
-            set_abort_on_internal_error(true);
-            const gms::inet_address listen("127.0.0.1");
-            auto sys_dist_ks = seastar::sharded<db::system_distributed_keyspace>();
-            auto sl_controller = sharded<qos::service_level_controller>();
-            sl_controller.start(std::ref(auth_service), qos::service_level_options{}).get();
-            auto stop_sl_controller = defer([&sl_controller] { sl_controller.stop().get(); });
-            sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
-
-            auto sys_ks = seastar::sharded<db::system_keyspace>();
-            sys_ks.start(std::ref(qp), std::ref(db)).get();
-            auto stop_sys_kd = defer([&sys_ks] { sys_ks.stop().get(); });
-
-            // don't start listening so tests can be run in parallel
-            ms.start(listen, std::move(7000)).get();
-            auto stop_ms = defer([&ms] { ms.stop().get(); });
-
-            // Normally the auth server is already stopped in here,
-            // but if there is an initialization failure we have to
-            // make sure to stop it now or ~sharded will assert.
-            auto stop_auth_server = defer([&auth_service] {
-                auth_service.stop().get();
-            });
-
-            auto stop_sys_dist_ks = defer([&sys_dist_ks] { sys_dist_ks.stop().get(); });
-
-            gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg, cfg_in.disabled_features);
-            feature_service.start(fcfg).get();
-            auto stop_feature_service = defer([&] { feature_service.stop().get(); });
-
-            sharded<gms::gossiper> gossiper;
-
-            // Init gossiper
-            std::set<gms::inet_address> seeds;
-            auto seed_provider = db::config::seed_provider_type();
-            if (seed_provider.parameters.contains("seeds")) {
-                size_t begin = 0;
-                size_t next = 0;
-                sstring seeds_str = seed_provider.parameters.find("seeds")->second;
-                while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
-                    seeds.emplace(gms::inet_address(seeds_str.substr(begin,next-begin)));
-                    begin = next+1;
-                }
-            }
-            if (seeds.empty()) {
-                seeds.emplace(gms::inet_address("127.0.0.1"));
-            }
-
-            gms::gossip_config gcfg;
-            gcfg.cluster_name = "Test Cluster";
-            gcfg.seeds = std::move(seeds);
-            gcfg.skip_wait_for_gossip_to_settle = 0;
-            gossiper.start(std::ref(abort_sources), std::ref(token_metadata), std::ref(ms), std::ref(*cfg), std::move(gcfg)).get();
-            auto stop_ms_fd_gossiper = defer([&gossiper] {
-                gossiper.stop().get();
-            });
-            gossiper.invoke_on_all(&gms::gossiper::start).get();
-
-            sharded<cql3::cql_config> cql_config;
-            cql_config.start(cql3::cql_config::default_tag{}).get();
-            auto stop_cql_config = defer([&] { cql_config.stop().get(); });
-
-            sharded<db::view::view_update_generator> view_update_generator;
-            sharded<cdc::generation_service> cdc_generation_service;
-            sharded<repair_service> repair;
-            sharded<service::raft_group_registry> raft_gr;
-            sharded<streaming::stream_manager> stream_manager;
-            sharded<service::forward_service> forward_service;
-            sharded<direct_failure_detector::failure_detector> fd;
-            sharded<service::raft_address_map> raft_address_map;
-
-            raft_address_map.start().get();
-            auto stop_address_map = defer([&raft_address_map] {
-                raft_address_map.stop().get();
-            });
-
-
-            static sharded<service::direct_fd_pinger> fd_pinger;
-            fd_pinger.start(std::ref(ms), std::ref(raft_address_map)).get();
-            auto stop_fd_pinger = defer([] { fd_pinger.stop().get(); });
-
-            service::direct_fd_clock fd_clock;
-            fd.start(
-                std::ref(fd_pinger), std::ref(fd_clock),
-                service::direct_fd_clock::base::duration{std::chrono::milliseconds{100}}.count()).get();
-
-            auto stop_fd = defer([&fd] {
-                fd.stop().get();
-            });
-
-            raft_gr.start(cfg->consistent_cluster_management(),
-                std::ref(raft_address_map), std::ref(ms), std::ref(gossiper), std::ref(fd)).get();
-            auto stop_raft_gr = deferred_stop(raft_gr);
-
-            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(ms), std::ref(mm), std::ref(gossiper), scheduling_groups.streaming_scheduling_group).get();
-            auto stop_streaming = defer([&stream_manager] { stream_manager.stop().get(); });
 
             sharded<sstables::directory_semaphore> sst_dir_semaphore;
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
@@ -752,10 +654,6 @@ public:
 
             db.invoke_on_all(&replica::database::start).get();
 
-            feature_service.invoke_on_all([] (auto& fs) {
-                return fs.enable(fs.supported_feature_set());
-            }).get();
-
             smp::invoke_on_all([blocked_reactor_notify_ms] {
                 engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
             }).get();
@@ -767,23 +665,12 @@ public:
             db::view::node_update_backlog b(smp::count, 10ms);
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
-            proxy.start(std::ref(db), std::ref(gossiper), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory), std::ref(ms)).get();
+            proxy.start(std::ref(db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get0(), std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory)).get();
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
-            forward_service.start(std::ref(ms), std::ref(proxy), std::ref(db), std::ref(token_metadata)).get();
-            auto stop_forward_service =  defer([&forward_service] { forward_service.stop().get(); });
-
-            // gropu0 client exists only on shard 0
-            service::raft_group0_client group0_client(raft_gr.local(), sys_ks.local());
-
-            mm.start(std::ref(mm_notif), std::ref(feature_service), std::ref(ms), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
-            auto stop_mm = defer([&mm] { mm.stop().get(); });
-
-            distributed<service::tablet_allocator> the_tablet_allocator;
-            the_tablet_allocator.start(std::ref(mm_notif), std::ref(db)).get();
-            auto stop_tablet_allocator = defer([&] {
-                the_tablet_allocator.stop().get();
-            });
+            sharded<cql3::cql_config> cql_config;
+            cql_config.start(cql3::cql_config::default_tag{}).get();
+            auto stop_cql_config = defer([&] { cql_config.stop().get(); });
 
             cql3::query_processor::memory_config qp_mcfg;
             if (cfg_in.qp_mcfg) {
@@ -804,8 +691,128 @@ public:
                 wasm_ctx.emplace(*cfg, dbcfg);
             }
 
-            qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notif), std::ref(mm), qp_mcfg, std::ref(cql_config), auth_prep_cache_config, std::ref(group0_client), wasm_ctx).get();
+            qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notif), qp_mcfg, std::ref(cql_config), auth_prep_cache_config, wasm_ctx).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
+
+            sharded<service::endpoint_lifecycle_notifier> elc_notif;
+            elc_notif.start().get();
+            auto stop_elc_notif = defer([&elc_notif] { elc_notif.stop().get(); });
+
+            sharded<auth::service> auth_service;
+
+            set_abort_on_internal_error(true);
+            const gms::inet_address listen("127.0.0.1");
+            auto sys_dist_ks = seastar::sharded<db::system_distributed_keyspace>();
+            auto sl_controller = sharded<qos::service_level_controller>();
+            sl_controller.start(std::ref(auth_service), qos::service_level_options{}).get();
+            auto stop_sl_controller = defer([&sl_controller] { sl_controller.stop().get(); });
+            sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
+
+            auto sys_ks = seastar::sharded<db::system_keyspace>();
+            sys_ks.start(std::ref(qp), std::ref(db)).get();
+            auto stop_sys_kd = defer([&sys_ks] { sys_ks.stop().get(); });
+
+            // don't start listening so tests can be run in parallel
+            ms.start(listen, std::move(7000)).get();
+            auto stop_ms = defer([&ms] { ms.stop().get(); });
+
+            // Normally the auth server is already stopped in here,
+            // but if there is an initialization failure we have to
+            // make sure to stop it now or ~sharded will assert.
+            auto stop_auth_server = defer([&auth_service] {
+                auth_service.stop().get();
+            });
+
+            auto stop_sys_dist_ks = defer([&sys_dist_ks] { sys_dist_ks.stop().get(); });
+
+            sharded<gms::gossiper> gossiper;
+
+            // Init gossiper
+            std::set<gms::inet_address> seeds;
+            auto seed_provider = db::config::seed_provider_type();
+            if (seed_provider.parameters.contains("seeds")) {
+                size_t begin = 0;
+                size_t next = 0;
+                sstring seeds_str = seed_provider.parameters.find("seeds")->second;
+                while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
+                    seeds.emplace(gms::inet_address(seeds_str.substr(begin,next-begin)));
+                    begin = next+1;
+                }
+            }
+            if (seeds.empty()) {
+                seeds.emplace(gms::inet_address("127.0.0.1"));
+            }
+
+            gms::gossip_config gcfg;
+            gcfg.cluster_name = "Test Cluster";
+            gcfg.seeds = std::move(seeds);
+            gcfg.skip_wait_for_gossip_to_settle = 0;
+            gossiper.start(std::ref(abort_sources), std::ref(token_metadata), std::ref(ms), std::ref(*cfg), std::move(gcfg)).get();
+            auto stop_ms_fd_gossiper = defer([&gossiper] {
+                gossiper.stop().get();
+            });
+            gossiper.invoke_on_all(&gms::gossiper::start).get();
+
+            sharded<db::view::view_update_generator> view_update_generator;
+            sharded<cdc::generation_service> cdc_generation_service;
+            sharded<repair_service> repair;
+            sharded<service::raft_group_registry> raft_gr;
+            sharded<streaming::stream_manager> stream_manager;
+            sharded<service::forward_service> forward_service;
+            sharded<direct_failure_detector::failure_detector> fd;
+            sharded<service::raft_address_map> raft_address_map;
+
+            raft_address_map.start().get();
+            auto stop_address_map = defer([&raft_address_map] {
+                raft_address_map.stop().get();
+            });
+
+
+            static sharded<service::direct_fd_pinger> fd_pinger;
+            fd_pinger.start(std::ref(ms), std::ref(raft_address_map)).get();
+            auto stop_fd_pinger = defer([] { fd_pinger.stop().get(); });
+
+            service::direct_fd_clock fd_clock;
+            fd.start(
+                std::ref(fd_pinger), std::ref(fd_clock),
+                service::direct_fd_clock::base::duration{std::chrono::milliseconds{100}}.count()).get();
+
+            auto stop_fd = defer([&fd] {
+                fd.stop().get();
+            });
+
+            raft_gr.start(cfg->consistent_cluster_management(),
+                std::ref(raft_address_map), std::ref(ms), std::ref(gossiper), std::ref(fd)).get();
+            auto stop_raft_gr = deferred_stop(raft_gr);
+
+            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(ms), std::ref(mm), std::ref(gossiper), scheduling_groups.streaming_scheduling_group).get();
+            auto stop_streaming = defer([&stream_manager] { stream_manager.stop().get(); });
+
+            feature_service.invoke_on_all([] (auto& fs) {
+                return fs.enable(fs.supported_feature_set());
+            }).get();
+
+            forward_service.start(std::ref(ms), std::ref(proxy), std::ref(db), std::ref(token_metadata)).get();
+            auto stop_forward_service =  defer([&forward_service] { forward_service.stop().get(); });
+
+            // gropu0 client exists only on shard 0
+            service::raft_group0_client group0_client(raft_gr.local(), sys_ks.local());
+
+            mm.start(std::ref(mm_notif), std::ref(feature_service), std::ref(ms), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
+            auto stop_mm = defer([&mm] { mm.stop().get(); });
+
+            distributed<service::tablet_allocator> the_tablet_allocator;
+            the_tablet_allocator.start(std::ref(mm_notif), std::ref(db)).get();
+            auto stop_tablet_allocator = defer([&] {
+                the_tablet_allocator.stop().get();
+            });
+
+            qp.invoke_on_all([&mm, &forward_service, &group0_client] (cql3::query_processor& qp) {
+                qp.start_remote(mm.local(), forward_service.local(), group0_client);
+            }).get();
+            auto stop_qp_remote = defer([&qp] {
+                qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
+            });
 
             sys_ks.invoke_on_all([&snitch] (auto& sys_ks) {
                 return sys_ks.start(snitch.local());

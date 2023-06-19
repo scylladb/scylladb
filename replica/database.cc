@@ -75,8 +75,6 @@
 #include "readers/multi_range.hh"
 #include "readers/multishard.hh"
 
-#include "lang/wasm.hh"
-
 using namespace std::chrono_literals;
 using namespace db;
 
@@ -321,7 +319,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _system_dirty_memory_manager(*this, 10 << 20, cfg.unspooled_dirty_soft_limit(), default_scheduling_group())
     , _dirty_memory_manager(*this, dbcfg.available_memory * 0.50, cfg.unspooled_dirty_soft_limit(), dbcfg.statement_scheduling_group)
     , _dbcfg(dbcfg)
-    , _flush_sg(backlog_controller::scheduling_group{dbcfg.memtable_scheduling_group})
+    , _flush_sg(dbcfg.memtable_scheduling_group)
     , _memtable_controller(make_flush_controller(_cfg, _flush_sg, [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
         auto backlog = (_dirty_memory_manager.unspooled_dirty_memory()) / limit;
         if (_dirty_memory_manager.has_extraneous_flushes_requested()) {
@@ -459,7 +457,7 @@ float backlog_controller::backlog_of_shares(float shares) const {
 }
 
 void backlog_controller::update_controller(float shares) {
-    _scheduling_group.cpu.set_shares(shares);
+    _scheduling_group.set_shares(shares);
 }
 
 

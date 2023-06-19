@@ -22,6 +22,7 @@
 #include "cql3/column_identifier.hh"
 #include "utils/to_string.hh"
 #include "log.hh"
+#include "schema/schema.hh"
 #include <unordered_map>
 
 namespace cql3 {
@@ -84,11 +85,13 @@ private:
     // case where there is no override for a given function. This is thus probably worth the minor code duplication.
     static void validate_types(data_dictionary::database db,
                               const sstring& keyspace,
+                              const schema* schema_opt,
                               shared_ptr<function> fun,
                               const std::vector<shared_ptr<assignment_testable>>& provided_args,
                               const sstring& receiver_ks,
                               std::optional<const std::string_view> receiver_cf);
     static assignment_testable::test_result match_arguments(data_dictionary::database db, const sstring& keyspace,
+            const schema* schema_opt,
             shared_ptr<function> fun,
             const std::vector<shared_ptr<assignment_testable>>& provided_args,
             const sstring& receiver_ks,

@@ -2686,7 +2686,7 @@ private:
                 });
 
             } else {
-                ns.state = repair_state::put_row_diff_finished;
+                ns.state = repair_state::put_row_diff_started;
                 return master.put_row_diff(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx]).then([&ns] {
                     ns.state = repair_state::put_row_diff_finished;
                 }).handle_exception([this, &node] (std::exception_ptr ep) {
@@ -2871,12 +2871,8 @@ public:
 future<> repair_cf_range_row_level(repair::shard_repair_task_impl& shard_task,
         sstring cf_name, table_id table_id, dht::token_range range,
         const std::vector<gms::inet_address>& all_peer_nodes) {
-    return seastar::futurize_invoke([&shard_task, cf_name = std::move(cf_name), table_id = std::move(table_id), range = std::move(range), &all_peer_nodes] () mutable {
-        auto repair = row_level_repair(shard_task, std::move(cf_name), std::move(table_id), std::move(range), all_peer_nodes);
-        return do_with(std::move(repair), [] (row_level_repair& repair) {
-            return repair.run();
-        });
-    });
+    auto repair = row_level_repair(shard_task, std::move(cf_name), std::move(table_id), std::move(range), all_peer_nodes);
+    co_return co_await repair.run();
 }
 
 class row_level_repair_gossip_helper : public gms::i_endpoint_state_change_subscriber {

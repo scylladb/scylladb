@@ -386,9 +386,8 @@ std::pair<schema_builder, std::vector<view_ptr>> alter_table_statement::prepare_
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
-alter_table_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+alter_table_statement::prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type ts) const {
   data_dictionary::database db = qp.db();
-  auto& mm = qp.get_migration_manager();
   auto [cfm, view_updates] = prepare_schema_update(db);
   auto m = co_await mm.prepare_column_family_update_announcement(cfm.build(), false, std::move(view_updates), ts);
 

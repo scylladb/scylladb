@@ -45,7 +45,6 @@
 #include "utils/result.hh"
 #include "utils/result_combinators.hh"
 #include "utils/result_loop.hh"
-#include "service/forward_service.hh"
 #include "replica/database.hh"
 
 template<typename T = void>
@@ -1574,7 +1573,7 @@ parallelized_select_statement::do_execute(
     };
 
     // dispatch execution of this statement to other nodes
-    return qp.forwarder().dispatch(req, state.get_trace_state()).then([this] (query::forward_result res) {
+    return qp.forward(req, state.get_trace_state()).then([this] (query::forward_result res) {
         auto meta = make_shared<metadata>(*_selection->get_result_metadata());
         auto rs = std::make_unique<result_set>(std::move(meta));
         rs->add_row(res.query_results);
@@ -1630,8 +1629,8 @@ void select_statement::maybe_jsonize_select_clause(data_dictionary::database db,
         std::vector<const column_definition*> defs;
         selector_names.reserve(_select_clause.size());
         selector_types.reserve(_select_clause.size());
-        auto selectables = selection::raw_selector::to_selectables(_select_clause, *schema);
-        selection::selector_factories factories(selection::raw_selector::to_selectables(_select_clause, *schema), db, schema, defs);
+        auto selectables = selection::raw_selector::to_selectables(_select_clause, *schema, db, keyspace());
+        selection::selector_factories factories(selectables, db, schema, defs);
         auto selectors = factories.new_instances();
         for (size_t i = 0; i < selectors.size(); ++i) {
             if (_select_clause[i]->alias) {
@@ -1664,7 +1663,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     auto selection = _select_clause.empty()
                      ? selection::selection::wildcard(schema)
-                     : selection::selection::from_selectors(db, schema, _select_clause);
+                     : selection::selection::from_selectors(db, schema, keyspace(), _select_clause);
 
     auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering());
 
@@ -1815,6 +1814,7 @@ select_statement::prepare_limit(data_dictionary::database db, prepare_context& c
     }
 
     expr::expression prep_limit = prepare_expression(*limit, db, keyspace(), nullptr, limit_receiver());
+    expr::verify_no_aggregate_functions(prep_limit, "LIMIT clause");
     expr::fill_prepare_context(prep_limit, ctx);
     return prep_limit;
 }

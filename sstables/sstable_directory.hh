@@ -71,8 +71,9 @@ public:
 
     class components_lister {
     public:
-        virtual future<> process(sstable_directory& directory, fs::path location, process_flags flags) = 0;
+        virtual future<> process(sstable_directory& directory, process_flags flags) = 0;
         virtual future<> commit() = 0;
+        virtual future<> garbage_collect() = 0;
         virtual ~components_lister() {}
     };
 
@@ -95,17 +96,20 @@ public:
 
         void handle(sstables::entry_descriptor desc, std::filesystem::path filename);
 
-        directory_lister _lister;
+        fs::path _directory;
         std::unique_ptr<scan_state> _state;
 
-        future<sstring> get();
-        future<> close();
+        future<> cleanup_column_family_temp_sst_dirs();
+        future<> handle_sstables_pending_delete();
+        future<> replay_pending_delete_log(std::filesystem::path log_file);
+
 
     public:
         filesystem_components_lister(std::filesystem::path dir);
 
-        virtual future<> process(sstable_directory& directory, fs::path location, process_flags flags) override;
+        virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;
+        virtual future<> garbage_collect() override;
     };
 
     class system_keyspace_components_lister final : public components_lister {
@@ -115,8 +119,9 @@ public:
     public:
         system_keyspace_components_lister(db::system_keyspace& sys_ks, sstring location);
 
-        virtual future<> process(sstable_directory& directory, fs::path location, process_flags flags) override;
+        virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;
+        virtual future<> garbage_collect() override;
     };
 
 private:
@@ -132,7 +137,7 @@ private:
     io_error_handler_gen _error_handler_gen;
     std::unique_ptr<components_lister> _lister;
 
-    std::optional<generation_type> _max_generation_seen;
+    generation_type _max_generation_seen;
     sstables::sstable_version_types _max_version_seen = sstables::sstable_version_types::ka;
 
     // SSTables that are unshared and belong to this shard. They are already stored as an
@@ -177,10 +182,6 @@ private:
     // Retrieves sstables::foreign_sstable_open_info for a particular SSTable.
     future<foreign_sstable_open_info> get_open_info_for_this_sstable(const sstables::entry_descriptor& desc) const;
 
-    future<> cleanup_column_family_temp_sst_dirs();
-    future<> handle_sstables_pending_delete();
-    future<> replay_pending_delete_log(std::filesystem::path log_file);
-
 public:
     sstable_directory(sstables_manager& manager,
             schema_ptr schema,
@@ -198,7 +199,7 @@ public:
     future<> move_foreign_sstables(sharded<sstable_directory>& source_directory);
 
     // returns what is the highest generation seen in this directory.
-    std::optional<generation_type> highest_generation_seen() const;
+    generation_type highest_generation_seen() const;
 
     // returns what is the highest version seen in this directory.
     sstables::sstable_version_types highest_version_seen() const;
@@ -269,6 +270,6 @@ public:
     future<> garbage_collect();
 };
 
-future<std::optional<sstables::generation_type>> highest_generation_seen(sharded<sstables::sstable_directory>& directory);
+future<sstables::generation_type> highest_generation_seen(sharded<sstables::sstable_directory>& directory);
 
 }

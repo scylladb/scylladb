@@ -48,6 +48,7 @@ private:
     future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
     future<> touch_temp_dir(const sstable& sst);
     future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay) override;
+    future<> rename_new_file(const sstable& sst, sstring from_name, sstring to_name) const;
 
     virtual void change_dir_for_test(sstring nd) override {
         dir = std::move(nd);
@@ -96,6 +97,13 @@ static future<file> open_sstable_component_file_non_checked(std::string_view nam
     return open_file_dma(name, flags, options);
 }
 
+future<> filesystem_storage::rename_new_file(const sstable& sst, sstring from_name, sstring to_name) const {
+    return sst.sstable_write_io_check(rename_file, from_name, to_name).handle_exception([from_name, to_name] (std::exception_ptr ep) {
+        sstlog.error("Could not rename SSTable component {} to {}. Found exception: {}", from_name, to_name, ep);
+        return make_exception_future<>(ep);
+    });
+}
+
 future<file> filesystem_storage::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
     auto create_flags = open_flags::create | open_flags::exclusive;
     auto readonly = (flags & create_flags) != create_flags;
@@ -105,8 +113,8 @@ future<file> filesystem_storage::open_component(const sstable& sst, component_ty
     auto f = open_sstable_component_file_non_checked(name, flags, options, check_integrity);
 
     if (!readonly) {
-        f = with_file_close_on_failure(std::move(f), [&sst, type, name = std::move(name)] (file fd) mutable {
-            return sst.rename_new_sstable_component_file(name, sst.filename(type)).then([fd = std::move(fd)] () mutable {
+        f = with_file_close_on_failure(std::move(f), [this, &sst, type, name = std::move(name)] (file fd) mutable {
+            return rename_new_file(sst, name, sst.filename(type)).then([fd = std::move(fd)] () mutable {
                 return make_ready_future<file>(std::move(fd));
             });
         });

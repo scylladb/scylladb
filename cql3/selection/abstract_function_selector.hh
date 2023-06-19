@@ -87,10 +87,6 @@ public:
     const functions::function_name& name() const {
         return _tfun->name();
     }
-
-    virtual sstring assignment_testable_source_context() const override {
-        return format("{}", this->name());
-    }
 };
 
 }

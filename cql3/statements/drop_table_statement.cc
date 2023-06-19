@@ -45,12 +45,12 @@ void drop_table_statement::validate(query_processor&, const service::client_stat
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
-drop_table_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+drop_table_statement::prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
     try {
-        m = co_await qp.get_migration_manager().prepare_column_family_drop_announcement(keyspace(), column_family(), ts);
+        m = co_await mm.prepare_column_family_drop_announcement(keyspace(), column_family(), ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(

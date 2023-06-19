@@ -121,14 +121,17 @@ std::unique_ptr<attributes> attributes::raw::prepare(data_dictionary::database d
 
     if (timestamp.has_value()) {
         ts = prepare_expression(*timestamp, db, ks_name, nullptr, timestamp_receiver(ks_name, cf_name));
+        verify_no_aggregate_functions(*ts, "USING clause");
     }
 
     if (time_to_live.has_value()) {
         ttl = prepare_expression(*time_to_live, db, ks_name, nullptr, time_to_live_receiver(ks_name, cf_name));
+        verify_no_aggregate_functions(*time_to_live, "USING clause");
     }
 
     if (timeout.has_value()) {
         to = prepare_expression(*timeout, db, ks_name, nullptr, timeout_receiver(ks_name, cf_name));
+        verify_no_aggregate_functions(*timeout, "USING clause");
     }
 
     return std::unique_ptr<attributes>{new attributes{std::move(ts), std::move(ttl), std::move(to)}};

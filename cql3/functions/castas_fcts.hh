@@ -30,6 +30,7 @@ namespace functions {
 using castas_fctn = data_value(*)(data_value);
 
 castas_fctn get_castas_fctn(data_type to_type, data_type from_type);
+::shared_ptr<function> get_castas_fctn_as_cql3_function(data_type to_type, data_type from_type);
 
 class castas_functions {
 public:

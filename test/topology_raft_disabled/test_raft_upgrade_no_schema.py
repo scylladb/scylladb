@@ -10,10 +10,11 @@ import logging
 import time
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
-from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology_raft_disabled.util import reconnect_driver, restart, enable_raft, \
+from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature
+from test.topology.util import reconnect_driver
+from test.topology_raft_disabled.util import restart, enable_raft, \
         enable_raft_and_restart, wait_for_upgrade_state, wait_until_upgrade_finishes, \
-        delete_raft_data, log_run_time, wait_for_feature
+        delete_raft_data, log_run_time
 
 @pytest.mark.asyncio
 @log_run_time

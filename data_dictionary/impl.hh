@@ -17,6 +17,7 @@ namespace data_dictionary {
 class impl {
 public:
     virtual ~impl();
+    virtual const table_schema_version& get_version(database) const = 0;
     virtual std::optional<keyspace> try_find_keyspace(database db, std::string_view name) const = 0;
     virtual std::vector<keyspace> get_keyspaces(database db) const = 0;
     virtual std::vector<sstring> get_user_keyspaces(database db) const = 0;

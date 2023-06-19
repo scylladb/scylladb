@@ -27,8 +27,8 @@
 
 .. topic-box::
   :title: ScyllaDB Cloud
+  :icon: scylla-icon scylla-icon--cloud
   :link: https://cloud.docs.scylladb.com
-  :image: /_static/img/mascots/scylla-cloud.svg
   :class: large-4 cloud-card
   :anchor: ScyllaDB Cloud Documentation
 
@@ -36,8 +36,8 @@
 
 .. topic-box::
   :title: ScyllaDB Enterprise
+  :icon: scylla-icon scylla-icon--enterprise-m
   :link: https://enterprise.docs.scylladb.com
-  :image: /_static/img/mascots/scylla-enterprise.svg
   :class: large-4 enterprise-card
   :anchor: ScyllaDB Enterprise Documentation
 
@@ -45,8 +45,8 @@
 
 .. topic-box::
   :title: ScyllaDB Open Source
+  :icon: scylla-icon scylla-icon--about-us-m
   :link: https://docs.scylladb.com/stable/getting-started/
-  :image: /_static/img/mascots/scylla-opensource.svg
   :class: large-4 opensource-card
   :anchor: ScyllaDB Open Source Documentation
 
@@ -163,4 +163,3 @@
   faq
   Contribute to ScyllaDB <contribute>
   alternator/alternator
-

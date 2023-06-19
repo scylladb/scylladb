@@ -41,6 +41,7 @@
 #include "utils/fb_utilities.hh"
 #include "mutation/mutation_source_metadata.hh"
 #include "gms/gossiper.hh"
+#include "gms/feature_service.hh"
 #include "db/config.hh"
 #include "db/commitlog/commitlog.hh"
 #include "utils/lister.hh"
@@ -66,8 +67,8 @@ static seastar::metrics::label keyspace_label("ks");
 
 using namespace std::chrono_literals;
 
-void table::update_sstables_known_generation(std::optional<sstables::generation_type> generation) {
-    auto gen = generation.value_or(sstables::generation_type(0)).as_int();
+void table::update_sstables_known_generation(sstables::generation_type generation) {
+    auto gen = generation ? generation.as_int() : 0;
     if (_sstable_generation_generator) {
         _sstable_generation_generator->update_known_generation(gen);
     } else {
@@ -82,7 +83,8 @@ sstables::generation_type table::calculate_generation_for_new_table() {
     // See https://github.com/scylladb/scylladb/issues/10459
     // for uuid-based sstable generation
     assert(_sstable_generation_generator);
-    auto ret = std::invoke(*_sstable_generation_generator);
+    auto ret = std::invoke(*_sstable_generation_generator,
+                           uuid_identifiers{_sstables_manager.uuid_sstable_identifiers()});
     tlogger.debug("{}.{} new sstable generation {}", schema()->ks_name(), schema()->cf_name(), ret);
     return ret;
 }
@@ -2190,9 +2192,13 @@ void table::set_hit_rate(gms::inet_address addr, cache_temperature rate) {
     e.last_updated = lowres_clock::now();
 }
 
+table::cache_hit_rate table::get_my_hit_rate() const {
+    return cache_hit_rate { _global_cache_hit_rate, lowres_clock::now()};
+}
+
 table::cache_hit_rate table::get_hit_rate(const gms::gossiper& gossiper, gms::inet_address addr) {
     if (utils::fb_utilities::get_broadcast_address() == addr) {
-        return cache_hit_rate { _global_cache_hit_rate, lowres_clock::now()};
+        return get_my_hit_rate();
     }
     auto it = _cluster_cache_hit_rates.find(addr);
     if (it == _cluster_cache_hit_rates.end()) {

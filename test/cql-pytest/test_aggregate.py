@@ -9,8 +9,9 @@
 import pytest
 import math
 from decimal import Decimal
-from util import new_test_table, unique_key_int, project
+from util import new_test_table, unique_key_int, project, new_type
 from cassandra.util import Date
+from cassandra_tests.porting import assert_invalid_message
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -72,9 +73,9 @@ def test_count_in_partition(cql, table1):
     cql.execute(stmt, [p, 3, 3])
     assert [(3,)] == list(cql.execute(f"select count(*) from {table1} where p = {p}"))
 
-# Using count(v) instead of count(*) allows counting only rows with a set
+# Using count(v) instead of count(*) allows counting only rows with a non-NULL
 # value in v
-def test_count_specific_column(cql, table1):
+def test_count_specific_column(cql, test_keyspace, table1):
     p = unique_key_int()
     stmt = cql.prepare(f"insert into {table1} (p, c, v) values (?, ?, ?)")
     cql.execute(stmt, [p, 1, 1])
@@ -83,6 +84,16 @@ def test_count_specific_column(cql, table1):
     cql.execute(stmt, [p, 4, None])
     assert [(4,)] == list(cql.execute(f"select count(*) from {table1} where p = {p}"))
     assert [(3,)] == list(cql.execute(f"select count(v) from {table1} where p = {p}"))
+    # Check with non-scalar types too, reproduces #14198
+    with new_type(cql, test_keyspace, '(i int, t text)') as udt:
+        with new_test_table(cql, test_keyspace, f'p int, c int, fli frozen<list<int>>, tup tuple<int, bigint>, udt {udt}, PRIMARY KEY (p, c)') as table2:
+            cql.execute(f'INSERT INTO {table2}(p, c, fli, tup, udt) VALUES({p}, 5, [1, 2], (3, 4), {{i: 3, t: \'text\'}})')
+            cql.execute(f'INSERT INTO {table2}(p, c) VALUES({p}, 6)')
+
+            assert [(1,)] == list(cql.execute(f"select count(fli) from {table2} where p = {p}"))
+            assert [(1,)] == list(cql.execute(f"select count(tup) from {table2} where p = {p}"))
+            assert [(1,)] == list(cql.execute(f"select count(udt) from {table2} where p = {p}"))
+            assert [(2,)] == list(cql.execute(f"select count(*) from {table2} where p = {p}"))
 
 # COUNT can be combined with GROUP BY to count separately for each partition
 # or row.
@@ -202,3 +213,7 @@ def test_avg_decimal_2(cql, table1, cassandra_bug):
     cql.execute(f"insert into {table1} (p, c, dc) values ({p}, 4, 3)")
     # Reproduces CASSANDRA-18470:
     assert [(Decimal('2'),)] == list(cql.execute(f"select avg(dc) from {table1} where p = {p}"))
+
+def test_reject_aggregates_in_where_clause(cql, table1):
+    assert_invalid_message(cql, table1, 'Aggregation',
+                           f'SELECT * FROM {table1} WHERE p = sum((int)4)')

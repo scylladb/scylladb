@@ -251,6 +251,26 @@ def test_storage_options_describe(cql, scylla_only):
 
         assert "{'type': 'S3', 'bucket': '42', 'endpoint': 'localhost'}" in desc_output
 
+# Reproducer for scylladb#14139
+def test_alter_keyspace_preserves_udt(cql):
+    ks = unique_name()
+    cql.execute(f"CREATE KEYSPACE {ks} WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
+    try:
+        cql.execute(f"CREATE TYPE {ks}.my_type (my_field int)")
+        cql.execute(f"CREATE TABLE {ks}.tab (p int PRIMARY KEY, m {ks}.my_type)")
+        # The contents of the below line doesn't matter, only the fact
+        # that it modifies keyspace metadata.
+        cql.execute(f"ALTER KEYSPACE {ks} WITH DURABLE_WRITES = false")
+        # The root cause of #14139 was that ALTER KEYSPACE was dropping
+        # some in-memory metadata about UDTs
+        cql.execute(f"DESCRIBE TYPE {ks}.my_type")
+        # #14139 was originally observed as some schema manipulations,
+        # such as DROP TABLE, failing after the ALTER KEYSPACE.
+        cql.execute(f"DROP TABLE {ks}.tab")
+    finally:
+        cql.execute(f"DROP TABLE IF EXISTS {ks}.tab")
+        cql.execute(f"DROP KEYSPACE {ks}")
+
 # TODO: more tests for "WITH REPLICATION" syntax in CREATE TABLE.
 # TODO: check the "AND DURABLE_WRITES" option of CREATE TABLE.
 # TODO: confirm case insensitivity without quotes, and case sensitivity with them.

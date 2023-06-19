@@ -107,7 +107,7 @@ if ! $skip_systemd_check && [ ! -d /run/systemd/system/ ]; then
     exit 1
 fi
 
-if ! scylla-jmx/select-java --version > /dev/null; then
+if ! scylla-jmx/select-java -version > /dev/null; then
     echo "Please install openjdk-8 or openjdk-11 before running install.sh."
     exit 1
 fi

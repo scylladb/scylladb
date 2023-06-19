@@ -888,6 +888,153 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 mm_notifier.stop().get();
             });
 
+            supervisor::notify("starting per-shard database core");
+
+            sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
+            auto stop_sst_dir_sem = defer_verbose_shutdown("sst_dir_semaphore", [&sst_dir_semaphore] {
+                sst_dir_semaphore.stop().get();
+            });
+
+            service_memory_limiter.start(memory::stats().total_memory()).get();
+            auto stop_mem_limiter = defer_verbose_shutdown("service_memory_limiter", [] {
+                // Uncomment this once services release all the memory on stop
+                // service_memory_limiter.stop().get();
+            });
+
+            supervisor::notify("creating and verifying directories");
+            utils::directories::set dir_set;
+            dir_set.add(cfg->data_file_directories());
+            dir_set.add(cfg->commitlog_directory());
+            dir_set.add(cfg->schema_commitlog_directory());
+            dirs.emplace(cfg->developer_mode());
+            dirs->create_and_verify(std::move(dir_set)).get();
+
+            auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory()).get();
+            auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory()).get();
+            if (!hinted_handoff_enabled.is_disabled_for_all()) {
+                hints_dir_initializer.ensure_created_and_verified().get();
+            }
+            view_hints_dir_initializer.ensure_created_and_verified().get();
+
+            auto get_tm_cfg = sharded_parameter([&] {
+                return tasks::task_manager::config {
+                    .task_ttl = cfg->task_ttl_seconds,
+                };
+            });
+            task_manager.start(std::move(get_tm_cfg), std::ref(stop_signal.as_sharded_abort_source())).get();
+            auto stop_task_manager = defer_verbose_shutdown("task_manager", [&task_manager] {
+                task_manager.stop().get();
+            });
+
+            // Note: changed from using a move here, because we want the config object intact.
+            replica::database_config dbcfg;
+            dbcfg.compaction_scheduling_group = make_sched_group("compaction", 1000);
+            dbcfg.memory_compaction_scheduling_group = make_sched_group("mem_compaction", 1000);
+            dbcfg.streaming_scheduling_group = maintenance_scheduling_group;
+            dbcfg.statement_scheduling_group = make_sched_group("statement", 1000);
+            dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
+            dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
+            dbcfg.gossip_scheduling_group = make_sched_group("gossip", 1000);
+            dbcfg.commitlog_scheduling_group = make_sched_group("commitlog", 1000);
+            dbcfg.available_memory = memory::stats().total_memory();
+
+            supervisor::notify("starting compaction_manager");
+            // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
+            // we need the getter since updateable_value is not shard-safe (#7316)
+            auto get_cm_cfg = sharded_parameter([&] {
+                return compaction_manager::config {
+                    .compaction_sched_group = compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group},
+                    .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group},
+                    .available_memory = dbcfg.available_memory,
+                    .static_shares = cfg->compaction_static_shares,
+                    .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
+                };
+            });
+            cm.start(std::move(get_cm_cfg), std::ref(stop_signal.as_sharded_abort_source()), std::ref(task_manager)).get();
+            auto stop_cm = defer_verbose_shutdown("compaction_manager", [&cm] {
+               cm.stop().get();
+            });
+
+            sstm.start(std::ref(*cfg)).get();
+            auto stop_sstm = defer_verbose_shutdown("sstables storage manager", [&sstm] {
+                sstm.stop().get();
+            });
+
+            supervisor::notify("starting database");
+            debug::the_database = &db;
+            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
+                    std::ref(cm), std::ref(sstm), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
+            auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
+                // #293 - do not stop anything - not even db (for real)
+                //return db.stop();
+                // call stop on each db instance, but leave the shareded<database> pointers alive.
+                db.invoke_on_all(&replica::database::stop).get();
+            });
+
+            // We need to init commitlog on shard0 before it is inited on other shards
+            // because it obtains the list of pre-existing segments for replay, which must
+            // not include reserve segments created by active commitlogs.
+            db.local().init_commitlog().get();
+            db.invoke_on_all(&replica::database::start).get();
+
+            smp::invoke_on_all([blocked_reactor_notify_ms] {
+                engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
+            }).get();
+
+            debug::the_storage_proxy = &proxy;
+            supervisor::notify("starting storage proxy");
+            service::storage_proxy::config spcfg {
+                .hints_directory_initializer = hints_dir_initializer,
+            };
+            spcfg.hinted_handoff_enabled = hinted_handoff_enabled;
+            spcfg.available_memory = memory::stats().total_memory();
+            smp_service_group_config storage_proxy_smp_service_group_config;
+            // Assuming less than 1kB per queued request, this limits storage_proxy submit_to() queues to 5MB or less
+            storage_proxy_smp_service_group_config.max_nonlocal_requests = 5000;
+            spcfg.read_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
+            spcfg.write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
+            spcfg.hints_write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
+            spcfg.write_ack_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
+            static db::view::node_update_backlog node_backlog(smp::count, 10ms);
+            scheduling_group_key_config storage_proxy_stats_cfg =
+                    make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
+            storage_proxy_stats_cfg.constructor = [plain_constructor = storage_proxy_stats_cfg.constructor] (void* ptr) {
+                plain_constructor(ptr);
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats();
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local();
+            };
+            storage_proxy_stats_cfg.rename = [] (void* ptr) {
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats();
+                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local();
+            };
+            proxy.start(std::ref(db), spcfg, std::ref(node_backlog),
+                    scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
+                    std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory)).get();
+
+            // #293 - do not stop anything
+            // engine().at_exit([&proxy] { return proxy.stop(); });
+
+            static sharded<cql3::cql_config> cql_config;
+            cql_config.start(std::ref(*cfg)).get();
+
+            supervisor::notify("starting query processor");
+            cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
+            debug::the_query_processor = &qp;
+            auto local_data_dict = seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db));
+
+            utils::loading_cache_config auth_prep_cache_config;
+            auth_prep_cache_config.max_size = qp_mcfg.authorized_prepared_cache_size;
+            auth_prep_cache_config.expiry = std::min(std::chrono::milliseconds(cfg->permissions_validity_in_ms()),
+                                                     std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));
+            auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
+
+            std::optional<wasm::startup_context> wasm_ctx;
+            if (cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF)) {
+                wasm_ctx.emplace(*cfg, dbcfg);
+            }
+
+            qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notifier), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::move(wasm_ctx)).get();
+
             supervisor::notify("starting lifecycle notifier");
             lifecycle_notifier.start().get();
             // storage_service references this notifier and is not stopped yet
@@ -914,18 +1061,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             startlog.info("Scylla API server listening on {}:{} ...", api_addr, cfg->api_port());
 
             api::set_server_config(ctx, *cfg).get();
-
-            // Note: changed from using a move here, because we want the config object intact.
-            replica::database_config dbcfg;
-            dbcfg.compaction_scheduling_group = make_sched_group("compaction", 1000);
-            dbcfg.memory_compaction_scheduling_group = make_sched_group("mem_compaction", 1000);
-            dbcfg.streaming_scheduling_group = maintenance_scheduling_group;
-            dbcfg.statement_scheduling_group = make_sched_group("statement", 1000);
-            dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
-            dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
-            dbcfg.gossip_scheduling_group = make_sched_group("gossip", 1000);
-            dbcfg.commitlog_scheduling_group = make_sched_group("commitlog", 1000);
-            dbcfg.available_memory = memory::stats().total_memory();
 
             netw::messaging_service::config mscfg;
 
@@ -986,6 +1121,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             scfg.streaming = dbcfg.streaming_scheduling_group;
             scfg.gossip = dbcfg.gossip_scheduling_group;
 
+            supervisor::notify("starting messaging service");
             debug::the_messaging_service = &messaging;
 
             std::shared_ptr<seastar::tls::credentials_builder> creds;
@@ -1003,9 +1139,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
             static sharded<db::system_keyspace> sys_ks;
             static sharded<db::view::view_update_generator> view_update_generator;
-            static sharded<cql3::cql_config> cql_config;
             static sharded<cdc::generation_service> cdc_generation_service;
-            cql_config.start(std::ref(*cfg)).get();
 
             supervisor::notify("starting system keyspace");
             // FIXME -- the query processor is not started yet and is thus not usable. It starts later
@@ -1089,88 +1223,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 ss.stop().get();
             });
 
-            supervisor::notify("starting per-shard database core");
-
-            sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
-            auto stop_sst_dir_sem = defer_verbose_shutdown("sst_dir_semaphore", [&sst_dir_semaphore] {
-                sst_dir_semaphore.stop().get();
-            });
-
-            service_memory_limiter.start(memory::stats().total_memory()).get();
-            auto stop_mem_limiter = defer_verbose_shutdown("service_memory_limiter", [] {
-                // Uncomment this once services release all the memory on stop
-                // service_memory_limiter.stop().get();
-            });
-
-            supervisor::notify("creating and verifying directories");
-            utils::directories::set dir_set;
-            dir_set.add(cfg->data_file_directories());
-            dir_set.add(cfg->commitlog_directory());
-            dir_set.add(cfg->schema_commitlog_directory());
-            dirs.emplace(cfg->developer_mode());
-            dirs->create_and_verify(std::move(dir_set)).get();
-
-            auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory()).get();
-            auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory()).get();
-            if (!hinted_handoff_enabled.is_disabled_for_all()) {
-                hints_dir_initializer.ensure_created_and_verified().get();
-            }
-            view_hints_dir_initializer.ensure_created_and_verified().get();
-
-            std::optional<wasm::startup_context> wasm_ctx;
-            if (cfg->enable_user_defined_functions() && cfg->check_experimental(db::experimental_features_t::feature::UDF)) {
-                wasm_ctx.emplace(*cfg, dbcfg);
-            }
-
-            auto get_tm_cfg = sharded_parameter([&] {
-                return tasks::task_manager::config {
-                    .task_ttl = cfg->task_ttl_seconds,
-                };
-            });
-            task_manager.start(std::move(get_tm_cfg), std::ref(stop_signal.as_sharded_abort_source())).get();
-            auto stop_task_manager = defer_verbose_shutdown("task_manager", [&task_manager] {
-                task_manager.stop().get();
-            });
-
-            supervisor::notify("starting compaction_manager");
-            // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
-            // we need the getter since updateable_value is not shard-safe (#7316)
-            auto get_cm_cfg = sharded_parameter([&] {
-                return compaction_manager::config {
-                    .compaction_sched_group = compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group},
-                    .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group},
-                    .available_memory = dbcfg.available_memory,
-                    .static_shares = cfg->compaction_static_shares,
-                    .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
-                };
-            });
-            cm.start(std::move(get_cm_cfg), std::ref(stop_signal.as_sharded_abort_source()), std::ref(task_manager)).get();
-            auto stop_cm = defer_verbose_shutdown("compaction_manager", [&cm] {
-               cm.stop().get();
-            });
-
-            sstm.start(std::ref(*cfg)).get();
-            auto stop_sstm = defer_verbose_shutdown("sstables storage manager", [&sstm] {
-                sstm.stop().get();
-            });
-
-            supervisor::notify("starting database");
-            debug::the_database = &db;
-            db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
-                    std::ref(cm), std::ref(sstm), std::ref(sst_dir_semaphore), utils::cross_shard_barrier()).get();
-            auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
-                // #293 - do not stop anything - not even db (for real)
-                //return db.stop();
-                // call stop on each db instance, but leave the shareded<database> pointers alive.
-                db.invoke_on_all(&replica::database::stop).get();
-            });
-
-            // We need to init commitlog on shard0 before it is inited on other shards
-            // because it obtains the list of pre-existing segments for replay, which must
-            // not include reserve segments created by active commitlogs.
-            db.local().init_commitlog().get();
-            db.invoke_on_all(&replica::database::start).get();
-
             // Initialization of a keyspace is done by shard 0 only. For system
             // keyspace, the procedure  will go through the hardcoded column
             // families, and in each of them, it will load the sstables for all
@@ -1180,40 +1232,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // described here: https://github.com/scylladb/scylla/issues/1014
             supervisor::notify("loading system sstables");
             replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, raft_gr, *cfg, system_table_load_phase::phase1).get();
-
-            smp::invoke_on_all([blocked_reactor_notify_ms] {
-                engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
-            }).get();
-
-            debug::the_storage_proxy = &proxy;
-            supervisor::notify("starting storage proxy");
-            service::storage_proxy::config spcfg {
-                .hints_directory_initializer = hints_dir_initializer,
-            };
-            spcfg.hinted_handoff_enabled = hinted_handoff_enabled;
-            spcfg.available_memory = memory::stats().total_memory();
-            smp_service_group_config storage_proxy_smp_service_group_config;
-            // Assuming less than 1kB per queued request, this limits storage_proxy submit_to() queues to 5MB or less
-            storage_proxy_smp_service_group_config.max_nonlocal_requests = 5000;
-            spcfg.read_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
-            spcfg.write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
-            spcfg.hints_write_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
-            spcfg.write_ack_smp_service_group = create_smp_service_group(storage_proxy_smp_service_group_config).get0();
-            static db::view::node_update_backlog node_backlog(smp::count, 10ms);
-            scheduling_group_key_config storage_proxy_stats_cfg =
-                    make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
-            storage_proxy_stats_cfg.constructor = [plain_constructor = storage_proxy_stats_cfg.constructor] (void* ptr) {
-                plain_constructor(ptr);
-                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats();
-                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local();
-            };
-            storage_proxy_stats_cfg.rename = [] (void* ptr) {
-                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_stats();
-                reinterpret_cast<service::storage_proxy_stats::stats*>(ptr)->register_split_metrics_local();
-            };
-            proxy.start(std::ref(db), std::ref(gossiper), spcfg, std::ref(node_backlog),
-                    scheduling_group_key_create(storage_proxy_stats_cfg).get0(),
-                    std::ref(feature_service), std::ref(token_metadata), std::ref(erm_factory), std::ref(messaging)).get();
             supervisor::notify("starting forward service");
             forward_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(token_metadata)).get();
             auto stop_forward_service_handlers = defer_verbose_shutdown("forward service", [&forward_service] {
@@ -1227,9 +1245,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_tablet_allocator = defer_verbose_shutdown("tablet allocator", [&tablet_allocator] {
                 tablet_allocator.stop().get();
             });
-
-            // #293 - do not stop anything
-            // engine().at_exit([&proxy] { return proxy.stop(); });
 
             supervisor::notify("starting migration manager");
             debug::the_migration_manager = &mm;
@@ -1245,18 +1260,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 raft_gr.stop().get();
             });
 
-            supervisor::notify("starting query processor");
-            cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
-            debug::the_query_processor = &qp;
-            auto local_data_dict = seastar::sharded_parameter([] (const replica::database& db) { return db.as_data_dictionary(); }, std::ref(db));
-
-            utils::loading_cache_config auth_prep_cache_config;
-            auth_prep_cache_config.max_size = qp_mcfg.authorized_prepared_cache_size;
-            auth_prep_cache_config.expiry = std::min(std::chrono::milliseconds(cfg->permissions_validity_in_ms()),
-                                                     std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));
-            auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
-
-            qp.start(std::ref(proxy), std::ref(forward_service), std::move(local_data_dict), std::ref(mm_notifier), std::ref(mm), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::ref(group0_client), std::move(wasm_ctx)).get();
+            supervisor::notify("initializing query processor remote part");
+            // TODO: do this together with proxy.start_remote(...)
+            qp.invoke_on_all([&mm, &forward_service, &group0_client] (cql3::query_processor& qp) {
+                qp.start_remote(mm.local(), forward_service.local(), group0_client);
+            }).get();
+            auto stop_qp_remote = defer_verbose_shutdown("query processor remote part", [&qp] {
+                qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
+            });
 
             ss.invoke_on_all([&] (service::storage_service& ss) {
                 ss.set_query_processor(qp.local());
@@ -1452,11 +1463,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 mm.init_messaging_service();
             }).get();
             supervisor::notify("initializing storage proxy RPC verbs");
-            proxy.invoke_on_all([&mm] (service::storage_proxy& proxy) {
-                proxy.init_messaging_service(&mm.local());
+            proxy.invoke_on_all([&messaging, &gossiper, &mm] (service::storage_proxy& proxy) {
+                proxy.start_remote(messaging.local(), gossiper.local(), mm.local());
             }).get();
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
-                proxy.invoke_on_all(&service::storage_proxy::uninit_messaging_service).get();
+                proxy.invoke_on_all(&service::storage_proxy::stop_remote).get();
             });
 
             debug::the_stream_manager = &stream_manager;
@@ -1542,6 +1553,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_ss_msg = defer_verbose_shutdown("storage service messaging", [&ss] {
                 ss.local().uninit_messaging_service_part().get();
             });
+
+            // It's essential to load fencing_version prior to starting the messaging service,
+            // since incoming messages may require fencing.
+            ss.local().update_fence_version(sys_ks.local().get_topology_fence_version().get()).get();
+
             api::set_server_messaging_service(ctx, messaging).get();
             auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
                 api::unset_server_messaging_service(ctx).get();
@@ -1603,6 +1619,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 group0_service.abort().get();
             });
 
+            load_address_map(sys_ks.local(), raft_address_map.local()).get();
+
             // Set up group0 service earlier since it is needed by group0 setup just below
             ss.local().set_group0(group0_service);
 
@@ -1628,7 +1646,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }).get();
 
             supervisor::notify("starting tracing");
-            tracing::tracing::start_tracing(qp).get();
+            tracing::tracing::start_tracing(qp, mm).get();
             auto stop_tracing = defer_verbose_shutdown("tracing", [] {
                 tracing::tracing::stop_tracing().get();
             });
@@ -1853,6 +1871,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
                 ss.local().drain_on_shutdown().get();
+            });
+
+            // Signal shutdown to the forward service before draining the messaging service.
+            auto shutdown_forward_service = defer_verbose_shutdown("forward service", [&forward_service] {
+                forward_service.invoke_on_all(&service::forward_service::shutdown).get();
             });
 
             auto drain_view_builder = defer_verbose_shutdown("view builder ops", [cfg] {

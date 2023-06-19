@@ -128,7 +128,7 @@ private:
     static std::vector<lw_shared_ptr<column_specification>> collect_metadata(const schema& schema,
         const std::vector<::shared_ptr<raw_selector>>& raw_selectors, const selector_factories& factories);
 public:
-    static ::shared_ptr<selection> from_selectors(data_dictionary::database db, schema_ptr schema, const std::vector<::shared_ptr<raw_selector>>& raw_selectors);
+    static ::shared_ptr<selection> from_selectors(data_dictionary::database db, schema_ptr schema, const sstring& ks, const std::vector<::shared_ptr<raw_selector>>& raw_selectors);
 
     virtual std::unique_ptr<selectors> new_selectors() const = 0;
 

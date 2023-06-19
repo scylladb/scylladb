@@ -17,18 +17,6 @@ from test.pylib.manager_client import ManagerClient, IPAddress, ServerInfo
 from test.pylib.util import wait_for
 
 
-async def reconnect_driver(manager: ManagerClient) -> Session:
-    """Workaround for scylladb/python-driver#170:
-       the existing driver session may not reconnect, create a new one.
-    """
-    logging.info(f"Reconnecting driver")
-    manager.driver_close()
-    await manager.driver_connect()
-    cql = manager.cql
-    assert(cql)
-    return cql
-
-
 async def restart(manager: ManagerClient, server: ServerInfo) -> None:
     logging.info(f"Stopping {server} gracefully")
     await manager.server_stop_gracefully(server.server_id)
@@ -103,15 +91,3 @@ def log_run_time(f):
         logging.info(f"{f.__name__} took {int(time.time() - start)} seconds.")
         return res
     return wrapped
-
-
-# Wait for the given feature to be enabled.
-async def wait_for_feature(feature: str, cql: Session, host: Host, deadline: float) -> None:
-    async def feature_is_enabled():
-        rs = await cql.run_async("select value from system.scylla_local where key = 'enabled_features'", host=host)
-        if rs:
-            value = rs[0].value
-            if feature in value:
-                return True
-        return None
-    await wait_for(feature_is_enabled, deadline)

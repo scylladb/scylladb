@@ -64,7 +64,6 @@
 #include "utils/serialized_action.hh"
 #include "compaction/compaction_fwd.hh"
 #include "utils/disk-error-handler.hh"
-#include "rust/wasmtime_bindings.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -572,7 +571,7 @@ private:
 
     // update the sstable generation, making sure (in calculate_generation_for_new_table)
     // that new new sstables don't overwrite this one.
-    void update_sstables_known_generation(std::optional<sstables::generation_type> generation);
+    void update_sstables_known_generation(sstables::generation_type generation);
 
     sstables::generation_type calculate_generation_for_new_table();
 private:
@@ -961,6 +960,7 @@ public:
     }
 
     void set_hit_rate(gms::inet_address addr, cache_temperature rate);
+    cache_hit_rate get_my_hit_rate() const;
     cache_hit_rate get_hit_rate(const gms::gossiper& g, gms::inet_address addr);
     void drop_hit_rate(gms::inet_address addr);
 

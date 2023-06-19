@@ -44,7 +44,9 @@ public:
      * Most caller should just call the isAssignable() method on the result, though functions have a use for
      * testing "strong" equality to decide the most precise overload to pick when multiple could match.
      */
-    virtual test_result test_assignment(data_dictionary::database db, const sstring& keyspace, const column_specification& receiver) const = 0;
+    virtual test_result test_assignment(data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver) const = 0;
+
+    virtual std::optional<data_type> assignment_testable_type_opt() const = 0;
 
     // for error reporting
     virtual sstring assignment_testable_source_context() const = 0;
