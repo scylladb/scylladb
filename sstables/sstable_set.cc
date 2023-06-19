@@ -830,10 +830,22 @@ make_pk_filter(const dht::ring_position& pos, const schema& schema) {
     };
 }
 
-// Filter out sstables for reader using bloom filter
+const sstable_predicate& default_sstable_predicate() {
+    static const sstable_predicate predicate = [] (const sstable&) { return true; };
+    return predicate;
+}
+
+static std::predicate<const sstable&> auto
+make_sstable_filter(const dht::ring_position& pos, const schema& schema, const sstable_predicate& predicate) {
+    return [pk_filter = make_pk_filter(pos, schema), &predicate] (const sstable& sst) {
+        return predicate(sst) && pk_filter(sst);
+    };
+}
+
+// Filter out sstables for reader using bloom filter and supplied predicate
 static std::vector<shared_sstable>
-filter_sstable_for_reader_by_pk(std::vector<shared_sstable>&& sstables, const schema& schema, const dht::ring_position& pos) {
-    auto filter = [_filter = make_pk_filter(pos, schema)] (const shared_sstable& sst) { return !_filter(*sst); };
+filter_sstable_for_reader(std::vector<shared_sstable>&& sstables, const schema& schema, const dht::ring_position& pos, const sstable_predicate& predicate) {
+    auto filter = [_filter = make_sstable_filter(pos, schema, predicate)] (const shared_sstable& sst) { return !_filter(*sst); };
     sstables.erase(boost::remove_if(sstables, filter), sstables.end());
     return std::move(sstables);
 }
@@ -887,10 +899,11 @@ sstable_set_impl::create_single_key_sstable_reader(
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
-        mutation_reader::forwarding fwd_mr) const
+        mutation_reader::forwarding fwd_mr,
+        const sstable_predicate& predicate) const
 {
     const auto& pos = pr.start()->value();
-    auto selected_sstables = filter_sstable_for_reader_by_pk(select(pr), *schema, pos);
+    auto selected_sstables = filter_sstable_for_reader(select(pr), *schema, pos, predicate);
     auto num_sstables = selected_sstables.size();
     if (!num_sstables) {
         return make_empty_flat_reader_v2(schema, permit);
@@ -929,7 +942,8 @@ time_series_sstable_set::create_single_key_sstable_reader(
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd_sm,
-        mutation_reader::forwarding fwd_mr) const {
+        mutation_reader::forwarding fwd_mr,
+        const sstable_predicate& predicate) const {
     const auto& pos = pr.start()->value();
     // First check if the optimized algorithm for TWCS single partition queries can be applied.
     // Multiple conditions must be satisfied:
@@ -951,11 +965,11 @@ time_series_sstable_set::create_single_key_sstable_reader(
         // Some of the conditions were not satisfied so we use the standard query path.
         return sstable_set_impl::create_single_key_sstable_reader(
                 cf, std::move(schema), std::move(permit), sstable_histogram,
-                pr, slice, std::move(trace_state), fwd_sm, fwd_mr);
+                pr, slice, std::move(trace_state), fwd_sm, fwd_mr, predicate);
     }
 
-    auto pk_filter = make_pk_filter(pos, *schema);
-    auto it = std::find_if(_sstables->begin(), _sstables->end(), [&] (const sst_entry& e) { return pk_filter(*e.second); });
+    auto sst_filter = make_sstable_filter(pos, *schema, predicate);
+    auto it = std::find_if(_sstables->begin(), _sstables->end(), [&] (const sst_entry& e) { return sst_filter(*e.second); });
     if (it == _sstables->end()) {
         // No sstables contain data for the queried partition.
         return make_empty_flat_reader_v2(std::move(schema), std::move(permit));
@@ -968,6 +982,7 @@ time_series_sstable_set::create_single_key_sstable_reader(
         return sst.make_reader(schema, permit, pr, slice, trace_state, fwd_sm);
     };
 
+    auto pk_filter = make_pk_filter(pos, *schema);
     auto ck_filter = [ranges = slice.get_all_ranges()] (const sstable& sst) { return sst.may_contain_rows(ranges); };
 
     // We're going to pass this filter into sstable_position_reader_queue. The queue guarantees that
@@ -1168,7 +1183,8 @@ compound_sstable_set::create_single_key_sstable_reader(
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
-        mutation_reader::forwarding fwd_mr) const {
+        mutation_reader::forwarding fwd_mr,
+        const sstable_predicate& predicate) const {
     auto sets = _sets;
     auto it = std::partition(sets.begin(), sets.end(), [] (const auto& set) { return set->size() > 0; });
     auto non_empty_set_count = std::distance(sets.begin(), it);
@@ -1179,13 +1195,13 @@ compound_sstable_set::create_single_key_sstable_reader(
     // optimize for common case where only 1 set is populated, avoiding the expensive combined reader
     if (non_empty_set_count == 1) {
         const auto& non_empty_set = *std::begin(sets);
-        return non_empty_set->create_single_key_sstable_reader(cf, std::move(schema), std::move(permit), sstable_histogram, pr, slice, trace_state, fwd, fwd_mr);
+        return non_empty_set->create_single_key_sstable_reader(cf, std::move(schema), std::move(permit), sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate);
     }
 
     auto readers = boost::copy_range<std::vector<flat_mutation_reader_v2>>(
         boost::make_iterator_range(sets.begin(), it)
         | boost::adaptors::transformed([&] (const lw_shared_ptr<sstable_set>& non_empty_set) {
-            return non_empty_set->create_single_key_sstable_reader(cf, schema, permit, sstable_histogram, pr, slice, trace_state, fwd, fwd_mr);
+            return non_empty_set->create_single_key_sstable_reader(cf, schema, permit, sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate);
         })
     );
     return make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr);
@@ -1201,10 +1217,11 @@ sstable_set::create_single_key_sstable_reader(
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
-        mutation_reader::forwarding fwd_mr) const {
+        mutation_reader::forwarding fwd_mr,
+        const sstable_predicate& predicate) const {
     assert(pr.is_singular() && pr.start()->value().has_key());
     return _impl->create_single_key_sstable_reader(cf, std::move(schema),
-            std::move(permit), sstable_histogram, pr, slice, std::move(trace_state), fwd, fwd_mr);
+            std::move(permit), sstable_histogram, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate);
 }
 
 flat_mutation_reader_v2
@@ -1240,11 +1257,15 @@ sstable_set::make_local_shard_sstable_reader(
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
-        read_monitor_generator& monitor_generator) const
+        read_monitor_generator& monitor_generator,
+        const sstable_predicate& predicate) const
 {
-    auto reader_factory_fn = [s, permit, &slice, trace_state, fwd, fwd_mr, &monitor_generator]
+    auto reader_factory_fn = [s, permit, &slice, trace_state, fwd, fwd_mr, &monitor_generator, &predicate]
             (shared_sstable& sst, const dht::partition_range& pr) mutable {
         assert(!sst->is_shared());
+        if (!predicate(*sst)) {
+            return make_empty_flat_reader_v2(s, permit);
+        }
         return sst->make_reader(s, permit, pr, slice, trace_state, fwd, fwd_mr, monitor_generator(sst));
     };
     if (_impl->size() == 1) [[unlikely]] {

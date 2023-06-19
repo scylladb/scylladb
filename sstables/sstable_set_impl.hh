@@ -114,7 +114,8 @@ public:
         const query::partition_slice&,
         tracing::trace_state_ptr,
         streamed_mutation::forwarding,
-        mutation_reader::forwarding) const override;
+        mutation_reader::forwarding,
+        const sstable_predicate&) const override;
 
     friend class sstable_position_reader_queue;
 };
@@ -147,7 +148,8 @@ public:
             const query::partition_slice&,
             tracing::trace_state_ptr,
             streamed_mutation::forwarding,
-            mutation_reader::forwarding) const override;
+            mutation_reader::forwarding,
+            const sstable_predicate&) const override;
 
     class incremental_selector;
 };
