@@ -159,8 +159,6 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
     for (auto i : idx) {
         // create 4 sstables of similar size to be compacted later on.
 
-        auto mt = make_lw_shared<replica::memtable>(s);
-
         const column_definition& r1_col = *s->get_column_definition("r1");
 
         sstring k = "key" + to_sstring(i);
@@ -169,9 +167,8 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
 
         mutation m(s, key);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
-        mt->apply(std::move(m));
 
-        auto sst = make_sstable_containing(sst_gen, mt);
+        auto sst = make_sstable_containing(sst_gen, {std::move(m)});
         column_family_test(cf).add_sstable(sst).get();
     }
 
@@ -326,8 +323,6 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
 
         if (create_sstables) {
             for (auto i = 0; i < create_sstables; i++) {
-                auto mt = make_lw_shared<replica::memtable>(s);
-
                 const column_definition& r1_col = *s->get_column_definition("r1");
 
                 auto sst = sst_gen();
@@ -337,9 +332,8 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
 
                 mutation m(s, key);
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(utf8_type, bytes(min_sstable_size, 'a')));
-                mt->apply(std::move(m));
 
-                sst = make_sstable_containing(sst, mt);
+                sst = make_sstable_containing(sst, {std::move(m)});
                 sstables.push_back(sst);
             }
         }
@@ -1149,20 +1143,14 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type);
         auto sst_gen = env.make_sst_factory(s);
 
-        auto mt = make_lw_shared<replica::memtable>(s);
-
         const column_definition& r1_col = *s->get_column_definition("r1");
 
         auto key_for_this_shard = tests::generate_partition_keys(1, s);
-        auto apply_key = [mt, s, &r1_col] (const dht::decorated_key& key) {
-            auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
-            mutation m(s, key);
-            m.set_clustered_cell(c_key, r1_col, make_atomic_cell(utf8_type, bytes("a")));
-            mt->apply(std::move(m));
-        };
-        apply_key(key_for_this_shard[0]);
+        auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
+        mutation mut(s, key_for_this_shard[0]);
+        mut.set_clustered_cell(c_key, r1_col, make_atomic_cell(utf8_type, bytes("a")));
 
-        auto sstp = make_sstable_containing(sst_gen, mt);
+        auto sstp = make_sstable_containing(sst_gen, {std::move(mut)});
         auto key = key_for_this_shard[0];
         std::vector<sstables::shared_sstable> new_tables;
         auto creator = [&] {
@@ -1215,16 +1203,13 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                                          make_atomic_cell(utf8_type, bytes(""), ttl, last_expiry));
                     mt->apply(std::move(m));
                 };
-                auto get_usable_sst = [&] (lw_shared_ptr<replica::memtable> mt) {
-                    return make_sstable_containing(sst_gen, mt);
-                };
 
                 mutation m(s, partition_key::from_exploded(*s, {to_bytes("deletetest")}));
                 for (auto i = 0; i < 5; i++) {
                     add_row(m, to_bytes("deletecolumn" + to_sstring(i)), 100);
                 }
                 add_row(m, to_bytes("todelete"), 1000);
-                auto sst1 = get_usable_sst(mt);
+                auto sst1 = make_sstable_containing(sst_gen, mt);
                 BOOST_REQUIRE(last_expiry == sst1->get_stats_metadata().max_local_deletion_time);
 
                 mt = make_lw_shared<replica::memtable>(s);
@@ -1232,7 +1217,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                 tombstone tomb(api::new_timestamp(), now);
                 m.partition().apply_delete(*s, clustering_key::from_exploded(*s, {to_bytes("todelete")}), tomb);
                 mt->apply(std::move(m));
-                auto sst2 = get_usable_sst(mt);
+                auto sst2 = make_sstable_containing(sst_gen, mt);
                 BOOST_REQUIRE(now.time_since_epoch().count() == sst2->get_stats_metadata().max_local_deletion_time);
 
                 auto creator = sst_gen;
@@ -1306,12 +1291,10 @@ SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
         auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
         auto sst_gen = env.make_sst_factory(s);
 
-        auto mt = make_lw_shared<replica::memtable>(s);
         mutation m(s, key);
         tombstone tomb(api::new_timestamp(), gc_clock::now() - std::chrono::seconds(3600));
         m.partition().apply_delete(*s, c_key, tomb);
-        mt->apply(std::move(m));
-        auto sst = make_sstable_containing(sst_gen, mt);
+        auto sst = make_sstable_containing(sst_gen, {std::move(m)});
 
         auto cf = env.make_table_for_tests(s);
         auto close_cf = deferred_stop(cf);
