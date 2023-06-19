@@ -45,7 +45,8 @@ public:
         const io_priority_class&,
         tracing::trace_state_ptr,
         streamed_mutation::forwarding,
-        mutation_reader::forwarding) const;
+        mutation_reader::forwarding,
+        const sstable_predicate&) const;
 };
 
 // specialized when sstables are partitioned in the token range space
@@ -141,7 +142,8 @@ public:
         const io_priority_class&,
         tracing::trace_state_ptr,
         streamed_mutation::forwarding,
-        mutation_reader::forwarding) const override;
+        mutation_reader::forwarding,
+        const sstable_predicate&) const override;
 
     friend class sstable_position_reader_queue;
 };
@@ -173,7 +175,8 @@ public:
             const io_priority_class&,
             tracing::trace_state_ptr,
             streamed_mutation::forwarding,
-            mutation_reader::forwarding) const override;
+            mutation_reader::forwarding,
+            const sstable_predicate&) const override;
 
     class incremental_selector;
 };

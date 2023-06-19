@@ -49,6 +49,10 @@ public:
     double estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const;
 };
 
+using sstable_predicate = noncopyable_function<bool(const sstable&)>;
+// Default predicate includes everything
+const sstable_predicate& default_sstable_predicate();
+
 class sstable_set : public enable_lw_shared_from_this<sstable_set> {
     std::unique_ptr<sstable_set_impl> _impl;
     schema_ptr _schema;
@@ -115,7 +119,8 @@ public:
         const io_priority_class&,
         tracing::trace_state_ptr,
         streamed_mutation::forwarding,
-        mutation_reader::forwarding) const;
+        mutation_reader::forwarding,
+        const sstable_predicate& p = default_sstable_predicate()) const;
 
     /// Read a range from the sstable set.
     ///
@@ -142,7 +147,8 @@ public:
         tracing::trace_state_ptr,
         streamed_mutation::forwarding,
         mutation_reader::forwarding,
-        read_monitor_generator& rmg = default_read_monitor_generator()) const;
+        read_monitor_generator& rmg = default_read_monitor_generator(),
+        const sstable_predicate& p = default_sstable_predicate()) const;
 
     flat_mutation_reader_v2 make_crawling_reader(
             schema_ptr,
