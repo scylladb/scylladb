@@ -41,7 +41,6 @@
 #include "utils/fb_utilities.hh"
 #include "mutation/mutation_source_metadata.hh"
 #include "gms/gossiper.hh"
-#include "gms/feature_service.hh"
 #include "db/config.hh"
 #include "db/commitlog/commitlog.hh"
 #include "utils/lister.hh"
@@ -67,8 +66,8 @@ static seastar::metrics::label keyspace_label("ks");
 
 using namespace std::chrono_literals;
 
-void table::update_sstables_known_generation(sstables::generation_type generation) {
-    auto gen = generation ? generation.as_int() : 0;
+void table::update_sstables_known_generation(std::optional<sstables::generation_type> generation) {
+    auto gen = generation.value_or(sstables::generation_type(0)).as_int();
     if (_sstable_generation_generator) {
         _sstable_generation_generator->update_known_generation(gen);
     } else {
@@ -83,8 +82,7 @@ sstables::generation_type table::calculate_generation_for_new_table() {
     // See https://github.com/scylladb/scylladb/issues/10459
     // for uuid-based sstable generation
     assert(_sstable_generation_generator);
-    auto ret = std::invoke(*_sstable_generation_generator,
-                           uuid_identifiers{_sstables_manager.uuid_sstable_identifiers()});
+    auto ret = std::invoke(*_sstable_generation_generator);
     tlogger.debug("{}.{} new sstable generation {}", schema()->ks_name(), schema()->cf_name(), ret);
     return ret;
 }

@@ -453,16 +453,14 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
         process_sstable_dir(directory, flags).get();
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
-        auto highest_generation = highest_generation_seen(directory).get0();
-        sharded_gen.start(highest_generation ? highest_generation.as_int() : 0).get();
+        auto highest_generation = highest_generation_seen(directory).get0().value_or(
+            sstables::generation_type{0});
+        sharded_gen.start(highest_generation.as_int()).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         auto make_sstable = [&] (shard_id shard) {
             auto& sstm = global_table->get_sstables_manager();
-            bool uuid_sstable_identifiers = db.local().features().uuid_sstable_identifiers;
-            auto generation = sharded_gen.invoke_on(shard, [uuid_sstable_identifiers] (auto& gen) {
-                return gen(sstables::uuid_identifiers{uuid_sstable_identifiers});
-            }).get();
+            auto generation = sharded_gen.invoke_on(shard, [] (auto& gen) { return gen(); }).get();
             return sstm.make_sstable(global_table->schema(), global_table->get_storage_options(),
                                      upload.native(), generation, sstm.get_highest_supported_format(),
                                      sstables::sstable_format_types::big, gc_clock::now(), &error_handler_gen_for_upload_dir);
@@ -536,7 +534,7 @@ class table_populator {
     fs::path _base_path;
     std::unordered_map<sstring, lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
     sstables::sstable_version_types _highest_version = sstables::oldest_writable_sstable_format;
-    sstables::generation_type _highest_generation;
+    std::optional<sstables::generation_type> _highest_generation;
 
 public:
     table_populator(global_table_ptr ptr, distributed<replica::database>& db, sstring ks, sstring cf)
@@ -628,7 +626,11 @@ future<> table_populator::start_subdir(sstring subdir) {
     auto generation = co_await highest_generation_seen(directory);
 
     _highest_version = std::max(sst_version, _highest_version);
-    _highest_generation = std::max(generation, _highest_generation);
+    if (generation) {
+        _highest_generation = _highest_generation ?
+            std::max(*generation, *_highest_generation) :
+            *generation;
+    }
 }
 
 sstables::shared_sstable make_sstable(replica::table& table, fs::path dir, sstables::generation_type generation, sstables::sstable_version_types v) {
