@@ -86,7 +86,7 @@ def test_futuristic_timestamp(cql, table1):
 # test will need to be replaced by a test for the new feature instead of
 # expecting an error message.
 def test_key_writetime(cql, table1):
-    with pytest.raises(InvalidRequest, match='PRIMARY KEY part k'):
+    with pytest.raises(InvalidRequest, match='PRIMARY KEY part k|WRITETIME is not legal on partition key component k'):
         cql.execute(f'SELECT writetime(k) FROM {table1}')
-    with pytest.raises(InvalidRequest, match='PRIMARY KEY part k'):
+    with pytest.raises(InvalidRequest, match='PRIMARY KEY part k|TTL is not legal on partition key component k'):
         cql.execute(f'SELECT ttl(k) FROM {table1}')
