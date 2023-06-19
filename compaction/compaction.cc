@@ -148,25 +148,6 @@ std::ostream& operator<<(std::ostream& os, compaction_type_options::scrub::quara
     return os << to_string(quarantine_mode);
 }
 
-std::ostream& operator<<(std::ostream& os, pretty_printed_data_size data) {
-    static constexpr const char* suffixes[] = { " bytes", "kB", "MB", "GB", "TB", "PB" };
-
-    unsigned exp = 0;
-    while ((data._size >= 1000) && (exp < sizeof(suffixes))) {
-        exp++;
-        data._size /= 1000;
-    }
-
-    os << data._size << suffixes[exp];
-    return os;
-}
-
-std::ostream& operator<<(std::ostream& os, pretty_printed_throughput tp) {
-    uint64_t throughput = tp._duration.count() > 0 ? tp._size / tp._duration.count() : 0;
-    os << pretty_printed_data_size(throughput) << "/s";
-    return os;
-}
-
 static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_s, sstable_set::incremental_selector& selector,
         const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk, uint64_t& bloom_filter_checks) {
     if (!table_s.tombstone_gc_enabled()) [[unlikely]] {
@@ -806,8 +787,8 @@ protected:
         // By the time being, using estimated key count.
         log_info("{} {} sstables to {}. {} to {} (~{}% of original) in {}ms = {}. ~{} total partitions merged to {}.",
                 report_finish_desc(),
-                _input_sstable_generations.size(), new_sstables_msg, pretty_printed_data_size(_start_size), pretty_printed_data_size(_end_size), int(ratio * 100),
-                std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), pretty_printed_throughput(_end_size, duration),
+                _input_sstable_generations.size(), new_sstables_msg, utils::pretty_printed_data_size(_start_size), utils::pretty_printed_data_size(_end_size), int(ratio * 100),
+                std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), utils::pretty_printed_throughput(_end_size, duration),
                 _cdata.total_partitions, _cdata.total_keys_written);
 
         return ret;
@@ -944,7 +925,7 @@ void compacted_fragments_writer::split_large_partition() {
         _c.log_debug("Closing active tombstone {} with {} for partition {}", _current_partition.current_emitted_tombstone, rtc, *_current_partition.dk);
         _compaction_writer->writer.consume(std::move(rtc));
     }
-    _c.log_debug("Splitting large partition {} in order to respect SSTable size limit of {}", *_current_partition.dk, pretty_printed_data_size(_c._max_sstable_size));
+    _c.log_debug("Splitting large partition {} in order to respect SSTable size limit of {}", *_current_partition.dk, utils::pretty_printed_data_size(_c._max_sstable_size));
     // Close partition in current writer, and open it again in a new writer.
     do_consume_end_of_partition();
     stop_current_writer();
