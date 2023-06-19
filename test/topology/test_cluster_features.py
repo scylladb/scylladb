@@ -130,6 +130,10 @@ async def test_joining_old_node_fails(manager: ManagerClient) -> None:
     servers = await manager.running_servers()
     await change_support_for_test_feature_and_restart(manager, servers, enable=True)
 
+    # Workaround for scylladb/python-driver#230 - the driver might not
+    # reconnect after all nodes are stopped at once.
+    cql = await reconnect_driver(manager)
+
     # Wait until the feature is considered enabled by all nodes
     cql = manager.cql
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
