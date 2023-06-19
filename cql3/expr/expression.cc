@@ -76,11 +76,11 @@ binary_operator::binary_operator(expression lhs, oper_t op, expression rhs, comp
 // Since column_identifier_raw is forward-declared in expression.hh, delay destructor instantiation here
 unresolved_identifier::~unresolved_identifier() = default;
 
-static cql3::raw_value evaluate(const bind_variable&, const evaluation_inputs&);
-static cql3::raw_value evaluate(const tuple_constructor&, const evaluation_inputs&);
-static cql3::raw_value evaluate(const collection_constructor&, const evaluation_inputs&);
-static cql3::raw_value evaluate(const usertype_constructor&, const evaluation_inputs&);
-static cql3::raw_value evaluate(const function_call&, const evaluation_inputs&);
+static cql3::raw_value do_evaluate(const bind_variable&, const evaluation_inputs&);
+static cql3::raw_value do_evaluate(const tuple_constructor&, const evaluation_inputs&);
+static cql3::raw_value do_evaluate(const collection_constructor&, const evaluation_inputs&);
+static cql3::raw_value do_evaluate(const usertype_constructor&, const evaluation_inputs&);
+static cql3::raw_value do_evaluate(const function_call&, const evaluation_inputs&);
 
 namespace {
 
@@ -1585,7 +1585,8 @@ std::optional<bool> get_bool_value(const constant& constant_val) {
     return constant_val.view().deserialize<bool>(*boolean_type);
 }
 
-cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& inputs) {
+static
+cql3::raw_value do_evaluate(const binary_operator& binop, const evaluation_inputs& inputs) {
     if (binop.order == comparison_order::clustering) {
         throw exceptions::invalid_request_exception("Can't evaluate a binary operator with SCYLLA_CLUSTERING_BOUND");
     }
@@ -1645,7 +1646,8 @@ cql3::raw_value evaluate(const binary_operator& binop, const evaluation_inputs& 
 // It works this way in Postgres as well, for example:
 // `SELECT true AND NULL AND 1/0 = 0` will throw a division by zero error
 // but `SELECT false AND 1/0 = 0` will successfully evaluate to FALSE.
-cql3::raw_value evaluate(const conjunction& conj, const evaluation_inputs& inputs) {
+static
+cql3::raw_value do_evaluate(const conjunction& conj, const evaluation_inputs& inputs) {
     bool has_null = false;
 
     for (const expression& element : conj.children) {
@@ -1672,7 +1674,8 @@ cql3::raw_value evaluate(const conjunction& conj, const evaluation_inputs& input
     return raw_value::make_value(boolean_type->decompose(true));
 }
 
-cql3::raw_value evaluate(const field_selection& field_select, const evaluation_inputs& inputs) {
+static
+cql3::raw_value do_evaluate(const field_selection& field_select, const evaluation_inputs& inputs) {
     const user_type_impl* udt_type = dynamic_cast<const user_type_impl*>(&field_select.type->without_reversed());
     if (udt_type == nullptr) {
         on_internal_error(expr_logger, "evaluate(field_selection): type is not a user defined type");
@@ -1709,7 +1712,7 @@ cql3::raw_value evaluate(const field_selection& field_select, const evaluation_i
 
 static
 cql3::raw_value
-evaluate(const column_mutation_attribute& cma, const evaluation_inputs& inputs) {
+do_evaluate(const column_mutation_attribute& cma, const evaluation_inputs& inputs) {
     auto col = expr::as_if<column_value>(&cma.column);
     if (!col) {
         on_internal_error(expr_logger, fmt::format("evaluating column_mutation_attribute of non-column {}", cma.column));
@@ -1737,16 +1740,16 @@ evaluate(const column_mutation_attribute& cma, const evaluation_inputs& inputs) 
 cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
     return expr::visit(overloaded_functor {
         [&](const binary_operator& binop) -> cql3::raw_value {
-            return evaluate(binop, inputs);
+            return do_evaluate(binop, inputs);
         },
         [&](const conjunction& conj) -> cql3::raw_value {
-            return evaluate(conj, inputs);
+            return do_evaluate(conj, inputs);
         },
         [](const unresolved_identifier&) -> cql3::raw_value {
             on_internal_error(expr_logger, "Can't evaluate unresolved_identifier");
         },
         [&](const column_mutation_attribute& cma) -> cql3::raw_value {
-            return evaluate(cma, inputs);
+            return do_evaluate(cma, inputs);
         },
         [&](const cast& c) -> cql3::raw_value {
             // std::invoke trick allows us to use "return" in switch can have the compiler warn us if we missed an enum
@@ -1766,7 +1769,7 @@ cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
             return ret;
         },
         [&](const field_selection& field_select) -> cql3::raw_value {
-            return evaluate(field_select, inputs);
+            return do_evaluate(field_select, inputs);
         },
 
         [&](const column_value& cv) -> cql3::raw_value {
@@ -1780,11 +1783,11 @@ cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
         },
 
         [](const constant& c) { return c.value; },
-        [&](const bind_variable& bind_var) { return evaluate(bind_var, inputs); },
-        [&](const tuple_constructor& tup) { return evaluate(tup, inputs); },
-        [&](const collection_constructor& col) { return evaluate(col, inputs); },
-        [&](const usertype_constructor& user_val) { return evaluate(user_val, inputs); },
-        [&](const function_call& fun_call) { return evaluate(fun_call, inputs); }
+        [&](const bind_variable& bind_var) { return do_evaluate(bind_var, inputs); },
+        [&](const tuple_constructor& tup) { return do_evaluate(tup, inputs); },
+        [&](const collection_constructor& col) { return do_evaluate(col, inputs); },
+        [&](const usertype_constructor& user_val) { return do_evaluate(user_val, inputs); },
+        [&](const function_call& fun_call) { return do_evaluate(fun_call, inputs); }
     }, e);
 }
 
@@ -1887,7 +1890,7 @@ static managed_bytes reserialize_value(View value_bytes,
         fmt::format("Reserializing type that shouldn't need reserialization: {}", type.name()));
 }
 
-static cql3::raw_value evaluate(const bind_variable& bind_var, const evaluation_inputs& inputs) {
+static cql3::raw_value do_evaluate(const bind_variable& bind_var, const evaluation_inputs& inputs) {
     if (bind_var.receiver.get() == nullptr) {
         on_internal_error(expr_logger,
             "evaluate(bind_variable) called with nullptr receiver, should be prepared first");
@@ -1918,7 +1921,7 @@ static cql3::raw_value evaluate(const bind_variable& bind_var, const evaluation_
     return raw_value::make_value(value);
 }
 
-static cql3::raw_value evaluate(const tuple_constructor& tuple, const evaluation_inputs& inputs) {
+static cql3::raw_value do_evaluate(const tuple_constructor& tuple, const evaluation_inputs& inputs) {
     if (tuple.type.get() == nullptr) {
         on_internal_error(expr_logger,
             "evaluate(tuple_constructor) called with nullptr type, should be prepared first");
@@ -2050,7 +2053,7 @@ static cql3::raw_value evaluate_map(const collection_constructor& collection, co
     return raw_value::make_value(std::move(serialized_map));
 }
 
-static cql3::raw_value evaluate(const collection_constructor& collection, const evaluation_inputs& inputs) {
+static cql3::raw_value do_evaluate(const collection_constructor& collection, const evaluation_inputs& inputs) {
     if (collection.type.get() == nullptr) {
         on_internal_error(expr_logger,
             "evaluate(collection_constructor) called with nullptr type, should be prepared first");
@@ -2069,7 +2072,7 @@ static cql3::raw_value evaluate(const collection_constructor& collection, const 
     std::abort();
 }
 
-static cql3::raw_value evaluate(const usertype_constructor& user_val, const evaluation_inputs& inputs) {
+static cql3::raw_value do_evaluate(const usertype_constructor& user_val, const evaluation_inputs& inputs) {
     if (user_val.type.get() == nullptr) {
         on_internal_error(expr_logger,
             "evaluate(usertype_constructor) called with nullptr type, should be prepared first");
@@ -2103,7 +2106,7 @@ static cql3::raw_value evaluate(const usertype_constructor& user_val, const eval
     return val_bytes;
 }
 
-static cql3::raw_value evaluate(const function_call& fun_call, const evaluation_inputs& inputs) {
+static cql3::raw_value do_evaluate(const function_call& fun_call, const evaluation_inputs& inputs) {
     const shared_ptr<functions::function>* fun = std::get_if<shared_ptr<functions::function>>(&fun_call.func);
     if (fun == nullptr) {
         throw std::runtime_error("Can't evaluate function call with name only, should be prepared earlier");
