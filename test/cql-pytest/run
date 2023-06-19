@@ -26,6 +26,12 @@ if '--raft' in sys.argv:
     run_with_raft.orig_cmd = cmd
     cmd = run_with_raft
 
+if "-h" in sys.argv or "--help" in sys.argv:
+    run.run_pytest(sys.path[0], sys.argv)
+    exit(0)
+
+run.omit_scylla_output = "--omit-scylla-output" in sys.argv
+
 pid = run.run_with_temporary_dir(cmd)
 ip = run.pid_to_ip(pid)
 
