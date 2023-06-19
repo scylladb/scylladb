@@ -16,6 +16,7 @@
 #include "sstables/progress_monitor.hh"
 #include "readers/evictable.hh"
 #include "dht/partition_filter.hh"
+#include "utils/pretty_printers.hh"
 
 static logging::logger vug_logger("view_update_generator");
 
@@ -127,9 +128,9 @@ future<> view_update_generator::start() {
                 auto& [t, sstables] = *table_it;
                 schema_ptr s = t->schema();
 
-                vug_logger.trace("Processing {}.{}: {} sstables", s->ks_name(), s->cf_name(), sstables.size());
-
                 const auto num_sstables = sstables.size();
+                auto start_time = db_clock::now();
+                uint64_t input_size = 0;
 
                 try {
                     // Exploit the fact that sstables in the staging directory
@@ -138,7 +139,11 @@ future<> view_update_generator::start() {
                     auto ssts = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, false));
                     for (auto& sst : sstables) {
                         ssts->insert(sst);
+                        input_size += sst->data_size();
                     }
+
+                    vug_logger.info("Processing {}.{}: {} in {} sstables",
+                                    s->ks_name(), s->cf_name(), utils::pretty_printed_data_size(input_size), sstables.size());
 
                     auto permit = _db.obtain_reader_permit(*t, "view_update_generator", db::no_timeout, {}).get0();
                     auto ms = mutation_source([this, ssts] (
@@ -184,6 +189,12 @@ future<> view_update_generator::start() {
                     vug_logger.warn("Moving {} from staging failed: {}:{}. Ignoring...", s->ks_name(), s->cf_name(), std::current_exception());
                 }
                 _registration_sem.signal(num_sstables);
+
+                auto end_time = db_clock::now();
+                auto duration = std::chrono::duration<float>(end_time - start_time);
+                vug_logger.info("Processed {}.{}: {} sstables in {}ms = {}", s->ks_name(), s->cf_name(), sstables.size(),
+                                std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(),
+                                utils::pretty_printed_throughput(input_size, duration));
             }
             // For each table, move the processed staging sstables into the table's base dir.
             for (auto it = _sstables_to_move.begin(); it != _sstables_to_move.end(); ) {
