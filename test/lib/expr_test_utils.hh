@@ -113,8 +113,26 @@ struct evaluation_inputs_data {
     std::vector<managed_bytes_opt> static_and_regular_columns;
     ::shared_ptr<selection::selection> selection;
     query_options options;
+    std::vector<api::timestamp_type> timestamps;
+    std::vector<int32_t> ttls;
 };
-using column_values = std::map<sstring, raw_value>;
+
+struct mutation_column_value {
+    mutation_column_value(cql3::raw_value v, api::timestamp_type ts, int32_t ttl)
+        : value(std::move(v)), timestamp(ts), ttl(ttl) {}
+    // Convenience constructor when timestamp/ttl are not interesting
+    mutation_column_value(cql3::raw_value v)
+            : value(std::move(v))
+            , timestamp(value.is_null() ? api::missing_timestamp : 12345)
+            , ttl(-1) {
+    }
+
+    cql3::raw_value value;
+    api::timestamp_type timestamp;
+    int32_t ttl;
+};
+
+using column_values = std::map<sstring, mutation_column_value>;
 
 // Creates evaluation_inputs that can be used to evaluate columns and bind variables using evaluate()
 std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evaluation_inputs(
@@ -127,6 +145,14 @@ std::pair<data_dictionary::database, std::unique_ptr<data_dictionary::impl>> mak
     const schema_ptr& table_schema);
 
 raw_value evaluate_with_bind_variables(const expression& e, std::vector<raw_value> bind_variable_values);
+
+// FIXME: convert to formatter, but got into a template loop since fmt prefers the fallback formatter for
+// sstring rather than the actual formatter -> std::pair formatting fails -> loop.
+inline
+std::ostream&
+operator<<(std::ostream& os, const mutation_column_value& mcv) {
+    return os << fmt::format("{{{}/ts={}/ttl={}}}", mcv.value, mcv.timestamp, mcv.ttl);
+}
 
 }  // namespace test_utils
 }  // namespace expr
