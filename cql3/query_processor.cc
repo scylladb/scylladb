@@ -15,6 +15,7 @@
 #include "lang/wasm_alien_thread_runner.hh"
 #include "lang/wasm_instance_cache.hh"
 #include "service/storage_proxy.hh"
+#include "service/migration_manager.hh"
 #include "service/forward_service.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "cql3/CqlParser.hpp"
@@ -41,6 +42,17 @@ const sstring query_processor::CQL_VERSION = "3.3.1";
 
 const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono::minutes(60);
 
+struct query_processor::remote {
+    remote(service::migration_manager& mm, service::forward_service& fwd, service::raft_group0_client& group0_client)
+            : mm(mm), forwarder(fwd), group0_client(group0_client) {}
+
+    service::migration_manager& mm;
+    service::forward_service& forwarder;
+    service::raft_group0_client& group0_client;
+
+    seastar::gate gate;
+};
+
 class query_processor::internal_state {
     service::query_state _qs;
 public:
@@ -60,16 +72,13 @@ public:
     }
 };
 
-query_processor::query_processor(service::storage_proxy& proxy, service::forward_service& forwarder, data_dictionary::database db, service::migration_notifier& mn, service::migration_manager& mm, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, service::raft_group0_client& group0_client, std::optional<wasm::startup_context> wasm_ctx)
+query_processor::query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, std::optional<wasm::startup_context> wasm_ctx)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
-        , _forwarder(forwarder)
         , _db(db)
         , _mnotifier(mn)
-        , _mm(mm)
         , _mcfg(mcfg)
         , _cql_config(cql_cfg)
-        , _group0_client(group0_client)
         , _internal_state(new internal_state())
         , _prepared_cache(prep_cache_log, _mcfg.prepared_statment_cache_size)
         , _authorized_prepared_cache(std::move(auth_prep_cache_cfg), authorized_prepared_statements_cache_log)
@@ -467,6 +476,23 @@ query_processor::query_processor(service::storage_proxy& proxy, service::forward
 }
 
 query_processor::~query_processor() {
+    if (_remote) {
+        on_internal_error_noexcept(log, "`remote` not stopped before `query_processor` destruction");
+    }
+}
+
+void query_processor::start_remote(service::migration_manager& mm, service::forward_service& forwarder,
+                                  service::raft_group0_client& group0_client) {
+    _remote = std::make_unique<struct remote>(mm, forwarder, group0_client);
+}
+
+future<> query_processor::stop_remote() {
+    if (!_remote) {
+        on_internal_error(log, "`remote` already gone in `stop_remote()`");
+    }
+
+    co_await _remote->gate.close();
+    _remote = nullptr;
 }
 
 future<> query_processor::stop() {
@@ -654,6 +680,18 @@ query_processor::parse_statements(std::string_view queries) {
         log.error("The statements: {} could not be parsed: {}", queries, e.what());
         throw exceptions::syntax_exception(format("Failed parsing statements: [{}] reason: {}", queries, e.what()));
     }
+}
+
+std::pair<std::reference_wrapper<struct query_processor::remote>, gate::holder> query_processor::remote() {
+    if (_remote) {
+        auto holder = _remote->gate.hold();
+        return {*_remote, std::move(holder)};
+    }
+
+    // This error should not appear because the user should not be able to send distributed queries
+    // before `remote` is initialized, and user queries should be drained before `remote` is destroyed.
+    // See `storage_proxy::remote()` for a similar comment with more details.
+    on_internal_error(log, "attempted to perform distributed query when `query_processor::remote` is unavailable");
 }
 
 query_options query_processor::make_internal_options(
@@ -849,6 +887,90 @@ query_processor::execute_batch_without_checking_exception_message(
             return batch->execute(*this, query_state, options);
         });
     });
+}
+
+future<service::broadcast_tables::query_result>
+query_processor::execute_broadcast_table_query(const service::broadcast_tables::query& query) {
+    auto [remote_, holder] = remote();
+    co_return co_await service::broadcast_tables::execute(remote_.get().group0_client, query);
+}
+
+future<query::forward_result>
+query_processor::forward(query::forward_request req, tracing::trace_state_ptr tr_state) {
+    auto [remote_, holder] = remote();
+    co_return co_await remote_.get().forwarder.dispatch(std::move(req), std::move(tr_state));
+}
+
+future<::shared_ptr<messages::result_message>>
+query_processor::execute_schema_statement(const statements::schema_altering_statement& stmt, service::query_state& state, const query_options& options) {
+    ::shared_ptr<cql_transport::event::schema_change> ce;
+
+    if (this_shard_id() != 0) {
+        // execute all schema altering statements on a shard zero since this is where raft group 0 is
+        co_return ::make_shared<cql_transport::messages::result_message::bounce_to_shard>(0,
+                    std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()));
+    }
+
+    cql3::cql_warnings_vec warnings;
+
+    auto [remote_, holder] = remote();
+    auto& mm = remote_.get().mm;
+    auto retries = mm.get_concurrent_ddl_retries();
+    while (true) {
+        try {
+            auto group0_guard = co_await mm.start_group0_operation();
+
+            auto [ret, m, cql_warnings] = co_await stmt.prepare_schema_mutations(*this, mm, group0_guard.write_timestamp());
+            warnings = std::move(cql_warnings);
+
+            if (!m.empty()) {
+                auto description = format("CQL DDL statement: \"{}\"", stmt.raw_cql_statement);
+                co_await mm.announce(std::move(m), std::move(group0_guard), description);
+            }
+
+            ce = std::move(ret);
+        } catch (const service::group0_concurrent_modification&) {
+            log.warn("Failed to execute DDL statement \"{}\" due to concurrent group 0 modification.{}.",
+                    stmt.raw_cql_statement, retries ? " Retrying" : " Number of retries exceeded, giving up");
+            if (retries--) {
+                continue;
+            }
+            throw;
+        }
+        break;
+    }
+
+    // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
+    // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)
+    ::shared_ptr<messages::result_message> result;
+    if (!ce) {
+        result = ::make_shared<messages::result_message::void_message>();
+    } else {
+        result = ::make_shared<messages::result_message::schema_change>(ce);
+    }
+
+    for (const sstring& warning : warnings) {
+        result->add_warning(warning);
+    }
+
+    co_return result;
+}
+
+future<std::string>
+query_processor::execute_thrift_schema_command(
+        std::function<future<std::vector<mutation>>(
+            service::migration_manager&, data_dictionary::database, api::timestamp_type)
+        > prepare_schema_mutations) {
+    assert(this_shard_id() == 0);
+
+    auto [remote_, holder] = remote();
+    auto& mm = remote_.get().mm;
+    auto group0_guard = co_await mm.start_group0_operation();
+    auto ts = group0_guard.write_timestamp();
+
+    co_await mm.announce(co_await prepare_schema_mutations(mm, db(), ts), std::move(group0_guard));
+
+    co_return std::string(db().get_version().to_sstring());
 }
 
 query_processor::migration_subscriber::migration_subscriber(query_processor* qp) : _qp{qp} {

@@ -496,6 +496,10 @@ public:
         return std::pair(std::move(db), std::move(mock_db));
     }
 
+    virtual const table_schema_version& get_version(data_dictionary::database db) const override {
+        throw std::bad_function_call();
+    }
+
     virtual std::optional<data_dictionary::keyspace> try_find_keyspace(data_dictionary::database db,
                                                                        std::string_view name) const override {
         if (_table_schema->ks_name() == name) {

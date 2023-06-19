@@ -16,7 +16,6 @@
 #include "timestamp.hh"
 #include "exceptions/exceptions.hh"
 #include "sstables/shared_sstable.hh"
-#include "service/priority_manager.hh"
 
 namespace sstables {
 
@@ -172,7 +171,7 @@ public:
         return true;
     }
 
-    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) const override;
+    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_mode mode) const override;
 };
 
 }

@@ -119,7 +119,7 @@ class dataset_acceptor {
 public:
     virtual ~dataset_acceptor() = default;;
     virtual bool can_run(dataset&) = 0;
-    virtual void run(replica::column_family& cf, dataset& ds) = 0;
+    virtual void run(app_template &app, replica::column_family& cf, dataset& ds) = 0;
 };
 
 struct test_group {
@@ -169,7 +169,7 @@ public:
 // type of its argument.
 template<typename DataSet>
 class dataset_acceptor_impl: public dataset_acceptor {
-    using test_fn = void (*)(replica::column_family&, DataSet&);
+    using test_fn = void (*)(app_template&, replica::column_family&, DataSet&);
     test_fn _fn;
 private:
     static DataSet* try_cast(dataset& ds) {
@@ -182,13 +182,13 @@ public:
         return try_cast(ds) != nullptr;
     }
 
-    void run(replica::column_family& cf, dataset& ds) override {
-        _fn(cf, *try_cast(ds));
+    void run(app_template &app, replica::column_family& cf, dataset& ds) override {
+        _fn(app, cf, *try_cast(ds));
     }
 };
 
 template<typename DataSet>
-std::unique_ptr<dataset_acceptor> make_test_fn(void (*fn)(replica::column_family&, DataSet&)) {
+std::unique_ptr<dataset_acceptor> make_test_fn(void (*fn)(app_template &app, replica::column_family&, DataSet&)) {
     return std::make_unique<dataset_acceptor_impl<DataSet>>(fn);
 }
 
@@ -799,7 +799,6 @@ static test_result scan_rows_with_stride(replica::column_family& cf, clustered_d
         semaphore.make_permit(),
         query::full_partition_range,
         cf.schema()->full_slice(),
-        default_priority_class(),
         nullptr,
         n_skip ? streamed_mutation::forwarding::yes : streamed_mutation::forwarding::no);
     auto close_rd = deferred_close(rd);
@@ -870,7 +869,6 @@ static test_result slice_rows(replica::column_family& cf, clustered_ds& ds, int 
         semaphore.make_permit(),
         query::full_partition_range,
         cf.schema()->full_slice(),
-        default_priority_class(),
         nullptr,
         streamed_mutation::forwarding::yes);
     auto close_rd = deferred_close(rd);
@@ -930,7 +928,7 @@ static test_result test_slicing_using_restrictions(replica::column_family& cf, c
         }))
         .build();
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
-    auto rd = cf.make_reader_v2(cf.schema(), semaphore.make_permit(), pr, slice, default_priority_class(), nullptr,
+    auto rd = cf.make_reader_v2(cf.schema(), semaphore.make_permit(), pr, slice, nullptr,
                              streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     auto close_rd = deferred_close(rd);
 
@@ -940,7 +938,7 @@ static test_result test_slicing_using_restrictions(replica::column_family& cf, c
 static test_result slice_rows_single_key(replica::column_family& cf, clustered_ds& ds, int offset = 0, int n_read = 1) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
-    auto rd = cf.make_reader_v2(cf.schema(), semaphore.make_permit(), pr, cf.schema()->full_slice(), default_priority_class(), nullptr, streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
+    auto rd = cf.make_reader_v2(cf.schema(), semaphore.make_permit(), pr, cf.schema()->full_slice(), nullptr, streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
     auto close_rd = deferred_close(rd);
 
     metrics_snapshot before;
@@ -1129,7 +1127,6 @@ static test_result test_forwarding_with_restriction(replica::column_family& cf, 
         semaphore.make_permit(),
         pr,
         slice,
-        default_priority_class(),
         nullptr,
         streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
     auto close_rd = deferred_close(rd);
@@ -1210,7 +1207,6 @@ static int count_for_skip_pattern(int n, int n_read, int n_skip) {
     return n / (n_read + n_skip) * n_read + std::min(n % (n_read + n_skip), n_read);
 }
 
-app_template app;
 bool cancel = false;
 bool cache_enabled;
 bool new_test_case = false;
@@ -1224,14 +1220,14 @@ void clear_cache() {
     cql_env->local_db().row_cache_tracker().clear();
 }
 
-void on_test_group() {
+void on_test_group(app_template &app) {
     if (!app.configuration().contains("keep-cache-across-test-groups")
         && !app.configuration().contains("keep-cache-across-test-cases")) {
         clear_cache();
     }
 };
 
-void on_test_case() {
+void on_test_case(app_template &app) {
     new_test_case = true;
     if (!app.configuration().contains("keep-cache-across-test-cases")) {
         clear_cache();
@@ -1311,11 +1307,11 @@ public:
     }
 };
 
-void run_test_case(std::function<std::vector<test_result>()> fn) {
+void run_test_case(app_template &app, std::function<std::vector<test_result>()> fn) {
     result_collector rc;
 
     auto do_run = [&] {
-        on_test_case();
+        on_test_case(app);
         return fn();
     };
 
@@ -1341,13 +1337,13 @@ void run_test_case(std::function<std::vector<test_result>()> fn) {
     rc.done();
 }
 
-void run_test_case(std::function<test_result()> fn) {
-    run_test_case([&] {
+void run_test_case(app_template &app, std::function<test_result()> fn) {
+    run_test_case(app, [&] {
         return test_result_vector { fn() };
     });
 }
 
-void test_large_partition_single_key_slice(replica::column_family& cf, clustered_ds& ds) {
+void test_large_partition_single_key_slice(app_template &app, replica::column_family& cf, clustered_ds& ds) {
     auto n_rows = ds.n_rows(cfg);
     int_range live_range = int_range({0}, {n_rows - 1});
 
@@ -1361,21 +1357,21 @@ void test_large_partition_single_key_slice(replica::column_family& cf, clustered
         return r;
     };
 
-    run_test_case([&] {
+    run_test_case(app, [&] {
         return test_result_vector {
             test(int_range::make({0}, {1})),
             check_no_disk_reads(test(int_range::make({0}, {1}))),
         };
     });
 
-    run_test_case([&] {
+    run_test_case(app, [&] {
         return test_result_vector {
             test(int_range::make({0}, {n_rows / 2})),
             check_no_disk_reads(test(int_range::make({0}, {n_rows / 2}))),
         };
     });
 
-    run_test_case([&] {
+    run_test_case(app, [&] {
       return test_result_vector {
         test(int_range::make({0}, {n_rows})),
         check_no_disk_reads(test(int_range::make({0}, {n_rows}))),
@@ -1384,35 +1380,35 @@ void test_large_partition_single_key_slice(replica::column_family& cf, clustered
 
     assert(n_rows > 200); // assumed below
 
-    run_test_case([&] { // adjacent, no overlap
+    run_test_case(app, [&] { // adjacent, no overlap
         return test_result_vector {
             test(int_range::make({1}, {100, false})),
             test(int_range::make({100}, {109})),
         };
     });
 
-    run_test_case([&] { // adjacent, contained
+    run_test_case(app, [&] { // adjacent, contained
         return test_result_vector {
             test(int_range::make({1}, {100})),
             check_no_disk_reads(test(int_range::make_singular(100))),
         };
     });
 
-    run_test_case([&] { // overlap
+    run_test_case(app, [&] { // overlap
         return test_result_vector {
             test(int_range::make({1}, {100})),
             test(int_range::make({51}, {150})),
         };
     });
 
-    run_test_case([&] { // enclosed
+    run_test_case(app, [&] { // enclosed
         return test_result_vector {
             test(int_range::make({1}, {100})),
             check_no_disk_reads(test(int_range::make({51}, {70}))),
         };
     });
 
-    run_test_case([&] { // enclosing
+    run_test_case(app, [&] { // enclosing
         return test_result_vector {
             test(int_range::make({51}, {70})),
             test(int_range::make({41}, {80})),
@@ -1420,21 +1416,21 @@ void test_large_partition_single_key_slice(replica::column_family& cf, clustered
         };
     });
 
-    run_test_case([&] { // adjacent, singular excluded
+    run_test_case(app, [&] { // adjacent, singular excluded
         return test_result_vector {
             test(int_range::make({0}, {100, false})),
             test(int_range::make_singular(100)),
         };
     });
 
-    run_test_case([&] { // adjacent, singular excluded
+    run_test_case(app, [&] { // adjacent, singular excluded
         return test_result_vector {
             test(int_range::make({100, false}, {200})),
             test(int_range::make_singular(100)),
         };
     });
 
-    run_test_case([&] {
+    run_test_case(app, [&] {
         return test_result_vector {
             test(int_range::make_ending_with({100})),
             check_no_disk_reads(test(int_range::make({10}, {20}))),
@@ -1442,7 +1438,7 @@ void test_large_partition_single_key_slice(replica::column_family& cf, clustered
         };
     });
 
-    run_test_case([&] {
+    run_test_case(app, [&] {
         return test_result_vector {
             test(int_range::make_starting_with({100})),
             check_no_disk_reads(test(int_range::make({150}, {159}))),
@@ -1451,7 +1447,7 @@ void test_large_partition_single_key_slice(replica::column_family& cf, clustered
         };
     });
 
-    run_test_case([&] { // many gaps
+    run_test_case(app, [&] { // many gaps
         return test_result_vector {
             test(int_range::make({10}, {20, false})),
             test(int_range::make({30}, {40, false})),
@@ -1461,7 +1457,7 @@ void test_large_partition_single_key_slice(replica::column_family& cf, clustered
         };
     });
 
-    run_test_case([&] { // many gaps
+    run_test_case(app, [&] { // many gaps
         return test_result_vector {
             test(int_range::make({10}, {20, false})),
             test(int_range::make({30}, {40, false})),
@@ -1472,7 +1468,7 @@ void test_large_partition_single_key_slice(replica::column_family& cf, clustered
     });
 }
 
-void test_large_partition_skips(replica::column_family& cf, clustered_ds& ds) {
+void test_large_partition_skips(app_template &app, replica::column_family& cf, clustered_ds& ds) {
     auto n_rows = ds.n_rows(cfg);
 
     output_mgr->set_test_param_names({{"read", "{:<7}"}, {"skip", "{:<7}"}}, test_result::stats_names());
@@ -1483,7 +1479,7 @@ void test_large_partition_skips(replica::column_family& cf, clustered_ds& ds) {
         return r;
     };
     auto test = [&] (int n_read, int n_skip) {
-        run_test_case([&] {
+        run_test_case(app, [&] {
             return do_test(n_read, n_skip);
         });
     };
@@ -1512,7 +1508,7 @@ void test_large_partition_skips(replica::column_family& cf, clustered_ds& ds) {
         output_mgr->add_test_static_param("cache_enabled", "Testing cache scan of large partition with varying row continuity.");
         for (auto n_read : {1, 64}) {
             for (auto n_skip : {1, 64}) {
-                run_test_case([&] {
+                run_test_case(app, [&] {
                     return test_result_vector {
                         do_test(n_read, n_skip), // populate with gaps
                         do_test(1, 0),
@@ -1523,12 +1519,12 @@ void test_large_partition_skips(replica::column_family& cf, clustered_ds& ds) {
     }
 }
 
-void test_large_partition_slicing(replica::column_family& cf, clustered_ds& ds) {
+void test_large_partition_slicing(app_template &app, replica::column_family& cf, clustered_ds& ds) {
     auto n_rows = ds.n_rows(cfg);
 
     output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"read", "{:<7}"}}, test_result::stats_names());
     auto test = [&] (int offset, int read) {
-      run_test_case([&] {
+      run_test_case(app, [&] {
         auto r = slice_rows(cf, ds, offset, read);
         r.set_params(to_sstrings(offset, read));
         check_fragment_count(r, std::min(n_rows - offset, read));
@@ -1547,12 +1543,12 @@ void test_large_partition_slicing(replica::column_family& cf, clustered_ds& ds) 
     test(n_rows / 2, 4096);
 }
 
-void test_large_partition_slicing_clustering_keys(replica::column_family& cf, clustered_ds& ds) {
+void test_large_partition_slicing_clustering_keys(app_template &app, replica::column_family& cf, clustered_ds& ds) {
     auto n_rows = ds.n_rows(cfg);
 
     output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"read", "{:<7}"}}, test_result::stats_names());
     auto test = [&] (int offset, int read) {
-      run_test_case([&] {
+      run_test_case(app, [&] {
         auto r = slice_rows_by_ck(cf, ds, offset, read);
         r.set_params(to_sstrings(offset, read));
         check_fragment_count(r, std::min(n_rows - offset, read));
@@ -1571,12 +1567,12 @@ void test_large_partition_slicing_clustering_keys(replica::column_family& cf, cl
     test(n_rows / 2, 4096);
 }
 
-void test_large_partition_slicing_single_partition_reader(replica::column_family& cf, clustered_ds& ds) {
+void test_large_partition_slicing_single_partition_reader(app_template &app, replica::column_family& cf, clustered_ds& ds) {
     auto n_rows = ds.n_rows(cfg);
 
     output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"read", "{:<7}"}}, test_result::stats_names());
     auto test = [&](int offset, int read) {
-      run_test_case([&] {
+      run_test_case(app, [&] {
         auto r = slice_rows_single_key(cf, ds, offset, read);
         r.set_params(to_sstrings(offset, read));
         check_fragment_count(r, std::min(n_rows - offset, read));
@@ -1595,12 +1591,12 @@ void test_large_partition_slicing_single_partition_reader(replica::column_family
     test(n_rows / 2, 4096);
 }
 
-void test_large_partition_select_few_rows(replica::column_family& cf, clustered_ds& ds) {
+void test_large_partition_select_few_rows(app_template &app, replica::column_family& cf, clustered_ds& ds) {
     auto n_rows = ds.n_rows(cfg);
 
     output_mgr->set_test_param_names({{"stride", "{:<7}"}, {"rows", "{:<7}"}}, test_result::stats_names());
     auto test = [&](int stride, int read) {
-      run_test_case([&] {
+      run_test_case(app, [&] {
         auto r = select_spread_rows(cf, ds, stride, read);
         r.set_params(to_sstrings(stride, read));
         check_fragment_count(r, read);
@@ -1616,17 +1612,17 @@ void test_large_partition_select_few_rows(replica::column_family& cf, clustered_
     test(2, n_rows / 2);
 }
 
-void test_large_partition_forwarding(replica::column_family& cf, clustered_ds& ds) {
+void test_large_partition_forwarding(app_template &app, replica::column_family& cf, clustered_ds& ds) {
     output_mgr->set_test_param_names({{"pk-scan", "{:<7}"}}, test_result::stats_names());
 
-  run_test_case([&] {
+  run_test_case(app, [&] {
     auto r = test_forwarding_with_restriction(cf, ds, cfg, false);
     check_fragment_count(r, 2);
     r.set_params(to_sstrings("yes"));
     return r;
   });
 
-  run_test_case([&] {
+  run_test_case(app, [&] {
     auto r = test_forwarding_with_restriction(cf, ds, cfg, true);
     check_fragment_count(r, 2);
     r.set_params(to_sstrings("no"));
@@ -1634,7 +1630,7 @@ void test_large_partition_forwarding(replica::column_family& cf, clustered_ds& d
   });
 }
 
-void test_small_partition_skips(replica::column_family& cf2, multipart_ds& ds) {
+void test_small_partition_skips(app_template &app, replica::column_family& cf2, multipart_ds& ds) {
     auto n_parts = ds.n_partitions(cfg);
 
     output_mgr->set_test_param_names({{"", "{:<2}"}, {"read", "{:<7}"}, {"skip", "{:<7}"}}, test_result::stats_names());
@@ -1647,7 +1643,7 @@ void test_small_partition_skips(replica::column_family& cf2, multipart_ds& ds) {
     };
     auto test = [&] (int n_read, int n_skip) {
       test_result r;
-      run_test_case([&] {
+      run_test_case(app, [&] {
         r = do_test(n_read, n_skip);
         return r;
       });
@@ -1679,7 +1675,7 @@ void test_small_partition_skips(replica::column_family& cf2, multipart_ds& ds) {
         output_mgr->add_test_static_param("cache_enabled", "Testing cache scan with small partitions with varying continuity.");
         for (auto n_read : {1, 64}) {
             for (auto n_skip : {1, 64}) {
-                run_test_case([&] {
+                run_test_case(app, [&] {
                     return test_result_vector {
                         do_test(n_read, n_skip), // populate with gaps
                         do_test(1, 0),
@@ -1690,13 +1686,13 @@ void test_small_partition_skips(replica::column_family& cf2, multipart_ds& ds) {
     }
 }
 
-void test_small_partition_slicing(replica::column_family& cf2, multipart_ds& ds) {
+void test_small_partition_slicing(app_template &app, replica::column_family& cf2, multipart_ds& ds) {
     auto n_parts = ds.n_partitions(cfg);
 
     output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"read", "{:<7}"}}, test_result::stats_names());
     auto keys = make_pkeys(cf2.schema(), n_parts);
     auto test = [&] (int offset, int read) {
-      run_test_case([&] {
+      run_test_case(app, [&] {
         auto r = slice_partitions(cf2, keys, offset, read);
         r.set_params(to_sstrings(offset, read));
         check_fragment_count(r, std::min(n_parts - offset, read));
@@ -1885,6 +1881,8 @@ namespace perf {
 
 int scylla_fast_forward_main(int argc, char** argv) {
     namespace bpo = boost::program_options;
+    app_template app;
+
     app.add_options()
         ("random-seed", boost::program_options::value<unsigned>(), "Random number generator seed")
         ("run-tests", bpo::value<std::vector<std::string>>()->default_value(
@@ -1920,7 +1918,7 @@ int scylla_fast_forward_main(int argc, char** argv) {
         ("dump-all-results", "Write results of all iterations of all tests to text files in the output directory")
         ;
 
-    return app.run(argc, argv, [] {
+    return app.run(argc, argv, [&app] {
         auto db_cfg_ptr = make_shared<db::config>();
         auto& db_cfg = *db_cfg_ptr;
 
@@ -1969,7 +1967,7 @@ int scylla_fast_forward_main(int argc, char** argv) {
         std::cout << "Data directory: " << db_cfg.data_file_directories() << "\n";
         std::cout << "Output directory: " << output_dir << "\n";
 
-        auto init = [] {
+        auto init = [&app] {
             auto conf_seed = app.configuration()["random-seed"];
             auto seed = conf_seed.empty() ? std::random_device()() : conf_seed.as<unsigned>();
             std::cout << "random-seed=" << seed << '\n';
@@ -1978,9 +1976,9 @@ int scylla_fast_forward_main(int argc, char** argv) {
             });
         };
 
-        return init().then([db_cfg_ptr] {
-          return do_with_cql_env([] (cql_test_env& env) {
-            return seastar::async([&env] {
+        return init().then([&app, db_cfg_ptr] {
+          return do_with_cql_env([&app] (cql_test_env& env) {
+            return seastar::async([&app, &env] {
                 cql_env = &env;
                 sstring name = app.configuration()["name"].as<std::string>();
 
@@ -2047,8 +2045,8 @@ int scylla_fast_forward_main(int argc, char** argv) {
                                             output_mgr->add_test_group(tc, *ds, false);
                                         } else {
                                             output_mgr->add_test_group(tc, *ds, true);
-                                            on_test_group();
-                                            tc.test_fn->run(find_table(db, *ds), *ds);
+                                            on_test_group(app);
+                                            tc.test_fn->run(app, find_table(db, *ds), *ds);
                                         }
                                       }
                                      }

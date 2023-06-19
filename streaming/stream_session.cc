@@ -10,7 +10,7 @@
 
 #include "log.hh"
 #include "message/messaging_service.hh"
-#include "seastar/coroutine/maybe_yield.hh"
+#include <seastar/coroutine/maybe_yield.hh>
 #include "streaming/stream_session.hh"
 #include "streaming/prepare_message.hh"
 #include "streaming/stream_result_future.hh"
@@ -23,7 +23,6 @@
 #include "streaming/stream_state.hh"
 #include "streaming/stream_session_state.hh"
 #include "streaming/stream_exception.hh"
-#include "service/priority_manager.hh"
 #include "service/migration_manager.hh"
 #include "query-request.hh"
 #include "schema/schema_registry.hh"

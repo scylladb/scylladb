@@ -570,7 +570,7 @@ def testReadAfterAlteringUserTypeNestedWithinList(cql, test_keyspace):
 def testAlteringUserTypeNestedWithinSetWithView(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int)") as columnType:
         with create_table(cql, test_keyspace, f"(pk int, c int, v int, s set<frozen<{columnType}>>, PRIMARY KEY (pk, c))") as table:
-            with create_materialized_view(cql, test_keyspace, f"AS SELECT c, pk, v FROM {table} WHERE pk IS NOT NULL AND c IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, pk)") as mv:
+            with create_materialized_view(cql, test_keyspace, f"AS SELECT c, pk, v FROM {table} WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, pk)") as mv:
                 execute(cql, table, "INSERT INTO %s (pk, c, v, s) VALUES(?, ?, ?, ?)", 1, 1, 1, {user_type("a", 1), user_type("a", 2)})
                 flush(cql, table)
                 execute(cql, table, "ALTER TYPE " + columnType + " ADD b int")

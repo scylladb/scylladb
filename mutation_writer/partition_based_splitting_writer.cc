@@ -18,7 +18,6 @@ class partition_sorting_mutation_writer {
     schema_ptr _schema;
     reader_permit _permit;
     reader_consumer_v2 _consumer;
-    const io_priority_class& _pc;
     size_t _max_memory;
     bucket_writer_v2 _bucket_writer;
     std::optional<dht::decorated_key> _last_bucket_key;
@@ -41,7 +40,7 @@ private:
     }
 
     future<> flush_memtable() {
-        co_await _consumer(_memtable->make_flush_reader(_schema, _permit, _pc));
+        co_await _consumer(_memtable->make_flush_reader(_schema, _permit));
         _memtable = make_lw_shared<replica::memtable>(_schema);
     }
 
@@ -75,7 +74,6 @@ public:
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _consumer(std::move(consumer))
-        , _pc(cfg.pc)
         , _max_memory(cfg.max_memory)
         , _bucket_writer(_schema, _permit, _consumer)
         , _memtable(make_lw_shared<replica::memtable>(_schema))

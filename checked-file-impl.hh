@@ -21,27 +21,27 @@ public:
             : file_impl(*get_file_impl(f)),  _error_handler(error_handler), _file(f) {
     }
 
-    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, const io_priority_class& pc) override {
+    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent* intent) override {
         return do_io_check(_error_handler, [&] {
-            return get_file_impl(_file)->write_dma(pos, buffer, len, pc);
+            return get_file_impl(_file)->write_dma(pos, buffer, len, intent);
         });
     }
 
-    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override {
+    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) override {
         return do_io_check(_error_handler, [&] {
-            return get_file_impl(_file)->write_dma(pos, iov, pc);
+            return get_file_impl(_file)->write_dma(pos, iov, intent);
         });
     }
 
-    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, const io_priority_class& pc) override {
+    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent* intent) override {
         return do_io_check(_error_handler, [&] {
-            return get_file_impl(_file)->read_dma(pos, buffer, len, pc);
+            return get_file_impl(_file)->read_dma(pos, buffer, len, intent);
         });
     }
 
-    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override {
+    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) override {
         return do_io_check(_error_handler, [&] {
-            return get_file_impl(_file)->read_dma(pos, iov, pc);
+            return get_file_impl(_file)->read_dma(pos, iov, intent);
         });
     }
 
@@ -99,9 +99,9 @@ public:
         });
     }
 
-    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) override {
+    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent* intent) override {
         return do_io_check(_error_handler, [&] {
-            return get_file_impl(_file)->dma_read_bulk(offset, range_size, pc);
+            return get_file_impl(_file)->dma_read_bulk(offset, range_size, intent);
         });
     }
 private:

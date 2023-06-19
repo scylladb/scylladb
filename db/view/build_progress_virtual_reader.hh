@@ -14,12 +14,13 @@
 #include "mutation/mutation_fragment.hh"
 #include "query-request.hh"
 #include "schema/schema_fwd.hh"
-#include "tracing/tracing.hh"
 
 #include <boost/range/iterator_range.hpp>
 
 #include <iterator>
 #include <memory>
+
+namespace tracing { class trace_state_ptr; }
 
 namespace db::view {
 
@@ -54,7 +55,6 @@ class build_progress_virtual_reader {
                 replica::column_family& scylla_views_build_progress,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd,
                 mutation_reader::forwarding fwd_mr)
@@ -70,7 +70,6 @@ class build_progress_virtual_reader {
                         std::move(permit),
                         range,
                         slice,
-                        pc,
                         std::move(trace_state),
                         fwd,
                         fwd_mr))
@@ -192,7 +191,6 @@ public:
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) {
@@ -202,7 +200,6 @@ public:
                 _db.find_column_family(s->ks_name(), system_keyspace::v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS),
                 range,
                 slice,
-                pc,
                 std::move(trace_state),
                 fwd,
                 fwd_mr));

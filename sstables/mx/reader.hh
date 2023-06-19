@@ -11,7 +11,6 @@
 #include "readers/flat_mutation_reader_fwd.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "sstables/progress_monitor.hh"
-#include <seastar/core/io_priority_class.hh>
 
 namespace sstables {
 namespace mx {
@@ -27,7 +26,6 @@ flat_mutation_reader_v2 make_reader(
         reader_permit permit,
         const dht::partition_range& range,
         const query::partition_slice& slice,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
@@ -40,7 +38,6 @@ flat_mutation_reader_v2 make_reader(
         reader_permit permit,
         const dht::partition_range& range,
         query::partition_slice&& slice,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
@@ -52,7 +49,6 @@ flat_mutation_reader_v2 make_crawling_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         read_monitor& monitor);
 
@@ -62,7 +58,6 @@ flat_mutation_reader_v2 make_crawling_reader(
 future<uint64_t> validate(
         shared_sstable sstable,
         reader_permit permit,
-        const io_priority_class& pc,
         abort_source& abort,
         std::function<void(sstring)> error_handler);
 

@@ -275,11 +275,10 @@ static void test_database(void (*run_tests)(populate_fn_ex, bool)) {
                     reader_permit permit,
                     const dht::partition_range& range,
                     const query::partition_slice& slice,
-                    const io_priority_class& pc,
                     tracing::trace_state_ptr trace_state,
                     streamed_mutation::forwarding fwd,
                     mutation_reader::forwarding fwd_mr) {
-                return cf.make_reader_v2(s, std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+                return cf.make_reader_v2(s, std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr);
             });
         }, true);
     }).get();
@@ -391,7 +390,9 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
     std::vector<sstables::generation_type> gen;
     constexpr size_t num_gens = 9;
     std::generate_n(std::back_inserter(gen), num_gens, [&] {
-        return gen_generator();
+        // we assumes the integer-based generation identifier in this test, so disable
+        // uuid_identifier here
+        return gen_generator(sstables::uuid_identifiers::no);
     });
 
     // Regular log file with single entry
@@ -1278,7 +1279,6 @@ SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
                 database_test(db).get_user_read_concurrency_semaphore().make_tracking_only_permit(s.get(), "test", db::no_timeout, {}),
                 query::full_partition_range,
                 s->full_slice(),
-                default_priority_class(),
                 nullptr);
 
         auto f = replica::database::drop_table_on_all_shards(e.db(), "ks", "cf");

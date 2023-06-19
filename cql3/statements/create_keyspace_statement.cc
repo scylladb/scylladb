@@ -93,14 +93,14 @@ void create_keyspace_statement::validate(query_processor& qp, const service::cli
 #endif
 }
 
-future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> create_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> create_keyspace_statement::prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type ts) const {
     using namespace cql_transport;
     const auto& tm = *qp.proxy().get_token_metadata_ptr();
     ::shared_ptr<event::schema_change> ret;
     std::vector<mutation> m;
 
     try {
-        m = qp.get_migration_manager().prepare_new_keyspace_announcement(_attrs->as_ks_metadata(_name, tm), ts);
+        m = mm.prepare_new_keyspace_announcement(_attrs->as_ks_metadata(_name, tm), ts);
 
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::CREATED,
@@ -112,7 +112,7 @@ future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<
         }
     }
 
-    co_return std::make_pair(std::move(ret), std::move(m));
+    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

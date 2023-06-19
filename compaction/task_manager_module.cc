@@ -12,22 +12,82 @@
 
 namespace compaction {
 
-// Run on all tables, skipping dropped tables
-future<> run_on_existing_tables(sstring op, replica::database& db, std::string_view keyspace, const std::vector<table_info> local_tables, std::function<future<> (replica::table&)> func) {
+struct table_tasks_info {
+    tasks::task_manager::task_ptr task;
+    table_info ti;
+
+    table_tasks_info(tasks::task_manager::task_ptr t, table_info info)
+        : task(t)
+        , ti(info)
+    {}
+};
+
+future<> run_on_table(sstring op, replica::database& db, std::string keyspace, table_info ti, std::function<future<> (replica::table&)> func) {
     std::exception_ptr ex;
+    tasks::tmlogger.debug("Starting {} on {}.{}", op, keyspace, ti.name);
+    try {
+        co_await func(db.find_column_family(ti.id));
+    } catch (const replica::no_such_column_family& e) {
+        tasks::tmlogger.warn("Skipping {} of {}.{}: {}", op, keyspace, ti.name, e.what());
+    } catch (...) {
+        ex = std::current_exception();
+        tasks::tmlogger.error("Failed {} of {}.{}: {}", op, keyspace, ti.name, ex);
+    }
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+}
+
+// Run on all tables, skipping dropped tables
+future<> run_on_existing_tables(sstring op, replica::database& db, std::string keyspace, const std::vector<table_info> local_tables, std::function<future<> (replica::table&)> func) {
     for (const auto& ti : local_tables) {
-        tasks::tmlogger.debug("Starting {} on {}.{}", op, keyspace, ti.name);
+        co_await run_on_table(op, db, keyspace, ti, func);
+    }
+}
+
+future<> wait_for_your_turn(seastar::condition_variable& cv, tasks::task_manager::task_ptr& current_task, tasks::task_id id) {
+    co_await cv.wait([&] {
+        return current_task && current_task->id() == id;
+    });
+}
+
+future<> run_table_tasks(replica::database& db, std::vector<table_tasks_info> table_tasks, seastar::condition_variable& cv, tasks::task_manager::task_ptr& current_task, bool sort) {
+    std::exception_ptr ex;
+
+    // While compaction is run on one table, the size of tables may significantly change.
+    // Thus, they are sorted before each invidual compaction and the smallest table is chosen.
+    while (!table_tasks.empty()) {
         try {
-            co_await func(db.find_column_family(ti.id));
-        } catch (const replica::no_such_column_family& e) {
-            tasks::tmlogger.warn("Skipping {} of {}.{}: {}", op, keyspace, ti.name, e.what());
+            if (sort) {
+                // Major compact smaller tables first, to increase chances of success if low on space.
+                // Tables will be kept in descending order.
+                std::ranges::sort(table_tasks, std::greater<>(), [&] (const table_tasks_info& tti) {
+                    try {
+                        return db.find_column_family(tti.ti.id).get_stats().live_disk_space_used;
+                    } catch (const replica::no_such_column_family& e) {
+                        return int64_t(-1);
+                    }
+                });
+            }
+            // Task responsible for the smallest table.
+            current_task = table_tasks.back().task;
+            table_tasks.pop_back();
+            cv.broadcast();
+            co_await current_task->done();
         } catch (...) {
             ex = std::current_exception();
-            tasks::tmlogger.error("Failed {} of {}.{}: {}", op, keyspace, ti.name, ex);
+            current_task = nullptr;
+            cv.broken(ex);
+            break;
         }
-        if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+
+    if (ex) {
+        // Wait for all tasks even on failure.
+        for (auto& tti: table_tasks) {
+            co_await tti.task->done();
         }
+        co_await coroutine::return_exception_ptr(std::move(ex));
     }
 }
 
@@ -45,15 +105,24 @@ tasks::is_internal shard_major_keyspace_compaction_task_impl::is_internal() cons
 }
 
 future<> shard_major_keyspace_compaction_task_impl::run() {
-    // Major compact smaller tables first, to increase chances of success if low on space.
-    std::ranges::sort(_local_tables, std::less<>(), [&] (const table_info& ti) {
-        try {
-            return _db.find_column_family(ti.id).get_stats().live_disk_space_used;
-        } catch (const replica::no_such_column_family& e) {
-            return int64_t(-1);
-        }
-    });
-    co_await run_on_existing_tables("force_keyspace_compaction", _db, _status.keyspace, _local_tables, [] (replica::table& t) {
+    seastar::condition_variable cv;
+    tasks::task_manager::task_ptr current_task;
+    tasks::task_info parent_info{_status.id, _status.shard};
+    std::vector<table_tasks_info> table_tasks;
+    for (auto& ti : _local_tables) {
+        table_tasks.emplace_back(co_await _module->make_and_start_task<table_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task), ti);
+    }
+
+    co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, true);
+}
+
+tasks::is_internal table_major_keyspace_compaction_task_impl::is_internal() const noexcept {
+    return tasks::is_internal::yes;
+}
+
+future<> table_major_keyspace_compaction_task_impl::run() {
+    co_await wait_for_your_turn(_cv, _current_task, _status.id);
+    co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [] (replica::table& t) {
         return t.compact_all_sstables();
     });
 }
@@ -71,16 +140,25 @@ tasks::is_internal shard_cleanup_keyspace_compaction_task_impl::is_internal() co
 }
 
 future<> shard_cleanup_keyspace_compaction_task_impl::run() {
-    // Cleanup smaller tables first, to increase chances of success if low on space.
-    std::ranges::sort(_local_tables, std::less<>(), [&] (const table_info& ti) {
-        try {
-            return _db.find_column_family(ti.id).get_stats().live_disk_space_used;
-        } catch (const replica::no_such_column_family& e) {
-            return int64_t(-1);
-        }
-    });
+    seastar::condition_variable cv;
+    tasks::task_manager::task_ptr current_task;
+    tasks::task_info parent_info{_status.id, _status.shard};
+    std::vector<table_tasks_info> table_tasks;
+    for (auto& ti : _local_tables) {
+        table_tasks.emplace_back(co_await _module->make_and_start_task<table_cleanup_keyspace_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task), ti);
+    }
+
+    co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, true);
+}
+
+tasks::is_internal table_cleanup_keyspace_compaction_task_impl::is_internal() const noexcept {
+    return tasks::is_internal::yes;
+}
+
+future<> table_cleanup_keyspace_compaction_task_impl::run() {
+    co_await wait_for_your_turn(_cv, _current_task, _status.id);
     auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(_db.get_keyspace_local_ranges(_status.keyspace));
-    co_await run_on_existing_tables("force_keyspace_cleanup", _db, _status.keyspace, _local_tables, [&] (replica::table& t) {
+    co_await run_on_table("force_keyspace_cleanup", _db, _status.keyspace, _ti, [&] (replica::table& t) {
         return t.perform_cleanup_compaction(owned_ranges_ptr);
     });
 }
@@ -101,7 +179,24 @@ tasks::is_internal shard_offstrategy_keyspace_compaction_task_impl::is_internal(
 }
 
 future<> shard_offstrategy_keyspace_compaction_task_impl::run() {
-    co_await run_on_existing_tables("perform_keyspace_offstrategy_compaction", _db, _status.keyspace, _table_infos, [this] (replica::table& t) -> future<> {
+    seastar::condition_variable cv;
+    tasks::task_manager::task_ptr current_task;
+    tasks::task_info parent_info{_status.id, _status.shard};
+    std::vector<table_tasks_info> table_tasks;
+    for (auto& ti : _table_infos) {
+        table_tasks.emplace_back(co_await _module->make_and_start_task<table_offstrategy_keyspace_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task, _needed), ti);
+    }
+
+    co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, false);
+}
+
+tasks::is_internal table_offstrategy_keyspace_compaction_task_impl::is_internal() const noexcept {
+    return tasks::is_internal::yes;
+}
+
+future<> table_offstrategy_keyspace_compaction_task_impl::run() {
+    co_await wait_for_your_turn(_cv, _current_task, _status.id);
+    co_await run_on_table("perform_keyspace_offstrategy_compaction", _db, _status.keyspace, _ti, [this] (replica::table& t) -> future<> {
         _needed |= co_await t.perform_offstrategy_compaction();
     });
 }
@@ -120,8 +215,25 @@ tasks::is_internal shard_upgrade_sstables_compaction_task_impl::is_internal() co
 }
 
 future<> shard_upgrade_sstables_compaction_task_impl::run() {
+    seastar::condition_variable cv;
+    tasks::task_manager::task_ptr current_task;
+    tasks::task_info parent_info{_status.id, _status.shard};
+    std::vector<table_tasks_info> table_tasks;
+    for (auto& ti : _table_infos) {
+        table_tasks.emplace_back(co_await _module->make_and_start_task<table_upgrade_sstables_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task, _exclude_current_version), ti);
+    }
+
+    co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, false);
+}
+
+tasks::is_internal table_upgrade_sstables_compaction_task_impl::is_internal() const noexcept {
+    return tasks::is_internal::yes;
+}
+
+future<> table_upgrade_sstables_compaction_task_impl::run() {
+    co_await wait_for_your_turn(_cv, _current_task, _status.id);
     auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(_db.get_keyspace_local_ranges(_status.keyspace));
-    co_await run_on_existing_tables("upgrade_sstables", _db, _status.keyspace, _table_infos, [&] (replica::table& t) -> future<> {
+    co_await run_on_table("upgrade_sstables", _db, _status.keyspace, _ti, [&] (replica::table& t) -> future<> {
         return t.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
             return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, _exclude_current_version);
         });

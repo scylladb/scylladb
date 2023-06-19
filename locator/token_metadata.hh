@@ -22,9 +22,12 @@
 #include <boost/range/iterator_range.hpp>
 #include <boost/icl/interval.hpp>
 #include "range.hh"
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sharded.hh>
+#include "utils/phased_barrier.hh"
+#include "service/topology_state_machine.hh"
 
 #include "locator/types.hh"
 #include "locator/topology.hh"
@@ -78,6 +81,8 @@ public:
         topology::config topo_cfg;
     };
     using inet_address = gms::inet_address;
+    using version_t = service::topology::version_t;
+    using version_tracker_t = utils::phased_barrier::operation;
 private:
     friend class token_metadata_ring_splitter;
     class tokens_iterator {
@@ -275,7 +280,13 @@ public:
     long get_ring_version() const;
     void invalidate_cached_rings();
 
+    version_t get_version() const;
+    void set_version(version_t version);
+
     friend class token_metadata_impl;
+    friend class shared_token_metadata;
+private:
+    void set_version_tracker(version_tracker_t tracker);
 };
 
 struct topology_change_info {
@@ -305,13 +316,33 @@ class shared_token_metadata {
     mutable_token_metadata_ptr _shared;
     token_metadata_lock_func _lock_func;
 
+    // We use this barrier during the transition to a new token_metadata version to ensure that the
+    // system stops using previous versions. Here are the key points:
+    //   * A new phase begins when a mutable_token_metadata_ptr passed to shared_token_metadata::set has
+    //   a higher version than the current one.
+    //   * Each shared_token_metadata::set call initiates an operation on the barrier. If multiple calls
+    //   have the same version, multiple operations may be initiated with the same phase.
+    //   * The operation is stored within the new token_metadata instance (token_metadata::set_version_tracker),
+    //   and it completes when the instance is destroyed.
+    //   * The method shared_token_metadata::stale_versions_in_use can be used to wait for the phase
+    //   transition to complete. Once this future resolves, there will be no token_metadata instances
+    //   with versions lower than the current one.
+    //   * Multiple new phases (version upgrades) can be started before accessing stale_versions_in_use.
+    //   However, stale_versions_in_use waits for all previous phases to finish, as advance_and_await
+    //   includes its own invocation as an operation in the new phase.
+    utils::phased_barrier _versions_barrier;
+    shared_future<> _stale_versions_in_use{make_ready_future<>()};
+    token_metadata::version_t _fence_version = 0;
+
 public:
     // used to construct the shared object as a sharded<> instance
     // lock_func returns semaphore_units<>
     explicit shared_token_metadata(token_metadata_lock_func lock_func, token_metadata::config cfg)
         : _shared(make_token_metadata_ptr(std::move(cfg)))
         , _lock_func(std::move(lock_func))
-    { }
+    {
+        _shared->set_version_tracker(_versions_barrier.start());
+    }
 
     shared_token_metadata(const shared_token_metadata& x) = delete;
     shared_token_metadata(shared_token_metadata&& x) = default;
@@ -321,6 +352,15 @@ public:
     }
 
     void set(mutable_token_metadata_ptr tmptr) noexcept;
+
+    future<> stale_versions_in_use() const {
+        return _stale_versions_in_use.get_future();
+    }
+
+    void update_fence_version(token_metadata::version_t version);
+    token_metadata::version_t get_fence_version() const noexcept {
+        return _fence_version;
+    }
 
     // Token metadata changes are serialized
     // using the schema_tables merge_lock.

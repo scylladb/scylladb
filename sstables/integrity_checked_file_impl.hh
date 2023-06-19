@@ -22,16 +22,16 @@ class integrity_checked_file_impl : public file_impl {
 public:
     integrity_checked_file_impl(sstring fname, file f);
 
-    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, const io_priority_class& pc) override;
+    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent*) override;
 
-    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override;
+    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, io_intent*) override;
 
-    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, const io_priority_class& pc) override {
-        return get_file_impl(_file)->read_dma(pos, buffer, len, pc);
+    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent* intent) override {
+        return get_file_impl(_file)->read_dma(pos, buffer, len, intent);
     }
 
-    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override {
-        return get_file_impl(_file)->read_dma(pos, iov, pc);
+    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) override {
+        return get_file_impl(_file)->read_dma(pos, iov, intent);
     }
 
     virtual future<> flush(void) override {
@@ -72,8 +72,8 @@ public:
         return get_file_impl(_file)->list_directory(next);
     }
 
-    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) override {
-        return get_file_impl(_file)->dma_read_bulk(offset, range_size, pc);
+    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent* intent) override {
+        return get_file_impl(_file)->dma_read_bulk(offset, range_size, intent);
     }
 private:
     sstring _fname;

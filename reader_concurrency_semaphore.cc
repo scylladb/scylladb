@@ -736,7 +736,7 @@ static permit_stats do_dump_reader_permit_diagnostics(std::ostream& os, const pe
         fmt::print(os, "{}\t{}\t{}\t{}\n", col1, col2, col3, col4);
     };
 
-    print_line("permits", "count", "memory", "table/description/state");
+    print_line("permits", "count", "memory", "table/operation/state");
     for (const auto& summary : permit_summaries) {
         total.permits += summary.permits;
         total.resources += summary.resources;
@@ -1568,20 +1568,20 @@ public:
     tracking_file_impl(tracking_file_impl&&) = default;
     tracking_file_impl& operator=(tracking_file_impl&&) = default;
 
-    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, const io_priority_class& pc) override {
-        return get_file_impl(_tracked_file)->write_dma(pos, buffer, len, pc);
+    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent* intent) override {
+        return get_file_impl(_tracked_file)->write_dma(pos, buffer, len, intent);
     }
 
-    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override {
-        return get_file_impl(_tracked_file)->write_dma(pos, std::move(iov), pc);
+    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) override {
+        return get_file_impl(_tracked_file)->write_dma(pos, std::move(iov), intent);
     }
 
-    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, const io_priority_class& pc) override {
-        return get_file_impl(_tracked_file)->read_dma(pos, buffer, len, pc);
+    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent* intent) override {
+        return get_file_impl(_tracked_file)->read_dma(pos, buffer, len, intent);
     }
 
-    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, const io_priority_class& pc) override {
-        return get_file_impl(_tracked_file)->read_dma(pos, iov, pc);
+    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) override {
+        return get_file_impl(_tracked_file)->read_dma(pos, iov, intent);
     }
 
     virtual future<> flush(void) override {
@@ -1620,9 +1620,9 @@ public:
         return get_file_impl(_tracked_file)->list_directory(std::move(next));
     }
 
-    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) override {
-        return _permit.request_memory(range_size).then([this, offset, range_size, &pc] (reader_permit::resource_units units) {
-            return get_file_impl(_tracked_file)->dma_read_bulk(offset, range_size, pc).then([units = std::move(units)] (temporary_buffer<uint8_t> buf) mutable {
+    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent* intent) override {
+        return _permit.request_memory(range_size).then([this, offset, range_size, intent] (reader_permit::resource_units units) {
+            return get_file_impl(_tracked_file)->dma_read_bulk(offset, range_size, intent).then([units = std::move(units)] (temporary_buffer<uint8_t> buf) mutable {
                 return make_ready_future<temporary_buffer<uint8_t>>(make_tracked_temporary_buffer(std::move(buf), std::move(units)));
             });
         });

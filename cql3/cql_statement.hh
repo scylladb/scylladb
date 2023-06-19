@@ -39,6 +39,9 @@ seastar::shared_ptr<const metadata> make_empty_metadata();
 
 class query_options;
 
+// A vector of CQL warnings generated during execution of a statement.
+using cql_warnings_vec = std::vector<sstring>;
+
 class cql_statement {
     timeout_config_selector _timeout_config_selector;
 public:

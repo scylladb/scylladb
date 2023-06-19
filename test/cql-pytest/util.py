@@ -54,6 +54,15 @@ def unique_key_int():
     return unique_key_int.i
 unique_key_int.i = 0
 
+def format_tuples(tuples=None, **kwargs):
+    '''format a dict to structured values (tuples) in CQL'''
+    if tuples is None:
+        tuples = {}
+    tuples.update(kwargs)
+    body = ', '.join(f"'{key}': '{value}'" for key, value in tuples.items())
+    return f'{{ {body} }}'
+
+
 # A utility function for creating a new temporary keyspace with given options.
 # It can be used in a "with", as:
 #   with new_test_keyspace(cql, '...') as keyspace:

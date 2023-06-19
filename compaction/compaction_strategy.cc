@@ -39,14 +39,14 @@ namespace sstables {
 
 compaction_descriptor compaction_strategy_impl::make_major_compaction_job(std::vector<sstables::shared_sstable> candidates, int level, uint64_t max_sstable_bytes) {
     // run major compaction in maintenance priority
-    return compaction_descriptor(std::move(candidates), service::get_local_streaming_priority(), level, max_sstable_bytes);
+    return compaction_descriptor(std::move(candidates), level, max_sstable_bytes);
 }
 
 std::vector<compaction_descriptor> compaction_strategy_impl::get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const {
     // The default implementation is suboptimal and causes the writeamp problem described issue in #10097.
     // The compaction strategy relying on it should strive to implement its own method, to make cleanup bucket aware.
     return boost::copy_range<std::vector<compaction_descriptor>>(candidates | boost::adaptors::transformed([] (const shared_sstable& sst) {
-        return compaction_descriptor({ sst }, service::get_local_compaction_priority(),
+        return compaction_descriptor({ sst },
             sst->get_sstable_level(), sstables::compaction_descriptor::default_max_sstable_bytes, sst->run_identifier());
     }));
 }
@@ -75,7 +75,7 @@ reader_consumer_v2 compaction_strategy_impl::make_interposer_consumer(const muta
 }
 
 compaction_descriptor
-compaction_strategy_impl::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) const {
+compaction_strategy_impl::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_mode mode) const {
     return compaction_descriptor();
 }
 
@@ -665,7 +665,7 @@ compaction_descriptor date_tiered_compaction_strategy::get_sstables_for_compacti
 
     if (!sstables.empty()) {
         date_tiered_manifest::logger.debug("datetiered: Compacting {} out of {} sstables", sstables.size(), candidates.size());
-        return sstables::compaction_descriptor(std::move(sstables), service::get_local_compaction_priority());
+        return sstables::compaction_descriptor(std::move(sstables));
     }
 
     // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
@@ -681,7 +681,7 @@ compaction_descriptor date_tiered_compaction_strategy::get_sstables_for_compacti
     auto it = std::min_element(candidates.begin(), candidates.end(), [] (auto& i, auto& j) {
         return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
     });
-    return sstables::compaction_descriptor({ *it }, service::get_local_compaction_priority());
+    return sstables::compaction_descriptor({ *it });
 }
 
 std::unique_ptr<compaction_backlog_tracker::impl> date_tiered_compaction_strategy::make_backlog_tracker() const {
@@ -746,8 +746,8 @@ compaction_backlog_tracker compaction_strategy::make_backlog_tracker() const {
 }
 
 sstables::compaction_descriptor
-compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) const {
-    return _compaction_strategy_impl->get_reshaping_job(std::move(input), schema, iop, mode);
+compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_mode mode) const {
+    return _compaction_strategy_impl->get_reshaping_job(std::move(input), schema, mode);
 }
 
 uint64_t compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate) const {

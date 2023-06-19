@@ -1020,8 +1020,9 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         return ctx.db.map_reduce0([key, uuid] (replica::database& db) {
             return db.find_column_family(uuid).get_sstables_by_partition_key(key);
         }, std::unordered_set<sstring>(),
-            [](std::unordered_set<sstring> a, std::unordered_set<sstring>&& b) mutable {
-            a.insert(b.begin(),b.end());
+        [](std::unordered_set<sstring> a, std::unordered_set<sstables::shared_sstable>&& b) mutable {
+            auto names = b | boost::adaptors::transformed([] (auto s) { return s->get_filename(); });
+            a.insert(names.begin(), names.end());
             return a;
         }).then([](const std::unordered_set<sstring>& res) {
             return make_ready_future<json::json_return_type>(container_to_vec(res));

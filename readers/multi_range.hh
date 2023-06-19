@@ -11,7 +11,6 @@
 #include "dht/i_partitioner_fwd.hh"
 #include <functional>
 #include <optional>
-#include <seastar/core/io_priority_class.hh>
 #include "readers/flat_mutation_reader_fwd.hh"
 #include "tracing/trace_state.hh"
 
@@ -38,7 +37,7 @@ namespace query {
 flat_mutation_reader_v2
 make_flat_multi_range_reader(
         schema_ptr s, reader_permit permit, mutation_source source, const dht::partition_range_vector& ranges,
-        const query::partition_slice& slice, const io_priority_class& pc = default_priority_class(),
+        const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state = nullptr,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 
@@ -53,6 +52,5 @@ make_flat_multi_range_reader(
         mutation_source source,
         std::function<std::optional<dht::partition_range>()> generator,
         const query::partition_slice& slice,
-        const io_priority_class& pc = default_priority_class(),
         tracing::trace_state_ptr trace_state = nullptr,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);

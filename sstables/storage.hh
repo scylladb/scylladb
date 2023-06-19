@@ -53,10 +53,10 @@ public:
     virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const = 0;
     virtual future<> change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay) = 0;
     // runs in async context
-    virtual void open(sstable& sst, const io_priority_class& pc) = 0;
+    virtual void open(sstable& sst) = 0;
     virtual future<> wipe(const sstable& sst) noexcept = 0;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) = 0;
-    virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) = 0;
+    virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) = 0;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) = 0;
     virtual future<> destroy(const sstable& sst) = 0;
     virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const = 0;

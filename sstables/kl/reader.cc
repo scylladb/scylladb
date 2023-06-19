@@ -87,7 +87,6 @@ public:
 class mp_row_consumer_k_l {
     reader_permit _permit;
     tracing::trace_state_ptr _trace_state;
-    const io_priority_class& _pc;
 
 public:
     using proceed = data_consumer::proceed;
@@ -380,13 +379,11 @@ public:
                         const schema_ptr schema,
                         reader_permit permit,
                         const query::partition_slice& slice,
-                        const io_priority_class& pc,
                         tracing::trace_state_ptr trace_state,
                         streamed_mutation::forwarding fwd,
                         const shared_sstable& sst)
         : _permit(std::move(permit))
         , _trace_state(std::move(trace_state))
-        , _pc(pc) 
         , _reader(reader)
         , _sst(sst)
         , _schema(schema)
@@ -399,11 +396,10 @@ public:
     mp_row_consumer_k_l(mp_row_consumer_reader_k_l* reader,
                         const schema_ptr schema,
                         reader_permit permit,
-                        const io_priority_class& pc,
                         tracing::trace_state_ptr trace_state,
                         streamed_mutation::forwarding fwd,
                         const shared_sstable& sst)
-        : mp_row_consumer_k_l(reader, schema, std::move(permit), schema->full_slice(), pc, std::move(trace_state), fwd, sst) { }
+        : mp_row_consumer_k_l(reader, schema, std::move(permit), schema->full_slice(), std::move(trace_state), fwd, sst) { }
 
     // Consume the row's key and deletion_time. The latter determines if the
     // row is a tombstone, and if so, when it has been deleted.
@@ -915,10 +911,6 @@ public:
         sstlog.trace("mp_row_consumer_k_l {}: advance_context({})", fmt::ptr(this), _ck_ranges_walker->lower_bound());
         return _ck_ranges_walker->lower_bound();
     }
-    // Under which priority class to place I/O coming from this consumer
-    const io_priority_class& io_priority() const {
-        return _pc;
-    }
 
     // The permit for this read
     reader_permit& permit() {
@@ -1161,13 +1153,12 @@ public:
                             reader_permit permit,
                             const dht::partition_range& pr,
                             const query::partition_slice& slice,
-                            const io_priority_class& pc,
                             tracing::trace_state_ptr trace_state,
                             streamed_mutation::forwarding fwd,
                             mutation_reader::forwarding fwd_mr,
                             read_monitor& mon)
             : mp_row_consumer_reader_k_l(std::move(schema), permit, std::move(sst))
-            , _consumer(this, _schema, std::move(permit), slice, pc, std::move(trace_state), fwd, _sst)
+            , _consumer(this, _schema, std::move(permit), slice, std::move(trace_state), fwd, _sst)
             // FIXME: I want to add `&& fwd_mr == mutation_reader::forwarding::no` below
             // but can't because many call sites use the default value for
             // `mutation_reader::forwarding` which is `yes`.
@@ -1196,7 +1187,7 @@ private:
     index_reader& get_index_reader() {
         if (!_index_reader) {
             auto caching = use_caching(global_cache_index_pages && !_slice.options.contains(query::partition_slice::option::bypass_cache));
-            _index_reader = std::make_unique<index_reader>(_sst, _consumer.permit(), _consumer.io_priority(),
+            _index_reader = std::make_unique<index_reader>(_sst, _consumer.permit(),
                                                            _consumer.trace_state(), caching, _single_partition_read);
         }
         return *_index_reader;
@@ -1501,13 +1492,12 @@ flat_mutation_reader_v2 make_reader(
         reader_permit permit,
         const dht::partition_range& range,
         const query::partition_slice& slice,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor) {
     return make_flat_mutation_reader_v2<sstable_mutation_reader>(
-        std::move(sstable), std::move(schema), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr, monitor);
+        std::move(sstable), std::move(schema), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr, monitor);
 }
 
 class crawling_sstable_mutation_reader : public mp_row_consumer_reader_k_l {
@@ -1520,11 +1510,10 @@ class crawling_sstable_mutation_reader : public mp_row_consumer_reader_k_l {
 public:
     crawling_sstable_mutation_reader(shared_sstable sst, schema_ptr schema,
              reader_permit permit,
-             const io_priority_class &pc,
              tracing::trace_state_ptr trace_state,
              read_monitor& mon)
         : mp_row_consumer_reader_k_l(std::move(schema), permit, std::move(sst))
-        , _consumer(this, _schema, std::move(permit), _schema->full_slice(), pc, std::move(trace_state), streamed_mutation::forwarding::no, _sst)
+        , _consumer(this, _schema, std::move(permit), _schema->full_slice(), std::move(trace_state), streamed_mutation::forwarding::no, _sst)
         , _context(data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer))
         , _monitor(mon) {
         _monitor.on_read_started(_context->reader_position());
@@ -1567,10 +1556,9 @@ flat_mutation_reader_v2 make_crawling_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         read_monitor& monitor) {
-    return make_flat_mutation_reader_v2<crawling_sstable_mutation_reader>(std::move(sstable), std::move(schema), std::move(permit), pc,
+    return make_flat_mutation_reader_v2<crawling_sstable_mutation_reader>(std::move(sstable), std::move(schema), std::move(permit),
             std::move(trace_state), monitor);
 }
 

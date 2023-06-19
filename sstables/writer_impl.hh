@@ -20,7 +20,6 @@ namespace sstables {
 struct sstable_writer::writer_impl {
     sstable& _sst;
     const schema& _schema;
-    const io_priority_class& _pc;
     const sstable_writer_config _cfg;
     // NOTE: _collector and _c_stats are used to generation of statistics file
     // when writing a new sstable.
@@ -28,10 +27,9 @@ struct sstable_writer::writer_impl {
     column_stats _c_stats;
     mutation_fragment_stream_validating_filter _validator;
 
-    writer_impl(sstable& sst, const schema& schema, const io_priority_class& pc, const sstable_writer_config& cfg)
+    writer_impl(sstable& sst, const schema& schema, const sstable_writer_config& cfg)
         : _sst(sst)
         , _schema(schema)
-        , _pc(pc)
         , _cfg(cfg)
         , _collector(_schema, sst.get_filename(), sst.manager().get_local_host_id())
         , _validator(format("sstable writer {}", _sst.get_filename()), _schema, _cfg.validation_level)

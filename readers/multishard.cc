@@ -213,7 +213,6 @@ private:
     mutation_source _ms;
     const dht::partition_range* _pr;
     const query::partition_slice& _ps;
-    const io_priority_class& _pc;
     tracing::global_trace_state_ptr _trace_state;
     const mutation_reader::forwarding _fwd_mr;
     reader_concurrency_semaphore::inactive_read_handle _irh;
@@ -251,7 +250,6 @@ public:
             reader_permit permit,
             const dht::partition_range& pr,
             const query::partition_slice& ps,
-            const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr);
     virtual future<> fill_buffer() override;
@@ -397,7 +395,6 @@ flat_mutation_reader_v2 evictable_reader_v2::recreate_reader() {
             _permit,
             *range,
             *slice,
-            _pc,
             _trace_state,
             streamed_mutation::forwarding::no,
             _fwd_mr);
@@ -547,7 +544,6 @@ evictable_reader_v2::evictable_reader_v2(
         reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr)
     : impl(std::move(schema), std::move(permit))
@@ -555,7 +551,6 @@ evictable_reader_v2::evictable_reader_v2(
     , _ms(std::move(ms))
     , _pr(&pr)
     , _ps(ps)
-    , _pc(pc)
     , _trace_state(std::move(trace_state))
     , _fwd_mr(fwd_mr)
     , _tri_cmp(*_schema)
@@ -671,11 +666,10 @@ flat_mutation_reader_v2 make_auto_paused_evictable_reader_v2(
         reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr) {
     return make_flat_mutation_reader_v2<evictable_reader_v2>(evictable_reader_v2::auto_pause::yes, std::move(ms), std::nullopt, std::move(schema), std::move(permit), pr, ps,
-            pc, std::move(trace_state), fwd_mr);
+            std::move(trace_state), fwd_mr);
 }
 
 std::pair<flat_mutation_reader_v2, evictable_reader_handle_v2> make_manually_paused_evictable_reader_v2(
@@ -684,11 +678,10 @@ std::pair<flat_mutation_reader_v2, evictable_reader_handle_v2> make_manually_pau
         reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr) {
     auto reader = std::make_unique<evictable_reader_v2>(evictable_reader_v2::auto_pause::no, std::move(ms), std::nullopt, std::move(schema), std::move(permit), pr, ps,
-            pc, std::move(trace_state), fwd_mr);
+            std::move(trace_state), fwd_mr);
     auto handle = evictable_reader_handle_v2(*reader.get());
     return std::pair(flat_mutation_reader_v2(std::move(reader)), handle);
 }
@@ -710,7 +703,6 @@ private:
     const unsigned _shard;
     foreign_ptr<lw_shared_ptr<const dht::partition_range>> _pr;
     const query::partition_slice& _ps;
-    const io_priority_class& _pc;
     tracing::global_trace_state_ptr _trace_state;
     const mutation_reader::forwarding _fwd_mr;
     std::optional<future<>> _read_ahead;
@@ -727,7 +719,6 @@ public:
             unsigned shard,
             const dht::partition_range& pr,
             const query::partition_slice& ps,
-            const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr)
         : impl(std::move(schema), std::move(permit))
@@ -735,7 +726,6 @@ public:
         , _shard(shard)
         , _pr(make_foreign(make_lw_shared<const dht::partition_range>(pr)))
         , _ps(ps)
-        , _pc(pc)
         , _trace_state(std::move(trace_state))
         , _fwd_mr(fwd_mr) {
     }
@@ -817,18 +807,17 @@ future<> shard_reader_v2::do_fill_buffer() {
                             reader_permit permit,
                             const dht::partition_range& pr,
                             const query::partition_slice& ps,
-                            const io_priority_class& pc,
                             tracing::trace_state_ptr ts,
                             streamed_mutation::forwarding,
                             mutation_reader::forwarding fwd_mr) {
-                    return lifecycle_policy->create_reader(std::move(s), std::move(permit), pr, ps, pc, std::move(ts), fwd_mr);
+                    return lifecycle_policy->create_reader(std::move(s), std::move(permit), pr, ps, std::move(ts), fwd_mr);
                 });
                 auto s = gs.get();
                 auto permit = co_await _lifecycle_policy->obtain_reader_permit(s, "shard-reader", timeout(), _trace_state);
                 if (permit.needs_readmission()) {
                     co_await permit.wait_readmission();
                 }
-                auto underlying_reader = _lifecycle_policy->create_reader(s, permit, *_pr, _ps, _pc, _trace_state, _fwd_mr);
+                auto underlying_reader = _lifecycle_policy->create_reader(s, permit, *_pr, _ps, _trace_state, _fwd_mr);
 
                 std::exception_ptr ex;
 
@@ -851,7 +840,7 @@ future<> shard_reader_v2::do_fill_buffer() {
                 }
 
                 auto rreader = make_foreign(std::make_unique<evictable_reader_v2>(evictable_reader_v2::auto_pause::yes, std::move(ms),
-                            std::move(underlying_reader), s, std::move(permit), *_pr, _ps, _pc, _trace_state, _fwd_mr));
+                            std::move(underlying_reader), s, std::move(permit), *_pr, _ps, _trace_state, _fwd_mr));
 
                 try {
                     tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
@@ -989,7 +978,6 @@ public:
             reader_permit permit,
             const dht::partition_range& pr,
             const query::partition_slice& ps,
-            const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr);
 
@@ -1088,7 +1076,6 @@ multishard_combining_reader_v2::multishard_combining_reader_v2(
         reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr)
     : impl(std::move(s), std::move(permit)), _sharder(sharder) {
@@ -1097,7 +1084,7 @@ multishard_combining_reader_v2::multishard_combining_reader_v2(
 
     _shard_readers.reserve(_sharder.shard_count());
     for (unsigned i = 0; i < _sharder.shard_count(); ++i) {
-        _shard_readers.emplace_back(std::make_unique<shard_reader_v2>(_schema, _permit, lifecycle_policy, i, pr, ps, pc, trace_state, fwd_mr));
+        _shard_readers.emplace_back(std::make_unique<shard_reader_v2>(_schema, _permit, lifecycle_policy, i, pr, ps, trace_state, fwd_mr));
     }
 }
 
@@ -1153,11 +1140,10 @@ flat_mutation_reader_v2 make_multishard_combining_reader_v2(
         reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr) {
     const dht::sharder& sharder = schema->get_sharder();
-    return make_flat_mutation_reader_v2<multishard_combining_reader_v2>(sharder, std::move(lifecycle_policy), std::move(schema), std::move(permit), pr, ps, pc,
+    return make_flat_mutation_reader_v2<multishard_combining_reader_v2>(sharder, std::move(lifecycle_policy), std::move(schema), std::move(permit), pr, ps,
             std::move(trace_state), fwd_mr);
 }
 
@@ -1168,9 +1154,8 @@ flat_mutation_reader_v2 make_multishard_combining_reader_v2_for_tests(
         reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr) {
-    return make_flat_mutation_reader_v2<multishard_combining_reader_v2>(sharder, std::move(lifecycle_policy), std::move(schema), std::move(permit), pr, ps, pc,
+    return make_flat_mutation_reader_v2<multishard_combining_reader_v2>(sharder, std::move(lifecycle_policy), std::move(schema), std::move(permit), pr, ps,
             std::move(trace_state), fwd_mr);
 }

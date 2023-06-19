@@ -516,7 +516,7 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
         testlog.info("Segregating with in-memory method (max_memory={})", max_memory);
         mutation_writer::segregate_by_partition(
                 make_flat_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), shuffled_input_mutations),
-                mutation_writer::segregate_config{default_priority_class(), max_memory},
+                mutation_writer::segregate_config{max_memory},
                 consumer).get();
         testlog.info("Done segregating with in-memory method (max_memory={}): input segregated into {} buckets", max_memory, output_mutations.size());
         check_and_reset();

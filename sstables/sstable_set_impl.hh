@@ -112,7 +112,6 @@ public:
         utils::estimated_histogram&,
         const dht::partition_range&,
         const query::partition_slice&,
-        const io_priority_class&,
         tracing::trace_state_ptr,
         streamed_mutation::forwarding,
         mutation_reader::forwarding) const override;
@@ -146,7 +145,6 @@ public:
             utils::estimated_histogram&,
             const dht::partition_range&,
             const query::partition_slice&,
-            const io_priority_class&,
             tracing::trace_state_ptr,
             streamed_mutation::forwarding,
             mutation_reader::forwarding) const override;

@@ -39,7 +39,7 @@ private:
     cf_properties _properties;
     bool _if_not_exists;
 
-    view_ptr prepare_view(data_dictionary::database db) const;
+    std::pair<view_ptr, cql3::cql_warnings_vec> prepare_view(data_dictionary::database db) const;
 
 public:
     create_view_statement(
@@ -58,7 +58,7 @@ public:
     // Functions we need to override to subclass schema_altering_statement
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
     virtual void validate(query_processor&, const service::client_state& state) const override;
-    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp, api::timestamp_type) const override;
+    future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type) const override;
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 

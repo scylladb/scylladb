@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include "cql3/abstract_marker.hh"
 #include "utils/to_string.hh"
 #include "operation.hh"
 #include "utils/chunked_vector.hh"

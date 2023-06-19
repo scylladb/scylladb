@@ -1898,7 +1898,6 @@ future<> view_builder::initialize_reader_at_current_token(build_step& step) {
             _permit,
             step.prange,
             step.pslice,
-            default_priority_class(),
             nullptr,
             streamed_mutation::forwarding::no,
             mutation_reader::forwarding::no);

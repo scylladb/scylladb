@@ -461,6 +461,7 @@ scylla_tests = set([
     'test/boost/snitch_reset_test',
     'test/boost/sstable_3_x_test',
     'test/boost/sstable_datafile_test',
+    'test/boost/sstable_generation_test',
     'test/boost/sstable_mutation_test',
     'test/boost/sstable_partition_index_cache_test',
     'test/boost/schema_changes_test',
@@ -772,7 +773,6 @@ scylla_core = (['message/messaging_service.cc',
                 'cdc/generation.cc',
                 'cdc/metadata.cc',
                 'cql3/type_json.cc',
-                'cql3/abstract_marker.cc',
                 'cql3/attributes.cc',
                 'cql3/cf_name.cc',
                 'cql3/cql3_type.cc',
@@ -862,7 +862,6 @@ scylla_core = (['message/messaging_service.cc',
                 'utils/big_decimal.cc',
                 'types/types.cc',
                 'validation.cc',
-                'service/priority_manager.cc',
                 'service/migration_manager.cc',
                 'service/tablet_allocator.cc',
                 'service/storage_proxy.cc',
@@ -1640,7 +1639,7 @@ def configure_seastar(build_dir, mode, mode_config):
         '-DSeastar_CXX_FLAGS=SHELL:{}'.format(mode_config['lib_cflags']),
         '-DSeastar_LD_FLAGS={}'.format(semicolon_separated(mode_config['lib_ldflags'], mode_config['cxx_ld_flags'])),
         '-DSeastar_CXX_DIALECT=gnu++20',
-        '-DSeastar_API_LEVEL=6',
+        '-DSeastar_API_LEVEL=7',
         '-DSeastar_UNUSED_RESULT_ERROR=ON',
         '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
         '-DSeastar_SCHEDULING_GROUPS_COUNT=16',
@@ -1829,11 +1828,7 @@ with open(buildfile, 'w') as f:
             command = clang --target=wasm32 --no-standard-libraries -Wl,--export-all -Wl,--no-entry $in -o $out
             description = C2WASM $out
         rule rust2wasm
-            # The default stack size in Rust is 1MB, which causes oversized allocation warnings,
-            # because it's allocated in a single chunk as a part of a Wasm Linear Memory.
-            # We change the stack size to 128KB using the RUSTFLAGS environment variable
-            # in the command below.
-            command = RUSTFLAGS="-C link-args=-zstack-size=131072" cargo build --target=wasm32-wasi --example=$example --locked --manifest-path=test/resource/wasm/rust/Cargo.toml --target-dir=$builddir/wasm/ $
+            command = cargo build --target=wasm32-wasi --example=$example --locked --manifest-path=test/resource/wasm/rust/Cargo.toml --target-dir=$builddir/wasm/ $
                 && wasm-opt -Oz $builddir/wasm/wasm32-wasi/debug/examples/$example.wasm -o $builddir/wasm/$example.wasm $
                 && wasm-strip $builddir/wasm/$example.wasm
             description = RUST2WASM $out
@@ -1845,7 +1840,7 @@ with open(buildfile, 'w') as f:
         src = wasm_deps[binary]
         wasm = binary[:-4] + '.wasm'
         if src.endswith('.rs'):
-            f.write(f'build $builddir/{wasm}: rust2wasm {src} | test/resource/wasm/rust/Cargo.lock\n')
+            f.write(f'build $builddir/{wasm}: rust2wasm {src} | test/resource/wasm/rust/Cargo.lock test/resource/wasm/rust/build.rs\n')
             example_name = binary[binary.rindex('/')+1:-4]
             f.write(f'   example = {example_name}\n')
         else:

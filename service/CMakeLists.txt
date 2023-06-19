@@ -12,7 +12,6 @@ target_sources(service
     paxos/prepare_response.cc
     paxos/prepare_summary.cc
     paxos/proposal.cc
-    priority_manager.cc
     qos/qos_common.cc
     qos/service_level_controller.cc
     qos/standard_service_level_distributed_data_accessor.cc

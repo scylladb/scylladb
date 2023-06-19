@@ -99,6 +99,7 @@ private:
     friend class impl;
     database(const impl* ops, const void* database);
 public:
+    const table_schema_version& get_version() const;
     keyspace find_keyspace(std::string_view name) const;
     std::optional<keyspace> try_find_keyspace(std::string_view name) const;
     bool has_keyspace(std::string_view name) const;  // throws no_keyspace

@@ -3518,6 +3518,21 @@ class scylla_io_queues(gdb.Command):
             gdb.write("{}\t{}\n".format(indent, scylla_io_queues.ticket(entry['_ticket'])))
 
     def _get_classes_infos(self, ioq):
+        # Starting from 5.3 priority classes are removed and IO inherits its name and
+        # shares from the respective sched group, so should the infos.  Not to rely on
+        # gdb.parse_and_eval() to fail searching for _infos, use the secret knowledge:
+        # commitlog gained its sched group at the same time, so if not present, we're
+        # on some older version and should fallback to io-prio _infos (or worse)
+        infos = {}
+        commitlog_met = False
+        for tq in get_local_task_queues():
+            name = str(tq['_name'])
+            if name == '"commitlog"':
+                commitlog_met = True
+            infos[int(tq['_id'])] = { 'name': name, 'shares': int(tq['_shares']) }
+        if commitlog_met:
+            return infos
+
         try:
             return std_array(gdb.parse_and_eval('seastar::io_priority_class::_infos'))
         except gdb.error:

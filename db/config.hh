@@ -356,6 +356,7 @@ public:
     named_value<bool> enable_sstables_mc_format;
     named_value<bool> enable_sstables_md_format;
     named_value<sstring> sstable_format;
+    named_value<bool> uuid_sstable_identifiers_enabled;
     named_value<bool> enable_dangerous_direct_import_of_cassandra_counters;
     named_value<bool> enable_shard_aware_drivers;
     named_value<bool> enable_ipv6_dns_lookup;
@@ -377,6 +378,7 @@ public:
     named_value<uint32_t> max_concurrent_requests_per_shard;
     named_value<bool> cdc_dont_rewrite_streams;
     named_value<tri_mode_restriction> strict_allow_filtering;
+    named_value<tri_mode_restriction> strict_is_not_null_in_views;
     named_value<bool> reversed_reads_auto_bypass_cache;
     named_value<bool> enable_optimized_reversed_reads;
     named_value<bool> enable_cql_config_updates;

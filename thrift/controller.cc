@@ -7,7 +7,7 @@
  */
 
 #include "thrift/controller.hh"
-#include "seastar/core/sharded.hh"
+#include <seastar/core/sharded.hh>
 #include "thrift/server.hh"
 #include "replica/database.hh"
 #include "db/config.hh"

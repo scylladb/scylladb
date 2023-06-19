@@ -333,7 +333,9 @@ public:
      * \see init_messaging_service_part
      */
     future<> join_cluster(cdc::generation_service& cdc_gen_service,
-            sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, service::raft_group0&, cql3::query_processor& qp);
+            sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, cql3::query_processor& qp);
+
+    void set_group0(service::raft_group0&);
 
     future<> drain_on_shutdown();
 
@@ -742,6 +744,7 @@ private:
 public:
     future<bool> is_cleanup_allowed(sstring keyspace);
     bool is_repair_based_node_ops_enabled(streaming::stream_reason reason);
+    future<> update_fence_version(token_metadata::version_t version);
 
 private:
     std::unordered_set<gms::inet_address> _normal_state_handled_on_boot;
@@ -766,8 +769,13 @@ private:
     std::optional<shared_future<>> _decomission_result;
     std::optional<shared_future<>> _rebuild_result;
     std::unordered_map<raft::server_id, std::optional<shared_future<>>> _remove_result;
+    struct {
+        raft::term_t term{0};
+        uint64_t last_index{0};
+        semaphore _operation_mutex{1};
+    } _raft_topology_cmd_handler_state;
 
-    future<raft_topology_cmd_result> raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, const raft_topology_cmd& cmd);
+    future<raft_topology_cmd_result> raft_topology_cmd_handler(sharded<db::system_distributed_keyspace>& sys_dist_ks, raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd);
 
     future<> raft_bootstrap(raft::server&);
     future<> raft_decomission();

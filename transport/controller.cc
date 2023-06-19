@@ -7,7 +7,7 @@
  */
 
 #include "transport/controller.hh"
-#include "seastar/core/sharded.hh"
+#include <seastar/core/sharded.hh>
 #include "transport/server.hh"
 #include "service/memory_limiter.hh"
 #include "db/config.hh"

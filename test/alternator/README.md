@@ -19,7 +19,8 @@ More conveniently, instead of starting ScyllaDB on your own, we have a
 script `test/alternator/run` which does all the work necessary to start
 ScyllaDB with Alternator, and then runs `pytest` against it. The ScyllaDB
 process is run in a temporary directory which is automatically deleted when
-the test ends.
+the test ends. This is recomended way because it configures scylla to start
+much faster.
 
 `run` automatically picks the most-recently compiled version of Scylla in
 `build/*/scylla` - but this choice of Scylla executable can be overridden with

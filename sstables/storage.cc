@@ -48,6 +48,7 @@ private:
     future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, mark_for_removal mark_for_removal) const;
     future<> touch_temp_dir(const sstable& sst);
     future<> move(const sstable& sst, sstring new_dir, generation_type generation, delayed_commit_changes* delay) override;
+    future<> rename_new_file(const sstable& sst, sstring from_name, sstring to_name) const;
 
     virtual void change_dir_for_test(sstring nd) override {
         dir = std::move(nd);
@@ -60,10 +61,10 @@ public:
     virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const override;
     virtual future<> change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
-    virtual void open(sstable& sst, const io_priority_class& pc) override;
+    virtual void open(sstable& sst) override;
     virtual future<> wipe(const sstable& sst) noexcept override;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
-    virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) override;
+    virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
     virtual future<> destroy(const sstable& sst) override { return make_ready_future<>(); }
     virtual noncopyable_function<future<>(std::vector<shared_sstable>)> atomic_deleter() const override {
@@ -73,9 +74,8 @@ public:
     virtual sstring prefix() const override { return dir; }
 };
 
-future<data_sink> filesystem_storage::make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) {
+future<data_sink> filesystem_storage::make_data_or_index_sink(sstable& sst, component_type type) {
     file_output_stream_options options;
-    options.io_priority_class = pc;
     options.buffer_size = sst.sstable_buffer_size;
     options.write_behind = 10;
 
@@ -97,6 +97,13 @@ static future<file> open_sstable_component_file_non_checked(std::string_view nam
     return open_file_dma(name, flags, options);
 }
 
+future<> filesystem_storage::rename_new_file(const sstable& sst, sstring from_name, sstring to_name) const {
+    return sst.sstable_write_io_check(rename_file, from_name, to_name).handle_exception([from_name, to_name] (std::exception_ptr ep) {
+        sstlog.error("Could not rename SSTable component {} to {}. Found exception: {}", from_name, to_name, ep);
+        return make_exception_future<>(ep);
+    });
+}
+
 future<file> filesystem_storage::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
     auto create_flags = open_flags::create | open_flags::exclusive;
     auto readonly = (flags & create_flags) != create_flags;
@@ -106,8 +113,8 @@ future<file> filesystem_storage::open_component(const sstable& sst, component_ty
     auto f = open_sstable_component_file_non_checked(name, flags, options, check_integrity);
 
     if (!readonly) {
-        f = with_file_close_on_failure(std::move(f), [&sst, type, name = std::move(name)] (file fd) mutable {
-            return sst.rename_new_sstable_component_file(name, sst.filename(type)).then([fd = std::move(fd)] () mutable {
+        f = with_file_close_on_failure(std::move(f), [this, &sst, type, name = std::move(name)] (file fd) mutable {
+            return rename_new_file(sst, name, sst.filename(type)).then([fd = std::move(fd)] () mutable {
                 return make_ready_future<file>(std::move(fd));
             });
         });
@@ -116,7 +123,7 @@ future<file> filesystem_storage::open_component(const sstable& sst, component_ty
     return f;
 }
 
-void filesystem_storage::open(sstable& sst, const io_priority_class& pc) {
+void filesystem_storage::open(sstable& sst) {
     touch_temp_dir(sst).get0();
     auto file_path = sst.filename(component_type::TemporaryTOC);
 
@@ -126,7 +133,6 @@ void filesystem_storage::open(sstable& sst, const io_priority_class& pc) {
     // sstable being created in parallel with the same generation.
     file_output_stream_options options;
     options.buffer_size = 4096;
-    options.io_priority_class = pc;
     auto w = sst.make_component_file_writer(component_type::TemporaryTOC, std::move(options)).get0();
 
     bool toc_exists = file_exists(sst.filename(component_type::TOC)).get0();
@@ -439,10 +445,10 @@ public:
     virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs) const override;
     virtual future<> change_state(const sstable& sst, sstring to, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
-    virtual void open(sstable& sst, const io_priority_class& pc) override;
+    virtual void open(sstable& sst) override;
     virtual future<> wipe(const sstable& sst) noexcept override;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
-    virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) override;
+    virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
     virtual future<> destroy(const sstable& sst) override {
         return make_ready_future<>();
@@ -465,7 +471,7 @@ future<> s3_storage::ensure_remote_prefix(const sstable& sst) {
     }
 }
 
-void s3_storage::open(sstable& sst, const io_priority_class& pc) {
+void s3_storage::open(sstable& sst) {
     auto uuid = utils::UUID_gen::get_time_UUID();
     entry_descriptor desc("", "", "", sst._generation, sst._version, sst._format, component_type::TOC);
     sst.manager().system_keyspace().sstables_registry_create_entry(_location, uuid, status_creating, std::move(desc)).get();
@@ -489,7 +495,7 @@ future<file> s3_storage::open_component(const sstable& sst, component_type type,
     co_return _client->make_readable_file(make_s3_object_name(sst, type));
 }
 
-future<data_sink> s3_storage::make_data_or_index_sink(sstable& sst, component_type type, io_priority_class pc) {
+future<data_sink> s3_storage::make_data_or_index_sink(sstable& sst, component_type type) {
     assert(type == component_type::Data || type == component_type::Index);
     co_await ensure_remote_prefix(sst);
     // FIXME: if we have file size upper bound upfront, it's better to use make_upload_sink() instead

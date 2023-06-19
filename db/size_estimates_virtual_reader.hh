@@ -8,7 +8,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include <seastar/core/io_priority_class.hh>
 #include "readers/flat_mutation_reader_fwd.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "db/system_keyspace.hh"
@@ -61,7 +60,6 @@ struct virtual_reader {
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) {

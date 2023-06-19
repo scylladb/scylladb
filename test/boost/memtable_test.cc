@@ -7,7 +7,6 @@
  */
 
 #include <boost/test/unit_test.hpp>
-#include "service/priority_manager.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "utils/UUID_gen.hh"
@@ -537,7 +536,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_compaction_during_flush) {
         mt->apply(m);
     }
 
-    auto rd1 = mt->make_flat_reader(ss.schema(), semaphore.make_permit(), pr, s->full_slice(), default_priority_class(),
+    auto rd1 = mt->make_flat_reader(ss.schema(), semaphore.make_permit(), pr, s->full_slice(),
                                     nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     auto close_rd1 = defer([&] { rd1.close().get(); });
 
@@ -547,7 +546,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_compaction_during_flush) {
     auto rt = ss.delete_range(rt_m, ss.make_ckey_range(0, n_rows));
     mt->apply(rt_m);
 
-    auto rd2 = mt->make_flat_reader(ss.schema(), semaphore.make_permit(), pr, s->full_slice(), default_priority_class(),
+    auto rd2 = mt->make_flat_reader(ss.schema(), semaphore.make_permit(), pr, s->full_slice(),
                                     nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     auto close_rd2 = defer([&] { rd2.close().get(); });
 
@@ -614,7 +613,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_merging_with_multiple_versions) {
 
     mt->apply(m1);
 
-    auto rd1 = mt->make_flat_reader(s, semaphore.make_permit(), pr, s->full_slice(), default_priority_class(),
+    auto rd1 = mt->make_flat_reader(s, semaphore.make_permit(), pr, s->full_slice(),
                                     nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     auto close_rd1 = defer([&] { rd1.close().get(); });
 
@@ -623,7 +622,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_merging_with_multiple_versions) {
 
     mt->apply(m2);
 
-    auto rd2 = mt->make_flat_reader(s, semaphore.make_permit(), pr, s->full_slice(), default_priority_class(),
+    auto rd2 = mt->make_flat_reader(s, semaphore.make_permit(), pr, s->full_slice(),
                                     nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     auto close_r2 = defer([&] { rd2.close().get(); });
 
@@ -662,7 +661,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_merging_with_mvcc_and_preemption) {
     mt->apply(m0);
 
     std::optional<flat_mutation_reader_v2> rd0 = mt->make_flat_reader(
-            s, semaphore.make_permit(), pr, s->full_slice(), default_priority_class(),
+            s, semaphore.make_permit(), pr, s->full_slice(),
             nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     auto close_rd0 = defer([&] { rd0->close().get(); });
     rd0->fill_buffer().get();
@@ -676,7 +675,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_merging_with_mvcc_and_preemption) {
     mt->apply(m1);
 
     std::optional<flat_mutation_reader_v2> rd1 = mt->make_flat_reader(
-            s, semaphore.make_permit(), pr, s->full_slice(), default_priority_class(),
+            s, semaphore.make_permit(), pr, s->full_slice(),
             nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
     auto close_rd1 = defer([&] { rd1->close().get(); });
     rd1->fill_buffer().get();

@@ -38,6 +38,10 @@ public:
         return *static_cast<const replica::table*>(extract(t));
     }
 public:
+    virtual const table_schema_version& get_version(data_dictionary::database db) const override {
+        return unwrap(db).get_version();
+    }
+
     virtual std::optional<data_dictionary::keyspace> try_find_keyspace(data_dictionary::database db, std::string_view name) const override {
         try {
             return wrap(unwrap(db).find_keyspace(name));

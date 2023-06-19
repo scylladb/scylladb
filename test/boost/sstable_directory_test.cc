@@ -33,7 +33,7 @@ public:
         return replica::distributed_loader::lock_table(dir, db, std::move(ks_name), std::move(cf_name));
     }
     static future<> reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
-        return replica::distributed_loader::reshard(dir, db, std::move(ks_name), std::move(table_name), std::move(creator), default_priority_class());
+        return replica::distributed_loader::reshard(dir, db, std::move(ks_name), std::move(table_name), std::move(creator));
     }
 };
 
@@ -159,8 +159,7 @@ static void with_sstable_directory(
     sstdir.start(seastar::sharded_parameter([&env_wrap] { return std::ref(env_wrap.get_manager()); }),
             seastar::sharded_parameter([] { return test_table_schema(); }),
             seastar::sharded_parameter([] { return make_lw_shared<data_dictionary::storage_options>(); }),
-            path.native(), default_priority_class(),
-            default_io_error_handler_gen()).get();
+            path.native(), default_io_error_handler_gen()).get();
 
     func(sstdir);
 }
@@ -382,7 +381,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_unmatched_ge
             env.invoke_on(i, [dir = dir.path(), &sharded_gen] (sstables::test_env& env) -> future<> {
                 // intentionally generate the generation on a different shard
                 auto generation = co_await sharded_gen.invoke_on((this_shard_id() + 1) % smp::count, [] (auto& gen) {
-                    return gen();
+                    return gen(sstables::uuid_identifiers::no);
                 });
                 // this is why it is annoying for the internal functions in the test infrastructure to
                 // assume threaded execution
@@ -501,7 +500,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
 
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
             auto generation = sharded_gen.invoke_on(nr % smp::count, [] (auto& gen) {
-                return gen();
+                return gen(sstables::uuid_identifiers::no);
             }).get();
             make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation);
         }
@@ -512,12 +511,12 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
         auto max_generation_seen = highest_generation_seen(sstdir).get0();
-        sharded_gen.start(max_generation_seen->as_int()).get();
+        sharded_gen.start(max_generation_seen.as_int()).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         auto make_sstable = [&e, upload_path, &sharded_gen] (shard_id shard) {
             auto generation = sharded_gen.invoke_on(shard, [] (auto& gen) {
-                return gen();
+                return gen(sstables::uuid_identifiers::no);
             }).get();
             auto& cf = e.local_db().find_column_family("ks", "cf");
             data_dictionary::storage_options local;
@@ -554,7 +553,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
             // always generate the generation on shard#0
             auto generation = sharded_gen.invoke_on(0, [] (auto& gen) {
-                return gen();
+                return gen(sstables::uuid_identifiers::no);
             }).get();
             make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation);
         }
@@ -565,12 +564,12 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
         auto max_generation_seen = highest_generation_seen(sstdir).get0();
-        sharded_gen.start(max_generation_seen->as_int()).get();
+        sharded_gen.start(max_generation_seen.as_int()).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         auto make_sstable = [&e, upload_path, &sharded_gen] (shard_id shard) {
             auto generation = sharded_gen.invoke_on(shard, [] (auto& gen) {
-                return gen();
+                return gen(sstables::uuid_identifiers::no);
             }).get();
             auto& cf = e.local_db().find_column_family("ks", "cf");
             data_dictionary::storage_options local;
@@ -606,7 +605,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
 
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
             auto generation = sharded_gen.invoke_on(nr % smp::count, [] (auto& gen) {
-                return gen();
+                return gen(sstables::uuid_identifiers::no);
             }).get();
             make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation);
         }
@@ -617,12 +616,12 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
         auto max_generation_seen = highest_generation_seen(sstdir).get0();
-        sharded_gen.start(max_generation_seen->as_int()).get();
+        sharded_gen.start(max_generation_seen.as_int()).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         auto make_sstable = [&e, upload_path, &sharded_gen] (shard_id shard) {
             auto generation = sharded_gen.invoke_on(shard, [] (auto& gen) {
-                return gen();
+                return gen(sstables::uuid_identifiers::no);
             }).get();
             auto& cf = e.local_db().find_column_family("ks", "cf");
             data_dictionary::storage_options local;

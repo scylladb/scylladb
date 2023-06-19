@@ -94,6 +94,9 @@ public:
     }
 
 private:
+    virtual const table_schema_version& get_version(data_dictionary::database) const override {
+        throw std::bad_function_call();
+    }
     virtual std::optional<data_dictionary::keyspace> try_find_keyspace(data_dictionary::database db, std::string_view name) const override {
         auto& keyspaces = unwrap(db).keyspaces;
         auto it = std::find_if(keyspaces.begin(), keyspaces.end(), [name] (const keyspace& ks) { return ks.metadata->name() == name; });
@@ -353,7 +356,6 @@ mutation_opt read_schema_table_mutation(sharded<sstable_manager_service>& sst_ma
         sharded_parameter([&schema_factory] { return schema_factory(); }),
         sharded_parameter([] { return make_lw_shared<const data_dictionary::storage_options>(); }),
         schema_table_data_path,
-        sharded_parameter([] { return default_priority_class(); }),
         sharded_parameter([] { return default_io_error_handler_gen(); })).get();
     auto stop_sst_dirs = deferred_stop(sst_dirs);
 

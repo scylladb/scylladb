@@ -7,9 +7,9 @@ authors = ["ScyllaDB Contributors"]
 [tool.poetry.dependencies]
 python = "^3.7"
 pyyaml = "6.0"
-pygments = "2.7.4"
+pygments = "2.15.1"
 recommonmark = "0.7.1"
-sphinx-scylladb-theme = "~1.4.1"
+sphinx-scylladb-theme = "~1.5.1"
 sphinx-sitemap = "2.5.0"
 sphinx-autobuild = "2021.3.14"
 Sphinx = "4.3.2"

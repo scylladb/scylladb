@@ -78,12 +78,6 @@ public:
         _selected->reset();
     }
 
-    virtual sstring assignment_testable_source_context() const override {
-        auto&& name = _type->field_name(_field);
-        auto sname = std::string_view(reinterpret_cast<const char*>(name.data()), name.size());
-        return format("{}.{}", _selected, sname);
-    }
-
     field_selector(user_type type, size_t field, shared_ptr<selector> selected)
             : _type(std::move(type)), _field(field), _selected(std::move(selected)) {
     }

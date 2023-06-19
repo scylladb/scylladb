@@ -75,8 +75,6 @@
 #include "readers/multi_range.hh"
 #include "readers/multishard.hh"
 
-#include "lang/wasm.hh"
-
 using namespace std::chrono_literals;
 using namespace db;
 
@@ -321,7 +319,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _system_dirty_memory_manager(*this, 10 << 20, cfg.unspooled_dirty_soft_limit(), default_scheduling_group())
     , _dirty_memory_manager(*this, dbcfg.available_memory * 0.50, cfg.unspooled_dirty_soft_limit(), dbcfg.statement_scheduling_group)
     , _dbcfg(dbcfg)
-    , _flush_sg(backlog_controller::scheduling_group{dbcfg.memtable_scheduling_group, service::get_local_memtable_flush_priority()})
+    , _flush_sg(dbcfg.memtable_scheduling_group)
     , _memtable_controller(make_flush_controller(_cfg, _flush_sg, [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
         auto backlog = (_dirty_memory_manager.unspooled_dirty_memory()) / limit;
         if (_dirty_memory_manager.has_extraneous_flushes_requested()) {
@@ -459,11 +457,7 @@ float backlog_controller::backlog_of_shares(float shares) const {
 }
 
 void backlog_controller::update_controller(float shares) {
-    _scheduling_group.cpu.set_shares(shares);
-    if (!_inflight_update.available()) {
-        return; // next timer will fix it
-    }
-    _inflight_update = _scheduling_group.io.update_shares(uint32_t(shares));
+    _scheduling_group.set_shares(shares);
 }
 
 
@@ -2805,7 +2799,6 @@ flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::da
                 reader_permit permit,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr,
                 mutation_reader::forwarding fwd_mr) override {
             const auto shard = this_shard_id();
@@ -2850,17 +2843,16 @@ flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::da
             reader_permit permit,
             const dht::partition_range& pr,
             const query::partition_slice& ps,
-            const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding,
             mutation_reader::forwarding fwd_mr) {
         auto table_id = s->id();
-        return make_multishard_combining_reader_v2(make_shared<streaming_reader_lifecycle_policy>(db, table_id), std::move(s), std::move(permit), pr, ps, pc,
+        return make_multishard_combining_reader_v2(make_shared<streaming_reader_lifecycle_policy>(db, table_id), std::move(s), std::move(permit), pr, ps,
                 std::move(trace_state), fwd_mr);
     });
     auto&& full_slice = schema->full_slice();
     return make_flat_multi_range_reader(schema, std::move(permit), std::move(ms),
-            std::move(range_generator), std::move(full_slice), service::get_local_streaming_priority(), {}, mutation_reader::forwarding::no);
+            std::move(range_generator), std::move(full_slice), {}, mutation_reader::forwarding::no);
 }
 
 std::ostream& operator<<(std::ostream& os, gc_clock::time_point tp) {

@@ -271,6 +271,7 @@ def run_scylla_cmd(pid, dir):
         '--authenticator', 'PasswordAuthenticator',
         '--authorizer', 'CassandraAuthorizer',
         '--strict-allow-filtering', 'true',
+        '--strict-is-not-null-in-views', 'true',
         '--permissions-update-interval-in-ms', '100',
         '--permissions-validity-in-ms', '100',
         ], env)

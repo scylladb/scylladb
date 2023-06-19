@@ -1099,7 +1099,7 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
         const auto msg = format("Invalid amount of bind variables: expected {:d} received {:d}",
                 stmt->get_bound_terms(),
                 options.get_values_count());
-        tracing::trace(query_state.get_trace_state(), msg);
+        tracing::trace(query_state.get_trace_state(), "{}", msg);
         throw exceptions::invalid_request_exception(msg);
     }
 

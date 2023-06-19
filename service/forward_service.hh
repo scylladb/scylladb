@@ -16,7 +16,11 @@
 #include "message/messaging_service_fwd.hh"
 #include "query-request.hh"
 #include "replica/database_fwd.hh"
-#include "tracing/trace_state.hh"
+
+namespace tracing {
+class trace_state_ptr;
+class trace_info;
+}
 
 namespace service {
 
@@ -127,6 +131,8 @@ class forward_service : public seastar::peering_sharded_service<forward_service>
     } _stats;
     seastar::metrics::metric_groups _metrics;
 
+    bool _shutdown = false;
+
 public:
     forward_service(netw::messaging_service& ms, service::storage_proxy& p, distributed<replica::database> &db,
         const locator::shared_token_metadata& stm)
@@ -138,6 +144,7 @@ public:
         init_messaging_service();
     }
 
+    future<> shutdown();
     future<> stop();
 
     // Splits given `forward_request` and distributes execution of resulting

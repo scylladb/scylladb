@@ -7,7 +7,6 @@
  */
 
 #include "schema/schema_registry.hh"
-#include "service/priority_manager.hh"
 #include "multishard_mutation_query.hh"
 #include "mutation_query.hh"
 #include "replica/database.hh"
@@ -245,7 +244,6 @@ public:
             reader_permit permit,
             const dht::partition_range& pr,
             const query::partition_slice& ps,
-            const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr) override;
 
@@ -304,7 +302,6 @@ flat_mutation_reader_v2 read_context::create_reader(
         reader_permit permit,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
-        const io_priority_class& pc,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr) {
     const auto shard = this_shard_id();
@@ -348,7 +345,7 @@ flat_mutation_reader_v2 read_context::create_reader(
 
     rm.state = reader_state::used;
 
-    return table.as_mutation_source().make_reader_v2(std::move(schema), rm.rparts->permit, *rm.rparts->range, *rm.rparts->slice, pc,
+    return table.as_mutation_source().make_reader_v2(std::move(schema), rm.rparts->permit, *rm.rparts->range, *rm.rparts->slice,
             std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
 }
 
@@ -718,7 +715,7 @@ future<page_consume_result<ResultBuilder>> read_page(
             cmd.partition_limit);
 
     auto reader = make_multishard_combining_reader_v2(ctx, s, ctx->permit(), ranges.front(), cmd.slice,
-            service::get_local_sstable_query_read_priority(), trace_state, mutation_reader::forwarding(ranges.size() > 1));
+            trace_state, mutation_reader::forwarding(ranges.size() > 1));
     if (ranges.size() > 1) {
         reader = make_flat_mutation_reader_v2<multi_range_reader>(s, ctx->permit(), std::move(reader), ranges);
     }

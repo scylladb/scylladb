@@ -25,7 +25,6 @@
 #include "converting_mutation_partition_applier.hh"
 #include "schema/schema_registry.hh"
 #include "commitlog_entry.hh"
-#include "service/priority_manager.hh"
 #include "db/extensions.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 #include "validation.hh"
@@ -194,7 +193,7 @@ db::commitlog_replayer::impl::recover(sstring file, const sstring& fname_prefix)
     auto s = make_lw_shared<stats>();
     auto& exts = _db.local().extensions();
 
-    return db::commitlog::read_log_file(file, fname_prefix, service::get_local_commitlog_priority(),
+    return db::commitlog::read_log_file(file, fname_prefix,
             std::bind(&impl::process, this, s.get(), std::placeholders::_1),
             p, &exts).then_wrapped([s](future<> f) {
         try {

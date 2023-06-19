@@ -15,7 +15,7 @@
 #include "log.hh"
 #include "lang/wasm.hh"
 #include "lang/wasm_alien_thread_runner.hh"
-#include "seastar/core/posix.hh"
+#include <seastar/core/posix.hh>
 
 extern logging::logger wasm_logger;
 

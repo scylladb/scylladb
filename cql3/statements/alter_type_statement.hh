@@ -16,10 +16,6 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "schema/schema.hh"
 
-namespace service {
-class migration_manager;
-}
-
 namespace cql3 {
 
 class query_processor;
@@ -41,7 +37,7 @@ public:
     virtual const sstring& keyspace() const override;
 
 
-    future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>> prepare_schema_mutations(query_processor& qp, api::timestamp_type) const override;
+    future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type) const override;
 
     class add_or_alter;
     class renames;

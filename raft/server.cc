@@ -432,6 +432,30 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
             _stats.waiters_awoken++;
 
             if (!term) {
+                // The entry at index `eid.idx` got truncated away.
+                // Still, if the last snapshot's term is the same as `eid.term`, we can deduce
+                // that our entry `eid` got committed at index `eid.idx` and not some different entry.
+                // Indeed, let `snp_idx` be the last snapshot index (`snp_idx >= eid.idx`). Consider
+                // the entry that was committed at `snp_idx`; it had the same term as the snapshot's term,
+                // `snp_term`. If `eid.term == snp_term`, then we know that the entry at `snp_idx` was
+                // created by the same leader as the entry `eid`. A leader doesn't replace an entry
+                // that it previously appended, so when it appended the `snp_idx` entry, the entry at
+                // `eid.idx` was still `eid`. By the Log Matching Property, every log that had the entry
+                // `(snp_idx, snp_term)` also had the entry `eid`. Thus when the snapshot at `snp_idx`
+                // was created, it included the entry `eid`.
+                auto snap_idx = _fsm->log_last_snapshot_idx();
+                auto snap_term = _fsm->log_term_for(snap_idx);
+                assert(snap_term);
+                assert(snap_idx >= eid.idx);
+                if (type == wait_type::committed && snap_term == eid.term) {
+                    logger.trace("[{}] wait_for_entry {}.{}: entry got truncated away, but has the snapshot's term"
+                                 " (snapshot index: {})", id(), eid.term, eid.idx, snap_idx);
+                    co_return;
+
+                    // We don't do this for `wait_type::applied` - see below why.
+                }
+
+                logger.trace("[{}] wait_for_entry {}.{}: entry got truncated away", id(), eid.term, eid.idx);
                 throw commit_status_unknown();
             }
 
@@ -444,6 +468,12 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
                 // and we don't know if the entry was applied with `state_machine::apply`
                 // (we may've loaded a snapshot before we managed to apply the entry).
                 // As specified by `add_entry`, throw `commit_status_unknown` in this case.
+                //
+                // FIXME: replace this with a different exception type - `commit_status_unknown`
+                // gives too much uncertainty while we know that the entry was committed
+                // and had to be applied on at least one server. Some callers of `add_entry`
+                // need to know only that the current state includes that entry, whether it was done
+                // through `apply` on this server or through receiving a snapshot.
                 throw commit_status_unknown();
             }
 

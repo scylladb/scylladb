@@ -14,7 +14,6 @@
 #include "shared_sstable.hh"
 #include "dht/i_partitioner.hh"
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/io_priority_class.hh>
 #include <type_traits>
 #include <vector>
 
@@ -77,7 +76,6 @@ public:
         utils::estimated_histogram&,
         const dht::partition_range&,
         const query::partition_slice&,
-        const io_priority_class&,
         tracing::trace_state_ptr,
         streamed_mutation::forwarding,
         mutation_reader::forwarding) const;
@@ -167,7 +165,6 @@ public:
         utils::estimated_histogram&,
         const dht::partition_range&, // must be singular and contain a key
         const query::partition_slice&,
-        const io_priority_class&,
         tracing::trace_state_ptr,
         streamed_mutation::forwarding,
         mutation_reader::forwarding) const;
@@ -181,7 +178,6 @@ public:
         reader_permit,
         const dht::partition_range&,
         const query::partition_slice&,
-        const io_priority_class&,
         tracing::trace_state_ptr,
         streamed_mutation::forwarding,
         mutation_reader::forwarding,
@@ -193,7 +189,6 @@ public:
         reader_permit,
         const dht::partition_range&,
         const query::partition_slice&,
-        const io_priority_class&,
         tracing::trace_state_ptr,
         streamed_mutation::forwarding,
         mutation_reader::forwarding,
@@ -202,7 +197,6 @@ public:
     flat_mutation_reader_v2 make_crawling_reader(
             schema_ptr,
             reader_permit,
-            const io_priority_class&,
             tracing::trace_state_ptr,
             read_monitor_generator& rmg = default_read_monitor_generator()) const;
 

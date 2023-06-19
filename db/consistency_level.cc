@@ -344,15 +344,6 @@ filter_for_query(consistency_level cl,
     return selected_endpoints;
 }
 
-inet_address_vector_replica_set filter_for_query(consistency_level cl,
-        const locator::effective_replication_map& erm,
-        inet_address_vector_replica_set& live_endpoints,
-        const inet_address_vector_replica_set& preferred_endpoints,
-        const gms::gossiper& g,
-        replica::column_family* cf) {
-    return filter_for_query(cl, erm, live_endpoints, preferred_endpoints, read_repair_decision::NONE, g, nullptr, cf);
-}
-
 bool
 is_sufficient_live_nodes(consistency_level cl,
                          const locator::effective_replication_map& erm,

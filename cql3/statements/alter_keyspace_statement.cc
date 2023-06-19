@@ -74,13 +74,13 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
 #endif
 }
 
-future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
+cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type ts) const {
     try {
         auto old_ksm = qp.db().find_keyspace(_name).metadata();
         const auto& tm = *qp.proxy().get_token_metadata_ptr();
 
-        auto m = qp.get_migration_manager().prepare_keyspace_update_announcement(_attrs->as_ks_metadata_update(old_ksm, tm), ts);
+        auto m = mm.prepare_keyspace_update_announcement(_attrs->as_ks_metadata_update(old_ksm, tm), ts);
 
         using namespace cql_transport;
         auto ret = ::make_shared<event::schema_change>(
@@ -88,9 +88,9 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
                 event::schema_change::target_type::KEYSPACE,
                 keyspace());
 
-        return make_ready_future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>(std::make_pair(std::move(ret), std::move(m)));
+        return make_ready_future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>()));
     } catch (data_dictionary::no_such_keyspace& e) {
-        return make_exception_future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>(exceptions::invalid_request_exception("Unknown keyspace " + _name));
+        return make_exception_future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>(exceptions::invalid_request_exception("Unknown keyspace " + _name));
     }
 }
 

@@ -155,13 +155,13 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_
 
     if (is_any_bucket_interesting(buckets, min_threshold)) {
         std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-        return sstables::compaction_descriptor(std::move(most_interesting), service::get_local_compaction_priority());
+        return sstables::compaction_descriptor(std::move(most_interesting));
     }
 
     // If we are not enforcing min_threshold explicitly, try any pair of SStables in the same tier.
     if (!table_s.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
         std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
-        return sstables::compaction_descriptor(std::move(most_interesting), service::get_local_compaction_priority());
+        return sstables::compaction_descriptor(std::move(most_interesting));
     }
 
     if (!table_s.tombstone_gc_enabled()) {
@@ -185,7 +185,7 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_
         auto it = std::min_element(sstables.begin(), sstables.end(), [] (auto& i, auto& j) {
             return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
         });
-        return sstables::compaction_descriptor({ *it }, service::get_local_compaction_priority());
+        return sstables::compaction_descriptor({ *it });
     }
     return sstables::compaction_descriptor();
 }
@@ -229,7 +229,7 @@ size_tiered_compaction_strategy::most_interesting_bucket(const std::vector<sstab
 }
 
 compaction_descriptor
-size_tiered_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, const ::io_priority_class& iop, reshape_mode mode) const
+size_tiered_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_mode mode) const
 {
     size_t offstrategy_threshold = std::max(schema->min_compaction_threshold(), 4);
     size_t max_sstables = std::max(schema->max_compaction_threshold(), int(offstrategy_threshold));
@@ -245,7 +245,7 @@ size_tiered_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
         // All sstables can be reshaped at once if the amount of overlapping will not cause memory usage to be high,
         // which is possible because partitioned set is able to incrementally open sstables during compaction
         if (sstable_set_overlapping_count(schema, input) <= max_sstables) {
-            compaction_descriptor desc(std::move(input), iop);
+            compaction_descriptor desc(std::move(input));
             desc.options = compaction_type_options::make_reshape();
             return desc;
         }
@@ -261,7 +261,7 @@ size_tiered_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
                 });
                 bucket.resize(max_sstables);
             }
-            compaction_descriptor desc(std::move(bucket), iop);
+            compaction_descriptor desc(std::move(bucket));
             desc.options = compaction_type_options::make_reshape();
             return desc;
         }
@@ -289,7 +289,7 @@ size_tiered_compaction_strategy::get_cleanup_compaction_jobs(table_state& table_
             unsigned needed = std::min(remaining, max_threshold);
             std::vector<shared_sstable> sstables;
             std::move(it, it + needed, std::back_inserter(sstables));
-            ret.push_back(compaction_descriptor(std::move(sstables), service::get_local_compaction_priority()));
+            ret.push_back(compaction_descriptor(std::move(sstables)));
             std::advance(it, needed);
         }
     }

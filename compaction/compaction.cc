@@ -37,7 +37,6 @@
 #include "compaction_manager.hh"
 #include "schema/schema.hh"
 #include "db/system_keyspace.hh"
-#include "service/priority_manager.hh"
 #include "db_clock.hh"
 #include "mutation/mutation_compactor.hh"
 #include "leveled_manifest.hh"
@@ -472,7 +471,6 @@ protected:
     mutation_source_metadata _ms_metadata = {};
     compaction_sstable_replacer_fn _replacer;
     run_id _run_identifier;
-    ::io_priority_class _io_priority;
     // optional clone of sstable set to be used for expiration purposes, so it will be set if expiration is enabled.
     std::optional<sstable_set> _sstable_set;
     // used to incrementally calculate max purgeable timestamp, as we iterate through decorated keys.
@@ -505,7 +503,6 @@ protected:
         , _can_split_large_partition(descriptor.can_split_large_partition)
         , _replacer(std::move(descriptor.replacer))
         , _run_identifier(descriptor.run_identifier)
-        , _io_priority(descriptor.io_priority)
         , _sstable_set(std::move(descriptor.all_sstables_snapshot))
         , _selector(_sstable_set ? _sstable_set->make_incremental_selector() : std::optional<sstable_set::incremental_selector>{})
         , _compacting_for_max_purgeable_func(std::unordered_set<shared_sstable>(_sstables.begin(), _sstables.end()))
@@ -584,12 +581,11 @@ protected:
     compaction_writer create_gc_compaction_writer() const {
         auto sst = _sstable_creator(this_shard_id());
 
-        auto&& priority = _io_priority;
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
         sstable_writer_config cfg = _table_s.configure_writer("garbage_collection");
         cfg.run_identifier = _run_identifier;
         cfg.monitor = monitor.get();
-        auto writer = sst->get_writer(*schema(), partitions_per_sstable(), cfg, get_encoding_stats(), priority);
+        auto writer = sst->get_writer(*schema(), partitions_per_sstable(), cfg, get_encoding_stats());
         return compaction_writer(std::move(monitor), std::move(writer), std::move(sst));
     }
 
@@ -1043,7 +1039,6 @@ public:
                 _permit,
                 query::full_partition_range,
                 _schema->full_slice(),
-                _io_priority,
                 tracing::trace_state_ptr(),
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no,
@@ -1063,7 +1058,7 @@ public:
         setup_new_sstable(sst);
 
         sstable_writer_config cfg = make_sstable_writer_config(compaction_type::Reshape);
-        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority), sst};
+        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats()), sst};
     }
 
     virtual void stop_sstable_writer(compaction_writer* writer) override {
@@ -1089,7 +1084,6 @@ public:
                 _permit,
                 query::full_partition_range,
                 _schema->full_slice(),
-                _io_priority,
                 tracing::trace_state_ptr(),
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no,
@@ -1111,7 +1105,7 @@ public:
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
         sstable_writer_config cfg = make_sstable_writer_config(_type);
         cfg.monitor = monitor.get();
-        return compaction_writer{std::move(monitor), sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats(), _io_priority), sst};
+        return compaction_writer{std::move(monitor), sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats()), sst};
     }
 
     virtual void stop_sstable_writer(compaction_writer* writer) override {
@@ -1478,7 +1472,7 @@ public:
     }
 
     flat_mutation_reader_v2 make_sstable_reader() const override {
-        auto crawling_reader = _compacting->make_crawling_reader(_schema, _permit, _io_priority, nullptr);
+        auto crawling_reader = _compacting->make_crawling_reader(_schema, _permit, nullptr);
         return make_flat_mutation_reader_v2<reader>(std::move(crawling_reader), _options.operation_mode, _validation_errors);
     }
 
@@ -1497,7 +1491,7 @@ public:
             return end_consumer;
         }
         return [this, end_consumer = std::move(end_consumer)] (flat_mutation_reader_v2 reader) mutable -> future<> {
-            auto cfg = mutation_writer::segregate_config{_io_priority, memory::stats().total_memory() / 10};
+            auto cfg = mutation_writer::segregate_config{memory::stats().total_memory() / 10};
             return mutation_writer::segregate_by_partition(std::move(reader), cfg,
                     [consumer = std::move(end_consumer), this] (flat_mutation_reader_v2 rd) {
                 ++_bucket_count;
@@ -1574,7 +1568,6 @@ public:
                 _permit,
                 query::full_partition_range,
                 _schema->full_slice(),
-                _io_priority,
                 nullptr,
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no);
@@ -1607,7 +1600,7 @@ public:
         auto cfg = make_sstable_writer_config(compaction_type::Reshard);
         // sstables generated for a given shard will share the same run identifier.
         cfg.run_identifier = _run_identifiers.at(shard);
-        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(shard), cfg, get_encoding_stats(), _io_priority, shard), sst};
+        return compaction_writer{sst->get_writer(*_schema, partitions_per_sstable(shard), cfg, get_encoding_stats(), shard), sst};
     }
 
     void stop_sstable_writer(compaction_writer* writer) override {
@@ -1687,7 +1680,7 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
     for (const auto& sst : descriptor.sstables) {
         clogger.info("Scrubbing in validate mode {}", sst->get_filename());
 
-        validation_errors += co_await sst->validate(permit, descriptor.io_priority, cdata.abort, [&schema] (sstring what) {
+        validation_errors += co_await sst->validate(permit, cdata.abort, [&schema] (sstring what) {
             scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, what);
         });
         // Did validation actually finish because aborted?

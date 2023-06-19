@@ -9,11 +9,11 @@
 #pragma once
 
 #include <seastar/core/iostream.hh>
-#include <seastar/core/io_priority_class.hh>
 #include "reader_permit.hh"
 #include "sstables/index_reader.hh"
 #include "sstables/shared_sstable.hh"
-#include "tracing/trace_state.hh"
+
+namespace tracing { class trace_state_ptr; }
 
 namespace sstables {
 namespace mx {
@@ -45,7 +45,7 @@ struct partition_reversing_data_source {
 // The source must be closed before destruction unless `get()` was never called.
 partition_reversing_data_source make_partition_reversing_data_source(
     const schema& s, shared_sstable sst, index_reader& ir, uint64_t pos, size_t len,
-    reader_permit permit, const io_priority_class& io_priority, tracing::trace_state_ptr trace_state);
+    reader_permit permit, tracing::trace_state_ptr trace_state);
 
 }
 }

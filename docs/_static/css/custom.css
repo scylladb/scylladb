@@ -1,17 +1,11 @@
 /* Override theme styles */
 
-.cloud-card img {
-    right: -30px !important;
+.topic-box--product p {
+    margin-bottom: 0;
 }
 
-.enterprise-card img {
-    right: -25px !important;
-}
-
-@media  screen and (min-width: 1024px) {
-    .cloud-card .card,
-    .enterprise-card .card,
-    .opensource-card .card {
-        padding: 20px 30px !important;
+@media screen and (min-width: 640px) {
+    .hero__title {
+        max-width: 550px;
     }
 }

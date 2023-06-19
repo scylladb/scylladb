@@ -13,10 +13,11 @@
 #include "query-request.hh"
 #include "schema/schema_fwd.hh"
 #include "secondary_index_manager.hh"
-#include "tracing/tracing.hh"
 #include "view_info.hh"
 
 #include <memory>
+
+namespace tracing { class trace_state_ptr; }
 
 namespace db::index {
 
@@ -103,7 +104,6 @@ class built_indexes_virtual_reader {
                 replica::column_family& built_views,
                 const dht::partition_range& range,
                 const query::partition_slice& slice,
-                const io_priority_class& pc,
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd,
                 mutation_reader::forwarding fwd_mr)
@@ -116,7 +116,6 @@ class built_indexes_virtual_reader {
                         std::move(permit),
                         range,
                         _view_names_slice,
-                        pc,
                         std::move(trace_state),
                         fwd,
                         fwd_mr)) {
@@ -217,7 +216,6 @@ public:
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            const io_priority_class& pc,
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr) {
@@ -228,7 +226,6 @@ public:
                 _db.find_column_family(s->ks_name(), system_keyspace::v3::BUILT_VIEWS),
                 range,
                 slice,
-                pc,
                 std::move(trace_state),
                 fwd,
                 fwd_mr);

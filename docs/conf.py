@@ -72,7 +72,7 @@ notfound_urls_prefix = ""
 
 # -- Options for sitemap extension ---------------------------------------
 
-sitemap_url_scheme = "stable/{link}"
+sitemap_url_scheme = "/stable/{link}"
 
 # -- Options for multiversion extension ----------------------------------
 
@@ -110,7 +110,9 @@ html_css_files = [
 # documentation.
 html_theme_options = {
     "conf_py_path": "docs/",
+    'hide_banner': 'true',
     "hide_edit_this_page_button": "false",
+    "hide_feedback_buttons": 'false',
     "github_issues_repository": "scylladb/scylladb",
     "github_repository": "scylladb/scylladb",
     "versions_unstable": UNSTABLE_VERSIONS,
@@ -118,7 +120,6 @@ html_theme_options = {
     'banner_button_text': 'Register for Free',
     'banner_button_url': 'https://lp.scylladb.com/university-live-2023-03-registration?siteplacement=docs',
     'banner_title_text': 'ScyllaDB University LIVE, FREE Virtual Training Event | March 21',
-    'hide_banner': 'true',
     "collapse_navigation": 'true',
 }
 

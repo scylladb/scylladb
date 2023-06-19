@@ -208,9 +208,8 @@ static std::string lsi_name(const std::string& table_name, std::string_view inde
 
 /** Extract table name from a request.
  *  Most requests expect the table's name to be listed in a "TableName" field.
- *  This convenience function returns the name, with appropriate validation
- *  and api_error in case the table name is missing or not a string, or
- *  doesn't pass validate_table_name().
+ *  This convenience function returns the name or api_error in case the
+ *  table name is missing or not a string.
  */
 static std::optional<std::string> find_table_name(const rjson::value& request) {
     const rjson::value* table_name_value = rjson::find(request, "TableName");
@@ -221,7 +220,6 @@ static std::optional<std::string> find_table_name(const rjson::value& request) {
         throw api_error::validation("Non-string TableName field in request");
     }
     std::string table_name = table_name_value->GetString();
-    validate_table_name(table_name);
     return table_name;
 }
 
@@ -248,6 +246,10 @@ schema_ptr executor::find_table(service::storage_proxy& proxy, const rjson::valu
     try {
         return proxy.data_dictionary().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + sstring(*table_name), *table_name);
     } catch(data_dictionary::no_such_column_family&) {
+        // DynamoDB returns validation error even when table does not exist
+        // and the table name is invalid.
+        validate_table_name(table_name.value());
+
         throw api_error::resource_not_found(
                 format("Requested resource not found: Table: {} not found", *table_name));
     }
@@ -298,6 +300,10 @@ get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
         try {
             return { proxy.data_dictionary().find_schema(sstring(internal_ks_name), sstring(internal_table_name)), type };
         } catch (data_dictionary::no_such_column_family&) {
+            // DynamoDB returns validation error even when table does not exist
+            // and the table name is invalid.
+            validate_table_name(table_name);
+
             throw api_error::resource_not_found(
                 format("Requested resource not found: Internal table: {}.{} not found", internal_ks_name, internal_table_name));
         }
@@ -543,6 +549,10 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     elogger.trace("Deleting table {}", request);
 
     std::string table_name = get_table_name(request);
+    // DynamoDB returns validation error even when table does not exist
+    // and the table name is invalid.
+    validate_table_name(table_name);
+
     std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
     tracing::add_table_name(trace_state, keyspace_name, table_name);
     auto& p = _proxy.container();
@@ -876,6 +886,8 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     // (e.g., verify that this table doesn't already exist) - we can only
     // do this further down - after taking group0_guard.
     std::string table_name = get_table_name(request);
+    validate_table_name(table_name);
+
     if (table_name.find(executor::INTERNAL_TABLE_PREFIX) == 0) {
         co_return api_error::validation(format("Prefix {} is reserved for accessing internal tables", executor::INTERNAL_TABLE_PREFIX));
     }
@@ -4385,6 +4397,10 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
     try {
         schema = _proxy.data_dictionary().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + table_name, table_name);
     } catch(data_dictionary::no_such_column_family&) {
+        // DynamoDB returns validation error even when table does not exist
+        // and the table name is invalid.
+        validate_table_name(table_name);
+
         throw api_error::table_not_found(
                 format("Table {} not found", table_name));
     }

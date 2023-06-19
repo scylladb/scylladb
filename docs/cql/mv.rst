@@ -82,8 +82,7 @@ statement is limited in a number of ways:
 - The ``WHERE`` clause has the following restrictions:
 
   - It cannot include any :token:`bind_marker`.
-  - The columns that are not part of the *base table* primary key can only be restricted by an ``IS NOT NULL``
-    restriction. No other restriction is allowed.
+  - The columns that are not part of the *view table* primary key can't be restricted.
   - As the columns that are part of the *view* primary key cannot be null, they must always be at least restricted by a
     ``IS NOT NULL`` restriction (or any other restriction, but they must have one).
   - They can also be restricted by relational operations (=, >, <).
@@ -147,6 +146,20 @@ MV Options
 A materialized view is internally implemented by a table, and as such, creating a MV allows the :ref:`same options than
 creating a table <create-table-options>`.
 
+Additionally, the following Scylla-specific options are supported:
+
+.. list-table::
+   :widths: 20 10 10 60
+   :header-rows: 1
+
+   * - Option
+     - Kind
+     - Default
+     - Description
+   * - ``synchronous_updates``
+     - simple
+     - false
+     - When true, view updates are applied synchronously; otherwise, view updates may be applied in the background
 
 .. _alter-materialized-view-statement:
 

@@ -9,7 +9,7 @@
 #include "lang/wasm.hh"
 #include "lang/wasm_instance_cache.hh"
 #include "rust/wasmtime_bindings.hh"
-#include "seastar/coroutine/maybe_yield.hh"
+#include <seastar/coroutine/maybe_yield.hh>
 #include <chrono>
 #include <seastar/core/lowres_clock.hh>
 #include "test/lib/scylla_test_case.hh"

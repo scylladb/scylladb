@@ -124,8 +124,8 @@ const sstring& drop_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-drop_type_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
+drop_type_statement::prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type ts) const {
     validate_while_executing(qp);
 
     data_dictionary::database db = qp.db();
@@ -141,7 +141,7 @@ drop_type_statement::prepare_schema_mutations(query_processor& qp, api::timestam
 
     // Can happen with if_exists
     if (to_drop != all_types.end()) {
-        m = co_await qp.get_migration_manager().prepare_type_drop_announcement(to_drop->second, ts);
+        m = co_await mm.prepare_type_drop_announcement(to_drop->second, ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(
@@ -151,7 +151,7 @@ drop_type_statement::prepare_schema_mutations(query_processor& qp, api::timestam
                 _name.get_string_type_name());
     }
 
-    co_return std::make_pair(std::move(ret), std::move(m));
+    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

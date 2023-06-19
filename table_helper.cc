@@ -16,7 +16,7 @@
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
 
-future<> table_helper::setup_table(cql3::query_processor& qp, const sstring& create_cql) {
+future<> table_helper::setup_table(cql3::query_processor& qp, service::migration_manager& mm, const sstring& create_cql) {
     auto db = qp.db();
 
     auto parsed = cql3::query_processor::parse_statement(create_cql);
@@ -31,8 +31,6 @@ future<> table_helper::setup_table(cql3::query_processor& qp, const sstring& cre
     if (db.has_schema(schema->ks_name(), schema->cf_name())) {
         co_return;
     }
-
-    auto& mm = qp.get_migration_manager();
 
     auto group0_guard = co_await mm.start_group0_operation();
     auto ts = group0_guard.write_timestamp();
@@ -58,7 +56,7 @@ future<> table_helper::setup_table(cql3::query_processor& qp, const sstring& cre
     } catch (...) {}
 }
 
-future<> table_helper::cache_table_info(cql3::query_processor& qp, service::query_state& qs) {
+future<> table_helper::cache_table_info(cql3::query_processor& qp, service::migration_manager& mm, service::query_state& qs) {
     if (!_prepared_stmt) {
         // if prepared statement has been invalidated - drop cached pointers
         _insert_stmt = nullptr;
@@ -89,11 +87,11 @@ future<> table_helper::cache_table_info(cql3::query_processor& qp, service::quer
             _insert_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(cql_stmt);
             _is_fallback_stmt = true;
         });
-    }).handle_exception([this, &qp] (auto eptr) {
+    }).handle_exception([this, &qp, &mm] (auto eptr) {
         // One of the possible causes for an error here could be the table that doesn't exist.
         //FIXME: discarded future.
-        (void)qp.container().invoke_on(0, [create_cql = _create_cql] (cql3::query_processor& qp) -> future<> {
-            co_return co_await table_helper::setup_table(qp, create_cql);
+        (void)qp.container().invoke_on(0, [&mm = mm.container(), create_cql = _create_cql] (cql3::query_processor& qp) -> future<> {
+            co_return co_await table_helper::setup_table(qp, mm.local(), create_cql);
         });
 
         // We throw the bad_column_family exception because the caller
@@ -108,8 +106,8 @@ future<> table_helper::cache_table_info(cql3::query_processor& qp, service::quer
     });
 }
 
-future<> table_helper::insert(cql3::query_processor& qp, service::query_state& qs, noncopyable_function<cql3::query_options ()> opt_maker) {
-    return cache_table_info(qp, qs).then([this, &qp, &qs, opt_maker = std::move(opt_maker)] () mutable {
+future<> table_helper::insert(cql3::query_processor& qp, service::migration_manager& mm, service::query_state& qs, noncopyable_function<cql3::query_options ()> opt_maker) {
+    return cache_table_info(qp, mm, qs).then([this, &qp, &qs, opt_maker = std::move(opt_maker)] () mutable {
         return do_with(opt_maker(), [this, &qp, &qs] (auto& opts) {
             opts.prepare(_prepared_stmt->bound_names);
             return _insert_stmt->execute(qp, qs, opts);
@@ -117,7 +115,7 @@ future<> table_helper::insert(cql3::query_processor& qp, service::query_state& q
     }).discard_result();
 }
 
-future<> table_helper::setup_keyspace(cql3::query_processor& qp, std::string_view keyspace_name, sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
+future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name, sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
     if (this_shard_id() != 0) {
         co_return;
     }
@@ -129,7 +127,6 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, std::string_vie
     }
 
     data_dictionary::database db = qp.db();
-    auto& mm = qp.get_migration_manager();
 
     if (!db.has_keyspace(keyspace_name)) {
         auto group0_guard = co_await mm.start_group0_operation();
@@ -146,7 +143,7 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, std::string_vie
     qs.get_client_state().set_keyspace(db.real_database(), keyspace_name);
 
     // Create tables
-    co_await coroutine::parallel_for_each(tables, [&qp] (table_helper* t) {
-        return table_helper::setup_table(qp, t->_create_cql);
+    co_await coroutine::parallel_for_each(tables, [&qp, &mm] (table_helper* t) {
+        return table_helper::setup_table(qp, mm, t->_create_cql);
     });
 }

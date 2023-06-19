@@ -46,13 +46,13 @@ const sstring& drop_keyspace_statement::keyspace() const
     return _keyspace;
 }
 
-future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-drop_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
+drop_keyspace_statement::prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type ts) const {
     std::vector<mutation> m;
     ::shared_ptr<cql_transport::event::schema_change> ret;
 
     try {
-        m = co_await qp.get_migration_manager().prepare_keyspace_drop_announcement(_keyspace, ts);
+        m = co_await mm.prepare_keyspace_drop_announcement(_keyspace, ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(
@@ -65,7 +65,7 @@ drop_keyspace_statement::prepare_schema_mutations(query_processor& qp, api::time
         }
     }
 
-    co_return std::make_pair(std::move(ret), std::move(m));
+    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

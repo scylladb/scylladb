@@ -371,7 +371,7 @@ future<sstables::compaction_result> compaction_task_executor::compact_sstables(s
             }
         }
         if (!sstables_requiring_cleanup.empty()) {
-            cmlog.info("The following SSTables require cleaned up in this compaction: {}", sstables_requiring_cleanup);
+            cmlog.info("The following SSTables require cleanup in this compaction: {}", sstables_requiring_cleanup);
             if (!cs.owned_ranges_ptr) {
                 on_internal_error_noexcept(cmlog, "SSTables require cleanup but compaction state has null owned ranges");
             }
@@ -433,7 +433,7 @@ protected:
     // it cannot be the other way around, or minor compaction for this table would be
     // prevented while an ongoing major compaction doesn't release the semaphore.
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
-        co_await coroutine::switch_to(_cm.maintenance_sg().cpu);
+        co_await coroutine::switch_to(_cm.maintenance_sg());
 
         switch_state(state::pending);
         auto units = co_await acquire_semaphore(_cm._maintenance_ops_sem);
@@ -715,7 +715,7 @@ sstables::compaction_stopped_exception compaction_task_executor::make_compaction
 compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm)
     : _task_manager_module(make_shared<task_manager_module>(tm))
     , _cfg(std::move(cfg))
-    , _compaction_submission_timer(compaction_sg().cpu, compaction_submission_callback())
+    , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
     , _compaction_controller(make_compaction_controller(compaction_sg(), static_shares(), [this] () -> float {
         _last_backlog = backlog();
         auto b = _last_backlog / available_memory();
@@ -752,7 +752,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
 compaction_manager::compaction_manager(tasks::task_manager& tm)
     : _task_manager_module(make_shared<task_manager_module>(tm))
     , _cfg(config{ .available_memory = 1 })
-    , _compaction_submission_timer(compaction_sg().cpu, compaction_submission_callback())
+    , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
     , _compaction_controller(make_compaction_controller(compaction_sg(), 1, [] () -> float { return 1.0; }))
     , _backlog_manager(_compaction_controller)
     , _throughput_updater(serialized_action([this] { return update_throughput(throughput_mbs()); }))
@@ -774,7 +774,7 @@ compaction_manager::~compaction_manager() {
 
 future<> compaction_manager::update_throughput(uint32_t value_mbs) {
     uint64_t bps = ((uint64_t)(value_mbs != 0 ? value_mbs : std::numeric_limits<uint32_t>::max())) << 20;
-    return compaction_sg().io.update_bandwidth(bps).then_wrapped([value_mbs] (auto f) {
+    return compaction_sg().update_io_bandwidth(bps).then_wrapped([value_mbs] (auto f) {
         if (f.failed()) {
             cmlog.warn("Couldn't update compaction bandwidth: {}", f.get_exception());
         } else if (value_mbs != 0) {
@@ -1011,7 +1011,7 @@ public:
     {}
 protected:
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
-        co_await coroutine::switch_to(_cm.compaction_sg().cpu);
+        co_await coroutine::switch_to(_cm.compaction_sg());
 
         for (;;) {
             if (!can_proceed()) {
@@ -1186,8 +1186,7 @@ private:
         });
 
         auto get_next_job = [&] () -> std::optional<sstables::compaction_descriptor> {
-            auto& iop = service::get_local_streaming_priority(); // run reshape in maintenance mode
-            auto desc = t.get_compaction_strategy().get_reshaping_job(reshape_candidates, t.schema(), iop, sstables::reshape_mode::strict);
+            auto desc = t.get_compaction_strategy().get_reshaping_job(reshape_candidates, t.schema(), sstables::reshape_mode::strict);
             return desc.sstables.size() ? std::make_optional(std::move(desc)) : std::nullopt;
         };
 
@@ -1244,7 +1243,7 @@ private:
     }
 protected:
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
-        co_await coroutine::switch_to(_cm.maintenance_sg().cpu);
+        co_await coroutine::switch_to(_cm.maintenance_sg());
 
         for (;;) {
             if (!can_proceed()) {
@@ -1334,14 +1333,14 @@ protected:
 
 private:
     future<sstables::compaction_result> rewrite_sstable(const sstables::shared_sstable sst) {
-        co_await coroutine::switch_to(_cm.compaction_sg().cpu);
+        co_await coroutine::switch_to(_cm.compaction_sg());
 
         for (;;) {
             switch_state(state::active);
             auto sstable_level = sst->get_sstable_level();
             auto run_identifier = sst->run_identifier();
             // FIXME: this compaction should run with maintenance priority.
-            auto descriptor = sstables::compaction_descriptor({ sst }, service::get_local_compaction_priority(),
+            auto descriptor = sstables::compaction_descriptor({ sst },
                 sstable_level, sstables::compaction_descriptor::default_max_sstable_bytes, run_identifier, _options, _owned_ranges_ptr);
 
             // Releases reference to cleaned sstable such that respective used disk space can be freed.
@@ -1432,14 +1431,13 @@ protected:
 
 private:
     future<sstables::compaction_result> validate_sstable(const sstables::shared_sstable& sst) {
-        co_await coroutine::switch_to(_cm.maintenance_sg().cpu);
+        co_await coroutine::switch_to(_cm.maintenance_sg());
 
         switch_state(state::active);
         std::exception_ptr ex;
         try {
             auto desc = sstables::compaction_descriptor(
                     { sst },
-                    _cm.maintenance_sg().io,
                     sst->get_sstable_level(),
                     sstables::compaction_descriptor::default_max_sstable_bytes,
                     sst->run_identifier(),
@@ -1525,7 +1523,7 @@ protected:
     }
 private:
     future<> run_cleanup_job(sstables::compaction_descriptor descriptor) {
-        co_await coroutine::switch_to(_cm.compaction_sg().cpu);
+        co_await coroutine::switch_to(_cm.compaction_sg());
 
         // Releases reference to cleaned files such that respective used disk space can be freed.
         auto release_exhausted = [this, &descriptor] (std::vector<sstables::shared_sstable> exhausted_sstables) mutable {
@@ -1590,6 +1588,10 @@ bool needs_cleanup(const sstables::shared_sstable& sst,
 
 bool compaction_manager::update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges) {
     auto& cs = get_compaction_state(&t);
+    if (sst->is_shared()) {
+        throw std::runtime_error(format("Shared SSTable {} cannot be marked as requiring cleanup, as it can only be processed by resharding",
+                                        sst->get_filename()));
+    }
     if (needs_cleanup(sst, sorted_owned_ranges)) {
         cs.sstables_requiring_cleanup.insert(sst);
         return true;

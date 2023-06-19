@@ -9,7 +9,6 @@
  */
 
 #include <seastar/core/distributed.hh>
-#include "service/priority_manager.hh"
 #include "gms/gossiper.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_result_future.hh"
@@ -95,7 +94,7 @@ future<> stream_manager::stop() {
 
 future<> stream_manager::update_io_throughput(uint32_t value_mbs) {
     uint64_t bps = ((uint64_t)(value_mbs != 0 ? value_mbs : std::numeric_limits<uint32_t>::max())) << 20;
-    return service::get_local_streaming_priority().update_bandwidth(bps).then_wrapped([value_mbs] (auto f) {
+    return _streaming_group.update_io_bandwidth(bps).then_wrapped([value_mbs] (auto f) {
         if (f.failed()) {
             sslog.warn("Couldn't update streaming bandwidth: {}", f.get_exception());
         } else if (value_mbs != 0) {

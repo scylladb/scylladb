@@ -20,6 +20,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include "gms/gossiper.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
+#include "utils/error_injection.hh"
 
 namespace gms {
 
@@ -70,6 +71,13 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
     }
     if (!cfg.check_experimental(db::experimental_features_t::feature::TABLETS)) {
         fcfg._disabled_features.insert("TABLETS"s);
+    }
+    if (!cfg.uuid_sstable_identifiers_enabled()) {
+        fcfg._disabled_features.insert("UUID_SSTABLE_IDENTIFIERS"s);
+    }
+
+    if (!utils::get_local_injector().enter("features_enable_test_feature")) {
+        fcfg._disabled_features.insert("TEST_ONLY_FEATURE"s);
     }
 
     return fcfg;

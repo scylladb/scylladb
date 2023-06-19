@@ -65,19 +65,19 @@ std::unique_ptr<prepared_statement> create_function_statement::prepare(data_dict
     return std::make_unique<prepared_statement>(make_shared<create_function_statement>(*this));
 }
 
-future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-create_function_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
+create_function_statement::prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
     std::vector<mutation> m;
 
     auto func = dynamic_pointer_cast<functions::user_function>(co_await validate_while_executing(qp));
 
     if (func) {
-        m = co_await qp.get_migration_manager().prepare_new_function_announcement(func, ts);
+        m = co_await mm.prepare_new_function_announcement(func, ts);
         ret = create_schema_change(*func, true);
     }
 
-    co_return std::make_pair(std::move(ret), std::move(m));
+    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
 }
 
 create_function_statement::create_function_statement(functions::function_name name, sstring language, sstring body,

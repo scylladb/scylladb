@@ -103,10 +103,10 @@ future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutatio
     co_return m;
 }
 
-future<std::pair<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>>>
-alter_type_statement::prepare_schema_mutations(query_processor& qp, api::timestamp_type ts) const {
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
+alter_type_statement::prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type ts) const {
     try {
-        auto m = co_await prepare_announcement_mutations(qp.db(), qp.get_migration_manager(), ts);
+        auto m = co_await prepare_announcement_mutations(qp.db(), mm, ts);
 
         using namespace cql_transport;
         auto ret = ::make_shared<event::schema_change>(
@@ -115,7 +115,7 @@ alter_type_statement::prepare_schema_mutations(query_processor& qp, api::timesta
                 keyspace(),
                 _name.get_string_type_name());
 
-        co_return std::make_pair(std::move(ret), std::move(m));
+        co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
     } catch(data_dictionary::no_such_keyspace& e) {
         auto&& ex = std::make_exception_ptr(exceptions::invalid_request_exception(format("Cannot alter type in unknown keyspace {}", keyspace())));
         co_return coroutine::exception(std::move(ex));

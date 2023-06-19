@@ -316,6 +316,8 @@ struct function_call {
 };
 
 struct cast {
+    enum class cast_style { c, sql };
+    cast_style style;
     expression arg;
     std::variant<data_type, shared_ptr<cql3_type::raw>> type;
 
@@ -325,6 +327,7 @@ struct cast {
 struct field_selection {
     expression structure;
     shared_ptr<column_identifier_raw> field;
+    size_t field_idx = 0; // invalid before prepare
     data_type type; // may be null before prepare
 
     friend bool operator==(const field_selection&, const field_selection&) = default;
@@ -701,6 +704,9 @@ expression adjust_for_collection_as_maps(const expression& e);
 extern expression prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver);
 std::optional<expression> try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver);
 
+// Check that a prepared expression has no aggregate functions. Throws on error.
+void verify_no_aggregate_functions(const expression& expr, std::string_view context_for_errors);
+
 // Prepares a binary operator received from the parser.
 // Does some basic type checks but no advanced validation.
 extern binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::database db, const schema& table_schema);
@@ -718,13 +724,13 @@ expression optimize_like(const expression& e);
  * Most caller should just call the is_assignable() method on the result, though functions have a use for
  * testing "strong" equality to decide the most precise overload to pick when multiple could match.
  */
-extern assignment_testable::test_result test_assignment(const expression& expr, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver);
+extern assignment_testable::test_result test_assignment(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver);
 
 // Test all elements of exprs for assignment. If all are exact match, return exact match. If any is not assignable,
 // return not assignable. Otherwise, return weakly assignable.
-extern assignment_testable::test_result test_assignment_all(const std::vector<expression>& exprs, data_dictionary::database db, const sstring& keyspace, const column_specification& receiver);
+extern assignment_testable::test_result test_assignment_all(const std::vector<expression>& exprs, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver);
 
-extern shared_ptr<assignment_testable> as_assignment_testable(expression e);
+extern shared_ptr<assignment_testable> as_assignment_testable(expression e, std::optional<data_type> type_opt);
 
 inline oper_t pick_operator(statements::bound b, bool inclusive) {
     return is_start(b) ?
@@ -823,6 +829,11 @@ bytes_opt value_for(const column_definition&, const expression&, const query_opt
 bool contains_multi_column_restriction(const expression&);
 
 bool has_only_eq_binops(const expression&);
+
+/// Finds the data type of writetime(x) or ttl(x)
+data_type column_mutation_attribute_type(const column_mutation_attribute& e);
+
+
 } // namespace expr
 
 } // namespace cql3
@@ -880,4 +891,18 @@ struct fmt::formatter<cql3::expr::expression::printer> {
 /// Required for fmt::join() to work on ExpressionElement, and for {:user}/{:debug} to work on ExpressionElement.
 template <cql3::expr::ExpressionElement E>
 struct fmt::formatter<E> : public fmt::formatter<cql3::expr::expression> {
+};
+
+template <>
+struct fmt::formatter<cql3::expr::column_mutation_attribute::attribute_kind> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(cql3::expr::column_mutation_attribute::attribute_kind k, FormatContext& ctx) const {
+        switch (k) {
+            case cql3::expr::column_mutation_attribute::attribute_kind::writetime:
+                return fmt::format_to(ctx.out(), "WRITETIME");
+            case cql3::expr::column_mutation_attribute::attribute_kind::ttl:
+                return fmt::format_to(ctx.out(), "TTL");
+        }
+        return fmt::format_to(ctx.out(), "unrecognized_attribute_kind({})", static_cast<int>(k));
+    }
 };
