@@ -187,12 +187,19 @@ if [ -e ~/.gdbinit ]; then
     docker_common_args+=(-v "$HOME/.gdbinit:$HOME/.gdbinit:ro")
 fi
 
+# By default use "unlimited" as the hard limit
+hard_limit=$(ulimit -Hn)
+if [[ "${OSTYPE}" == "darwin"* ]]; then
+  # Docker-on-osx cannot parse "unlimited" as hard limit value, hence set to a high value
+  hard_limit=1024000
+fi
+
 docker_common_args+=(
        --security-opt seccomp=unconfined \
        --security-opt label=disable \
        --network host \
        --cap-add SYS_PTRACE \
-       --ulimit nofile=$(ulimit -Sn):$(ulimit -Hn) \
+       --ulimit nofile=$(ulimit -Sn):$hard_limit \
        -v "$PWD:$PWD" \
        -v "$tmpdir:/tmp" \
        -v "$MAVEN_LOCAL_REPO:$MAVEN_LOCAL_REPO" \
