@@ -6,3 +6,5 @@ extra_scylla_config_options:
     authenticator: AllowAllAuthenticator
     authorizer: AllowAllAuthorizer
     experimental_features: ['raft']
+skip_in_release:
+  - test_blocked_bootstrap
