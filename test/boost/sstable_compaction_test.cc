@@ -5117,3 +5117,55 @@ SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
         BOOST_REQUIRE(sstables_closed_during_cleanup >= sstables_nr / 2);
     });
 }
+
+SEASTAR_TEST_CASE(test_sstables_excluding_staging_correctness) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pks = ss.make_pkeys(2);
+
+        auto make_mut = [&] (auto pkey) {
+            auto mut1 = mutation(s, pkey);
+            mut1.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+            return mut1;
+        };
+        std::set<mutation, mutation_decorated_key_less_comparator> sorted_muts;
+        sorted_muts.insert(make_mut(pks[0]));
+        sorted_muts.insert(make_mut(pks[1]));
+
+        auto tmp = tmpdir();
+        table_for_tests t(env.manager(), s, tmp.path().string());
+        auto close_t = deferred_stop(t);
+        t->mark_ready_for_writes();
+
+        auto sst_gen = [&env, s, &tmp, gen = make_lw_shared<unsigned>(1)]() {
+            return env.make_sstable(s, tmp.path().string(), (*gen)++, sstables::get_highest_sstable_version(), big);
+        };
+
+        auto staging_sst = make_sstable_containing(sst_gen, {*sorted_muts.begin()});
+        staging_sst->move_to_new_dir((tmp.path() / fs::path(sstables::staging_dir)).string(), staging_sst->generation()).get();
+        BOOST_REQUIRE(staging_sst->requires_view_building());
+
+        auto regular_sst = make_sstable_containing(sst_gen, {*sorted_muts.rbegin()});
+
+        t->add_sstable_and_update_cache(staging_sst).get();
+        t->add_sstable_and_update_cache(regular_sst).get();
+
+        {
+            testlog.info("table::as_mutation_source_excluding_staging()");
+            auto ms_excluding_staging = t->as_mutation_source_excluding_staging();
+            assert_that(ms_excluding_staging.make_reader_v2(s, env.make_reader_permit(), query::full_partition_range))
+                    .produces(*sorted_muts.rbegin())
+                    .produces_end_of_stream();
+        }
+
+        {
+            testlog.info("table::as_mutation_source()");
+            auto ms_inclusive = t->as_mutation_source();
+            assert_that(ms_inclusive.make_reader_v2(s, env.make_reader_permit(), query::full_partition_range))
+                    .produces(*sorted_muts.begin())
+                    .produces(*sorted_muts.rbegin())
+                    .produces_end_of_stream();
+        }
+    });
+}
