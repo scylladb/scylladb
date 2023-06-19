@@ -1788,40 +1788,8 @@ do_evaluate(const constant& c, const evaluation_inputs& inputs) {
 }
 
 cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
-    return expr::visit(overloaded_functor {
-        [&](const binary_operator& binop) -> cql3::raw_value {
-            return do_evaluate(binop, inputs);
-        },
-        [&](const conjunction& conj) -> cql3::raw_value {
-            return do_evaluate(conj, inputs);
-        },
-        [&](const unresolved_identifier& ui) -> cql3::raw_value {
-            return do_evaluate(ui, inputs);
-        },
-        [&](const column_mutation_attribute& cma) -> cql3::raw_value {
-            return do_evaluate(cma, inputs);
-        },
-        [&](const cast& c) -> cql3::raw_value {
-            return do_evaluate(c, inputs);
-        },
-        [&](const field_selection& field_select) -> cql3::raw_value {
-            return do_evaluate(field_select, inputs);
-        },
-        [&](const column_value& cv) -> cql3::raw_value {
-            return do_evaluate(cv, inputs);
-        },
-        [&](const subscript& s) -> cql3::raw_value {
-            return do_evaluate(s, inputs);
-        },
-        [&](const untyped_constant& uc) -> cql3::raw_value {
-            return do_evaluate(uc, inputs);
-        },
-        [&](const constant& c) { return do_evaluate(c, inputs); },
-        [&](const bind_variable& bind_var) { return do_evaluate(bind_var, inputs); },
-        [&](const tuple_constructor& tup) { return do_evaluate(tup, inputs); },
-        [&](const collection_constructor& col) { return do_evaluate(col, inputs); },
-        [&](const usertype_constructor& user_val) { return do_evaluate(user_val, inputs); },
-        [&](const function_call& fun_call) { return do_evaluate(fun_call, inputs); }
+    return expr::visit([&] (const ExpressionElement auto& ee) -> cql3::raw_value {
+        return do_evaluate(ee, inputs);
     }, e);
 }
 
