@@ -1737,6 +1737,56 @@ do_evaluate(const column_mutation_attribute& cma, const evaluation_inputs& input
     on_internal_error(expr_logger, "evaluating column_mutation_attribute with unexpected kind");
 }
 
+static
+cql3::raw_value
+do_evaluate(const cast& c, const evaluation_inputs& inputs) {
+    // std::invoke trick allows us to use "return" in switch can have the compiler warn us if we missed an enum
+    std::invoke([&] {
+        switch (c.style) {
+        case cast::cast_style::c: return;
+        case cast::cast_style::sql: on_internal_error(expr_logger, "SQL-style cast should have been converted to a function_call");
+        }
+        on_internal_error(expr_logger, "illegal cast_style");
+    });
+
+    auto ret = evaluate(c.arg, inputs);
+    auto type = std::get_if<data_type>(&c.type);
+    if (!type) {
+        on_internal_error(expr_logger, "attempting to evaluate an unprepared cast");
+    }
+    return ret;
+}
+
+static
+cql3::raw_value
+do_evaluate(const unresolved_identifier& ui, const evaluation_inputs& inputs) {
+    on_internal_error(expr_logger, "Can't evaluate unresolved_identifier");
+}
+
+static
+cql3::raw_value
+do_evaluate(const untyped_constant& uc, const evaluation_inputs& inputs) {
+    on_internal_error(expr_logger, "Can't evaluate a untyped_constant ");
+}
+
+static
+cql3::raw_value
+do_evaluate(const column_value& cv, const evaluation_inputs& inputs) {
+    return raw_value::make_value(get_value(cv, inputs));
+}
+
+static
+cql3::raw_value
+do_evaluate(const subscript& s, const evaluation_inputs& inputs) {
+    return raw_value::make_value(get_value(s, inputs));
+}
+
+static
+cql3::raw_value
+do_evaluate(const constant& c, const evaluation_inputs& inputs) {
+    return c.value;
+}
+
 cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
     return expr::visit(overloaded_functor {
         [&](const binary_operator& binop) -> cql3::raw_value {
@@ -1745,44 +1795,28 @@ cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
         [&](const conjunction& conj) -> cql3::raw_value {
             return do_evaluate(conj, inputs);
         },
-        [](const unresolved_identifier&) -> cql3::raw_value {
-            on_internal_error(expr_logger, "Can't evaluate unresolved_identifier");
+        [&](const unresolved_identifier& ui) -> cql3::raw_value {
+            return do_evaluate(ui, inputs);
         },
         [&](const column_mutation_attribute& cma) -> cql3::raw_value {
             return do_evaluate(cma, inputs);
         },
         [&](const cast& c) -> cql3::raw_value {
-            // std::invoke trick allows us to use "return" in switch can have the compiler warn us if we missed an enum
-            std::invoke([&] {
-                switch (c.style) {
-                case cast::cast_style::c: return;
-                case cast::cast_style::sql: on_internal_error(expr_logger, "SQL-style cast should have been converted to a function_call");
-                }
-                on_internal_error(expr_logger, "illegal cast_style");
-            });
-
-            auto ret = evaluate(c.arg, inputs);
-            auto type = std::get_if<data_type>(&c.type);
-            if (!type) {
-                on_internal_error(expr_logger, "attempting to evaluate an unprepared cast");
-            }
-            return ret;
+            return do_evaluate(c, inputs);
         },
         [&](const field_selection& field_select) -> cql3::raw_value {
             return do_evaluate(field_select, inputs);
         },
-
         [&](const column_value& cv) -> cql3::raw_value {
-            return raw_value::make_value(get_value(cv, inputs));
+            return do_evaluate(cv, inputs);
         },
         [&](const subscript& s) -> cql3::raw_value {
-            return raw_value::make_value(get_value(s, inputs));
+            return do_evaluate(s, inputs);
         },
-        [](const untyped_constant&) -> cql3::raw_value {
-            on_internal_error(expr_logger, "Can't evaluate a untyped_constant ");
+        [&](const untyped_constant& uc) -> cql3::raw_value {
+            return do_evaluate(uc, inputs);
         },
-
-        [](const constant& c) { return c.value; },
+        [&](const constant& c) { return do_evaluate(c, inputs); },
         [&](const bind_variable& bind_var) { return do_evaluate(bind_var, inputs); },
         [&](const tuple_constructor& tup) { return do_evaluate(tup, inputs); },
         [&](const collection_constructor& col) { return do_evaluate(col, inputs); },
