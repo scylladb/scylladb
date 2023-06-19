@@ -2584,10 +2584,13 @@ void mutation_cleaner_impl::start_worker() {
       }
       return with_scheduling_group(_scheduling_group, [w, this] {
         return w->cv.wait([w] {
-            return w->done || !w->snapshots.empty();
+            return (w->done || !w->snapshots.empty()) && !w->merging_paused;
         }).then([this, w] () noexcept {
             if (w->done) {
                 return stop_iteration::yes;
+            }
+            if (w->merging_paused) {
+                return stop_iteration::no;
             }
             merge_some();
             return stop_iteration::no;

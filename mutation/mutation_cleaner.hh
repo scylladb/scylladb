@@ -24,6 +24,7 @@ class mutation_cleaner_impl final {
         snapshot_list snapshots;
         logalloc::allocating_section alloc_section;
         bool done = false; // true means the worker was abandoned and cannot access the mutation_cleaner_impl instance.
+        int64_t merging_paused = 0; // Allows for pausing the background merging. Used only for testing purposes.
     };
 private:
     logalloc::region& _region;
@@ -67,6 +68,13 @@ public:
         _scheduling_group = sg;
         _worker_state->cv.broadcast();
     }
+    auto pause() {
+        _worker_state->merging_paused += 1;
+        return defer([this] {
+            _worker_state->merging_paused -= 1;
+            _worker_state->cv.signal();
+        });
+    };
     auto make_region_space_guard() {
         return defer([&, dirty_before = _region.occupancy().total_space()] {
             auto dirty_after = _region.occupancy().total_space();
@@ -93,7 +101,7 @@ void mutation_cleaner_impl::destroy_gently(partition_version& v) noexcept {
 
 inline
 void mutation_cleaner_impl::merge_and_destroy(partition_snapshot& ps) noexcept {
-    if (ps.slide_to_oldest() == stop_iteration::yes || merge_some(ps) == stop_iteration::yes) {
+    if (ps.slide_to_oldest() == stop_iteration::yes || (!_worker_state->merging_paused && merge_some(ps) == stop_iteration::yes)) {
         lw_shared_ptr<partition_snapshot>::dispose(&ps);
     } else {
         // The snapshot must not be reachable by partitino_entry::read() after this,
@@ -193,5 +201,24 @@ public:
     // nor access it after calling this.
     void merge_and_destroy(partition_snapshot& ps) {
         return _impl->merge_and_destroy(ps);
+    }
+
+    // Ensures the cleaner isn't doing any version merging while
+    // the returned guard object is alive.
+    //
+    // Example usage:
+    //
+    // mutation_cleaner cleaner;
+    // ...
+    // {
+    //     auto pause_guard = cleaner.pause();
+    //     // Merging is paused here.
+    //     ...
+    // }
+    // // Merging happens normally here.
+    //
+    // Meant only for use by unit tests.
+    auto pause() {
+        return _impl->pause();
     }
 };
