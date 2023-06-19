@@ -5467,7 +5467,9 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             inet_address_vector_replica_set filtered_merged = filter_for_query(cl, *erm, merged, current_merged_preferred_replicas, gossiper, pcf);
 
             // Estimate whether merging will be a win or not
-            if (!is_worth_merging_for_range_query(erm->get_topology(), filtered_merged, filtered_endpoints, next_filtered_endpoints)) {
+            if (filtered_merged.empty()
+                    || !is_worth_merging_for_range_query(
+                            erm->get_topology(), filtered_merged, filtered_endpoints, next_filtered_endpoints)) {
                 break;
             } else if (pcf) {
                 // check that merged set hit rate is not to low
@@ -5479,6 +5481,10 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                             return float(cf->get_hit_rate(g, ep).rate);
                         }
                     } ep_to_hr{g, pcf};
+
+                    if (range.empty()) {
+                        on_internal_error(slogger, "empty range passed to `find_min`");
+                    }
                     return *boost::range::min_element(range | boost::adaptors::transformed(ep_to_hr));
                 };
                 auto merged = find_min(filtered_merged) * 1.2; // give merged set 20% boost
