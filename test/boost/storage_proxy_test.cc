@@ -103,3 +103,33 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
         });
     });
 }
+
+SEASTAR_THREAD_TEST_CASE(test_split_stats) {
+    auto ep1 = gms::inet_address("127.0.0.1");
+    auto sg1 = create_scheduling_group("apa1", 100).get();
+    auto sg2 = create_scheduling_group("apa2", 100).get();
+
+    std::optional<service::storage_proxy_stats::split_stats> stats1, stats2;
+
+    // pretending to be abstract_write_response_handler type. 
+    // created in various scheduling groups, in which they 
+    // instantiate group-local split_stats.
+    with_scheduling_group(sg1, [&] {
+        stats1.emplace("tuta", "nils", "en nils", "nilsa", true);
+    }).get0();
+
+    with_scheduling_group(sg2, [&] {
+        stats2.emplace("tuta", "nils", "en nils", "nilsa", true);
+    }).get0();
+
+    // simulating the calling of storage_proxy::on_down, from gossip
+    // on node dropping out. If inside a write operation, we'll pick up
+    // write handlers and to "timeout_cb" on them, which in turn might
+    // call get_ep_stat, which evenually calls register_metrics for 
+    // the DC written to.
+    // Point being is that either the above should not happen, or 
+    // split_stats should be resilient to being called from different
+    // scheduling group.
+    stats1->register_metrics_for("DC1", ep1);
+    stats2->register_metrics_for("DC1", ep1);
+}
