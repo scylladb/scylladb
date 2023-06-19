@@ -1657,6 +1657,7 @@ future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_r
         throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}", t));
     }
 
+    auto& cs = get_compaction_state(&t);
     co_await run_with_compaction_disabled(t, [&] () -> future<> {
         auto update_sstables_cleanup_state = [&] (const sstables::sstable_set& set) -> future<> {
             // Hold on to the sstable set since it may be overwritten
@@ -1668,18 +1669,19 @@ future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_r
         };
         co_await update_sstables_cleanup_state(t.main_sstable_set());
         co_await update_sstables_cleanup_state(t.maintenance_sstable_set());
+
+        // Some sstables may remain in sstables_requiring_cleanup
+        // for later processing if they can't be cleaned up right now.
+        // They are erased from sstables_requiring_cleanup by compacting.release_compacting
+        if (!cs.sstables_requiring_cleanup.empty()) {
+            cs.owned_ranges_ptr = std::move(sorted_owned_ranges);
+        }
     });
 
-    auto& cs = get_compaction_state(&t);
     if (cs.sstables_requiring_cleanup.empty()) {
         cmlog.debug("perform_cleanup for {} found no sstables requiring cleanup", t);
         co_return;
     }
-
-    // Some sstables may remain in sstables_requiring_cleanup
-    // for later processing if they can't be cleaned up right now.
-    // They are erased from sstables_requiring_cleanup by compacting.release_compacting
-    cs.owned_ranges_ptr = std::move(sorted_owned_ranges);
 
     auto found_maintenance_sstables = bool(t.maintenance_sstable_set().for_each_sstable_until([this, &t] (const sstables::shared_sstable& sst) {
         return stop_iteration(requires_cleanup(t, sst));
