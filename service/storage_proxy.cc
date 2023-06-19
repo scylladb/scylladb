@@ -116,8 +116,12 @@ static const seastar::metrics::label op_type_label("op_type");
 static const seastar::metrics::label scheduling_group_label("scheduling_group_name");
 static const seastar::metrics::label rejected_by_coordinator_label("rejected_by_coordinator");
 
+seastar::metrics::label_instance make_scheduling_group_label(const scheduling_group& sg) {
+    return scheduling_group_label(sg.name());
+}
+
 seastar::metrics::label_instance current_scheduling_group_label() {
-    return scheduling_group_label(current_scheduling_group().name());
+    return make_scheduling_group_label(current_scheduling_group());
 }
 
 }
@@ -2376,7 +2380,8 @@ storage_proxy_stats::split_stats::split_stats(const sstring& category, const sst
         , _long_description_prefix(long_description_prefix)
         , _category(category)
         , _op_type(op_type)
-        , _auto_register_metrics(auto_register_metrics) { }
+        , _auto_register_metrics(auto_register_metrics) 
+        , _sg(current_scheduling_group()) { }
 
 storage_proxy_stats::write_stats::write_stats()
 : writes_attempts(COORDINATOR_STATS_CATEGORY, "total_write_attempts", "total number of write requests", "mutation_data")
@@ -2693,7 +2698,7 @@ void storage_proxy_stats::split_stats::register_metrics_local() {
     auto new_metrics = sm::metric_groups();
     new_metrics.add_group(_category, {
         sm::make_counter(_short_description_prefix + sstring("_local_node"), [this] { return _local.val; },
-                       sm::description(_long_description_prefix + "on a local Node"), {storage_proxy_stats::current_scheduling_group_label(), op_type_label(_op_type)})
+                       sm::description(_long_description_prefix + "on a local Node"), {storage_proxy_stats::make_scheduling_group_label(_sg), op_type_label(_op_type)})
     });
     _metrics = std::exchange(new_metrics, {});
 }
@@ -2706,7 +2711,7 @@ void storage_proxy_stats::split_stats::register_metrics_for(sstring dc, gms::ine
     if (auto [ignored, added] = _dc_stats.try_emplace(dc); added) {
         _metrics.add_group(_category, {
             sm::make_counter(_short_description_prefix + sstring("_remote_node"), [this, dc] { return _dc_stats[dc].val; },
-                            sm::description(seastar::format("{} when communicating with external Nodes in another DC", _long_description_prefix)), {storage_proxy_stats::current_scheduling_group_label(), datacenter_label(dc), op_type_label(_op_type)})
+                            sm::description(seastar::format("{} when communicating with external Nodes in another DC", _long_description_prefix)), {storage_proxy_stats::make_scheduling_group_label(_sg), datacenter_label(dc), op_type_label(_op_type)})
                                 .set_skip_when_empty()
         });
     }
