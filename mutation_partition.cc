@@ -1032,20 +1032,34 @@ operator<<(std::ostream& os, const mutation_partition::printer& p) {
 constexpr gc_clock::duration row_marker::no_ttl;
 constexpr gc_clock::duration row_marker::dead;
 
+// Note: the ordering algorithm for rows is the same as for cells,
+// except that there is no cell value to break a tie in case all other attributes are equal.
+// See compare_atomic_cell_for_merge.
 int compare_row_marker_for_merge(const row_marker& left, const row_marker& right) noexcept {
+    // Largest write timestamp wins.
     if (left.timestamp() != right.timestamp()) {
         return left.timestamp() > right.timestamp() ? 1 : -1;
     }
+    // Tombstones always win reconciliation with live rows of the same timestamp
     if (left.is_live() != right.is_live()) {
         return left.is_live() ? -1 : 1;
     }
     if (left.is_live()) {
+        // Prefer expiring rows (which will become tombstones at some future date) over live rows.
+        // See https://issues.apache.org/jira/browse/CASSANDRA-14592
         if (left.is_expiring() != right.is_expiring()) {
             // prefer expiring cells.
             return left.is_expiring() ? 1 : -1;
         }
-        if (left.is_expiring() && left.expiry() != right.expiry()) {
-            return left.expiry() < right.expiry() ? -1 : 1;
+        // If both are expiring, choose the cell with the latest expiry or derived write time.
+        if (left.is_expiring()) {
+            if (left.expiry() != right.expiry()) {
+                return left.expiry() < right.expiry() ? -1 : 1;
+            } else if (left.ttl() != right.ttl()) {
+                // The cell write time is derived by (expiry - ttl).
+                // Prefer row that was written later (and has a smaller ttl).
+                return left.ttl() < right.ttl() ? 1 : -1;
+            }
         }
     } else {
         // Both are either deleted or missing
