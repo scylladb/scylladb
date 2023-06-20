@@ -4,6 +4,7 @@ target_sources(db
     consistency_level.cc
     system_keyspace.cc
     virtual_table.cc
+    virtual_tables.cc
     system_distributed_keyspace.cc
     size_estimates_virtual_reader.cc
     schema_tables.cc
