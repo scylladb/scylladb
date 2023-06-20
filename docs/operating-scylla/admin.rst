@@ -34,6 +34,8 @@ Scylla configuration files are:
 | :code:`/etc/scylla/cassandra-rackdc.properties`       | Rack & dc configuration file    |
 +-------------------------------------------------------+---------------------------------+
 
+.. note:: Scylla provides the ability to live update some configuration values without restarting the entire server. You can use both the REST API and the CQL API to perform live updates.
+
 .. _check-your-current-version-of-scylla:
 
 Check your current version of Scylla
