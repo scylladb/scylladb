@@ -1099,6 +1099,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             netw::messaging_service::config mscfg;
 
+            mscfg.id = cfg->host_id;
             mscfg.ip = utils::resolve(cfg->listen_address, family).get0();
             mscfg.port = cfg->storage_port();
             mscfg.ssl_port = cfg->ssl_storage_port();

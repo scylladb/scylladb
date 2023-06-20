@@ -716,7 +716,7 @@ public:
             }
 
             // don't start listening so tests can be run in parallel
-            ms.start(listen, std::move(7000)).get();
+            ms.start(cfg->host_id, listen, std::move(7000)).get();
             auto stop_ms = defer([&ms] { ms.stop().get(); });
 
             // Normally the auth server is already stopped in here,

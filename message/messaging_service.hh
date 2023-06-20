@@ -19,6 +19,7 @@
 #include "range.hh"
 #include "schema/schema_fwd.hh"
 #include "streaming/stream_fwd.hh"
+#include "locator/host_id.hh"
 
 #include <list>
 #include <vector>
@@ -261,6 +262,7 @@ public:
     };
 
     struct config {
+        locator::host_id id;
         gms::inet_address ip;
         uint16_t port;
         uint16_t ssl_port = 0;
@@ -322,7 +324,7 @@ private:
 public:
     using clock_type = lowres_clock;
 
-    messaging_service(gms::inet_address ip, uint16_t port);
+    messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port);
     messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder>);
     ~messaging_service();
 

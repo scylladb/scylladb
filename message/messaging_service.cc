@@ -226,8 +226,9 @@ future<> messaging_service::unregister_handler(messaging_verb verb) {
     return _rpc->unregister_handler(verb);
 }
 
-messaging_service::messaging_service(gms::inet_address ip, uint16_t port)
-    : messaging_service(config{std::move(ip), port}, scheduling_config{{{{}, "$default"}}, {}, {}}, nullptr)
+messaging_service::messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port)
+    : messaging_service(config{std::move(id), std::move(ip), port},
+                        scheduling_config{{{{}, "$default"}}, {}, {}}, nullptr)
 {}
 
 static
