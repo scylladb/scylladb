@@ -322,8 +322,7 @@ private:
 public:
     using clock_type = lowres_clock;
 
-    messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"),
-            uint16_t port = 7000);
+    messaging_service(gms::inet_address ip, uint16_t port);
     messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder>);
     ~messaging_service();
 
