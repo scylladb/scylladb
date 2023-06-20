@@ -256,12 +256,14 @@ schema_ptr system_keyspace::topology() {
             .with_column("num_tokens", int32_type)
             .with_column("shard_count", int32_type)
             .with_column("ignore_msb", int32_type)
+            .with_column("supported_features", set_type_impl::get_instance(utf8_type, true))
             .with_column("new_cdc_generation_data_uuid", uuid_type, column_kind::static_column)
             .with_column("version", long_type, column_kind::static_column)
             .with_column("transition_state", utf8_type, column_kind::static_column)
             .with_column("current_cdc_generation_uuid", uuid_type, column_kind::static_column)
             .with_column("current_cdc_generation_timestamp", timestamp_type, column_kind::static_column)
             .with_column("global_topology_request", utf8_type, column_kind::static_column)
+            .with_column("enabled_features", set_type_impl::get_instance(utf8_type, true), column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_version(generate_schema_version(id))
             .build();
@@ -1554,6 +1556,13 @@ future<db_clock::time_point> system_keyspace::get_truncated_at(table_id cf_id) {
     });
 }
 
+static set_type_impl::native_type deserialize_set_column(const schema& s, const cql3::untyped_result_set_row& row, const char* name) {
+    auto blob = row.get_blob(name);
+    auto cdef = s.get_column_definition(name);
+    auto deserialized = cdef->type->deserialize(blob);
+    return value_cast<set_type_impl::native_type>(deserialized);
+}
+
 static set_type_impl::native_type prepare_tokens(const std::unordered_set<dht::token>& tokens) {
     set_type_impl::native_type tset;
     for (auto& t: tokens) {
@@ -1562,7 +1571,7 @@ static set_type_impl::native_type prepare_tokens(const std::unordered_set<dht::t
     return tset;
 }
 
-std::unordered_set<dht::token> decode_tokens(set_type_impl::native_type& tokens) {
+std::unordered_set<dht::token> decode_tokens(const set_type_impl::native_type& tokens) {
     std::unordered_set<dht::token> tset;
     for (auto& t: tokens) {
         auto str = value_cast<sstring>(t);
@@ -1593,11 +1602,7 @@ future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> sy
         for (auto& row : *cql_result) {
             auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
             if (row.has("tokens")) {
-                auto blob = row.get_blob("tokens");
-                auto cdef = peers()->get_column_definition("tokens");
-                auto deserialized = cdef->type->deserialize(blob);
-                auto tokens = value_cast<set_type_impl::native_type>(deserialized);
-                ret.emplace(peer, decode_tokens(tokens));
+                ret.emplace(peer, decode_tokens(deserialize_set_column(*peers(), row, "tokens")));
             }
         }
         return ret;
@@ -1791,12 +1796,8 @@ future<std::unordered_set<dht::token>> system_keyspace::get_saved_tokens() {
             return make_ready_future<std::unordered_set<dht::token>>();
         }
 
-        auto blob = msg->one().get_blob("tokens");
-        auto cdef = local()->get_column_definition("tokens");
-        auto deserialized = cdef->type->deserialize(blob);
-        auto tokens = value_cast<set_type_impl::native_type>(deserialized);
-
-        return make_ready_future<std::unordered_set<dht::token>>(decode_tokens(tokens));
+        auto decoded_tokens = decode_tokens(deserialize_set_column(*local(), msg->one(), "tokens"));
+        return make_ready_future<std::unordered_set<dht::token>>(std::move(decoded_tokens));
     });
 }
 
@@ -3461,6 +3462,14 @@ future<> system_keyspace::set_must_synchronize_topology(bool value) {
     return set_scylla_local_param_as<bool>(MUST_SYNCHRONIZE_TOPOLOGY_KEY, value);
 }
 
+static std::set<sstring> decode_features(const set_type_impl::native_type& features) {
+    std::set<sstring> fset;
+    for (auto& f : features) {
+        fset.insert(value_cast<sstring>(std::move(f)));
+    }
+    return fset;
+}
+
 future<service::topology> system_keyspace::load_topology_state() {
     auto rs = co_await qctx->execute_cql(
         format("SELECT * FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
@@ -3485,11 +3494,7 @@ future<service::topology> system_keyspace::load_topology_state() {
 
         std::optional<service::ring_slice> ring_slice;
         if (row.has("tokens")) {
-            auto blob = row.get_blob("tokens");
-            auto cdef = topology()->get_column_definition("tokens");
-            auto deserialized = cdef->type->deserialize(blob);
-            auto ts = value_cast<set_type_impl::native_type>(deserialized);
-            auto tokens = decode_tokens(ts);
+            auto tokens = decode_tokens(deserialize_set_column(*topology(), row, "tokens"));
 
             if (tokens.empty()) {
                 on_fatal_internal_error(slogger, format(
@@ -3510,6 +3515,11 @@ future<service::topology> system_keyspace::load_topology_state() {
         std::optional<sstring> rebuild_option;
         if (row.has("rebuild_option")) {
             rebuild_option = row.get_as<sstring>("rebuild_option");
+        }
+
+        std::set<sstring> supported_features;
+        if (row.has("supported_features")) {
+            supported_features = decode_features(deserialize_set_column(*topology(), row, "supported_features"));
         }
 
         if (row.has("topology_request")) {
@@ -3578,7 +3588,7 @@ future<service::topology> system_keyspace::load_topology_state() {
         if (map) {
             map->emplace(host_id, service::replica_state{
                 nstate, std::move(datacenter), std::move(rack), std::move(release_version),
-                ring_slice, shard_count, ignore_msb});
+                ring_slice, shard_count, ignore_msb, std::move(supported_features)});
         }
     }
 
@@ -3644,6 +3654,10 @@ future<service::topology> system_keyspace::load_topology_state() {
             auto req = service::global_topology_request_from_string(
                     some_row.get_as<sstring>("global_topology_request"));
             ret.global_request.emplace(req);
+        }
+
+        if (some_row.has("enabled_features")) {
+            ret.enabled_features = decode_features(deserialize_set_column(*topology(), some_row, "enabled_features"));
         }
     }
 
