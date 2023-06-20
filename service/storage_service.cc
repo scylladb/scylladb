@@ -1139,6 +1139,7 @@ class topology_coordinator {
                                       f.get_exception());
                         break;
                     }
+                    node = std::move(f).get();
                 }
 
                 raft_topology_cmd cmd{raft_topology_cmd::command::stream_ranges};

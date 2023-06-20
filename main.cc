@@ -1549,10 +1549,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 ss.local().uninit_messaging_service_part().get();
             });
 
-            // It's essential to load fencing_version prior to starting the messaging service,
-            // since incoming messages may require fencing.
-            ss.local().update_fence_version(sys_ks.local().get_topology_fence_version().get()).get();
-
             api::set_server_messaging_service(ctx, messaging).get();
             auto stop_messaging_api = defer_verbose_shutdown("messaging service API", [&ctx] {
                 api::unset_server_messaging_service(ctx).get();
@@ -1623,6 +1619,15 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Need to do it before allowing incomming messaging service connections since
             // storage proxy's and migration manager's verbs may access group0
             group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local(), cdc_generation_service.local()).get();
+
+            // It's essential to load fencing_version prior to starting the messaging service,
+            // since incoming messages may require fencing.
+            // It is also necessary that token_metadata be initialized by this point and
+            // token_metadata::version to be up to date, since when assigning fence_version we
+            // validate it cannot be greater than token_metadata::version.
+            // The setup_group0_if_exist call above waits for the raft log for group0 to be applied,
+            // which ensures this.
+            ss.local().update_fence_version(sys_ks.local().get_topology_fence_version().get()).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return messaging.invoke_on_all([&token_metadata] (auto& netw) {
