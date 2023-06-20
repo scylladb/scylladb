@@ -472,9 +472,9 @@ extern std::ostream& operator<<(std::ostream&, oper_t);
 // Input data needed to evaluate an expression. Individual members can be
 // null if not applicable (e.g. evaluating outside a row context)
 struct evaluation_inputs {
-    const std::vector<bytes>* partition_key = nullptr;
-    const std::vector<bytes>* clustering_key = nullptr;
-    const std::vector<managed_bytes_opt>* static_and_regular_columns = nullptr; // indexes match `selection` member
+    std::span<const bytes> partition_key;
+    std::span<const bytes> clustering_key;
+    std::span<const managed_bytes_opt> static_and_regular_columns; // indexes match `selection` member
     const cql3::selection::selection* selection = nullptr;
     const query_options* options = nullptr;
     std::span<const api::timestamp_type> static_and_regular_timestamps;  // indexes match `selection` member

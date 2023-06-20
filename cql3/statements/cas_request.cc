@@ -174,9 +174,9 @@ cas_request::build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
         auto ckey_bytes = old_row.ckey->explode();
 
         auto eval_inputs = expr::evaluation_inputs{
-            .partition_key = &pkey_bytes,
-            .clustering_key = &ckey_bytes,
-            .static_and_regular_columns = &old_row.row->cells,
+            .partition_key = pkey_bytes,
+            .clustering_key = ckey_bytes,
+            .static_and_regular_columns = old_row.row->cells,
             .selection = _rows.selection.get(),
         };
 

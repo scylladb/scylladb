@@ -457,9 +457,9 @@ std::pair<evaluation_inputs, std::unique_ptr<evaluation_inputs_data>> make_evalu
                                .timestamps = std::move(static_and_regular_column_timestamps),
                                .ttls = std::move(static_and_regular_column_ttls)});
 
-    evaluation_inputs inputs{.partition_key = &data->partition_key,
-                             .clustering_key = &data->clustering_key,
-                             .static_and_regular_columns = &data->static_and_regular_columns,
+    evaluation_inputs inputs{.partition_key = data->partition_key,
+                             .clustering_key = data->clustering_key,
+                             .static_and_regular_columns = data->static_and_regular_columns,
                              .selection = data->selection.get(),
                              .options = &data->options,
                              .static_and_regular_timestamps = data->timestamps,
