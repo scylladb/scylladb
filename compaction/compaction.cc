@@ -484,10 +484,18 @@ protected:
     // Garbage collected sstables that were added to SSTable set and should be eventually removed from it.
     std::vector<shared_sstable> _used_garbage_collected_sstables;
     utils::observable<> _stop_request_observable;
+    query::partition_slice _full_slice_with_bypass_cache;
 private:
     compaction_data& init_compaction_data(compaction_data& cdata, const compaction_descriptor& descriptor) const {
         cdata.compaction_fan_in = descriptor.fan_in();
         return cdata;
+    }
+
+    // Prevents compaction that uses index reader from polluting the index caching.
+    static query::partition_slice full_slice_with_bypass_cache(const schema_ptr& s) {
+        query::partition_slice ps = s->full_slice();
+        ps.options.set(query::partition_slice::option::bypass_cache);
+        return ps;
     }
 protected:
     compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata)
@@ -508,6 +516,7 @@ protected:
         , _compacting_for_max_purgeable_func(std::unordered_set<shared_sstable>(_sstables.begin(), _sstables.end()))
         , _owned_ranges(std::move(descriptor.owned_ranges))
         , _owned_ranges_checker(_owned_ranges ? std::optional<dht::incremental_owned_ranges_checker>(*_owned_ranges) : std::nullopt)
+        , _full_slice_with_bypass_cache(full_slice_with_bypass_cache(_schema))
     {
         for (auto& sst : _sstables) {
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
@@ -1038,7 +1047,7 @@ public:
         return _compacting->make_local_shard_sstable_reader(_schema,
                 _permit,
                 query::full_partition_range,
-                _schema->full_slice(),
+                _full_slice_with_bypass_cache,
                 tracing::trace_state_ptr(),
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no,
@@ -1083,7 +1092,7 @@ public:
         return _compacting->make_local_shard_sstable_reader(_schema,
                 _permit,
                 query::full_partition_range,
-                _schema->full_slice(),
+                _full_slice_with_bypass_cache,
                 tracing::trace_state_ptr(),
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no,
@@ -1567,7 +1576,7 @@ public:
         return _compacting->make_range_sstable_reader(_schema,
                 _permit,
                 query::full_partition_range,
-                _schema->full_slice(),
+                _full_slice_with_bypass_cache,
                 nullptr,
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no);
