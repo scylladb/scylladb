@@ -1138,7 +1138,7 @@ indexed_table_select_statement::do_execute(query_processor& qp,
             // page size is set to the internal count page size, regardless of the user-provided value
             internal_options.reset(new cql3::query_options(std::move(internal_options), options.get_paging_state(), internal_paging_size));
             do {
-                auto consume_results = [this, &builder, &options, &internal_options, &state] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) -> coordinator_result<stop_iteration> {
+                auto consume_results = [this, &builder, &options, &internal_options, &state] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) -> stop_iteration {
                     if (paging_state) {
                         paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options);
                     }
@@ -1168,11 +1168,7 @@ indexed_table_select_statement::do_execute(query_processor& qp,
                         }
                         auto&& [results, cmd] = result_results_and_cmd.assume_value();
                         {
-                            auto result_stop = consume_results(std::move(results), std::move(cmd), std::move(paging_state));
-                            if (result_stop.has_error()) {
-                                co_return failed_result_to_result_message(std::move(result_stop));
-                            }
-                            stop = std::move(result_stop).assume_value();
+                            stop = consume_results(std::move(results), std::move(cmd), std::move(paging_state));
                         }
                     }
                 } else {
@@ -1189,11 +1185,7 @@ indexed_table_select_statement::do_execute(query_processor& qp,
                         }
                         auto&& [results, cmd] = result_results_cmd.assume_value();
                         {
-                            auto result_stop = consume_results(std::move(results), std::move(cmd), std::move(paging_state));
-                            if (result_stop.has_error()) {
-                                co_return failed_result_to_result_message(std::move(result_stop));
-                            }
-                            stop = std::move(result_stop).assume_value();
+                            stop = consume_results(std::move(results), std::move(cmd), std::move(paging_state));
                         }
                     }
                 }
