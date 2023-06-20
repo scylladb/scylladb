@@ -184,7 +184,7 @@ bool modification_statement::applies_to(const selection::selection* selection,
     });
 
     auto inputs = expr::evaluation_inputs{
-        .static_and_regular_columns = static_and_regular_columns,
+        .static_and_regular_columns = *static_and_regular_columns,
         .selection = selection,
         .options = &options,
     };

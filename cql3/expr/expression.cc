@@ -110,13 +110,13 @@ managed_bytes_opt
 extract_column_value(const column_definition* cdef, const evaluation_inputs& inputs) {
     switch (cdef->kind) {
         case column_kind::partition_key:
-            return managed_bytes((*inputs.partition_key)[cdef->id]);
+            return managed_bytes(inputs.partition_key[cdef->id]);
         case column_kind::clustering_key:
-            if (cdef->id >= inputs.clustering_key->size()) {
+            if (cdef->id >= inputs.clustering_key.size()) {
                 // partial clustering key, or LWT non-existing row
                 return std::nullopt;
             }
-            return managed_bytes((*inputs.clustering_key)[cdef->id]);
+            return managed_bytes(inputs.clustering_key[cdef->id]);
         case column_kind::static_column:
             [[fallthrough]];
         case column_kind::regular_column: {
@@ -126,7 +126,7 @@ extract_column_value(const column_definition* cdef, const evaluation_inputs& inp
                         format("Column definition {} does not match any column in the query selection",
                         cdef->name_as_text()));
             }
-            return managed_bytes_opt((*inputs.static_and_regular_columns)[index]);
+            return managed_bytes_opt(inputs.static_and_regular_columns[index]);
         }
         default:
             throw exceptions::unsupported_operation_exception("Unknown column kind");

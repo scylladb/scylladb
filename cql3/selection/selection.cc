@@ -469,9 +469,9 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
         bool multi_col_clustering_satisfied = expr::is_satisfied_by(
                 clustering_columns_restrictions,
                 expr::evaluation_inputs{
-                    .partition_key = &partition_key,
-                    .clustering_key = &clustering_key,
-                    .static_and_regular_columns = &static_and_regular_columns,
+                    .partition_key = partition_key,
+                    .clustering_key = clustering_key,
+                    .static_and_regular_columns = static_and_regular_columns,
                     .selection = &selection,
                     .options = &_options,
                 });
@@ -501,9 +501,9 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             bool regular_restriction_matches = expr::is_satisfied_by(
                     single_col_restriction,
                     expr::evaluation_inputs{
-                        .partition_key = &partition_key,
-                        .clustering_key = &clustering_key,
-                        .static_and_regular_columns = &static_and_regular_columns,
+                        .partition_key = partition_key,
+                        .clustering_key = clustering_key,
+                        .static_and_regular_columns = static_and_regular_columns,
                         .selection = &selection,
                         .options = &_options,
                     });
@@ -526,9 +526,9 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             if (!expr::is_satisfied_by(
                         single_col_restriction,
                         expr::evaluation_inputs{
-                            .partition_key = &partition_key,
-                            .clustering_key = &clustering_key,
-                            .static_and_regular_columns = nullptr, // partition key filtering only
+                            .partition_key = partition_key,
+                            .clustering_key = clustering_key,
+                            .static_and_regular_columns = {}, // partition key filtering only
                             .selection = &selection,
                             .options = &_options,
                         })) {
@@ -554,9 +554,9 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
             if (!expr::is_satisfied_by(
                         single_col_restriction,
                         expr::evaluation_inputs{
-                            .partition_key = &partition_key,
-                            .clustering_key = &clustering_key,
-                            .static_and_regular_columns = nullptr, // clustering key checks only
+                            .partition_key = partition_key,
+                            .clustering_key = clustering_key,
+                            .static_and_regular_columns = {}, // clustering key checks only
                             .selection = &selection,
                             .options = &_options,
                         })) {
