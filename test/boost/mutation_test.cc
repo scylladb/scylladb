@@ -681,14 +681,11 @@ SEASTAR_TEST_CASE(test_cell_ordering) {
     auto expiry_2 = now + ttl_2;
 
     auto assert_order = [] (atomic_cell_view first, atomic_cell_view second) {
-        if (compare_atomic_cell_for_merge(first, second) >= 0) {
-            testlog.trace("Expected {} < {}", first, second);
-            abort();
-        }
-        if (compare_atomic_cell_for_merge(second, first) <= 0) {
-            testlog.trace("Expected {} < {}", second, first);
-            abort();
-        }
+        testlog.trace("Expected {} < {}", first, second);
+        BOOST_REQUIRE(compare_atomic_cell_for_merge(first, second) < 0);
+
+        testlog.trace("Expected {} > {}", second, first);
+        BOOST_REQUIRE(compare_atomic_cell_for_merge(second, first) > 0);
     };
 
     auto assert_equal = [] (atomic_cell_view c1, atomic_cell_view c2) {
@@ -697,18 +694,27 @@ SEASTAR_TEST_CASE(test_cell_ordering) {
         BOOST_REQUIRE(compare_atomic_cell_for_merge(c2, c1) == 0);
     };
 
+    testlog.debug("Live cells with same value are equal");
     assert_equal(
         atomic_cell::make_live(*bytes_type, 0, bytes("value")),
         atomic_cell::make_live(*bytes_type, 0, bytes("value")));
 
+    testlog.debug("Non-expiring live cells are ordered before expiring cells");
     assert_order(
         atomic_cell::make_live(*bytes_type, 1, bytes("value")),
         atomic_cell::make_live(*bytes_type, 1, bytes("value"), expiry_1, ttl_1));
 
+    testlog.debug("Non-expiring live cells are ordered before expiring cells, regardless of their value");
+    assert_order(
+        atomic_cell::make_live(*bytes_type, 1, bytes("value2")),
+        atomic_cell::make_live(*bytes_type, 1, bytes("value1"), expiry_1, ttl_1));
+
+    testlog.debug("Dead cells with same expiry are equal");
     assert_equal(
         atomic_cell::make_dead(1, expiry_1),
         atomic_cell::make_dead(1, expiry_1));
 
+    testlog.debug("Non-expiring live cells are ordered before expiring cells, with empty value");
     assert_order(
         atomic_cell::make_live(*bytes_type, 1, bytes()),
         atomic_cell::make_live(*bytes_type, 1, bytes(), expiry_2, ttl_2));
@@ -716,49 +722,57 @@ SEASTAR_TEST_CASE(test_cell_ordering) {
     // Origin doesn't compare ttl (is it wise?)
     // But we do. See https://github.com/scylladb/scylla/issues/10156
     // and https://github.com/scylladb/scylla/issues/10173
+    testlog.debug("Expiring cells with higher ttl are ordered before expiring cells with smaller ttl and same expiry time");
     assert_order(
         atomic_cell::make_live(*bytes_type, 1, bytes("value"), expiry_1, ttl_2),
         atomic_cell::make_live(*bytes_type, 1, bytes("value"), expiry_1, ttl_1));
 
+    testlog.debug("Cells are ordered by value if all else is equal");
     assert_order(
         atomic_cell::make_live(*bytes_type, 0, bytes("value1")),
         atomic_cell::make_live(*bytes_type, 0, bytes("value2")));
 
+    testlog.debug("Cells are ordered by value in lexicographical order if all else is equal");
     assert_order(
         atomic_cell::make_live(*bytes_type, 0, bytes("value12")),
         atomic_cell::make_live(*bytes_type, 0, bytes("value2")));
 
-    // Live cells are ordered first by timestamp...
+    testlog.debug("Live cells are ordered first by timestamp...");
     assert_order(
         atomic_cell::make_live(*bytes_type, 0, bytes("value2")),
         atomic_cell::make_live(*bytes_type, 1, bytes("value1")));
 
-    // ..then by value
-    assert_order(
-        atomic_cell::make_live(*bytes_type, 1, bytes("value1"), expiry_2, ttl_2),
-        atomic_cell::make_live(*bytes_type, 1, bytes("value2"), expiry_1, ttl_1));
-
-    // ..then by expiry
+    testlog.debug("...then by expiry");
     assert_order(
         atomic_cell::make_live(*bytes_type, 1, bytes(), expiry_1, ttl_1),
         atomic_cell::make_live(*bytes_type, 1, bytes(), expiry_2, ttl_1));
 
-    // Dead wins
+    testlog.debug("...then by ttl (in reverse)");
+    assert_order(
+        atomic_cell::make_live(*bytes_type, 1, bytes(), expiry_1, ttl_2),
+        atomic_cell::make_live(*bytes_type, 1, bytes(), expiry_1, ttl_1));
+
+    testlog.debug("...then by value");
+    assert_order(
+        atomic_cell::make_live(*bytes_type, 1, bytes("value1"), expiry_1, ttl_1),
+        atomic_cell::make_live(*bytes_type, 1, bytes("value2"), expiry_1, ttl_1));
+
+    testlog.debug("Dead wins");
     assert_order(
         atomic_cell::make_live(*bytes_type, 1, bytes("value")),
         atomic_cell::make_dead(1, expiry_1));
 
-    // Dead wins with expiring cell
+    testlog.debug("Dead wins with expiring cell");
     assert_order(
         atomic_cell::make_live(*bytes_type, 1, bytes("value"), expiry_2, ttl_2),
         atomic_cell::make_dead(1, expiry_1));
 
-    // Deleted cells are ordered first by timestamp
+    testlog.debug("Deleted cells are ordered first by timestamp...");
     assert_order(
         atomic_cell::make_dead(1, expiry_2),
         atomic_cell::make_dead(2, expiry_1));
 
-    // ...then by expiry
+    testlog.debug("...then by expiry");
     assert_order(
         atomic_cell::make_dead(1, expiry_1),
         atomic_cell::make_dead(1, expiry_2));
