@@ -76,6 +76,10 @@ class ManagerClient():
             logger.debug("refresh driver node list")
             self.ccluster.control_connection.refresh_node_list_and_token_map()
 
+    def get_cql(self) -> CassandraSession:
+        assert self.cql
+        return self.cql
+
     async def before_test(self, test_case_name: str) -> None:
         """Before a test starts check if cluster needs cycling and update driver connection"""
         logger.debug("before_test for %s", test_case_name)
