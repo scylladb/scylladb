@@ -51,10 +51,23 @@ class raft_address_map_t : public peering_sharded_service<raft_address_map_t<Clo
     // when they become too old.
     struct timestamped_entry {
         std::optional<gms::inet_address> _addr;
+        // The address map's source of IP addresses is gossip,
+        // which can reorder events it delivers. It is therefore
+        // possible that we get an outdated IP address after
+        // the map has been updated with a new one, and revert
+        // the mapping to an incorrect one (see #14274). To
+        // protect against outdated information we mark each
+        // entry with its generation number, when available,
+        // and drop updates with outdated generations. 0 means
+        // there is no generation available - e.g. it's set when
+        // we load the persisted map state from system.peers at
+        // boot.
+        int64_t _generation_number;
         std::unique_ptr<expiring_entry_ptr> _lru_entry;
 
-        explicit timestamped_entry(std::optional<gms::inet_address> addr)
-            : _addr(std::move(addr)), _lru_entry(nullptr)
+        explicit timestamped_entry(int64_t generation_number,
+            std::optional<gms::inet_address> addr)
+            : _addr(std::move(addr)), _generation_number(generation_number), _lru_entry(nullptr)
         {
         }
 
@@ -205,15 +218,16 @@ class raft_address_map_t : public peering_sharded_service<raft_address_map_t<Clo
         });
     }
 
-    void replicate_add_or_update_entry(const raft::server_id& id, const gms::inet_address& ip_addr,
+    void replicate_add_or_update_entry(const raft::server_id& id,
+            int64_t generation_number, const gms::inet_address& ip_addr,
             bool update_if_exists) {
-        replicate([id, ip_addr, update_if_exists] (raft_address_map_t& self) {
-            self.handle_add_or_update_entry(id, ip_addr, update_if_exists);
+        replicate([id, generation_number, ip_addr, update_if_exists] (raft_address_map_t& self) {
+            self.handle_add_or_update_entry(id, generation_number, ip_addr, update_if_exists);
         });
     }
 
     void handle_set_nonexpiring(const raft::server_id& id) {
-        auto [it, _] = _map.try_emplace(id, std::nullopt);
+        auto [it, _] = _map.try_emplace(id, timestamped_entry{int64_t{0}, std::nullopt});
         auto& entry = it->second;
 
         if (entry.expiring()) {
@@ -233,14 +247,16 @@ class raft_address_map_t : public peering_sharded_service<raft_address_map_t<Clo
         add_expiring_entry(it->first, entry);
     }
 
-    void handle_add_or_update_entry(const raft::server_id& id, const gms::inet_address& ip_addr,
+    void handle_add_or_update_entry(const raft::server_id& id,
+            int64_t generation_number, const gms::inet_address& ip_addr,
             bool update_if_exists) {
-        auto [it, emplaced] = _map.try_emplace(id, ip_addr);
+        auto [it, emplaced] = _map.try_emplace(id, timestamped_entry{generation_number, ip_addr});
         auto& entry = it->second;
         if (emplaced) {
             add_expiring_entry(it->first, entry);
-        } else if (update_if_exists || !entry._addr) {
+        } else if ((update_if_exists && generation_number >= entry._generation_number) || !entry._addr) {
             entry._addr = ip_addr;
+            entry._generation_number = generation_number;
             if (entry.expiring()) {
                 entry._lru_entry->touch(); // Re-insert in the front of _expiring_list
             }
@@ -313,20 +329,22 @@ public:
         if (addr == gms::inet_address{}) {
             on_internal_error(rslog, format("IP address missing for {}", id));
         }
-        handle_add_or_update_entry(id, addr, false);
+        handle_add_or_update_entry(id, int64_t{0}, addr, false);
     }
     // Insert or update entry with a new IP address on all shards.
     // Used when we get a gossip notification about a node IP
-    // address. Overrides the current IP address if present.
+    // address. Overrides the current IP address if present,
+    // as long as the generation of the new entry is greater.
     // If no entry is present, creates an expiring entry - there
     // must be a separate Raft configuration change event (@sa
     // set_nonexpiring()) to mark the entry as non expiring.
-    void add_or_update_entry(raft::server_id id, gms::inet_address addr) {
+    void add_or_update_entry(raft::server_id id, gms::inet_address addr,
+            int64_t generation_number = {}) {
         if (addr == gms::inet_address{}) {
             on_internal_error(rslog, format("IP address missing for {}", id));
         }
-        handle_add_or_update_entry(id, addr, true);
-        replicate_add_or_update_entry(id, addr, true);
+        handle_add_or_update_entry(id, generation_number, addr, true);
+        replicate_add_or_update_entry(id, generation_number, addr, true);
     }
 };
 
