@@ -332,8 +332,9 @@ static shared_ptr<cql3::selection::selection> mock_selection(
         const std::optional<query::forward_request::aggregation_info>& info
     ) {
         auto name_as_expression = [] (const sstring& name) -> cql3::expr::expression {
+            constexpr bool keep_case = true;
             return cql3::expr::unresolved_identifier {
-                make_shared<cql3::column_identifier_raw>(name, true)
+                make_shared<cql3::column_identifier_raw>(name, keep_case)
             };
         };
 
