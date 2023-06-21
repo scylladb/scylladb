@@ -352,5 +352,18 @@ bool has_only_eq_binops(const expression&);
 data_type column_mutation_attribute_type(const column_mutation_attribute& e);
 
 
+// How deep aggregations are nested. e.g. sum(avg(count(col))) == 3
+unsigned aggregation_depth(const cql3::expr::expression& e);
+
+// Make sure evey column_value is nested in exactly `depth` aggregations, by adding
+// first() calls at the deepest level. e.g. if depth=3, then
+//
+//    my_agg(sum(x), y)
+//
+// becomes
+//
+//    my_agg(sum(first(x)), first(first(y)))
+//
+cql3::expr::expression levellize_aggregation_depth(const cql3::expr::expression& e, unsigned depth);
 
 }

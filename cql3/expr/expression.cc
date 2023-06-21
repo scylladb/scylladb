@@ -19,6 +19,7 @@
 #include <boost/range/algorithm/set_algorithm.hpp>
 #include <boost/range/algorithm/unique.hpp>
 #include <boost/range/algorithm/sort.hpp>
+#include <boost/range/numeric.hpp>
 #include <fmt/ostream.h>
 #include <unordered_map>
 
@@ -39,6 +40,7 @@
 #include "cql3/maps.hh"
 #include "cql3/user_types.hh"
 #include "cql3/functions/scalar_function.hh"
+#include "cql3/functions/first_function.hh"
 #include "cql3/prepare_context.hh"
 
 namespace cql3 {
@@ -2757,6 +2759,142 @@ verify_no_aggregate_functions(const expression& expr, std::string_view context_f
     if (found_agg) {
         throw exceptions::invalid_request_exception(fmt::format("Aggregation functions are not supported in the {}", context_for_errors));
     }
+}
+
+unsigned
+aggregation_depth(const cql3::expr::expression& e) {
+    static constexpr auto max = static_cast<const unsigned& (*)(const unsigned&, const unsigned&)>(std::max<unsigned>);
+    static constexpr auto max_over_range = [] (std::ranges::range auto&& rng) -> unsigned {
+        return boost::accumulate(rng | boost::adaptors::transformed(aggregation_depth), 0u, max);
+    };
+    return visit(overloaded_functor{
+        [] (const conjunction& c) {
+            return max_over_range(c.children);
+        },
+        [] (const binary_operator& bo) {
+            return std::max(aggregation_depth(bo.lhs), aggregation_depth(bo.rhs));
+        },
+        [] (const subscript& s) {
+            return std::max(aggregation_depth(s.val), aggregation_depth(s.sub));
+        },
+        [] (const column_mutation_attribute& cma) {
+            return aggregation_depth(cma.column);
+        },
+        [] (const function_call& fc) {
+            unsigned this_function_depth = std::visit(overloaded_functor{
+                [] (const functions::function_name& n) -> unsigned {
+                    on_internal_error(expr_logger, "unprepared function_call in aggregation_depth()");
+                },
+                [] (const shared_ptr<functions::function>& fn) -> unsigned {
+                    return unsigned(fn->is_aggregate());
+                }
+            }, fc.func);
+            auto arg_depth = max_over_range(fc.args);
+            return this_function_depth + arg_depth;
+        },
+        [] (const cast& c) {
+            return aggregation_depth(c.arg);
+        },
+        [] (const field_selection& fs) {
+            return aggregation_depth(fs.structure);
+        },
+        [] (const LeafExpression auto&) {
+            return 0u;
+        },
+        [] (const tuple_constructor& tc) {
+            return max_over_range(tc.elements);
+        },
+        [] (const collection_constructor& cc) {
+            return max_over_range(cc.elements);
+        },
+        [] (const usertype_constructor& uc) {
+            return max_over_range(uc.elements | boost::adaptors::map_values);
+        }
+    }, e);
+}
+
+cql3::expr::expression
+levellize_aggregation_depth(const cql3::expr::expression& e, unsigned desired_depth) {
+    auto recurse = [&] (expression& e) {
+        e = levellize_aggregation_depth(e, desired_depth);
+    };
+    auto recurse_over_range = [&] (std::ranges::range auto&& rng) {
+        for (auto& e : rng) {
+            recurse(e);
+        }
+    };
+    // Implementation trick: we're returning a new expression, so have the visitor
+    // accept everything by value to generate a clean copy for us to mutate.
+    return visit(overloaded_functor{
+        [&] (column_value cv) -> expression {
+            expression ret = std::move(cv);
+            while (desired_depth) {
+                ret = function_call({
+                    .func = functions::aggregate_fcts::make_first_function(type_of(ret)),
+                    .args = {std::move(ret)},
+                });
+                desired_depth -= 1;
+            }
+            return ret;
+        },
+        [&] (conjunction c) -> expression {
+            recurse_over_range(c.children);
+            return c;
+        },
+        [&] (binary_operator bo) -> expression {
+            recurse(bo.lhs);
+            recurse(bo.rhs);
+            return bo;
+        },
+        [&] (subscript s) -> expression {
+            recurse(s.val);
+            recurse(s.sub);
+            return s;
+        },
+        [&] (column_mutation_attribute cma) -> expression {
+            recurse(cma.column);
+            return cma;
+        },
+        [&] (function_call fc) -> expression {
+            unsigned this_function_depth = std::visit(overloaded_functor{
+                [] (const functions::function_name& n) -> unsigned {
+                    on_internal_error(expr_logger, "unprepared function_call in aggregation_depth()");
+                },
+                [] (const shared_ptr<functions::function>& fn) -> unsigned {
+                    return unsigned(fn->is_aggregate());
+                }
+            }, fc.func);
+            if (this_function_depth > desired_depth) {
+                on_internal_error(expr_logger, "expression aggregation depth exceeds expectations");
+            }
+            desired_depth -= this_function_depth;
+            recurse_over_range(fc.args);
+            return fc;
+        },
+        [&] (cast c) -> expression {
+            recurse(c.arg);
+            return c;
+        },
+        [&] (field_selection fs) -> expression {
+            recurse(fs.structure);
+            return fs;
+        },
+        [&] (LeafExpression auto leaf) -> expression {
+            return leaf;
+        },
+        [&] (tuple_constructor tc) -> expression {
+            recurse_over_range(tc.elements);
+            return tc;
+        },
+        [&] (collection_constructor cc) -> expression {
+            recurse_over_range(cc.elements);
+            return cc;
+        },
+        [&] (usertype_constructor uc) -> expression {
+            recurse_over_range(uc.elements | boost::adaptors::map_values);
+            return uc;
+        }
+    }, e);
 }
 
 

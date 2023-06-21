@@ -18,6 +18,7 @@
 #include "test/lib/expr_test_utils.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
+#include "cql3/functions/aggregate_fcts.hh"
 
 using namespace cql3;
 using namespace cql3::expr;
@@ -4554,4 +4555,80 @@ BOOST_AUTO_TEST_CASE(is_partition_token_for_schema_test) {
     BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_other, *schema1), false);
     BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_other, *schema2), false);
     BOOST_REQUIRE_EQUAL(is_partition_token_for_schema(prepared_token_other, *schema3), false);
+}
+
+BOOST_AUTO_TEST_CASE(test_aggregation_depth) {
+    BOOST_REQUIRE_EQUAL(aggregation_depth(make_bigint_const(7)), 0);
+    auto schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(schema);
+    auto avg_sum_r = expression(
+            function_call{
+                    .func = functions::function_name("", "avg"),
+                    .args = {
+                            function_call{
+                                    .func = functions::function_name("", "sum"),
+                                    .args = {
+                                            unresolved_identifier{
+                                                    .ident = ::make_shared<column_identifier_raw>("r", false),
+                                            },
+                                    },
+                            },
+                    },
+            }
+    );
+    avg_sum_r = prepare_expression(avg_sum_r, db, "test_ks", schema.get(), nullptr);
+    
+    BOOST_REQUIRE_EQUAL(aggregation_depth(avg_sum_r), 2);
+
+
+    // Now test something with an imbalance
+    auto avg_r = function_call{
+            .func = functions::function_name("", "avg"),
+            .args = {
+                    unresolved_identifier{
+                            .ident = ::make_shared<column_identifier_raw>("r", false),
+                    },
+            },
+    };
+    auto compared = expression(binary_operator(avg_r, oper_t::EQ, avg_sum_r));
+    compared = prepare_expression(compared, db, "test_ks", schema.get(), nullptr);
+ 
+    BOOST_REQUIRE_EQUAL(aggregation_depth(compared), 2);
+}
+
+static
+shared_ptr<functions::function>
+make_two_arg_aggregate_function() {
+    return make_shared<db::functions::aggregate_function>(db::functions::stateless_aggregate_function{
+            .name = functions::function_name("foo", "my_agg"),
+            .result_type = int32_type,
+            .argument_types = { int32_type, int32_type },
+            // THe other fields are important, but not for test_levellize_aggregation_depth
+    });
+}
+
+BOOST_AUTO_TEST_CASE(test_levellize_aggregation_depth) {
+    auto schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(schema);
+    // my_agg(sum(r), r))
+    auto e = expression(
+            function_call{
+                    .func = make_two_arg_aggregate_function(),
+                    .args = {
+                            function_call{
+                                    .func = functions::function_name::native_function("sum"),
+                                    .args = {
+                                            column_value(&schema->regular_column_at(0)),
+                                    },
+                            },
+                            column_value(&schema->regular_column_at(0)),
+                    },
+            }
+    );
+    e = prepare_expression(e, db, "test_ks", schema.get(), nullptr);
+    BOOST_REQUIRE_EQUAL(aggregation_depth(e), 2);
+    e = levellize_aggregation_depth(e, 3); // Note: aggregation_depth(e) == 2 before the call
+    BOOST_REQUIRE_EQUAL(aggregation_depth(e), 3);
+    // Somewhat fragile, but easiest way to test entire structure
+    BOOST_REQUIRE_EQUAL(fmt::format("{:debug}", e), "foo.my_agg(system.sum(system.$$first$$(r)), system.$$first$$(system.$$first$$(r)))");
 }
