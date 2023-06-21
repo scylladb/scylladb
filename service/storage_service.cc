@@ -252,29 +252,11 @@ static future<> set_gossip_tokens(gms::gossiper& g,
  *
  * This function must only be called if we're not the first node
  * (i.e. booting into existing cluster).
+ *
+ * Precondition: gossiper observed at least one other live node;
+ * see `gossiper::wait_for_live_nodes_to_show_up()`.
  */
 future<> storage_service::wait_for_ring_to_settle() {
-    // Make sure we see at least one other node.
-    logger::rate_limit rate_limit{std::chrono::seconds{5}};
-#ifdef SEASTAR_DEBUG
-    // Account for debug slowness. 3 minutes is probably overkill but we don't want flaky tests.
-    constexpr auto timeout_delay = std::chrono::minutes{3};
-#else
-    constexpr auto timeout_delay = std::chrono::seconds{30};
-#endif
-    auto timeout = gms::gossiper::clk::now() + timeout_delay;
-    while (_gossiper.get_live_members().size() < 2) {
-        if (timeout <= gms::gossiper::clk::now()) {
-            auto err = ::format("Timed out waiting for other live nodes to show up in gossip during initial boot");
-            slogger.error("{}", err);
-            throw std::runtime_error{std::move(err)};
-        }
-
-        slogger.log(log_level::info, rate_limit, "No other live nodes seen yet in gossip during initial boot...");
-        co_await sleep_abortable(std::chrono::milliseconds(10), _abort_source);
-    }
-    slogger.info("Live nodes seen in gossip during initial boot: {}", _gossiper.get_live_members());
-
     auto t = gms::gossiper::clk::now();
     while (true) {
         slogger.info("waiting for schema information to complete");
@@ -1966,6 +1948,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
 
         // if our schema hasn't matched yet, keep sleeping until it does
         // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
+        co_await _gossiper.wait_for_live_nodes_to_show_up(2); // wait for at least one other node (besides us)
         co_await wait_for_ring_to_settle();
 
         if (!replace_address) {

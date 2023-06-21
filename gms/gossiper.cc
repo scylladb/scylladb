@@ -2223,6 +2223,30 @@ future<> gossiper::wait_alive(std::vector<gms::inet_address> nodes, std::chrono:
     }
 }
 
+future<> gossiper::wait_for_live_nodes_to_show_up(size_t n) {
+    logger::rate_limit rate_limit{std::chrono::seconds{5}};
+#ifdef SEASTAR_DEBUG
+    // Account for debug slowness. 3 minutes is probably overkill but we don't want flaky tests.
+    constexpr auto timeout_delay = std::chrono::minutes{3};
+#else
+    constexpr auto timeout_delay = std::chrono::seconds{30};
+#endif
+    auto timeout = gossiper::clk::now() + timeout_delay;
+    while (get_live_members().size() < n) {
+        if (timeout <= gossiper::clk::now()) {
+            auto err = ::format("Timed out waiting for {} live nodes to show up in gossip", n);
+            logger.error("{}", err);
+            throw std::runtime_error{std::move(err)};
+        }
+
+        logger.log(log_level::info, rate_limit,
+                   "Waiting for {} live nodes to show up in gossip, currently {} present...",
+                   n, get_live_members().size());
+        co_await sleep_abortable(std::chrono::milliseconds(10), _abort_source);
+    }
+    logger.info("Live nodes seen in gossip: {}", get_live_members());
+}
+
 const versioned_value* gossiper::get_application_state_ptr(inet_address endpoint, application_state appstate) const noexcept {
     auto* eps = get_endpoint_state_for_endpoint_ptr(std::move(endpoint));
     if (!eps) {
