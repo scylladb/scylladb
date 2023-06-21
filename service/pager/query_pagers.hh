@@ -37,7 +37,8 @@ public:
             const cql3::query_options&,
             lw_shared_ptr<query::read_command>,
             dht::partition_range_vector,
-            ::shared_ptr<const cql3::restrictions::statement_restrictions> filtering_restrictions = nullptr);
+            ::shared_ptr<const cql3::restrictions::statement_restrictions> filtering_restrictions = nullptr,
+            query_function query_function_override = {});
     static ::shared_ptr<query_pager> ghost_row_deleting_pager(schema_ptr,
             shared_ptr<const cql3::selection::selection>,
             service::query_state&,

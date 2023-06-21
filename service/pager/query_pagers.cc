@@ -45,7 +45,8 @@ query_pager::query_pager(service::storage_proxy& p, schema_ptr s,
                 service::query_state& state,
                 const cql3::query_options& options,
                 lw_shared_ptr<query::read_command> cmd,
-                dht::partition_range_vector ranges)
+                dht::partition_range_vector ranges,
+                query_function query_function_override)
                 : _has_clustering_keys(has_clustering_keys(*s, *cmd))
                 , _max(cmd->get_row_limit())
                 , _per_partition_limit(cmd->slice.partition_row_limit())
@@ -57,7 +58,21 @@ query_pager::query_pager(service::storage_proxy& p, schema_ptr s,
                 , _options(options)
                 , _cmd(std::move(cmd))
                 , _ranges(std::move(ranges))
-{}
+{
+    if (query_function_override) {
+        _query_function = std::move(query_function_override);
+    } else {
+        _query_function = [] (
+                service::storage_proxy& sp,
+                schema_ptr schema,
+                lw_shared_ptr<query::read_command> cmd,
+                dht::partition_range_vector&& partition_ranges,
+                db::consistency_level cl,
+                service::storage_proxy_coordinator_query_options optional_params) {
+            return sp.query_result(std::move(schema), std::move(cmd), std::move(partition_ranges), cl, std::move(optional_params));
+        };
+    }
+}
 
 future<result<service::storage_proxy::coordinator_query_result>> query_pager::do_fetch_page(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) {
     auto state = _options.get_paging_state();
@@ -179,7 +194,9 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
 
     auto ranges = _ranges;
     auto command = ::make_lw_shared<query::read_command>(*_cmd);
-    return _proxy->query_result(_schema,
+    return _query_function(
+            *_proxy,
+            _schema,
             std::move(command),
             std::move(ranges),
             _options.get_consistency(),
@@ -244,8 +261,9 @@ public:
                 const cql3::query_options& options,
                 lw_shared_ptr<query::read_command> cmd,
                 dht::partition_range_vector ranges,
-                ::shared_ptr<const cql3::restrictions::statement_restrictions> filtering_restrictions)
-        : query_pager(p, s, selection, state, options, std::move(cmd), std::move(ranges))
+                ::shared_ptr<const cql3::restrictions::statement_restrictions> filtering_restrictions,
+                query_function query_function_override)
+        : query_pager(p, s, selection, state, options, std::move(cmd), std::move(ranges), std::move(query_function_override))
         , _filtering_restrictions(std::move(filtering_restrictions))
         {}
     virtual ~filtering_query_pager() {}
@@ -469,7 +487,8 @@ std::unique_ptr<service::pager::query_pager> service::pager::query_pagers::pager
         service::query_state& state, const cql3::query_options& options,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector ranges,
-        ::shared_ptr<const cql3::restrictions::statement_restrictions> filtering_restrictions) {
+        ::shared_ptr<const cql3::restrictions::statement_restrictions> filtering_restrictions,
+        query_function query_function_override) {
     // If partition row limit is applied to paging, we still need to fall back
     // to filtering the results to avoid extraneous rows on page breaks.
     if (!filtering_restrictions && cmd->slice.partition_row_limit() < query::max_rows_if_set) {
@@ -477,10 +496,10 @@ std::unique_ptr<service::pager::query_pager> service::pager::query_pagers::pager
     }
     if (filtering_restrictions) {
         return std::make_unique<filtering_query_pager>(proxy, std::move(s), std::move(selection), state,
-                    options, std::move(cmd), std::move(ranges), std::move(filtering_restrictions));
+                    options, std::move(cmd), std::move(ranges), std::move(filtering_restrictions), std::move(query_function_override));
     }
     return std::make_unique<query_pager>(proxy, std::move(s), std::move(selection), state,
-            options, std::move(cmd), std::move(ranges));
+            options, std::move(cmd), std::move(ranges), std::move(query_function_override));
 }
 
 ::shared_ptr<service::pager::query_pager> service::pager::query_pagers::ghost_row_deleting_pager(
