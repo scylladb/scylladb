@@ -11,6 +11,7 @@
 #include "schema/schema.hh"
 #include <seastar/util/defer.hh>
 #include "cql3/prepare_context.hh"
+#include "cql3/expr/expr-utils.hh"
 #include "types/list.hh"
 #include <iterator>
 #include <ranges>

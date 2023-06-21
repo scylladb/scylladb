@@ -17,6 +17,8 @@
 #include <stdexcept>
 
 #include "cql3/expr/expression.hh"
+#include "cql3/expr/evaluate.hh"
+#include "cql3/expr/expr-utils.hh"
 #include "query-result-reader.hh"
 #include "statement_restrictions.hh"
 #include "data_dictionary/data_dictionary.hh"

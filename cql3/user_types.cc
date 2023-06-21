@@ -13,6 +13,9 @@
 #include "cql3/cql3_type.hh"
 #include "cql3/constants.hh"
 
+#include "cql3/expr/evaluate.hh"
+#include "cql3/expr/expr-utils.hh"
+
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 

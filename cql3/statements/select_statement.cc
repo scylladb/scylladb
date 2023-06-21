@@ -10,6 +10,8 @@
 
 #include "cql3/statements/select_statement.hh"
 #include "cql3/expr/expression.hh"
+#include "cql3/expr/evaluate.hh"
+#include "cql3/expr/expr-utils.hh"
 #include "cql3/statements/index_target.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"

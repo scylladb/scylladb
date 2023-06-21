@@ -10,6 +10,8 @@
 
 #include "update_statement.hh"
 #include "cql3/expr/expression.hh"
+#include "cql3/expr/evaluate.hh"
+#include "cql3/expr/expr-utils.hh"
 #include "cql3/statements/strongly_consistent_modification_statement.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "raw/update_statement.hh"

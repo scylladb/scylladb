@@ -11,6 +11,8 @@
 #include "cql3_type.hh"
 #include "types/map.hh"
 #include "types/set.hh"
+#include "cql3/expr/evaluate.hh"
+#include "cql3/expr/expr-utils.hh"
 
 namespace cql3 {
 void

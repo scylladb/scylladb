@@ -13,6 +13,8 @@
 #include "sets.hh"
 #include "lists.hh"
 #include "user_types.hh"
+#include "cql3/expr/evaluate.hh"
+#include "cql3/expr/expr-utils.hh"
 #include "types/tuple.hh"
 #include "types/map.hh"
 #include "types/list.hh"

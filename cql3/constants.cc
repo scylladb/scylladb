@@ -11,6 +11,7 @@
 #include "cql3/constants.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/statements/strongly_consistent_modification_statement.hh"
+#include "cql3/expr/evaluate.hh"
 
 namespace cql3 {
 

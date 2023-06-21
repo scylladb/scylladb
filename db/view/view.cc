@@ -32,6 +32,8 @@
 #include "cql3/statements/select_statement.hh"
 #include "cql3/util.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
+#include "cql3/expr/expr-utils.hh"
+#include "cql3/expr/evaluate.hh"
 #include "db/view/view.hh"
 #include "db/view/view_builder.hh"
 #include "db/view/view_updating_consumer.hh"

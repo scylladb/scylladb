@@ -17,6 +17,7 @@
 #include "cql3/functions/castas_fcts.hh"
 #include "cql3/functions/aggregate_fcts.hh"
 #include "cql3/expr/expression.hh"
+#include "cql3/expr/expr-utils.hh"
 #include "abstract_function_selector.hh"
 #include "writetime_or_ttl_selector.hh"
 

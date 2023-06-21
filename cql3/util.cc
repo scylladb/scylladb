@@ -5,6 +5,7 @@
 /* Copyright 2020-present ScyllaDB */
 
 #include "util.hh"
+#include "cql3/expr/expr-utils.hh"
 
 #ifdef DEBUG
 

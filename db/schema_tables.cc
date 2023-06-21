@@ -32,6 +32,8 @@
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_function.hh"
 #include "cql3/functions/user_aggregate.hh"
+#include "cql3/expr/evaluate.hh"
+#include "cql3/expr/expr-utils.hh"
 #include "cql3/util.hh"
 #include "types/list.hh"
 #include "types/set.hh"

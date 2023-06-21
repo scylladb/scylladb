@@ -12,6 +12,8 @@
 #include "operation.hh"
 #include "update_parameters.hh"
 #include "exceptions/exceptions.hh"
+#include "cql3/expr/evaluate.hh"
+#include "cql3/expr/expr-utils.hh"
 #include "cql3/cql3_type.hh"
 #include "constants.hh"
 #include "types/map.hh"

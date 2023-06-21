@@ -17,6 +17,7 @@
 #include "utils/overloaded_functor.hh"
 #include "mutation/mutation.hh"
 #include "cql3/expr/expression.hh"
+#include "cql3/expr/expr-utils.hh"
 
 namespace cql3 {
 

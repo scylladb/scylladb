@@ -15,6 +15,7 @@
 #include "exceptions/exceptions.hh"
 #include "index/secondary_index_manager.hh"
 #include "cql3/expr/expression.hh"
+#include "cql3/statements/bound.hh"
 
 namespace cql3 {
 

@@ -11,6 +11,8 @@
 #include "column_identifier.hh"
 #include "cql3_type.hh"
 #include "constants.hh"
+#include "cql3/expr/evaluate.hh"
+#include "cql3/expr/expr-utils.hh"
 #include <boost/iterator/transform_iterator.hpp>
 #include "types/list.hh"
 #include "utils/UUID_gen.hh"
