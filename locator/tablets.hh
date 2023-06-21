@@ -52,15 +52,6 @@ using tablet_replica_set = utils::small_vector<tablet_replica, 3>;
 struct tablet_info {
     tablet_replica_set replicas;
 
-    std::optional<shard_id> get_shard(host_id host) const {
-        for (auto&& r : replicas) {
-            if (r.host == host) {
-                return r.shard;
-            }
-        }
-        return std::nullopt;
-    }
-
     bool operator==(const tablet_info&) const = default;
 };
 
@@ -147,6 +138,12 @@ public:
         }
         return tablet_id(size_t(t) + 1);
     }
+
+    /// Returns shard id which is a replica for a given tablet on a given host.
+    /// If there is no replica on a given host, returns nullopt.
+    /// If the topology is transitional, also considers the new replica set.
+    /// The old replica set is preferred in case of ambiguity.
+    std::optional<shard_id> get_shard(tablet_id, host_id) const;
 
     const tablet_container& tablets() const {
         return _tablets;

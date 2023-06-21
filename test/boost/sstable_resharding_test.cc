@@ -42,7 +42,7 @@ static schema_ptr get_schema(unsigned shard_count, unsigned sharding_ignore_msb_
 // Asserts that sstable::compute_owner_shards(...) produces correct results.
 static future<> assert_sstable_computes_correct_owners(test_env& env, const sstables::shared_sstable& base_sst) {
     auto sst = co_await env.reusable_sst(base_sst);
-    co_await sst->load_owner_shards();
+    co_await sst->load_owner_shards(sst->get_schema()->get_sharder());
     BOOST_REQUIRE_EQUAL(sst->get_shards_for_this_sstable(), base_sst->get_shards_for_this_sstable());
 }
 
@@ -96,8 +96,11 @@ void run_sstable_resharding_test(sstables::test_env& env) {
 
     uint64_t bloom_filter_size_before = filter_size(sst);
 
+    auto erm = cf->get_effective_replication_map();
+
     auto descriptor = sstables::compaction_descriptor({sst}, 0, std::numeric_limits<uint64_t>::max());
     descriptor.options = sstables::compaction_type_options::make_reshard();
+    descriptor.sharder = &cf->schema()->get_sharder();
     descriptor.creator = [&env, &cf, version] (shard_id shard) mutable {
         // we need generation calculated by instance of cf at requested shard,
         // or resource usage wouldn't be fairly distributed among shards.

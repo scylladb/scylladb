@@ -158,6 +158,7 @@ static void with_sstable_directory(
 
     sstdir.start(seastar::sharded_parameter([&env_wrap] { return std::ref(env_wrap.get_manager()); }),
             seastar::sharded_parameter([] { return test_table_schema(); }),
+            seastar::sharded_parameter([] { return std::ref(test_table_schema()->get_sharder()); }),
             seastar::sharded_parameter([] { return make_lw_shared<data_dictionary::storage_options>(); }),
             path.native(), default_io_error_handler_gen()).get();
 

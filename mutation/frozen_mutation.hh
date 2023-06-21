@@ -215,8 +215,8 @@ public:
     template<FlattenedConsumerV2 Consumer>
     auto consume_gently(schema_ptr s, frozen_mutation_consumer_adaptor<Consumer>& adaptor) const -> future<frozen_mutation_consume_result<decltype(adaptor.consumer().consume_end_of_stream())>>;
 
-    unsigned shard_of(const schema& s) const {
-        return dht::shard_of(s, dht::get_token(s, key()));
+    dht::token token(const schema& s) const {
+        return dht::get_token(s, key());
     }
 
     struct printer {

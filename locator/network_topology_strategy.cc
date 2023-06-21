@@ -14,6 +14,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "locator/network_topology_strategy.hh"
+#include "locator/load_sketch.hh"
 #include "utils/fb_utilities.hh"
 #include <boost/algorithm/string.hpp>
 #include "utils/hash.hh"
@@ -294,6 +295,8 @@ future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(sch
     }
 
     tablet_map tablets(tablet_count);
+    load_sketch load(tm);
+    co_await load.populate();
 
     // FIXME: Don't use tokens to distribute nodes.
     // The following reuses the existing token-based algorithm used by NetworkTopologyStrategy.
@@ -317,8 +320,8 @@ future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(sch
 
         tablet_replica_set replicas;
         for (auto&& ep : tracker.replicas()) {
-            // FIXME: Allocate shard. Currently ignored by the replica.
-            replicas.emplace_back(tablet_replica{tm->get_host_id(ep), 0});
+            auto host = tm->get_host_id(ep);
+            replicas.emplace_back(tablet_replica{host, load.next_shard(host)});
         }
 
         tablets.set_tablet(tb, tablet_info{std::move(replicas)});

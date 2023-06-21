@@ -308,9 +308,89 @@ normalize(dht::partition_range pr) {
     return dht::partition_range(start, end);
 };
 
+class map_sharder : public dht::sharder {
+    // Defines mapping of tokens to shards.
+    //
+    // For example, {t1:s1, t2:s2, t3:s3} defines the following mapping on token ranges:
+    //
+    //   (-inf, t1) -> s1
+    //   [t1, t2) -> s2
+    //   [t2, t3) -> s3
+    //   [t3, +inf) -> s1
+    //
+    std::map<dht::token, unsigned> _shards;
+public:
+    map_sharder(unsigned num_shards) : dht::sharder(num_shards) {}
+
+    const std::map<dht::token, unsigned>& get_map() const {
+        return _shards;
+    }
+
+    void add_token(dht::token t, unsigned shard) {
+        _shards[t] = shard;
+    }
+
+    size_t token_count() const {
+        return _shards.size();
+    }
+
+    unsigned shard_of(const dht::token& t) const override {
+        auto i = _shards.upper_bound(t);
+        if (i == _shards.end()) {
+            i = _shards.begin();
+        }
+        return i->second;
+    }
+
+    dht::token token_for_next_shard(const dht::token& t, shard_id shard, unsigned int spans) const override {
+        auto i = _shards.upper_bound(t);
+        if (i == _shards.end()) {
+            return dht::maximum_token();
+        }
+        while (true) {
+            auto prev = i;
+            ++i;
+            if (i == _shards.end()) {
+                i = _shards.begin();
+                if (i->second == shard && --spans == 0) {
+                    return prev->first;
+                }
+                return dht::maximum_token();
+            }
+            if (i->second == shard && --spans == 0) {
+                return prev->first;
+            }
+        }
+    }
+
+    std::optional<dht::shard_and_token> next_shard(const dht::token& t) const override {
+        auto i = _shards.upper_bound(t);
+        if (i == _shards.end()) {
+            return std::nullopt;
+        }
+        auto prev = i;
+        ++i;
+        if (i == _shards.end()) {
+            i = _shards.begin();
+        }
+        return dht::shard_and_token{i->second, prev->first};
+    }
+};
+
+class random_sharder : public map_sharder {
+public:
+    random_sharder(unsigned num_shards, unsigned nr_tokens)
+            : map_sharder(num_shards) {
+        unsigned i = 0;
+        while (token_count() < nr_tokens) {
+            add_token(dht::token::get_random_token(), i++ % num_shards);
+        }
+    }
+};
+
 static
 void
-test_something_with_some_interesting_ranges_and_sharder(std::function<void (const schema&, const dht::partition_range&)> func_to_test) {
+test_something_with_some_interesting_ranges_and_sharder(std::function<void (const schema&, const dht::sharder&, const dht::partition_range&)> func_to_test) {
     auto s = schema_builder("ks", "cf")
         .with_column("c1", int32_type, column_kind::partition_key)
         .with_column("c2", int32_type, column_kind::partition_key)
@@ -346,17 +426,29 @@ test_something_with_some_interesting_ranges_and_sharder(std::function<void (cons
         auto schema = schema_builder(s)
             .with_sharder(sharder.shard_count(), sharder.sharding_ignore_msb()).build();
         for (auto&& range : some_murmur3_ranges) {
-            func_to_test(*schema, range);
+            func_to_test(*schema, sharder, range);
+        }
+    }
+
+    auto random_sharders = {
+        random_sharder(1, 10),
+        random_sharder(16, 256),
+        random_sharder(4, 32)
+    };
+
+    for (auto&& sharder : random_sharders) {
+        for (auto&& range : some_murmur3_ranges) {
+            func_to_test(*s, sharder, range);
         }
     }
 }
 
 static
 void
-do_test_split_range_to_single_shard(const schema& s, const dht::partition_range& pr) {
-    for (auto shard : boost::irange(0u, s.get_sharder().shard_count())) {
-        auto ranges = dht::split_range_to_single_shard(s, pr, shard).get0();
-        auto sharder = dht::ring_position_range_sharder(s.get_sharder(), pr);
+do_test_split_range_to_single_shard(const schema& s, const dht::sharder& sharder_, const dht::partition_range& pr) {
+    for (auto shard : boost::irange(0u, sharder_.shard_count())) {
+        auto ranges = dht::split_range_to_single_shard(s, sharder_, pr, shard).get0();
+        auto sharder = dht::ring_position_range_sharder(sharder_, pr);
         auto x = sharder.next(s);
         auto cmp = dht::ring_position_comparator(s);
         auto reference_ranges = std::vector<dht::partition_range>();

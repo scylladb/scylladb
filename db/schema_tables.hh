@@ -66,8 +66,8 @@ class config;
 
 class schema_ctxt {
 public:
-    schema_ctxt(const config&, std::shared_ptr<data_dictionary::user_types_storage> uts);
-    schema_ctxt(const replica::database&);
+    schema_ctxt(const config&, std::shared_ptr<data_dictionary::user_types_storage> uts, replica::database* = nullptr);
+    schema_ctxt(replica::database&);
     schema_ctxt(distributed<replica::database>&);
     schema_ctxt(distributed<service::storage_proxy>&);
 
@@ -87,7 +87,11 @@ public:
         return *_user_types;
     }
 
+    replica::database* get_db() {
+        return _db;
+    }
 private:
+    replica::database* _db;
     const db::extensions& _extensions;
     const unsigned _murmur3_partitioner_ignore_msb_bits;
     const uint32_t _schema_registry_grace_period;

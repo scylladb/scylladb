@@ -555,7 +555,7 @@ static schema_ptr tombstone_overlap_schema() {
 
 static future<sstable_ptr> ka_sst(sstables::test_env& env, schema_ptr schema, sstring dir, sstables::generation_type::int_t generation) {
     auto sst = env.make_sstable(std::move(schema), dir, sstables::generation_from_value(generation), sstables::sstable::version_types::ka, big);
-    auto fut = sst->load();
+    auto fut = sst->load(sst->get_schema()->get_sharder());
     return std::move(fut).then([sst = std::move(sst)] {
         return make_ready_future<sstable_ptr>(std::move(sst));
     });
@@ -1631,7 +1631,7 @@ SEASTAR_TEST_CASE(writer_handles_subsequent_range_tombstone_changes_without_tomb
             shared_sstable sstable = env.make_sstable(s);
             encoding_stats es;
             sstable->write_components(std::move(input_reader), 1, s, cfg, es).get();
-            sstable->load().get();
+            sstable->load(sstable->get_schema()->get_sharder()).get();
 
             mutation_fragment_stream_validating_filter f{"mutation_order_violation_test", *s, mutation_fragment_stream_validation_level::clustering_key};
             auto sstable_reader = sstable->make_reader(s, sem.make_permit(), query::full_partition_range, s->full_slice());

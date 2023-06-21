@@ -102,7 +102,7 @@ table::make_sstable_reader(schema_ptr s,
     // regardless of what the fwd_mr parameter says.
     if (pr.is_singular() && pr.start()->value().has_key()) {
         const dht::ring_position& pos = pr.start()->value();
-        if (dht::shard_of(*s, pos.token()) != this_shard_id()) {
+        if (_erm->shard_of(*s, pos.token()) != this_shard_id()) {
             return make_empty_flat_reader_v2(s, std::move(permit)); // range doesn't belong to this shard
         }
 
@@ -873,6 +873,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
           try {
             sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer("memtable");
             cfg.backup = incremental_backups_enabled();
+            cfg.erm = _erm;
 
             auto newtab = make_sstable();
             newtabs.push_back(newtab);
@@ -2782,7 +2783,9 @@ public:
         return _t.make_sstable();
     }
     sstables::sstable_writer_config configure_writer(sstring origin) const override {
-        return _t.get_sstables_manager().configure_writer(std::move(origin));
+        auto cfg = _t.get_sstables_manager().configure_writer(std::move(origin));
+        cfg.erm = _t.get_effective_replication_map();
+        return cfg;
     }
     api::timestamp_type min_memtable_timestamp() const override {
         return _cg.min_memtable_timestamp();

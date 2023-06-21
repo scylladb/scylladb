@@ -39,6 +39,7 @@
 #include "readers/flat_mutation_reader_fwd.hh"
 #include "tracing/trace_state.hh"
 #include "utils/updateable_value.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -110,6 +111,7 @@ struct sstable_writer_config {
     run_id run_identifier = run_id::create_random_id();
     size_t summary_byte_cost;
     sstring origin;
+    locator::effective_replication_map_ptr erm;
 
 private:
     explicit sstable_writer_config() {}
@@ -196,13 +198,13 @@ public:
     // load all components from disk
     // this variant will be useful for testing purposes and also when loading
     // a new sstable from scratch for sharing its components.
-    future<> load(sstable_open_config cfg = {}) noexcept;
+    future<> load(const dht::sharder& sharder, sstable_open_config cfg = {}) noexcept;
     future<> open_data(sstable_open_config cfg = {}) noexcept;
     future<> update_info_for_opened_data(sstable_open_config cfg = {});
 
     // Load set of shards that own the SSTable, while reading the minimum
     // from disk to achieve that.
-    future<> load_owner_shards();
+    future<> load_owner_shards(const dht::sharder& sharder);
 
     // Call as the last method before the object is destroyed.
     // No other uses of the object can happen at this point.
@@ -579,8 +581,13 @@ private:
     void write_compression();
 
     future<> read_scylla_metadata() noexcept;
-    void write_scylla_metadata(shard_id shard, sstable_enabled_features features, run_identifier identifier,
-            std::optional<scylla_metadata::large_data_stats> ld_stats, sstring origin);
+
+    void write_scylla_metadata(shard_id shard,
+                               const dht::sharder& sharder,
+                               sstable_enabled_features features,
+                               run_identifier identifier,
+                               std::optional<scylla_metadata::large_data_stats> ld_stats,
+                               sstring origin);
 
     future<> read_filter(sstable_open_config cfg = {});
 
@@ -664,7 +671,7 @@ private:
     std::optional<std::pair<uint64_t, uint64_t>> get_sample_indexes_for_range(const dht::token_range& range);
     std::optional<std::pair<uint64_t, uint64_t>> get_index_pages_for_range(const dht::token_range& range);
 
-    std::vector<unsigned> compute_shards_for_this_sstable() const;
+    std::vector<unsigned> compute_shards_for_this_sstable(const dht::sharder&) const;
     template <typename Components>
     static auto& get_mutable_serialization_header(Components& components) {
         auto entry = components.statistics.contents.find(metadata_type::Serialization);

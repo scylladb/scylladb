@@ -2246,7 +2246,7 @@ SEASTAR_TEST_CASE(test_broken_promoted_index_is_skipped) {
 
         auto sst = env.make_sstable(s, get_test_dir("broken_non_compound_pi_and_range_tombstone", s), sstables::generation_type(1), version);
         try {
-            sst->load().get();
+            sst->load(sst->get_schema()->get_sharder()).get();
         } catch (...) {
             BOOST_REQUIRE_EXCEPTION(current_exception_as_future().get(), sstables::malformed_sstable_exception, exception_predicate::message_contains(
                 "Failed to read partition from SSTable "));
@@ -2825,7 +2825,7 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
                 auto wr = sst->get_writer(*sst_schema, 1, cfg, encoding_stats{});
                 mr.consume_in_thread(std::move(wr));
 
-                sst->load().get();
+                sst->load(sst->get_schema()->get_sharder()).get();
 
                 bool valid;
 
@@ -2906,7 +2906,7 @@ SEASTAR_TEST_CASE(test_index_fast_forwarding_after_eof) {
             auto wr = sst->get_writer(*schema, 1, cfg, encoding_stats{});
             mr.consume_in_thread(std::move(wr));
 
-            sst->load().get();
+            sst->load(sst->get_schema()->get_sharder()).get();
         }
 
         const auto t1 = muts.front().decorated_key()._token;

@@ -134,6 +134,10 @@ std::unique_ptr<token_range_splitter> vnode_effective_replication_map::make_spli
     return locator::make_splitter(_tmptr);
 }
 
+const dht::sharder& vnode_effective_replication_map::get_sharder(const schema& s) const {
+    return s.get_sharder();
+}
+
 const per_table_replication_strategy* abstract_replication_strategy::maybe_as_per_table() const {
     if (!_per_table) {
         return nullptr;

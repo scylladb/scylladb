@@ -91,7 +91,7 @@ shared_sstable make_sstable(sstables::test_env& env, schema_ptr s, sstring dir, 
     auto sst = env.make_sstable(s, dir_path.string(), env.new_generation(), version, sstable_format_types::big, default_sstable_buffer_size, query_time);
     auto mr = mt->make_flat_reader(s, env.make_reader_permit());
     sst->write_components(std::move(mr), mutations.size(), s, cfg, mt->get_encoding_stats()).get();
-    sst->load().get();
+    sst->load(s->get_sharder()).get();
     return sst;
 }
 
@@ -100,7 +100,7 @@ shared_sstable make_sstable_easy(test_env& env, flat_mutation_reader_v2 rd, ssta
     auto s = rd.schema();
     auto sst = env.make_sstable(s, gen, version, sstable_format_types::big, default_sstable_buffer_size, query_time);
     sst->write_components(std::move(rd), expected_partition, s, cfg, encoding_stats{}).get();
-    sst->load().get();
+    sst->load(s->get_sharder()).get();
     return sst;
 }
 

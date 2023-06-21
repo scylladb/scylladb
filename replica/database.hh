@@ -352,7 +352,8 @@ struct table_stats {
 
 using storage_options = data_dictionary::storage_options;
 
-class table : public enable_lw_shared_from_this<table> {
+class table : public enable_lw_shared_from_this<table>
+            , public weakly_referencable<table> {
 public:
     struct config {
         std::vector<sstring> all_datadirs;
@@ -771,6 +772,13 @@ public:
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
     future<const_mutation_partition_ptr> find_partition_slow(schema_ptr, reader_permit permit, const partition_key& key) const;
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
+    shard_id shard_of(const mutation& m) const {
+        return shard_of(m.token());
+    }
+    shard_id shard_of(dht::token t) const {
+        return _erm ? _erm->shard_of(*_schema, t)
+                    : dht::static_shard_of(*_schema, t); // for tests.
+    }
     // Applies given mutation to this column family
     // The mutation is always upgraded to current schema.
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h = {}) {
@@ -879,6 +887,10 @@ public:
 
     void set_incremental_backups(bool val) {
         _config.enable_incremental_backups = val;
+    }
+
+    bool uses_static_sharding() const {
+        return !_erm || _erm->get_replication_strategy().is_vnode_based();
     }
 
     /*!
@@ -1581,7 +1593,7 @@ public:
     // Apply mutations atomically.
     // On restart, either all mutations will be replayed or none of them.
     // All mutations must belong to the same commitlog domain.
-    // All mutations must be owned by the current shard (in terms of dht::shard_of).
+    // All mutations must be owned by the current shard.
     // Mutations may be partially visible to reads during the call.
     // Mutations may be partially visible to reads until restart on exception (FIXME).
     future<> apply(const std::vector<frozen_mutation>&, db::timeout_clock::time_point timeout);

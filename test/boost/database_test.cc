@@ -63,7 +63,8 @@ public:
 
 static future<> apply_mutation(sharded<replica::database>& sharded_db, table_id uuid, const mutation& m, bool do_flush = false,
         db::commitlog::force_sync fs = db::commitlog::force_sync::no, db::timeout_clock::time_point timeout = db::no_timeout) {
-    auto shard = m.shard_of();
+    auto& t = sharded_db.local().find_column_family(uuid);
+    auto shard = t.shard_of(m);
     return sharded_db.invoke_on(shard, [uuid, fm = freeze(m), do_flush, fs, timeout] (replica::database& db) {
         auto& t = db.find_column_family(uuid);
         return db.apply(t.schema(), fm, tracing::trace_state_ptr(), fs, timeout).then([do_flush, &t] {
@@ -94,6 +95,7 @@ SEASTAR_TEST_CASE(test_safety_after_truncate) {
         sstring ks_name = "ks";
         sstring cf_name = "cf";
         auto s = db.find_schema(ks_name, cf_name);
+        auto&& table = db.find_column_family(s);
         auto uuid = s->id();
 
         std::vector<size_t> keys_per_shard;
@@ -104,7 +106,7 @@ SEASTAR_TEST_CASE(test_safety_after_truncate) {
             auto pkey = partition_key::from_single_value(*s, to_bytes(fmt::format("key{}", i)));
             mutation m(s, pkey);
             m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", int32_t(42), {});
-            auto shard = m.shard_of();
+            auto shard = table.shard_of(m);
             keys_per_shard[shard]++;
             pranges_per_shard[shard].emplace_back(dht::partition_range::make_singular(dht::decorate_key(*s, std::move(pkey))));
             apply_mutation(e.db(), uuid, m).get();
@@ -187,6 +189,7 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
             e.execute_cql("create table ks.cf (k text, v int, primary key (k));").get();
             auto& db = e.local_db();
             auto s = db.find_schema("ks", "cf");
+            auto&& table = db.find_column_family(s);
             auto uuid = s->id();
             std::vector<size_t> keys_per_shard;
             std::vector<dht::partition_range_vector> pranges_per_shard;
@@ -197,7 +200,7 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
                 mutation m(s, pkey);
                 m.partition().apply(tombstone(api::timestamp_type(1), gc_clock::now()));
                 apply_mutation(e.db(), uuid, m).get();
-                auto shard = m.shard_of();
+                auto shard = table.shard_of(m);
                 pranges_per_shard[shard].emplace_back(dht::partition_range::make_singular(dht::decorate_key(*s, std::move(pkey))));
             }
             for (uint32_t i = 3 * smp::count; i <= 8 * smp::count; ++i) {
@@ -205,7 +208,7 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
                 mutation m(s, pkey);
                 m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", int32_t(42), 1);
                 apply_mutation(e.db(), uuid, m).get();
-                auto shard = m.shard_of();
+                auto shard = table.shard_of(m);
                 keys_per_shard[shard]++;
                 pranges_per_shard[shard].emplace_back(dht::partition_range::make_singular(dht::decorate_key(*s, std::move(pkey))));
             }

@@ -54,17 +54,43 @@ void schema_registry::init(const db::schema_ctxt& ctxt) {
     _ctxt = std::make_unique<db::schema_ctxt>(ctxt);
 }
 
+void schema_registry::attach_table(schema_registry_entry& e) noexcept {
+    if (e._table) {
+        return;
+    }
+    replica::database* db = _ctxt->get_db();
+    if (!db) {
+        return;
+    }
+    try {
+        auto& table = db->find_column_family(e.get_schema()->id());
+        e.set_table(table.weak_from_this());
+    } catch (const replica::no_such_column_family&) {
+        if (slogger.is_enabled(seastar::log_level::debug)) {
+            slogger.debug("No table for schema version {} of {}.{}: {}", e._version,
+                          e.get_schema()->ks_name(), e.get_schema()->cf_name(), seastar::current_backtrace());
+        }
+        // ignore
+    }
+}
+
 schema_ptr schema_registry::learn(const schema_ptr& s) {
     if (s->registry_entry()) {
         return std::move(s);
     }
     auto i = _entries.find(s->version());
     if (i != _entries.end()) {
-        return i->second->get_schema();
+        schema_registry_entry& e = *i->second;
+        if (e._state == schema_registry_entry::state::LOADING) {
+            e.load(s);
+            attach_table(e);
+        }
+        return e.get_schema();
     }
     slogger.debug("Learning about version {} of {}.{}", s->version(), s->ks_name(), s->cf_name());
     auto e_ptr = make_lw_shared<schema_registry_entry>(s->version(), *this);
-    auto loaded_s = e_ptr->load(frozen_schema(s));
+    auto loaded_s = e_ptr->load(s);
+    attach_table(*e_ptr);
     _entries.emplace(s->version(), e_ptr);
     return loaded_s;
 }
@@ -125,12 +151,15 @@ schema_ptr schema_registry::get_or_load(table_schema_version v, const schema_loa
     if (i == _entries.end()) {
         auto e_ptr = make_lw_shared<schema_registry_entry>(v, *this);
         auto s = e_ptr->load(loader(v));
+        attach_table(*e_ptr);
         _entries.emplace(v, e_ptr);
         return s;
     }
     schema_registry_entry& e = *i->second;
     if (e._state == schema_registry_entry::state::LOADING) {
-        return e.load(loader(v));
+        auto s = e.load(loader(v));
+        attach_table(e);
+        return s;
     }
     return e.get_schema();
 }
@@ -138,6 +167,20 @@ schema_ptr schema_registry::get_or_load(table_schema_version v, const schema_loa
 schema_ptr schema_registry_entry::load(frozen_schema fs) {
     _frozen_schema = std::move(fs);
     auto s = get_schema();
+    if (_state == state::LOADING) {
+        _schema_promise.set_value(s);
+        _schema_promise = {};
+    }
+    _state = state::LOADED;
+    slogger.trace("Loaded {} = {}", _version, *s);
+    return s;
+}
+
+schema_ptr schema_registry_entry::load(schema_ptr s) {
+    _frozen_schema = frozen_schema(s);
+    _schema = &*s;
+    _schema->_registry_entry = this;
+    _erase_timer.cancel();
     if (_state == state::LOADING) {
         _schema_promise.set_value(s);
         _schema_promise = {};
@@ -163,6 +206,7 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
         try {
             try {
                 load(f.get0());
+                _registry.attach_table(*this);
             } catch (...) {
                 std::throw_with_nested(schema_version_loading_failed(_version));
             }
@@ -228,6 +272,7 @@ future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
                     _synced_promise.set_exception(f.get_exception());
                 } else {
                     slogger.debug("Synced {}", _version);
+                    _registry.attach_table(*this);
                     _sync_state = schema_registry_entry::sync_state::SYNCED;
                     _synced_promise.set_value();
                 }
@@ -243,9 +288,13 @@ bool schema_registry_entry::is_synced() const {
 }
 
 void schema_registry_entry::mark_synced() {
+    if (_sync_state == sync_state::SYNCED) {
+        return;
+    }
     if (_sync_state == sync_state::SYNCING) {
         _synced_promise.set_value();
     }
+    _registry.attach_table(*this);
     _sync_state = sync_state::SYNCED;
     slogger.debug("Marked {} as synced", _version);
 }

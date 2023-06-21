@@ -65,7 +65,7 @@ std::vector<dht::decorated_key> generate_partition_keys(size_t n, schema_ptr s, 
             s->partition_key_type()->types(),
             [s, shard, tokens = std::set<dht::token>()] (const partition_key& pkey) mutable -> std::optional<dht::decorated_key> {
                 auto dkey = dht::decorate_key(*s, pkey);
-                if (shard && *shard != dht::shard_of(*s, dkey.token())) {
+                if (shard && *shard != dht::static_shard_of(*s, dkey.token())) {
                     return {};
                 }
                 if (!tokens.insert(dkey.token()).second) {

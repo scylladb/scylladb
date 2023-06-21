@@ -88,7 +88,7 @@ public:
         _sst->read_statistics().get();
     }
     void load() {
-        _sst->load().get();
+        _sst->load(_sst->get_schema()->get_sharder()).get();
     }
     future<std::vector<sstables::test::index_entry>> read_index() {
         load();

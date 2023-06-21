@@ -424,7 +424,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
         for (const auto& [ring_point, endpoint, id] : ring_points) {
             std::unordered_set<token> tokens;
             tokens.insert({dht::token::kind::key, d2t(ring_point / ring_points.size())});
-            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
+            topo.add_node(id, endpoint, make_endpoint_dc_rack(endpoint), locator::node::state::normal, 1);
             tm.update_host_id(id, endpoint);
             co_await tm.update_normal_tokens(std::move(tokens), endpoint);
         }

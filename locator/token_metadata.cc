@@ -117,8 +117,8 @@ public:
         return _bootstrap_tokens;
     }
 
-    void update_topology(inet_address ep, endpoint_dc_rack dr, std::optional<node::state> opt_st) {
-        _topology.add_or_update_endpoint(ep, std::move(dr), std::move(opt_st));
+    void update_topology(inet_address ep, endpoint_dc_rack dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count = std::nullopt) {
+        _topology.add_or_update_endpoint(ep, std::nullopt, std::move(dr), std::move(opt_st), std::move(shard_count));
     }
 
     /**
@@ -920,8 +920,8 @@ token_metadata::get_bootstrap_tokens() const {
 }
 
 void
-token_metadata::update_topology(inet_address ep, endpoint_dc_rack dr, std::optional<node::state> opt_st) {
-    _impl->update_topology(ep, std::move(dr), std::move(opt_st));
+token_metadata::update_topology(inet_address ep, endpoint_dc_rack dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count) {
+    _impl->update_topology(ep, std::move(dr), std::move(opt_st), std::move(shard_count));
 }
 
 boost::iterator_range<token_metadata::tokens_iterator>

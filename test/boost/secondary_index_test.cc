@@ -1909,7 +1909,7 @@ SEASTAR_TEST_CASE(test_deleting_ghost_rows) {
                 mutation m(schema, partition_key::from_singular(*schema, pk));
                 auto& row = m.partition().clustered_row(*schema, clustering_key::from_exploded(*schema, {int32_type->decompose(8), int32_type->decompose(7)}));
                 row.apply(row_marker{api::new_timestamp()});
-                unsigned shard = m.shard_of();
+                unsigned shard = t.shard_of(m);
                 if (shard == this_shard_id()) {
                     t.apply(m);
                 }
