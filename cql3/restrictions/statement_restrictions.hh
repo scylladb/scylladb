@@ -136,9 +136,7 @@ public:
      * @return <code>true</code> the restrictions on the partition key is an IN restriction, <code>false</code>
      * otherwise.
      */
-    bool key_is_in_relation() const {
-        return find(_partition_key_restrictions, expr::oper_t::IN);
-    }
+    bool key_is_in_relation() const;
 
     /**
      * Checks if the restrictions on the clustering key is an IN restriction.
@@ -146,13 +144,9 @@ public:
      * @return <code>true</code> the restrictions on the partition key is an IN restriction, <code>false</code>
      * otherwise.
      */
-    bool clustering_key_restrictions_has_IN() const {
-        return find(_clustering_columns_restrictions, expr::oper_t::IN);
-    }
+    bool clustering_key_restrictions_has_IN() const;
 
-    bool clustering_key_restrictions_has_only_eq() const {
-        return expr::has_only_eq_binops(_clustering_columns_restrictions);
-    }
+    bool clustering_key_restrictions_has_only_eq() const;
 
     /**
      * Checks if the query request a range of partition keys.
@@ -184,9 +178,7 @@ public:
     // IS NOT NULL is a special case that is handled separately from other restrictions.
     const std::unordered_set<const column_definition*> get_not_null_columns() const;
 
-    bool has_token_restrictions() const {
-        return has_partition_token(_partition_key_restrictions, *_schema);
-    }
+    bool has_token_restrictions() const;
 
     // Checks whether the given column has an EQ restriction.
     // EQ restriction is `col = ...` or `(col, col2) = ...`
@@ -278,13 +270,7 @@ private:
      * @param kind the column type
      * @return the <code>restrictions</code> for the specified type of columns
      */
-    const expr::expression& get_restrictions(column_kind kind) const {
-        switch (kind) {
-        case column_kind::partition_key: return _partition_key_restrictions;
-        case column_kind::clustering_key: return _clustering_columns_restrictions;
-        default: return _nonprimary_key_restrictions;
-        }
-    }
+    const expr::expression& get_restrictions(column_kind kind) const;
 
     /**
      * Adds restrictions from _clustering_prefix_restrictions to _idx_tbl_ck_prefix.
@@ -457,47 +443,25 @@ public:
      * @return <code>true</code> if the query has some restrictions on the clustering columns,
      * <code>false</code> otherwise.
      */
-    bool has_clustering_columns_restriction() const {
-        return !expr::is_empty_restriction(_clustering_columns_restrictions);
-    }
+    bool has_clustering_columns_restriction() const;
 
     /**
      * Checks if the restrictions contain any non-primary key restrictions
      *
      * @return <code>true</code> if the restrictions contain any non-primary key restrictions, <code>false</code> otherwise.
      */
-    bool has_non_primary_key_restriction() const {
-        return !expr::is_empty_restriction(_nonprimary_key_restrictions);
-    }
+    bool has_non_primary_key_restriction() const;
 
     bool pk_restrictions_need_filtering() const;
 
-    bool ck_restrictions_need_filtering() const {
-        if (expr::is_empty_restriction(_clustering_columns_restrictions)) {
-            return false;
-        }
-
-        return has_partition_key_unrestricted_components()
-        || clustering_key_restrictions_need_filtering()
-        // If token restrictions are present in an indexed query, then all other restrictions need to be filtered.
-        // A single token restriction can have multiple matching partition key values.
-        // Because of this we can't create a clustering prefix with more than token restriction.
-        || (_uses_secondary_indexing && has_token_restrictions());
-    }
+    bool ck_restrictions_need_filtering() const;
 
     bool clustering_key_restrictions_need_filtering() const;
 
     /**
      * @return true if column is restricted by some restriction, false otherwise
      */
-    bool is_restricted(const column_definition* cdef) const {
-        if (_not_null_columns.contains(cdef)) {
-            return true;
-        }
-
-        auto restricted = expr::get_sorted_column_defs(get_restrictions(cdef->kind));
-        return std::find(restricted.begin(), restricted.end(), cdef) != restricted.end();
-    }
+    bool is_restricted(const column_definition* cdef) const;
 
      /**
       * @return the non-primary key restrictions.
