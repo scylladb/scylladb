@@ -47,6 +47,7 @@
 #include "utils/result_combinators.hh"
 #include "utils/result_loop.hh"
 #include "replica/database.hh"
+#include "replica/mutation_dump.hh"
 
 #include <boost/algorithm/cxx11/all_of.hpp>
 
@@ -1615,6 +1616,192 @@ parallelized_select_statement::do_execute(
             make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)))
         );
     });
+}
+
+mutation_fragments_select_statement::mutation_fragments_select_statement(
+            schema_ptr output_schema,
+            schema_ptr underlying_schema,
+            uint32_t bound_terms,
+            lw_shared_ptr<const parameters> parameters,
+            ::shared_ptr<selection::selection> selection,
+            ::shared_ptr<const restrictions::statement_restrictions> restrictions,
+            ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
+            bool is_reversed,
+            ordering_comparator_type ordering_comparator,
+            std::optional<expr::expression> limit,
+            std::optional<expr::expression> per_partition_limit,
+            cql_stats &stats,
+            std::unique_ptr<cql3::attributes> attrs)
+    : select_statement(
+            std::move(output_schema),
+            bound_terms,
+            std::move(parameters),
+            std::move(selection),
+            std::move(restrictions),
+            std::move(group_by_cell_indices),
+            is_reversed,
+            std::move(ordering_comparator),
+            std::move(limit),
+            std::move(per_partition_limit),
+            stats,
+            std::move(attrs))
+    , _underlying_schema(std::move(underlying_schema))
+{ }
+
+schema_ptr mutation_fragments_select_statement::generate_output_schema(schema_ptr underlying_schema) {
+    return replica::mutation_dump::generate_output_schema_from_underlying_schema(std::move(underlying_schema));
+}
+
+future<exceptions::coordinator_result<service::storage_proxy_coordinator_query_result>>
+mutation_fragments_select_statement::do_query(
+        const locator::node* this_node,
+        service::storage_proxy& sp,
+        schema_ptr schema,
+        lw_shared_ptr<query::read_command> cmd,
+        dht::partition_range_vector partition_ranges,
+        db::consistency_level cl,
+        service::storage_proxy_coordinator_query_options optional_params) const {
+    auto res = co_await replica::mutation_dump::dump_mutations(sp.get_db(), schema, _underlying_schema, partition_ranges, *cmd, optional_params.timeout(sp));
+    service::replicas_per_token_range last_replicas;
+    if (this_node) {
+        last_replicas.emplace(dht::token_range::make_open_ended_both_sides(), std::vector<locator::host_id>{this_node->host_id()});
+    }
+    co_return service::storage_proxy_coordinator_query_result{std::move(res), std::move(last_replicas), {}};
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>>
+mutation_fragments_select_statement::do_execute(query_processor& qp, service::query_state& state, const query_options& options) const {
+    tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
+
+    auto cl = options.get_consistency();
+
+    uint64_t limit = get_limit(options);
+    auto now = gc_clock::now();
+
+    _stats.filtered_reads += _restrictions_need_filtering;
+
+    const source_selector src_sel = state.get_client_state().is_internal()
+            ? source_selector::INTERNAL : source_selector::USER;
+    ++_stats.query_cnt(src_sel, _ks_sel, cond_selector::NO_CONDITIONS, statement_type::SELECT);
+
+    _stats.select_bypass_caches += _parameters->bypass_cache();
+    _stats.select_allow_filtering += _parameters->allow_filtering();
+    _stats.select_partition_range_scan += _range_scan;
+    _stats.select_partition_range_scan_no_bypass_cache += _range_scan_no_bypass_cache;
+
+    auto slice = make_partition_slice(options);
+    auto max_result_size = qp.proxy().get_max_result_size(slice);
+    auto command = ::make_lw_shared<query::read_command>(
+            _schema->id(),
+            _schema->version(),
+            std::move(slice),
+            max_result_size,
+            query::tombstone_limit(qp.proxy().get_tombstone_limit()),
+            query::row_limit(limit),
+            query::partition_limit(query::max_partitions),
+            now,
+            tracing::make_trace_info(state.get_trace_state()),
+            query_id::create_null_id(),
+            query::is_first_page::no,
+            options.get_timestamp(state));
+    command->allow_limit = db::allow_per_partition_rate_limit::yes;
+
+    int32_t page_size = options.get_page_size();
+
+    _stats.unpaged_select_queries(_ks_sel) += page_size <= 0;
+
+    // An aggregation query will never be paged for the user, but we always page it internally to avoid OOM.
+    // If we user provided a page_size we'll use that to page internally (because why not), otherwise we use our default
+    // Note that if there are some nodes in the cluster with a version less than 2.0, we can't use paging (CASSANDRA-6707).
+    // Also note: all GROUP BY queries are considered aggregation.
+    const bool aggregate = _selection->is_aggregate() || has_group_by();
+    const bool nonpaged_filtering = _restrictions_need_filtering && page_size <= 0;
+    if (aggregate || nonpaged_filtering) {
+        page_size = internal_paging_size;
+    }
+
+    auto key_ranges = _restrictions->get_partition_key_ranges(options);
+
+    auto timeout_duration = get_timeout(state.get_client_state(), options);
+    auto timeout = db::timeout_clock::now() + timeout_duration;
+
+    if (!aggregate && !_restrictions_need_filtering && (page_size <= 0
+            || !service::pager::query_pagers::may_need_paging(*_schema, page_size,
+                    *command, key_ranges))) {
+        return do_query({}, qp.proxy(), _schema, command, std::move(key_ranges), cl,
+                {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}})
+        .then(wrap_result_to_error_message([&, this] (service::storage_proxy_coordinator_query_result&& qr) {
+            cql3::selection::result_set_builder builder(*_selection, now);
+            query::result_view::consume(*qr.query_result, std::move(slice),
+                    cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection));
+            auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(builder.build()));
+            return ::shared_ptr<cql_transport::messages::result_message>(std::move(msg));
+        }));
+    }
+
+    const locator::node* this_node = nullptr;
+    {
+        auto& tbl = qp.proxy().local_db().find_column_family(_underlying_schema);
+        auto& erm = tbl.get_effective_replication_map();
+        auto& topo = erm->get_topology();
+        this_node = topo.this_node();
+        auto state = options.get_paging_state();
+        if (state && !state->get_last_replicas().empty()) {
+            auto last_host = state->get_last_replicas().begin()->second.front();
+            if (last_host != this_node->host_id()) {
+                const auto last_node = topo.find_node(last_host);
+                throw exceptions::invalid_request_exception(format(
+                            "Moving between coordinators is not allowed in SELECT FROM MUTATION_FRAGMENTS() statements, last page's coordinator was {}{}",
+                            last_host,
+                            last_node ? fmt::format("({})", last_node->endpoint()) : ""));
+            }
+        }
+    }
+
+    command->slice.options.set<query::partition_slice::option::allow_short_read>();
+    auto p = service::pager::query_pagers::pager(
+            qp.proxy(),
+            _schema,
+            _selection,
+            state,
+            options,
+            command,
+            std::move(key_ranges),
+            _restrictions_need_filtering ? _restrictions : nullptr,
+            std::bind_front(&mutation_fragments_select_statement::do_query, this, this_node));
+
+    if (_selection->is_trivial() && !_restrictions_need_filtering && !_per_partition_limit) {
+        return p->fetch_page_generator_result(page_size, now, timeout, _stats).then(wrap_result_to_error_message([this, p = std::move(p)] (result_generator&& generator) {
+            auto meta = [&] () -> shared_ptr<const cql3::metadata> {
+                if (!p->is_exhausted()) {
+                    auto meta = make_shared<metadata>(*_selection->get_result_metadata());
+                    meta->set_paging_state(p->state());
+                    return meta;
+                } else {
+                    return _selection->get_result_metadata();
+                }
+            }();
+
+            return shared_ptr<cql_transport::messages::result_message>(
+                make_shared<cql_transport::messages::result_message::rows>(result(std::move(generator), std::move(meta)))
+            );
+        }));
+    }
+
+    return p->fetch_page_result(page_size, now, timeout).then(wrap_result_to_error_message(
+            [this, p = std::move(p)](std::unique_ptr<cql3::result_set>&& rs) {
+                if (!p->is_exhausted()) {
+                    rs->get_metadata().set_paging_state(p->state());
+                }
+
+                if (_restrictions_need_filtering) {
+                    _stats.filtered_rows_read_total += p->stats().rows_read_total;
+                    _stats.filtered_rows_matched_total += rs->size();
+                }
+                update_stats_rows_read(rs->size());
+                auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
+                return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(msg));
+            }));
 }
 
 namespace raw {
