@@ -3748,7 +3748,7 @@ future<> system_keyspace::sstables_registry_list(sstring location, sstable_regis
     co_await _qp.query_internal(req, db::consistency_level::ONE, { location }, 1000, [ consumer = std::move(consumer) ] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
         auto uuid = row.get_as<utils::UUID>("uuid");
         auto status = row.get_as<sstring>("status");
-        auto gen = sstables::generation_type::from_uuid(row.get_as<utils::UUID>("generation"));
+        auto gen = sstables::generation_type(row.get_as<utils::UUID>("generation"));
         auto ver = sstables::version_from_string(row.get_as<sstring>("version"));
         auto fmt = sstables::format_from_string(row.get_as<sstring>("format"));
         sstables::entry_descriptor desc("", "", "", gen, ver, fmt, sstables::component_type::TOC);

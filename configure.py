@@ -461,6 +461,7 @@ scylla_tests = set([
     'test/boost/snitch_reset_test',
     'test/boost/sstable_3_x_test',
     'test/boost/sstable_datafile_test',
+    'test/boost/sstable_generation_test',
     'test/boost/sstable_mutation_test',
     'test/boost/sstable_partition_index_cache_test',
     'test/boost/schema_changes_test',
