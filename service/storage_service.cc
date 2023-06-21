@@ -1855,6 +1855,30 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
     co_await _gossiper.start_gossiping(generation_number, app_states, advertise);
 
+    if (!_raft_topology_change_enabled && should_bootstrap()) {
+        // Wait for NORMAL state handlers to finish for existing nodes now, so that connection dropping
+        // (happening at the end of `handle_state_normal`: `notify_joined`) doesn't interrupt
+        // group 0 joining or repair. (See #12764, #12956, #12972, #13302)
+        //
+        // But before we can do that, we must make sure that gossip sees at least one other node
+        // and fetches the list of peers from it; otherwise `wait_for_normal_state_handled_on_boot`
+        // may trivially finish without waiting for anyone.
+        co_await _gossiper.wait_for_live_nodes_to_show_up(2);
+
+        auto ignore_nodes = ri
+                ? parse_node_list(_db.local().get_config().ignore_dead_nodes_for_replace(), get_token_metadata())
+                // TODO: specify ignore_nodes for bootstrap
+                : std::unordered_set<gms::inet_address>{};
+        auto sync_nodes = co_await get_nodes_to_sync_with(ignore_nodes);
+        if (ri) {
+            sync_nodes.erase(ri->address);
+        }
+
+        // Note: in Raft topology mode this is unnecessary.
+        // Node state changes are propagated to the cluster through explicit global barriers.
+        co_await wait_for_normal_state_handled_on_boot(sync_nodes);
+    }
+
     assert(_group0);
     // if the node is bootstrapped the functin will do nothing since we already created group0 in main.cc
     co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, raft_replace_info, *this, qp, _migration_manager.local(), cdc_gen_service);
@@ -1948,7 +1972,6 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
 
         // if our schema hasn't matched yet, keep sleeping until it does
         // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
-        co_await _gossiper.wait_for_live_nodes_to_show_up(2); // wait for at least one other node (besides us)
         co_await wait_for_ring_to_settle();
 
         if (!replace_address) {
@@ -2166,18 +2189,6 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
                         " - a node with this IP didn't recently leave the cluster. If it did, wait for some time first (the IP is quarantined),\n"
                         "and retry the bootstrap/replace."};
             }
-        }
-
-        {
-            // Wait for normal state handler to finish for existing nodes in the cluster.
-            auto ignore_nodes = replacement_info ? parse_node_list(_db.local().get_config().ignore_dead_nodes_for_replace(), get_token_metadata())
-                                                 // TODO: specify ignore_nodes for bootstrap
-                                                 : std::unordered_set<gms::inet_address>{};
-            auto sync_nodes = get_nodes_to_sync_with(ignore_nodes).get();
-            if (replacement_info) {
-                sync_nodes.erase(replacement_info->address);
-            }
-            wait_for_normal_state_handled_on_boot(sync_nodes).get();
         }
 
         if (!replacement_info) {
