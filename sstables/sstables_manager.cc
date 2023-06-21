@@ -98,6 +98,10 @@ const locator::host_id& sstables_manager::get_local_host_id() const {
     return _db_config.host_id;
 }
 
+bool sstables_manager::uuid_sstable_identifiers() const {
+    return _features.uuid_sstable_identifiers;
+}
+
 shared_sstable sstables_manager::make_sstable(schema_ptr schema,
         const data_dictionary::storage_options& storage,
         sstring dir,

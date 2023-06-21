@@ -138,7 +138,7 @@ private:
     std::unique_ptr<components_lister> _lister;
     const dht::sharder& _sharder;
 
-    std::optional<generation_type> _max_generation_seen;
+    generation_type _max_generation_seen;
     sstables::sstable_version_types _max_version_seen = sstables::sstable_version_types::ka;
 
     // SSTables that are unshared and belong to this shard. They are already stored as an
@@ -201,7 +201,7 @@ public:
     future<> move_foreign_sstables(sharded<sstable_directory>& source_directory);
 
     // returns what is the highest generation seen in this directory.
-    std::optional<generation_type> highest_generation_seen() const;
+    generation_type highest_generation_seen() const;
 
     // returns what is the highest version seen in this directory.
     sstables::sstable_version_types highest_version_seen() const;
@@ -272,6 +272,6 @@ public:
     future<> garbage_collect();
 };
 
-future<std::optional<sstables::generation_type>> highest_generation_seen(sharded<sstables::sstable_directory>& directory);
+future<sstables::generation_type> highest_generation_seen(sharded<sstables::sstable_directory>& directory);
 
 }
