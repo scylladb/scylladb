@@ -1,152 +1,53 @@
-:full-width:
-:hide-version-warning:
-:hide-pre-content:
-:hide-post-content:
-:hide-sidebar:
-:hide-secondary-sidebar:
-:landing:
+:orphan:
 
-.. title:: Welcome to ScyllaDB Documentation
+====================================
+ScyllaDB Open Source Documentation
+====================================
 
-.. hero-box::
-  :title: Welcome to ScyllaDB Documentation
-  :image: /_static/img/mascots/scylla-docs.svg
-  :search_box:
+.. meta::
+   :title: ScyllaDB Open Source Documentation
+   :description: ScyllaDB Open Source Documentation
+   :keywords: ScyllaDB Open Source, Scylla Open Source, Scylla docs, ScyllaDB documentation, Scylla Documentation
 
-  New to ScyllaDB? Start `here <https://cloud.docs.scylladb.com/stable/scylladb-basics/>`_!
+About This User Guide
+-----------------------
 
-.. raw:: html
+ScyllaDB is a distributed NoSQL wide-column database for data-intensive apps that require 
+high performance and low latency.
 
-  <div class="landing__content landing__content">
+This user guide covers topics related to ScyllaDB Open Source - an open-source project that allows you to evaluate 
+experimental features, review the `source code <https://github.com/scylladb/scylladb>`_, and add your contributions
+to the project.
 
-.. raw:: html
+For topics related to other ScyllaDB flavors, see the documentation for `ScyllaDB Enterprise <https://enterprise.docs.scylladb.com/>`_ and 
+`ScyllaDB Cloud <https://cloud.docs.scylladb.com/>`_.
 
-  <div class="topics-grid topics-grid--scrollable grid-container full">
+Documentation Highlights
+--------------------------
 
-  <div class="grid-x grid-margin-x hs">
+* :doc:`Install ScyllaDB Open Source </getting-started/install-scylla/index>`
+* :doc:`Configure ScyllaDB Open Source </getting-started/system-configuration/>`
+* :doc:`Cluster Management Procedures </operating-scylla/procedures/cluster-management/index>`
+* :doc:`Upgrade ScyllaDB Open Source </upgrade/index>`
+* :doc:`CQL Reference </cql/index>`
+* :doc:`ScyllaDB Drivers </using-scylla/drivers/index>`
 
-.. topic-box::
-  :title: ScyllaDB Cloud
-  :icon: scylla-icon scylla-icon--cloud
-  :link: https://cloud.docs.scylladb.com
-  :class: large-4 cloud-card
-  :anchor: ScyllaDB Cloud Documentation
+ScyllaDB Community
+--------------------------
 
-  Simplify application development with ScyllaDB Cloud - a fully managed database-as-a-service.
+Join the ScyllaDB Open Source community:
 
-.. topic-box::
-  :title: ScyllaDB Enterprise
-  :icon: scylla-icon scylla-icon--enterprise-m
-  :link: https://enterprise.docs.scylladb.com
-  :class: large-4 enterprise-card
-  :anchor: ScyllaDB Enterprise Documentation
+* Contribute to the ScyllaDB Open Source `project <https://github.com/scylladb/scylladb>`_.
+* Join the `ScyllaDB Community Forum <https://forum.scylladb.com/>`_.
+* Join our `Slack Channel <https://slack.scylladb.com/>`_.
+* Sign up for the `scylladb-users <https://groups.google.com/d/forum/scylladb-users>`_ Google group.
 
-  Deploy and manage ScyllaDB's most stable enterprise-grade database with premium features and 24/7 support.
+Learn How to Use ScyllaDB
+---------------------------
 
-.. topic-box::
-  :title: ScyllaDB Open Source
-  :icon: scylla-icon scylla-icon--about-us-m
-  :link: https://docs.scylladb.com/stable/getting-started/
-  :class: large-4 opensource-card
-  :anchor: ScyllaDB Open Source Documentation
-
-  Deploy and manage your database in your environment.
-
-
-.. raw:: html
-
-  </div></div>
-
-.. raw:: html
-
-  <div class="topics-grid topics-grid--products">
-
-      <h2 class="topics-grid__title">Other Products</h2>
-      <p class="topics-grid__text"></p>
-
-      <div class="grid-container full">
-          <div class="grid-x grid-margin-x">
-
-.. topic-box::
-  :title: ScyllaDB Alternator
-  :link: https://docs.scylladb.com/stable/alternator/alternator.html
-  :image: /_static/img/mascots/scylla-alternator.svg
-  :class: topic-box--product,large-4,small-6
-
-  Open source Amazon DynamoDB-compatible API.
-
-.. topic-box::
-  :title: ScyllaDB Monitoring Stack
-  :link: https://monitoring.docs.scylladb.com
-  :image: /_static/img/mascots/scylla-monitor.svg
-  :class: topic-box--product,large-4,small-6
-
-  Complete open source monitoring solution for your ScyllaDB clusters.
-
-.. topic-box::
-  :title: ScyllaDB Manager
-  :link: https://manager.docs.scylladb.com
-  :image: /_static/img/mascots/scylla-manager.svg
-  :class: topic-box--product,large-4,small-6
-
-  Hassle-free ScyllaDB NoSQL database management for scale-out clusters.
-
-.. topic-box::
-  :title: ScyllaDB Drivers
-  :link: https://docs.scylladb.com/stable/using-scylla/drivers/
-  :image: /_static/img/mascots/scylla-drivers.svg
-  :class: topic-box--product,large-4,small-6
-
-  Shard-aware drivers for superior performance. 
-
-.. topic-box::
-  :title: ScyllaDB Operator
-  :link: https://operator.docs.scylladb.com
-  :image: /_static/img/mascots/scylla-enterprise.svg
-  :class: topic-box--product,large-4,small-6
-
-  Easily run and manage your ScyllaDB cluster on Kubernetes.
-
-.. raw:: html
-
-  </div></div></div>
-
-.. raw:: html
-
-  <div class="topics-grid">
-
-      <h2 class="topics-grid__title">Learn More About ScyllaDB</h2>
-      <p class="topics-grid__text"></p>
-      <div class="grid-container full">
-          <div class="grid-x grid-margin-x">
-
-.. topic-box::
-  :title: Attend ScyllaDB University
-  :link: https://university.scylladb.com/
-  :image: /_static/img/mascots/scylla-university.png
-  :class: large-6,small-12
-  :anchor: Find a Class
-
-  | Register to take a *free* class at ScyllaDB University.
-  | There are several learning paths to choose from.
-
-.. topic-box::
-  :title: Register for a Webinar
-  :link: https://www.scylladb.com/resources/webinars/
-  :image: /_static/img/mascots/scylla-with-computer-2.png
-  :class: large-6,small-12
-  :anchor: Find a Webinar
-
-  | You can either participate in a live webinar or see a recording on demand.
-  | There are several webinars to choose from.
-
-.. raw:: html
-
-  </div></div></div>
-
-.. raw:: html
-
-  </div>
+You can learn to use ScyllaDB by taking **free courses** at `ScyllaDB University <https://university.scylladb.com/>`_. 
+In addition, you can read our `blog <https://www.scylladb.com/blog/>`_ and attend ScyllaDB's 
+`webinars, workshops, and conferences <https://www.scylladb.com/company/events/>`_.
 
 .. toctree::
   :hidden:
@@ -159,7 +60,6 @@
   troubleshooting/index
   kb/index
   reference/index
-  ScyllaDB University <https://university.scylladb.com/>
   faq
   Contribute to ScyllaDB <contribute>
   alternator/alternator
