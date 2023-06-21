@@ -391,7 +391,10 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
                 ( K_DISTINCT { is_distinct = true; } )?
                 sclause=selectClause
                )
-      K_FROM cf=columnFamilyName
+      K_FROM (
+                cf=columnFamilyName
+                | K_MUTATION_FRAGMENTS '(' cf=columnFamilyName ')' { statement_subtype = raw::select_statement::parameters::statement_subtype::MUTATION_FRAGMENTS; }
+             )
       ( K_WHERE w=whereClause { wclause = std::move(w); } )?
       ( K_GROUP K_BY gbcolumns=listOfIdentifiers)?
       ( K_ORDER K_BY orderByClause[orderings] ( ',' orderByClause[orderings] )* )?
@@ -2067,6 +2070,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_DESCRIBE
         | K_DESC
         | K_EXECUTE
+        | K_MUTATION_FRAGMENTS
         ) { $str = $k.text; }
     ;
 
@@ -2274,6 +2278,8 @@ K_TIMEOUT:     T I M E O U T;
 K_PRUNE:       P R U N E;
 
 K_EXECUTE:     E X E C U T E;
+
+K_MUTATION_FRAGMENTS:    M U T A T I O N '_' F R A G M E N T S;
 
 // Case-insensitive alpha characters
 fragment A: ('a'|'A');

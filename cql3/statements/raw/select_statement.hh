@@ -49,7 +49,7 @@ public:
     class parameters final {
     public:
         using orderings_type = std::vector<std::pair<shared_ptr<column_identifier::raw>, ordering>>;
-        enum class statement_subtype { REGULAR, JSON, PRUNE_MATERIALIZED_VIEW };
+        enum class statement_subtype { REGULAR, JSON, PRUNE_MATERIALIZED_VIEW, MUTATION_FRAGMENTS };
     private:
         const orderings_type _orderings;
         const bool _is_distinct;
