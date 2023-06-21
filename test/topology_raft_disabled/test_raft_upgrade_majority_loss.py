@@ -30,8 +30,6 @@ async def test_recovery_after_majority_loss(manager: ManagerClient, random_table
     used to recover group 0 might have missed them. However in this test the driver waits
     for schema agreement to complete before proceeding, so we know that every server learned
     about the schema changes.
-
-    kbr-: the test takes about 22 seconds in dev mode on my laptop.
     """
     servers = await manager.running_servers()
 
@@ -85,3 +83,8 @@ async def test_recovery_after_majority_loss(manager: ManagerClient, random_table
 
     logging.info("Creating another table")
     await random_tables.add_table(ncolumns=5)
+
+    logging.info("Booting new node")
+    await manager.server_add(config={
+        'consistent_cluster_management': True
+    })
