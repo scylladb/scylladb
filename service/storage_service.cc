@@ -1877,6 +1877,18 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         // Note: in Raft topology mode this is unnecessary.
         // Node state changes are propagated to the cluster through explicit global barriers.
         co_await wait_for_normal_state_handled_on_boot(sync_nodes);
+
+        // NORMAL doesn't necessarily mean UP (#14042). Wait for these nodes to be UP as well
+        // to reduce flakiness (we need them to be UP to perform CDC generation write and for repair/streaming).
+        //
+        // This could be done in Raft topology mode as well, but the calculation of nodes to sync with
+        // has to be done based on topology state machine instead of gossiper as it is here;
+        // furthermore, the place in the code where we do this has to be different (it has to be coordinated
+        // by the topology coordinator after it joins the node to the cluster).
+        std::vector<gms::inet_address> sync_nodes_vec{sync_nodes.begin(), sync_nodes.end()};
+        slogger.info("Waiting for nodes {} to be alive", sync_nodes_vec);
+        co_await _gossiper.wait_alive(sync_nodes_vec, std::chrono::seconds{30});
+        slogger.info("Nodes {} are alive", sync_nodes_vec);
     }
 
     assert(_group0);
