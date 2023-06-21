@@ -888,7 +888,12 @@ void messaging_service::remove_rpc_client(msg_addr id) {
 
 void messaging_service::remove_rpc_client_with_ignored_topology(msg_addr id) {
     for (auto& c : _clients) {
-        find_and_remove_client(c, id, [] (const auto& s) { return s.topology_ignored; });
+        find_and_remove_client(c, id, [id] (const auto& s) {
+            if (s.topology_ignored) {
+                mlogger.info("Dropping connection to {} because it was created without topology information", id.addr);
+            }
+            return s.topology_ignored;
+        });
     }
 }
 
