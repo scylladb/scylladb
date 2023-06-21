@@ -755,6 +755,18 @@ public:
     // apply call 'state_machine::load_snapshot(snapshot::id)'
     // Called during Raft server initialization only, should not
     // run in parallel with store.
+    //
+    // If you want to create a Raft cluster with a non-empty state
+    // machine, so that joining servers always receive a snapshot,
+    // you should:
+    // - make sure that members of the initial configuration have
+    //   the same state machine state,
+    // - set the initial snapshot index on members of the initial
+    //   configuration to 1,
+    // - set the initial snapshot index on all subsequently joining
+    //   servers to 0.
+    // This also works if you start with an empty state machine,
+    // so consider it as the go-to default.
     virtual future<snapshot_descriptor> load_snapshot_descriptor() = 0;
 
     // Persist given log entries.

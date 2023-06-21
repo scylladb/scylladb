@@ -71,9 +71,14 @@ public:
 
     // Persist initial configuration of a new Raft group.
     // To be called before start for the new group.
-    // Uses a special snapshot id (0) to identify the snapshot
-    // descriptor.
-    future<> bootstrap(raft::configuration initial_configuation);
+    //
+    // If `nontrivial_snapshot` is true, the initial snapshot will have index 1 instead of 0,
+    // which will trigger a snapshot transfer to servers which start with snapshot index 0.
+    // This should be set for the first group 0 server during upgrade or recovery, which
+    // will force snapshot transfers for subsequently joining nodes (so we can transfer initial
+    // schema etc.). It's also correct to do it when booting a cluster from
+    // scratch with Raft, although not necessary (it will force an empty snapshot transfer).
+    future<> bootstrap(raft::configuration initial_configuation, bool nontrivial_snapshot);
 private:
 
     future<> do_store_log_entries(const std::vector<raft::log_entry_ptr>& entries);
