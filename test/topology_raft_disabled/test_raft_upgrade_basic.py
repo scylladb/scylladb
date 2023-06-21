@@ -24,9 +24,6 @@ from test.topology_raft_disabled.util import restart, enable_raft, \
 @log_run_time
 @pytest.mark.replication_factor(1)
 async def test_raft_upgrade_basic(manager: ManagerClient, random_tables: RandomTables):
-    """
-    kbr-: the test takes about 7 seconds in dev mode on my laptop.
-    """
     servers = await manager.running_servers()
     cql = manager.cql
     assert(cql)
@@ -53,3 +50,8 @@ async def test_raft_upgrade_basic(manager: ManagerClient, random_tables: RandomT
     assert(rs)
     logging.info(f"group0_history entry description: '{rs[0].description}'")
     assert(table.full_name in rs[0].description)
+
+    logging.info("Booting new node")
+    await manager.server_add(config={
+        'consistent_cluster_management': True
+    })
