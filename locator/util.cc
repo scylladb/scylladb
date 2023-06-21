@@ -86,7 +86,7 @@ get_range_to_address_map_in_local_dc(
 
 // static future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 // get_range_to_address_map(const replica::database& db, const sstring& keyspace) {
-//     return get_range_to_address_map(db.find_keyspace(keyspace).get_effective_replication_map());
+//     return get_range_to_address_map(db.find_keyspace(keyspace).erm());
 // }
 
 static future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
@@ -99,7 +99,7 @@ describe_ring(const replica::database& db, const gms::gossiper& gossiper, const 
     std::vector<dht::token_range_endpoints> ranges;
     //Token.TokenFactory tf = getPartitioner().getTokenFactory();
 
-    auto erm = db.find_keyspace(keyspace).get_effective_replication_map();
+    auto erm = db.find_keyspace(keyspace).erm();
     std::unordered_map<dht::token_range, inet_address_vector_replica_set> range_to_address_map = co_await (
             include_only_local_dc
                     ? get_range_to_address_map_in_local_dc(erm)

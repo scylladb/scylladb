@@ -613,7 +613,7 @@ SEASTAR_TEST_CASE(test_commitlog_replay_invalid_key){
         auto& table = db.find_column_family("ks", "t");
         auto& cl = *table.commitlog();
         auto s = table.schema();
-        auto& sharder = table.get_effective_replication_map()->get_sharder(*table.schema());
+        auto& sharder = table.erm()->get_sharder(*table.schema());
         auto memtables = table.active_memtables();
 
         auto add_entry = [&cl, s, &sharder] (const partition_key& key) mutable {

@@ -851,7 +851,7 @@ void manager::end_point_hints_manager::sender::start() {
 }
 
 future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_mutation_and_schema m) {
-    auto erm = _db.find_column_family(m.s).get_effective_replication_map();
+    auto erm = _db.find_column_family(m.s).erm();
     auto token = dht::get_token(*m.s, m.fm.key());
     inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints(std::move(token));
 

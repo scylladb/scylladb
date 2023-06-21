@@ -434,11 +434,11 @@ class token_ranges_owned_by_this_shard {
 public:
     token_ranges_owned_by_this_shard(replica::database& db, gms::gossiper& g, schema_ptr s)
         :  _s(s)
-        , _token_ranges(db.find_keyspace(s->ks_name()).get_effective_replication_map(),
+        , _token_ranges(db.find_keyspace(s->ks_name()).erm(),
                 g, utils::fb_utilities::get_broadcast_address())
         , _range_idx(random_offset(0, _token_ranges.size() - 1))
         , _end_idx(_range_idx + _token_ranges.size())
-        , _erm(s->table().get_effective_replication_map())
+        , _erm(s->table().erm())
     {
         tlogger.debug("Generating token ranges starting from base range {} of {}", _range_idx, _token_ranges.size());
     }

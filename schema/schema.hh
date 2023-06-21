@@ -830,7 +830,7 @@ public:
     // Returns a sharder for this table.
     // Use only for tables which use vnode-based replication strategy, that is for which
     // table::uses_static_sharding() is true.
-    // To obtain a sharder which is valid for all kinds of tables, use table::get_effective_replication_map()->get_sharder()
+    // To obtain a sharder which is valid for all kinds of tables, use table::erm()->get_sharder()
     const dht::sharder& get_sharder() const;
 
     // Returns a pointer to the table if the local database has a table which this object references by id().

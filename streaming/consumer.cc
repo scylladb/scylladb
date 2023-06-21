@@ -55,7 +55,7 @@ std::function<future<> (flat_mutation_reader_v2)> make_streaming_consumer(sstrin
                 schema_ptr s = reader.schema();
 
                 auto cfg = cf->get_sstables_manager().configure_writer(origin);
-                cfg.erm = cf->get_effective_replication_map();
+                cfg.erm = cf->erm();
                 return sst->write_components(std::move(reader), adjusted_estimated_partitions, s,
                                              cfg, encoding_stats{}).then([sst] {
                     return sst->open_data();

@@ -350,7 +350,7 @@ public:
         auto ckey = clustering_key::from_deeply_exploded(*schema, ck);
         auto exp = expected.type()->decompose(expected);
         auto dk = dht::decorate_key(*schema, pkey);
-        auto shard = cf.get_effective_replication_map()->shard_of(*schema, dk._token);
+        auto shard = cf.erm()->shard_of(*schema, dk._token);
         return _db.invoke_on(shard, [pkey = std::move(pkey),
                                       ckey = std::move(ckey),
                                       ks_name = std::move(ks_name),

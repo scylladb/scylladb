@@ -2786,7 +2786,7 @@ public:
     }
     sstables::sstable_writer_config configure_writer(sstring origin) const override {
         auto cfg = _t.get_sstables_manager().configure_writer(std::move(origin));
-        cfg.erm = _t.get_effective_replication_map();
+        cfg.erm = _t.erm();
         return cfg;
     }
     api::timestamp_type min_memtable_timestamp() const override {

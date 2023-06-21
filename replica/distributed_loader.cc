@@ -252,7 +252,7 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
     auto& t = table.as_table_state();
     co_await coroutine::parallel_for_each(buckets, [&] (std::vector<sstables::shared_sstable>& sstlist) mutable {
         return table.get_compaction_manager().run_custom_job(table.as_table_state(), sstables::compaction_type::Reshard, "Reshard compaction", [&] (sstables::compaction_data& info) -> future<> {
-            auto erm = table.get_effective_replication_map(); // keep alive around compaction.
+            auto erm = table.erm(); // keep alive around compaction.
 
             sstables::compaction_descriptor desc(sstlist);
             desc.options = sstables::compaction_type_options::make_reshard();
@@ -438,7 +438,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, distr
 
         sharded<locator::effective_replication_map_ptr> erms;
         erms.start(sharded_parameter([&global_table] {
-            return global_table->get_effective_replication_map();
+            return global_table->erm();
         })).get();
         auto stop_erms = deferred_stop(erms);
 
@@ -513,7 +513,7 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
 
         sharded<locator::effective_replication_map_ptr> erms;
         erms.start(sharded_parameter([&global_table] {
-            return global_table->get_effective_replication_map();
+            return global_table->erm();
         })).get();
         auto stop_erms = deferred_stop(erms);
 
@@ -575,7 +575,7 @@ public:
         assert(this_shard_id() == 0);
 
         co_await _erms.start(sharded_parameter([this] {
-            return _global_table->get_effective_replication_map();
+            return _global_table->erm();
         }));
 
         for (auto subdir : { "", sstables::staging_dir, sstables::quarantine_dir }) {

@@ -771,7 +771,7 @@ future<typename ResultBuilder::result_type> do_query(
         db::timeout_clock::time_point timeout,
         noncopyable_function<ResultBuilder(const compact_for_query_state_v2&)> result_builder_factory) {
     auto& table = db.local().find_column_family(s);
-    auto erm = table.get_effective_replication_map();
+    auto erm = table.erm();
     auto ctx = seastar::make_shared<read_context>(db, s, erm, cmd, ranges, trace_state, timeout);
 
     // Use coroutine::as_future to prevent exception on timesout.

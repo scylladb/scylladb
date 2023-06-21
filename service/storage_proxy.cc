@@ -657,7 +657,7 @@ private:
                     // this function assumes singular queries but doesn't validate
                     throw std::runtime_error("READ_DATA called with wrapping range");
                 }
-                auto erm = s->table().get_effective_replication_map();
+                auto erm = s->table().erm();
                 p->get_stats().replica_data_reads++;
                 auto da = oda.value_or(query::digest_algorithm::MD5);
                 query::result_options opts;
@@ -672,7 +672,7 @@ private:
                     // this function assumes singular queries but doesn't validate
                     throw std::runtime_error("READ_DIGEST called with wrapping range");
                 }
-                auto erm = s->table().get_effective_replication_map();
+                auto erm = s->table().erm();
                 p->get_stats().replica_digest_reads++;
                 auto da = oda.value_or(query::digest_algorithm::MD5);
                 return p->query_result_local_digest(erm, std::move(s), cmd, std::move(pr2.first), trace_state_ptr, timeout, da, rate_limit_info);
@@ -1697,7 +1697,7 @@ paxos_response_handler::paxos_response_handler(shared_ptr<storage_proxy> proxy_a
         , tr_state(tr_state_arg) {
     auto ks_name = _schema->ks_name();
     replica::table& table = _proxy->_db.local().find_column_family(_schema->id());
-    _effective_replication_map_ptr = table.get_effective_replication_map();
+    _effective_replication_map_ptr = table.erm();
     storage_proxy::paxos_participants pp = _proxy->get_paxos_participants(ks_name, *_effective_replication_map_ptr, _key.token(), _cl_for_paxos);
     _live_endpoints = std::move(pp.endpoints);
     _required_participants = pp.required_participants;
@@ -2848,7 +2848,7 @@ storage_proxy::response_id_type storage_proxy::unique_response_handler::release(
 
 future<>
 storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
-    auto erm = _db.local().find_column_family(m.schema()).get_effective_replication_map();
+    auto erm = _db.local().find_column_family(m.schema()).erm();
     auto shard = erm->get_sharder(*m.schema()).shard_of(m.token());
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
     return _db.invoke_on(shard, {smp_grp, timeout},
@@ -2865,7 +2865,7 @@ storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_sta
 future<>
 storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout,
         smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
-    auto erm = _db.local().find_column_family(s).get_effective_replication_map();
+    auto erm = _db.local().find_column_family(s).erm();
     auto shard = erm->get_sharder(*s).shard_of(m.token(*s));
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
     return _db.invoke_on(shard, {smp_grp, timeout},
@@ -2887,7 +2887,7 @@ storage_proxy::mutate_locally(std::vector<mutation> mutation, tracing::trace_sta
 }
 future<>
 storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
-    auto erm = _db.local().find_column_family(s).get_effective_replication_map();
+    auto erm = _db.local().find_column_family(s).erm();
     auto shard = erm->get_sharder(*s).shard_of(m.token(*s));
     get_stats().replica_cross_shard_ops += shard != this_shard_id();
     return _db.invoke_on(shard, {_hints_write_smp_service_group, timeout}, [&m, gs = global_schema_ptr(s), tr_state = std::move(tr_state), timeout] (replica::database& db) mutable -> future<> {
@@ -2938,7 +2938,7 @@ storage_proxy::mutate_counters_on_leader(std::vector<frozen_mutation_and_schema>
 future<>
 storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, frozen_mutation fm, db::consistency_level cl, clock_type::time_point timeout,
                                                       tracing::trace_state_ptr trace_state, service_permit permit) {
-    auto erm = _db.local().find_column_family(s).get_effective_replication_map();
+    auto erm = _db.local().find_column_family(s).erm();
     auto shard = erm->get_sharder(*s).shard_of(fm.token(*s));
     bool local = shard == this_shard_id();
     get_stats().replica_cross_shard_ops += !local;
@@ -2955,7 +2955,7 @@ result<storage_proxy::response_id_type>
 storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::token& token, std::unique_ptr<mutation_holder> mh,
         db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, is_cancellable cancellable) {
     replica::table& table = _db.local().find_column_family(s->id());
-    auto erm = table.get_effective_replication_map();
+    auto erm = table.erm();
     inet_address_vector_replica_set natural_endpoints = erm->get_natural_endpoints_without_node_being_replaced(token);
     inet_address_vector_topology_change pending_endpoints = erm->get_pending_endpoints(token);
 
@@ -3073,7 +3073,7 @@ storage_proxy::create_write_response_handler(const std::tuple<lw_shared_ptr<paxo
 
     auto keyspace_name = s->ks_name();
     replica::table& table = _db.local().find_column_family(s->id());
-    auto ermp = table.get_effective_replication_map();
+    auto ermp = table.erm();
 
     // No rate limiting for paxos (yet)
     return create_write_response_handler(std::move(ermp), cl, db::write_type::CAS, std::make_unique<cas_mutation>(std::move(commit), s, nullptr), std::move(endpoints),
@@ -3257,7 +3257,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 
     for (auto& m : mutations) {
         auto& table = _db.local().find_column_family(m.schema()->id());
-        auto erm = table.get_effective_replication_map();
+        auto erm = table.erm();
         erms.insert(erm);
         auto leader = find_leader_for_counter_update(m, *erm, cl);
         leaders[leader].emplace_back(frozen_mutation_and_schema { freeze(m), m.schema() });
@@ -3302,7 +3302,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
             // - the topology coordinator should prevent incompatible changes while requests
             //   (like this one) are in flight
             auto& table = _db.local().find_column_family(s->id());
-            auto erm = table.get_effective_replication_map();
+            auto erm = table.erm();
             try {
                 std::rethrow_exception(std::move(exp));
             } catch (rpc::timeout_error&) {
@@ -3606,7 +3606,7 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
         future<result<>> send_batchlog_mutation(mutation m, db::consistency_level cl = db::consistency_level::ONE) {
             return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, cl, db::write_type::BATCH_LOG, _permit, [this] (const mutation& m, db::consistency_level cl, db::write_type type, service_permit permit) {
                 auto& table = _p._db.local().find_column_family(m.schema()->id());
-                auto ermp = table.get_effective_replication_map();
+                auto ermp = table.erm();
                 return _p.create_write_response_handler(std::move(ermp), cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats, std::move(permit), std::monostate(), is_cancellable::no);
             }).then(utils::result_wrap([this, cl] (unique_response_handler_vector ids) {
                 _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
@@ -3738,7 +3738,7 @@ future<> storage_proxy::send_to_endpoint(
                 std::back_inserter(dead_endpoints),
                 std::bind_front(&storage_proxy::is_alive, this));
         auto& table = _db.local().find_column_family(m->schema()->id());
-        auto erm = table.get_effective_replication_map();
+        auto erm = table.erm();
         slogger.trace("Creating write handler with live: {}; dead: {}", targets, dead_endpoints);
         db::assure_sufficient_live_nodes(cl, *erm, targets, pending_endpoints);
         return create_write_response_handler(
@@ -5378,7 +5378,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
 
     replica::table& table = _db.local().find_column_family(schema->id());
-    auto erm = table.get_effective_replication_map();
+    auto erm = table.erm();
 
     db::read_repair_decision repair_decision = query_options.read_repair_decision
         ? *query_options.read_repair_decision : new_read_repair_decision(*schema);
@@ -5721,7 +5721,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
         storage_proxy::coordinator_query_options query_options) {
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     replica::table& table = _db.local().find_column_family(schema->id());
-    auto erm = table.get_effective_replication_map();
+    auto erm = table.erm();
 
     // when dealing with LocalStrategy and EverywhereStrategy keyspaces, we can skip the range splitting and merging
     // (which can be expensive in clusters with vnodes)
@@ -6235,7 +6235,7 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
                                        storage_proxy::clock_type::time_point timeout,
                                        tracing::trace_state_ptr trace_state) {
     auto& table = s->table();
-    auto erm = table.get_effective_replication_map();
+    auto erm = table.erm();
     if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
         auto shard = *shard_opt;
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
