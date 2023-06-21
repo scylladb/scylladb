@@ -8,7 +8,8 @@ target_sources(replica
     distributed_loader.cc
     memtable.cc
     exceptions.cc
-    dirty_memory_manager.cc)
+    dirty_memory_manager.cc
+    mutation_dump.cc)
 target_include_directories(replica
   PUBLIC
     ${CMAKE_SOURCE_DIR})
