@@ -101,6 +101,37 @@ using allow_hints = bool_class<allow_hints_tag>;
 
 using is_cancellable = bool_class<struct cancellable_tag>;
 
+using storage_proxy_clock_type = lowres_clock;
+
+class storage_proxy_coordinator_query_options {
+    storage_proxy_clock_type::time_point _timeout;
+
+public:
+    service_permit permit;
+    client_state& cstate;
+    tracing::trace_state_ptr trace_state = nullptr;
+    replicas_per_token_range preferred_replicas;
+    std::optional<db::read_repair_decision> read_repair_decision;
+
+    storage_proxy_coordinator_query_options(storage_proxy_clock_type::time_point timeout,
+            service_permit permit_,
+            client_state& client_state_,
+            tracing::trace_state_ptr trace_state = nullptr,
+            replicas_per_token_range preferred_replicas = { },
+            std::optional<db::read_repair_decision> read_repair_decision = { })
+        : _timeout(timeout)
+        , permit(std::move(permit_))
+        , cstate(client_state_)
+        , trace_state(std::move(trace_state))
+        , preferred_replicas(std::move(preferred_replicas))
+        , read_repair_decision(read_repair_decision) {
+    }
+
+    storage_proxy_clock_type::time_point timeout(storage_proxy& sp) const {
+        return _timeout;
+    }
+};
+
 struct storage_proxy_coordinator_query_result {
     foreign_ptr<lw_shared_ptr<query::result>> query_result;
     replicas_per_token_range last_replicas;
@@ -127,7 +158,7 @@ public:
     };
     template<typename T = void>
     using result = exceptions::coordinator_result<T>;
-    using clock_type = lowres_clock;
+    using clock_type = storage_proxy_clock_type;
     struct config {
         db::hints::host_filter hinted_handoff_enabled = {};
         db::hints::directory_initializer hints_directory_initializer;
@@ -166,35 +197,7 @@ public:
     using global_stats = storage_proxy_stats::global_stats;
     using cdc_stats = cdc::stats;
 
-    class coordinator_query_options {
-        clock_type::time_point _timeout;
-
-    public:
-        service_permit permit;
-        client_state& cstate;
-        tracing::trace_state_ptr trace_state = nullptr;
-        replicas_per_token_range preferred_replicas;
-        std::optional<db::read_repair_decision> read_repair_decision;
-
-        coordinator_query_options(clock_type::time_point timeout,
-                service_permit permit_,
-                client_state& client_state_,
-                tracing::trace_state_ptr trace_state = nullptr,
-                replicas_per_token_range preferred_replicas = { },
-                std::optional<db::read_repair_decision> read_repair_decision = { })
-            : _timeout(timeout)
-            , permit(std::move(permit_))
-            , cstate(client_state_)
-            , trace_state(std::move(trace_state))
-            , preferred_replicas(std::move(preferred_replicas))
-            , read_repair_decision(read_repair_decision) {
-        }
-
-        clock_type::time_point timeout(storage_proxy& sp) const {
-            return _timeout;
-        }
-    };
-
+    using coordinator_query_options = storage_proxy_coordinator_query_options;
     using coordinator_query_result = storage_proxy_coordinator_query_result;
 
     // Holds  a list of endpoints participating in CAS request, for a given
