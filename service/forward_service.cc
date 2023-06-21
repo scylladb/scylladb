@@ -333,7 +333,7 @@ static shared_ptr<cql3::selection::selection> mock_selection(
     ) {
         auto name_as_expression = [] (const sstring& name) -> cql3::expr::expression {
             return cql3::expr::unresolved_identifier {
-                make_shared<cql3::column_identifier_raw>(name, false)
+                make_shared<cql3::column_identifier_raw>(name, true)
             };
         };
 
