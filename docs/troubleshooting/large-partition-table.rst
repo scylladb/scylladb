@@ -31,10 +31,10 @@ Example output:
 
 .. code-block:: console
 
-   keyspace_name | table_name | sstable_name     | partition_size | partition_key                                       | rows   | compaction_time
-   --------------+------------+------------------+----------------+-----------------------------------------------------+--------+--------------------------
-          demodb |       tmcr | md-6-big-Data.db |     1188716932 | {key: pk{000400000001}, token:-4069959284402364209} |    100 | 2018-07-23 08:10:34
-          testdb |       tmcr | md-7-big-Data.db |        1234567 | {key: pk{000400000001}, token:-3169959284402457813} | 100101 | 2018-07-23 08:10:34
+   keyspace_name | table_name | sstable_name     | partition_size | partition_key                                       | rows   | compaction_time     | dead_rows | range_tombstones
+   --------------+------------+------------------+----------------+-----------------------------------------------------+--------+---------------------+-----------+-------------------
+          demodb |       tmcr | md-6-big-Data.db |     1188716932 | {key: pk{000400000001}, token:-4069959284402364209} |    100 | 2018-07-23 08:10:34 |         0 |                0
+          testdb |       tmcr | md-7-big-Data.db |        1234567 | {key: pk{000400000001}, token:-3169959284402457813} | 100101 | 2018-07-23 08:10:34 |       123 |            45678
   
 ================================================  =================================================================================
 Parameter                                         Description
@@ -49,9 +49,13 @@ partition_size                                    The size of the partition in t
 ------------------------------------------------  ---------------------------------------------------------------------------------
 partition_key                                     The value of a partition key that identifies the large partition
 ------------------------------------------------  ---------------------------------------------------------------------------------
-rows                                              The number of rows in the partition in this sstable
+rows                                              The total number of rows and range tombstones in the partition in this sstable
 ------------------------------------------------  ---------------------------------------------------------------------------------
 compaction_time                                   Time when compaction last occurred
+------------------------------------------------  ---------------------------------------------------------------------------------
+dead_rows                                         The number of deleted or expired rows out of the total number of rows
+------------------------------------------------  ---------------------------------------------------------------------------------
+range_tombstones                                  The number of range tombstones out of the total number of rows
 ================================================  =================================================================================
 
 .. note::
@@ -71,9 +75,9 @@ Example output:
 
 .. code-block:: console
 
-   keyspace_name | table_name | sstable_name     | partition_size | partition_key                                       | rows | compaction_time
-   --------------+------------+------------------+----------------+-----------------------------------------------------+------+--------------------------
-          demodb |       tmcr | md-6-big-Data.db |     1188716932 | {key: pk{000400000001}, token:-4069959284402364209} | 1942 | 2018-07-23 08:10:34
+   keyspace_name | table_name | sstable_name     | partition_size | partition_key                                       | rows | compaction_time     | dead_rows | range_tombstones
+   --------------+------------+------------------+----------------+-----------------------------------------------------+------+---------------------+-----------+-------------------
+          demodb |       tmcr | md-6-big-Data.db |     1188716932 | {key: pk{000400000001}, token:-4069959284402364209} | 1942 | 2018-07-23 08:10:34 |        17 |                0
 
 
 .. _large-partition-table-configure:
@@ -85,6 +89,8 @@ Configure the detection thresholds of large partitions with the ``compaction_lar
 and the ``compaction_rows_count_warning_threshold`` paramater (default 100000)
 in the scylla.yaml configuration file.
 Partitions that are bigger than the size threshold and/or hold more than the rows count threshold are reported in the ``system.large_partitions`` table and generate a warning in the Scylla log (refer to :doc:`log </getting-started/logging/>`).
+The number of rows includes live rows as well as dead rows (that are either deleted or expired), and range tombstone.
+The latter are accounted in additional columns in the ``system.large_partitions`` table: ``dead_rows`` and ``range_tombstones``, respectively.
 
 For example (set to 500MB / 50000, respectively):
 

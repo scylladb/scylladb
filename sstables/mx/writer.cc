@@ -687,7 +687,7 @@ private:
         std::optional<gc_clock::time_point> local_deletion_time;
     };
 
-    void maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows);
+    void maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size, uint64_t rows, uint64_t dead_rows, uint64_t range_tombstones);
     void maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const uint64_t row_size);
     void maybe_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
@@ -708,8 +708,11 @@ private:
         const row& row_body, const row_time_properties& properties, bool has_complex_deletion);
     void write_row_body(bytes_ostream& writer, const clustering_row& row, bool has_complex_deletion);
     void write_static_row(const row&, column_kind);
-    void collect_row_stats(uint64_t row_size, const clustering_key_prefix* clustering_key) {
+    void collect_row_stats(uint64_t row_size, const clustering_key_prefix* clustering_key, bool is_dead = false) {
         ++_c_stats.rows_count;
+        if (is_dead) {
+            ++_c_stats.dead_rows_count;
+        }
         maybe_record_large_rows(_sst, *_partition_key, clustering_key, row_size);
     }
 
@@ -961,12 +964,12 @@ void writer::consume(tombstone t) {
 }
 
 void writer::maybe_record_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key,
-                                           uint64_t partition_size, uint64_t rows) {
+                                           uint64_t partition_size, uint64_t rows, uint64_t dead_rows, uint64_t range_tombstones) {
     auto& size_entry = _partition_size_entry;
     auto& row_count_entry = _rows_in_partition_entry;
     size_entry.max_value = std::max(size_entry.max_value, partition_size);
     row_count_entry.max_value = std::max(row_count_entry.max_value, rows);
-    auto ret = _sst.get_large_data_handler().maybe_record_large_partitions(sst, partition_key, partition_size, rows).get0();
+    auto ret = _sst.get_large_data_handler().maybe_record_large_partitions(sst, partition_key, partition_size, rows, dead_rows, range_tombstones).get0();
     size_entry.above_threshold += unsigned(bool(ret.size));
     row_count_entry.above_threshold += unsigned(bool(ret.rows));
 }
@@ -1244,10 +1247,12 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
     row_flags flags = row_flags::none;
     row_extended_flags ext_flags = row_extended_flags::none;
     const row_marker& marker = clustered_row.marker();
+    bool is_dead = false;
     if (!marker.is_missing()) {
         flags |= row_flags::has_timestamp;
         if (!marker.is_live() || marker.is_expiring()) {
             flags |= row_flags::has_ttl;
+            is_dead = marker.is_dead(gc_clock::now());
         }
     }
 
@@ -1282,7 +1287,7 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
 
     // Collect statistics
     _collector.update_min_max_components(clustered_row.position());
-    collect_row_stats(_data_writer->offset() - current_pos, &clustered_row.key());
+    collect_row_stats(_data_writer->offset() - current_pos, &clustered_row.key(), is_dead);
 }
 
 stop_iteration writer::consume(clustering_row&& cr) {
@@ -1364,6 +1369,7 @@ void writer::write_pi_block(const pi_block& block) {
 }
 
 void writer::write_clustered(const rt_marker& marker, uint64_t prev_row_size) {
+    uint64_t current_pos = _data_writer->offset();
     write(_sst.get_version(), *_data_writer, row_flags::is_marker);
     write_clustering_prefix(_sst.get_version(), *_data_writer, marker.kind, _schema, marker.clustering);
     auto write_marker_body = [this, &marker] (bytes_ostream& writer) {
@@ -1380,6 +1386,8 @@ void writer::write_clustered(const rt_marker& marker, uint64_t prev_row_size) {
     write_vint(*_data_writer, _tmp_bufs.size());
     flush_tmp_bufs();
     _collector.update_min_max_components(marker.position());
+    ++_c_stats.range_tombstones_count;
+    collect_row_stats(_data_writer->offset() - current_pos, &marker.clustering);
 }
 
 void writer::consume(rt_marker&& marker) {
@@ -1424,7 +1432,7 @@ stop_iteration writer::consume_end_of_partition() {
     // compute size of the current row.
     _c_stats.partition_size = _data_writer->offset() - _c_stats.start_offset;
 
-    maybe_record_large_partitions(_sst, *_partition_key, _c_stats.partition_size, _c_stats.rows_count);
+    maybe_record_large_partitions(_sst, *_partition_key, _c_stats.partition_size, _c_stats.rows_count, _c_stats.dead_rows_count, _c_stats.range_tombstones_count);
 
 
     // update is about merging column_stats with the data being stored by collector.
