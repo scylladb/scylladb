@@ -659,6 +659,7 @@ std::vector<lw_shared_ptr<column_specification>> generic_describe_statement::get
 
 future<std::vector<std::vector<bytes_opt>>> generic_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
     auto db = qp.db();
+    auto& replica_db = db.real_database();
     auto raw_ks = client_state.get_raw_keyspace();
     auto ks_name = (_keyspace) ? *_keyspace : raw_ks;
 
@@ -671,6 +672,12 @@ future<std::vector<std::vector<bytes_opt>>> generic_describe_statement::describe
             throw exceptions::invalid_request_exception(format("'{}' not found in keyspaces", _name));
         }
     }
+    
+    auto ks = db.try_find_keyspace(ks_name);
+    if (!ks) {
+        throw exceptions::invalid_request_exception(format("'{}' not found in keyspaces", _name));
+    }
+    auto ks_meta = ks->metadata();
 
     auto tbl = db.try_find_table(ks_name, _name);
     if (tbl) {
@@ -684,6 +691,32 @@ future<std::vector<std::vector<bytes_opt>>> generic_describe_statement::describe
     auto idx_tbl = db.find_indexed_table(ks_name, _name);
     if (idx_tbl) {
         co_return serialize_descriptions({index(db, ks_name, _name, _with_internals)});
+    }
+
+    auto udt_meta = ks_meta->user_types();
+    if (udt_meta.has_type(to_bytes(_name))) {
+        co_return serialize_descriptions({type(replica_db, ks_meta, _name)});
+    }
+
+    auto uf = functions::functions::find(functions::function_name(ks_name, _name));
+    if (!uf.empty()) {
+        auto udfs = boost::copy_range<std::vector<shared_ptr<const keyspace_element>>>(uf | boost::adaptors::transformed([] (const auto& f) {
+            return dynamic_pointer_cast<const functions::user_function>(f.second);
+        }) | boost::adaptors::filtered([] (const auto& f) {
+            return f != nullptr;
+        }));
+        if (!udfs.empty()) {
+            co_return serialize_descriptions(co_await generate_descriptions(replica_db, udfs, true));
+        }
+
+        auto udas = boost::copy_range<std::vector<shared_ptr<const keyspace_element>>>(uf | boost::adaptors::transformed([] (const auto& f) {
+            return dynamic_pointer_cast<const functions::user_aggregate>(f.second);
+        }) | boost::adaptors::filtered([] (const auto& f) {
+            return f != nullptr;
+        }));
+        if (!udas.empty()) {
+            co_return serialize_descriptions(co_await generate_descriptions(replica_db, udas, true));
+        }
     }
 
     throw exceptions::invalid_request_exception(format("'{}' not found in keyspace '{}'", _name, ks_name));
