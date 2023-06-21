@@ -178,7 +178,13 @@ future<std::vector<description>> function(replica::database& db, const sstring& 
 
     auto udfs = boost::copy_range<std::vector<shared_ptr<const keyspace_element>>>(fs | boost::adaptors::transformed([] (const auto& f) {
         return dynamic_pointer_cast<const functions::user_function>(f.second);
+    }) | boost::adaptors::filtered([] (const auto& f) {
+        return f != nullptr;
     }));
+    if (udfs.empty()) {
+        throw exceptions::invalid_request_exception(format("Function '{}' not found in keyspace '{}'", name, ks));
+    }
+
     co_return co_await generate_descriptions(db, udfs, true);
 }
 
@@ -191,13 +197,19 @@ future<std::vector<description>> functions(replica::database& db,const sstring& 
 
 future<std::vector<description>> aggregate(replica::database& db, const sstring& ks, const sstring& name) {
     auto fs = functions::functions::find(functions::function_name(ks, name));
-    if(fs.empty()) {
+    if (fs.empty()) {
         throw exceptions::invalid_request_exception(format("Aggregate '{}' not found in keyspace '{}'", name, ks));
     }
 
     auto udas = boost::copy_range<std::vector<shared_ptr<const keyspace_element>>>(fs | boost::adaptors::transformed([] (const auto& f) {
         return dynamic_pointer_cast<const functions::user_aggregate>(f.second);
+    }) | boost::adaptors::filtered([] (const auto& f) {
+        return f != nullptr;
     }));
+    if (udas.empty()) {
+        throw exceptions::invalid_request_exception(format("Aggregate '{}' not found in keyspace '{}'", name, ks));
+    }
+
     co_return co_await generate_descriptions(db, udas, true);
 }
 
