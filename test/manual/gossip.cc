@@ -68,7 +68,7 @@ int main(int ac, char ** av) {
             token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, locator::token_metadata::config{}).get();
             auto stop_token_mgr = defer([&] { token_metadata.stop().get(); });
 
-            messaging.start(listen).get();
+            messaging.start(locator::host_id{}, listen, 7000).get();
             auto stop_messaging = deferred_stop(messaging);
 
             gms::gossip_config gcfg;

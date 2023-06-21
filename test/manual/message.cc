@@ -171,7 +171,7 @@ int main(int ac, char ** av) {
         const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
         utils::fb_utilities::set_broadcast_address(listen);
         seastar::sharded<netw::messaging_service> messaging;
-        return messaging.start(listen).then([config, stay_alive, &messaging] () {
+        return messaging.start(locator::host_id{}, listen, 7000).then([config, stay_alive, &messaging] () {
             auto testers = new distributed<tester>;
             return testers->start(std::ref(messaging)).then([testers]{
                 auto port = testers->local().port();

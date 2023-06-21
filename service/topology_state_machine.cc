@@ -69,6 +69,7 @@ static std::unordered_map<node_state, sstring> node_state_to_name_map = {
     {node_state::decommissioning, "decommissioning"},
     {node_state::removing, "removing"},
     {node_state::normal, "normal"},
+    {node_state::left_token_ring, "left_token_ring"},
     {node_state::left, "left"},
     {node_state::replacing, "replacing"},
     {node_state::rebuilding, "rebuilding"},
@@ -149,6 +150,9 @@ std::ostream& operator<<(std::ostream& os, const raft_topology_cmd::command& cmd
             break;
         case raft_topology_cmd::command::fence:
             os << "fence";
+            break;
+        case raft_topology_cmd::command::shutdown:
+            os << "shutdown";
             break;
     }
     return os;

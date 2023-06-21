@@ -1062,8 +1062,44 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             api::set_server_config(ctx, *cfg).get();
 
+            static sharded<auth::service> auth_service;
+            static sharded<qos::service_level_controller> sl_controller;
+            debug::the_sl_controller = &sl_controller;
+
+            //starting service level controller
+            qos::service_level_options default_service_level_configuration;
+            sl_controller.start(std::ref(auth_service), default_service_level_configuration).get();
+            sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
+            auto stop_sl_controller = defer_verbose_shutdown("service level controller", [] {
+                sl_controller.stop().get();
+            });
+
+            //This starts the update loop - but no real update happens until the data accessor is not initialized.
+            sl_controller.local().update_from_distributed_data(std::chrono::seconds(10));
+
+            static sharded<db::system_distributed_keyspace> sys_dist_ks;
+            static sharded<db::system_keyspace> sys_ks;
+            static sharded<db::view::view_update_generator> view_update_generator;
+            static sharded<cdc::generation_service> cdc_generation_service;
+
+            supervisor::notify("starting system keyspace");
+            sys_ks.start(std::ref(qp), std::ref(db), std::ref(snitch)).get();
+            // TODO: stop()?
+
+            // Initialization of a keyspace is done by shard 0 only. For system
+            // keyspace, the procedure  will go through the hardcoded column
+            // families, and in each of them, it will load the sstables for all
+            // shards using distributed database object.
+            // Iteration through column family directory for sstable loading is
+            // done only by shard 0, so we'll no longer face race conditions as
+            // described here: https://github.com/scylladb/scylla/issues/1014
+            supervisor::notify("loading system sstables");
+            replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, *cfg, system_table_load_phase::phase1).get();
+            cfg->host_id = sys_ks.local().load_local_host_id().get0();
+
             netw::messaging_service::config mscfg;
 
+            mscfg.id = cfg->host_id;
             mscfg.ip = utils::resolve(cfg->listen_address, family).get0();
             mscfg.port = cfg->storage_port();
             mscfg.ssl_port = cfg->ssl_storage_port();
@@ -1101,21 +1137,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 mscfg.tcp_nodelay = netw::messaging_service::tcp_nodelay_what::local;
             }
 
-            static sharded<auth::service> auth_service;
-            static sharded<qos::service_level_controller> sl_controller;
-            debug::the_sl_controller = &sl_controller;
-
-            //starting service level controller
-            qos::service_level_options default_service_level_configuration;
-            sl_controller.start(std::ref(auth_service), default_service_level_configuration).get();
-            sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
-            auto stop_sl_controller = defer_verbose_shutdown("service level controller", [] {
-                sl_controller.stop().get();
-            });
-
-            //This starts the update loop - but no real update happens until the data accessor is not initialized.
-            sl_controller.local().update_from_distributed_data(std::chrono::seconds(10));
-
             netw::messaging_service::scheduling_config scfg;
             scfg.statement_tenants = { {dbcfg.statement_scheduling_group, "$user"}, {default_scheduling_group(), "$system"} };
             scfg.streaming = dbcfg.streaming_scheduling_group;
@@ -1135,26 +1156,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_ms = defer_verbose_shutdown("messaging service", [&messaging] {
                 messaging.invoke_on_all(&netw::messaging_service::stop).get();
             });
-
-            static sharded<db::system_distributed_keyspace> sys_dist_ks;
-            static sharded<db::system_keyspace> sys_ks;
-            static sharded<db::view::view_update_generator> view_update_generator;
-            static sharded<cdc::generation_service> cdc_generation_service;
-
-            supervisor::notify("starting system keyspace");
-            sys_ks.start(std::ref(qp), std::ref(db), std::ref(snitch)).get();
-            // TODO: stop()?
-
-            // Initialization of a keyspace is done by shard 0 only. For system
-            // keyspace, the procedure  will go through the hardcoded column
-            // families, and in each of them, it will load the sstables for all
-            // shards using distributed database object.
-            // Iteration through column family directory for sstable loading is
-            // done only by shard 0, so we'll no longer face race conditions as
-            // described here: https://github.com/scylladb/scylla/issues/1014
-            supervisor::notify("loading system sstables");
-            replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, *cfg, system_table_load_phase::phase1).get();
-            cfg->host_id = sys_ks.local().load_local_host_id().get0();
 
             supervisor::notify("starting gossiper");
             gms::gossip_config gcfg;

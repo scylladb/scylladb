@@ -34,6 +34,7 @@ enum class node_state: uint16_t {
     replacing,           // the node replaces another dead node in the cluster and it data is being streamed to it
     rebuilding,          // the node is being rebuild and is streaming data from other replicas
     normal,              // the node does not do any streaming and serves the slice of the ring that belongs to it
+    left_token_ring,     // the node left the token ring, but not group0 yet; we wait until other nodes stop writing to it
     left                 // the node left the cluster and group0
 };
 
@@ -142,9 +143,12 @@ struct raft_topology_cmd {
           barrier_and_drain,    // same + drain requests which use previous versions
           stream_ranges,        // reqeust to stream data, return when streaming is
                                 // done
-          fence                 // erect the fence against requests with stale versions
+          fence,                // erect the fence against requests with stale versions
+          shutdown,             // a decommissioning node should shut down
       };
       command cmd;
+
+      raft_topology_cmd(command c) : cmd(c) {}
 };
 
 // returned as a result of raft_bootstrap_cmd

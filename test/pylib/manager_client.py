@@ -76,6 +76,10 @@ class ManagerClient():
             logger.debug("refresh driver node list")
             self.ccluster.control_connection.refresh_node_list_and_token_map()
 
+    def get_cql(self) -> CassandraSession:
+        assert self.cql
+        return self.cql
+
     async def before_test(self, test_case_name: str) -> None:
         """Before a test starts check if cluster needs cycling and update driver connection"""
         logger.debug("before_test for %s", test_case_name)
@@ -160,6 +164,16 @@ class ManagerClient():
         await self.client.get_text(f"/cluster/server/{server_id}/restart")
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
         self._driver_update()
+
+    async def server_pause(self, server_id: ServerNum) -> None:
+        """Pause the specified server."""
+        logger.debug("ManagerClient pausing %s", server_id)
+        await self.client.get(f"/cluster/server/{server_id}/pause")
+
+    async def server_unpause(self, server_id: ServerNum) -> None:
+        """Unpause the specified server."""
+        logger.debug("ManagerClient unpausing %s", server_id)
+        await self.client.get(f"/cluster/server/{server_id}/unpause")
 
     async def server_add(self, replace_cfg: Optional[ReplaceConfig] = None, cmdline: Optional[List[str]] = None, config: Optional[dict[str, Any]] = None, start: bool = True) -> ServerInfo:
         """Add a new server"""
@@ -258,7 +272,7 @@ class ManagerClient():
             alive_nodes = await self.api.get_alive_endpoints(server_ip)
             if len(alive_nodes) > count:
                 return True
-        await wait_for(_sees_min_others, time() + interval, period=.1)
+        await wait_for(_sees_min_others, time() + interval, period=.5)
 
     async def server_sees_other_server(self, server_ip: IPAddress, other_ip: IPAddress,
                                        interval: float = 45.):
@@ -267,7 +281,7 @@ class ManagerClient():
             alive_nodes = await self.api.get_alive_endpoints(server_ip)
             if other_ip in alive_nodes:
                 return True
-        await wait_for(_sees_another_server, time() + interval, period=.1)
+        await wait_for(_sees_another_server, time() + interval, period=.5)
 
     async def server_not_sees_other_server(self, server_ip: IPAddress, other_ip: IPAddress,
                                            interval: float = 45.):
@@ -276,4 +290,4 @@ class ManagerClient():
             alive_nodes = await self.api.get_alive_endpoints(server_ip)
             if not other_ip in alive_nodes:
                 return True
-        await wait_for(_not_sees_another_server, time() + interval, period=.1)
+        await wait_for(_not_sees_another_server, time() + interval, period=.5)
