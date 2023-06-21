@@ -136,6 +136,10 @@ bool select_statement::parameters::is_json() const {
    return _statement_subtype == statement_subtype::JSON;
 }
 
+bool select_statement::parameters::is_mutation_fragments() const {
+   return _statement_subtype == statement_subtype::MUTATION_FRAGMENTS;
+}
+
 bool select_statement::parameters::allow_filtering() const {
     return _allow_filtering;
 }
@@ -1874,7 +1878,8 @@ select_statement::maybe_jsonize_select_clause(std::vector<selection::prepared_se
 }
 
 std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::database db, cql_stats& stats, bool for_view) {
-    schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
+    schema_ptr underlying_schema = validation::validate_column_family(db, keyspace(), column_family());
+    schema_ptr schema = _parameters->is_mutation_fragments() ? mutation_fragments_select_statement::generate_output_schema(underlying_schema) : underlying_schema;
     prepare_context& ctx = get_prepare_context();
 
     auto prepared_selectors = selection::raw_selector::to_prepared_selectors(_select_clause, *schema, db, keyspace());
@@ -1905,7 +1910,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                      ? selection::selection::wildcard(schema)
                      : selection::selection::from_selectors(db, schema, keyspace(), levellized_prepared_selectors);
 
-    auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering());
+    auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering(),
+            restrictions::check_indexes(!_parameters->is_mutation_fragments()));
 
     if (_parameters->is_distinct()) {
         validate_distinct_selection(*schema, *selection, *restrictions);
@@ -1916,7 +1922,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     if (!_parameters->orderings().empty()) {
         assert(!for_view);
-        verify_ordering_is_allowed(*restrictions);
+        verify_ordering_is_allowed(*_parameters, *restrictions);
         prepared_orderings_type prepared_orderings = prepare_orderings(*schema);
         verify_ordering_is_valid(prepared_orderings, *schema, *restrictions);
 
@@ -1967,6 +1973,21 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     if (_parameters->is_prune_materialized_view()) {
         stmt = ::make_shared<cql3::statements::prune_materialized_view_statement>(
                 schema,
+                ctx.bound_variables_size(),
+                _parameters,
+                std::move(selection),
+                std::move(restrictions),
+                std::move(group_by_cell_indices),
+                is_reversed_,
+                std::move(ordering_comparator),
+                prepare_limit(db, ctx, _limit),
+                prepare_limit(db, ctx, _per_partition_limit),
+                stats,
+                std::move(prepared_attrs));
+    } else if (_parameters->is_mutation_fragments()) {
+        stmt = ::make_shared<cql3::statements::mutation_fragments_select_statement>(
+                schema,
+                underlying_schema,
                 ctx.bound_variables_size(),
                 _parameters,
                 std::move(selection),
@@ -2049,11 +2070,12 @@ select_statement::prepare_restrictions(data_dictionary::database db,
                                        prepare_context& ctx,
                                        ::shared_ptr<selection::selection> selection,
                                        bool for_view,
-                                       bool allow_filtering)
+                                       bool allow_filtering,
+                                       restrictions::check_indexes do_check_indexes)
 {
     try {
         return ::make_shared<restrictions::statement_restrictions>(db, schema, statement_type::SELECT, _where_clause, ctx,
-            selection->contains_only_static_columns(), for_view, allow_filtering);
+            selection->contains_only_static_columns(), for_view, allow_filtering, do_check_indexes);
     } catch (const exceptions::unrecognized_entity_exception& e) {
         if (contains_alias(e.entity)) {
             throw exceptions::invalid_request_exception(format("Aliases aren't allowed in the WHERE clause (name: '{}')", e.entity));
@@ -2076,13 +2098,16 @@ select_statement::prepare_limit(data_dictionary::database db, prepare_context& c
     return prep_limit;
 }
 
-void select_statement::verify_ordering_is_allowed(const restrictions::statement_restrictions& restrictions)
+void select_statement::verify_ordering_is_allowed(const parameters& params, const restrictions::statement_restrictions& restrictions)
 {
     if (restrictions.uses_secondary_indexing()) {
         throw exceptions::invalid_request_exception("ORDER BY with 2ndary indexes is not supported.");
     }
     if (restrictions.is_key_range()) {
         throw exceptions::invalid_request_exception("ORDER BY is only supported when the partition key is restricted by an EQ or an IN.");
+    }
+    if (params.is_mutation_fragments()) {
+        throw exceptions::invalid_request_exception("ORDER BY is not supported in SELECT FROM MUTATION_FRAGMENTS() statements.");
     }
 }
 

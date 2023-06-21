@@ -12,6 +12,7 @@
 
 #include "cql3/statements/raw/cf_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
+#include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/attributes.hh"
 #include "db/config.hh"
 #include <seastar/core/shared_ptr.hh>
@@ -23,10 +24,6 @@ namespace selection {
     class raw_selector;
     class prepared_selector;
 } // namespace selection
-
-namespace restrictions {
-    class statement_restrictions;
-} // namespace restrictions
 
 namespace statements {
 
@@ -69,6 +66,7 @@ public:
         bool is_distinct() const;
         bool allow_filtering() const;
         bool is_json() const;
+        bool is_mutation_fragments() const;
         bool bypass_cache() const;
         bool is_prune_materialized_view() const;
         orderings_type const& orderings() const;
@@ -110,13 +108,14 @@ private:
         prepare_context& ctx,
         ::shared_ptr<selection::selection> selection,
         bool for_view = false,
-        bool allow_filtering = false);
+        bool allow_filtering = false,
+        restrictions::check_indexes do_check_indexes = restrictions::check_indexes::yes);
 
     /** Returns an expression for the limit or nullopt if no limit is set */
     std::optional<expr::expression> prepare_limit(data_dictionary::database db, prepare_context& ctx, const std::optional<expr::expression>& limit);
 
     // Checks whether it is legal to have ORDER BY in this statement
-    static void verify_ordering_is_allowed(const restrictions::statement_restrictions& restrictions);
+    static void verify_ordering_is_allowed(const parameters& params, const restrictions::statement_restrictions& restrictions);
 
     void handle_unrecognized_ordering_column(const column_identifier& column) const;
 
