@@ -22,6 +22,13 @@
 
 namespace cql3 {
 
+void
+operation::fill_prepare_context(prepare_context& ctx) {
+    if (_e.has_value()) {
+        expr::fill_prepare_context(*_e, ctx);
+    }
+}
+
 sstring
 operation::set_element::to_string(const column_definition& receiver) const {
     return format("{}[{}] = {}", receiver.name_as_text(), _selector, _value);
