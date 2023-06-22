@@ -37,18 +37,9 @@ public:
      * @return a list of <code>Selectable</code>s
      */
     static std::vector<::shared_ptr<selectable>> to_selectables(const std::vector<::shared_ptr<raw_selector>>& raws,
-            const schema& schema, data_dictionary::database db, const sstring& ks) {
-        std::vector<::shared_ptr<selectable>> r;
-        r.reserve(raws.size());
-        for (auto&& raw : raws) {
-            r.emplace_back(prepare_selectable(schema, raw->selectable_, db, ks));
-        }
-        return r;
-    }
+            const schema& schema, data_dictionary::database db, const sstring& ks);
 
-    bool processes_selection() const {
-        return selectable_processes_selection(selectable_);
-    }
+    bool processes_selection() const;
 };
 
 }
