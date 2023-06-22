@@ -189,26 +189,44 @@ public:
     }
 };
 
-SEASTAR_TEST_CASE(test_aggregate_functions) {
+SEASTAR_TEST_CASE(test_aggregate_functions_byte_type) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        // Numeric types
         aggregate_function_test(e, byte_type, int8_t(1), int8_t(2), int8_t(3))
             .test_min_max_count()
             .test_sum(int8_t(6))
             .test_avg(int8_t(2));
+    });
+}
+
+SEASTAR_TEST_CASE(test_aggregate_functions_short_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         aggregate_function_test(e, short_type, int16_t(1), int16_t(2), int16_t(3))
             .test_min_max_count()
             .test_sum(int16_t(6))
             .test_avg(int16_t(2));
+    });
+}
+
+SEASTAR_TEST_CASE(test_aggregate_functions_int32_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         aggregate_function_test(e, int32_type, int32_t(1), int32_t(2), int32_t(3))
             .test_min_max_count()
             .test_sum(int32_t(6))
             .test_avg(int32_t(2));
+    });
+}
+
+SEASTAR_TEST_CASE(test_aggregate_functions_long_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         aggregate_function_test(e, long_type, int64_t(1), int64_t(2), int64_t(3))
             .test_min_max_count()
             .test_sum(int64_t(6))
             .test_avg(int64_t(2));
+    });
+}
 
+SEASTAR_TEST_CASE(test_aggregate_functions_varint_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         aggregate_function_test(e, varint_type,
             utils::multiprecision_int(1),
             utils::multiprecision_int(2),
@@ -216,7 +234,11 @@ SEASTAR_TEST_CASE(test_aggregate_functions) {
         ).test_min_max_count()
             .test_sum(utils::multiprecision_int(6))
             .test_avg(utils::multiprecision_int(2));
+    });
+}
 
+SEASTAR_TEST_CASE(test_aggregate_functions_decimal_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         aggregate_function_test(e, decimal_type,
             big_decimal("1.0"),
             big_decimal("2.0"),
@@ -224,46 +246,85 @@ SEASTAR_TEST_CASE(test_aggregate_functions) {
         ).test_min_max_count()
             .test_sum(big_decimal("6.0"))
             .test_avg(big_decimal("2.0"));
+    });
+}
 
+SEASTAR_TEST_CASE(test_aggregate_functions_float_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         aggregate_function_test(e, float_type, 1.0f, 2.0f, 3.0f)
             .test_min_max_count()
             .test_sum(6.0f)
             .test_avg(2.0f);
+    });
+}
+
+SEASTAR_TEST_CASE(test_aggregate_functions_double_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         aggregate_function_test(e, double_type, 1.0, 2.0, 3.0)
             .test_min_max_count()
             .test_sum(6.0)
             .test_avg(2.0);
+    });
+}
 
-        // Ordered types
+SEASTAR_TEST_CASE(test_aggregate_functions_ordered_utf8_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         aggregate_function_test(e, utf8_type, sstring("abcd"), sstring("efgh"), sstring("ijkl"))
             .test_min_max_count();
+    });
+}
+
+SEASTAR_TEST_CASE(test_aggregate_functions_ordered_bytes_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         aggregate_function_test(e, bytes_type, bytes("abcd"), bytes("efgh"), bytes("ijkl"))
             .test_min_max_count();
+    });
+}
+
+SEASTAR_TEST_CASE(test_aggregate_functions_ordered_ascii_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         aggregate_function_test(e, ascii_type,
             ascii_native_type{"abcd"},
             ascii_native_type{"efgh"},
             ascii_native_type{"ijkl"}
         ).test_min_max_count();
+    });
+}
 
+SEASTAR_TEST_CASE(test_aggregate_functions_ordered_simple_data_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         aggregate_function_test(e, simple_date_type,
             simple_date_native_type{1},
             simple_date_native_type{2},
             simple_date_native_type{3}
         ).test_min_max_count();
+    });
+}
 
+SEASTAR_TEST_CASE(test_aggregate_functions_timestamp_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         const db_clock::time_point now = db_clock::now();
         aggregate_function_test(e, timestamp_type,
             now,
             now + std::chrono::seconds(1),
             now + std::chrono::seconds(2)
         ).test_min_max_count();
+    });
+}
 
+SEASTAR_TEST_CASE(test_aggregate_functions_timeuuid_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         aggregate_function_test(e, timeuuid_type,
             timeuuid_native_type{utils::UUID("00000000-0000-1000-0000-000000000000")},
             timeuuid_native_type{utils::UUID("00000000-0000-1000-0000-000000000001")},
             timeuuid_native_type{utils::UUID("00000000-0000-1000-0000-000000000002")}
         ).test_count(); // min and max will fail, because we assert using UUID order, not timestamp order.
+    });
+}
 
+SEASTAR_TEST_CASE(test_aggregate_functions_time_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const db_clock::time_point now = db_clock::now();
         aggregate_function_test(e, time_type,
             time_native_type{std::chrono::duration_cast<std::chrono::nanoseconds>(
                     now.time_since_epoch() - std::chrono::seconds(1)).count()},
@@ -272,15 +333,27 @@ SEASTAR_TEST_CASE(test_aggregate_functions) {
             time_native_type{std::chrono::duration_cast<std::chrono::nanoseconds>(
                     now.time_since_epoch() + std::chrono::seconds(1)).count()}
         ).test_min_max_count();
+    });
+}
 
+SEASTAR_TEST_CASE(test_aggregate_functions_uuid_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         aggregate_function_test(e, uuid_type,
             utils::UUID("00000000-0000-1000-0000-000000000000"),
             utils::UUID("00000000-0000-1000-0000-000000000001"),
             utils::UUID("00000000-0000-1000-0000-000000000002")
         ).test_min_max_count();
+    });
+}
 
+SEASTAR_TEST_CASE(test_aggregate_functions_boolean_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         aggregate_function_test(e, boolean_type, false, true).test_min_max_count();
+    });
+}
 
+SEASTAR_TEST_CASE(test_aggregate_functions_inet_addr_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         aggregate_function_test(e, inet_addr_type,
             net::inet_address("0.0.0.0"),
             net::inet_address("::"),
@@ -289,28 +362,44 @@ SEASTAR_TEST_CASE(test_aggregate_functions) {
             net::inet_address("1::1"),
             net::inet_address("1.0.0.1")
         ).test_min_max_count();
+    });
+}
 
+SEASTAR_TEST_CASE(test_aggregate_functions_list_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         auto list_type_int = list_type_impl::get_instance(int32_type, false);
         aggregate_function_test(e, list_type_int,
             make_list_value(list_type_int, {1, 2, 3}),
             make_list_value(list_type_int, {1, 2, 4}),
             make_list_value(list_type_int, {2, 2, 3})
         ).test_min_max_count();
+    });
+}
 
+SEASTAR_TEST_CASE(test_aggregate_functions_set_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         auto set_type_int = set_type_impl::get_instance(int32_type, false);
         aggregate_function_test(e, set_type_int,
             make_set_value(set_type_int, {1, 2, 3}),
             make_set_value(set_type_int, {1, 2, 4}),
             make_set_value(set_type_int, {2, 3, 4})
         ).test_min_max_count();
+    });
+}
 
+SEASTAR_TEST_CASE(test_aggregate_functions_tuple_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         auto tuple_type_int_text = tuple_type_impl::get_instance({int32_type, utf8_type});
         aggregate_function_test(e, tuple_type_int_text,
             make_tuple_value(tuple_type_int_text, {1, "aaa"}),
             make_tuple_value(tuple_type_int_text, {1, "bbb"}),
             make_tuple_value(tuple_type_int_text, {2, "aaa"})
         ).test_min_max_count();
+    });
+}
 
+SEASTAR_TEST_CASE(test_aggregate_functions_map_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
         auto map_type_int_text = map_type_impl::get_instance(int32_type, utf8_type, false);
         aggregate_function_test(e, map_type_int_text,
             make_map_value(map_type_int_text, {std::make_pair(data_value(1), data_value("asdf"))}),
