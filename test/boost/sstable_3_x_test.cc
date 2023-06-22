@@ -88,7 +88,7 @@ public:
         _sst->read_statistics().get();
     }
     void load() {
-        _sst->load().get();
+        _sst->load(_sst->get_schema()->get_sharder()).get();
     }
     future<std::vector<sstables::test::index_entry>> read_index() {
         load();
@@ -3353,15 +3353,12 @@ static void write_mut_and_validate(test_env& env, schema_ptr s, const sstring& t
 
 static void write_mut_and_validate_version(test_env& env, schema_ptr s, const sstring& table_name, mutation& mut,
         sstable_version_types version, std::vector<bytes> min_components, std::vector<bytes> max_components) {
-    lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(s);
-    mt->apply(mut);
-
     // FIXME This used to `write_and_compare_sstables()` and to
     // additionally call `do_validate_stats_metadata()` on the result,
     // but cannot now because flat reader version tranforms rearrange
     // range tombstones.  Revisit once the reader v2 migration is
     // complete and those version transforms are gone
-    auto sst = write_sstables(env, s, mt, version);
+    auto sst = make_sstable_containing(env.make_sstable(s, version), {mut});
     auto written_sst = validate_read(env, sst, {mut});
     check_min_max_column_names(written_sst, std::move(min_components), std::move(max_components));
 }

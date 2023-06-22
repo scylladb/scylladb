@@ -33,13 +33,7 @@ SEASTAR_TEST_CASE(test_schema_changes) {
             shared_sstable created_with_base_schema;
             shared_sstable created_with_changed_schema;
             if (it == cache.end()) {
-                auto mt = make_lw_shared<replica::memtable>(base);
-                for (auto& m : base_mutations) {
-                    mt->apply(m);
-                }
-
-                created_with_base_schema = make_sstable_containing(env.make_sstable(base), mt);
-
+                created_with_base_schema = make_sstable_containing(env.make_sstable(base), base_mutations);
                 cache.emplace(std::tuple { version, base }, created_with_base_schema);
             } else {
                 created_with_base_schema = it->second;

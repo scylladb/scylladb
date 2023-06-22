@@ -975,13 +975,6 @@ SEASTAR_TEST_CASE(reader_selector_fast_forwarding_test) {
     });
 }
 
-static
-sstables::shared_sstable create_sstable(sstables::test_env& env, schema_ptr s, std::vector<mutation> mutations) {
-    return make_sstable_containing([&] {
-        return env.make_sstable(s);
-    }, mutations);
-}
-
 static mutation compacted(const mutation& m) {
     auto result = m;
     result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), gc_clock::now(), tombstone_gc_state(nullptr));
@@ -1013,7 +1006,7 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
                     combined[j++].apply(m);
                 }
             }
-            mutation_source ds = create_sstable(env, s, muts)->as_mutation_source();
+            mutation_source ds = make_sstable_containing(env.make_sstable(s), muts)->as_mutation_source();
             reader_ranges.push_back(dht::partition_range::make({keys[0]}, {keys[0]}));
             readers.push_back(ds.make_reader_v2(s,
                 permit,
@@ -1083,8 +1076,8 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
 
         std::vector<flat_mutation_reader_v2> readers;
 
-        mutation_source ds1 = create_sstable(env, s, {m1})->as_mutation_source();
-        mutation_source ds2 = create_sstable(env, s, {m2})->as_mutation_source();
+        mutation_source ds1 = make_sstable_containing(env.make_sstable(s), {m1})->as_mutation_source();
+        mutation_source ds2 = make_sstable_containing(env.make_sstable(s), {m2})->as_mutation_source();
 
         // upper bound ends before the row in m2, so that the raw is fetched after next fast forward.
         auto range = ss.make_ckey_range(0, 3);
@@ -1595,6 +1588,11 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
     do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
         std::vector<std::atomic<bool>> shards_touched(smp::count);
         simple_schema s;
+
+        env.execute_cql(s.cql()).get();
+        auto& table = env.db().local().find_column_family(s.schema()->ks_name(), s.schema()->cf_name());
+        auto erm = table.get_effective_replication_map();
+
         auto factory = [&shards_touched] (
                 schema_ptr s,
                 reader_permit permit,
@@ -1609,6 +1607,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
         assert_that(make_multishard_combining_reader_v2(
                     seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
                     s.schema(),
+                    erm,
                     make_reader_permit(env),
                     query::full_partition_range,
                     s.schema()->full_slice()))
@@ -1947,9 +1946,13 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
             return make_empty_flat_reader_v2(s, std::move(permit));
         };
 
+        env.execute_cql(s.cql()).get();
+        auto& table = env.db().local().find_column_family(s.schema()->ks_name(), s.schema()->cf_name());
+        auto erm = table.get_effective_replication_map();
+
         std::vector<bool> expected_shards_touched(smp::count);
 
-        const dht::sharder& sharder = s.schema()->get_sharder();
+        const dht::sharder& sharder = erm->get_sharder(*s.schema());
         dht::token start_token(dht::token_kind::key, 0);
         dht::token end_token(dht::token_kind::key, 0);
         const auto additional_shards = tests::random::get_int<unsigned>(0, smp::count - 1);
@@ -1977,6 +1980,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
         assert_that(make_multishard_combining_reader_v2(
                 seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
                 s.schema(),
+                erm,
                 make_reader_permit(env),
                 pr,
                 s.schema()->full_slice()))
@@ -2197,9 +2201,11 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
             reader.set_max_buffer_size(max_buffer_size);
             return reader;
         };
+        auto& table = env.db().local().find_column_family(schema);
         auto reader = make_multishard_combining_reader_v2(
                 seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
                 schema,
+                table.get_effective_replication_map(),
                 make_reader_permit(env),
                 query::full_partition_range,
                 schema->full_slice());
@@ -2274,9 +2280,11 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
             return table.as_mutation_source().make_reader_v2(std::move(s), std::move(permit), range, slice, std::move(trace_state),
                     streamed_mutation::forwarding::no, fwd_mr);
         };
+        auto& table = env.db().local().find_column_family(schema);
+        auto erm = table.get_effective_replication_map();
         auto reference_reader = make_filtering_reader(
                 make_multishard_combining_reader_v2(seastar::make_shared<test_reader_lifecycle_policy>(std::move(reader_factory)),
-                    schema, make_reader_permit(env), partition_range, schema->full_slice()),
+                    schema, erm, make_reader_permit(env), partition_range, schema->full_slice()),
                 [&remote_partitioner] (const dht::decorated_key& pkey) {
                     return remote_partitioner.shard_of(pkey.token()) == 0;
                 });

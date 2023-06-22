@@ -8,6 +8,7 @@
 
 #include "locator/tablet_replication_strategy.hh"
 #include "locator/tablets.hh"
+#include "locator/tablet_sharder.hh"
 #include "locator/token_range_splitter.hh"
 #include "dht/i_partitioner.hh"
 #include "types/types.hh"
@@ -105,6 +106,23 @@ void tablet_map::set_tablet_transition_info(tablet_id id, tablet_transition_info
     _transitions.insert_or_assign(id, std::move(info));
 }
 
+std::optional<shard_id> tablet_map::get_shard(tablet_id tid, host_id host) const {
+    auto&& info = get_tablet_info(tid);
+
+    for (auto&& r : info.replicas) {
+        if (r.host == host) {
+            return r.shard;
+        }
+    }
+
+    auto tinfo = get_tablet_transition_info(tid);
+    if (tinfo && tinfo->pending_replica.host == host) {
+        return tinfo->pending_replica.shard;
+    }
+
+    return std::nullopt;
+}
+
 future<> tablet_map::clear_gently() {
     return utils::clear_gently(_tablets);
 }
@@ -184,6 +202,7 @@ size_t tablet_metadata::external_memory_usage() const {
 
 class tablet_effective_replication_map : public effective_replication_map {
     table_id _table;
+    tablet_sharder _sharder;
 private:
     gms::inet_address get_endpoint_for_host_id(host_id host) const {
         auto endpoint_opt = _tmptr->get_endpoint_for_host_id(host);
@@ -210,6 +229,7 @@ public:
                                      size_t replication_factor)
             : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
             , _table(table)
+            , _sharder(*_tmptr, table)
     { }
 
     virtual ~tablet_effective_replication_map() = default;
@@ -282,6 +302,10 @@ public:
             }
         };
         return std::make_unique<splitter>(_tmptr, get_tablet_map());
+    }
+
+    const dht::sharder& get_sharder(const schema& s) const override {
+        return _sharder;
     }
 };
 

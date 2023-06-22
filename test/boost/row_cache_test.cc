@@ -34,6 +34,7 @@
 #include "test/lib/log.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/random_utils.hh"
+#include "utils/throttle.hh"
 
 #include <boost/range/algorithm/min_element.hpp>
 #include "readers/from_mutations_v2.hh"
@@ -1230,62 +1231,16 @@ SEASTAR_TEST_CASE(test_update_failure) {
 }
 #endif
 
-class throttle {
-    unsigned _block_counter = 0;
-    promise<> _p; // valid when _block_counter != 0, resolves when goes down to 0
-    std::optional<promise<>> _entered;
-    bool _one_shot;
-public:
-    // one_shot means whether only the first enter() after block() will block.
-    throttle(bool one_shot = false) : _one_shot(one_shot) {}
-    future<> enter() {
-        if (_block_counter && (!_one_shot || _entered)) {
-            promise<> p1;
-            promise<> p2;
-
-            auto f1 = p1.get_future();
-
-            // Intentional, the future is waited on indirectly.
-            (void)p2.get_future().then([p1 = std::move(p1), p3 = std::move(_p)] () mutable {
-                p1.set_value();
-                p3.set_value();
-            });
-            _p = std::move(p2);
-            if (_entered) {
-                _entered->set_value();
-                _entered.reset();
-            }
-            return f1;
-        } else {
-            return make_ready_future<>();
-        }
-    }
-
-    future<> block() {
-        ++_block_counter;
-        _p = promise<>();
-        _entered = promise<>();
-        return _entered->get_future();
-    }
-
-    void unblock() {
-        assert(_block_counter);
-        if (--_block_counter == 0) {
-            _p.set_value();
-        }
-    }
-};
-
 class throttled_mutation_source {
 private:
     class impl : public enable_lw_shared_from_this<impl> {
         mutation_source _underlying;
-        ::throttle& _throttle;
+        utils::throttle& _throttle;
     private:
         class reader : public delegating_reader_v2 {
-            throttle& _throttle;
+            utils::throttle& _throttle;
         public:
-            reader(throttle& t, flat_mutation_reader_v2 r)
+            reader(utils::throttle& t, flat_mutation_reader_v2 r)
                     : delegating_reader_v2(std::move(r))
                     , _throttle(t)
             {}
@@ -1296,7 +1251,7 @@ private:
             }
         };
     public:
-        impl(::throttle& t, mutation_source underlying)
+        impl(utils::throttle& t, mutation_source underlying)
             : _underlying(std::move(underlying))
             , _throttle(t)
         { }
@@ -1308,7 +1263,7 @@ private:
     };
     lw_shared_ptr<impl> _impl;
 public:
-    throttled_mutation_source(throttle& t, mutation_source underlying)
+    throttled_mutation_source(utils::throttle& t, mutation_source underlying)
         : _impl(make_lw_shared<impl>(t, std::move(underlying)))
     { }
 
@@ -1388,7 +1343,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
         memtable_snapshot_source memtables(s);
-        throttle thr;
+        utils::throttle thr;
         auto cache_source = make_decorated_snapshot_source(snapshot_source([&] { return memtables(); }), [&] (mutation_source src) {
             return throttled_mutation_source(thr, std::move(src));
         });
@@ -1527,7 +1482,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
         memtable_snapshot_source memtables(s);
-        throttle thr;
+        utils::throttle thr;
         auto cache_source = make_decorated_snapshot_source(snapshot_source([&] { return memtables(); }), [&] (mutation_source src) {
             return throttled_mutation_source(thr, std::move(src));
         });
@@ -4268,7 +4223,7 @@ SEASTAR_TEST_CASE(test_eviction_of_upper_bound_of_population_range) {
         cache_mt->apply(m1);
 
         cache_tracker tracker;
-        throttle thr(true);
+        utils::throttle thr(true);
         auto cache_source = make_decorated_snapshot_source(snapshot_source([&] { return cache_mt->as_data_source(); }),
                                                            [&] (mutation_source src) {
             return throttled_mutation_source(thr, std::move(src));
@@ -4520,4 +4475,71 @@ SEASTAR_THREAD_TEST_CASE(test_population_of_subrange_of_expired_partition) {
         assert_that(cache.make_reader(s.schema(), semaphore.make_permit(), pr))
         .produces(m1)
         .produces_end_of_stream();
+}
+
+// Reproducer for #14110.
+// Forces a scenario where digest is calculated for rows in old MVCC
+// versions, incompatible with the current schema.
+// In the original issue, this crashed the node with an assert failure,
+// because the digest calculation was passed the current schema,
+// instead of the row's actual old schema.
+SEASTAR_THREAD_TEST_CASE(test_digest_read_during_schema_upgrade) {
+    // The test will insert a row into the cache,
+    // then drop a column, and read the old row with the new schema.
+    // If the old row was processed with the new schema,
+    // the test would fail because one of the row's columns would
+    // have no definition.
+    auto s1 = schema_builder("ks", "cf")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("ck", utf8_type, column_kind::clustering_key)
+        .with_column("v1", utf8_type, column_kind::regular_column)
+        .build();
+    auto s2 = schema_builder(s1)
+        .remove_column("v1")
+        .build();
+
+    // Create a mutation with one row, with inconsequential keys and values.
+    auto pk = partition_key::from_single_value(*s1, serialized(0));
+    auto m1 = std::invoke([s1, pk] {
+        auto x = mutation(s1, pk);
+        auto ck = clustering_key::from_single_value(*s1, serialized(0));
+        x.set_clustered_cell(ck, "v1", "v1_value", api::new_timestamp());
+        return x;
+    });
+
+    // Populate the cache with m1.
+    memtable_snapshot_source underlying(s1);
+    underlying.apply(m1);
+    cache_tracker tracker;
+    row_cache cache(s1, snapshot_source([&] { return underlying(); }), tracker);
+    populate_range(cache);
+
+    // A schema upgrade of a MVCC version happens by adding an empty version
+    // with the new schema next to it, and merging the old-schema version into
+    // the new-schema version.
+    //
+    // We want to test a read of rows which are still in the old-schema
+    // version. To ensure that, we have to prevent mutation_cleaner from
+    // merging the versions until the test is done.
+    auto pause_background_merges = tracker.cleaner().pause();
+
+    // Upgrade the cache
+    cache.set_schema(s2);
+
+    // Create a digest-requesting reader for the tested partition.
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto pr = dht::partition_range::make_singular(dht::decorate_key(*s1, pk));
+    auto slice = partition_slice_builder(*s2)
+        .with_option<query::partition_slice::option::with_digest>()
+        .build();
+    auto rd = cache.make_reader(s2, semaphore.make_permit(), pr, slice);
+    auto close_rd = deferred_close(rd);
+
+    // In the original issue reproduced by this test, the read would crash
+    // on an assert.
+    // So what we are really testing below is that the read doesn't crash.
+    // The comparison with m2 is just a sanity check.
+    auto m2 = m1;
+    m2.upgrade(s2);
+    assert_that(std::move(rd)).produces(m2);
 }

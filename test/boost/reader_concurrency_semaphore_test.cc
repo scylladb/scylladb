@@ -1341,7 +1341,7 @@ memory_limit_table create_memory_limit_table(cql_test_env& env, uint64_t target_
                     s,
                     writer_cfg,
                     encoding_stats{}).get();
-                sst->load().get();
+                sst->open_data().get();
                 tbl.add_sstable_and_update_cache(std::move(sst)).get();
             }
         });

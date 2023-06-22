@@ -26,7 +26,8 @@ async def inject_error_one_shot_on(manager, error_name, servers):
 async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(manager: ManagerClient):
     """Test that you can create a table and insert and query data"""
 
-    servers = await manager.running_servers()
+    logger.info("Bootstrapping cluster")
+    servers = [await manager.server_add(), await manager.server_add(), await manager.server_add()]
 
     s0 = servers[0].server_id
     not_s0 = servers[1:]
@@ -88,9 +89,12 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
 
 @pytest.mark.asyncio
 async def test_scans(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    servers = [await manager.server_add(), await manager.server_add(), await manager.server_add()]
+
     cql = manager.get_cql()
     await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', "
-                        "'replication_factor': 1, 'initial_tablets': 8};")
+                  "'replication_factor': 1, 'initial_tablets': 8};")
     await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
 
     keys = range(100)

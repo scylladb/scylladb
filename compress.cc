@@ -147,6 +147,12 @@ void compression_parameters::validate() {
             throw exceptions::configuration_exception(
                 fmt::format("{}/{} must be a power of 2.", CHUNK_LENGTH_KB, CHUNK_LENGTH_KB_ERR));
         }
+        // Excessive _chunk_length is pointless and can lead to allocation
+        // failures (see issue #9933)
+        if (chunk_length > 128 * 1024) {
+            throw exceptions::configuration_exception(
+                fmt::format("{}/{} must be 128 or less.", CHUNK_LENGTH_KB, CHUNK_LENGTH_KB_ERR));
+        }
     }
     if (_crc_check_chance && (_crc_check_chance.value() < 0.0 || _crc_check_chance.value() > 1.0)) {
         throw exceptions::configuration_exception(sstring(CRC_CHECK_CHANCE) + " must be between 0.0 and 1.0.");

@@ -17,6 +17,7 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/smp.hh>
 #include <seastar/util/bool_class.hh>
 
 #include "locator/types.hh"
@@ -37,6 +38,8 @@ namespace locator {
 class node;
 using node_holder = std::unique_ptr<node>;
 
+using shard_id = seastar::shard_id;
+
 class node {
 public:
     using this_node = bool_class<struct this_node_tag>;
@@ -56,13 +59,21 @@ private:
     inet_address _endpoint;
     endpoint_dc_rack _dc_rack;
     state _state;
+    shard_id _shard_count = 0;
 
     // Is this node the `localhost` instance
     this_node _is_this_node;
     idx_type _idx = -1;
 
 public:
-    node(const locator::topology* topology, locator::host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, state state, this_node is_this_node = this_node::no, idx_type idx = -1);
+    node(const locator::topology* topology,
+         locator::host_id id,
+         inet_address endpoint,
+         endpoint_dc_rack dc_rack,
+         state state,
+         shard_id shard_count = 0,
+         this_node is_this_node = this_node::no,
+         idx_type idx = -1);
 
     node(const node&) = delete;
     node(node&&) = delete;
@@ -91,15 +102,25 @@ public:
 
     state get_state() const noexcept { return _state; }
 
+    shard_id get_shard_count() const noexcept { return _shard_count; }
+
     static std::string to_string(state);
 
 private:
-    static node_holder make(const locator::topology* topology, locator::host_id id, inet_address endpoint, endpoint_dc_rack dc_rack, state state, node::this_node is_this_node = this_node::no, idx_type idx = -1);
+    static node_holder make(const locator::topology* topology,
+                            locator::host_id id,
+                            inet_address endpoint,
+                            endpoint_dc_rack dc_rack,
+                            state state,
+                            shard_id shard_count = 0,
+                            node::this_node is_this_node = this_node::no,
+                            idx_type idx = -1);
     node_holder clone() const;
 
     void set_topology(const locator::topology* topology) noexcept { _topology = topology; }
     void set_idx(idx_type idx) noexcept { _idx = idx; }
     void set_state(state state) noexcept { _state = state; }
+    void set_shard_count(shard_id shard_count) noexcept { _shard_count = shard_count; }
 
     friend class topology;
 };
@@ -130,12 +151,18 @@ public:
     }
 
     // Adds a node with given host_id, endpoint, and DC/rack.
-    const node* add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr, node::state state);
+    const node* add_node(host_id id, const inet_address& ep, const endpoint_dc_rack& dr, node::state state,
+                         shard_id shard_count = 0);
 
     // Optionally updates node's current host_id, endpoint, or DC/rack.
     // Note: the host_id may be updated from null to non-null after a new node gets a new, random host_id,
     // or a peer node host_id may be updated when the node is replaced with another node using the same ip address.
-    const node* update_node(node* node, std::optional<host_id> opt_id, std::optional<inet_address> opt_ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st);
+    const node* update_node(node* node,
+                            std::optional<host_id> opt_id,
+                            std::optional<inet_address> opt_ep,
+                            std::optional<endpoint_dc_rack> opt_dr,
+                            std::optional<node::state> opt_st,
+                            std::optional<shard_id> opt_shard_count = std::nullopt);
 
     // Removes a node using its host_id
     // Returns true iff the node was found and removed.
@@ -162,14 +189,17 @@ public:
      *
      * Adds or updates a node with given endpoint
      */
-    const node* add_or_update_endpoint(inet_address ep, std::optional<host_id> opt_id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st);
+    const node* add_or_update_endpoint(inet_address ep, std::optional<host_id> opt_id,
+                                       std::optional<endpoint_dc_rack> opt_dr,
+                                       std::optional<node::state> opt_st,
+                                       std::optional<shard_id> shard_count = std::nullopt);
 
     // Legacy entry point from token_metadata::update_topology
     const node* add_or_update_endpoint(inet_address ep, endpoint_dc_rack dr, std::optional<node::state> opt_st) {
-        return add_or_update_endpoint(ep, std::nullopt, std::move(dr), std::move(opt_st));
+        return add_or_update_endpoint(ep, std::nullopt, std::move(dr), std::move(opt_st), std::nullopt);
     }
     const node* add_or_update_endpoint(inet_address ep, host_id id) {
-        return add_or_update_endpoint(ep, id, std::nullopt, std::nullopt);
+        return add_or_update_endpoint(ep, id, std::nullopt, std::nullopt, std::nullopt);
     }
 
     /**

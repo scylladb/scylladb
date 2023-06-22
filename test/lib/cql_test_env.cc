@@ -132,6 +132,7 @@ public:
     static std::atomic<bool> active;
 private:
     sharded<replica::database>& _db;
+    sharded<gms::feature_service>& _feature_service;
     sharded<sstables::storage_manager>& _sstm;
     sharded<service::storage_proxy>& _proxy;
     sharded<cql3::query_processor>& _qp;
@@ -188,6 +189,7 @@ private:
 public:
     single_node_cql_env(
             sharded<replica::database>& db,
+            sharded<gms::feature_service>& feature_service,
             sharded<sstables::storage_manager>& sstm,
             sharded<service::storage_proxy>& proxy,
             sharded<cql3::query_processor>& qp,
@@ -203,6 +205,7 @@ public:
             sharded<service::raft_group_registry>& group0_registry,
             sharded<db::system_keyspace>& sys_ks)
             : _db(db)
+            , _feature_service(feature_service)
             , _sstm(sstm)
             , _proxy(proxy)
             , _qp(qp)
@@ -347,7 +350,7 @@ public:
         auto ckey = clustering_key::from_deeply_exploded(*schema, ck);
         auto exp = expected.type()->decompose(expected);
         auto dk = dht::decorate_key(*schema, pkey);
-        auto shard = dht::shard_of(*schema, dk._token);
+        auto shard = cf.get_effective_replication_map()->shard_of(*schema, dk._token);
         return _db.invoke_on(shard, [pkey = std::move(pkey),
                                       ckey = std::move(ckey),
                                       ks_name = std::move(ks_name),
@@ -444,6 +447,10 @@ public:
 
     virtual sharded<service::storage_proxy>& get_storage_proxy() override {
         return _proxy;
+    }
+
+    virtual sharded<gms::feature_service>& get_feature_service() override {
+        return _feature_service;
     }
 
     virtual sharded<sstables::storage_manager>& get_sstorage_manager() override {
@@ -709,8 +716,11 @@ public:
             sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
 
             auto sys_ks = seastar::sharded<db::system_keyspace>();
-            sys_ks.start(std::ref(qp), std::ref(db)).get();
+            sys_ks.start(std::ref(qp), std::ref(db), std::ref(snitch)).get();
             auto stop_sys_kd = defer([&sys_ks] { sys_ks.stop().get(); });
+            for (const auto p: all_system_table_load_phases) {
+                replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, *cfg, p).get();
+            }
 
             // don't start listening so tests can be run in parallel
             ms.start(listen, std::move(7000)).get();
@@ -814,10 +824,6 @@ public:
                 qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
             });
 
-            sys_ks.invoke_on_all([&snitch] (auto& sys_ks) {
-                return sys_ks.start(snitch.local());
-            }).get();
-
             db::batchlog_manager_config bmcfg;
             bmcfg.replay_rate = 100000000;
             bmcfg.write_request_timeout = 2s;
@@ -845,10 +851,9 @@ public:
             ss.invoke_on_all([&] (service::storage_service& ss) {
                 ss.set_query_processor(qp.local());
             }).get();
-
-            for (const auto p: all_system_table_load_phases) {
-                replica::distributed_loader::init_system_keyspace(sys_ks, db, ss, gossiper, raft_gr, *cfg, p).get();
-            }
+            sys_ks.invoke_on_all([&db, &ss, &gossiper, &raft_gr, &cfg] (db::system_keyspace& sys_ks) {
+                return sys_ks.initialize_virtual_tables(db, ss, gossiper, raft_gr, *cfg);
+            }).get();
 
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
 
@@ -985,7 +990,7 @@ public:
 
             notify_set.notify_all(configurable::system_state::started).get();
 
-            single_node_cql_env env(db, sstm, proxy, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, group0_client, raft_gr, sys_ks);
+            single_node_cql_env env(db, feature_service, sstm, proxy, qp, auth_service, view_builder, view_update_generator, mm_notif, mm, std::ref(sl_controller), bm, gossiper, group0_client, raft_gr, sys_ks);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 

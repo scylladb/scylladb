@@ -1707,6 +1707,33 @@ cql3::raw_value evaluate(const field_selection& field_select, const evaluation_i
     return field_value;
 }
 
+static
+cql3::raw_value
+evaluate(const column_mutation_attribute& cma, const evaluation_inputs& inputs) {
+    auto col = expr::as_if<column_value>(&cma.column);
+    if (!col) {
+        on_internal_error(expr_logger, fmt::format("evaluating column_mutation_attribute of non-column {}", cma.column));
+    }
+    int32_t index = inputs.selection->index_of(*col->col);
+    switch (cma.kind) {
+    case column_mutation_attribute::attribute_kind::ttl: {
+        auto ttl_v = inputs.static_and_regular_ttls[index];
+        if (ttl_v <= 0) {
+            return cql3::raw_value::make_null();
+        }
+        return raw_value::make_value(data_value(ttl_v).serialize());
+    }
+    case column_mutation_attribute::attribute_kind::writetime: {
+        auto ts_v = inputs.static_and_regular_timestamps[index];
+        if (ts_v == api::missing_timestamp) {
+            return cql3::raw_value::make_null();
+        }
+        return raw_value::make_value(data_value(ts_v).serialize());
+    }
+    }
+    on_internal_error(expr_logger, "evaluating column_mutation_attribute with unexpected kind");
+}
+
 cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
     return expr::visit(overloaded_functor {
         [&](const binary_operator& binop) -> cql3::raw_value {
@@ -1718,8 +1745,8 @@ cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
         [](const unresolved_identifier&) -> cql3::raw_value {
             on_internal_error(expr_logger, "Can't evaluate unresolved_identifier");
         },
-        [](const column_mutation_attribute&) -> cql3::raw_value {
-            on_internal_error(expr_logger, "Can't evaluate a column_mutation_attribute");
+        [&](const column_mutation_attribute& cma) -> cql3::raw_value {
+            return evaluate(cma, inputs);
         },
         [&](const cast& c) -> cql3::raw_value {
             // std::invoke trick allows us to use "return" in switch can have the compiler warn us if we missed an enum
@@ -2720,7 +2747,7 @@ verify_no_aggregate_functions(const expression& expr, std::string_view context_f
         return std::visit(find_agg, fc.func);
     });
     if (found_agg) {
-        throw exceptions::invalid_request_exception(fmt::format("Aggregation function are not supported in the {}", context_for_errors));
+        throw exceptions::invalid_request_exception(fmt::format("Aggregation functions are not supported in the {}", context_for_errors));
     }
 }
 

@@ -47,6 +47,17 @@ sharder::token_for_next_shard(const token& t, shard_id shard, unsigned spans) co
     return dht::token_for_next_shard(_shard_start, _shard_count, _sharding_ignore_msb_bits, t, shard, spans);
 }
 
+std::optional<shard_and_token>
+sharder::next_shard(const token& t) const {
+    auto shard = shard_of(t);
+    auto next_shard = shard + 1 == _shard_count ? 0 : shard + 1;
+    auto next_token = token_for_next_shard(t, next_shard);
+    if (next_token == dht::maximum_token()) {
+        return std::nullopt;
+    }
+    return shard_and_token{next_shard, next_token};
+}
+
 std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {
     fmt::print(out, "{{key: {}, token: {}}}", dk._key, dk._token);
     return out;
@@ -171,7 +182,7 @@ std::ostream& operator<<(std::ostream& out, const i_partitioner& p) {
     return out << "}";
 }
 
-unsigned shard_of(const schema& s, const token& t) {
+unsigned static_shard_of(const schema& s, const token& t) {
     return s.get_sharder().shard_of(t);
 }
 
@@ -201,9 +212,14 @@ ring_position_range_sharder::next(const schema& s) {
     if (_done) {
         return {};
     }
-    auto shard = _range.start() ? _sharder.shard_of(_range.start()->value().token()) : token::shard_of_minimum_token();
-    auto next_shard = shard + 1 < _sharder.shard_count() ? shard + 1 : 0;
-    auto shard_boundary_token = _sharder.token_for_next_shard(_range.start() ? _range.start()->value().token() : minimum_token(), next_shard);
+    auto token = _range.start() ? _range.start()->value().token() : dht::minimum_token();
+    auto shard = _sharder.shard_of(token);
+    auto next_shard_and_token = _sharder.next_shard(token);
+    if (!next_shard_and_token) {
+        _done = true;
+        return ring_position_range_and_shard{std::move(_range), shard};
+    }
+    auto shard_boundary_token = next_shard_and_token->token;
     auto shard_boundary = ring_position::starting_at(shard_boundary_token);
     if ((!_range.end() || shard_boundary.less_compare(s, _range.end()->value()))
             && shard_boundary_token != maximum_token()) {
@@ -244,29 +260,38 @@ ring_position_range_vector_sharder::next(const schema& s) {
 }
 
 future<utils::chunked_vector<partition_range>>
-split_range_to_single_shard(const schema& s, const partition_range& pr, shard_id shard) {
-    const sharder& sharder = s.get_sharder();
-    auto next_shard = shard + 1 == sharder.shard_count() ? 0 : shard + 1;
+split_range_to_single_shard(const schema& s, const sharder& sharder, const partition_range& pr, shard_id shard) {
     auto start_token = pr.start() ? pr.start()->value().token() : minimum_token();
     auto start_shard = sharder.shard_of(start_token);
     auto start_boundary = start_shard == shard ? pr.start() : range_bound<ring_position>(ring_position::starting_at(sharder.token_for_next_shard(start_token, shard)));
+    start_token = start_shard == shard ? start_token : sharder.token_for_next_shard(start_token, shard);
     return repeat_until_value([&sharder,
             &pr,
             cmp = ring_position_comparator(s),
             ret = utils::chunked_vector<partition_range>(),
             start_token,
             start_boundary,
-            shard,
-            next_shard] () mutable {
+            shard] () mutable {
         if (pr.overlaps(partition_range(start_boundary, {}), cmp)
                 && !(start_boundary && start_boundary->value().token() == maximum_token())) {
-            auto end_token = sharder.token_for_next_shard(start_token, next_shard);
+            dht::token end_token = maximum_token();
+            auto s_a_t = sharder.next_shard(start_token);
+            if (s_a_t) {
+                end_token = s_a_t->token;
+            }
             auto candidate = partition_range(std::move(start_boundary), range_bound<ring_position>(ring_position::starting_at(end_token), false));
             auto intersection = pr.intersection(std::move(candidate), cmp);
             if (intersection) {
                 ret.push_back(std::move(*intersection));
             }
-            start_token = sharder.token_for_next_shard(end_token, shard);
+            if (!s_a_t) {
+                return make_ready_future<std::optional<utils::chunked_vector<partition_range>>>(std::move(ret));
+            }
+            if (s_a_t->shard == shard) {
+                start_token = end_token;
+            } else {
+                start_token = sharder.token_for_next_shard(end_token, shard);
+            }
             start_boundary = range_bound<ring_position>(ring_position::starting_at(start_token));
             return make_ready_future<std::optional<utils::chunked_vector<partition_range>>>();
         }
@@ -360,9 +385,9 @@ dht::partition_range_vector to_partition_ranges(const dht::token_range_vector& r
 }
 
 std::map<unsigned, dht::partition_range_vector>
-split_range_to_shards(dht::partition_range pr, const schema& s) {
+split_range_to_shards(dht::partition_range pr, const schema& s, const sharder& raw_sharder) {
     std::map<unsigned, dht::partition_range_vector> ret;
-    auto sharder = dht::ring_position_range_sharder(s.get_sharder(), std::move(pr));
+    auto sharder = dht::ring_position_range_sharder(raw_sharder, std::move(pr));
     auto rprs = sharder.next(s);
     while (rprs) {
         ret[rprs->shard].emplace_back(rprs->ring_range);
@@ -477,6 +502,35 @@ dht::token_range_vector split_token_range_msb(unsigned most_significant_bits) {
         ret.emplace_back(std::move(start_bound), std::move(end_bound));
     }
     return ret;
+}
+
+dht::token first_token(const dht::partition_range& pr) {
+    auto start = dht::ring_position_view::for_range_start(pr);
+    auto token = start.token();
+    // Check if the range excludes "token".
+    if (!start.key()
+        && start.get_token_bound() == dht::ring_position::token_bound::end
+        && token._kind == dht::token::kind::key
+        && !token.is_last()) {
+        token = dht::next_token(token);
+    }
+    return token;
+}
+
+std::optional<shard_id> is_single_shard(const dht::sharder& sharder, const schema& s, const dht::partition_range& pr) {
+    auto token = first_token(pr);
+    auto shard = sharder.shard_of(token);
+    if (pr.is_singular()) {
+        return shard;
+    }
+    if (auto s_a_t = sharder.next_shard(token)) {
+        dht::ring_position_comparator cmp(s);
+        auto end = dht::ring_position_view::for_range_end(pr);
+        if (cmp(end, dht::ring_position_view::starting_at(s_a_t->token)) > 0) {
+            return std::nullopt;
+        }
+    }
+    return shard;
 }
 
 }

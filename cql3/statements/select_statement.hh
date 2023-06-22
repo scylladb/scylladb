@@ -115,13 +115,18 @@ public:
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
         execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options) const override;
 
-    future<::shared_ptr<cql_transport::messages::result_message>> execute(query_processor& qp,
+    future<::shared_ptr<cql_transport::messages::result_message>> execute_non_aggregate_unpaged(query_processor& qp,
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
          const query_options& options, gc_clock::time_point now) const;
 
-    future<::shared_ptr<cql_transport::messages::result_message>> execute_without_checking_exception_message(query_processor& qp,
+    future<::shared_ptr<cql_transport::messages::result_message>> execute_without_checking_exception_message_non_aggregate_unpaged(query_processor& qp,
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
          const query_options& options, gc_clock::time_point now) const;
+
+    future<::shared_ptr<cql_transport::messages::result_message>> execute_without_checking_exception_message_aggregate_or_paged(query_processor& qp,
+        lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
+         const query_options& options, gc_clock::time_point now, int32_t page_size, bool aggregate, bool nonpaged_filtering) const;
+
 
     struct primary_key {
         dht::decorated_key partition;

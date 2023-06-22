@@ -83,6 +83,12 @@ public:
         return _kind == kind::after_all_keys;
     }
 
+    // Returns true iff this is the largest token which can be associated with a partition key.
+    // Note that this is different that is_maximum().
+    bool is_last() const {
+        return _kind == dht::token::kind::key && _data == std::numeric_limits<int64_t>::max();
+    }
+
     size_t external_memory_usage() const {
         return 0;
     }

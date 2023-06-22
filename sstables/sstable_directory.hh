@@ -136,6 +136,7 @@ private:
     std::filesystem::path _sstable_dir;
     io_error_handler_gen _error_handler_gen;
     std::unique_ptr<components_lister> _lister;
+    const dht::sharder& _sharder;
 
     generation_type _max_generation_seen;
     sstables::sstable_version_types _max_version_seen = sstables::sstable_version_types::ka;
@@ -185,6 +186,7 @@ private:
 public:
     sstable_directory(sstables_manager& manager,
             schema_ptr schema,
+            const dht::sharder& sharder,
             lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
             std::filesystem::path sstable_dir,
             io_error_handler_gen error_handler_gen);

@@ -1471,7 +1471,9 @@ void writer::consume_end_of_stream() {
             { large_data_type::elements_in_collection, std::move(_elements_in_collection_entry) },
         }
     });
-    _sst.write_scylla_metadata(_shard, std::move(features), std::move(identifier), std::move(ld_stats), _cfg.origin);
+    const dht::sharder& sharder = _cfg.erm ? _cfg.erm->get_sharder(_schema)
+                                           : _schema.get_sharder(); // Used in tests
+    _sst.write_scylla_metadata(_shard, sharder, std::move(features), std::move(identifier), std::move(ld_stats), _cfg.origin);
     _sst.seal_sstable(_cfg.backup).get();
 }
 

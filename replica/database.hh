@@ -119,8 +119,6 @@ class large_data_handler;
 class system_keyspace;
 class table_selector;
 
-future<> system_keyspace_make(db::system_keyspace& sys_ks, distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<service::raft_group_registry>& raft_gr, db::config& cfg, system_table_load_phase phase);
-
 namespace view {
 class view_update_generator;
 }
@@ -354,7 +352,8 @@ struct table_stats {
 
 using storage_options = data_dictionary::storage_options;
 
-class table : public enable_lw_shared_from_this<table> {
+class table : public enable_lw_shared_from_this<table>
+            , public weakly_referencable<table> {
 public:
     struct config {
         std::vector<sstring> all_datadirs;
@@ -773,6 +772,13 @@ public:
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
     future<const_mutation_partition_ptr> find_partition_slow(schema_ptr, reader_permit permit, const partition_key& key) const;
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
+    shard_id shard_of(const mutation& m) const {
+        return shard_of(m.token());
+    }
+    shard_id shard_of(dht::token t) const {
+        return _erm ? _erm->shard_of(*_schema, t)
+                    : dht::static_shard_of(*_schema, t); // for tests.
+    }
     // Applies given mutation to this column family
     // The mutation is always upgraded to current schema.
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h = {}) {
@@ -881,6 +887,10 @@ public:
 
     void set_incremental_backups(bool val) {
         _config.enable_incremental_backups = val;
+    }
+
+    bool uses_static_sharding() const {
+        return !_erm || _erm->get_replication_strategy().is_vnode_based();
     }
 
     /*!
@@ -1180,14 +1190,6 @@ private:
     config _config;
     locator::effective_replication_map_factory& _erm_factory;
 
-    locator::effective_replication_map_factory& get_erm_factory() noexcept {
-        return _erm_factory;
-    }
-
-    const locator::effective_replication_map_factory& get_erm_factory() const noexcept {
-        return _erm_factory;
-    }
-
 public:
     explicit keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locator::effective_replication_map_factory& erm_factory);
 
@@ -1420,7 +1422,6 @@ private:
 
     using system_keyspace = bool_class<struct system_keyspace_tag>;
     future<> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
-    friend future<> db::system_keyspace_make(db::system_keyspace& sys_ks, distributed<database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<service::raft_group_registry>& raft_gr, db::config& cfg, system_table_load_phase);
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
 
@@ -1434,7 +1435,7 @@ private:
     template<typename Future>
     Future update_write_metrics(Future&& f);
     void update_write_metrics_for_timed_out_write();
-    future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, bool is_bootstrap, system_keyspace system);
+    future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
     void remove(table&) noexcept;
 public:
     static table_schema_version empty_version;
@@ -1464,7 +1465,10 @@ public:
         }
     };
 
+    // Load the schema definitions kept in schema tables from disk and initialize in-memory schema data structures
+    // (keyspace/table definitions, column mappings etc.)
     future<> parse_system_tables(distributed<service::storage_proxy>&, sharded<db::system_keyspace>&);
+
     database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
             compaction_manager& cm, sstables::storage_manager& sstm, sharded<sstables::directory_semaphore>& sst_dir_sem, utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
     database(database&&) = delete;
@@ -1504,7 +1508,14 @@ public:
     service::migration_notifier& get_notifier() { return _mnotifier; }
     const service::migration_notifier& get_notifier() const { return _mnotifier; }
 
-    void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
+    // Setup in-memory data structures for this table (`table` and, if it doesn't exist yet, `keyspace` object).
+    // Create the keyspace data directories if the keyspace wasn't created yet.
+    //
+    // Note: 'system table' does not necessarily mean it sits in `system` keyspace, it could also be `system_schema`;
+    // in general we mean local tables created by the system (not the user).
+    future<> create_local_system_table(
+            schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory&);
+
     void maybe_init_schema_commitlog();
     future<> add_column_family_and_make_directory(schema_ptr schema);
 
@@ -1582,7 +1593,7 @@ public:
     // Apply mutations atomically.
     // On restart, either all mutations will be replayed or none of them.
     // All mutations must belong to the same commitlog domain.
-    // All mutations must be owned by the current shard (in terms of dht::shard_of).
+    // All mutations must be owned by the current shard.
     // Mutations may be partially visible to reads during the call.
     // Mutations may be partially visible to reads until restart on exception (FIXME).
     future<> apply(const std::vector<frozen_mutation>&, db::timeout_clock::time_point timeout);
@@ -1676,6 +1687,7 @@ public:
 public:
     bool update_column_family(schema_ptr s);
 private:
+    void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
     future<> detach_column_family(table& cf);
 
     struct table_truncate_state;

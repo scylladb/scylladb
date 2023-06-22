@@ -1305,9 +1305,7 @@ future<> sstable::open_or_create_data(open_flags oflags, file_open_options optio
 future<> sstable::open_data(sstable_open_config cfg) noexcept {
     co_await open_or_create_data(open_flags::ro);
     co_await update_info_for_opened_data(cfg);
-    if (_shards.empty()) {
-        _shards = compute_shards_for_this_sstable();
-    }
+    assert(!_shards.empty());
     auto* sm = _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>();
     if (sm) {
         // Sharding information uses a lot of memory and once we're doing with this computation we will no longer use it.
@@ -1401,7 +1399,7 @@ void sstable::write_filter() {
 
 // This interface is only used during tests, snapshot loading and early initialization.
 // No need to set tunable priorities for it.
-future<> sstable::load(sstable_open_config cfg) noexcept {
+future<> sstable::load(const dht::sharder& sharder, sstable_open_config cfg) noexcept {
     co_await read_toc();
     // read scylla-meta after toc. Might need it to parse
     // rest (hint extensions)
@@ -1416,6 +1414,10 @@ future<> sstable::load(sstable_open_config cfg) noexcept {
     validate_min_max_metadata();
     validate_max_local_deletion_time();
     validate_partitioner();
+    if (_shards.empty()) {
+        set_first_and_last_keys();
+        _shards = compute_shards_for_this_sstable(sharder);
+    }
     co_await open_data(cfg);
 }
 
@@ -1442,8 +1444,9 @@ future<foreign_sstable_open_info> sstable::get_open_info() & {
 }
 
 future<>
-sstable::load_owner_shards() {
+sstable::load_owner_shards(const dht::sharder& sharder) {
     if (!_shards.empty()) {
+        sstlog.trace("{}: shards={}", get_filename(), _shards);
         co_return;
     }
     co_await read_scylla_metadata();
@@ -1470,7 +1473,8 @@ sstable::load_owner_shards() {
         set_first_and_last_keys();
     }
 
-    _shards = compute_shards_for_this_sstable();
+    _shards = compute_shards_for_this_sstable(sharder);
+    sstlog.trace("{}: shards={}", get_filename(), _shards);
 }
 
 void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval) {
@@ -1536,12 +1540,12 @@ populate_statistics_offsets(sstable_version_types v, statistics& s) {
 
 static
 sharding_metadata
-create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
+create_sharding_metadata(schema_ptr schema, const dht::sharder& sharder, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
     auto prange = dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
     auto sm = sharding_metadata();
-    auto&& ranges = dht::split_range_to_single_shard(*schema, prange, shard).get0();
+    auto&& ranges = dht::split_range_to_single_shard(*schema, sharder, prange, shard).get0();
     if (ranges.empty()) {
-        auto split_ranges_all_shards = dht::split_range_to_shards(prange, *schema);
+        auto split_ranges_all_shards = dht::split_range_to_shards(prange, *schema, sharder);
         sstlog.warn("create_sharding_metadata: range={} has no intersection with shard={} first_key={} last_key={} ranges_single_shard={} ranges_all_shards={}",
                 prange, shard, first_key, last_key, ranges, split_ranges_all_shards);
     }
@@ -1622,11 +1626,12 @@ sstable::read_scylla_metadata() noexcept {
 }
 
 void
-sstable::write_scylla_metadata(shard_id shard, sstable_enabled_features features, struct run_identifier identifier,
+sstable::write_scylla_metadata(shard_id shard, const dht::sharder& sharder, sstable_enabled_features features, struct run_identifier identifier,
         std::optional<scylla_metadata::large_data_stats> ld_stats, sstring origin) {
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
-    auto sm = create_sharding_metadata(_schema, first_key, last_key, shard);
+
+    auto sm = create_sharding_metadata(_schema, sharder, first_key, last_key, shard);
 
     // sstable write may fail to generate empty metadata if mutation source has only data from other shard.
     // see https://github.com/scylladb/scylla/issues/2932 for details on how it can happen.
@@ -2728,7 +2733,7 @@ uint64_t sstable::estimated_keys_for_range(const dht::token_range& range) {
 }
 
 std::vector<unsigned>
-sstable::compute_shards_for_this_sstable() const {
+sstable::compute_shards_for_this_sstable(const dht::sharder& sharder_) const {
     std::unordered_set<unsigned> shards;
     dht::partition_range_vector token_ranges;
     const auto* sm = _components->scylla_metadata
@@ -2750,7 +2755,8 @@ sstable::compute_shards_for_this_sstable() const {
                 sm->token_ranges.elements
                 | boost::adaptors::transformed(disk_token_range_to_ring_position_range));
     }
-    auto sharder = dht::ring_position_range_vector_sharder(_schema->get_sharder(), std::move(token_ranges));
+    sstlog.trace("{}: token_ranges={}", get_filename(), token_ranges);
+    auto sharder = dht::ring_position_range_vector_sharder(sharder_, std::move(token_ranges));
     auto rpras = sharder.next(*_schema);
     while (rpras) {
         shards.insert(rpras->shard);

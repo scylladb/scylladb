@@ -17,7 +17,9 @@
 
 #include "replica/tablets.hh"
 #include "locator/tablets.hh"
+#include "locator/tablet_sharder.hh"
 #include "locator/tablet_replication_strategy.hh"
+#include "utils/fb_utilities.hh"
 
 using namespace locator;
 using namespace replica;
@@ -208,6 +210,163 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
             }
 
             verify_tablet_metadata_persistence(e, tm);
+        }
+    }, tablet_cql_test_config());
+}
+
+SEASTAR_TEST_CASE(test_get_shard) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+
+        auto table1 = table_id(utils::UUID_gen::get_time_UUID());
+
+        tablet_metadata tm;
+        tablet_id tid;
+        tablet_id tid1;
+
+        {
+            tablet_map tmap(2);
+            tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                    tablet_replica {h3, 5},
+                }
+            });
+            tid1 = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid1, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 2},
+                    tablet_replica {h3, 1},
+                }
+            });
+            tmap.set_tablet_transition_info(tid, tablet_transition_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                    tablet_replica {h2, 3},
+                },
+                tablet_replica {h2, 3}
+            });
+            tm.set_tablet_map(table1, std::move(tmap));
+        }
+
+        auto&& tmap = tm.get_tablet_map(table1);
+
+        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid1, h1), std::make_optional(shard_id(2)));
+        BOOST_REQUIRE(!tmap.get_shard(tid1, h2));
+        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid1, h3), std::make_optional(shard_id(1)));
+
+        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid, h1), std::make_optional(shard_id(0)));
+        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid, h2), std::make_optional(shard_id(3)));
+        BOOST_REQUIRE_EQUAL(tmap.get_shard(tid, h3), std::make_optional(shard_id(5)));
+
+    }, tablet_cql_test_config());
+}
+
+SEASTAR_TEST_CASE(test_sharder) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+
+        auto table1 = table_id(utils::UUID_gen::get_time_UUID());
+
+        token_metadata tokm(token_metadata::config{});
+        tokm.get_topology().add_or_update_endpoint(utils::fb_utilities::get_broadcast_address(), h1);
+
+        std::vector<tablet_id> tablet_ids;
+        {
+            tablet_map tmap(4);
+            auto tid = tmap.first_tablet();
+
+            tablet_ids.push_back(tid);
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 3},
+                    tablet_replica {h3, 5},
+                }
+            });
+
+            tid = *tmap.next_tablet(tid);
+            tablet_ids.push_back(tid);
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h2, 3},
+                    tablet_replica {h3, 1},
+                }
+            });
+
+            tid = *tmap.next_tablet(tid);
+            tablet_ids.push_back(tid);
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h3, 2},
+                    tablet_replica {h1, 1},
+                }
+            });
+            tmap.set_tablet_transition_info(tid, tablet_transition_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 1},
+                    tablet_replica {h2, 3},
+                },
+                tablet_replica {h2, 3}
+            });
+
+            tid = *tmap.next_tablet(tid);
+            tablet_ids.push_back(tid);
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h3, 7},
+                    tablet_replica {h2, 3},
+                }
+            });
+
+            tablet_metadata tm;
+            tm.set_tablet_map(table1, std::move(tmap));
+            tokm.set_tablets(std::move(tm));
+        }
+
+        auto& tm = tokm.tablets().get_tablet_map(table1);
+        tablet_sharder sharder(tokm, table1);
+        BOOST_REQUIRE_EQUAL(sharder.shard_of(tm.get_last_token(tablet_ids[0])), 3);
+        BOOST_REQUIRE_EQUAL(sharder.shard_of(tm.get_last_token(tablet_ids[1])), 0); // missing
+        BOOST_REQUIRE_EQUAL(sharder.shard_of(tm.get_last_token(tablet_ids[2])), 1);
+        BOOST_REQUIRE_EQUAL(sharder.shard_of(tm.get_last_token(tablet_ids[3])), 0); // missing
+
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_last_token(tablet_ids[1]), 0), tm.get_first_token(tablet_ids[3]));
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_last_token(tablet_ids[1]), 1), tm.get_first_token(tablet_ids[2]));
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_last_token(tablet_ids[1]), 3), dht::maximum_token());
+
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_first_token(tablet_ids[1]), 0), tm.get_first_token(tablet_ids[3]));
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_first_token(tablet_ids[1]), 1), tm.get_first_token(tablet_ids[2]));
+        BOOST_REQUIRE_EQUAL(sharder.token_for_next_shard(tm.get_first_token(tablet_ids[1]), 3), dht::maximum_token());
+
+        {
+            auto shard_opt = sharder.next_shard(tm.get_last_token(tablet_ids[0]));
+            BOOST_REQUIRE(shard_opt);
+            BOOST_REQUIRE_EQUAL(shard_opt->shard, 0);
+            BOOST_REQUIRE_EQUAL(shard_opt->token, tm.get_first_token(tablet_ids[1]));
+        }
+
+        {
+            auto shard_opt = sharder.next_shard(tm.get_last_token(tablet_ids[1]));
+            BOOST_REQUIRE(shard_opt);
+            BOOST_REQUIRE_EQUAL(shard_opt->shard, 1);
+            BOOST_REQUIRE_EQUAL(shard_opt->token, tm.get_first_token(tablet_ids[2]));
+        }
+
+        {
+            auto shard_opt = sharder.next_shard(tm.get_last_token(tablet_ids[2]));
+            BOOST_REQUIRE(shard_opt);
+            BOOST_REQUIRE_EQUAL(shard_opt->shard, 0);
+            BOOST_REQUIRE_EQUAL(shard_opt->token, tm.get_first_token(tablet_ids[3]));
+        }
+
+        {
+            auto shard_opt = sharder.next_shard(tm.get_last_token(tablet_ids[3]));
+            BOOST_REQUIRE(!shard_opt);
         }
     }, tablet_cql_test_config());
 }

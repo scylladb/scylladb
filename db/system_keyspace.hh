@@ -59,6 +59,7 @@ namespace gms {
 }
 
 namespace locator {
+    class effective_replication_map_factory;
     class endpoint_dc_rack;
     class snitch_ptr;
 } // namespace locator
@@ -101,8 +102,8 @@ struct compaction_history_entry {
 };
 
 class system_keyspace : public seastar::peering_sharded_service<system_keyspace>, public seastar::async_sharded_service<system_keyspace> {
-    sharded<cql3::query_processor>& _qp;
-    sharded<replica::database>& _db;
+    cql3::query_processor& _qp;
+    replica::database& _db;
     std::unique_ptr<local_cache> _cache;
 
     static schema_ptr raft_snapshot_config();
@@ -269,12 +270,19 @@ public:
     static future<std::optional<sstring>> get_scylla_local_param(const sstring& key);
 
     static std::vector<schema_ptr> all_tables(const db::config& cfg);
-    future<> make(distributed<replica::database>& db,
-                         distributed<service::storage_service>& ss,
-                         sharded<gms::gossiper>& g,
-                         sharded<service::raft_group_registry>& raft_gr,
-                         db::config& cfg,
-                         system_table_load_phase phase);
+    future<> make(
+            locator::effective_replication_map_factory&,
+            replica::database&,
+            db::config&,
+            system_table_load_phase phase);
+
+    future<> initialize_virtual_tables(
+                         distributed<replica::database>&,
+                         distributed<service::storage_service>&,
+                         sharded<gms::gossiper>&,
+                         sharded<service::raft_group_registry>&,
+                         db::config&);
+
 
     /// overloads
 
@@ -488,10 +496,8 @@ public:
     future<bool> get_must_synchronize_topology();
     future<> set_must_synchronize_topology(bool);
 
-    system_keyspace(sharded<cql3::query_processor>& qp, sharded<replica::database>& db) noexcept;
+    system_keyspace(cql3::query_processor& qp, replica::database& db, const locator::snitch_ptr&) noexcept;
     ~system_keyspace();
-    future<> start(const locator::snitch_ptr&);
-    future<> stop();
     future<> shutdown();
 
 private:

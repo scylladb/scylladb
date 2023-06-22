@@ -797,7 +797,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto scylla_specific_rs = co_await db::schema_tables::extract_scylla_specific_keyspace_info(proxy, v);
         auto ksm = create_keyspace_from_schema_partition(v, scylla_specific_rs);
-        co_return co_await create_keyspace(ksm, proxy.local().get_erm_factory(), true /* bootstrap. do not mark populated yet */, system_keyspace::no);
+        co_return co_await create_keyspace(ksm, proxy.local().get_erm_factory(), system_keyspace::no);
     }));
     co_await do_parse_schema_tables(proxy, db::schema_tables::TYPES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto& ks = this->find_keyspace(v.first);
@@ -944,6 +944,29 @@ void database::maybe_init_schema_commitlog() {
     }).release();
 }
 
+future<> database::create_local_system_table(
+        schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory& erm_factory) {
+    auto ks_name = table->ks_name();
+    if (!has_keyspace(ks_name)) {
+        bool durable = _cfg.data_file_directories().size() > 0;
+        auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
+                "org.apache.cassandra.locator.LocalStrategy",
+                std::map<sstring, sstring>{},
+                durable
+                );
+        co_await create_keyspace(ksm, erm_factory, replica::database::system_keyspace::yes);
+    }
+    auto& ks = find_keyspace(ks_name);
+    auto cfg = ks.make_column_family_config(*table, *this);
+    if (write_in_user_memory) {
+        cfg.dirty_memory_manager = &_dirty_memory_manager;
+    } else {
+        cfg.memtable_scheduling_group = default_scheduling_group();
+        cfg.memtable_to_cache_scheduling_group = default_scheduling_group();
+    }
+    add_column_family(ks, table, std::move(cfg));
+}
+
 void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg) {
     schema = local_schema_registry().learn(schema);
     schema->registry_entry()->mark_synced();
@@ -977,6 +1000,7 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     }
     ks.add_or_update_column_family(schema);
     cf->start();
+    schema->registry_entry()->set_table(cf->weak_from_this());
     _column_families.emplace(uuid, std::move(cf));
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
     if (schema->is_view()) {
@@ -1246,7 +1270,7 @@ keyspace::create_replication_strategy(const locator::shared_token_metadata& stm,
             abstract_replication_strategy::create_replication_strategy(
                 _metadata->strategy_name(), options);
     rslogger.debug("replication strategy for keyspace {} is {}, opts={}", _metadata->name(), _metadata->strategy_name(), options);
-    auto erm = co_await get_erm_factory().create_effective_replication_map(_replication_strategy, stm.get());
+    auto erm = co_await _erm_factory.create_effective_replication_map(_replication_strategy, stm.get());
     update_effective_replication_map(std::move(erm));
 }
 
@@ -1383,11 +1407,11 @@ future<> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metada
 
 future<>
 database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory) {
-    return create_keyspace(ksm, erm_factory, false, system_keyspace::no);
+    return create_keyspace(ksm, erm_factory, system_keyspace::no);
 }
 
 future<>
-database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, bool is_bootstrap, system_keyspace system) {
+database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system) {
     if (_keyspaces.contains(ksm->name())) {
         co_return;
     }
@@ -1915,7 +1939,7 @@ future<> database::do_apply_many(const std::vector<frozen_mutation>& muts, db::t
                               first_cf.schema()->ks_name(), first_cf.schema()->cf_name()));
         }
 
-        auto m_shard = dht::shard_of(*s, dht::get_token(*s, muts[i].key()));
+        auto m_shard = cf.shard_of(dht::get_token(*s, muts[i].key()));
         if (!shard) {
             if (this_shard_id() != m_shard) {
                 on_internal_error(dblog, format("Must call apply() on the owning shard ({} != {})", this_shard_id(), m_shard));
@@ -2839,7 +2863,9 @@ flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::da
             return semaphore().obtain_permit(schema.get(), description, cf.estimate_read_memory_cost(), timeout, std::move(trace_ptr));
         }
     };
-    auto ms = mutation_source([&db] (schema_ptr s,
+    auto& table = db.local().find_column_family(schema);
+    auto erm = table.get_effective_replication_map();
+    auto ms = mutation_source([&db, erm] (schema_ptr s,
             reader_permit permit,
             const dht::partition_range& pr,
             const query::partition_slice& ps,
@@ -2847,8 +2873,8 @@ flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::da
             streamed_mutation::forwarding,
             mutation_reader::forwarding fwd_mr) {
         auto table_id = s->id();
-        return make_multishard_combining_reader_v2(make_shared<streaming_reader_lifecycle_policy>(db, table_id), std::move(s), std::move(permit), pr, ps,
-                std::move(trace_state), fwd_mr);
+        return make_multishard_combining_reader_v2(make_shared<streaming_reader_lifecycle_policy>(db, table_id),
+                std::move(s), erm, std::move(permit), pr, ps, std::move(trace_state), fwd_mr);
     });
     auto&& full_slice = schema->full_slice();
     return make_flat_multi_range_reader(schema, std::move(permit), std::move(ms),
@@ -2878,8 +2904,9 @@ future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations(
     auto max_size = db.local().get_unlimited_query_max_result_size();
     auto max_res_size = query::max_result_size(max_size.soft_limit, max_size.hard_limit, query::result_memory_limiter::maximum_result_size);
     auto cmd = query::read_command(s->id(), s->version(), ps, max_res_size, query::tombstone_limit::max);
-    if (pr.is_singular()) {
-        unsigned shard = dht::shard_of(*s, pr.start()->value().token());
+    auto erm = s->table().get_effective_replication_map();
+    if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
+        auto shard = *shard_opt;
         co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, &pr, timeout] (replica::database& db) mutable {
             return db.query_mutations(gs, cmd, pr, {}, timeout).then([] (std::tuple<reconcilable_result, cache_temperature>&& res) {
                 return make_foreign(make_lw_shared<reconcilable_result>(std::move(std::get<0>(res))));
@@ -2903,8 +2930,9 @@ future<foreign_ptr<lw_shared_ptr<query::result>>> query_data(
     auto cmd = query::read_command(s->id(), s->version(), ps, max_res_size, query::tombstone_limit::max);
     auto prs = dht::partition_range_vector{pr};
     auto opts = query::result_options::only_result();
-    if (pr.is_singular()) {
-        unsigned shard = dht::shard_of(*s, pr.start()->value().token());
+    auto erm = s->table().get_effective_replication_map();
+    if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
+        auto shard = *shard_opt;
         co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, opts, &prs, timeout] (replica::database& db) mutable {
             return db.query(gs, cmd, opts, prs, {}, timeout).then([] (std::tuple<lw_shared_ptr<query::result>, cache_temperature>&& res) {
                 return make_foreign(std::move(std::get<0>(res)));

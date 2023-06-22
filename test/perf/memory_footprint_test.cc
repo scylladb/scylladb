@@ -209,7 +209,7 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& se
             auto mt2 = make_lw_shared<replica::memtable>(s);
             mt2->apply(*mt, env.make_reader_permit()).get();
             write_memtable_to_sstable_for_test(*mt2, sst).get();
-            sst->load().get();
+            sst->open_data().get();
             result.sstable[v] = sst->data_size();
         }
     }).get();

@@ -152,7 +152,27 @@ const dht::i_partitioner& schema::get_partitioner() const {
 }
 
 const dht::sharder& schema::get_sharder() const {
+    auto t = maybe_table();
+    if (t && !t->uses_static_sharding()) {
+        // Use table()->get_effective_replication_map()->get_sharder() instead.
+        on_internal_error(dblog, format("Attempted to obtain static sharder for table {}.{}", ks_name(), cf_name()));
+    }
     return _raw._sharder.get();
+}
+
+replica::table* schema::maybe_table() const {
+    if (_registry_entry) {
+        return _registry_entry->table();
+    }
+    return nullptr;
+}
+
+replica::table& schema::table() const {
+    auto t = maybe_table();
+    if (!t) {
+        seastar::throw_with_backtrace<replica::no_such_column_family>(id());
+    }
+    return *t;
 }
 
 bool schema::has_custom_partitioner() const {

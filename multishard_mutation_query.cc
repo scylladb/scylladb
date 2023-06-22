@@ -192,6 +192,7 @@ class read_context : public reader_lifecycle_policy_v2 {
 
     distributed<replica::database>& _db;
     schema_ptr _schema;
+    locator::effective_replication_map_ptr _erm;
     reader_permit _permit;
     const query::read_command& _cmd;
     const dht::partition_range_vector& _ranges;
@@ -208,10 +209,12 @@ class read_context : public reader_lifecycle_policy_v2 {
     future<> save_reader(shard_id shard, full_position_view last_pos);
 
 public:
-    read_context(distributed<replica::database>& db, schema_ptr s, const query::read_command& cmd, const dht::partition_range_vector& ranges,
-            tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout)
+    read_context(distributed<replica::database>& db, schema_ptr s, locator::effective_replication_map_ptr erm,
+                 const query::read_command& cmd, const dht::partition_range_vector& ranges,
+                 tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout)
             : _db(db)
             , _schema(std::move(s))
+            , _erm(std::move(erm))
             , _permit(_db.local().get_reader_concurrency_semaphore().make_tracking_only_permit(_schema.get(), "multishard-mutation-query", timeout, trace_state))
             , _cmd(cmd)
             , _ranges(ranges)
@@ -219,6 +222,14 @@ public:
             , _semaphores(smp::count, nullptr) {
         _readers.resize(smp::count);
         _permit.set_max_result_size(get_max_result_size());
+
+        if (!_erm->get_replication_strategy().is_vnode_based()) {
+            // The algorithm is full of assumptions about shard assignment being round-robin, static, and full.
+            // This does not hold for tablets. We chose to avoid this algorithm rather than adapting it.
+            // The coordinator should split ranges accordingly.
+            on_internal_error(mmq_log, format("multishard reader cannot be used on tables with non-static sharding: {}.{}",
+                              _schema->ks_name(), _schema->cf_name()));
+        }
     }
 
     read_context(read_context&&) = delete;
@@ -233,6 +244,10 @@ public:
 
     reader_permit permit() const {
         return _permit;
+    }
+
+    const locator::effective_replication_map_ptr& erm() const {
+        return _erm;
     }
 
     query::max_result_size get_max_result_size() {
@@ -398,7 +413,7 @@ future<> read_context::stop() {
 
 read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(flat_mutation_reader_v2::tracked_buffer combined_buffer,
         const dht::decorated_key& pkey) {
-    auto& sharder = _schema->get_sharder();
+    auto& sharder = _erm->get_sharder(*_schema);
 
     std::vector<mutation_fragment_v2> tmp_buffer;
     dismantle_buffer_stats stats;
@@ -446,7 +461,7 @@ read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(fla
 
 read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(detached_compaction_state compaction_state) {
     auto stats = dismantle_buffer_stats();
-    auto& sharder = _schema->get_sharder();
+    auto& sharder = _erm->get_sharder(*_schema);
     const auto shard = sharder.shard_of(compaction_state.partition_start.key().token());
 
     auto& rtc_opt = compaction_state.current_tombstone;
@@ -714,7 +729,7 @@ future<page_consume_result<ResultBuilder>> read_page(
     auto compaction_state = make_lw_shared<compact_for_query_state_v2>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
             cmd.partition_limit);
 
-    auto reader = make_multishard_combining_reader_v2(ctx, s, ctx->permit(), ranges.front(), cmd.slice,
+    auto reader = make_multishard_combining_reader_v2(ctx, s, ctx->erm(), ctx->permit(), ranges.front(), cmd.slice,
             trace_state, mutation_reader::forwarding(ranges.size() > 1));
     if (ranges.size() > 1) {
         reader = make_flat_mutation_reader_v2<multi_range_reader>(s, ctx->permit(), std::move(reader), ranges);
@@ -755,7 +770,9 @@ future<typename ResultBuilder::result_type> do_query(
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout,
         noncopyable_function<ResultBuilder(const compact_for_query_state_v2&)> result_builder_factory) {
-    auto ctx = seastar::make_shared<read_context>(db, s, cmd, ranges, trace_state, timeout);
+    auto& table = db.local().find_column_family(s);
+    auto erm = table.get_effective_replication_map();
+    auto ctx = seastar::make_shared<read_context>(db, s, erm, cmd, ranges, trace_state, timeout);
 
     // Use coroutine::as_future to prevent exception on timesout.
     auto f = co_await coroutine::as_future(ctx->lookup_readers(timeout).then([&, result_builder_factory = std::move(result_builder_factory)] () mutable {

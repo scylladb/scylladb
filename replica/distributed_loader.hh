@@ -47,13 +47,11 @@ class foreign_sstable_open_info;
 namespace service {
 
 class storage_proxy;
-class storage_service;
-class raft_group_registry;
 
 }
 
-namespace gms {
-class gossiper;
+namespace locator {
+class effective_replication_map_factory;
 }
 
 class distributed_loader_for_tests;
@@ -78,7 +76,7 @@ class distributed_loader {
     static future<> populate_keyspace(distributed<replica::database>& db, sstring datadir, sstring ks_name);
 
 public:
-    static future<> init_system_keyspace(sharded<db::system_keyspace>& sys_ks, distributed<replica::database>& db, distributed<service::storage_service>& ss, sharded<gms::gossiper>& g, sharded<service::raft_group_registry>& raft_gr, db::config& cfg, system_table_load_phase phase);
+    static future<> init_system_keyspace(sharded<db::system_keyspace>&, distributed<locator::effective_replication_map_factory>&, distributed<replica::database>&, db::config& cfg, system_table_load_phase phase);
     static future<> init_non_system_keyspaces(distributed<replica::database>& db, distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks);
 
     /**

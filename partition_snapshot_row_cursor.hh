@@ -565,8 +565,8 @@ public:
     }
 
     // Can be called only when cursor is valid and pointing at a row.
-    deletable_row& latest_row() const noexcept {
-        return _current_row[0].it->row();
+    void latest_row_prepare_hash() const {
+        _current_row[0].it->row().cells().prepare_hash(*_current_row[0].schema, column_kind::regular_column);
     }
 
     // Can be called only when cursor is valid and pointing at a row.

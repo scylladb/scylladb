@@ -354,6 +354,7 @@ mutation_opt read_schema_table_mutation(sharded<sstable_manager_service>& sst_ma
     sst_dirs.start(
         sharded_parameter([&sst_man] { return std::ref(sst_man.local().sst_man); }),
         sharded_parameter([&schema_factory] { return schema_factory(); }),
+        sharded_parameter([&] { return std::ref(schema_factory()->get_sharder()); }),
         sharded_parameter([] { return make_lw_shared<const data_dictionary::storage_options>(); }),
         schema_table_data_path,
         sharded_parameter([] { return default_io_error_handler_gen(); })).get();

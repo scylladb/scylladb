@@ -213,6 +213,14 @@ public:
     /// Returns a token_range_splitter which is line with the replica assignment of this replication map.
     /// The splitter can live longer than this instance.
     virtual std::unique_ptr<token_range_splitter> make_splitter() const = 0;
+
+    /// Returns a sharder which reflects shard replica assignment of this replication map.
+    /// The sharder is valid as long as this instance is kept alive.
+    virtual const dht::sharder& get_sharder(const schema& s) const = 0;
+
+    shard_id shard_of(const schema& s, dht::token t) const {
+        return get_sharder(s).shard_of(t);
+    }
 };
 
 using effective_replication_map_ptr = seastar::shared_ptr<const effective_replication_map>;
@@ -274,6 +282,7 @@ public: // effective_replication_map
     std::optional<inet_address_vector_replica_set> get_endpoints_for_reading(const token& search_token) const override;
     bool has_pending_ranges(inet_address endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
+    const dht::sharder& get_sharder(const schema& s) const override;
 public:
     explicit vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map,
             ring_mapping pending_endpoints, ring_mapping read_endpoints, size_t replication_factor) noexcept

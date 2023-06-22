@@ -214,11 +214,13 @@ class partition_ranges_owned_by_this_shard {
     const dht::partition_range_vector _partition_ranges;
     size_t _range_idx;
     std::optional<dht::ring_position_range_sharder> _intersecter;
+    locator::effective_replication_map_ptr _erm;
 public:
     partition_ranges_owned_by_this_shard(schema_ptr s, dht::partition_range_vector v)
         :  _s(s)
         , _partition_ranges(v)
         , _range_idx(0)
+        , _erm(_s->table().get_effective_replication_map())
     {}
 
     // Return the next partition_range owned by this shard, or nullopt when the
@@ -246,7 +248,7 @@ public:
                 return std::nullopt;
             }
 
-            _intersecter.emplace(_s->get_sharder(), std::move(_partition_ranges[_range_idx]));
+            _intersecter.emplace(_erm->get_sharder(*_s), std::move(_partition_ranges[_range_idx]));
         }
     }
 };

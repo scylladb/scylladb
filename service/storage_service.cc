@@ -347,12 +347,16 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
 
         tmptr->set_version(_topology_state_machine._topology.version);
 
+        auto update_topology = [&] (inet_address ip, const replica_state& rs) {
+            tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack}, std::nullopt, rs.shard_count);
+        };
+
         auto add_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
             locator::host_id host_id{id.uuid()};
             auto ip = co_await id2ip(id);
 
-            slogger.trace("raft topology: loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={}",
-                          id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate, rs.ring.value().tokens);
+            slogger.trace("raft topology: loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={} shards={}",
+                          id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate, rs.ring.value().tokens, rs.shard_count);
             // Save tokens, not needed for raft topology management, but needed by legacy
             // Also ip -> id mapping is needed for address map recreation on reboot
             if (!utils::fb_utilities::is_me(ip)) {
@@ -371,7 +375,7 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
                 co_await _sys_ks.local().update_tokens(rs.ring.value().tokens);
                 co_await _gossiper.add_local_application_state({{ gms::application_state::STATUS, gms::versioned_value::normal(rs.ring.value().tokens) }});
             }
-            tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack});
+            update_topology(ip, rs);
             co_await tmptr->update_normal_tokens(rs.ring.value().tokens, ip);
             tmptr->update_host_id(host_id, ip);
         };
@@ -409,7 +413,7 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
                     co_await _sys_ks.local().update_tokens(ip, {});
                     co_await _sys_ks.local().update_peer_info(ip, "host_id", id.uuid());
                 }
-                tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack});
+                update_topology(ip, rs);
                 if (_topology_state_machine._topology.normal_nodes.empty()) {
                     // This is the first node in the cluster. Insert the tokens as normal to the token ring early
                     // so we can perform writes to regular 'distributed' tables during the bootstrap procedure
@@ -423,7 +427,7 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
                 break;
             case node_state::decommissioning:
             case node_state::removing:
-                tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack});
+                update_topology(ip, rs);
                 co_await tmptr->update_normal_tokens(rs.ring.value().tokens, ip);
                 tmptr->update_host_id(host_id, ip);
                 tmptr->add_leaving_endpoint(ip);
@@ -438,7 +442,7 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
                     on_fatal_internal_error(slogger, ::format("Cannot map id of a node being replaced {} to its ip", replaced_id));
                 }
                 assert(existing_ip);
-                tmptr->update_topology(ip, locator::endpoint_dc_rack{rs.datacenter, rs.rack});
+                update_topology(ip, rs);
                 tmptr->add_replacing_endpoint(*existing_ip, ip);
                 co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, *existing_ip, id, ip));
             }
@@ -501,29 +505,64 @@ future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
    co_await _db.local().apply(freeze(muts), db::no_timeout);
 }
 
+template<typename Builder>
+class topology_mutation_builder_base {
+private:
+    Builder& self() {
+        return *static_cast<Builder*>(this);
+    }
+
+protected:
+    enum class collection_apply_mode {
+        overwrite,
+        update,
+    };
+
+    using builder_base = topology_mutation_builder_base<Builder>;
+
+    Builder& apply_atomic(const char* cell, const data_value& value);
+    template<std::ranges::range C>
+    requires std::convertible_to<std::ranges::range_value_t<C>, data_value>
+    Builder& apply_set(const char* cell, collection_apply_mode apply_mode, const C& c);
+    Builder& del(const char* cell);
+};
+
 class topology_mutation_builder;
 
-class topology_node_mutation_builder {
+class topology_node_mutation_builder
+        : public topology_mutation_builder_base<topology_node_mutation_builder> {
+
+    friend builder_base;
+
     topology_mutation_builder& _builder;
     deletable_row& _r;
+
+private:
+    row& row();
+    api::timestamp_type timestamp() const;
+    const schema& schema() const;
 
 public:
     topology_node_mutation_builder(topology_mutation_builder&, raft::server_id);
 
-    template<typename T>
-    topology_node_mutation_builder& set(const char* cell, const T& value) {
-        return set(cell, sstring{::format("{}", value)});
-    }
+    topology_node_mutation_builder& set(const char* cell, node_state value);
+    topology_node_mutation_builder& set(const char* cell, topology_request value);
     topology_node_mutation_builder& set(const char* cell, const sstring& value);
     topology_node_mutation_builder& set(const char* cell, const raft::server_id& value);
     topology_node_mutation_builder& set(const char* cell, const std::unordered_set<dht::token>& value);
+    template<typename S>
+    requires std::constructible_from<sstring, S>
+    topology_node_mutation_builder& set(const char* cell, const std::set<S>& value);
     topology_node_mutation_builder& set(const char* cell, const uint32_t& value);
     topology_node_mutation_builder& set(const char* cell, const utils::UUID& value);
     topology_node_mutation_builder& del(const char* cell);
     canonical_mutation build();
 };
 
-class topology_mutation_builder {
+class topology_mutation_builder
+        : public topology_mutation_builder_base<topology_mutation_builder> {
+
+    friend builder_base;
     friend class topology_node_mutation_builder;
 
     schema_ptr _s;
@@ -531,6 +570,12 @@ class topology_mutation_builder {
     api::timestamp_type _ts;
 
     std::optional<topology_node_mutation_builder> _node_builder;
+
+private:
+    row& row();
+    api::timestamp_type timestamp() const;
+    const schema& schema() const;
+
 public:
     topology_mutation_builder(api::timestamp_type ts);
     topology_mutation_builder& set_transition_state(topology::transition_state);
@@ -538,6 +583,9 @@ public:
     topology_mutation_builder& set_current_cdc_generation_id(const cdc::generation_id_v2&);
     topology_mutation_builder& set_new_cdc_generation_data_uuid(const utils::UUID& value);
     topology_mutation_builder& set_global_topology_request(global_topology_request);
+    template<typename S>
+    requires std::constructible_from<sstring, S>
+    topology_mutation_builder& add_enabled_features(const std::set<S>& value);
     topology_mutation_builder& del_transition_state();
     topology_mutation_builder& del_global_topology_request();
     topology_node_mutation_builder& with_node(raft::server_id);
@@ -556,76 +604,124 @@ topology_node_mutation_builder::topology_node_mutation_builder(topology_mutation
     _r.apply(row_marker(_builder._ts));
 }
 
-topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const sstring& value) {
-    auto cdef = _builder._s->get_column_definition(cell);
+template<typename Builder>
+Builder& topology_mutation_builder_base<Builder>::apply_atomic(const char* cell, const data_value& value) {
+    const column_definition* cdef = self().schema().get_column_definition(cell);
     assert(cdef);
-    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _builder._ts, cdef->type->decompose(value)));
-    return *this;
+    self().row().apply(*cdef, atomic_cell::make_live(*cdef->type, self().timestamp(), cdef->type->decompose(value)));
+    return self();
+}
+
+template<typename Builder>
+template<std::ranges::range C>
+requires std::convertible_to<std::ranges::range_value_t<C>, data_value>
+Builder& topology_mutation_builder_base<Builder>::apply_set(const char* cell, collection_apply_mode apply_mode, const C& c) {
+    const column_definition* cdef = self().schema().get_column_definition(cell);
+    assert(cdef);
+    auto vtype = static_pointer_cast<const set_type_impl>(cdef->type)->get_elements_type();
+
+    std::set<bytes, serialized_compare> cset(vtype->as_less_comparator());
+    for (const auto& v : c) {
+        cset.insert(vtype->decompose(data_value(v)));
+    }
+
+    collection_mutation_description cm;
+    cm.cells.reserve(cset.size());
+    for (const bytes& raw : cset) {
+        cm.cells.emplace_back(raw, atomic_cell::make_live(*bytes_type, self().timestamp(), bytes_view()));
+    }
+
+    if (apply_mode == collection_apply_mode::overwrite) {
+        cm.tomb = tombstone(self().timestamp() - 1, gc_clock::now());
+    }
+
+    self().row().apply(*cdef, cm.serialize(*cdef->type));
+    return self();
+}
+
+template<typename Builder>
+Builder& topology_mutation_builder_base<Builder>::del(const char* cell) {
+    auto cdef = self().schema().get_column_definition(cell);
+    assert(cdef);
+    if (!cdef->type->is_multi_cell()) {
+        self().row().apply(*cdef, atomic_cell::make_dead(self().timestamp(), gc_clock::now()));
+    } else {
+        collection_mutation_description cm;
+        cm.tomb = tombstone{self().timestamp(), gc_clock::now()};
+        self().row().apply(*cdef, cm.serialize(*cdef->type));
+    }
+    return self();
+}
+
+row& topology_node_mutation_builder::row() {
+    return _r.cells();
+}
+
+api::timestamp_type topology_node_mutation_builder::timestamp() const {
+    return _builder._ts;
+}
+
+const schema& topology_node_mutation_builder::schema() const {
+    return *_builder._s;
+}
+
+topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, node_state value) {
+    return apply_atomic(cell, sstring{::format("{}", value)});
+}
+
+topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, topology_request value) {
+    return apply_atomic(cell, sstring{::format("{}", value)});
+}
+
+topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const sstring& value) {
+    return apply_atomic(cell, value);
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const raft::server_id& value) {
-    auto cdef = _builder._s->get_column_definition(cell);
-    assert(cdef);
-    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _builder._ts, cdef->type->decompose(value.uuid())));
-    return *this;
+    return apply_atomic(cell, value.uuid());
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const uint32_t& value) {
-    auto cdef = _builder._s->get_column_definition(cell);
-    assert(cdef);
-    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _builder._ts, cdef->type->decompose(int32_t(value))));
-    return *this;
+    return apply_atomic(cell, int32_t(value));
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(
         const char* cell, const utils::UUID& value) {
-    auto cdef = _builder._s->get_column_definition(cell);
-    assert(cdef);
-    _r.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, _builder._ts, cdef->type->decompose(value)));
-    return *this;
+    return apply_atomic(cell, value);
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::del(const char* cell) {
-    auto cdef = _builder._s->get_column_definition(cell);
-    assert(cdef);
-    if (!cdef->type->is_multi_cell()) {
-        _r.cells().apply(*cdef, atomic_cell::make_dead(_builder._ts, gc_clock::now()));
-    } else {
-        collection_mutation_description cm;
-        cm.tomb = tombstone{_builder._ts, gc_clock::now()};
-        _r.cells().apply(*cdef, cm.serialize(*cdef->type));
-    }
-    return *this;
+    return builder_base::del(cell);
 }
 
 topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const std::unordered_set<dht::token>& tokens) {
-    auto cdef = _builder._s->get_column_definition(cell);
-    assert(cdef);
-    collection_mutation_description cm;
-    if (tokens.size()) {
-        auto vtype = static_pointer_cast<const set_type_impl>(cdef->type)->get_elements_type();
+    return apply_set(cell, collection_apply_mode::overwrite, tokens | boost::adaptors::transformed([] (const auto& t) { return t.to_sstring(); }));
+}
 
-        cm.cells.reserve(tokens.size());
-
-        for (auto&& value : tokens) {
-            cm.cells.emplace_back(vtype->decompose(value.to_sstring()), atomic_cell::make_live(*bytes_type, _builder._ts, bytes_view()));
-        }
-
-        cm.tomb = tombstone(_builder._ts - 1, gc_clock::now());
-        _r.cells().apply(*cdef, cm.serialize(*cdef->type));
-    } else {
-        del(cell);
-    }
-    return *this;
+template<typename S>
+requires std::constructible_from<sstring, S>
+topology_node_mutation_builder& topology_node_mutation_builder::set(const char* cell, const std::set<S>& features) {
+    return apply_set(cell, collection_apply_mode::overwrite, features | boost::adaptors::transformed([] (const auto& f) { return sstring(f); }));
 }
 
 canonical_mutation topology_node_mutation_builder::build() {
     return canonical_mutation{std::move(_builder._m)};
 }
 
+row& topology_mutation_builder::row() {
+    return _m.partition().static_row().maybe_create();
+}
+
+api::timestamp_type topology_mutation_builder::timestamp() const {
+    return _ts;
+}
+
+const schema& topology_mutation_builder::schema() const {
+    return *_s;
+}
+
 topology_mutation_builder& topology_mutation_builder::set_transition_state(topology::transition_state value) {
-    _m.set_static_cell("transition_state", ::format("{}", value), _ts);
-    return *this;
+    return apply_atomic("transition_state", ::format("{}", value));
 }
 
 topology_mutation_builder& topology_mutation_builder::set_version(topology::version_t value) {
@@ -634,35 +730,33 @@ topology_mutation_builder& topology_mutation_builder::set_version(topology::vers
 }
 
 topology_mutation_builder& topology_mutation_builder::del_transition_state() {
-    auto cdef = _s->get_column_definition("transition_state");
-    assert(cdef);
-    _m.partition().static_row().apply(*cdef, atomic_cell::make_dead(_ts, gc_clock::now()));
-    return *this;
+    return del("transition_state");
 }
 
 topology_mutation_builder& topology_mutation_builder::set_current_cdc_generation_id(
         const cdc::generation_id_v2& value) {
-    _m.set_static_cell("current_cdc_generation_timestamp", value.ts, _ts);
-    _m.set_static_cell("current_cdc_generation_uuid", value.id, _ts);
+    apply_atomic("current_cdc_generation_timestamp", value.ts);
+    apply_atomic("current_cdc_generation_uuid", value.id);
     return *this;
 }
 
 topology_mutation_builder& topology_mutation_builder::set_new_cdc_generation_data_uuid(
         const utils::UUID& value) {
-    _m.set_static_cell("new_cdc_generation_data_uuid", value, _ts);
-    return *this;
+    return apply_atomic("new_cdc_generation_data_uuid", value);
 }
 
 topology_mutation_builder& topology_mutation_builder::set_global_topology_request(global_topology_request value) {
-    _m.set_static_cell("global_topology_request", ::format("{}", value), _ts);
-    return *this;
+    return apply_atomic("global_topology_request", ::format("{}", value));
+}
+
+template<typename S>
+requires std::constructible_from<sstring, S>
+topology_mutation_builder& topology_mutation_builder::add_enabled_features(const std::set<S>& features) {
+    return apply_set("enabled_features", collection_apply_mode::update, features | boost::adaptors::transformed([] (const auto& f) { return sstring(f); }));
 }
 
 topology_mutation_builder& topology_mutation_builder::del_global_topology_request() {
-    auto cdef = _s->get_column_definition("global_topology_request");
-    assert(cdef);
-    _m.partition().static_row().apply(*cdef, atomic_cell::make_dead(_ts, gc_clock::now()));
-    return *this;
+    return del("global_topology_request");
 }
 
 topology_node_mutation_builder& topology_mutation_builder::with_node(raft::server_id n) {
@@ -1139,6 +1233,7 @@ class topology_coordinator {
                                       f.get_exception());
                         break;
                     }
+                    node = std::move(f).get();
                 }
 
                 raft_topology_cmd cmd{raft_topology_cmd::command::stream_ranges};
@@ -1482,7 +1577,8 @@ future<> storage_service::raft_replace(raft::server& raft_server, raft::server_i
                .set("replaced_id", replaced_id)
                .set("num_tokens", _db.local().get_config().num_tokens())
                .set("shard_count", smp::count)
-               .set("ignore_msb", _db.local().get_config().murmur3_partitioner_ignore_msb_bits());
+               .set("ignore_msb", _db.local().get_config().murmur3_partitioner_ignore_msb_bits())
+               .set("supported_features", _feature_service.supported_feature_set());
         topology_change change{{builder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("replace {}/{}: add myself ({}) to topology", replaced_id, replaced_ip, raft_server.id()));
         try {
@@ -1518,7 +1614,8 @@ future<> storage_service::raft_bootstrap(raft::server& raft_server) {
                .set("topology_request", topology_request::join)
                .set("num_tokens", _db.local().get_config().num_tokens())
                .set("shard_count", smp::count)
-               .set("ignore_msb", _db.local().get_config().murmur3_partitioner_ignore_msb_bits());
+               .set("ignore_msb", _db.local().get_config().murmur3_partitioner_ignore_msb_bits())
+               .set("supported_features", _feature_service.supported_feature_set());
         topology_change change{{builder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, "bootstrap: add myself to topology");
         try {
@@ -1534,6 +1631,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
     auto local_shard_count = smp::count;
     auto local_ignore_msb = _db.local().get_config().murmur3_partitioner_ignore_msb_bits();
     auto local_release_version = version::release();
+    auto local_supported_features = boost::copy_range<std::set<sstring>>(_feature_service.supported_feature_set());
 
     auto synchronized = [&] () {
         auto it = _topology_state_machine._topology.find(raft_server.id());
@@ -1545,7 +1643,8 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
 
         return replica_state.shard_count == local_shard_count
             && replica_state.ignore_msb == local_ignore_msb
-            && replica_state.release_version == local_release_version;
+            && replica_state.release_version == local_release_version
+            && replica_state.supported_features == local_supported_features;
     };
 
     // We avoid performing a read barrier if we're sure that our metadata stored in topology
@@ -1581,7 +1680,8 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
         builder.with_node(raft_server.id())
                .set("shard_count", local_shard_count)
                .set("ignore_msb", local_ignore_msb)
-               .set("release_version", local_release_version);
+               .set("release_version", local_release_version)
+               .set("supported_features", local_supported_features);
         topology_change change{{builder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(
                 std::move(change), guard, ::format("{}: update topology with local metadata", raft_server.id()));
