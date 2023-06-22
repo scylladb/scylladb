@@ -72,6 +72,7 @@
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
 #include "readers/combined.hh"
+#include "readers/filtering.hh"
 
 namespace fs = std::filesystem;
 
@@ -5126,5 +5127,92 @@ SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
 
         BOOST_REQUIRE(sstables_closed == sstables_nr);
         BOOST_REQUIRE(sstables_closed_during_cleanup >= sstables_nr / 2);
+    });
+}
+
+SEASTAR_TEST_CASE(sstable_index_reader_respect_bypass_flag) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto ks_name = "ks";    // single_node_cql_env::ks_name
+        auto s = schema_builder(ks_name, "correcness_test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", utf8_type).build();
+
+        auto sst_gen = env.make_sst_factory(s);
+
+        auto make_insert = [&] (dht::decorated_key key) {
+            mutation m(s, std::move(key));
+            const column_definition& col = *s->get_column_definition("value");
+            m.set_clustered_cell(clustering_key::make_empty(), col, make_atomic_cell(utf8_type, bytes(sstables::default_sstable_buffer_size, 'a')));
+            return m;
+        };
+
+        auto total_partitions = 1000U;
+        auto local_keys = tests::generate_partition_keys(total_partitions, s);
+        std::vector<mutation> mutations;
+        for (auto i = 0U; i < total_partitions; i++) {
+            mutations.push_back(make_insert(local_keys.at(i)));
+        }
+        auto sst = make_sstable_containing(sst_gen, mutations);
+
+        class noop_consumer {
+        public:
+            void consume_new_partition(const dht::decorated_key& dk) {}
+            void consume(tombstone t) {}
+            stop_iteration consume(static_row&& sr, tombstone, bool) { return stop_iteration::no; }
+            stop_iteration consume(clustering_row&& cr, row_tombstone, bool) { return stop_iteration::no; }
+            stop_iteration consume(range_tombstone_change&& rtc) { return stop_iteration::no; }
+            stop_iteration consume_end_of_partition() { return stop_iteration::no; }
+            stop_iteration consume(static_row&& sr) {
+                return consume(std::move(sr), tombstone{}, bool{});
+            }
+            stop_iteration consume(clustering_row&& cr) {
+                return consume(std::move(cr), row_tombstone{}, bool{});
+            }
+            void consume_end_of_stream() {}
+        };
+
+        auto log_index_cache_stats = [] (sstring s) {
+            testlog.info("{} - populations={}, evictions={}, used_bytes={}",
+                         s, partition_index_cache::shard_stats().populations, partition_index_cache::shard_stats().evictions, partition_index_cache::shard_stats().used_bytes);
+        };
+
+        auto cached_entries = [] () {
+            return partition_index_cache::shard_stats().populations - partition_index_cache::shard_stats().evictions;
+        };
+
+        auto do_test = [&] (sstables::use_caching caching) {
+            std::array<const char*, 3> caching_n = {"none", "local", "global"};
+            testlog.info("Running test with caching mode = {}", caching_n[static_cast<uint8_t>(caching)]);
+            auto tolerance = [&] () {
+                return caching == sstables::use_caching::none ? 1 : cached_entries();
+            };
+            auto partition_filter = [&] (const dht::decorated_key& dk) {
+                log_index_cache_stats("on partition filter");
+                BOOST_REQUIRE(cached_entries() <= tolerance());
+                return false;
+            };
+
+            query::partition_slice ps = s->full_slice();
+            if (caching == sstables::use_caching::none) {
+                ps.options.set(query::partition_slice::option::bypass_cache);
+            }
+
+            auto sst_reader = sst->make_reader(s, env.make_reader_permit(), query::full_partition_range, ps, tracing::trace_state_ptr(),
+                                               ::streamed_mutation::forwarding::no, ::mutation_reader::forwarding::no);
+            auto reader = make_filtering_reader(std::move(sst_reader), partition_filter);
+            auto close_reader = deferred_close(reader);
+            reader.consume_in_thread(noop_consumer());
+
+            log_index_cache_stats("before reader closed");
+            BOOST_REQUIRE(cached_entries() <= tolerance());
+
+            close_reader.close_now();
+
+            log_index_cache_stats("after reader closed");
+            BOOST_REQUIRE(cached_entries() == 0);
+        };
+
+        do_test(sstables::use_caching::none);
+        do_test(sstables::use_caching::local);
     });
 }

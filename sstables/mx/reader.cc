@@ -1349,7 +1349,7 @@ private:
     }
     index_reader& get_index_reader() {
         if (!_index_reader) {
-            auto caching = use_caching(global_cache_index_pages && !_slice.options.contains(query::partition_slice::option::bypass_cache));
+            auto caching = index_reader::caching_mode(_slice);
             _index_reader = std::make_unique<index_reader>(_sst, _consumer.permit(),
                                                            _consumer.trace_state(), caching, _single_partition_read);
         }
@@ -2057,7 +2057,7 @@ future<uint64_t> validate(
     auto context = data_consume_rows<data_consume_rows_context_m<validating_consumer>>(*schema, sstable, consumer);
 
     std::optional<sstables::index_reader> idx_reader;
-    idx_reader.emplace(sstable, permit, tracing::trace_state_ptr{}, sstables::use_caching::no, false);
+    idx_reader.emplace(sstable, permit, tracing::trace_state_ptr{}, sstables::use_caching::none, false);
 
     try {
         while (!context->eof() && !abort.abort_requested()) {

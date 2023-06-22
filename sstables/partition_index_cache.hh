@@ -112,7 +112,7 @@ public:
             : _ref(std::move(ref))
         {
             if (_ref->is_linked()) {
-                _ref->_parent->_lru.remove(*_ref);
+                _ref->_parent->_lru->remove(*_ref);
             }
         }
         ~entry_ptr() { *this = nullptr; }
@@ -121,9 +121,14 @@ public:
         entry_ptr& operator=(std::nullptr_t) noexcept {
             if (_ref) {
                 if (_ref.unique() && _ref->ready()) {
-                    _ref->_parent->_lru.add(*_ref);
+                    entry& e = *_ref;
+                    auto& lru = _ref->_parent->_lru;
+                    // entry is no longer referenced (i.e. is_referenced() == false), but remains alive until removed from cache.
+                    _ref = nullptr;
+                    lru->add(e);
+                } else {
+                    _ref = nullptr;
                 }
-                _ref = nullptr;
             }
             return *this;
         }
@@ -155,25 +160,64 @@ public:
         return entry_ptr(std::move(wptr));
     }
 
+    class lru_impl {
+    public:
+        virtual ~lru_impl() {}
+        virtual void remove(entry& e) noexcept = 0;
+        virtual void add(entry& e) noexcept = 0;
+    };
+
+    class no_lru final : public lru_impl {
+        logalloc::region& _region;
+    public:
+        no_lru(logalloc::region& region) : _region(region) {}
+
+        void remove(entry& e) noexcept override {}
+        void add(entry& e) noexcept override {
+            // evicts unused entry from cache, rather than placing it into an LRU.
+            with_allocator(_region.allocator(), [&] {
+                e.on_evicted();
+            });
+        }
+    };
+
+    class regular_lru final : public lru_impl {
+        lru& _lru;
+    public:
+        regular_lru(lru& lru_) : _lru(lru_) {}
+
+        void remove(entry& e) noexcept override {
+            _lru.remove(e);
+        }
+        void add(entry& e) noexcept override {
+            _lru.add(e);
+        }
+    };
 private:
     using cache_type = bplus::tree<key_type, entry, key_less_comparator, 8, bplus::key_search::linear>;
     cache_type _cache;
     logalloc::region& _region;
     logalloc::allocating_section _as;
-    lru& _lru;
+    std::unique_ptr<lru_impl> _lru;
 public:
-
     // Create a cache with a given LRU attached.
     partition_index_cache(lru& lru_, logalloc::region& r)
             : _cache(key_less_comparator())
             , _region(r)
-            , _lru(lru_)
+            , _lru(std::make_unique<regular_lru>(lru_))
+    { }
+
+    // Create a cache with no LRU attached. Means only referenced entries are cached.
+    partition_index_cache(logalloc::region& r)
+            : _cache(key_less_comparator())
+            , _region(r)
+            , _lru(std::make_unique<no_lru>(_region))
     { }
 
     ~partition_index_cache() {
         with_allocator(_region.allocator(), [&] {
             _cache.clear_and_dispose([this] (entry* e) noexcept {
-                _lru.remove(*e);
+                _lru->remove(*e);
                 on_evicted(*e);
             });
         });
@@ -262,7 +306,7 @@ public:
                 if (i->is_referenced()) {
                     ++i;
                 } else {
-                    _lru.remove(*i);
+                    _lru->remove(*i);
                     on_evicted(*i);
                     i = i.erase(key_less_comparator());
                 }

@@ -25,7 +25,11 @@
 
 namespace sstables {
 
-using use_caching = bool_class<struct use_caching_tag>;
+enum use_caching {
+    none,
+    local,
+    global
+};
 using promoted_index_block_position_view = std::variant<composite_view, position_in_partition_view>;
 using promoted_index_block_position = std::variant<composite, position_in_partition>;
 
