@@ -317,7 +317,7 @@ public:
     future<compaction_stats_opt> perform_sstable_scrub(compaction::table_state& t, sstables::compaction_type_options::scrub opts);
 
     // Submit a table for major compaction.
-    future<> perform_major_compaction(compaction::table_state& t);
+    future<> perform_major_compaction(compaction::table_state& t, tasks::task_info info = {});
 
 
     // Run a custom job for a given table, defined by a function
@@ -462,7 +462,6 @@ private:
     exponential_backoff_retry _compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
     sstables::compaction_type _type;
     sstables::run_id _output_run_identifier;
-    gate::holder _gate_holder;
     sstring _description;
 
 public:
@@ -505,13 +504,13 @@ protected:
         return ct == sstables::compaction_type::Compaction;
     }
 public:
-    future<compaction_manager::compaction_stats_opt> run() noexcept;
+    future<compaction_manager::compaction_stats_opt> run_compaction() noexcept;
 
     const ::compaction::table_state* compacting_table() const noexcept {
         return _compacting_table;
     }
 
-    sstables::compaction_type type() const noexcept {
+    sstables::compaction_type compaction_type() const noexcept {
         return _type;
     }
 
@@ -546,11 +545,13 @@ public:
         return _compaction_data.abort.abort_requested();
     }
 
-    void stop(sstring reason) noexcept;
+    void stop_compaction(sstring reason) noexcept;
 
     sstables::compaction_stopped_exception make_compaction_stopped_exception() const;
 
     std::string describe() const;
+
+    friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task);
 };
 
 std::ostream& operator<<(std::ostream& os, compaction::compaction_task_executor::state s);

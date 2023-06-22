@@ -122,8 +122,9 @@ tasks::is_internal table_major_keyspace_compaction_task_impl::is_internal() cons
 
 future<> table_major_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
-    co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [] (replica::table& t) {
-        return t.compact_all_sstables();
+    tasks::task_info info{_status.id, _status.shard};
+    co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [info] (replica::table& t) {
+        return t.compact_all_sstables(info);
     });
 }
 

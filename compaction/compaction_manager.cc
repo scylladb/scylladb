@@ -291,11 +291,11 @@ compaction_task_executor::compaction_task_executor(compaction_manager& mgr, tabl
     , _compacting_table(t)
     , _compaction_state(_cm.get_compaction_state(t))
     , _type(type)
-    , _gate_holder(_compaction_state.gate.hold())
     , _description(std::move(desc))
 {}
 
 future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task) {
+    gate::holder gate_holder = task->_compaction_state.gate.hold();
     _tasks.push_back(task);
     auto unregister_task = defer([this, task] {
         _tasks.remove(task);
@@ -303,7 +303,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
     cmlog.debug("{}: started", *task);
 
     try {
-        auto&& res = co_await task->run();
+        auto&& res = co_await task->run_compaction();
         cmlog.debug("{}: done", *task);
         co_return res;
     } catch (sstables::compaction_stopped_exception& e) {
@@ -422,13 +422,23 @@ public:
     virtual ~sstables_task_executor();
 };
 
-class major_compaction_task_executor : public compaction_task_executor {
+class major_compaction_task_executor : public compaction_task_executor, public major_compaction_task_impl {
 public:
-    major_compaction_task_executor(compaction_manager& mgr, table_state* t)
+    major_compaction_task_executor(compaction_manager& mgr,
+            table_state* t,
+            tasks::task_id parent_id)
         : compaction_task_executor(mgr, t, sstables::compaction_type::Compaction, "Major compaction")
+        , major_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
     {}
 
+    virtual tasks::is_internal is_internal() const noexcept override {
+        return tasks::is_internal::yes;
+    }
 protected:
+    virtual future<> run() override {
+        return compaction_done().discard_result();
+    }
+
     // first take major compaction semaphore, then exclusely take compaction lock for table.
     // it cannot be the other way around, or minor compaction for this table would be
     // prevented while an ongoing major compaction doesn't release the semaphore.
@@ -470,11 +480,18 @@ protected:
 
 }
 
-future<> compaction_manager::perform_major_compaction(table_state& t) {
+future<> compaction_manager::perform_major_compaction(table_state& t, tasks::task_info info) {
     if (_state != state::enabled) {
-        return make_ready_future<>();
+        co_return;
     }
-    return perform_task(make_shared<major_compaction_task_executor>(*this, &t)).discard_result();;
+    auto task_executor = make_shared<major_compaction_task_executor>(*this, &t, info.id);
+    if (info) {
+        auto task = co_await _task_manager_module->make_task(task_executor, info);
+        task->start();
+        // We do not need to wait for the task to be done as compaction_task_executor side will take care of that.
+    }
+
+    co_await perform_task(std::move(task_executor)).discard_result();
 }
 
 namespace compaction {
@@ -616,7 +633,7 @@ sstables_task_executor::~sstables_task_executor() {
     _cm._stats.pending_tasks -= _sstables.size() - (_state == state::pending);
 }
 
-future<compaction_manager::compaction_stats_opt> compaction_task_executor::run() noexcept {
+future<compaction_manager::compaction_stats_opt> compaction_task_executor::run_compaction() noexcept {
     try {
         _compaction_done = do_run();
         return compaction_done();
@@ -703,7 +720,7 @@ void compaction_task_executor::finish_compaction(state finish_state) noexcept {
     _compaction_state.compaction_done.signal();
 }
 
-void compaction_task_executor::stop(sstring reason) noexcept {
+void compaction_task_executor::stop_compaction(sstring reason) noexcept {
     _compaction_data.stop(std::move(reason));
 }
 
@@ -865,7 +882,7 @@ future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_e
     // let's stop all tasks before the deferring point below.
     for (auto& t : tasks) {
         cmlog.debug("Stopping {}", *t);
-        t->stop(reason);
+        t->stop_compaction(reason);
     }
     co_await coroutine::parallel_for_each(tasks, [] (auto& task) -> future<> {
         try {
@@ -885,7 +902,7 @@ future<> compaction_manager::stop_ongoing_compactions(sstring reason, table_stat
     try {
         auto ongoing_compactions = get_compactions(t).size();
         auto tasks = boost::copy_range<std::vector<shared_ptr<compaction_task_executor>>>(_tasks | boost::adaptors::filtered([t, type_opt] (auto& task) {
-            return (!t || task->compacting_table() == t) && (!type_opt || task->type() == *type_opt);
+            return (!t || task->compacting_table() == t) && (!type_opt || task->compaction_type() == *type_opt);
         }));
         logging::log_level level = tasks.empty() ? log_level::debug : log_level::info;
         if (cmlog.is_enabled(level)) {
@@ -1650,7 +1667,7 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
 future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, table_state& t) {
     auto check_for_cleanup = [this, &t] {
         return boost::algorithm::any_of(_tasks, [&t] (auto& task) {
-            return task->compacting_table() == &t && task->type() == sstables::compaction_type::Cleanup;
+            return task->compacting_table() == &t && task->compaction_type() == sstables::compaction_type::Cleanup;
         });
     };
     if (check_for_cleanup()) {
@@ -1804,7 +1821,7 @@ const std::vector<sstables::compaction_info> compaction_manager::get_compactions
     auto to_info = [] (const shared_ptr<compaction_task_executor>& task) {
         sstables::compaction_info ret;
         ret.compaction_uuid = task->compaction_data().compaction_uuid;
-        ret.type = task->type();
+        ret.type = task->compaction_type();
         ret.ks_name = task->compacting_table()->schema()->ks_name();
         ret.cf_name = task->compacting_table()->schema()->cf_name();
         ret.total_partitions = task->compaction_data().total_partitions;

@@ -173,12 +173,15 @@ protected:
             return make_ready_future<compaction_manager::compaction_stats_opt>(std::nullopt);
         });
     }
+
+    friend class compaction_manager_test;
 };
 
 future<> compaction_manager_test::run(sstables::run_id output_run_id, table_state& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job) {
     auto task = make_shared<compaction_manager_test_task>(_cm, table_s, output_run_id, std::move(job));
+    gate::holder gate_holder = task->_compaction_state.gate.hold();
     auto& cdata = register_compaction(task);
-    return task->run().discard_result().finally([this, &cdata] {
+    co_await task->run_compaction().discard_result().finally([this, &cdata] {
         deregister_compaction(cdata);
     });
 }
