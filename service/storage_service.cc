@@ -1593,25 +1593,17 @@ future<> topology_coordinator::run() {
         _topo_sm.event.signal();
     });
 
-    bool wait_for_event = false;
-
     while (!_as.abort_requested()) {
         try {
-            if (wait_for_event) {
-                slogger.trace("raft topology: topology coordinator fiber has nothing to do. Sleeping.");
-                co_await _topo_sm.event.when();
-                slogger.trace("raft topology: topology coordinator fiber got an event");
-                wait_for_event = false;
-            }
-
             auto guard = co_await start_operation();
             co_await cleanup_group0_config_if_needed();
 
             bool had_work = co_await handle_topology_transition(std::move(guard));
             if (!had_work) {
                 // Nothing to work on. Wait for topology change event.
-                wait_for_event = true;
-                continue;
+                slogger.trace("raft topology: topology coordinator fiber has nothing to do. Sleeping.");
+                co_await _topo_sm.event.when();
+                slogger.trace("raft topology: topology coordinator fiber got an event");
             }
         } catch (raft::request_aborted&) {
             slogger.debug("raft topology: topology change coordinator fiber aborted");
