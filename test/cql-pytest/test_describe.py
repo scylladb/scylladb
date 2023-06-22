@@ -12,6 +12,7 @@ import random
 from pytest import fixture
 from contextlib import contextmanager
 from util import new_type, unique_name, new_test_table, new_test_keyspace, new_function, new_aggregate, new_cql
+from cassandra.protocol import InvalidRequest
 
 # (`element` refers to keyspace or keyspace's element(table, type, function, aggregate))
 # There are 2 main types of tests:
@@ -458,6 +459,16 @@ def test_generic_desc(cql, random_seed):
             assert generic_t1 == desc_t1
             assert generic_tbl == desc_tbl
             assert generic_idx == desc_idx
+
+# Test that 'DESC FUNCTION'/'DESC AGGREGATE' doesn't show UDA/UDF and doesn't crash Scylla
+def test_desc_udf_uda(cql, test_keyspace):
+    with new_function(cql, test_keyspace, "(a int, b int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE LUA AS 'return a+b'") as fn:
+        with new_aggregate(cql, test_keyspace, f"(int) SFUNC {fn} STYPE int") as aggr:
+
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"DESC FUNCTION {test_keyspace}.{aggr}")
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"DESC AGGREGATE {test_keyspace}.{fn}")
 
 # -----------------------------------------------------------------------------
 # Following tests `test_*_quoting` check if names inside elements' descriptions are quoted if needed.
