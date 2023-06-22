@@ -94,6 +94,7 @@
 #include "utils/error_injection.hh"
 #include "utils/exceptions.hh"
 #include "utils/tuple_utils.hh"
+#include "utils/rpc_utils.hh"
 #include "replica/exceptions.hh"
 #include "db/operation_type.hh"
 #include "locator/util.hh"
@@ -134,7 +135,7 @@ static future<ResultTuple> encode_replica_exception_for_rpc(gms::feature_service
     std::exception_ptr eptr = f.get_exception();
     if (features.typed_errors_in_read_rpc) {
         if (auto ex = replica::try_encode_replica_exception(eptr); ex) {
-            return make_ready_future<ResultTuple>(utils::tuple_insert<ResultTuple>(SourceTuple{}, std::move(ex)));
+            return make_ready_future<ResultTuple>(utils::tuple_insert<ResultTuple>(utils::make_default_rpc_tuple<SourceTuple>(), std::move(ex)));
         }
     }
     return make_exception_future<ResultTuple>(std::move(eptr));
