@@ -1131,72 +1131,88 @@ indexed_table_select_statement::do_execute(query_processor& qp,
     // the paging state between requesting data from replicas.
     const bool aggregate = _selection->is_aggregate() || has_group_by();
     if (aggregate) {
-        return do_with(cql3::selection::result_set_builder(*_selection, now, *_group_by_cell_indices), std::make_unique<cql3::query_options>(cql3::query_options(options)),
-                [this, &options, &qp, &state, now, whole_partitions, partition_slices] (cql3::selection::result_set_builder& builder, std::unique_ptr<cql3::query_options>& internal_options) {
-            // page size is set to the internal count page size, regardless of the user-provided value
-            internal_options.reset(new cql3::query_options(std::move(internal_options), options.get_paging_state(), internal_paging_size));
-            return utils::result_repeat([this, &builder, &options, &internal_options, &qp, &state, now, whole_partitions, partition_slices] () {
-                auto consume_results = [this, &builder, &options, &internal_options, &state] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) -> coordinator_result<stop_iteration> {
-                    if (paging_state) {
-                        paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options);
-                    }
-                    internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr));
-                    if (_restrictions_need_filtering) {
-                        _stats.filtered_rows_read_total += *results->row_count();
-                        query::result_view::consume(*results, cmd->slice, cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection,
-                                cql3::selection::result_set_builder::restrictions_filter(_restrictions, options, cmd->get_row_limit(), _schema, cmd->slice.partition_row_limit())));
-                    } else {
-                        query::result_view::consume(*results, cmd->slice, cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection));
-                    }
-                    bool has_more_pages = paging_state && paging_state->get_remaining() > 0;
-                    return stop_iteration(!has_more_pages);
-                };
-
-                if (whole_partitions || partition_slices) {
-                    tracing::trace(state.get_trace_state(), "Consulting index {} for a single slice of keys, aggregation query", _index.metadata().name());
-                    return find_index_partition_ranges(qp, state, *internal_options).then(utils::result_wrap_unpack(
-                            [this, now, &state, &internal_options, &qp, consume_results = std::move(consume_results)] (dht::partition_range_vector partition_ranges, lw_shared_ptr<const service::pager::paging_state> paging_state) {
-                        return do_execute_base_query(qp, std::move(partition_ranges), state, *internal_options, now, paging_state)
-                        .then(utils::result_wrap_unpack([paging_state, consume_results = std::move(consume_results)](foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd) {
-                            return consume_results(std::move(results), std::move(cmd), std::move(paging_state));
-                        }));
-                    }));
-                } else {
-                    tracing::trace(state.get_trace_state(), "Consulting index {} for a list of rows containing keys, aggregation query", _index.metadata().name());
-                    return find_index_clustering_rows(qp, state, *internal_options).then(utils::result_wrap_unpack(
-                            [this, now, &state, &internal_options, &qp, consume_results = std::move(consume_results)] (std::vector<primary_key> primary_keys, lw_shared_ptr<const service::pager::paging_state> paging_state) {
-                        return this->do_execute_base_query(qp, std::move(primary_keys), state, *internal_options, now, paging_state)
-                        .then(utils::result_wrap_unpack([paging_state, consume_results = std::move(consume_results)](foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd) {
-                            return consume_results(std::move(results), std::move(cmd), std::move(paging_state));
-                        }));
-                    }));
+        cql3::selection::result_set_builder builder(*_selection, now, *_group_by_cell_indices);
+        std::unique_ptr<cql3::query_options> internal_options = std::make_unique<cql3::query_options>(cql3::query_options(options));
+        stop_iteration stop;
+        // page size is set to the internal count page size, regardless of the user-provided value
+        internal_options.reset(new cql3::query_options(std::move(internal_options), options.get_paging_state(), internal_paging_size));
+        do {
+            auto consume_results = [this, &builder, &options, &internal_options, &state] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) -> stop_iteration {
+                if (paging_state) {
+                    paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options);
                 }
-            }).then(wrap_result_to_error_message([this, &builder] () {
-                auto rs = builder.build();
-                update_stats_rows_read(rs->size());
-                _stats.filtered_rows_matched_total += _restrictions_need_filtering ? rs->size() : 0;
-                auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
-                return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(msg));
-            }));
-        });
+                internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr));
+                if (_restrictions_need_filtering) {
+                    _stats.filtered_rows_read_total += *results->row_count();
+                    query::result_view::consume(*results, cmd->slice, cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection,
+                            cql3::selection::result_set_builder::restrictions_filter(_restrictions, options, cmd->get_row_limit(), _schema, cmd->slice.partition_row_limit())));
+                } else {
+                    query::result_view::consume(*results, cmd->slice, cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection));
+                }
+                bool has_more_pages = paging_state && paging_state->get_remaining() > 0;
+                return stop_iteration(!has_more_pages);
+            };
+
+            if (whole_partitions || partition_slices) {
+                tracing::trace(state.get_trace_state(), "Consulting index {} for a single slice of keys, aggregation query", _index.metadata().name());
+                auto result_partition_ranges_and_paging_state = co_await find_index_partition_ranges(qp, state, *internal_options);
+                if (result_partition_ranges_and_paging_state.has_error()) {
+                    co_return failed_result_to_result_message(std::move(result_partition_ranges_and_paging_state));
+                }
+                auto&& [partition_ranges, paging_state] = result_partition_ranges_and_paging_state.assume_value();
+                auto result_results_and_cmd = co_await do_execute_base_query(qp, std::move(partition_ranges), state, *internal_options, now, paging_state);
+                if (result_results_and_cmd.has_error()) {
+                    co_return failed_result_to_result_message(std::move(result_results_and_cmd));
+                }
+                auto&& [results, cmd] = result_results_and_cmd.assume_value();
+                stop = consume_results(std::move(results), std::move(cmd), std::move(paging_state));
+            } else {
+                tracing::trace(state.get_trace_state(), "Consulting index {} for a list of rows containing keys, aggregation query", _index.metadata().name());
+                auto result_primary_keys_paging_state = co_await find_index_clustering_rows(qp, state, *internal_options);
+                if (result_primary_keys_paging_state.has_error()) {
+                    co_return failed_result_to_result_message(std::move(result_primary_keys_paging_state));
+                }
+                auto&& [primary_keys, paging_state] = result_primary_keys_paging_state.assume_value();
+                auto result_results_cmd = co_await this->do_execute_base_query(qp, std::move(primary_keys), state, *internal_options, now, paging_state);
+                if (result_results_cmd.has_error()) {
+                    co_return failed_result_to_result_message(std::move(result_results_cmd));
+                }
+                auto&& [results, cmd] = result_results_cmd.assume_value();
+                stop = consume_results(std::move(results), std::move(cmd), std::move(paging_state));
+            }
+        } while (!stop);
+
+        auto rs = builder.build();
+        update_stats_rows_read(rs->size());
+        _stats.filtered_rows_matched_total += _restrictions_need_filtering ? rs->size() : 0;
+        auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
+        co_return shared_ptr<cql_transport::messages::result_message>(std::move(msg));
     }
 
     if (whole_partitions || partition_slices) {
         tracing::trace(state.get_trace_state(), "Consulting index {} for a single slice of keys", _index.metadata().name());
         // In this case, can use our normal query machinery, which retrieves
         // entire partitions or the same slice for many partitions.
-        return find_index_partition_ranges(qp, state, options).then(wrap_result_to_error_message([now, &state, &options, &qp, this] (std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>> result) {
-            auto&& [partition_ranges, paging_state] = result;
-            return this->execute_base_query(qp, std::move(partition_ranges), state, options, now, std::move(paging_state));
-        }));
+        coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>> result = co_await find_index_partition_ranges(qp, state, options);
+        if (result.has_error()) {
+            co_return failed_result_to_result_message(std::move(result));
+        }
+        {
+            auto&& [partition_ranges, paging_state] = result.assume_value();
+            co_return co_await this->execute_base_query(qp, std::move(partition_ranges), state, options, now, std::move(paging_state));
+        }
     } else {
         tracing::trace(state.get_trace_state(), "Consulting index {} for a list of rows containing keys", _index.metadata().name());
         // In this case, we need to retrieve a list of rows (not entire
         // partitions) and then retrieve those specific rows.
-        return find_index_clustering_rows(qp, state, options).then(wrap_result_to_error_message([now, &state, &options, &qp, this] (std::tuple<std::vector<primary_key>, lw_shared_ptr<const service::pager::paging_state>> result) {
-            auto&& [primary_keys, paging_state] = result;
-            return this->execute_base_query(qp, std::move(primary_keys), state, options, now, std::move(paging_state));
-        }));
+        coordinator_result<std::tuple<std::vector<primary_key>, lw_shared_ptr<const service::pager::paging_state>>> result = co_await find_index_clustering_rows(qp, state, options);
+        if (result.has_error()) {
+            co_return failed_result_to_result_message(std::move(result));
+        }
+        {
+            auto&& [primary_keys, paging_state] = result.assume_value();
+            co_return co_await this->execute_base_query(qp, std::move(primary_keys), state, options, now, std::move(paging_state));
+        }
     }
 }
 
