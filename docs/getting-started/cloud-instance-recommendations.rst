@@ -15,6 +15,7 @@ You can run your ScyllaDB workloads on AWS, GCE, and Azure using a ScyllaDB imag
 
     The following recommendations apply to self-managed deployments. See the `ScyllaDB Cloud documentation <https://cloud.docs.scylladb.com/>`_ to learn about ScyllaDB's fully managed database-as-a-service.
 
+.. _system-requirements-aws:
 
 Amazon Web Services (AWS)
 -----------------------------
@@ -140,6 +141,7 @@ Im4gn and Is4gen instances
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ScyllaDB supports Arm-based Im4gn and Is4gen instances. See  `Amazon EC2 Im4gn and Is4gen instances <https://aws.amazon.com/ec2/instance-types/i4g/>`_ for specification details. 
 
+.. _system-requirements-gcp:
 
 Google Compute Engine (GCE)
 -----------------------------------
