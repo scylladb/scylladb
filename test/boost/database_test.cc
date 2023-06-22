@@ -73,16 +73,20 @@ static future<> apply_mutation(sharded<replica::database>& sharded_db, table_id 
     });
 }
 
+future<> do_with_cql_env_and_compaction_groups_cgs(unsigned cgs, std::function<void(cql_test_env&)> func, cql_test_config cfg = {}, thread_attributes thread_attr = {}) {
+    // clean the dir before running
+    if (cfg.db_config->data_file_directories.is_set()) {
+        co_await recursive_remove_directory(fs::path(cfg.db_config->data_file_directories()[0]));
+        co_await recursive_touch_directory(cfg.db_config->data_file_directories()[0]);
+    }
+    cfg.db_config->x_log2_compaction_groups(cgs);
+    co_await do_with_cql_env_thread(func, cfg, thread_attr);
+}
+
 future<> do_with_cql_env_and_compaction_groups(std::function<void(cql_test_env&)> func, cql_test_config cfg = {}, thread_attributes thread_attr = {}) {
     std::vector<unsigned> x_log2_compaction_group_values = { 0 /* 1 CG */, 1 /* 2 CGs */ };
     for (auto x_log2_compaction_groups : x_log2_compaction_group_values) {
-        // clean the dir before running
-        if (cfg.db_config->data_file_directories.is_set()) {
-            co_await recursive_remove_directory(fs::path(cfg.db_config->data_file_directories()[0]));
-            co_await recursive_touch_directory(cfg.db_config->data_file_directories()[0]);
-        }
-        cfg.db_config->x_log2_compaction_groups(x_log2_compaction_groups);
-        co_await do_with_cql_env_thread(func, cfg, thread_attr);
+        co_await do_with_cql_env_and_compaction_groups_cgs(x_log2_compaction_groups, func, cfg, thread_attr);
     }
 }
 
@@ -252,8 +256,8 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
     });
 }
 
-static void test_database(void (*run_tests)(populate_fn_ex, bool)) {
-    do_with_cql_env_and_compaction_groups([run_tests] (cql_test_env& e) {
+static void test_database(void (*run_tests)(populate_fn_ex, bool), unsigned cgs) {
+    do_with_cql_env_and_compaction_groups_cgs(cgs, [run_tests] (cql_test_env& e) {
         run_tests([&] (schema_ptr s, const std::vector<mutation>& partitions, gc_clock::time_point) -> mutation_source {
             auto& mm = e.migration_manager().local();
             try {
@@ -287,12 +291,20 @@ static void test_database(void (*run_tests)(populate_fn_ex, bool)) {
     }).get();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_plain) {
-    test_database(run_mutation_source_tests_plain);
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_plain_cg0) {
+    test_database(run_mutation_source_tests_plain, 0);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_reverse) {
-    test_database(run_mutation_source_tests_reverse);
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_plain_cg1) {
+    test_database(run_mutation_source_tests_plain, 1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_reverse_cg0) {
+    test_database(run_mutation_source_tests_reverse, 0);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_reverse_cg1) {
+    test_database(run_mutation_source_tests_reverse, 1);
 }
 
 static void require_exist(const sstring& filename, bool should) {
