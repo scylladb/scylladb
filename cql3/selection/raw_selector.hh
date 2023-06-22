@@ -20,6 +20,8 @@ namespace cql3 {
 
 namespace selection {
 
+struct prepared_selector;
+
 class raw_selector {
 public:
     const expr::expression selectable_;
@@ -36,7 +38,7 @@ public:
      * @param raws the <code>RawSelector</code>s to converts.
      * @return a list of <code>Selectable</code>s
      */
-    static std::vector<::shared_ptr<selectable>> to_selectables(const std::vector<::shared_ptr<raw_selector>>& raws,
+    static std::vector<prepared_selector> to_prepared_selectors(const std::vector<::shared_ptr<raw_selector>>& raws,
             const schema& schema, data_dictionary::database db, const sstring& ks);
 
     bool processes_selection() const;

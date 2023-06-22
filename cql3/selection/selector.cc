@@ -9,6 +9,7 @@
 #include "selector.hh"
 #include "raw_selector.hh"
 #include "cql3/column_identifier.hh"
+#include "cql3/expr/expr-utils.hh"
 
 namespace cql3 {
 
@@ -24,13 +25,27 @@ selector::factory::get_column_specification(const schema& schema) const {
 
 bool selector::requires_thread() const { return false; }
 
-std::vector<::shared_ptr<selectable>>
-raw_selector::to_selectables(const std::vector<::shared_ptr<raw_selector>>& raws,
+std::vector<prepared_selector>
+raw_selector::to_prepared_selectors(const std::vector<::shared_ptr<raw_selector>>& raws,
         const schema& schema, data_dictionary::database db, const sstring& ks) {
-    std::vector<::shared_ptr<selectable>> r;
+    std::vector<prepared_selector> r;
     r.reserve(raws.size());
     for (auto&& raw : raws) {
-        r.emplace_back(prepare_selectable(schema, raw->selectable_, db, ks));
+        r.emplace_back(prepared_selector{
+            .expr = expr::prepare_expression(raw->selectable_, db, ks, &schema, nullptr),
+            .alias = raw->alias,
+        });
+    }
+    return r;
+}
+
+std::vector<shared_ptr<selectable>>
+to_selectables(std::span<const prepared_selector> selectors,
+        const schema& schema, data_dictionary::database db, const sstring& ks) {
+    std::vector<::shared_ptr<selectable>> r;
+    r.reserve(selectors.size());
+    for (auto&& ps : selectors) {
+        r.emplace_back(prepare_selectable(schema, ps.expr, db, ks));
     }
     return r;
 }

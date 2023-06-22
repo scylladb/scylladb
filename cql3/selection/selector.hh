@@ -15,6 +15,7 @@
 #include "types/types.hh"
 #include "schema/schema_fwd.hh"
 #include "counters.hh"
+#include "cql3/expr/expression.hh"
 
 namespace cql3 {
 
@@ -74,6 +75,19 @@ public:
      */
     virtual void reset() = 0;
 };
+
+// Equivalent to `selector` above, but represented as an expression.
+// The expression still can't be evaluted, since it may contain aggregate functions.
+struct prepared_selector {
+    expr::expression expr;
+    ::shared_ptr<column_identifier> alias;
+};
+
+class selectable;
+
+std::vector<shared_ptr<selectable>> to_selectables(std::span<const prepared_selector> selectors,
+        const schema& schema, data_dictionary::database db, const sstring& ks);
+
 
 /**
  * A factory for <code>selector</code> instances.

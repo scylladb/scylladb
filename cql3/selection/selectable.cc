@@ -185,11 +185,8 @@ do_prepare_selectable(const schema& s, const expr::expression& selectable_expr) 
 }
 
 shared_ptr<selectable>
-prepare_selectable(const schema& s, const expr::expression& raw_selectable, data_dictionary::database db, const sstring& keyspace) {
-    // do_prepare_selectable() calls itself recursively, so the prepare_expression step
-    // has to be done outside.
-    auto prepared = expr::prepare_expression(raw_selectable, db, keyspace, &s, nullptr);
-    return do_prepare_selectable(s, prepared);
+prepare_selectable(const schema& s, const expr::expression& selector, data_dictionary::database db, const sstring& keyspace) {
+    return do_prepare_selectable(s, selector);
 }
 
 bool
