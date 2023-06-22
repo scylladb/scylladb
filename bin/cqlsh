@@ -1,0 +1,8 @@
+#!/bin/bash
+
+# Copyright (C) 2023-present ScyllaDB
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+here=$(dirname "$0")
+exec "$here/../tools/cqlsh/bin/cqlsh" "$@"
+
