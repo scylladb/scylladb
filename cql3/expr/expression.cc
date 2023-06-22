@@ -2745,18 +2745,7 @@ bool is_partition_token_for_schema(const expression& maybe_token, const schema& 
 
 void
 verify_no_aggregate_functions(const expression& expr, std::string_view context_for_errors) {
-    auto find_agg = overloaded_functor{
-            [] (const functions::function_name& f) -> bool {
-                on_internal_error(expr_logger, "verify_no_aggregate_functions: unprepared function_call");
-            },
-            [] (const shared_ptr<functions::function> f) -> bool {
-                return f->is_aggregate();
-            }
-        };
-    bool found_agg = find_in_expression<function_call>(expr, [find_agg] (const function_call& fc) {
-        return std::visit(find_agg, fc.func);
-    });
-    if (found_agg) {
+    if (aggregation_depth(expr) > 0) {
         throw exceptions::invalid_request_exception(fmt::format("Aggregation functions are not supported in the {}", context_for_errors));
     }
 }
