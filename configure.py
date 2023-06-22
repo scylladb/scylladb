@@ -512,6 +512,7 @@ scylla_tests = set([
     'test/boost/locator_topology_test',
     'test/boost/string_format_test',
     'test/boost/tagged_integer_test',
+    'test/boost/group0_cmd_merge_test',
     'test/manual/ec2_snitch_test',
     'test/manual/enormous_table_scan_test',
     'test/manual/gce_snitch_test',
