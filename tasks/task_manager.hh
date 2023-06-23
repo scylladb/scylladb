@@ -77,6 +77,17 @@ public:
         struct progress {
             double completed = 0.0;         // Number of units completed so far.
             double total = 0.0;             // Total number of units to complete the task.
+
+            progress& operator+=(const progress& rhs) {
+                completed += rhs.completed;
+                total += rhs.total;
+                return *this;
+            }
+
+            friend progress operator+(progress lhs, const progress& rhs) {
+                lhs += rhs;
+                return lhs;
+            }
         };
 
         struct status {
@@ -119,6 +130,9 @@ public:
             void finish() noexcept;
             void finish_failed(std::exception_ptr ex, std::string error) noexcept;
             void finish_failed(std::exception_ptr ex);
+            future<std::optional<double>> expected_total_workload() const;
+            std::optional<double> expected_children_number() const;
+            task_manager::task::progress get_binary_progress() const;
 
             friend task;
         };
