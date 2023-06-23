@@ -1699,6 +1699,12 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     prepared_selectors = maybe_jsonize_select_clause(std::move(prepared_selectors), db, schema);
 
     auto aggregation_depth = 0u;
+
+    // Force aggregation if GROUP BY is used. This will wrap every column x as first(x).
+    if (!_group_by_columns.empty()) {
+        aggregation_depth = std::max(aggregation_depth, 1u);
+    }
+
     for (auto& ps : prepared_selectors) {
         aggregation_depth = std::max(aggregation_depth, expr::aggregation_depth(ps.expr));
     }
