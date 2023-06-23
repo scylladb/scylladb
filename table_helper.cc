@@ -52,7 +52,9 @@ future<> table_helper::setup_table(cql3::query_processor& qp, service::migration
     // The important thing is that it will converge eventually (some traces may
     // be lost in a process but that's ok).
     try {
-        co_return co_await mm.announce(co_await mm.prepare_new_column_family_announcement(b.build(), ts), std::move(group0_guard));
+        auto description = format("Create \"{}\" table in \"{}\" keyspace", schema->cf_name(), schema->ks_name());
+        co_return co_await mm.announce(co_await mm.prepare_new_column_family_announcement(b.build(), ts), std::move(group0_guard), 
+                description);
     } catch (...) {}
 }
 
@@ -136,7 +138,9 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
             std::map<sstring, sstring> opts;
             opts["replication_factor"] = replication_factor;
             auto ksm = keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.SimpleStrategy", std::move(opts), true);
-            co_await mm.announce(mm.prepare_new_keyspace_announcement(ksm, ts), std::move(group0_guard));
+            auto description = format("Create \"{}\" keyspace", keyspace_name);
+            co_await mm.announce(mm.prepare_new_keyspace_announcement(ksm, ts), std::move(group0_guard), 
+                    description);
         }
     }
 

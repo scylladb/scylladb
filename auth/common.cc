@@ -71,7 +71,9 @@ static future<> create_metadata_table_if_missing_impl(
         auto group0_guard = co_await mm.start_group0_operation();
         auto ts = group0_guard.write_timestamp();
         try {
-            co_return co_await mm.announce(co_await mm.prepare_new_column_family_announcement(table, ts), std::move(group0_guard));
+            auto description = format("Create table \"{}\" in \"{}\" keyspace", table->cf_name(), table->ks_name());
+            co_return co_await mm.announce(co_await mm.prepare_new_column_family_announcement(table, ts), std::move(group0_guard), 
+                    description);
         } catch (exceptions::already_exists_exception&) {}
     }
 }

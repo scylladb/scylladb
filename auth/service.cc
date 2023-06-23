@@ -178,7 +178,8 @@ future<> service::create_keyspace_if_missing(::service::migration_manager& mm) c
                     opts,
                     true);
 
-            co_return co_await mm.announce(mm.prepare_new_keyspace_announcement(ksm, ts), std::move(group0_guard));
+            co_return co_await mm.announce(mm.prepare_new_keyspace_announcement(ksm, ts), std::move(group0_guard), 
+                    "Create system_auth keyspace");
         }
     }
 }
