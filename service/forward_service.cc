@@ -49,6 +49,7 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_aggregate.hh"
+#include "cql3/expr/expr-utils.hh"
 
 namespace service {
 
@@ -324,7 +325,7 @@ static shared_ptr<cql3::selection::selection> mock_selection(
     schema_ptr schema,
     replica::database& db
 ) {
-    std::vector<shared_ptr<cql3::selection::raw_selector>> raw_selectors;
+    std::vector<cql3::selection::prepared_selector> prepared_selectors;
 
     auto functions = get_functions(request);
 
@@ -341,9 +342,12 @@ static shared_ptr<cql3::selection::selection> mock_selection(
         };
 
         if (reduction == query::forward_request::reduction_type::count) {
-            auto selectable = cql3::selection::make_count_rows_function_expression();
+            auto count_expr = cql3::expr::function_call{
+                .func = cql3::functions::aggregate_fcts::make_count_rows_function(),
+                .args = {},
+            };
             auto column_identifier = make_shared<cql3::column_identifier>("count", false);
-            return make_shared<cql3::selection::raw_selector>(selectable, column_identifier);
+            return cql3::selection::prepared_selector{std::move(count_expr), column_identifier};
         }
 
         if (!info) {
@@ -354,15 +358,16 @@ static shared_ptr<cql3::selection::selection> mock_selection(
         auto arg_exprs =boost::copy_range<std::vector<cql3::expr::expression>>(info->column_names | boost::adaptors::transformed(name_as_expression));
         auto fc_expr = cql3::expr::function_call{reducible_aggr, arg_exprs};
         auto column_identifier = make_shared<cql3::column_identifier>(info->name.name, false);
-        return make_shared<cql3::selection::raw_selector>(fc_expr, column_identifier);
+        auto prepared_expr = cql3::expr::prepare_expression(fc_expr, db.as_data_dictionary(), "", schema.get(), nullptr);
+        return cql3::selection::prepared_selector{std::move(prepared_expr), column_identifier};
     };
 
     for (size_t i = 0; i < request.reduction_types.size(); i++) {
         auto info = (request.aggregation_infos) ? std::optional(request.aggregation_infos->at(i)) : std::nullopt;
-        raw_selectors.emplace_back(mock_singular_selection(functions[i], request.reduction_types[i], info));
+        prepared_selectors.emplace_back(mock_singular_selection(functions[i], request.reduction_types[i], info));
     }
 
-    return cql3::selection::selection::from_selectors(db.as_data_dictionary(), schema, schema->ks_name(), std::move(raw_selectors));
+    return cql3::selection::selection::from_selectors(db.as_data_dictionary(), schema, schema->ks_name(), std::move(prepared_selectors));
 }
 
 future<query::forward_result> forward_service::dispatch_to_shards(

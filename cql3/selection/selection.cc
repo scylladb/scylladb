@@ -297,10 +297,9 @@ uint32_t selection::add_column_for_post_processing(const column_definition& c) {
     return _columns.size() - 1;
 }
 
-::shared_ptr<selection> selection::from_selectors(data_dictionary::database db, schema_ptr schema, const sstring& ks, const std::vector<::shared_ptr<raw_selector>>& raw_selectors) {
+::shared_ptr<selection> selection::from_selectors(data_dictionary::database db, schema_ptr schema, const sstring& ks, const std::vector<prepared_selector>& prepared_selectors) {
     std::vector<const column_definition*> defs;
 
-    auto prepared_selectors = raw_selector::to_prepared_selectors(raw_selectors, *schema, db, ks);
     ::shared_ptr<selector_factories> factories =
         selector_factories::create_factories_and_collect_column_definitions(
             cql3::selection::to_selectables(prepared_selectors, *schema, db, ks), db, schema, defs);

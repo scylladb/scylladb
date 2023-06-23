@@ -1643,15 +1643,16 @@ select_statement::select_statement(cf_name cf_name,
     validate_attrs(*_attrs);
 }
 
-void select_statement::maybe_jsonize_select_clause(data_dictionary::database db, schema_ptr schema) {
+std::vector<selection::prepared_selector>
+select_statement::maybe_jsonize_select_clause(std::vector<selection::prepared_selector> prepared_selectors, data_dictionary::database db, schema_ptr schema) {
     // Fill wildcard clause with explicit column identifiers for as_json function
     if (_parameters->is_json()) {
-        if (_select_clause.empty()) {
-            _select_clause.reserve(schema->all_columns().size());
+        if (prepared_selectors.empty()) {
+            prepared_selectors.reserve(schema->all_columns().size());
             for (const column_definition& column_def : schema->all_columns_in_select_order()) {
-                _select_clause.push_back(make_shared<selection::raw_selector>(
-                    expr::unresolved_identifier{::make_shared<column_identifier::raw>(column_def.name_as_text(), true)},
-                    nullptr));
+                prepared_selectors.push_back(selection::prepared_selector{
+                    .expr = expr::column_value{&column_def},
+                });
             }
         }
 
@@ -1659,14 +1660,13 @@ void select_statement::maybe_jsonize_select_clause(data_dictionary::database db,
         std::vector<sstring> selector_names;
         std::vector<data_type> selector_types;
         std::vector<const column_definition*> defs;
-        selector_names.reserve(_select_clause.size());
-        selector_types.reserve(_select_clause.size());
-        auto prepared_selectors = selection::raw_selector::to_prepared_selectors(_select_clause, *schema, db, keyspace());
+        selector_names.reserve(prepared_selectors.size());
+        selector_types.reserve(prepared_selectors.size());
         auto selectables = selection::to_selectables(prepared_selectors, *schema, db, keyspace());
         selection::selector_factories factories(selectables, db, schema, defs);
         auto selectors = factories.new_instances();
         for (size_t i = 0; i < selectors.size(); ++i) {
-            if (_select_clause[i]->alias) {
+            if (prepared_selectors[i].alias) {
                 selector_names.push_back(_select_clause[i]->alias->to_string());
             } else {
                 selector_names.push_back(selectables[i]->to_string());
@@ -1675,28 +1675,30 @@ void select_statement::maybe_jsonize_select_clause(data_dictionary::database db,
         }
 
         // Prepare args for as_json_function
-        std::vector<expr::expression> raw_selectables;
-        raw_selectables.reserve(_select_clause.size());
-        for (const auto& raw_selector : _select_clause) {
-            raw_selectables.push_back(raw_selector->selectable_);
+        std::vector<expr::expression> args;
+        args.reserve(prepared_selectors.size());
+        for (const auto& prepared_selector : prepared_selectors) {
+            args.push_back(std::move(prepared_selector.expr));
         }
         auto as_json = ::make_shared<functions::as_json_function>(std::move(selector_names), std::move(selector_types));
-        auto as_json_selector = ::make_shared<selection::raw_selector>(
-                expr::function_call{as_json, std::move(raw_selectables)}, nullptr);
-        _select_clause.clear();
-        _select_clause.push_back(as_json_selector);
+        auto as_json_selector = selection::prepared_selector{.expr = expr::function_call{as_json, std::move(args)}, .alias = nullptr};
+        prepared_selectors.clear();
+        prepared_selectors.push_back(as_json_selector);
     }
+    return prepared_selectors;
 }
 
 std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::database db, cql_stats& stats, bool for_view) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     prepare_context& ctx = get_prepare_context();
 
-    maybe_jsonize_select_clause(db, schema);
+    auto prepared_selectors = selection::raw_selector::to_prepared_selectors(_select_clause, *schema, db, keyspace());
 
-    auto selection = _select_clause.empty()
+    prepared_selectors = maybe_jsonize_select_clause(std::move(prepared_selectors), db, schema);
+
+    auto selection = prepared_selectors.empty()
                      ? selection::selection::wildcard(schema)
-                     : selection::selection::from_selectors(db, schema, keyspace(), _select_clause);
+                     : selection::selection::from_selectors(db, schema, keyspace(), prepared_selectors);
 
     auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering());
 
