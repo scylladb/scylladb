@@ -840,6 +840,9 @@ static value_set possible_lhs_values(const column_definition* cdef,
                         [] (const usertype_constructor&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: user type constructors are not supported as the LHS of a binary expression");
                         },
+                        [] (const temporary&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: temporaries are not supported as the LHS of a binary expression");
+                        },
                     }, oper.lhs);
             },
             [] (const column_value&) -> value_set {
@@ -877,6 +880,9 @@ static value_set possible_lhs_values(const column_definition* cdef,
             },
             [] (const usertype_constructor&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: a user type constructor cannot serve as a restriction by itself");
+            },
+            [] (const temporary&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: a temporary cannot serve as a restriction by itself");
             },
         }, expr);
 }
@@ -973,6 +979,9 @@ secondary_index::index::supports_expression_v is_supported_by_helper(const expre
                         },
                         [&] (const usertype_constructor&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: user type constructors are not supported as the LHS of a binary expression");
+                        },
+                        [&] (const temporary&) -> ret_t {
+                            on_internal_error(expr_logger, "is_supported_by: temporaries are not supported as the LHS of a binary expression");
                         },
                     }, oper.lhs);
             },
@@ -1213,6 +1222,9 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                 }
                 fmt::print(os, "}}");
             },
+            [&] (const temporary& t) {
+                fmt::print(os, "@temporary{}", t.index);
+            }
         }, pr.expr_to_print);
     return os;
 }
@@ -1552,6 +1564,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
         void operator()(const tuple_constructor&) {}
         void operator()(const collection_constructor&) {}
         void operator()(const usertype_constructor&) {}
+        void operator()(const temporary&) {}
     };
 
     visitor v {
@@ -1810,6 +1823,12 @@ static
 cql3::raw_value
 do_evaluate(const constant& c, const evaluation_inputs& inputs) {
     return c.value;
+}
+
+static
+cql3::raw_value
+do_evaluate(const temporary& t, const evaluation_inputs& inputs) {
+    return inputs.temporaries[t.index];
 }
 
 cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
@@ -2337,6 +2356,7 @@ void fill_prepare_context(expression& e, prepare_context& ctx) {
         },
         [](untyped_constant&) {},
         [](constant&) {},
+        [](temporary&) {},
     }, e);
 }
 

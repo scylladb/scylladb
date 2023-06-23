@@ -11,6 +11,7 @@
 namespace cql3 {
 
 class query_options;
+class raw_value;
 
 }
 
@@ -26,6 +27,7 @@ struct evaluation_inputs {
     const query_options* options = nullptr;
     std::span<const api::timestamp_type> static_and_regular_timestamps;  // indexes match `selection` member
     std::span<const int32_t> static_and_regular_ttls;  // indexes match `selection` member
+    std::span<const cql3::raw_value> temporaries; // indexes match temporary::index
 };
 
 // Takes a prepared expression and calculates its value.

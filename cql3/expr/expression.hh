@@ -73,6 +73,7 @@ struct constant;
 struct tuple_constructor;
 struct collection_constructor;
 struct usertype_constructor;
+struct temporary;
 
 template <typename T>
 concept ExpressionElement
@@ -91,6 +92,7 @@ concept ExpressionElement
         || std::same_as<T, tuple_constructor>
         || std::same_as<T, collection_constructor>
         || std::same_as<T, usertype_constructor>
+        || std::same_as<T, temporary>
         ;
 
 template <typename Func>
@@ -110,6 +112,7 @@ concept invocable_on_expression
         && std::invocable<Func, tuple_constructor>
         && std::invocable<Func, collection_constructor>
         && std::invocable<Func, usertype_constructor>
+        && std::invocable<Func, temporary>
         ;
 
 template <typename Func>
@@ -129,6 +132,7 @@ concept invocable_on_expression_ref
         && std::invocable<Func, tuple_constructor&>
         && std::invocable<Func, collection_constructor&>
         && std::invocable<Func, usertype_constructor&>
+        && std::invocable<Func, temporary&>
         ;
 
 /// A CQL expression -- union of all possible expression types.
@@ -188,6 +192,7 @@ concept LeafExpression
         || std::same_as<untyped_constant, E> 
         || std::same_as<constant, E>
         || std::same_as<column_value, E>
+        || std::same_as<temporary, E>
         ;
 
 /// A column, usually encountered on the left side of a restriction.
@@ -406,13 +411,24 @@ struct usertype_constructor {
     friend bool operator==(const usertype_constructor&, const usertype_constructor&) = default;
 };
 
+// Represents a value that is external to the expression, but is not a
+// bind_variable or a column_value. If bind_variable:s are function parameters,
+// and column_value:s are globals, then temporary:s can be thought of as local
+// variables.
+//
+// Note expressions only read temporary values.
+struct temporary {
+    size_t index; // within evaluation_inputs::temporaries
+    data_type type;
+};
+
 // now that all expression types are fully defined, we can define expression::impl
 struct expression::impl final {
     using variant_type = std::variant<
             conjunction, binary_operator, column_value, unresolved_identifier,
             column_mutation_attribute, function_call, cast, field_selection,
             bind_variable, untyped_constant, constant, tuple_constructor, collection_constructor,
-            usertype_constructor, subscript>;
+            usertype_constructor, subscript, temporary>;
     variant_type v;
     impl(variant_type v) : v(std::move(v)) {}
 };
