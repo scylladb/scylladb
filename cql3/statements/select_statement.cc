@@ -1698,9 +1698,23 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     prepared_selectors = maybe_jsonize_select_clause(std::move(prepared_selectors), db, schema);
 
+    auto aggregation_depth = 0u;
+    for (auto& ps : prepared_selectors) {
+        aggregation_depth = std::max(aggregation_depth, expr::aggregation_depth(ps.expr));
+    }
+    if (aggregation_depth > 1) {
+        throw exceptions::invalid_request_exception("SELECT clause contains aggeregation of an aggregation");
+    }
+
+    auto levellized_prepared_selectors = prepared_selectors;
+
+    for (auto& ps : levellized_prepared_selectors) {
+        ps.expr = levellize_aggregation_depth(ps.expr, aggregation_depth);
+    }
+
     auto selection = prepared_selectors.empty()
                      ? selection::selection::wildcard(schema)
-                     : selection::selection::from_selectors(db, schema, keyspace(), prepared_selectors);
+                     : selection::selection::from_selectors(db, schema, keyspace(), levellized_prepared_selectors);
 
     auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering());
 
