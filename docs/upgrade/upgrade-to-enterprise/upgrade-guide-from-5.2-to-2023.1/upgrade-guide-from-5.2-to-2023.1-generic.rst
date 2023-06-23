@@ -346,8 +346,11 @@ Restore system tables
 
 Restore all tables of **system** and **system_schema** from the previous snapshot because |NEW_VERSION| uses a different set of system tables. See :doc:`Restore from a Backup and Incremental Backup </operating-scylla/procedures/backup-restore/restore/>` for reference.
 
-.. code:: sh
+.. code:: console
 
+    
+    cd /var/lib/scylla/data/keyspace_name/table_name-UUID/
+    sudo find . -maxdepth 1 -type f  -exec sudo rm -f "{}" +
     cd /var/lib/scylla/data/keyspace_name/table_name-UUID/snapshots/<snapshot_name>/
     sudo cp -r * /var/lib/scylla/data/keyspace_name/table_name-UUID/
     sudo chown -R scylla:scylla /var/lib/scylla/data/keyspace_name/table_name-UUID/
