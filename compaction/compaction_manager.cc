@@ -1034,12 +1034,17 @@ future<stop_iteration> compaction_task_executor::maybe_retry(std::exception_ptr 
 
 namespace compaction {
 
-class regular_compaction_task_executor : public compaction_task_executor {
+class regular_compaction_task_executor : public compaction_task_executor, public regular_compaction_task_impl {
 public:
     regular_compaction_task_executor(compaction_manager& mgr, table_state& t)
         : compaction_task_executor(mgr, &t, sstables::compaction_type::Compaction, "Compaction")
+        , regular_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), mgr._task_manager_module->new_sequence_number(), t.schema()->ks_name(), t.schema()->cf_name(), "", tasks::task_id::create_null_id())
     {}
 protected:
+    virtual future<> run() override {
+        return compaction_done().discard_result();
+    }
+
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
         co_await coroutine::switch_to(_cm.compaction_sg());
 
@@ -1126,7 +1131,7 @@ void compaction_manager::submit(table_state& t) {
 
     // OK to drop future.
     // waited via task->stop()
-    (void)perform_task(make_shared<regular_compaction_task_executor>(*this, t));
+    (void)perform_compaction<regular_compaction_task_executor>(tasks::task_info{}, t).discard_result();
 }
 
 bool compaction_manager::can_perform_regular_compaction(table_state& t) {
