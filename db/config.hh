@@ -445,6 +445,10 @@ public:
     static constexpr size_t wasm_udf_reserved_memory = 50 * 1024 * 1024;
 
     named_value<unsigned> minimum_keyspace_rf;
+    named_value<bool> live_updatable_config_params_changeable_via_cql;
+    bool are_live_updatable_config_params_changeable_via_cql() const override {
+        return live_updatable_config_params_changeable_via_cql();
+    }
 
     // authenticator options
     named_value<std::string> auth_superuser_name;

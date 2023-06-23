@@ -27,7 +27,7 @@ namespace YAML {
 /*
  * Add converters as needed here...
  *
- * TODO: Maybe we should just define all node conversionas as "lexical_cast".
+ * TODO: Maybe we should just define all node conversions as "lexical_cast".
  * However, vanilla yamp-cpp does some special treatment of scalar types,
  * mainly inf handling etc. Hm.
  */
@@ -181,7 +181,7 @@ sstring hyphenate(const std::string_view&);
 template<typename T>
 void utils::config_file::named_value<T>::add_command_line_option(boost::program_options::options_description_easy_init& init) {
     const auto hyphenated_name = hyphenate(name());
-    // NOTE. We are not adding default values. We could, but must in that case manually (in some way) geenrate the textual
+    // NOTE. We are not adding default values. We could, but must in that case manually (in some way) generate the textual
     // version, since the available ostream operators for things like pairs and collections don't match what we can deal with parser-wise.
     // See removed ostream operators above.
     init(hyphenated_name.data(), value_ex<T>()->notifier([this](T new_val) { set(std::move(new_val), config_source::CommandLine); }), desc().data());
@@ -204,7 +204,7 @@ void utils::config_file::named_value<T>::set_value(const YAML::Node& node) {
 
 template<typename T>
 bool utils::config_file::named_value<T>::set_value(sstring value, config_source src) {
-    if (_liveness != liveness::LiveUpdate) {
+    if ((_liveness != liveness::LiveUpdate) || (src == config_source::CQL && !_cf->are_live_updatable_config_params_changeable_via_cql())) {
         return false;
     }
 
@@ -226,7 +226,7 @@ future<> utils::config_file::named_value<T>::set_value_on_all_shards(const YAML:
 
 template<typename T>
 future<bool> utils::config_file::named_value<T>::set_value_on_all_shards(sstring value, config_source src) {
-    if (_liveness != liveness::LiveUpdate) {
+    if ((_liveness != liveness::LiveUpdate) || (src == config_source::CQL && !_cf->are_live_updatable_config_params_changeable_via_cql())) {
         co_return false;
     }
 
