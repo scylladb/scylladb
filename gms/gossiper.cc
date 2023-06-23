@@ -1698,8 +1698,12 @@ future<> gossiper::apply_new_states(inet_address addr, endpoint_state& local_sta
     // state indefinitely. Unless the value changes again, we wouldn't retry notifications.
     // Some values are set only once, so listeners would never be re-run.
     // Listeners should decide which failures are non-fatal and swallow them.
-    for (auto&& key : changed) {
-        co_await do_on_change_notifications(addr, key, remote_map.at(key));
+    try {
+        for (auto&& key: changed) {
+            co_await do_on_change_notifications(addr, key, remote_map.at(key));
+        }
+    } catch (...) {
+        on_fatal_internal_error(logger, format("Gossip change listener failed: {}", std::current_exception()));
     }
 
     maybe_rethrow_exception(std::move(ep));
