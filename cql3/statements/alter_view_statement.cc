@@ -35,17 +35,12 @@ future<> alter_view_statement::check_access(query_processor& qp, const service::
         const data_dictionary::database db = qp.db();
         auto&& s = db.find_schema(keyspace(), column_family());
         if (s->is_view())  {
-            return state.has_column_family_access(db, keyspace(), s->view_info()->base_name(), auth::permission::ALTER);
+            return state.has_column_family_access(keyspace(), s->view_info()->base_name(), auth::permission::ALTER);
         }
     } catch (const data_dictionary::no_such_column_family& e) {
         // Will be validated afterwards.
     }
     return make_ready_future<>();
-}
-
-void alter_view_statement::validate(query_processor&, const service::client_state& state) const
-{
-    // validated in prepare_schema_mutations()
 }
 
 view_ptr alter_view_statement::prepare_view(data_dictionary::database db) const {

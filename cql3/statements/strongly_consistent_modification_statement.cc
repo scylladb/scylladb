@@ -73,7 +73,7 @@ strongly_consistent_modification_statement::execute_without_checking_exception_m
     auto result = co_await qp.execute_broadcast_table_query(
         { evaluate_prepared(_query, options) }
     );
-    
+
     co_return co_await std::visit(make_visitor(
         [] (service::broadcast_tables::query_result_conditional_update& qr) -> future<::shared_ptr<cql_transport::messages::result_message>> {
             auto result_set = std::make_unique<cql3::result_set>(std::vector{
@@ -110,18 +110,13 @@ uint32_t strongly_consistent_modification_statement::get_bound_terms() const {
 }
 
 future<> strongly_consistent_modification_statement::check_access(query_processor& qp, const service::client_state& state) const {
-    const data_dictionary::database db = qp.db();
-    auto f = state.has_column_family_access(db, _schema->ks_name(), _schema->cf_name(), auth::permission::MODIFY);
+    auto f = state.has_column_family_access(_schema->ks_name(), _schema->cf_name(), auth::permission::MODIFY);
     if (_query.value_condition.has_value()) {
-        f = f.then([this, &state, db] {
-           return state.has_column_family_access(db, _schema->ks_name(), _schema->cf_name(), auth::permission::SELECT);
+        f = f.then([this, &state] {
+           return state.has_column_family_access(_schema->ks_name(), _schema->cf_name(), auth::permission::SELECT);
         });
     }
     return f;
-}
-
-void strongly_consistent_modification_statement::validate(query_processor&, const service::client_state& state) const {
-    // Nothing to do, all validation has been done by prepare().
 }
 
 bool strongly_consistent_modification_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const {

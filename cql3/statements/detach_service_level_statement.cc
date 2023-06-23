@@ -27,9 +27,6 @@ cql3::statements::detach_service_level_statement::prepare(
     return std::make_unique<prepared_statement>(::make_shared<detach_service_level_statement>(*this));
 }
 
-void detach_service_level_statement::validate(query_processor &, const service::client_state &) const {
-}
-
 future<> detach_service_level_statement::check_access(query_processor& qp, const service::client_state &state) const {
     return state.ensure_has_permission(auth::command_desc{.permission = auth::permission::AUTHORIZE, .resource = auth::root_service_level_resource()});
 }

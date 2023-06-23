@@ -102,7 +102,7 @@ strongly_consistent_select_statement::execute_without_checking_exception_message
     auto result = co_await qp.execute_broadcast_table_query(
         { evaluate_prepared(_query, options) }
     );
-    
+
     auto query_result = std::get_if<service::broadcast_tables::query_result_select>(&result);
 
     if (!query_result) {

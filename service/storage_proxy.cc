@@ -3360,8 +3360,6 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const locator::eff
                 cl_for_paxos, participants + 1, live_endpoints.size());
     }
 
-    bool dead = participants != live_endpoints.size();
-
     // Apart from the ballot, paxos_state::prepare() also sends the current value of the requested key.
     // If the values received from different replicas match, we skip a separate query stage thus saving
     // one network round trip. To generate less traffic, only closest replicas send data, others send
@@ -3369,7 +3367,7 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const locator::eff
     // list of participants by proximity to this instance.
     sort_endpoints_by_proximity(erm.get_topology(), live_endpoints);
 
-    return paxos_participants{std::move(live_endpoints), required_participants, dead};
+    return paxos_participants{std::move(live_endpoints), required_participants};
 }
 
 

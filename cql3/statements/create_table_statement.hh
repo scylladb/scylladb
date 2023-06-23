@@ -70,8 +70,6 @@ public:
 
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
-    virtual void validate(query_processor&, const service::client_state& state) const override;
-
     future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type) const override;
 
 

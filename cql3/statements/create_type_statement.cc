@@ -43,7 +43,7 @@ void create_type_statement::add_definition(::shared_ptr<column_identifier> name,
 
 future<> create_type_statement::check_access(query_processor& qp, const service::client_state& state) const
 {
-    return state.has_keyspace_access(qp.db(), keyspace(), auth::permission::CREATE);
+    return state.has_keyspace_access(keyspace(), auth::permission::CREATE);
 }
 
 inline bool create_type_statement::type_exists_in(data_dictionary::keyspace ks) const

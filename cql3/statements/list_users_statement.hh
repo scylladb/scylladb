@@ -23,7 +23,6 @@ public:
 
     std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
-    void validate(query_processor&, const service::client_state&) const override;
     future<> check_access(query_processor& qp, const service::client_state&) const override;
     future<::shared_ptr<cql_transport::messages::result_message>> execute(query_processor&
                     , service::query_state&

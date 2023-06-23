@@ -33,7 +33,7 @@ const sstring& cql3::statements::alter_keyspace_statement::keyspace() const {
 }
 
 future<> cql3::statements::alter_keyspace_statement::check_access(query_processor& qp, const service::client_state& state) const {
-    return state.has_keyspace_access(qp.db(), _name, auth::permission::ALTER);
+    return state.has_keyspace_access(_name, auth::permission::ALTER);
 }
 
 void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, const service::client_state& state) const {

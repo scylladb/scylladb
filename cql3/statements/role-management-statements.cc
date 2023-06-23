@@ -52,9 +52,6 @@ static future<result_message_ptr> void_result_message() {
     return make_ready_future<result_message_ptr>(nullptr);
 }
 
-void validate_cluster_support(query_processor& qp) {
-}
-
 //
 // `create_role_statement`
 //
@@ -73,10 +70,6 @@ future<> create_role_statement::grant_permissions_to_creator(const service::clie
             // Nothing.
         });
     });
-}
-
-void create_role_statement::validate(query_processor& qp, const service::client_state&) const {
-    validate_cluster_support(qp);
 }
 
 future<> create_role_statement::check_access(query_processor& qp, const service::client_state& state) const {
@@ -131,10 +124,6 @@ create_role_statement::execute(query_processor&,
 std::unique_ptr<prepared_statement> alter_role_statement::prepare(
                 data_dictionary::database db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(::make_shared<alter_role_statement>(*this));
-}
-
-void alter_role_statement::validate(query_processor& qp, const service::client_state&) const {
-    validate_cluster_support(qp);
 }
 
 future<> alter_role_statement::check_access(query_processor& qp, const service::client_state& state) const {
@@ -215,8 +204,6 @@ std::unique_ptr<prepared_statement> drop_role_statement::prepare(
 }
 
 void drop_role_statement::validate(query_processor& qp, const service::client_state& state) const {
-    validate_cluster_support(qp);
-
     if (*state.user() == auth::authenticated_user(_role)) {
         throw request_validations::invalid_request("Cannot DROP primary role for current login.");
     }

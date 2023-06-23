@@ -117,9 +117,6 @@ private:
 
     seastar::metrics::metric_groups _metrics;
 
-    class internal_state;
-    std::unique_ptr<internal_state> _internal_state;
-
     prepared_statements_cache _prepared_cache;
     authorized_prepared_statements_cache _authorized_prepared_cache;
 
@@ -444,7 +441,7 @@ private:
      *
      * When using paging internally a state object is needed.
      */
-    ::shared_ptr<internal_query_state> create_paged_state(
+    internal_query_state create_paged_state(
             const sstring& query_string,
             db::consistency_level,
             const std::initializer_list<data_value>&,
@@ -455,7 +452,7 @@ private:
      *
      * \note Optimized for convenience, not performance.
      */
-    future<::shared_ptr<untyped_result_set>> execute_paged_internal(::shared_ptr<internal_query_state> state);
+    future<::shared_ptr<untyped_result_set>> execute_paged_internal(internal_query_state& state);
 
     /*!
      * \brief iterate over all results using paging, accept a function that returns a future
@@ -463,14 +460,14 @@ private:
      * \note Optimized for convenience, not performance.
      */
     future<> for_each_cql_result(
-            ::shared_ptr<cql3::internal_query_state> state,
+            cql3::internal_query_state& state,
              noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)>&& f);
 
     /*!
      * \brief check, based on the state if there are additional results
      * Users of the paging, should not use the internal_query_state directly
      */
-    bool has_more_results(::shared_ptr<cql3::internal_query_state> state) const;
+    bool has_more_results(cql3::internal_query_state& state) const;
 
     ///
     /// \tparam ResultMsgType type of the returned result message (CQL or Thrift)

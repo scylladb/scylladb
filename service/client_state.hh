@@ -338,17 +338,17 @@ public:
     future<> check_user_can_login();
 
     future<> has_all_keyspaces_access(auth::permission) const;
-    future<> has_keyspace_access(data_dictionary::database db, const sstring&, auth::permission) const;
-    future<> has_column_family_access(data_dictionary::database db, const sstring&, const sstring&, auth::permission,
+    future<> has_keyspace_access(const sstring&, auth::permission) const;
+    future<> has_column_family_access(const sstring&, const sstring&, auth::permission,
                                       auth::command_desc::type = auth::command_desc::type::OTHER) const;
-    future<> has_schema_access(data_dictionary::database db, const schema& s, auth::permission p) const;
-    future<> has_schema_access(data_dictionary::database db, const sstring&, const sstring&, auth::permission p) const;
+    future<> has_schema_access(const schema& s, auth::permission p) const;
+    future<> has_schema_access(const sstring&, const sstring&, auth::permission p) const;
 
-    future<> has_functions_access(data_dictionary::database db, auth::permission p) const;
-    future<> has_functions_access(data_dictionary::database db, const sstring& ks, auth::permission p) const;
-    future<> has_function_access(data_dictionary::database db, const sstring& ks, const sstring& function_signature, auth::permission p) const;
+    future<> has_functions_access(auth::permission p) const;
+    future<> has_functions_access(const sstring& ks, auth::permission p) const;
+    future<> has_function_access(const sstring& ks, const sstring& function_signature, auth::permission p) const;
 private:
-    future<> has_access(data_dictionary::database db, const sstring& keyspace, auth::command_desc) const;
+    future<> has_access(const sstring& keyspace, auth::command_desc) const;
 
 public:
     future<bool> check_has_permission(auth::command_desc) const;

@@ -51,7 +51,6 @@ public:
                           renames_type renames);
 
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
-    virtual void validate(query_processor& qp, const service::client_state& state) const override;
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
     virtual future<::shared_ptr<messages::result_message>> execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
 

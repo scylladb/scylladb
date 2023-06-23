@@ -70,7 +70,7 @@ public:
      *
      * @param state the current client state
      */
-    virtual void validate(query_processor& qp, const service::client_state& state) const = 0;
+    virtual void validate(query_processor& qp, const service::client_state& state) const {}
 
     /**
      * Execute the statement and return the resulting result or null if there is no result.

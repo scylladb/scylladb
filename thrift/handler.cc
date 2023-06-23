@@ -301,7 +301,7 @@ public:
             auto cmd = slice_pred_to_read_cmd(proxy, *schema, predicate);
             auto cell_limit = predicate.__isset.slice_range ? static_cast<uint32_t>(predicate.slice_range.count) : std::numeric_limits<uint32_t>::max();
             auto pranges = make_partition_ranges(*schema, keys);
-            auto f = _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::SELECT);
+            auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
             return f.then([this, &proxy, schema, cmd, pranges = std::move(pranges), cell_limit, consistency_level, keys, permit = std::move(permit)]() mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.read_timeout;
                 return proxy.query(schema, cmd, std::move(pranges), cl_from_thrift(consistency_level), {timeout, std::move(permit), _query_state.get_client_state()}).then(
@@ -331,7 +331,7 @@ public:
             auto cmd = slice_pred_to_read_cmd(proxy, *schema, predicate);
             auto cell_limit = predicate.__isset.slice_range ? static_cast<uint32_t>(predicate.slice_range.count) : std::numeric_limits<uint32_t>::max();
             auto pranges = make_partition_ranges(*schema, keys);
-            auto f = _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::SELECT);
+            auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
             return f.then([this, &proxy, schema, cmd, pranges = std::move(pranges), cell_limit, consistency_level, keys, permit = std::move(permit)]() mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.read_timeout;
                 return proxy.query(schema, cmd, std::move(pranges), cl_from_thrift(consistency_level), {timeout, std::move(permit), _query_state.get_client_state()}).then(
@@ -370,7 +370,7 @@ public:
                 // For static CFs each thrift row maps to a CQL row.
                 cmd->set_row_limit(static_cast<uint64_t>(range.count));
             }
-            auto f = _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::SELECT);
+            auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
             return f.then([this, &proxy, schema, cmd, prange = std::move(prange), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.range_read_timeout;
                 return proxy.query(schema, cmd, std::move(prange), cl_from_thrift(consistency_level), {timeout, std::move(permit), _query_state.get_client_state()}).then(
@@ -489,7 +489,7 @@ public:
                         throw make_exception<InvalidRequestException>("If start column is provided, so must the start key");
                     }
                 }
-                auto f = _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::SELECT);
+                auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
                 return f.then([this, schema, count = range.count, start_column, prange = std::move(prange), consistency_level, &output, permit = std::move(permit)] () mutable {
                     return do_get_paged_slice(_proxy, std::move(schema), count, std::move(prange), &start_column,
                             cl_from_thrift(consistency_level), _timeout_config, output, _query_state, std::move(permit)).then([&output] {
@@ -521,7 +521,7 @@ public:
 
             mutation m_to_apply(schema, key_from_thrift(*schema, to_bytes_view(key)));
             add_to_mutation(*schema, column, m_to_apply);
-            return _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
+            return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
                 return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit), db::allow_per_partition_rate_limit::yes);
             });
@@ -537,7 +537,7 @@ public:
 
             mutation m_to_apply(schema, key_from_thrift(*schema, to_bytes_view(key)));
             add_to_mutation(*schema, column, m_to_apply);
-            return _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
+            return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
                 return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit), db::allow_per_partition_rate_limit::yes);
             });
@@ -574,7 +574,7 @@ public:
                 m_to_apply.partition().apply(tombstone(timestamp, gc_clock::now()));
             }
 
-            return _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
+            return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
                 return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit), db::allow_per_partition_rate_limit::yes);
             });
@@ -600,7 +600,7 @@ public:
                 m_to_apply.partition().apply(tombstone(timestamp, gc_clock::now()));
             }
 
-            return _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
+            return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY).then([this, m_to_apply = std::move(m_to_apply), consistency_level, permit = std::move(permit)] () mutable {
                 // This mutation contains only counter tombstones so it can be applied like non-counter mutations.
                 auto timeout = db::timeout_clock::now() + _timeout_config.counter_write_timeout;
                 return _proxy.local().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit), db::allow_per_partition_rate_limit::yes);
@@ -613,7 +613,7 @@ public:
         with_cob(std::move(cob), std::move(exn_cob), [&] {
             auto p = prepare_mutations(_db, current_keyspace(), mutation_map);
             return parallel_for_each(std::move(p.second), [this](auto&& schema) {
-                return _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::MODIFY);
+                return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY);
             }).then([this, muts = std::move(p.first), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
                 return _proxy.local().mutate(std::move(muts), cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit), db::allow_per_partition_rate_limit::yes);
@@ -626,7 +626,7 @@ public:
         with_cob(std::move(cob), std::move(exn_cob), [&] {
             auto p = prepare_mutations(_db, current_keyspace(), mutation_map);
             return parallel_for_each(std::move(p.second), [this](auto&& schema) {
-                return _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::MODIFY);
+                return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY);
             }).then([this, muts = std::move(p.first), consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.write_timeout;
                 return _proxy.local().mutate_atomically(std::move(muts), cl_from_thrift(consistency_level), timeout, nullptr, std::move(permit));
@@ -641,7 +641,7 @@ public:
                 throw make_exception<InvalidRequestException>("keyspace not set");
             }
 
-            return _query_state.get_client_state().has_column_family_access(_db, current_keyspace(), cfname, auth::permission::MODIFY).then([this, cfname] {
+            return _query_state.get_client_state().has_column_family_access(current_keyspace(), cfname, auth::permission::MODIFY).then([this, cfname] {
                 if (_db.find_schema(current_keyspace(), cfname)->is_view()) {
                     throw make_exception<InvalidRequestException>("Cannot truncate Materialized Views");
                 }
@@ -705,7 +705,7 @@ public:
             auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), proxy.get_max_result_size(slice),
                     query::tombstone_limit(proxy.get_tombstone_limit()), query::row_limit(row_limit));
             cmd->allow_limit = db::allow_per_partition_rate_limit::yes;
-            auto f = _query_state.get_client_state().has_schema_access(_db, *schema, auth::permission::SELECT);
+            auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
             return f.then([this, &proxy, dk = std::move(dk), cmd, schema, column_limit = request.count, cl = request.consistency_level, permit = std::move(permit)] () mutable {
                 auto timeout = db::timeout_clock::now() + _timeout_config.read_timeout;
                 return proxy.query(schema, cmd, {dht::partition_range::make_singular(dk)}, cl_from_thrift(cl), {timeout, std::move(permit), _query_state.get_client_state()}).then(
@@ -883,7 +883,7 @@ public:
             auto& t = *this;
             auto cf_def = def;
 
-            co_await t._query_state.get_client_state().has_keyspace_access(t._db, cf_def.keyspace, auth::permission::CREATE);
+            co_await t._query_state.get_client_state().has_keyspace_access(cf_def.keyspace, auth::permission::CREATE);
 
             co_return co_await t.execute_schema_command([&cf_def] (service::migration_manager& mm, data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
                 if (!db.has_keyspace(cf_def.keyspace)) {
@@ -903,7 +903,7 @@ public:
         with_cob(std::move(cob), std::move(exn_cob), [this, cfm = column_family] () -> future<std::string> {
             auto& t = *this;
             auto column_family = cfm;
-            co_await t._query_state.get_client_state().has_column_family_access(t._db, t.current_keyspace(), column_family, auth::permission::DROP);
+            co_await t._query_state.get_client_state().has_column_family_access(t.current_keyspace(), column_family, auth::permission::DROP);
 
             co_return co_await t.execute_schema_command(
                        [&column_family, &current_keyspace = t.current_keyspace()] (service::migration_manager& mm, data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
@@ -940,7 +940,7 @@ public:
             auto& t = *this;
             auto keyspace = ks;
 
-            co_await t._query_state.get_client_state().has_keyspace_access(t._db, keyspace, auth::permission::DROP);
+            co_await t._query_state.get_client_state().has_keyspace_access(keyspace, auth::permission::DROP);
 
             co_return co_await t.execute_schema_command([&keyspace] (service::migration_manager& mm, data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
                 thrift_validation::validate_keyspace_not_system(keyspace);
@@ -960,7 +960,7 @@ public:
             auto ks_def = def;
             thrift_validation::validate_keyspace_not_system(ks_def.name);
 
-            co_await t._query_state.get_client_state().has_keyspace_access(t._db, ks_def.name, auth::permission::ALTER);
+            co_await t._query_state.get_client_state().has_keyspace_access(ks_def.name, auth::permission::ALTER);
 
             co_return co_await t.execute_schema_command([&ks_def] (service::migration_manager& mm, data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
                 if (!db.has_keyspace(ks_def.name)) {
@@ -982,7 +982,7 @@ public:
             auto& t = *this;
             auto cf_def = def;
 
-            co_await t._query_state.get_client_state().has_schema_access(t._db, cf_def.keyspace, cf_def.name, auth::permission::ALTER);
+            co_await t._query_state.get_client_state().has_schema_access(cf_def.keyspace, cf_def.name, auth::permission::ALTER);
 
             co_return co_await t.execute_schema_command([&cf_def] (service::migration_manager& mm, data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
                 auto cf = db.find_table(cf_def.keyspace, cf_def.name);

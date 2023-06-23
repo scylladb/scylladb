@@ -30,7 +30,7 @@ drop_keyspace_statement::drop_keyspace_statement(const sstring& keyspace, bool i
 
 future<> drop_keyspace_statement::check_access(query_processor& qp, const service::client_state& state) const
 {
-    return state.has_keyspace_access(qp.db(), keyspace(), auth::permission::DROP);
+    return state.has_keyspace_access(keyspace(), auth::permission::DROP);
 }
 
 void drop_keyspace_statement::validate(query_processor&, const service::client_state& state) const

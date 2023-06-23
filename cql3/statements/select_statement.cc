@@ -213,7 +213,7 @@ future<> select_statement::check_access(query_processor& qp, const service::clie
         const data_dictionary::database db = qp.db();
         auto&& s = db.find_schema(keyspace(), column_family());
         auto& cf_name = s->is_view() ? s->view_info()->base_name() : column_family();
-        co_await state.has_column_family_access(db, keyspace(), cf_name, auth::permission::SELECT);
+        co_await state.has_column_family_access(keyspace(), cf_name, auth::permission::SELECT);
     } catch (const data_dictionary::no_such_column_family& e) {
         // Will be validated afterwards.
         co_return;
@@ -222,13 +222,9 @@ future<> select_statement::check_access(query_processor& qp, const service::clie
         std::vector<::shared_ptr<functions::function>> used_functions = _selection->used_functions();
         for (const auto& used_function : used_functions) {
             sstring encoded_signature = auth::encode_signature(used_function->name().name, used_function->arg_types());
-            co_await state.has_function_access(qp.db(), used_function->name().keyspace, encoded_signature, auth::permission::EXECUTE);
+            co_await state.has_function_access(used_function->name().keyspace, encoded_signature, auth::permission::EXECUTE);
         }
     }
-}
-
-void select_statement::validate(query_processor&, const service::client_state& state) const {
-    // Nothing to do, all validation has been done by raw_statemet::prepare()
 }
 
 bool select_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const {
@@ -345,6 +341,8 @@ select_statement::do_execute(query_processor& qp,
                           service::query_state& state,
                           const query_options& options) const
 {
+    (void)validation::validate_column_family(qp.db(), keyspace(), column_family());
+
     tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
 
     auto cl = options.get_consistency();

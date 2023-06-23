@@ -33,17 +33,12 @@ future<> drop_view_statement::check_access(query_processor& qp, const service::c
         const data_dictionary::database db = qp.db();
         auto&& s = db.find_schema(keyspace(), column_family());
         if (s->is_view()) {
-            return state.has_column_family_access(db, keyspace(), s->view_info()->base_name(), auth::permission::ALTER);
+            return state.has_column_family_access(keyspace(), s->view_info()->base_name(), auth::permission::ALTER);
         }
     } catch (const data_dictionary::no_such_column_family& e) {
         // Will be validated afterwards.
     }
     return make_ready_future<>();
-}
-
-void drop_view_statement::validate(query_processor&, const service::client_state& state) const
-{
-    // validated in service::migration_manager::announce_view_drop()
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>

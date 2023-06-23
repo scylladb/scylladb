@@ -40,7 +40,6 @@ protected:
 // common logic for creating UDF and UDA
 class create_function_statement_base : public function_statement {
 protected:
-    virtual void validate(query_processor& qp, const service::client_state& state) const override;
     virtual seastar::future<shared_ptr<db::functions::function>> create(query_processor& qp, db::functions::function* old) const = 0;
     virtual seastar::future<shared_ptr<db::functions::function>> validate_while_executing(query_processor&) const override;
 
@@ -57,7 +56,6 @@ public:
 // common logic for dropping UDF and UDA
 class drop_function_statement_base : public function_statement {
 protected:
-    virtual void validate(query_processor&, const service::client_state& state) const override;
     virtual seastar::future<shared_ptr<db::functions::function>> validate_while_executing(query_processor&) const override;
 
     bool _args_present;

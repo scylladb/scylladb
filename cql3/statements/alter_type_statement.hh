@@ -32,8 +32,6 @@ public:
 
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
-    virtual void validate(query_processor& qp, const service::client_state& state) const override;
-
     virtual const sstring& keyspace() const override;
 
 
