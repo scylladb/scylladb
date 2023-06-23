@@ -107,7 +107,6 @@ public:
         class impl {
         protected:
             status _status;
-            progress _progress;             // Reliable only for tasks with no descendants.
             task_id _parent_id;
             foreign_task_vector _children;
             shared_promise<> _done;
