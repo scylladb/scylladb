@@ -1013,7 +1013,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , relabel_config_file(this, "relabel_config_file", value_status::Used, "", "Optionally, read relabel config from file")
     , object_storage_config_file(this, "object_storage_config_file", value_status::Used, "", "Optionally, read object-storage endpoints config from file")
     , minimum_keyspace_rf(this, "minimum_keyspace_rf", liveness::LiveUpdate, value_status::Used, 0, "The minimum allowed replication factor when creating or altering a keyspace.")
-    , auth_superuser_name(this, "auth_superuser_name", value_status::Used, "", 
+    , live_updatable_config_params_changeable_via_cql(this, "live_updatable_config_params_changeable_via_cql", liveness::MustRestart, value_status::Used, true, "If set to true, configuration parameters defined with LiveUpdate can be updated in runtime via CQL (by updating system.config virtual table), otherwise they can't.")
+    , auth_superuser_name(this, "auth_superuser_name", value_status::Used, "",
         "Initial authentication super username. Ignored if authentication tables already contain a super user")
     , auth_superuser_salted_password(this, "auth_superuser_salted_password", value_status::Used, "", 
         "Initial authentication super user salted password. Create using mkpassword or similar. The hashing algorithm used must be available on the node host. "

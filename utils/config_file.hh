@@ -287,6 +287,10 @@ public:
     }
     future<> broadcast_to_all_shards();
 private:
+    virtual bool are_live_updatable_config_params_changeable_via_cql() const {
+        return false;
+    }
+
     configs
         _cfgs;
 };

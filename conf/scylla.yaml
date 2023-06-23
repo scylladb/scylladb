@@ -598,3 +598,10 @@ consistent_cluster_management: true
 # New clusters have this option set to `true` by scylla.yaml (which overrides the default `warn`)
 # to make sure that trying to create an invalid view causes an error.
 strict_is_not_null_in_views: true
+
+# If set to true, configuration parameters defined with LiveUpdate option can be updated in runtime with CQL
+# by updating system.config virtual table. If we don't want any configuration parameter to be changed in runtime
+# via CQL, this option should be set to false. This parameter doesn't impose any limits on other mechanisms updating
+# configuration parameters in runtime, e.g. sending SIGHUP or using API. This option should be set to false
+# e.g. for cloud users, for whom scylla's configuration should be changed only by support engineers.
+# live_updatable_config_params_changeable_via_cql: true
