@@ -14,6 +14,7 @@
 #include "auth/common.hh"
 #include "auth/resource.hh"
 #include "exceptions/exceptions.hh"
+#include "seastar/core/future.hh"
 #include "validation.hh"
 #include "db/system_keyspace.hh"
 #include "db/schema_tables.hh"
@@ -259,11 +260,8 @@ future<> service::client_state::maybe_update_per_service_level_params() {
         auto& role_manager = _auth_service->underlying_role_manager();
         auto role_set = co_await role_manager.query_granted(_user->name.value(), auth::recursive_role_query::yes);
         auto slo_opt = co_await _sl_controller->find_service_level(role_set);
-        if (!slo_opt) {
-            co_return;
-        }
         auto slo_timeout_or = [&] (const lowres_clock::duration& default_timeout) {
-            return std::visit(overloaded_functor{
+            return (!slo_opt) ? default_timeout : std::visit(overloaded_functor{
                 [&] (const qos::service_level_options::unset_marker&) -> lowres_clock::duration {
                     return default_timeout;
                 },
@@ -285,4 +283,74 @@ future<> service::client_state::maybe_update_per_service_level_params() {
 
         _workload_type = slo_opt->workload;
     }
+}
+
+void service::client_state::register_service_level_params_updater() {
+    if (_sl_controller && _user && _user->name) {
+        _sl_controller->register_subscriber(this);
+        _auth_service->underlying_role_manager().register_subscriber(this);
+    }
+}
+
+future<> service::client_state::on_client_leave() {
+    if (_sl_controller && _user && _user->name) {
+        co_await _sl_controller->unregister_subscriber(this);
+        co_await _auth_service->underlying_role_manager().unregister_subscriber(this);
+    }
+}
+
+future<> service::client_state::on_before_service_level_add(qos::service_level_options slo, qos::service_level_info sl_info) {
+    return make_ready_future<>();
+}
+
+future<> service::client_state::on_after_service_level_add(qos::service_level_options slo, qos::service_level_info sl_info) {
+    return make_ready_future<>();
+}
+future<> service::client_state::on_after_service_level_remove(qos::service_level_info sl_info) {
+    return maybe_update_per_service_level_params();
+}
+future<> service::client_state::on_before_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) {
+    return make_ready_future<>();
+}
+future<> service::client_state::on_after_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) {
+    return maybe_update_per_service_level_params();
+}
+
+future<> service::client_state::update_when_contains_role(std::string_view role_name) {
+    try {
+        auto role_set = co_await _auth_service->underlying_role_manager().query_granted(*_user->name, auth::recursive_role_query::yes);
+        if (!role_set.contains(sstring(role_name))) {
+            co_return;
+        }
+    } catch (const auth::nonexistant_role& e) {
+        // `client_state` may represent user of already deleted role.
+        // In this case, do nothing.
+        co_return;
+    }
+
+    co_return co_await maybe_update_per_service_level_params();
+}
+
+future<> service::client_state::on_attribute_set(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value) {
+    if (attribute_name != "service_level") {
+        co_return;
+    }
+
+    co_return co_await update_when_contains_role(role_name);  
+}
+
+future<> service::client_state::on_attribute_removed(std::string_view role_name, std::string_view attribute_name) {
+    if (attribute_name != "service_level") {
+        co_return;
+    }
+
+    co_return co_await update_when_contains_role(role_name);  
+}
+
+future<> service::client_state::on_role_granted(std::string_view grantee_name, std::string_view role_name) {
+    return update_when_contains_role(grantee_name);
+}
+
+future<> service::client_state::on_role_revoked(std::string_view revokee_name, std::string_view role_name) {
+    return update_when_contains_role(revokee_name);
 }

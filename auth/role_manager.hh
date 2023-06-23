@@ -21,6 +21,7 @@
 #include "auth/resource.hh"
 #include "seastarx.hh"
 #include "exceptions/exceptions.hh"
+#include "utils/atomic_vector.hh"
 
 namespace auth {
 
@@ -35,6 +36,21 @@ struct role_config final {
 struct role_config_update final {
     std::optional<bool> is_superuser{};
     std::optional<bool> can_login{};
+};
+
+///
+/// Subscribers are called when an attribbute is set or removed 
+/// and also when role is granted or revoked.
+/// The callback functions are called after the changes are applied.
+///
+class role_configuration_change_subscriber {
+public:
+    virtual future<> on_attribute_set(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value) = 0;
+    virtual future<> on_attribute_removed(std::string_view role_name, std::string_view attribute_name) = 0;
+    virtual future<> on_role_granted(std::string_view grantee_name, std::string_view role_name) = 0;
+    virtual future<> on_role_revoked(std::string_view revokee_name, std::string_view role_name) = 0;
+
+    virtual ~role_configuration_change_subscriber() {};
 };
 
 ///
@@ -88,6 +104,8 @@ enum class recursive_role_query { yes, no };
 /// access-control should never be enforced in implementations.
 ///
 class role_manager {
+private:
+    atomic_vector<role_configuration_change_subscriber*> _subscribers;
 public:
     // this type represents a mapping between a role and some attribute value.
     // i.e: given attribute name  'a' this map holds role name and it's assigned
@@ -178,5 +196,20 @@ public:
     /// \note: This is a no-op if the role does not have the named attribute set.
     ///
     virtual future<> remove_attribute(std::string_view role_name, std::string_view attribute_name) = 0;
+
+protected:
+    future<> notify_attribute_set(std::string_view role_name, std::string_view attribute_name, std::string_view attribute_value);
+    future<> notify_attribute_removed(std::string_view role_name, std::string_view attribute_name);
+    future<> notify_role_granted(std::string_view grantee_name, std::string_view role_name);
+    future<> notify_role_revoked(std::string_view revokee_name, std::string_view role_name);
+
+public:
+    /// Register a subscriber for role configuration changes notifications
+    ///
+    /// The caller is responsible to keep the subscriber object alive until
+    /// its unregistered with role_manager::unregister_subscriber()
+    ///
+    void register_subscriber(role_configuration_change_subscriber* subscriber);
+    future<> unregister_subscriber(role_configuration_change_subscriber* subscriber);
 };
 }
