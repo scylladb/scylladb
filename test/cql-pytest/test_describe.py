@@ -439,7 +439,16 @@ def test_index_desc_in_table_desc(cql, test_keyspace):
         assert create_idx_c in desc
         assert f"CREATE INDEX {tbl_name}_b_idx_1 ON {tbl}((a), b)" in desc
 
-# Test that generic 'DESC' works properly. It should be able to describe keyspace, table.
+# -----------------------------------------------------------------------------
+# "Generic describe" is a describe statement without specifying what kind of object 
+# you want to describe, so it only requires keyspace name(optionally) and object name.
+# Genric describe should be exactly the same as normal describe, so for instannce:
+# `DESC TABLE <table_name> == DESC <table_name>`.
+#
+# ScyllaDB looks for describing object in a following order: 
+# keyspace, table, view, index, UDT, UDF, UDA
+
+# Cassandra compatibility require us to be able generic describe: keyspace, table, view, index.
 def test_generic_desc(cql, random_seed):
     with new_random_keyspace(cql) as ks:
         with new_random_table(cql, ks) as t1, new_test_table(cql, ks, "a int primary key, b int, c int") as tbl:
@@ -459,6 +468,27 @@ def test_generic_desc(cql, random_seed):
             assert generic_t1 == desc_t1
             assert generic_tbl == desc_tbl
             assert generic_idx == desc_idx
+
+# We've extended generic describe to include user-defined objects: UDTs, UDFs and UDAs.
+# Since Cassandra doesn't generic description of support user-defined objects,
+# the test is `scylla_only`.
+# Reproduces #14170
+def test_generic_desc_user_defined(scylla_only, cql, test_keyspace):
+    with new_random_type(cql, test_keyspace) as udt:
+        assert cql.execute(f"DESC {udt}") == cql.execute(f"DESC TYPE {udt}")
+
+    with new_function(cql, test_keyspace, """
+        (val1 int, val2 int)
+        RETURNS NULL ON NULL INPUT
+        RETURNS int
+        LANGUAGE lua
+        AS 'return val1 + val2'
+    """) as fn:
+        assert cql.execute(f"DESC {test_keyspace}.{fn}") == cql.execute(f"DESC FUNCTION {test_keyspace}.{fn}")
+
+        with new_aggregate(cql, test_keyspace, f"(int) SFUNC {fn} STYPE int INITCOND 0") as aggr:
+            assert cql.execute(f"DESC {test_keyspace}.{aggr}") == cql.execute(f"DESC AGGREGATE {test_keyspace}.{aggr}")
+
 
 # Test that 'DESC FUNCTION'/'DESC AGGREGATE' doesn't show UDA/UDF and doesn't crash Scylla
 def test_desc_udf_uda(cql, test_keyspace):
