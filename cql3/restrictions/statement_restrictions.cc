@@ -17,6 +17,8 @@
 #include <stdexcept>
 
 #include "cql3/expr/expression.hh"
+#include "cql3/expr/evaluate.hh"
+#include "cql3/expr/expr-utils.hh"
 #include "query-result-reader.hh"
 #include "statement_restrictions.hh"
 #include "data_dictionary/data_dictionary.hh"
@@ -475,6 +477,70 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         validate_secondary_index_selections(selects_only_static_columns);
     }
 }
+
+bool
+statement_restrictions::clustering_key_restrictions_has_IN() const {
+    return find(_clustering_columns_restrictions, expr::oper_t::IN);
+}
+
+bool
+statement_restrictions::clustering_key_restrictions_has_only_eq() const {
+    return expr::has_only_eq_binops(_clustering_columns_restrictions);
+}
+
+bool
+statement_restrictions::has_token_restrictions() const {
+    return has_partition_token(_partition_key_restrictions, *_schema);
+}
+
+bool
+statement_restrictions::key_is_in_relation() const {
+    return find(_partition_key_restrictions, expr::oper_t::IN);
+}
+
+const expr::expression&
+statement_restrictions::get_restrictions(column_kind kind) const {
+    switch (kind) {
+    case column_kind::partition_key: return _partition_key_restrictions;
+    case column_kind::clustering_key: return _clustering_columns_restrictions;
+    default: return _nonprimary_key_restrictions;
+    }
+}
+
+bool
+statement_restrictions::has_clustering_columns_restriction() const {
+    return !expr::is_empty_restriction(_clustering_columns_restrictions);
+}
+
+bool
+statement_restrictions::has_non_primary_key_restriction() const {
+    return !expr::is_empty_restriction(_nonprimary_key_restrictions);
+}
+
+bool
+statement_restrictions::ck_restrictions_need_filtering() const {
+    if (expr::is_empty_restriction(_clustering_columns_restrictions)) {
+        return false;
+    }
+
+    return has_partition_key_unrestricted_components()
+    || clustering_key_restrictions_need_filtering()
+    // If token restrictions are present in an indexed query, then all other restrictions need to be filtered.
+    // A single token restriction can have multiple matching partition key values.
+    // Because of this we can't create a clustering prefix with more than token restriction.
+    || (_uses_secondary_indexing && has_token_restrictions());
+}
+
+bool
+statement_restrictions::is_restricted(const column_definition* cdef) const {
+    if (_not_null_columns.contains(cdef)) {
+        return true;
+    }
+
+    auto restricted = expr::get_sorted_column_defs(get_restrictions(cdef->kind));
+    return std::find(restricted.begin(), restricted.end(), cdef) != restricted.end();
+}
+
 
 const std::vector<expr::expression>& statement_restrictions::index_restrictions() const {
     return _index_restrictions;

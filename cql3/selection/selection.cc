@@ -20,6 +20,8 @@
 #include "cql3/result_set.hh"
 #include "cql3/query_options.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
+#include "cql3/expr/evaluate.hh"
+#include "cql3/expr/expr-utils.hh"
 
 namespace cql3 {
 

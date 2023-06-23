@@ -13,6 +13,8 @@
 #include "sets.hh"
 #include "lists.hh"
 #include "user_types.hh"
+#include "cql3/expr/evaluate.hh"
+#include "cql3/expr/expr-utils.hh"
 #include "types/tuple.hh"
 #include "types/map.hh"
 #include "types/list.hh"
@@ -21,6 +23,13 @@
 #include "service/broadcast_tables/experimental/lang.hh"
 
 namespace cql3 {
+
+void
+operation::fill_prepare_context(prepare_context& ctx) {
+    if (_e.has_value()) {
+        expr::fill_prepare_context(*_e, ctx);
+    }
+}
 
 sstring
 operation::set_element::to_string(const column_definition& receiver) const {

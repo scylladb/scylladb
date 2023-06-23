@@ -9,6 +9,7 @@
 #pragma once
 
 #include "cql3/expr/expression.hh"
+#include "cql3/expr/evaluate.hh"
 #include "cql3/query_options.hh"
 #include "cql3/selection/selection.hh"
 #include "data_dictionary/data_dictionary.hh"

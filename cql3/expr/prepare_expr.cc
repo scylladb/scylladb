@@ -7,6 +7,8 @@
  */
 
 #include "expression.hh"
+#include "expr-utils.hh"
+#include "evaluate.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/constants.hh"

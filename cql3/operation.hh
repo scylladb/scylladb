@@ -84,11 +84,7 @@ public:
      * @param meta the list of column specification where to collect the
      * bind variables of this term in.
      */
-    virtual void fill_prepare_context(prepare_context& ctx) {
-        if (_e.has_value()) {
-            expr::fill_prepare_context(*_e, ctx);
-        }
-    }
+    virtual void fill_prepare_context(prepare_context& ctx);
 
     /**
      * Execute the operation. Check should_skip_operation() first.

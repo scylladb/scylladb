@@ -8,6 +8,9 @@
 
 #include "expression.hh"
 
+#include "cql3/expr/evaluate.hh"
+#include "cql3/expr/expr-utils.hh"
+
 #include <seastar/core/on_internal_error.hh>
 
 #include <boost/algorithm/cxx11/all_of.hpp>
