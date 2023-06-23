@@ -112,6 +112,7 @@ public:
             virtual tasks::is_abortable is_abortable() const noexcept;
             virtual tasks::is_internal is_internal() const noexcept;
             virtual future<> abort() noexcept;
+            bool is_complete() const noexcept;
         protected:
             virtual future<> run() = 0;
             void run_to_completion();
@@ -146,6 +147,7 @@ public:
         void register_task();
         void unregister_task() noexcept;
         const foreign_task_vector& get_children() const noexcept;
+        bool is_complete() const noexcept;
 
         friend class test_task;
         friend class ::repair::task_manager_module;

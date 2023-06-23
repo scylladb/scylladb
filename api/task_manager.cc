@@ -158,8 +158,7 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
         tasks::task_manager::foreign_task_ptr task;
         try {
             task = co_await tasks::task_manager::invoke_on_task(ctx.tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
-                auto state = task->get_status().state;
-                if (state == tasks::task_manager::task_state::done || state == tasks::task_manager::task_state::failed) {
+                if (task->is_complete()) {
                     task->unregister_task();
                 }
                 co_return std::move(task);
@@ -214,8 +213,7 @@ void set_task_manager(http_context& ctx, routes& r, db::config& cfg) {
         try {
             // Get requested task.
             task = co_await tasks::task_manager::invoke_on_task(_ctx.tm, id, std::function([] (tasks::task_manager::task_ptr task) -> future<tasks::task_manager::foreign_task_ptr> {
-                auto state = task->get_status().state;
-                if (state == tasks::task_manager::task_state::done || state == tasks::task_manager::task_state::failed) {
+                if (task->is_complete()) {
                     task->unregister_task();
                 }
                 co_return task;

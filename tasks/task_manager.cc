@@ -72,6 +72,10 @@ future<> task_manager::task::impl::abort() noexcept {
     }
 }
 
+bool task_manager::task::impl::is_complete() const noexcept {
+    return _status.state == tasks::task_manager::task_state::done || _status.state == tasks::task_manager::task_state::failed;
+}
+
 void task_manager::task::impl::run_to_completion() {
     (void)run().then_wrapped([this] (auto f) {
         if (f.failed()) {
@@ -202,6 +206,10 @@ void task_manager::task::unregister_task() noexcept {
 
 const task_manager::foreign_task_vector& task_manager::task::get_children() const noexcept {
     return _impl->_children;
+}
+
+bool task_manager::task::is_complete() const noexcept {
+    return _impl->is_complete();
 }
 
 task_manager::module::module(task_manager& tm, std::string name) noexcept : _tm(tm), _name(std::move(name)) {}
