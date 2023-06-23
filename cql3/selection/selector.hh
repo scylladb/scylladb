@@ -83,6 +83,8 @@ struct prepared_selector {
     ::shared_ptr<column_identifier> alias;
 };
 
+bool processes_selection(const prepared_selector&);
+
 class selectable;
 
 std::vector<shared_ptr<selectable>> to_selectables(std::span<const prepared_selector> selectors,

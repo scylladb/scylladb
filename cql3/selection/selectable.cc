@@ -190,7 +190,7 @@ prepare_selectable(const schema& s, const expr::expression& selector, data_dicti
 }
 
 bool
-selectable_processes_selection(const expr::expression& raw_selectable) {
+selectable_processes_selection(const expr::expression& selectable) {
     return expr::visit(overloaded_functor{
         [&] (const expr::constant&) -> bool {
             on_internal_error(slogger, "no way to express SELECT constant in the grammar yet");
@@ -205,12 +205,10 @@ selectable_processes_selection(const expr::expression& raw_selectable) {
             on_internal_error(slogger, "no way to express 'SELECT a[b]' in the grammar yet");
         },
         [&] (const expr::column_value& column) -> bool {
-            // There is no path that reaches here, but expr::column_value and column_identifier are logically the same,
-            // so bridge them.
             return false;
         },
         [&] (const expr::unresolved_identifier& ui) -> bool {
-            return ui.ident->processes_selection();
+            on_internal_error(slogger, "selectable_processes_selection saw an unprepared column_identifier");
         },
         [&] (const expr::column_mutation_attribute& cma) -> bool {
             return true;
@@ -239,7 +237,7 @@ selectable_processes_selection(const expr::expression& raw_selectable) {
         [&] (const expr::usertype_constructor&) -> bool {
             on_internal_error(slogger, "collection_constructor found its way to selector context");
         },
-    }, raw_selectable);
+    }, selectable);
 };
 
 std::ostream & operator<<(std::ostream &os, const selectable& s) {

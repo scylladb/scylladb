@@ -40,8 +40,6 @@ public:
      */
     static std::vector<prepared_selector> to_prepared_selectors(const std::vector<::shared_ptr<raw_selector>>& raws,
             const schema& schema, data_dictionary::database db, const sstring& ks);
-
-    bool processes_selection() const;
 };
 
 }

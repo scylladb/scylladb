@@ -51,8 +51,8 @@ to_selectables(std::span<const prepared_selector> selectors,
 }
 
 bool
-raw_selector::processes_selection() const {
-    return selectable_processes_selection(selectable_);
+processes_selection(const prepared_selector& ps) {
+    return selectable_processes_selection(ps.expr);
 }
 
 }

@@ -83,9 +83,6 @@ public:
 
     ::shared_ptr<column_identifier> prepare_column_identifier(const schema& s) const;
 
-    // for selectable::with_expression::raw:
-    bool processes_selection() const;
-
     bool operator==(const column_identifier_raw& other) const;
 
     const sstring& text() const;

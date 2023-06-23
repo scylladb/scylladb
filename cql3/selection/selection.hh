@@ -123,7 +123,7 @@ public:
 
     query::partition_slice::option_set get_query_options();
 private:
-    static bool processes_selection(const std::vector<::shared_ptr<raw_selector>>& raw_selectors);
+    static bool processes_selection(const std::vector<prepared_selector>& prepared_selectors);
 
     static std::vector<lw_shared_ptr<column_specification>> collect_metadata(const schema& schema,
         const std::vector<::shared_ptr<raw_selector>>& raw_selectors, const selector_factories& factories);

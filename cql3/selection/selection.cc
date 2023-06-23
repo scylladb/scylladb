@@ -89,9 +89,9 @@ bool selection::has_column(const column_definition& def) const {
     return std::find(_columns.begin(), _columns.end(), &def) != _columns.end();
 }
 
-bool selection::processes_selection(const std::vector<::shared_ptr<raw_selector>>& raw_selectors) {
-    return std::any_of(raw_selectors.begin(), raw_selectors.end(),
-        [] (auto&& s) { return s->processes_selection(); });
+bool selection::processes_selection(const std::vector<prepared_selector>& prepared_selectors) {
+    return std::any_of(prepared_selectors.begin(), prepared_selectors.end(),
+        [] (auto&& s) { return cql3::selection::processes_selection(s); });
 }
 
 // Special cased selection for when no function is used (this save some allocations).
@@ -306,7 +306,7 @@ uint32_t selection::add_column_for_post_processing(const column_definition& c) {
             cql3::selection::to_selectables(prepared_selectors, *schema, db, ks), db, schema, defs);
 
     auto metadata = collect_metadata(*schema, raw_selectors, *factories);
-    if (processes_selection(raw_selectors) || raw_selectors.size() != defs.size()) {
+    if (processes_selection(prepared_selectors) || prepared_selectors.size() != defs.size()) {
         return ::make_shared<selection_with_processing>(schema, std::move(defs), std::move(metadata), std::move(factories));
     } else {
         return ::make_shared<simple_selection>(schema, std::move(defs), std::move(metadata), false);
