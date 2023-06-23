@@ -152,28 +152,6 @@ public:
     virtual query::forward_request::reductions_info get_reductions() const {return {{}, {}};}
 
     /**
-     * Checks that selectors are either all aggregates or that none of them is.
-     *
-     * @param selectors the selectors to test.
-     * @param messageTemplate the error message template
-     * @param messageArgs the error message arguments
-     * @throws InvalidRequestException if some of the selectors are aggregate but not all of them
-     */
-    template<typename... Args>
-    static void validate_selectors(const std::vector<::shared_ptr<selector>>& selectors, const sstring& msg, Args&&... args) {
-        int32_t aggregates = 0;
-        for (auto&& s : selectors) {
-            if (s->is_aggregate()) {
-                ++aggregates;
-            }
-        }
-
-        if (aggregates != 0 && aggregates != selectors.size()) {
-            throw exceptions::invalid_request_exception(fmt::format(msg, std::forward<Args>(args)...));
-        }
-    }
-
-    /**
      * Returns true if the selection is trivial, i.e. there are no function
      * selectors (including casts or aggregates).
      */
