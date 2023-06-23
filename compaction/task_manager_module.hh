@@ -107,7 +107,7 @@ public:
             table_info ti,
             seastar::condition_variable& cv,
             tasks::task_manager::task_ptr& current_task) noexcept
-        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), std::move(table), "", parent_id)
+        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), std::move(table), "", parent_id)
         , _db(db)
         , _ti(std::move(ti))
         , _cv(cv)
@@ -193,7 +193,7 @@ public:
             table_info ti,
             seastar::condition_variable& cv,
             tasks::task_manager::task_ptr& current_task) noexcept
-        : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), std::move(table), "", parent_id)
+        : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), std::move(table), "", parent_id)
         , _db(db)
         , _ti(std::move(ti))
         , _cv(cv)
@@ -286,7 +286,7 @@ public:
             seastar::condition_variable& cv,
             tasks::task_manager::task_ptr& current_task,
             bool& needed) noexcept
-        : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), std::move(table), "", parent_id)
+        : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), std::move(table), "", parent_id)
         , _db(db)
         , _ti(std::move(ti))
         , _cv(cv)
@@ -453,7 +453,7 @@ public:
             seastar::condition_variable& cv,
             tasks::task_manager::task_ptr& current_task,
             bool exclude_current_version) noexcept
-        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), std::move(table), "", parent_id)
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), std::move(table), "", parent_id)
         , _db(db)
         , _ti(std::move(ti))
         , _cv(cv)
