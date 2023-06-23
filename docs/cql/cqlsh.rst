@@ -380,6 +380,9 @@ dumping all or portions of the schema.
 
 In any of the commands, ``DESC`` may be used in place of ``DESCRIBE``.
 
+You may also omit what you want to describe and just simply use ``DESCRIBE <name>``. This will look for the object 
+ in a specific order: keyspace, table, view, index, user-defined type, user-defined function, user-defined aggregate.
+
 The ``DESCRIBE CLUSTER`` command prints the cluster name and partitioner::
 
 
