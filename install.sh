@@ -261,6 +261,9 @@ supervisor_conf() {
     fi
 }
 
+# force default umask to 022
+umask 022
+
 if ! $skip_systemd_check && [ ! -d /run/systemd/system/ ]; then
     echo "systemd is not detected, unsupported distribution."
     exit 1
