@@ -49,6 +49,8 @@
 #include "utils/result_loop.hh"
 #include "replica/database.hh"
 
+#include <boost/algorithm/cxx11/all_of.hpp>
+
 template<typename T = void>
 using coordinator_result = cql3::statements::select_statement::coordinator_result<T>;
 
@@ -1728,10 +1730,27 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     auto prepared_attrs = _attrs->prepare(db, keyspace(), column_family());
     prepared_attrs->fill_prepare_context(ctx);
 
+    auto all_aggregates = [] (const std::vector<selection::prepared_selector>& prepared_selectors) {
+        return boost::algorithm::all_of(
+            prepared_selectors | boost::adaptors::transformed(std::mem_fn(&selection::prepared_selector::expr)),
+            [] (const expr::expression& e) {
+                auto fn_expr = expr::as_if<expr::function_call>(&e);
+                if (!fn_expr) {
+                    return false;
+                }
+                auto func = std::get_if<shared_ptr<functions::function>>(&fn_expr->func);
+                if (!func) {
+                    return false;
+                }
+                return (*func)->is_aggregate();
+            }
+        );
+    };
+
     // Used to determine if an execution of this statement can be parallelized
     // using `forward_service`.
     auto can_be_forwarded = [&] {
-        return selection->is_aggregate()        // Aggregation only
+        return all_aggregates(prepared_selectors)   // Note: before we levellized aggregation depth
             && ( // SUPPORTED PARALLELIZATION
                  // All potential intermediate coordinators must support forwarding
                 (db.features().parallelized_aggregation && selection->is_count())
