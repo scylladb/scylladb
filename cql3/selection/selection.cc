@@ -94,6 +94,14 @@ bool selection::processes_selection(const std::vector<prepared_selector>& prepar
         [] (auto&& s) { return cql3::selection::processes_selection(s); });
 }
 
+std::vector<managed_bytes_opt>
+selectors::transform_input_row(result_set_builder& rs) {
+    add_input_row(rs);
+    auto ret = get_output_row();
+    reset();
+    return ret;
+}
+
 // Special cased selection for when no function is used (this save some allocations).
 class simple_selection : public selection {
 private:
@@ -134,10 +142,12 @@ protected:
 
         virtual bool requires_thread() const override { return false; }
 
+        // Should not be reached, since this is called when aggregating
         virtual std::vector<managed_bytes_opt> get_output_row() override {
             return std::move(_current);
         }
 
+        // Should not be reached, since this is called when aggregating
         virtual void add_input_row(result_set_builder& rs) override {
             // GROUP BY calls add_input_row() repeatedly without reset() in between, and it expects
             // the output to be the first value encountered:
@@ -146,6 +156,10 @@ protected:
                 _current = std::move(*rs.current);
                 _first = false;
             }
+        }
+
+        virtual std::vector<managed_bytes_opt> transform_input_row(result_set_builder& rs) override {
+            return std::move(*rs.current);
         }
 
         virtual bool is_aggregate() const override {
@@ -398,12 +412,21 @@ bool result_set_builder::last_group_ended() const {
 }
 
 void result_set_builder::flush_selectors() {
+    if (!_selectors->is_aggregate()) {
+        // handled by process_current_row
+        return;
+    }
     _result_set->add_row(_selectors->get_output_row());
     _selectors->reset();
 }
 
 void result_set_builder::process_current_row(bool more_rows_coming) {
     if (!current) {
+        return;
+    }
+    if (!_selectors->is_aggregate()) {
+        // Fast path when not aggregating
+        _result_set->add_row(_selectors->transform_input_row(*this));
         return;
     }
     if (last_group_ended()) {
