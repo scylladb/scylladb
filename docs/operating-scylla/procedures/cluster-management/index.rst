@@ -96,7 +96,7 @@ Cluster Management Procedures
 
 
   * :doc:`Update Topology Strategy From Simple to Network </operating-scylla/procedures/cluster-management/update-topology-strategy-from-simple-to-network>`
-  * Some of these procedures are also covered in the `MMS course <https://university.scylladb.com/courses/the-mutant-monitoring-system-training-course/>`_ on Scylla University
+  * Some of these procedures are also covered in the `MMS course <https://university.scylladb.com/courses/the-mutant-monitoring-system-training-course/>`_ and in the `ScyllaDB Operations course <https://university.scylladb.com/courses/scylla-operations>`_ on ScyllaDB University
 
 .. panel-box::
   :title: Handling Failures

@@ -17,4 +17,4 @@ More information
 
 * `Scylla Python Driver Documentation <https://python-driver.docs.scylladb.com/>`_
 * `Scylla Python Driver on GitHub <https://github.com/scylladb/python-driver/>`_
-* `Scylla University: Coding with Python <https://university.scylladb.com/courses/the-mutant-monitoring-system-training-course/lessons/coding-with-python/>`_ 
+* `ScyllaDB University: Coding with Python <https://university.scylladb.com/courses/using-scylla-drivers/lessons/coding-with-python/>`_ 
