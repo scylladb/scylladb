@@ -146,7 +146,10 @@ SEASTAR_TEST_CASE(sstable_resharding_test) {
 SEASTAR_TEST_CASE(sstable_resharding_over_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
     return sstables::test_env::do_with_async([] (auto& env) {
         run_sstable_resharding_test(env);
-    }, test_env_config{ .storage = make_test_object_storage_options() });
+    }, test_env_config{
+        .storage = make_test_object_storage_options(),
+        .use_uuid = true,
+    });
 }
 
 SEASTAR_TEST_CASE(sstable_is_shared_correctness) {

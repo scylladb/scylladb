@@ -206,6 +206,9 @@ test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm)
     , use_uuid(cfg.use_uuid)
     , storage(std::move(cfg.storage))
 {
+    if (cfg.use_uuid) {
+        feature_service.uuid_sstable_identifiers.enable();
+    }
     if (!storage.is_local_type()) {
         // remote storage requires uuid-based identifier for naming sstables
         assert(use_uuid == uuid_identifiers::yes);
