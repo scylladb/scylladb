@@ -39,3 +39,20 @@ check_cxx_compiler_flag(${_stack_usage_threshold_flag} _stack_usage_flag_support
 if(_stack_usage_flag_supported)
   string(APPEND CMAKE_CXX_FLAGS " ${_stack_usage_threshold_flag}")
 endif()
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_VERSION GREATER_EQUAL 16)
+  # workaround https://github.com/llvm/llvm-project/issues/62842
+  set(_original_level "${Seastar_OptimizationLevel_${build_mode}}")
+  set(_safe_level "0")
+  if(NOT _original_level STREQUAL _safe_level)
+    message(WARNING
+      "Changing optimization level from -O${_original_level} to -O${_safe_level} "
+      "due to https://github.com/llvm/llvm-project/issues/62842. "
+      "Please note -O0 is very slow that some tests might fail.")
+    string(REPLACE " -O${_original_level} " " -O${_safe_level} "
+      CMAKE_CXX_FLAGS_${build_mode}
+      "${CMAKE_CXX_FLAGS_${build_mode}}")
+  endif()
+  unset(_original_level)
+  unset(_safe_level)
+endif()
