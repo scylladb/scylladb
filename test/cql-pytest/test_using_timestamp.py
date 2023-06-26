@@ -131,25 +131,25 @@ def test_rewrite_different_values_using_same_timestamp(cql, table1):
         # Expiring cells are preferred over non-expiring
         k = unique_key_int()
         cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, {v1}) USING TIMESTAMP {ts}")
-        cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, {v2}) USING TIMESTAMP {ts} and TTL 1")
+        cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, {v2}) USING TIMESTAMP {ts} and TTL 10")
         assert_value(k, v2)
 
         k = unique_key_int()
-        cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, {v1}) USING TIMESTAMP {ts} and TTL 1")
+        cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, {v1}) USING TIMESTAMP {ts} and TTL 10")
         cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, {v2}) USING TIMESTAMP {ts}")
         assert_value(k, v1)
 
         # When both are expiring, the one with the later expiration time wins
         ensure_sync_with_tick()
         k = unique_key_int()
-        cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, {v1}) USING TIMESTAMP {ts} and TTL 1")
-        cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, {v2}) USING TIMESTAMP {ts} and TTL 2")
+        cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, {v1}) USING TIMESTAMP {ts} and TTL 10")
+        cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, {v2}) USING TIMESTAMP {ts} and TTL 20")
         assert_value(k, v2)
 
         ensure_sync_with_tick()
         k = unique_key_int()
-        cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, {v1}) USING TIMESTAMP {ts} and TTL 2")
-        cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, {v2}) USING TIMESTAMP {ts} and TTL 1")
+        cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, {v1}) USING TIMESTAMP {ts} and TTL 20")
+        cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, {v2}) USING TIMESTAMP {ts} and TTL 10")
         assert_value(k, v1)
 
 def test_rewrite_different_values_using_same_timestamp_and_expiration(scylla_only, cql, table1):
@@ -204,7 +204,7 @@ def test_rewrite_using_same_timestamp_select_after_expiration(cql, table1):
         ensure_sync_with_tick()
         k = unique_key_int()
         cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, {v1}) USING TIMESTAMP {ts} AND TTL 1")
-        cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, {v2}) USING TIMESTAMP {ts} AND TTL 2")
+        cql.execute(f"INSERT INTO {table} (k, v) VALUES ({k}, {v2}) USING TIMESTAMP {ts} AND TTL 10")
 
         # wait until first insert expires, and expect 2nd value.
         # Null value was returned due to #14182 when v1 > v2
