@@ -11,7 +11,7 @@
 import pytest
 import time
 from botocore.exceptions import ClientError
-from util import create_test_table, random_string, full_scan, full_query, multiset, list_tables, new_test_table
+from util import create_test_table, random_string, full_scan, full_query, multiset, list_tables, new_test_table, unique_table_name
 
 # GSIs only support eventually consistent reads, so tests that involve
 # writing to a table and then expect to read something from it cannot be
@@ -1191,7 +1191,7 @@ def test_gsi_non_scylla_name(dynamodb):
 # (compare test_create_and_delete_table_very_long_name()).
 def test_gsi_very_long_name(dynamodb):
     #create_gsi(dynamodb, 'n' * 255)   # works on DynamoDB, but not on Scylla
-    create_gsi(dynamodb, 'n' * 190)
+    create_gsi(dynamodb, 'n' * (211-len(unique_table_name())-1))
 
 # Verify that ListTables does not list materialized views used for indexes.
 # This is hard to test, because we don't really know which table names
