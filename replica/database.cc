@@ -869,6 +869,10 @@ database::init_commitlog() {
     });
 }
 
+future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func) {
+    co_await sharded_db.invoke_on_all(func);
+}
+
 future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const keyspace_metadata& tmp_ksm) {
     auto& ks = find_keyspace(tmp_ksm.name());
     auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm.name(), tmp_ksm.strategy_name(), tmp_ksm.strategy_options(), tmp_ksm.durable_writes(),
@@ -888,7 +892,7 @@ future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const
 }
 
 future<> database::update_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ksm) {
-    return sharded_db.invoke_on_all([&] (replica::database& db) {
+    return modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) {
         return db.update_keyspace(proxy, ksm);
     });
 }
@@ -898,7 +902,7 @@ void database::drop_keyspace(const sstring& name) {
 }
 
 future<> database::drop_keyspace_on_all_shards(sharded<database>& sharded_db, const sstring& name) {
-    return sharded_db.invoke_on_all([&] (replica::database& db) {
+    return modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) {
         db.drop_keyspace(name);
         return db.get_notifier().drop_keyspace(name);
     });
@@ -1390,7 +1394,7 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::
 }
 
 future<> database::create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ks_metadata) {
-    co_await sharded_db.invoke_on_all([&] (replica::database& db) -> future<> {
+    co_await modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) -> future<> {
         auto ksm = keyspace_metadata::new_keyspace(ks_metadata);
         co_await db.create_keyspace(ksm, proxy.local().get_erm_factory(), false, system_keyspace::no);
         co_await db.get_notifier().create_keyspace(ksm);
