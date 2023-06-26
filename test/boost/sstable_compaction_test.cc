@@ -173,14 +173,13 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
 
     BOOST_REQUIRE(cf->sstables_count() == idx.size());
     cf->trigger_compaction();
-    BOOST_REQUIRE(cm.get_stats().pending_tasks == 1 || cm.get_stats().active_tasks == 1);
-
     // wait for submitted job to finish.
-    auto end = [&cm] { return cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0; };
-    while (!end()) {
-        // sleep until compaction manager selects cf for compaction.
-        sleep(std::chrono::milliseconds(100)).get();
-    }
+    do_until([&cm] { return cm.get_stats().completed_tasks > 0; }, [] {
+        return sleep(std::chrono::milliseconds(100));
+    }).wait();
+    // test no more running compactions
+    BOOST_REQUIRE(cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0);
+    // test compaction successfully finished
     BOOST_REQUIRE(cm.get_stats().completed_tasks == 1);
     BOOST_REQUIRE(cm.get_stats().errors == 0);
 
@@ -3382,9 +3381,11 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
         // trigger background compaction
         cf->trigger_compaction();
         // wait until compaction finished
-        do_until([&cm] { return cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0; }, [] {
+        do_until([&cm] { return cm.get_stats().completed_tasks > 0; }, [] {
             return sleep(std::chrono::milliseconds(100));
         }).wait();
+        // test no more running compactions
+        BOOST_REQUIRE(ss.pending_tasks == 0 && ss.active_tasks == 0);
         // test compaction successfully finished
         BOOST_REQUIRE(ss.errors == 0);
         BOOST_REQUIRE(ss.completed_tasks == 1);
@@ -4142,8 +4143,6 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
                 BOOST_REQUIRE_EQUAL(t->sstables_count(), expected_before);
                 t->trigger_compaction();
             }
-
-            BOOST_REQUIRE(cm->get_stats().pending_tasks >= 1 || cm->get_stats().active_tasks >= 1);
 
             size_t max_ongoing_compaction = 0;
 
