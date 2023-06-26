@@ -60,7 +60,11 @@ void use_statement::validate(query_processor&, const service::client_state& stat
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 use_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
-    state.get_client_state().set_keyspace(qp.db().real_database(), _keyspace);
+    try {
+        state.get_client_state().set_keyspace(qp.db().real_database(), _keyspace);
+    } catch(...) {
+        return make_exception_future<::shared_ptr<cql_transport::messages::result_message>>(std::current_exception());
+    }
     auto result =::make_shared<cql_transport::messages::result_message::set_keyspace>(_keyspace);
     return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(result);
 }
