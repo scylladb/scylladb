@@ -464,7 +464,7 @@ public:
     compaction_task_executor(compaction_task_executor&&) = delete;
     compaction_task_executor(const compaction_task_executor&) = delete;
 
-    virtual ~compaction_task_executor();
+    virtual ~compaction_task_executor() = default;
 
 protected:
     virtual future<compaction_manager::compaction_stats_opt> do_run() = 0;

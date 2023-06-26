@@ -184,7 +184,8 @@ future<> compaction_manager_test::run(sstables::run_id output_run_id, table_stat
     auto task = make_shared<compaction_manager_test_task>(_cm, table_s, output_run_id, std::move(job));
     gate::holder gate_holder = task->_compaction_state.gate.hold();
     auto& cdata = register_compaction(task);
-    co_await task->run_compaction().discard_result().finally([this, &cdata] {
+    co_await task->run_compaction().discard_result().finally([this, &cdata, task] {
+        task->switch_state(compaction_task_executor::state::none);
         deregister_compaction(cdata);
     });
 }

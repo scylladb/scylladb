@@ -300,6 +300,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
     _tasks.push_back(task);
     auto unregister_task = defer([this, task] {
         _tasks.remove(task);
+        task->switch_state(compaction_task_executor::state::none);
     });
     cmlog.debug("{}: started", *task);
 
@@ -624,10 +625,6 @@ compaction::compaction_state::~compaction_state() {
 std::string compaction_task_executor::describe() const {
     auto* t = _compacting_table;
     return fmt::format("{} task {} for table {} [{}]", _description, fmt::ptr(this), *t, fmt::ptr(t));
-}
-
-compaction_task_executor::~compaction_task_executor() {
-    switch_state(state::none);
 }
 
 sstables_task_executor::~sstables_task_executor() {
