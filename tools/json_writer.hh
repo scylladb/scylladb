@@ -85,11 +85,16 @@ public:
     }
 };
 
-class mutation_fragment_json_writer {
+class mutation_partition_json_writer {
     const schema& _schema;
     json_writer _writer;
-    bool _clustering_array_created;
-private:
+public:
+    explicit mutation_partition_json_writer(const schema& s, std::ostream& os = std::cout)
+        : _schema(s), _writer(os) {}
+
+    const schema& schema() const { return _schema; }
+    json_writer& writer() { return _writer; }
+
     sstring to_string(gc_clock::time_point tp);
     void write(gc_clock::duration ttl, gc_clock::time_point expiry);
     void write(const tombstone& t);
@@ -99,12 +104,18 @@ private:
     void write(const collection_mutation_view_description& mv, data_type type);
     void write(const atomic_cell_or_collection& cell, const column_definition& cdef);
     void write(const row& r, column_kind kind);
+};
+
+class mutation_fragment_stream_json_writer {
+    mutation_partition_json_writer _writer;
+    bool _clustering_array_created;
+private:
     void write(const clustering_row& cr);
     void write(const range_tombstone_change& rtc);
 public:
-    explicit mutation_fragment_json_writer(const schema& s, std::ostream& os = std::cout)
-        : _schema(s), _writer(os) {}
-    json_writer& writer() { return _writer; }
+    explicit mutation_fragment_stream_json_writer(const schema& s, std::ostream& os = std::cout)
+        : _writer(s, os) {}
+    json_writer& writer() { return _writer.writer(); }
     void start_stream();
     void start_sstable(const sstables::sstable* const sst);
     void start_partition(const partition_start& ps);

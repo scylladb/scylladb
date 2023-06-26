@@ -902,7 +902,7 @@ int range_tombstone_change_index_l(lua_State* l) {
 }
 
 class json_writer {
-    tools::mutation_fragment_json_writer _writer;
+    tools::mutation_fragment_stream_json_writer _writer;
 
 private:
     static json_writer& get_this(lua_State* l) {
