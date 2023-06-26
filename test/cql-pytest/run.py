@@ -406,6 +406,65 @@ def run_pytest(pytest_dir, additional_parameters):
     else:
         return True
 
+# A variant of run_pytest() which instead of running a single "pytest"
+# invocation, runs a separate pytest process for each test file. This
+# has the downside of not reusing fixtures across different test files,
+# but the tradeoff is that we can now run several of these pytests in
+# parallel. So the function has a parameter maxparallel, saying how many
+# test files to run in parallel.
+# NYH TODO: need to fix the --junitxml=... which will get overwritten
+# instead of merged :-(
+# NYH TODO: save the outputs of individual pytest to temporary files and
+# print them separately when each finishes, instead of mixing all the
+# outputs together to one big mess.
+def run_pytest_parallel(pytest_dir, maxparallel, additional_parameters):
+    global run_with_temporary_dir_pids
+    global run_pytest_pids
+    # By default, pytest defines 'python_files = test_*.py *_test.py'
+    # So these are the test files that we need to run.
+    # The python_files can be overridden by pytest.ini, but currently
+    # we don't have code here to check that (TODO).
+    python_files_conf = ['test_*.py', '*_test.py']
+    python_files = []
+    for pattern in python_files_conf:
+        python_files.extend(glob.glob(os.path.join(pytest_dir, '**', pattern), recursive=True))
+    # To avoid stragglers in the end, we should try to run the longest-
+    # running tests first. As an *approximate* guess for longest running
+    # tests, let's try to use the size of the test file.
+    python_files = sorted(python_files, key=os.path.getsize, reverse=True)
+    success = True
+    running_pytests = set() # will be limited to maxparallel items
+    # TODO: If a specific test file is specified in additional_parameters,
+    # only it should be run and not all the python_files.
+    for python_file in python_files:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        pid = os.fork()
+        if pid == 0:
+            # child:
+            run_with_temporary_dir_pids = set() # no children to clean up on child
+            run_pytest_pids = set()
+            os.chdir(pytest_dir)
+            os.setsid()
+            os.execvp('pytest', ['pytest', python_file,
+                '-o', 'junit_family=xunit2'] + additional_parameters)
+            exit(1)
+        # parent:
+        run_pytest_pids.add(pid)
+        running_pytests.add(pid)
+        # If running more than "maxparallel" pytests invocations, wait
+        # for one to finish
+        while len(running_pytests) >= maxparallel:
+            pid, status = os.wait()
+            running_pytests.remove(pid)
+            if status:
+                success = False;
+    # Wait for all still-running pytest invocations to finish
+    for pid in running_pytests:
+        if os.waitpid(pid, 0)[1]:
+            success = False;
+    return success
+
 # Set up self-signed SSL certificate in dir/scylla.key, dir/scylla.crt.
 # These can be used for setting up an HTTPS server for Alternator, or for
 # any other part of Scylla which needs SSL.

@@ -93,7 +93,15 @@ cluster.connect().execute("INSERT INTO system_auth.roles (role, salted_hash) VAL
 cluster.shutdown()
 
 # Finally run pytest:
-success = run.run_pytest(sys.path[0], ['--url', alternator_url] + sys.argv[1:])
+if len(sys.argv) >= 3 and sys.argv[1] == '-j':
+    # Use "run -j 10" to run up to 10 test files in parallel (against the one
+    # Scylla process). Without "-j", one pytest is invoked to run all tests.
+    # Don't combine "-j" and a test file or function name - it is pointless
+    # and currently doesn't work.
+    # Note that we run Scylla itself on two shards, and -j doesn't chage that.
+    success = run.run_pytest_parallel(sys.path[0], int(sys.argv[2]), ['--url', alternator_url] + sys.argv[3:])
+else:
+    success = run.run_pytest(sys.path[0], ['--url', alternator_url] + sys.argv[1:])
 
 run.summary = 'Alternator tests pass' if success else 'Alternator tests failure'
 
