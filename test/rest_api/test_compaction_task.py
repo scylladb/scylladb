@@ -55,3 +55,7 @@ def test_rewrite_sstables_keyspace_compaction_task(cql, this_dc, rest_api):
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("GET", f"storage_service/keyspace_upgrade_sstables/{keyspace}"), "rewrite sstables compaction", task_tree_depth)
     # scrub sstables compaction
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, _: rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}"), "rewrite sstables compaction", task_tree_depth)
+
+def test_reshaping_compaction_task(cql, this_dc, rest_api):
+    task_tree_depth = 1
+    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"storage_service/sstables/{keyspace}", {'cf': table, 'load_and_stream': False}), "reshaping compaction", task_tree_depth)

@@ -316,79 +316,13 @@ highest_version_seen(sharded<sstables::sstable_directory>& dir, sstables::sstabl
     });
 }
 
-using sstable_filter_func_t = std::function<bool (const sstables::shared_sstable&)>;
-
-future<uint64_t> reshape(sstables::sstable_directory& dir, replica::table& table, sstables::compaction_sstable_creator_fn creator,
-                                            sstables::reshape_mode mode, sstable_filter_func_t filter)
-{
-    uint64_t reshaped_size = 0;
-
-    while (true) {
-        auto reshape_candidates = boost::copy_range<std::vector<sstables::shared_sstable>>(dir.get_unshared_local_sstables()
-                | boost::adaptors::filtered([&filter] (const auto& sst) {
-            return filter(sst);
-        }));
-        auto desc = table.get_compaction_strategy().get_reshaping_job(std::move(reshape_candidates), table.schema(), mode);
-        if (desc.sstables.empty()) {
-            break;
-        }
-
-        if (!reshaped_size) {
-            dblog.info("Table {}.{} with compaction strategy {} found SSTables that need reshape. Starting reshape process", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name());
-        }
-
-        std::vector<sstables::shared_sstable> sstlist;
-        for (auto& sst : desc.sstables) {
-            reshaped_size += sst->data_size();
-            sstlist.push_back(sst);
-        }
-
-        desc.creator = creator;
-
-        std::exception_ptr ex;
-        try {
-            co_await table.get_compaction_manager().run_custom_job(table.as_table_state(), sstables::compaction_type::Reshape, "Reshape compaction", [&dir, &table, sstlist = std::move(sstlist), desc = std::move(desc)] (sstables::compaction_data& info) mutable -> future<> {
-                sstables::compaction_result result = co_await sstables::compact_sstables(std::move(desc), info, table.as_table_state());
-                co_await dir.remove_unshared_sstables(std::move(sstlist));
-                co_await dir.collect_output_unshared_sstables(std::move(result.new_sstables), sstables::sstable_directory::can_be_remote::no);
-            });
-        } catch (...) {
-            ex = std::current_exception();
-        }
-
-        if (ex != nullptr) {
-              try {
-                std::rethrow_exception(std::move(ex));
-              } catch (sstables::compaction_stopped_exception& e) {
-                  dblog.info("Table {}.{} with compaction strategy {} had reshape successfully aborted.", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name());
-                  break;
-              } catch (...) {
-                  dblog.info("Reshape failed for Table {}.{} with compaction strategy {} due to {}", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name(), std::current_exception());
-                  break;
-              }
-        }
-
-        co_await coroutine::maybe_yield();
-    }
-
-    co_return reshaped_size;
-}
-
 future<>
 distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstables::reshape_mode mode,
         sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator,
         std::function<bool (const sstables::shared_sstable&)> filter) {
-
-    auto start = std::chrono::steady_clock::now();
-    auto total_size = co_await dir.map_reduce0([&db, ks_name = std::move(ks_name), table_name = std::move(table_name), creator = std::move(creator), mode, filter] (sstables::sstable_directory& d) {
-        auto& table = db.local().find_column_family(ks_name, table_name);
-        return ::replica::reshape(d, table, creator, mode, filter);
-    }, uint64_t(0), std::plus<uint64_t>());
-
-    if (total_size > 0) {
-        auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
-        dblog.info("Reshaped {} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), duration.count(), sstables::pretty_printed_throughput(total_size, duration));
-    }
+    auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+    auto task = co_await compaction_module.make_and_start_task<table_reshaping_compaction_task_impl>({}, std::move(ks_name), std::move(table_name), dir, db, mode, std::move(creator), std::move(filter));
+    co_await task->done();
 }
 
 // Loads SSTables into the main directory (or staging) and returns how many were loaded

@@ -13,6 +13,9 @@
 #include "schema/schema_fwd.hh"
 #include "tasks/task_manager.hh"
 
+namespace sstables {
+class sstable_directory;
+}
 namespace compaction {
 
 class compaction_task_impl : public tasks::task_manager::task::impl {
@@ -459,6 +462,87 @@ public:
         , _cv(cv)
         , _current_task(current_task)
         , _exclude_current_version(exclude_current_version)
+    {}
+
+    virtual tasks::is_internal is_internal() const noexcept override;
+protected:
+    virtual future<> run() override;
+};
+
+class reshaping_compaction_task_impl : public compaction_task_impl {
+public:
+    reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
+            tasks::task_id id,
+            unsigned sequence_number,
+            std::string keyspace,
+            std::string table,
+            std::string entity,
+            tasks::task_id parent_id) noexcept
+        : compaction_task_impl(module, id, sequence_number, std::move(keyspace), std::move(table), std::move(entity), parent_id)
+    {
+        // FIXME: add progress units
+    }
+
+    virtual std::string type() const override {
+        return "reshaping compaction";
+    }
+protected:
+    virtual future<> run() override = 0;
+};
+
+class table_reshaping_compaction_task_impl : public reshaping_compaction_task_impl {
+private:
+    sharded<sstables::sstable_directory>& _dir;
+    sharded<replica::database>& _db;
+    sstables::reshape_mode _mode;
+    sstables::compaction_sstable_creator_fn _creator;
+    std::function<bool (const sstables::shared_sstable&)> _filter;
+public:
+    table_reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
+            std::string keyspace,
+            std::string table,
+            sharded<sstables::sstable_directory>& dir,
+            sharded<replica::database>& db,
+            sstables::reshape_mode mode,
+            sstables::compaction_sstable_creator_fn creator,
+            std::function<bool (const sstables::shared_sstable&)> filter) noexcept
+        : reshaping_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), std::move(keyspace), std::move(table), "", tasks::task_id::create_null_id())
+        , _dir(dir)
+        , _db(db)
+        , _mode(mode)
+        , _creator(std::move(creator))
+        , _filter(std::move(filter))
+    {}
+protected:
+    virtual future<> run() override;
+};
+
+class shard_reshaping_compaction_task_impl : public reshaping_compaction_task_impl {
+private:
+    sstables::sstable_directory& _dir;
+    sharded<replica::database>& _db;
+    sstables::reshape_mode _mode;
+    sstables::compaction_sstable_creator_fn _creator;
+    std::function<bool (const sstables::shared_sstable&)> _filter;
+    uint64_t& _total_shard_size;
+public:
+    shard_reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
+            std::string keyspace,
+            std::string table,
+            tasks::task_id parent_id,
+            sstables::sstable_directory& dir,
+            sharded<replica::database>& db,
+            sstables::reshape_mode mode,
+            sstables::compaction_sstable_creator_fn creator,
+            std::function<bool (const sstables::shared_sstable&)> filter,
+            uint64_t& total_shard_size) noexcept
+        : reshaping_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), std::move(table), "", parent_id)
+        , _dir(dir)
+        , _db(db)
+        , _mode(mode)
+        , _creator(std::move(creator))
+        , _filter(std::move(filter))
+        , _total_shard_size(total_shard_size)
     {}
 
     virtual tasks::is_internal is_internal() const noexcept override;
