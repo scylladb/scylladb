@@ -869,13 +869,9 @@ database::init_commitlog() {
     });
 }
 
-future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const sstring& name) {
-    auto v = co_await db::schema_tables::read_schema_partition_for_keyspace(proxy, db::schema_tables::KEYSPACES, name);
-    auto& ks = find_keyspace(name);
-
-    auto scylla_specific_rs = co_await db::schema_tables::extract_scylla_specific_keyspace_info(proxy, v);
-    auto tmp_ksm = db::schema_tables::create_keyspace_from_schema_partition(v, scylla_specific_rs);
-    auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm->name(), tmp_ksm->strategy_name(), tmp_ksm->strategy_options(), tmp_ksm->durable_writes(),
+future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const keyspace_metadata& tmp_ksm) {
+    auto& ks = find_keyspace(tmp_ksm.name());
+    auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm.name(), tmp_ksm.strategy_name(), tmp_ksm.strategy_options(), tmp_ksm.durable_writes(),
                     boost::copy_range<std::vector<schema_ptr>>(ks.metadata()->cf_meta_data() | boost::adaptors::map_values), std::move(ks.metadata()->user_types()));
 
     bool old_durable_writes = ks.metadata()->durable_writes();
@@ -891,9 +887,9 @@ future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const
     co_await get_notifier().update_keyspace(ks.metadata());
 }
 
-future<> database::update_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const sstring& name) {
+future<> database::update_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ksm) {
     return sharded_db.invoke_on_all([&] (replica::database& db) {
-        return db.update_keyspace(proxy, name);
+        return db.update_keyspace(proxy, ksm);
     });
 }
 
