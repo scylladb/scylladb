@@ -124,12 +124,12 @@ def test_count_and_group_by_partition(cql, table1):
 # In the above tests we looked for per-row or per-partition counts and got
 # back more than one count. But if our query matches no row, we should get
 # back no count.
-@pytest.mark.xfail(reason="issue #12477")
+#
+# Reproduces #12477
 def test_count_and_group_by_row_none(cql, table1):
     p = unique_key_int()
     assert [] == list(cql.execute(f"select p, c, count(v) from {table1} where p = {p} group by p,c"))
 
-@pytest.mark.xfail(reason="issue #12477")
 def test_count_and_group_by_partition_none(cql, table1):
     p = unique_key_int()
     assert [] == list(cql.execute(f"select p, count(v) from {table1} where p = {p} group by p"))

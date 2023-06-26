@@ -427,7 +427,7 @@ void result_set_builder::new_row() {
 
 std::unique_ptr<result_set> result_set_builder::build() {
     process_current_row(/*more_rows_coming=*/false);
-    if (_result_set->empty() && _selectors->is_aggregate()) {
+    if (_result_set->empty() && _selectors->is_aggregate() && _group_by_cell_indices.empty()) {
         _result_set->add_row(_selectors->get_output_row());
     }
     return std::move(_result_set);

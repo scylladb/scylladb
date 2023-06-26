@@ -7,7 +7,7 @@
 
 from cassandra_tests.porting import *
 
-@pytest.mark.xfail(reason="Issue #2060, #5361, #5362, #5363, #12477, #12479, #13109")
+@pytest.mark.xfail(reason="Issue #2060, #5361, #5362, #5363, #12479, #13109")
 def testGroupByWithoutPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, e int, primary key (a, b, c, d))") as table:
 
