@@ -24,7 +24,7 @@ class json_writer {
     writer _writer;
 
 public:
-    json_writer() : _stream(std::cout), _writer(_stream)
+    json_writer(std::ostream& os = std::cout) : _stream(os), _writer(_stream)
     { }
 
     writer& rjson_writer() { return _writer; }
@@ -102,7 +102,8 @@ private:
     void write(const clustering_row& cr);
     void write(const range_tombstone_change& rtc);
 public:
-    explicit mutation_fragment_json_writer(const schema& s) : _schema(s) {}
+    explicit mutation_fragment_json_writer(const schema& s, std::ostream& os = std::cout)
+        : _schema(s), _writer(os) {}
     json_writer& writer() { return _writer; }
     void start_stream();
     void start_sstable(const sstables::sstable* const sst);
