@@ -74,6 +74,21 @@ private:
     serialized_action _schema_push;
     table_schema_version _schema_version_to_publish;
 
+    // If `false`, schema is synchronized only through Raft.
+    // Here are the conditions when we should enable/disable schema pulls:
+    // - If a node is bootstrapping in non-Raft mode, schema pulls must remain
+    //   enabled.
+    // - If a node is bootstrapping in Raft mode, it should never perform a
+    //   schema pull.
+    // - If a bootstrapped node is restarting in non-Raft mode but with Raft
+    //   feature enabled (which means we should start upgrading to use Raft),
+    //   or restarting in the middle of Raft upgrade procedure, schema pulls must
+    //   remain enabled until the Raft upgrade procedure finishes.
+    //   This is also the case of restarting after RECOVERY.
+    // - If a bootstrapped node is restarting in Raft mode, it should never
+    //   perform a schema pull.
+    bool _enable_schema_pulls{true};
+
     friend class group0_state_machine; // needed for access to _messaging
     size_t _concurrent_ddl_retries;
 public:
@@ -83,6 +98,9 @@ public:
     const migration_notifier& get_notifier() const { return _notifier; }
     service::storage_proxy& get_storage_proxy() { return _storage_proxy; }
     const service::storage_proxy& get_storage_proxy() const { return _storage_proxy; }
+
+    // Disable schema pulls when Raft group 0 is fully responsible for managing schema.
+    future<> disable_schema_pulls();
 
     future<> submit_migration_task(const gms::inet_address& endpoint, bool can_ignore_down_node = true);
 

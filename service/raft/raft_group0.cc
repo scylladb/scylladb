@@ -548,7 +548,12 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
     }
 
     if (!sys_ks.bootstrap_complete()) {
-        // If bootsrap did not complete yet there is no group0 to setup
+        // If bootstrap did not complete yet, there is no group 0 to setup at this point
+        // -- it will be done after we start gossiping, in `setup_group0`.
+        // Because of this we already want to disable schema pulls so they're done exclusively
+        // through group 0 from the first moment we join the cluster.
+        group0_log.info("Disabling migration_manager schema pulls because Raft is enabled and we're bootstrapping.");
+        co_await mm.disable_schema_pulls();
         co_return;
     }
 
@@ -557,6 +562,17 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
         // Group 0 ID is present => we've already joined group 0 earlier.
         group0_log.info("setup_group0: group 0 ID present. Starting existing Raft server.");
         co_await start_server_for_group0(group0_id, ss, qp, mm, cdc_gen_service);
+
+        // If we're not restarting in the middle of the Raft upgrade procedure, we must disable
+        // migration_manager schema pulls.
+        auto start_state = (co_await _client.get_group0_upgrade_state()).second;
+        if (start_state == group0_upgrade_state::use_post_raft_procedures) {
+            group0_log.info(
+                "Disabling migration_manager schema pulls because Raft is fully functioning in this cluster.");
+            co_await mm.disable_schema_pulls();
+        } else {
+            // We'll disable them once we complete the upgrade procedure.
+        }
     } else {
         // Scylla has bootstrapped earlier but group 0 ID not present. This means we're upgrading.
         // Upgrade will start through a feature listener created after we enter NORMAL state.
@@ -577,7 +593,7 @@ future<> raft_group0::setup_group0(
     }
 
     if (sys_ks.bootstrap_complete()) {
-        // If the node is bootsraped the group0 server should be setup already
+        // If the node is bootstrapped the group0 server should be setup already
         co_return;
     }
 
@@ -1503,7 +1519,8 @@ future<> raft_group0::upgrade_to_group0(service::storage_service& ss, cql3::quer
         try {
             co_await self.do_upgrade_to_group0(start_state, ss, qp, mm, cdc_gen_service);
             co_await self._client.set_group0_upgrade_state(group0_upgrade_state::use_post_raft_procedures);
-            upgrade_log.info("Raft upgrade finished.");
+            upgrade_log.info("Raft upgrade finished. Disabling migration_manager schema pulls.");
+            co_await mm.disable_schema_pulls();
         } catch (...) {
             upgrade_log.error(
                 "Raft upgrade failed: {}.\nTry restarting the node to retry upgrade."
