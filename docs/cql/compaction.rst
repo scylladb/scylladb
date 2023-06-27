@@ -116,7 +116,7 @@ The following options only apply to SizeTieredCompactionStrategy:
 
 =====
 
-``min_sstable_size`` (default: 50)
+``min_sstable_size`` (default: 52,428,800)
    All SSTables smaller than this number of bytes are put into the same bucket.
 
 =====
