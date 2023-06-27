@@ -24,5 +24,5 @@ More information
 ----------------
 
 * `Scylla Gocql Driver project page on GitHub <https://github.com/scylladb/gocql>`_ - contains the source code as well as a readme and documentation files.
-* `Scylla University: Golang and Scylla <https://university.scylladb.com/courses/the-mutant-monitoring-system-training-course/lessons/golang-and-scylla-part-1/>`_
-   A three-part course with in-depth examples from  executing a few basic CQL statements with a Scylla cluster using the Gocql driver, to the different data types that you can use in your database tables and how to store these binary files in Scylla with a simple Go application.
+* `ScyllaDB University: Golang and ScyllaDB <https://university.scylladb.com/courses/using-scylla-drivers/lessons/golang-and-scylla-part-1/>`_
+   A three-part lesson with in-depth examples from  executing a few basic CQL statements with a ScyllaDB cluster using the Gocql driver, to the different data types that you can use in your database tables and how to store these binary files in ScyllaDB with a simple Go application.

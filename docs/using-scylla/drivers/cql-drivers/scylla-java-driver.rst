@@ -27,5 +27,5 @@ More information
 ----------------
 * `Scylla Java Driver Docs <https://java-driver.docs.scylladb.com/>`_ 
 * `Scylla Java Driver project page on GitHub <https://github.com/scylladb/java-driver/>`_ - Source Code
-* `Scylla University: Coding with Java <https://university.scylladb.com/courses/the-mutant-monitoring-system-training-course/lessons/coding-with-java-part-1/>`_ - a three-part course with in-depth examples from  executing a few basic CQL statements with a Scylla cluster using the Java driver, to the different data types that you can use in your database tables and how to store these binary files in Scylla with a simple Java application. 
+* `ScyllaDB University: Coding with Java <https://university.scylladb.com/courses/using-scylla-drivers/lessons/coding-with-java-part-1/>`_ - a three-part lesson with in-depth examples from  executing a few basic CQL statements with a ScyllaDB cluster using the Java driver, to the different data types that you can use in your database tables and how to store these binary files in ScyllaDB with a simple Java application. 
 

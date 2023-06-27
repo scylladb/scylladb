@@ -26,7 +26,7 @@ Procedures to backup and restore your Scylla data safely
 
 * :doc:`Delete your Backup </operating-scylla/procedures/backup-restore/delete-snapshot/>`
 
-* Also covered in the `Backup and Restore lesson <https://university.scylladb.com/courses/the-mutant-monitoring-system-training-course/lessons/backup-and-restore/>`_ on Scylla University.
+* Also covered in the `Cluster Backup Using ScyllaDB Manager lesson <https://university.scylladb.com/courses/scylla-operations/lessons/scylla-manager-repair-and-tombstones/topic/cluster-backup-using-scylla-manager/>`_ on ScyllaDB University.
 
 .. raw:: html
 
