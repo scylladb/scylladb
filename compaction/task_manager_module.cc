@@ -11,6 +11,7 @@
 #include "replica/database.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstable_directory.hh"
+#include "utils/pretty_printers.hh"
 
 namespace compaction {
 
@@ -295,7 +296,7 @@ future<> table_reshaping_compaction_task_impl::run() {
 
     if (total_size > 0) {
         auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
-        dblog.info("Reshaped {} in {:.2f} seconds, {}", sstables::pretty_printed_data_size(total_size), duration.count(), sstables::pretty_printed_throughput(total_size, duration));
+        dblog.info("Reshaped {} in {:.2f} seconds, {}", utils::pretty_printed_data_size(total_size), duration.count(), utils::pretty_printed_throughput(total_size, duration));
     }
 }
 

@@ -3108,3 +3108,87 @@ SEASTAR_TEST_CASE(test_sstable_bytes_on_disk_correctness) {
 SEASTAR_TEST_CASE(test_sstable_bytes_on_s3_correctness) {
     return test_sstable_bytes_correctness(get_name() + "_s3", test_env_config{ .storage = make_test_object_storage_options() });
 }
+
+SEASTAR_TEST_CASE(test_sstable_set_predicate) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto random_spec = tests::make_random_schema_specification(
+                get_name(),
+                std::uniform_int_distribution<size_t>(1, 4),
+                std::uniform_int_distribution<size_t>(2, 4),
+                std::uniform_int_distribution<size_t>(2, 8),
+                std::uniform_int_distribution<size_t>(2, 8));
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto s = random_schema.schema();
+
+        testlog.info("Random schema:\n{}", random_schema.cql());
+
+        const auto muts = tests::generate_random_mutations(random_schema, 20).get();
+
+        auto sst = make_sstable_containing(env.make_sstable(s), muts);
+
+        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
+        sstable_set set = cs.make_sstable_set(s);
+        set.insert(sst);
+
+        auto first_key_pr = dht::partition_range::make_singular(sst->get_first_decorated_key());
+
+        auto make_point_query_reader = [&] (std::predicate<const sstable&> auto& pred) {
+            auto t = env.make_table_for_tests(s);
+            auto close_t = deferred_stop(t);
+            utils::estimated_histogram eh;
+            return set.create_single_key_sstable_reader(&*t, s, env.make_reader_permit(), eh,
+                                                       first_key_pr,
+                                                       s->full_slice(),
+                                                       tracing::trace_state_ptr(),
+                                                       ::streamed_mutation::forwarding::no,
+                                                       ::mutation_reader::forwarding::no,
+                                                       pred);
+        };
+
+        auto make_full_scan_reader = [&] (std::predicate<const sstable&> auto& pred) {
+            return set.make_local_shard_sstable_reader(s, env.make_reader_permit(),
+                                                       query::full_partition_range,
+                                                       s->full_slice(),
+                                                       tracing::trace_state_ptr(),
+                                                       ::streamed_mutation::forwarding::no,
+                                                       ::mutation_reader::forwarding::no,
+                                                       default_read_monitor_generator(),
+                                                       pred);
+        };
+
+        auto verify_reader_result = [&] (flat_mutation_reader_v2 sst_mr, bool expect_eos) {
+            auto close_mr = deferred_close(sst_mr);
+            auto sst_mut = read_mutation_from_flat_mutation_reader(sst_mr).get0();
+
+            if (expect_eos) {
+                BOOST_REQUIRE(sst_mr.is_buffer_empty());
+                BOOST_REQUIRE(sst_mr.is_end_of_stream());
+                BOOST_REQUIRE(!sst_mut);
+            } else {
+                BOOST_REQUIRE(sst_mut);
+            }
+        };
+
+        {
+            static std::predicate<const sstable&> auto excluding_pred = [] (const sstable&) {
+                return false;
+            };
+
+            testlog.info("excluding_pred: point query");
+            verify_reader_result(make_point_query_reader(excluding_pred), true);
+            testlog.info("excluding_pred: range query");
+            verify_reader_result(make_full_scan_reader(excluding_pred), true);
+        }
+
+        {
+            static std::predicate<const sstable&> auto inclusive_pred = [] (const sstable&) {
+                return true;
+            };
+
+            testlog.info("inclusive_pred: point query");
+            verify_reader_result(make_point_query_reader(inclusive_pred), false);
+            testlog.info("inclusive_pred: range query");
+            verify_reader_result(make_full_scan_reader(inclusive_pred), false);
+        }
+    });
+}
