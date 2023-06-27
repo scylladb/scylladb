@@ -264,7 +264,6 @@ future<> range_streamer::stream_async() {
                 unsigned sp_index = 0;
                 unsigned nr_ranges_streamed = 0;
                 size_t nr_ranges_total = range_vec.size();
-                size_t nr_ranges_per_stream_plan = nr_ranges_total / 10;
                 auto do_streaming = [&] (dht::token_range_vector&& ranges_to_stream) {
                     auto sp = stream_plan(_stream_manager.local(), format("{}-{}-index-{:d}", description, keyspace, sp_index++), _reason);
                     auto abort_listener = _abort_source.subscribe([&] () noexcept { sp.abort(); });
@@ -292,6 +291,8 @@ future<> range_streamer::stream_async() {
                     for (auto it = range_vec.begin(); it < range_vec.end();) {
                         ranges_to_stream.push_back(*it);
                         ++it;
+                        auto percentage = _db.local().get_config().stream_plan_ranges_percentage();
+                        size_t nr_ranges_per_stream_plan = nr_ranges_total * percentage;
                         if (ranges_to_stream.size() < nr_ranges_per_stream_plan) {
                             continue;
                         } else {
