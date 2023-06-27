@@ -311,8 +311,52 @@ output_format get_output_format_from_options(const bpo::variables_map& opts, out
 
 namespace tools {
 
+void mutation_partition_json_writer::write_each_collection_cell(const collection_mutation_view_description& mv, data_type type,
+        std::function<void(atomic_cell_view, data_type)> func) {
+    std::function<void(size_t, bytes_view)> write_key;
+    std::function<void(size_t, atomic_cell_view)> write_value;
+    if (auto t = dynamic_cast<const collection_type_impl*>(type.get())) {
+        write_key = [this, t = t->name_comparator()] (size_t, bytes_view k) { _writer.String(t->to_string(k)); };
+        write_value = [t = t->value_comparator(), &func] (size_t, atomic_cell_view v) { func(v, t); };
+    } else if (auto t = dynamic_cast<const tuple_type_impl*>(type.get())) {
+        write_key = [this] (size_t i, bytes_view) { _writer.String(""); };
+        write_value = [t, &func] (size_t i, atomic_cell_view v) { func(v, t->type(i)); };
+    }
+
+    if (write_key && write_value) {
+        _writer.StartArray();
+        for (size_t i = 0; i < mv.cells.size(); ++i) {
+            _writer.StartObject();
+            _writer.Key("key");
+            write_key(i, mv.cells[i].first);
+            _writer.Key("value");
+            write_value(i, mv.cells[i].second);
+            _writer.EndObject();
+        }
+        _writer.EndArray();
+    } else {
+        _writer.Null();
+    }
+}
+
 sstring mutation_partition_json_writer::to_string(gc_clock::time_point tp) {
     return fmt::format("{:%F %T}z", fmt::gmtime(gc_clock::to_time_t(tp)));
+}
+
+void mutation_partition_json_writer::write_atomic_cell_value(const atomic_cell_view& cell, data_type type) {
+    if (type->is_counter()) {
+        if (cell.is_counter_update()) {
+            _writer.Int64(cell.counter_update_value());
+        } else {
+            write(counter_cell_view(cell));
+        }
+    } else {
+        _writer.String(type->to_string(cell.value().linearize()));
+    }
+}
+
+void mutation_partition_json_writer::write_collection_value(const collection_mutation_view_description& mv, data_type type) {
+    write_each_collection_cell(mv, type, [&] (atomic_cell_view v, data_type t) { write_atomic_cell_value(v, t); });
 }
 
 void mutation_partition_json_writer::write(gc_clock::duration ttl, gc_clock::time_point expiry) {
@@ -358,7 +402,7 @@ void mutation_partition_json_writer::write(counter_cell_view cv) {
     _writer.EndArray();
 }
 
-void mutation_partition_json_writer::write(const atomic_cell_view& cell, data_type type) {
+void mutation_partition_json_writer::write(const atomic_cell_view& cell, data_type type, bool include_value) {
     _writer.StartObject();
     _writer.Key("is_live");
     _writer.Bool(cell.is_live());
@@ -376,28 +420,22 @@ void mutation_partition_json_writer::write(const atomic_cell_view& cell, data_ty
     }
     _writer.Key("timestamp");
     _writer.Int64(cell.timestamp());
-    if (type->is_counter()) {
-        _writer.Key("value");
-        if (cell.is_counter_update()) {
-            _writer.Int64(cell.counter_update_value());
-        } else {
-            write(counter_cell_view(cell));
-        }
-    } else {
+    if (!type->is_counter()) {
         if (cell.is_live_and_has_ttl()) {
             write(cell.ttl(), cell.expiry());
         }
-        if (cell.is_live()) {
-            _writer.Key("value");
-            _writer.String(type->to_string(cell.value().linearize()));
-        } else {
+        if (!cell.is_live()) {
             _writer.Key("deletion_time");
             _writer.String(to_string(cell.deletion_time()));
         }
     }
+    if (include_value && (type->is_counter() || cell.is_live())) {
+        _writer.Key("value");
+        write_atomic_cell_value(cell, type);
+    }
     _writer.EndObject();
 }
-void mutation_partition_json_writer::write(const collection_mutation_view_description& mv, data_type type) {
+void mutation_partition_json_writer::write(const collection_mutation_view_description& mv, data_type type, bool include_value) {
     _writer.StartObject();
 
     if (mv.tomb) {
@@ -407,52 +445,29 @@ void mutation_partition_json_writer::write(const collection_mutation_view_descri
 
     _writer.Key("cells");
 
-    std::function<void(size_t, bytes_view)> write_key;
-    std::function<void(size_t, atomic_cell_view)> write_value;
-    if (auto t = dynamic_cast<const collection_type_impl*>(type.get())) {
-        write_key = [this, t = t->name_comparator()] (size_t, bytes_view k) { _writer.String(t->to_string(k)); };
-        write_value = [this, t = t->value_comparator()] (size_t, atomic_cell_view v) { write(v, t); };
-    } else if (auto t = dynamic_cast<const tuple_type_impl*>(type.get())) {
-        write_key = [this] (size_t i, bytes_view) { _writer.String(""); };
-        write_value = [this, t] (size_t i, atomic_cell_view v) { write(v, t->type(i)); };
-    }
-
-    if (write_key && write_value) {
-        _writer.StartArray();
-        for (size_t i = 0; i < mv.cells.size(); ++i) {
-            _writer.StartObject();
-            _writer.Key("key");
-            write_key(i, mv.cells[i].first);
-            _writer.Key("value");
-            write_value(i, mv.cells[i].second);
-            _writer.EndObject();
-        }
-        _writer.EndArray();
-    } else {
-        _writer.Null();
-    }
+    write_each_collection_cell(mv, type, [&] (atomic_cell_view v, data_type t) { write(v, t, include_value); });
 
     _writer.EndObject();
 }
 
-void mutation_partition_json_writer::write(const atomic_cell_or_collection& cell, const column_definition& cdef) {
+void mutation_partition_json_writer::write(const atomic_cell_or_collection& cell, const column_definition& cdef, bool include_value) {
     if (cdef.is_atomic()) {
-        write(cell.as_atomic_cell(cdef), cdef.type);
+        write(cell.as_atomic_cell(cdef), cdef.type, include_value);
     } else if (cdef.type->is_collection() || cdef.type->is_user_type()) {
         cell.as_collection_mutation().with_deserialized(*cdef.type, [&, this] (collection_mutation_view_description mv) {
-            write(mv, cdef.type);
+            write(mv, cdef.type, include_value);
         });
     } else {
         _writer.Null();
     }
 }
 
-void mutation_partition_json_writer::write(const row& r, column_kind kind) {
+void mutation_partition_json_writer::write(const row& r, column_kind kind, bool include_value) {
     _writer.StartObject();
-    r.for_each_cell([this, kind] (column_id id, const atomic_cell_or_collection& cell) {
+    r.for_each_cell([this, kind, include_value] (column_id id, const atomic_cell_or_collection& cell) {
         auto cdef = _schema.column_at(kind, id);
         _writer.Key(cdef.name_as_text());
-        write(cell, cdef);
+        write(cell, cdef, include_value);
     });
     _writer.EndObject();
 }
