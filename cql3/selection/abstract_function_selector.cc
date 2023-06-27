@@ -13,6 +13,7 @@
 #include "utils/to_string.hh"
 #include "cql3/selection/selector_factories.hh"
 #include "cql3/functions/abstract_function.hh"
+#include "cql3/functions/first_function.hh"
 
 namespace cql3 {
 
@@ -45,6 +46,9 @@ abstract_function_selector::new_factory(shared_ptr<functions::function> fun, sha
         }
 
         virtual sstring column_name() const override {
+            if (_fun->name() == cql3::functions::aggregate_fcts::first_function_name()) {
+                return _factories->get_column_names()[0];
+            }
             return _fun->column_name(_factories->get_column_names());
         }
 

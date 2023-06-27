@@ -1130,7 +1130,10 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                             fmt::print(os, "{}({})", named, fmt::join(fc.args | transformed(to_printer), ", "));
                         },
                         [&] (const shared_ptr<functions::function>& fn) {
-                            if (!pr.for_metadata) {
+                            if (!pr.debug_mode && fn->name() == cql3::functions::aggregate_fcts::first_function_name()) {
+                                // The "first" function is artificial, don't emit it
+                                fmt::print(os, "{}", to_printer(fc.args[0]));
+                            } else if (!pr.for_metadata) {
                                 fmt::print(os, "{}({})", fn->name(), fmt::join(fc.args | transformed(to_printer), ", "));
                             } else {
                                 auto args = boost::copy_range<std::vector<sstring>>(fc.args | transformed(to_printer) | transformed(fmt::to_string<expression::printer>));
