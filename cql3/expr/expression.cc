@@ -1033,7 +1033,8 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
     auto to_printer = [&pr] (const expression& expr) -> expression::printer {
         return expression::printer {
             .expr_to_print = expr,
-            .debug_mode = pr.debug_mode
+            .debug_mode = pr.debug_mode,
+            .for_metadata = pr.for_metadata,
         };
     };
 
@@ -1080,7 +1081,11 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                 }
             },
             [&] (const column_value& col) {
-                fmt::print(os, "{}", cql3::util::maybe_quote(col.col->name_as_text()));
+                if (pr.for_metadata) {
+                    fmt::print(os, "{}", col.col->name_as_text());
+                } else {
+                    fmt::print(os, "{}", col.col->name_as_cql_string());
+                }
             },
             [&] (const subscript& sub) {
                 fmt::print(os, "{}[{}]", to_printer(sub.val), to_printer(sub.sub));
@@ -1093,20 +1098,35 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                 }
             },
             [&] (const column_mutation_attribute& cma)  {
-                fmt::print(os, "{}({})",
-                        cma.kind,
-                        to_printer(cma.column));
+                if (!pr.for_metadata) {
+                    fmt::print(os, "{}({})",
+                            cma.kind,
+                            to_printer(cma.column));
+                } else {
+                    auto kind = fmt::format("{}", cma.kind);
+                    std::transform(kind.begin(), kind.end(), kind.begin(), [] (unsigned char c) { return std::tolower(c); });
+                    fmt::print(os, "{}({})", kind, to_printer(cma.column));
+                }
             },
             [&] (const function_call& fc)  {
                 if (is_token_function(fc)) {
-                    fmt::print(os, "token({})", fmt::join(fc.args | transformed(to_printer), ", "));
+                    if (!pr.for_metadata) {
+                        fmt::print(os, "token({})", fmt::join(fc.args | transformed(to_printer), ", "));
+                    } else {
+                        fmt::print(os, "system.token({})", fmt::join(fc.args | transformed(to_printer), ", "));
+                    }
                 } else {
                     std::visit(overloaded_functor{
                         [&] (const functions::function_name& named) {
                             fmt::print(os, "{}({})", named, fmt::join(fc.args | transformed(to_printer), ", "));
                         },
                         [&] (const shared_ptr<functions::function>& fn) {
-                            fmt::print(os, "{}({})", fn->name(), fmt::join(fc.args | transformed(to_printer), ", "));
+                            if (!pr.for_metadata) {
+                                fmt::print(os, "{}({})", fn->name(), fmt::join(fc.args | transformed(to_printer), ", "));
+                            } else {
+                                auto args = boost::copy_range<std::vector<sstring>>(fc.args | transformed(to_printer) | transformed(fmt::to_string<expression::printer>));
+                                fmt::print(os, "{}", fn->column_name(args));
+                            }
                         },
                     }, fc.func);
                 }

@@ -169,6 +169,7 @@ public:
     struct printer {
         const expression& expr_to_print;
         bool debug_mode = true;
+        bool for_metadata = false;
     };
 
     friend bool operator==(const expression& e1, const expression& e2);
@@ -475,13 +476,16 @@ data_type type_of(const expression& e);
 
 } // namespace cql3
 
-/// Custom formatter for an expression. Use {:user} for user-oriented
-/// output, {:debug} for debug-oriented output. User is the default.
+/// Custom formatter for an expression.  Supports multiple modes:\
+///     {:user} for user-oriented output, suitable for error messages (default)
+///     {:debug} for debug-oriented output
+///     {:result_set_metadata} for stable output suitable for result set metadata (column headings)
 ///
 /// Required for fmt::join() to work on expression.
 template <>
 class fmt::formatter<cql3::expr::expression> {
     bool _debug = false;
+    bool _for_metadata = false;
 private:
     constexpr static bool try_match_and_advance(format_parse_context& ctx, std::string_view s) {
         auto [ctx_end, s_end] = std::ranges::mismatch(ctx, s);
@@ -498,6 +502,8 @@ public:
             _debug = true;
         } else if (try_match_and_advance(ctx, "user"sv)) {
             _debug = false;
+        } else if (try_match_and_advance(ctx, "result_set_metadata"sv)) {
+            _for_metadata = true;
         }
         return ctx.begin();
     }
@@ -505,7 +511,7 @@ public:
     template <typename FormatContext>
     auto format(const cql3::expr::expression& expr, FormatContext& ctx) const {
         std::ostringstream os;
-        os << cql3::expr::expression::printer{.expr_to_print = expr, .debug_mode = _debug};
+        os << cql3::expr::expression::printer{.expr_to_print = expr, .debug_mode = _debug, .for_metadata = _for_metadata};
         return fmt::format_to(ctx.out(), "{}", os.str());
     }
 };
