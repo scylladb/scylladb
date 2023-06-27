@@ -305,7 +305,7 @@ uint32_t selection::add_column_for_post_processing(const column_definition& c) {
         selector_factories::create_factories_and_collect_column_definitions(
             cql3::selection::to_selectables(prepared_selectors, *schema, db, ks), db, schema, defs);
 
-    auto metadata = collect_metadata(*schema, prepared_selectors, *factories);
+    auto metadata = collect_metadata(*schema, prepared_selectors);
     if (processes_selection(prepared_selectors) || prepared_selectors.size() != defs.size()) {
         return ::make_shared<selection_with_processing>(schema, std::move(defs), std::move(metadata), std::move(factories));
     } else {
@@ -314,14 +314,15 @@ uint32_t selection::add_column_for_post_processing(const column_definition& c) {
 }
 
 std::vector<lw_shared_ptr<column_specification>>
-selection::collect_metadata(const schema& schema, const std::vector<prepared_selector>& prepared_selectors,
-        const selector_factories& factories) {
+selection::collect_metadata(const schema& schema, const std::vector<prepared_selector>& prepared_selectors) {
     std::vector<lw_shared_ptr<column_specification>> r;
     r.reserve(prepared_selectors.size());
-    auto i = prepared_selectors.begin();
-    for (auto&& factory : factories) {
-        lw_shared_ptr<column_specification> col_spec = factory->get_column_specification(schema);
-        ::shared_ptr<column_identifier> alias = (*i++).alias;
+    for (auto&& selector : prepared_selectors) {
+        auto name = fmt::format("{:result_set_metadata}", selector.expr);
+        auto col_id = ::make_shared<column_identifier>(name, /* keep_case */ true);
+        lw_shared_ptr<column_specification> col_spec = make_lw_shared<column_specification>(
+                schema.ks_name(), schema.cf_name(), std::move(col_id), expr::type_of(selector.expr));
+        ::shared_ptr<column_identifier> alias = selector.alias;
         r.push_back(alias ? col_spec->with_alias(alias) : col_spec);
     }
     return r;
