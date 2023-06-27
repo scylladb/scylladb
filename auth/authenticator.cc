@@ -18,3 +18,7 @@
 
 const sstring auth::authenticator::USERNAME_KEY("username");
 const sstring auth::authenticator::PASSWORD_KEY("password");
+
+future<std::optional<auth::authenticated_user>> auth::authenticator::authenticate(session_dn_func) const {
+    return make_ready_future<std::optional<auth::authenticated_user>>(std::nullopt);
+}

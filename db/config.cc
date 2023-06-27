@@ -118,10 +118,16 @@ template <>
 const config_type config_type_for<sstring> = config_type("string", value_to_json<sstring>);
 
 template <>
+const config_type config_type_for<std::string> = config_type("string", value_to_json<std::string>);
+
+template <>
 const config_type config_type_for<std::vector<sstring>> = config_type("string list", value_to_json<std::vector<sstring>>);
 
 template <>
 const config_type config_type_for<std::unordered_map<sstring, sstring>> = config_type("string map", value_to_json<std::unordered_map<sstring, sstring>>);
+
+template <>
+const config_type config_type_for<std::vector<std::unordered_map<sstring, sstring>>> = config_type("string map list", value_to_json<std::vector<std::unordered_map<sstring, sstring>>>);
 
 template <>
 const config_type config_type_for<std::unordered_map<sstring, log_level>> = config_type("string map", log_level_map_to_json);
@@ -753,9 +759,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\n"
         "\torg.apache.cassandra.auth.AllowAllAuthenticator : Disables authentication; no checks are performed.\n"
         "\torg.apache.cassandra.auth.PasswordAuthenticator : Authenticates users with user names and hashed passwords stored in the system_auth.credentials table. If you use the default, 1, and the node with the lone replica goes down, you will not be able to log into the cluster because the system_auth keyspace was not replicated.\n"
+        "\tcom.scylladb.auth.CertificateAuthenticator : Authenticates users based on TLS certificate authentication subject. Roles and permissions still need to be defined as normal. Super user can be set using the 'auth_superuser_name' configuration value. Query to extract role name from subject string is set using 'auth_certificate_role_queries'.\n"
         "\tcom.scylladb.auth.TransitionalAuthenticator : Wraps around the PasswordAuthenticator, logging them in if username/password pair provided is correct and treating them as anonymous users otherwise.\n"
         "Related information: Internal authentication"
-        , {"AllowAllAuthenticator", "PasswordAuthenticator", "org.apache.cassandra.auth.PasswordAuthenticator", "org.apache.cassandra.auth.AllowAllAuthenticator", "com.scylladb.auth.TransitionalAuthenticator"})
+        , {"AllowAllAuthenticator", "PasswordAuthenticator", "CertificateAuthenticator", "org.apache.cassandra.auth.PasswordAuthenticator", "org.apache.cassandra.auth.AllowAllAuthenticator", "com.scylladb.auth.TransitionalAuthenticator", "com.scylladb.auth.CertificateAuthenticator"})
     , internode_authenticator(this, "internode_authenticator", value_status::Unused, "enabled",
         "Internode authentication backend. It implements org.apache.cassandra.auth.AllowAllInternodeAuthenticator to allows or disallow connections from peer nodes.")
     , authorizer(this, "authorizer", value_status::Used, "org.apache.cassandra.auth.AllowAllAuthorizer",
@@ -990,6 +997,13 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , relabel_config_file(this, "relabel_config_file", value_status::Used, "", "Optionally, read relabel config from file")
     , object_storage_config_file(this, "object_storage_config_file", value_status::Used, "", "Optionally, read object-storage endpoints config from file")
     , minimum_keyspace_rf(this, "minimum_keyspace_rf", liveness::LiveUpdate, value_status::Used, 0, "The minimum allowed replication factor when creating or altering a keyspace.")
+    , auth_superuser_name(this, "auth_superuser_name", value_status::Used, "", 
+        "Initial authentication super username. Ignored if authentication tables already contain a super user")
+    , auth_superuser_salted_password(this, "auth_superuser_salted_password", value_status::Used, "", 
+        "Initial authentication super user salted password. Create using mkpassword or similar. The hashing algorithm used must be available on the node host. "
+        "Ignored if authentication tables already contain a super user password.")
+    , auth_certificate_role_queries(this, "auth_certificate_role_queries", value_status::Used, { { { "source", "SUBJECT" }, {"query", "CN=([^,]+)" } } },
+        "Regular expression used by CertificateAuthenticator to extract role name from an accepted transport authentication certificate subject info.")
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")
     , default_log_level(this, "default_log_level", value_status::Used)
     , logger_log_level(this, "logger_log_level", value_status::Used)

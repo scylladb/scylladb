@@ -115,6 +115,23 @@ For example:
 
 .. _roles:
 
+Setting default initial superuser credentials using the config file
+...................................................................
+
+The default super username/password in ScyllaDB is 'cassandra'/'cassandra'. This is very insecure and should be altered using the above CQL procedure. However, to avoid 
+executing with known defaults for the period before the CQL modifications can be done, the default superuser name and password can be configured in the ``scylla.yaml`` configuration file instead.
+
+.. code-block:: yaml
+   
+   auth_superuser_name: <super user name>
+   auth_superuser_salted_password: <super user salted password as processed by mkpassword or similar - not cleartext>
+
+This will set the initial values of the super user credentials. 
+
+.. note:: The password entered here must be salted, i.e. pre-hashed. Cleartext passwords are not allowed. 
+.. note:: If you alter the password of the super user using CQL (like above), the value here is ignored.
+.. note:: If any super user is already defined in the cluster, the value here is ignored.
+
 Create Additional Roles
 .......................
 

@@ -29,6 +29,7 @@
 #include "utils/class_registrator.hh"
 #include "replica/database.hh"
 #include "cql3/query_processor.hh"
+#include "db/config.hh"
 
 namespace auth {
 
@@ -50,14 +51,23 @@ static const class_registrator<
 
 static thread_local auto rng_for_salt = std::default_random_engine(std::random_device{}());
 
+static std::string_view get_config_value(std::string_view value, std::string_view def) {
+    return value.empty() ? def : value;
+}
+
+std::string password_authenticator::default_superuser(const db::config& cfg) {
+    return std::string(get_config_value(cfg.auth_superuser_name(), DEFAULT_USER_NAME));
+}
+
 password_authenticator::~password_authenticator() {
 }
 
 password_authenticator::password_authenticator(cql3::query_processor& qp, ::service::migration_manager& mm)
     : _qp(qp)
     , _migration_manager(mm)
-    , _stopped(make_ready_future<>()) {
-}
+    , _stopped(make_ready_future<>()) 
+    , _superuser(default_superuser(qp.db().get_config()))
+{}
 
 static bool has_salted_hash(const cql3::untyped_result_set_row& row) {
     return !row.get_or<sstring>(SALTED_HASH, "").empty();
@@ -106,13 +116,17 @@ future<> password_authenticator::migrate_legacy_metadata() const {
 }
 
 future<> password_authenticator::create_default_if_missing() const {
-    return default_role_row_satisfies(_qp, &has_salted_hash).then([this](bool exists) {
+    return default_role_row_satisfies(_qp, &has_salted_hash, _superuser).then([this](bool exists) {
         if (!exists) {
+            std::string salted_pwd(get_config_value(_qp.db().get_config().auth_superuser_salted_password(), ""));
+            if (salted_pwd.empty()) {
+                salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt);
+            }
             return _qp.execute_internal(
                     update_row_query(),
                     db::consistency_level::QUORUM,
                     internal_distributed_query_state(),
-                    {passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt), DEFAULT_USER_NAME},
+                    {salted_pwd, _superuser},
                     cql3::query_processor::cache_internal::no).then([](auto&&) {
                 plogger.info("Created default superuser authentication record.");
             });
@@ -134,7 +148,7 @@ future<> password_authenticator::start() {
              return async([this] {
                  _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get0();
 
-                 if (any_nondefault_role_row_satisfies(_qp, &has_salted_hash).get0()) {
+                 if (any_nondefault_role_row_satisfies(_qp, &has_salted_hash, _superuser).get0()) {
                      if (legacy_metadata_exists()) {
                          plogger.warn("Ignoring legacy authentication metadata since nondefault data already exist.");
                      }
@@ -161,6 +175,8 @@ future<> password_authenticator::stop() {
 }
 
 db::consistency_level password_authenticator::consistency_for_user(std::string_view role_name) {
+    // TODO: this is plain dung. Why treat hardcoded default special, but for example a user-created
+    // super user uses plain LOCAL_ONE?
     if (role_name == DEFAULT_USER_NAME) {
         return db::consistency_level::QUORUM;
     }

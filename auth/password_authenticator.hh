@@ -14,6 +14,10 @@
 
 #include "auth/authenticator.hh"
 
+namespace db {
+    class config;
+}
+
 namespace cql3 {
 
 class query_processor;
@@ -33,9 +37,11 @@ class password_authenticator : public authenticator {
     ::service::migration_manager& _migration_manager;
     future<> _stopped;
     seastar::abort_source _as;
+    std::string _superuser;
 
 public:
     static db::consistency_level consistency_for_user(std::string_view role_name);
+    static std::string default_superuser(const db::config&);
 
     password_authenticator(cql3::query_processor&, ::service::migration_manager&);
 
