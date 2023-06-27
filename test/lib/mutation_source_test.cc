@@ -2669,9 +2669,9 @@ static bool compare_readers(const schema& s, flat_mutation_reader_v2& authority,
     return !empty;
 }
 
-void compare_readers(const schema& s, flat_mutation_reader_v2 authority, flat_mutation_reader_v2 tested) {
+void compare_readers(const schema& s, flat_mutation_reader_v2 authority, flat_mutation_reader_v2 tested, bool exact) {
     auto close_authority = deferred_close(authority);
-    auto assertions = assert_that(std::move(tested));
+    auto assertions = assert_that(std::move(tested)).exact(exact);
     compare_readers(s, authority, assertions);
 }
 
