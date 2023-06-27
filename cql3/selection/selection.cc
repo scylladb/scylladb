@@ -25,6 +25,8 @@
 
 namespace cql3 {
 
+logger cql_logger("cql_logger");
+
 namespace selection {
 
 selection::selection(schema_ptr schema,
@@ -131,31 +133,21 @@ public:
     virtual bool is_aggregate() const override { return false; }
 protected:
     class simple_selectors : public selectors {
-    private:
-        std::vector<managed_bytes_opt> _current;
-        bool _first = true; ///< Whether the next row we receive is the first in its group.
     public:
         virtual void reset() override {
-            _current.clear();
-            _first = true;
+            on_internal_error(cql_logger, "simple_selectors::reset() called, but we don't support aggregation");
         }
 
         virtual bool requires_thread() const override { return false; }
 
         // Should not be reached, since this is called when aggregating
         virtual std::vector<managed_bytes_opt> get_output_row() override {
-            return std::move(_current);
+            on_internal_error(cql_logger, "simple_selectors::get_output_row() called, but we don't support aggregation");
         }
 
         // Should not be reached, since this is called when aggregating
         virtual void add_input_row(result_set_builder& rs) override {
-            // GROUP BY calls add_input_row() repeatedly without reset() in between, and it expects
-            // the output to be the first value encountered:
-            // https://cassandra.apache.org/doc/latest/cql/dml.html#grouping-results
-            if (_first) {
-                _current = std::move(*rs.current);
-                _first = false;
-            }
+            on_internal_error(cql_logger, "simple_selectors::add_input_row() called, but we don't support aggregation");
         }
 
         virtual std::vector<managed_bytes_opt> transform_input_row(result_set_builder& rs) override {
