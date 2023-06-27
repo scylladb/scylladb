@@ -757,7 +757,9 @@ void cache_flat_mutation_reader::copy_from_cache_to_buffer() {
             && _snp->at_latest_version()
             && _snp->at_oldest_version()) {
             deletable_row& row = _next_row.latest_row();
+            tombstone range_tomb = _next_row.range_tombstone_for_row();
             auto t = row.deleted_at();
+            t.apply(range_tomb);
 
             auto row_tomb_expired = [&](row_tombstone tomb) {
                 return (tomb && tomb.max_deletion_time() < _gc_before);
@@ -780,6 +782,15 @@ void cache_flat_mutation_reader::copy_from_cache_to_buffer() {
                     std::swap(row, row_copy);
                 });
                 remove_row = row.empty();
+
+                auto tomb_expired = [&](tombstone tomb) {
+                    return (tomb && tomb.deletion_time < _gc_before);
+                };
+
+                auto latests_range_tomb = _next_row.get_iterator_in_latest_version()->range_tombstone();
+                if (tomb_expired(latests_range_tomb)) {
+                    _next_row.get_iterator_in_latest_version()->set_range_tombstone({});
+                }
             }
         }
 
