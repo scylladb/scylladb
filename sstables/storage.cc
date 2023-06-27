@@ -111,16 +111,15 @@ future<file> filesystem_storage::open_component(const sstable& sst, component_ty
     auto name = sst.filename(tgt_dir, type);
 
     auto f = open_sstable_component_file_non_checked(name, flags, options, check_integrity);
+    if (tgt_dir == dir) {
+        return f;
+    }
 
-    if (!readonly) {
-        f = with_file_close_on_failure(std::move(f), [this, &sst, type, name = std::move(name)] (file fd) mutable {
+    return with_file_close_on_failure(std::move(f), [this, &sst, type, name = std::move(name)] (file fd) mutable {
             return rename_new_file(sst, name, sst.filename(type)).then([fd = std::move(fd)] () mutable {
                 return make_ready_future<file>(std::move(fd));
             });
         });
-    }
-
-    return f;
 }
 
 void filesystem_storage::open(sstable& sst) {
