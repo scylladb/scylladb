@@ -435,7 +435,14 @@ future<> gossiper::handle_shutdown_msg(inet_address from, std::optional<int64_t>
             co_return;
         }
     }
-    co_await this->mark_as_shutdown(from);
+
+    // Do not move the node to SHUTDOWN gossip status when shutdown rpc message
+    // is recieved from the shudown node. Instead only mark the node as DOWN
+    // and keep the previous gossip status.
+    auto es = get_endpoint_state_for_endpoint_ptr(from);
+    if (es) {
+        co_await mark_dead(from, *es);
+    }
 }
 
 future<gossip_get_endpoint_states_response>
@@ -2086,10 +2093,13 @@ future<> gossiper::do_stop_gossiping() {
         if (my_ep_state) {
             logger.info("My status = {}", get_gossip_status(*my_ep_state));
         }
+        // Stop responding to echo message before sending the shutdown message
+        container().invoke_on_all([] (auto& g) {
+            g._advertise_myself = false;
+        }).get();
         if (my_ep_state && !is_silent_shutdown_state(*my_ep_state)) {
             auto local_generation = my_ep_state->get_heart_beat_state().get_generation();
             logger.info("Announcing shutdown");
-            add_local_application_state(application_state::STATUS, versioned_value::shutdown(true)).get();
             auto live_endpoints = _live_endpoints;
             for (inet_address addr : live_endpoints) {
                 msg_addr id = get_msg_addr(addr);
