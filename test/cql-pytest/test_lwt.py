@@ -73,7 +73,6 @@ def test_lwt_empty_partition_range(cql, table1):
 # Generate an LWT update where there is no value for the clustering key,
 # as the WHERE restricts it using `c = 2 AND c = 3`.
 # Such queries are rejected.
-@pytest.mark.skip(reason="crashes scylla, see issue #13129")
 def test_lwt_empty_clustering_range(cql, table1):
     with pytest.raises(InvalidRequest):
         cql.execute(f"UPDATE {table1} SET r = 9000 WHERE p = 1  AND c = 2 AND c = 2000 IF r = 3")
