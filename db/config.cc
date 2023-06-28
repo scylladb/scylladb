@@ -954,6 +954,13 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , alternator_ttl_period_in_seconds(this, "alternator_ttl_period_in_seconds", value_status::Used,
         60*60*24,
         "The default period for Alternator's expiration scan. Alternator attempts to scan every table within that period.")
+    , alternator_describe_endpoints(this, "alternator_describe_endpoints", liveness::LiveUpdate, value_status::Used,
+        "",
+        "Overrides the behavior of Alternator's DescribeEndpoints operation. "
+        "An empty value (the default) means DescribeEndpoints will return "
+        "the same endpoint used in the request. The string 'disabled' "
+        "disables the DescribeEndpoints operation. Any other string is the "
+        "fixed value that will be returned by DescribeEndpoints operations.")
     , abort_on_ebadf(this, "abort_on_ebadf", value_status::Used, true, "Abort the server on incorrect file descriptor access. Throws exception when disabled.")
     , redis_port(this, "redis_port", value_status::Used, 0, "Port on which the REDIS transport listens for clients.")
     , redis_ssl_port(this, "redis_ssl_port", value_status::Used, 0, "Port on which the REDIS TLS native transport listens for clients.")

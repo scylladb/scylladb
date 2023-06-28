@@ -4364,6 +4364,17 @@ future<executor::request_return_type> executor::list_tables(client_state& client
 
 future<executor::request_return_type> executor::describe_endpoints(client_state& client_state, service_permit permit, rjson::value request, std::string host_header) {
     _stats.api_operations.describe_endpoints++;
+    // The alternator_describe_endpoints configuration can be used to disable
+    // the DescribeEndpoints operation, or set it to return a fixed string
+    std::string override = _proxy.data_dictionary().get_config().alternator_describe_endpoints();
+    if (!override.empty()) {
+        if (override == "disabled") {
+            _stats.unsupported_operations++;
+            return make_ready_future<request_return_type>(api_error::unknown_operation(
+                "DescribeEndpoints disabled by configuration (alternator_describe_endpoints=disabled)"));
+        }
+        host_header = std::move(override);
+    }
     rjson::value response = rjson::empty_object();
     // Without having any configuration parameter to say otherwise, we tell
     // the user to return to the same endpoint they used to reach us. The only
