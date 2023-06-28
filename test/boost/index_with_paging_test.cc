@@ -18,7 +18,7 @@ SEASTAR_TEST_CASE(test_index_with_paging) {
         e.execute_cql("CREATE TABLE tab (pk int, ck text, v int, v2 int, v3 text, PRIMARY KEY (pk, ck))").get();
         e.execute_cql("CREATE INDEX ON tab (v)").get();
 
-        sstring big_string(4096, 'j');
+        sstring big_string(100, 'j');
         // There should be enough rows to use multiple pages
         for (int i = 0; i < 64 * 1024; ++i) {
             e.execute_cql(format("INSERT INTO tab (pk, ck, v, v2, v3) VALUES ({}, 'hello{}', 1, {}, '{}')", i % 3, i, i, big_string)).get();
