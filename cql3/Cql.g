@@ -59,6 +59,7 @@ options {
 #include "cql3/statements/list_roles_statement.hh"
 #include "cql3/statements/list_service_level_statement.hh"
 #include "cql3/statements/list_service_level_attachments_statement.hh"
+#include "cql3/statements/list_effective_service_level_statement.hh"
 #include "cql3/statements/grant_role_statement.hh"
 #include "cql3/statements/revoke_role_statement.hh"
 #include "cql3/statements/drop_role_statement.hh"
@@ -376,6 +377,7 @@ cqlStatement returns [std::unique_ptr<raw::parsed_statement> stmt]
     | st47=listServiceLevelAttachStatement { $stmt = std::move(st47); }
     | st48=pruneMaterializedViewStatement  { $stmt = std::move(st48); }
     | st49=describeStatement           { $stmt = std::move(st49); }
+    | st50=listEffectiveServiceLevelStatement { $stmt = std::move(st50); }
     ;
 
 /*
@@ -1411,6 +1413,16 @@ listServiceLevelAttachStatement returns [std::unique_ptr<list_service_level_atta
     ;
 
 /**
+ * LIST EFFECTIVE SERVICE_LEVEL OF <role_name>
+ */
+listEffectiveServiceLevelStatement returns [std::unique_ptr<list_effective_service_level_statement stmt>]
+    @init {
+    }
+    : K_LIST K_EFFECTIVE serviceLevel K_OF role_name=serviceLevelOrRoleName
+      { $stmt = std::make_unique<list_effective_service_level_statement>(role_name); }
+    ;
+
+/**
  * (DESCRIBE | DESC) (
  *    CLUSTER
  *    [FULL] SCHEMA
@@ -2081,6 +2093,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_DESC
         | K_EXECUTE
         | K_MUTATION_FRAGMENTS
+        | K_EFFECTIVE
         ) { $str = $k.text; }
     ;
 
@@ -2274,6 +2287,7 @@ K_FOR: F O R;
 K_SERVICE: S E R V I C E;
 K_LEVEL: L E V E L;
 K_LEVELS: L E V E L S;
+K_EFFECTIVE: E F F E C T I V E;
 
 K_SCYLLA_TIMEUUID_LIST_INDEX: S C Y L L A '_' T I M E U U I D '_' L I S T '_' I N D E X;
 K_SCYLLA_COUNTER_SHARD_LIST: S C Y L L A '_' C O U N T E R '_' S H A R D '_' L I S T; 
