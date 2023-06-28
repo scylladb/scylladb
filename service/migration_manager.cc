@@ -368,6 +368,12 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
     return db::schema_tables::merge_schema(_sys_ks, proxy.container(), _feat, std::move(mutations));
 }
 
+future<> migration_manager::reload_schema() {
+    mlogger.info("Reloading schema");
+    std::vector<mutation> mutations;
+    return db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, std::move(mutations), true);
+}
+
 future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr src, const std::vector<frozen_mutation>& mutations)
 {
     if (_as.abort_requested()) {
