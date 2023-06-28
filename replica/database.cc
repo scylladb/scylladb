@@ -332,7 +332,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
         "_read_concurrency_sem",
         max_inactive_queue_length(),
         _cfg.reader_concurrency_semaphore_serialize_limit_multiplier,
-        _cfg.reader_concurrency_semaphore_kill_limit_multiplier)
+        _cfg.reader_concurrency_semaphore_kill_limit_multiplier,
+        true)
     // No timeouts or queue length limits - a failure here can kill an entire repair.
     // Trust the caller to limit concurrency.
     , _streaming_concurrency_sem(
@@ -341,7 +342,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             "_streaming_concurrency_sem",
             std::numeric_limits<size_t>::max(),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
-            utils::updateable_value(std::numeric_limits<uint32_t>::max()))
+            utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            false)
     // No limits, just for accounting.
     , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{}, "compaction")
     , _system_read_concurrency_sem(
@@ -351,7 +353,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             "_system_read_concurrency_sem",
             std::numeric_limits<size_t>::max(),
             utils::updateable_value(std::numeric_limits<uint32_t>::max()),
-            utils::updateable_value(std::numeric_limits<uint32_t>::max()))
+            utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            true)
     , _row_cache_tracker(cache_tracker::register_metrics::yes)
     , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)

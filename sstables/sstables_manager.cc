@@ -30,7 +30,8 @@ sstables_manager::sstables_manager(
         "sstable_metadata_concurrency_sem",
         std::numeric_limits<size_t>::max(),
         utils::updateable_value(std::numeric_limits<uint32_t>::max()),
-        utils::updateable_value(std::numeric_limits<uint32_t>::max()))
+        utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+        false)
     , _dir_semaphore(dir_sem)
 {
 }
