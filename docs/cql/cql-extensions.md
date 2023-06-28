@@ -422,3 +422,19 @@ For more details, see:
 
 - Detailed [design notes](https://github.com/scylladb/scylla/blob/master/docs/dev/per-partition-rate-limit.md)
 - Description of the [rate limit exceeded](https://github.com/scylladb/scylla/blob/master/docs/dev/protocol-extensions.md#rate-limit-error) error
+
+## Effective service level
+
+Actual values of service level's options may come from different service levels, not only from the one user is assigned with.
+
+To facilitate insight into which values come from which service level, there is ``LIST EFFECTIVE SERVICE LEVEL OF <role_name>`` command.
+```cql
+    > LIST EFFECTIVE SERVICE LEVEL OF role2;
+
+     service_level_option | effective_service_level | value
+    ----------------------+-------------------------+-------------
+            workload_type |                     sl2 |       batch
+                  timeout |                     sl1 |          2s
+```
+
+For more details, check [Service Levels docs](https://github.com/scylladb/scylla/blob/master/docs/cql/service-levels.rst)

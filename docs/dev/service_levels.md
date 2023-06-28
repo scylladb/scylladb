@@ -93,6 +93,7 @@ role4: `timeout = 10ms`
 
 The granting hierarchy is as follows, with role1 inheriting from role2, which in turn
 inherits from role3 and role4:
+
       role4  role3
          \   /
          role2
@@ -134,3 +135,26 @@ Otherwise, e.g. if a role has multiple workload types declared,
 the conflicts are resolved as follows:
  - `X` vs `unspecified` -> `X`
  - `batch` vs `interactive` -> `batch` - under the assumption that `batch` is safer, because it would not trigger load shedding as eagerly as `interactive`
+
+### Effective service level
+
+Actual values of service level's options may come from different service levels, not only from the one user is assigned with. This can be achived by assigning one role to another.
+
+For instance:
+There are 2 roles: role1 and role2. Role1 is assigned with sl1 (timeout = 2s, workload_type = interactive) and role2 is assigned with sl2 (timeout = 10s, workload_type = batch).
+Then, if we grant role1 to role2, the user with role2 will have 2s timeout (from sl1) and batch workload type (from sl2).
+
+To see detail how the options are merged, check [combining service levels section](#combining-service-level-timeouts-from-multiple-roles).
+
+To facilitate insight into which values come from which service level, there is `LIST EFFECTIVE SERVICE LEVEL OF <role_name>` command.
+
+The command displays a table with: option name, effective service level the value comes from and the option value.
+
+```
+> LIST EFFECTIVE SERVICE LEVEL OF role2;
+
+ service_level_option | effective_service_level | value
+----------------------+-------------------------+-------------
+        workload_type |                     sl2 |       batch
+              timeout |                     sl1 |          2s
+```

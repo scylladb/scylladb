@@ -22,6 +22,7 @@ CQL Reference
    mv
    non-reserved-keywords
    reserved-keywords
+   service-levels
    cql-extensions.md
 
 cqlsh - The CQL Shell
