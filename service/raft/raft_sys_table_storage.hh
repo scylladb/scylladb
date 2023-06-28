@@ -51,6 +51,8 @@ class raft_sys_table_storage : public raft::persistence {
     // this helper.
     future<> _pending_op_fut;
 
+    const size_t _max_mutation_size;
+
 public:
     explicit raft_sys_table_storage(cql3::query_processor& qp, raft::group_id gid, raft::server_id server_id);
 
@@ -76,6 +78,7 @@ public:
     future<> bootstrap(raft::configuration initial_configuation);
 private:
 
+    future<size_t> do_store_log_entries_one_batch(const std::vector<raft::log_entry_ptr>& entries, size_t start_idx);
     future<> do_store_log_entries(const std::vector<raft::log_entry_ptr>& entries);
     // Truncate all entries from the persisted log with indices <= idx
     // Called from the `store_snapshot` function.

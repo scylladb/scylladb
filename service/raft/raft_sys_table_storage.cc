@@ -34,6 +34,7 @@ raft_sys_table_storage::raft_sys_table_storage(cql3::query_processor& qp, raft::
     , _qp(qp)
     , _dummy_query_state(service::client_state::for_internal_calls(), empty_service_permit())
     , _pending_op_fut(make_ready_future<>())
+    , _max_mutation_size(_qp.db().get_config().commitlog_segment_size_in_mb() * 1024 * 1204 / 2)
 {
     static const auto store_cql = format("INSERT INTO system.{} (group_id, term, \"index\", data) VALUES (?, ?, ?, ?)",
         db::system_keyspace::RAFT);
@@ -194,10 +195,7 @@ future<> raft_sys_table_storage::store_snapshot_descriptor(const raft::snapshot_
     });
 }
 
-future<> raft_sys_table_storage::do_store_log_entries(const std::vector<raft::log_entry_ptr>& entries) {
-    if (entries.empty()) {
-        co_return;
-    }
+future<size_t> raft_sys_table_storage::do_store_log_entries_one_batch(const std::vector<raft::log_entry_ptr>& entries, size_t start_idx) {
     std::vector<cql3::statements::batch_statement::single_statement> batch_stmts;
     // statement values that can be allocated at once (one contiguous allocation)
     std::vector<std::vector<cql3::raw_value>> stmt_values;
@@ -211,12 +209,19 @@ future<> raft_sys_table_storage::do_store_log_entries(const std::vector<raft::lo
     stmt_data_views.reserve(entries_size);
     stmt_value_views.reserve(entries_size);
 
-    for (const raft::log_entry_ptr& eptr : entries) {
-        batch_stmts.emplace_back(cql3::statements::batch_statement::single_statement(_store_entry_stmt, false));
+    size_t size = 0;
+    size_t idx = start_idx;
 
+    for (; idx < entries_size; idx++) {
+        auto& eptr = entries[idx];
         auto data_tmp_buf = fragmented_temporary_buffer::allocate_to_fit(ser::get_sizeof(eptr->data));
         auto data_out_str = data_tmp_buf.get_ostream();
         ser::serialize(data_out_str, eptr->data);
+        if (size && size + data_tmp_buf.size_bytes() > _max_mutation_size) {
+            break;
+        }
+        size += data_tmp_buf.size_bytes();
+        batch_stmts.emplace_back(cql3::statements::batch_statement::single_statement(_store_entry_stmt, false));
 
         // don't include serialized "data" here since it will require to linearize the stream
         std::vector<cql3::raw_value> single_stmt_values;
@@ -261,6 +266,23 @@ future<> raft_sys_table_storage::do_store_log_entries(const std::vector<raft::lo
         _qp.get_cql_stats());
 
     co_await batch.execute(_qp, _dummy_query_state, batch_options);
+
+    if (idx != entries_size) {
+        co_return idx;
+    }
+
+    co_return 0;
+}
+
+future<> raft_sys_table_storage::do_store_log_entries(const std::vector<raft::log_entry_ptr>& entries) {
+    if (entries.empty()) {
+        co_return;
+    }
+
+    size_t idx = 0;
+    do {
+        idx = co_await do_store_log_entries_one_batch(entries, idx);
+    } while (idx != 0);
 }
 
 future<> raft_sys_table_storage::store_log_entries(const std::vector<raft::log_entry_ptr>& entries) {

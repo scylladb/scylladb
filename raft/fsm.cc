@@ -316,6 +316,9 @@ future<fsm_output> fsm::poll_output() {
         }
         co_await _sm_events.wait();
     }
+    while (utils::get_local_injector().enter("fsm::poll_output/pause")) {
+        co_await seastar::sleep(std::chrono::milliseconds(100));
+    }
     co_return get_output();
 }
 
