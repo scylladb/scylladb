@@ -617,7 +617,8 @@ private:
                                         const io_priority_class& pc,
                                         tracing::trace_state_ptr trace_state,
                                         streamed_mutation::forwarding fwd,
-                                        mutation_reader::forwarding fwd_mr) const;
+                                        mutation_reader::forwarding fwd_mr,
+                                        const sstables::sstable_predicate& = sstables::default_sstable_predicate()) const;
 
     lw_shared_ptr<sstables::sstable_set> make_maintenance_sstable_set() const;
     lw_shared_ptr<sstables::sstable_set> make_compound_sstable_set();
@@ -679,9 +680,8 @@ public:
             tracing::trace_state_ptr trace_state = nullptr,
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const;
-    flat_mutation_reader_v2 make_reader_v2_excluding_sstables(schema_ptr schema,
+    flat_mutation_reader_v2 make_reader_v2_excluding_staging(schema_ptr schema,
             reader_permit permit,
-            std::vector<sstables::shared_sstable>& sst,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc = default_priority_class(),
@@ -719,7 +719,7 @@ public:
     sstables::shared_sstable make_streaming_staging_sstable();
 
     mutation_source as_mutation_source() const;
-    mutation_source as_mutation_source_excluding(std::vector<sstables::shared_sstable>& sst) const;
+    mutation_source as_mutation_source_excluding_staging() const;
 
     void set_virtual_reader(mutation_source virtual_reader) {
         _virtual_reader = std::move(virtual_reader);

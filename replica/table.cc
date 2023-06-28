@@ -72,7 +72,8 @@ table::make_sstable_reader(schema_ptr s,
                                    const io_priority_class& pc,
                                    tracing::trace_state_ptr trace_state,
                                    streamed_mutation::forwarding fwd,
-                                   mutation_reader::forwarding fwd_mr) const {
+                                   mutation_reader::forwarding fwd_mr,
+                                   const sstables::sstable_predicate& predicate) const {
     // CAVEAT: if make_sstable_reader() is called on a single partition
     // we want to optimize and read exactly this partition. As a
     // consequence, fast_forward_to() will *NOT* work on the result,
@@ -84,10 +85,10 @@ table::make_sstable_reader(schema_ptr s,
         }
 
         return sstables->create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(permit),
-                _stats.estimated_sstable_per_read, pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
+                _stats.estimated_sstable_per_read, pr, slice, pc, std::move(trace_state), fwd, fwd_mr, predicate);
     } else {
         return sstables->make_local_shard_sstable_reader(std::move(s), std::move(permit), pr, slice, pc,
-                std::move(trace_state), fwd, fwd_mr);
+                std::move(trace_state), fwd, fwd_mr, sstables::default_read_monitor_generator(), predicate);
     }
 }
 
@@ -2294,9 +2295,8 @@ table::disable_auto_compaction() {
 }
 
 flat_mutation_reader_v2
-table::make_reader_v2_excluding_sstables(schema_ptr s,
+table::make_reader_v2_excluding_staging(schema_ptr s,
         reader_permit permit,
-        std::vector<sstables::shared_sstable>& excluded,
         const dht::partition_range& range,
         const query::partition_slice& slice,
         const io_priority_class& pc,
@@ -2312,16 +2312,11 @@ table::make_reader_v2_excluding_sstables(schema_ptr s,
         }
     }
 
-    auto excluded_ssts = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(excluded);
-    auto effective_sstables = make_lw_shared(_compaction_strategy.make_sstable_set(_schema));
-    _sstables->for_each_sstable([&excluded_ssts, &effective_sstables] (const sstables::shared_sstable& sst) mutable {
-        if (excluded_ssts.contains(sst)) {
-            return;
-        }
-        effective_sstables->insert(sst);
-    });
+    static std::predicate<const sstables::sstable&> auto excl_staging_predicate = [] (const sstables::sstable& sst) {
+        return !sst.requires_view_building();
+    };
 
-    readers.emplace_back(make_sstable_reader(s, permit, std::move(effective_sstables), range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+    readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr, excl_staging_predicate));
     return make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr);
 }
 
@@ -2432,7 +2427,7 @@ table::stream_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeou
             s,
             std::move(m),
             timeout,
-            as_mutation_source_excluding(excluded_sstables),
+            as_mutation_source_excluding_staging(),
             tracing::trace_state_ptr(),
             *_config.streaming_read_concurrency_semaphore,
             service::get_local_streaming_priority(),
@@ -2440,8 +2435,8 @@ table::stream_view_replica_updates(const schema_ptr& s, mutation&& m, db::timeou
 }
 
 mutation_source
-table::as_mutation_source_excluding(std::vector<sstables::shared_sstable>& ssts) const {
-    return mutation_source([this, &ssts] (schema_ptr s,
+table::as_mutation_source_excluding_staging() const {
+    return mutation_source([this] (schema_ptr s,
                                    reader_permit permit,
                                    const dht::partition_range& range,
                                    const query::partition_slice& slice,
@@ -2449,7 +2444,7 @@ table::as_mutation_source_excluding(std::vector<sstables::shared_sstable>& ssts)
                                    tracing::trace_state_ptr trace_state,
                                    streamed_mutation::forwarding fwd,
                                    mutation_reader::forwarding fwd_mr) {
-        return this->make_reader_v2_excluding_sstables(std::move(s), std::move(permit), ssts, range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+        return this->make_reader_v2_excluding_staging(std::move(s), std::move(permit), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
     });
 }
 
