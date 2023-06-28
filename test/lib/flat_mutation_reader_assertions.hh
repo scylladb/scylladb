@@ -59,10 +59,27 @@ private:
                 continue;
             }
             // silently ignore rtcs that don't change anything
-            if (next->is_range_tombstone_change() && next->as_range_tombstone_change().tombstone() == _rt) {
-                testlog.trace("Received spurious closing rtc: {}", mutation_fragment_v2::printer(*_reader.schema(), *next));
-                _reader().get();
-                continue;
+            if (next->is_range_tombstone_change()) {
+                auto rtc_mf = std::move(*_reader().get());
+                auto tomb = rtc_mf.as_range_tombstone_change().tombstone();
+                auto cmp = position_in_partition::tri_compare(*_reader.schema());
+                // squash rtcs with the same pos
+                while (auto next_maybe_rtc = _reader.peek().get0()) {
+                    if (next_maybe_rtc->is_range_tombstone_change() && cmp(next_maybe_rtc->position(), rtc_mf.position()) == 0) {
+                        testlog.trace("Squashing {} with {}", next_maybe_rtc->as_range_tombstone_change().tombstone(), tomb);
+                        tomb = next_maybe_rtc->as_range_tombstone_change().tombstone();
+                        _reader().get0();
+                    } else {
+                        break;
+                    }
+                }
+                rtc_mf.mutate_as_range_tombstone_change(*_reader.schema(), [tomb] (range_tombstone_change& rtc) { rtc.set_tombstone(tomb); });
+                if (tomb == _rt) {
+                    testlog.trace("Received spurious rtcs, equivalent to: {}", mutation_fragment_v2::printer(*_reader.schema(), rtc_mf));
+                    continue;
+                }
+                _reader.unpop_mutation_fragment(std::move(rtc_mf));
+                next = _reader.peek().get0();
             }
             return next;
         }

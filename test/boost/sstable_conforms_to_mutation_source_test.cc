@@ -269,7 +269,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reversing_reader_random_schema) {
                             streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
                     close_r1.cancel();
 
-                    compare_readers(*query_schema, std::move(r1), std::move(r2));
+                    compare_readers(*query_schema, std::move(r1), std::move(r2), true);
                 }
 
                 auto r1 = source.make_reader_v2(query_schema, semaphore.make_permit(), prange,
