@@ -318,6 +318,10 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
         throw exceptions::invalid_request_exception(format("Unrestricted partition key in a conditional {}",
                     type.is_update() ? "update" : "deletion"));
     }
+    if (ranges.empty()) {
+        throw exceptions::invalid_request_exception(format("Unrestricted clustering key in a conditional {}",
+                    type.is_update() ? "update" : "deletion"));
+    }
 
     auto request = seastar::make_shared<cas_request>(s, std::move(keys));
     // cas_request can be used for batches as well single statements; Here we have just a single

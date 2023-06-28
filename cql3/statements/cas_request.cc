@@ -123,6 +123,9 @@ std::optional<mutation> cas_request::apply(foreign_ptr<lw_shared_ptr<query::resu
 
 cas_request::old_row cas_request::find_old_row(const cas_row_update& op) const {
     static const clustering_key empty_ckey = clustering_key::make_empty();
+    if (_key.empty()) {
+        throw exceptions::invalid_request_exception("Empty partition key range");
+    }
     const partition_key& pkey = _key.front().start()->value().key().value();
     // We must ignore statement clustering column restriction when
     // choosing a row to check the conditions. If there is no
@@ -134,6 +137,9 @@ cas_request::old_row cas_request::find_old_row(const cas_row_update& op) const {
     //   CREATE TABLE t(p int, c int, s int static, v int, PRIMARY KEY(p, c));
     //   INSERT INTO t(p, s) VALUES(1, 1);
     //   UPDATE t SET v=1 WHERE p=1 AND c=1 IF s=1;
+    if (op.ranges.empty()) {
+        throw exceptions::invalid_request_exception("Empty clustering range");
+    }
     const clustering_key& ckey = op.ranges.front().start() ?  op.ranges.front().start()->value() : empty_ckey;
     auto row = _rows.find_row(pkey, ckey);
     auto ckey_ptr = &ckey;
