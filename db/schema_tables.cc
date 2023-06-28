@@ -1067,6 +1067,9 @@ read_tables_for_keyspaces(distributed<service::storage_proxy>& proxy, const std:
 {
     std::map<table_id, schema_mutations> result;
     for (auto&& [keyspace_name, sel] : tables_per_keyspace) {
+        if (!sel.tables.contains(kind)) {
+            continue;
+        }
         for (auto&& table_name : sel.tables.find(kind)->second) {
             auto qn = qualified_name(keyspace_name, table_name);
             auto muts = co_await read_table_mutations(proxy, qn, get_table_holder(kind));
