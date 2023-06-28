@@ -252,29 +252,11 @@ static future<> set_gossip_tokens(gms::gossiper& g,
  *
  * This function must only be called if we're not the first node
  * (i.e. booting into existing cluster).
+ *
+ * Precondition: gossiper observed at least one other live node;
+ * see `gossiper::wait_for_live_nodes_to_show_up()`.
  */
 future<> storage_service::wait_for_ring_to_settle() {
-    // Make sure we see at least one other node.
-    logger::rate_limit rate_limit{std::chrono::seconds{5}};
-#ifdef SEASTAR_DEBUG
-    // Account for debug slowness. 3 minutes is probably overkill but we don't want flaky tests.
-    constexpr auto timeout_delay = std::chrono::minutes{3};
-#else
-    constexpr auto timeout_delay = std::chrono::seconds{30};
-#endif
-    auto timeout = gms::gossiper::clk::now() + timeout_delay;
-    while (_gossiper.get_live_members().size() < 2) {
-        if (timeout <= gms::gossiper::clk::now()) {
-            auto err = ::format("Timed out waiting for other live nodes to show up in gossip during initial boot");
-            slogger.error("{}", err);
-            throw std::runtime_error{std::move(err)};
-        }
-
-        slogger.log(log_level::info, rate_limit, "No other live nodes seen yet in gossip during initial boot...");
-        co_await sleep_abortable(std::chrono::milliseconds(10), _abort_source);
-    }
-    slogger.info("Live nodes seen in gossip during initial boot: {}", _gossiper.get_live_members());
-
     auto t = gms::gossiper::clk::now();
     while (true) {
         slogger.info("waiting for schema information to complete");
@@ -1961,6 +1943,42 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     auto advertise = gms::advertise_myself(!replacing_a_node_with_same_ip);
     co_await _gossiper.start_gossiping(generation_number, app_states, advertise);
 
+    if (!_raft_topology_change_enabled && should_bootstrap()) {
+        // Wait for NORMAL state handlers to finish for existing nodes now, so that connection dropping
+        // (happening at the end of `handle_state_normal`: `notify_joined`) doesn't interrupt
+        // group 0 joining or repair. (See #12764, #12956, #12972, #13302)
+        //
+        // But before we can do that, we must make sure that gossip sees at least one other node
+        // and fetches the list of peers from it; otherwise `wait_for_normal_state_handled_on_boot`
+        // may trivially finish without waiting for anyone.
+        co_await _gossiper.wait_for_live_nodes_to_show_up(2);
+
+        auto ignore_nodes = ri
+                ? parse_node_list(_db.local().get_config().ignore_dead_nodes_for_replace(), get_token_metadata())
+                // TODO: specify ignore_nodes for bootstrap
+                : std::unordered_set<gms::inet_address>{};
+        auto sync_nodes = co_await get_nodes_to_sync_with(ignore_nodes);
+        if (ri) {
+            sync_nodes.erase(ri->address);
+        }
+
+        // Note: in Raft topology mode this is unnecessary.
+        // Node state changes are propagated to the cluster through explicit global barriers.
+        co_await wait_for_normal_state_handled_on_boot(sync_nodes);
+
+        // NORMAL doesn't necessarily mean UP (#14042). Wait for these nodes to be UP as well
+        // to reduce flakiness (we need them to be UP to perform CDC generation write and for repair/streaming).
+        //
+        // This could be done in Raft topology mode as well, but the calculation of nodes to sync with
+        // has to be done based on topology state machine instead of gossiper as it is here;
+        // furthermore, the place in the code where we do this has to be different (it has to be coordinated
+        // by the topology coordinator after it joins the node to the cluster).
+        std::vector<gms::inet_address> sync_nodes_vec{sync_nodes.begin(), sync_nodes.end()};
+        slogger.info("Waiting for nodes {} to be alive", sync_nodes_vec);
+        co_await _gossiper.wait_alive(sync_nodes_vec, std::chrono::seconds{30});
+        slogger.info("Nodes {} are alive", sync_nodes_vec);
+    }
+
     assert(_group0);
     // if the node is bootstrapped the functin will do nothing since we already created group0 in main.cc
     co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, raft_replace_info, *this, qp, _migration_manager.local(), cdc_gen_service);
@@ -2271,18 +2289,6 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
                         " - a node with this IP didn't recently leave the cluster. If it did, wait for some time first (the IP is quarantined),\n"
                         "and retry the bootstrap/replace."};
             }
-        }
-
-        {
-            // Wait for normal state handler to finish for existing nodes in the cluster.
-            auto ignore_nodes = replacement_info ? parse_node_list(_db.local().get_config().ignore_dead_nodes_for_replace(), get_token_metadata())
-                                                 // TODO: specify ignore_nodes for bootstrap
-                                                 : std::unordered_set<gms::inet_address>{};
-            auto sync_nodes = get_nodes_to_sync_with(ignore_nodes).get();
-            if (replacement_info) {
-                sync_nodes.erase(replacement_info->address);
-            }
-            wait_for_normal_state_handled_on_boot(sync_nodes).get();
         }
 
         if (!replacement_info) {

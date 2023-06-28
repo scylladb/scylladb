@@ -428,6 +428,9 @@ public:
     // Wait for nodes to be alive on all shards
     future<> wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout);
 
+    // Wait for `n` live nodes to show up in gossip (including ourself).
+    future<> wait_for_live_nodes_to_show_up(size_t n);
+
     // Get live members synchronized to all shards
     future<std::set<inet_address>> get_live_members_synchronized();
 
