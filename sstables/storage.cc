@@ -141,7 +141,7 @@ void filesystem_storage::open(sstable& sst) {
         // the generation of a sstable that exists.
         w.close();
         remove_file(file_path).get();
-        throw std::runtime_error(format("SSTable write failed due to existence of TOC file for generation {:d} of {}.{}", sst._generation, sst._schema->ks_name(), sst._schema->cf_name()));
+        throw std::runtime_error(format("SSTable write failed due to existence of TOC file for generation {} of {}.{}", sst._generation, sst._schema->ks_name(), sst._schema->cf_name()));
     }
 
     sst.write_toc(std::move(w));
