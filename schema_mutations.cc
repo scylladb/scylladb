@@ -49,7 +49,7 @@ void schema_mutations::copy_to(std::vector<mutation>& dst) const {
     }
 }
 
-table_schema_version schema_mutations::digest() const {
+table_schema_version schema_mutations::digest(db::schema_features sf) const {
     if (_scylla_tables) {
         auto rs = query::result_set(*_scylla_tables);
         if (!rs.empty()) {
@@ -62,16 +62,19 @@ table_schema_version schema_mutations::digest() const {
     }
 
     md5_hasher h;
-    db::schema_features sf = db::schema_features::full();
 
-    // Disable this feature so that the digest remains compactible with Scylla
-    // versions prior to this feature.
-    // This digest affects the table schema version calculation and it's important
-    // that all nodes arrive at the same table schema version to avoid needless schema version
-    // pulls. Table schema versions are calculated on boot when we don't yet
-    // know all the cluster features, so we could get different table versions after reboot
-    // in an already upgraded cluster.
-    sf.remove<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>();
+    if (!sf.contains<db::schema_feature::TABLE_DIGEST_INSENSITIVE_TO_EXPIRY>()) {
+        // Disable this feature so that the digest remains compactible with Scylla
+        // versions prior to this feature.
+        // This digest affects the table schema version calculation and it's important
+        // that all nodes arrive at the same table schema version to avoid needless schema version
+        // pulls. It used to be the case that when table schema versions were calculated on boot we
+        // didn't yet know all the cluster features, so we could get different table versions after reboot
+        // in an already upgraded cluster. However, they are now available, and if
+        // TABLE_DIGEST_INSENSITIVE_TO_EXPIRY is enabled, we can compute with DIGEST_INSENSITIVE_TO_EXPIRY
+        // enabled.
+        sf.remove<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>();
+    }
 
     db::schema_tables::feed_hash_for_schema_digest(h, _columnfamilies, sf);
     db::schema_tables::feed_hash_for_schema_digest(h, _columns, sf);

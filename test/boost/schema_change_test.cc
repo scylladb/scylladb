@@ -812,8 +812,6 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
 
         expect_digest(sf, expected_digests[4]);
 
-        // FIXME: schema_mutations::digest() is still sensitive to expiry, so we can check versions only after forward_jump_clocks()
-        // otherwise the results would not be stable.
         expect_version("tests", "table1", expected_digests[5]);
         expect_version("ks", "tbl", expected_digests[6]);
         expect_version("ks", "tbl_view", expected_digests[7]);
@@ -840,7 +838,8 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change) {
         utils::UUID("de49e92f-a00d-3f24-8779-d07de26708cb"),
     };
     return test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test",
-            std::set<sstring>{"COMPUTED_COLUMNS", "CDC", "KEYSPACE_STORAGE_OPTIONS"}, std::move(expected_digests), [] (cql_test_env& e) {});
+            std::set<sstring>{"COMPUTED_COLUMNS", "CDC", "KEYSPACE_STORAGE_OPTIONS", "TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"},
+            std::move(expected_digests), [] (cql_test_env& e) {});
 }
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
@@ -857,7 +856,7 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns) {
         utils::UUID("94606636-ae43-3e0a-b238-e7f0e33ef600"),
     };
     return test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test_computed_columns",
-            std::set<sstring>{"CDC", "KEYSPACE_STORAGE_OPTIONS"}, std::move(expected_digests), [] (cql_test_env& e) {});
+            std::set<sstring>{"CDC", "KEYSPACE_STORAGE_OPTIONS", "TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"}, std::move(expected_digests), [] (cql_test_env& e) {});
 }
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions) {
@@ -875,7 +874,7 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_functions) {
     };
     return test_schema_digest_does_not_change_with_disabled_features(
         "./test/resource/sstables/schema_digest_with_functions_test",
-        std::set<sstring>{"CDC", "KEYSPACE_STORAGE_OPTIONS"},
+        std::set<sstring>{"CDC", "KEYSPACE_STORAGE_OPTIONS", "TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"},
         std::move(expected_digests),
         [] (cql_test_env& e) {
             e.execute_cql("create function twice(val int) called on null input returns int language lua as 'return 2 * val';").get();
@@ -900,7 +899,7 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_cdc_options) {
     };
     return test_schema_digest_does_not_change_with_disabled_features(
         "./test/resource/sstables/schema_digest_test_cdc_options",
-        std::set<sstring>{"KEYSPACE_STORAGE_OPTIONS"},
+        std::set<sstring>{"KEYSPACE_STORAGE_OPTIONS", "TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"},
         std::move(expected_digests),
         [] (cql_test_env& e) {
             e.execute_cql("create table tests.table_cdc (pk int primary key, c1 int, c2 int) with cdc = {'enabled':'true'};").get();
@@ -923,7 +922,7 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_with_keyspace_storage_optio
     };
     return test_schema_digest_does_not_change_with_disabled_features(
         "./test/resource/sstables/schema_digest_test_keyspace_storage_options",
-        std::set<sstring>{},
+        std::set<sstring>{"TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"},
         std::move(expected_digests),
         [] (cql_test_env& e) {
             e.execute_cql("create keyspace tests_s3 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }"

@@ -102,8 +102,10 @@ namespace {
     });
 }
 
-schema_ctxt::schema_ctxt(const db::config& cfg, std::shared_ptr<data_dictionary::user_types_storage> uts, replica::database* db)
+schema_ctxt::schema_ctxt(const db::config& cfg, std::shared_ptr<data_dictionary::user_types_storage> uts,
+                         const gms::feature_service& features, replica::database* db)
     : _db(db)
+    , _features(features)
     , _extensions(cfg.extensions())
     , _murmur3_partitioner_ignore_msb_bits(cfg.murmur3_partitioner_ignore_msb_bits())
     , _schema_registry_grace_period(cfg.schema_registry_grace_period())
@@ -111,7 +113,7 @@ schema_ctxt::schema_ctxt(const db::config& cfg, std::shared_ptr<data_dictionary:
 {}
 
 schema_ctxt::schema_ctxt(replica::database& db)
-    : schema_ctxt(db.get_config(), db.as_user_types_storage(), &db)
+    : schema_ctxt(db.get_config(), db.as_user_types_storage(), db.features(), &db)
 {}
 
 schema_ctxt::schema_ctxt(distributed<replica::database>& db)
@@ -3127,7 +3129,7 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
     if (version) {
         builder.with_version(*version);
     } else {
-        builder.with_version(sm.digest());
+        builder.with_version(sm.digest(ctxt.features().cluster_schema_features()));
     }
 
     if (auto partitioner = sm.partitioner()) {
@@ -3347,7 +3349,7 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
     if (version) {
         builder.with_version(*version);
     } else {
-        builder.with_version(sm.digest());
+        builder.with_version(sm.digest(ctxt.features().cluster_schema_features()));
     }
 
     auto base_id = table_id(row.get_nonnull<utils::UUID>("base_table_id"));
