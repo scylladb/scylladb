@@ -669,6 +669,50 @@ SEASTAR_THREAD_TEST_CASE(test_sm_fast_forwarding_combining_reader_with_galloping
     assertions.produces_end_of_stream();
 }
 
+class selector_of_empty_readers : public reader_selector {
+    schema_ptr _schema;
+    reader_permit _permit;
+    size_t _remaining;
+public:
+    selector_of_empty_readers(schema_ptr s, reader_permit permit, size_t count)
+        : reader_selector(s, dht::ring_position_view::min())
+        , _schema(s)
+        , _permit(std::move(permit))
+        , _remaining(count) {
+    }
+    virtual std::vector<flat_mutation_reader_v2> create_new_readers(const std::optional<dht::ring_position_view>& pos) override {
+        if (_remaining == 0) {
+            return {};
+        }
+        --_remaining;
+        std::vector<flat_mutation_reader_v2> ret;
+        ret.push_back(make_empty_flat_reader_v2(_schema, _permit));
+        return ret;
+    }
+    virtual std::vector<flat_mutation_reader_v2> fast_forward_to(const dht::partition_range& pr) override {
+        assert(false); // Fast forward not supported by this reader
+        return {};
+    }
+};
+
+// Reproduces scylladb/scylladb#14415
+SEASTAR_THREAD_TEST_CASE(test_combined_reader_with_incrementally_opened_empty_readers) {
+    static constexpr size_t empty_reader_count = 10 * 1000;
+
+    simple_schema s;
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto permit = semaphore.make_permit();
+
+    auto reader = make_combined_reader(s.schema(), permit,
+                std::make_unique<selector_of_empty_readers>(s.schema(), permit, empty_reader_count),
+                streamed_mutation::forwarding::no,
+                mutation_reader::forwarding::no);
+
+    // Expect that the reader won't produce a stack overflow
+    assert_that(std::move(reader))
+            .produces_end_of_stream();
+}
+
 SEASTAR_TEST_CASE(combined_mutation_reader_test) {
   return sstables::test_env::do_with_async([] (sstables::test_env& env) {
     simple_schema s;

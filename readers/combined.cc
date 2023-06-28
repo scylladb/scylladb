@@ -13,6 +13,7 @@
 #include "readers/clustering_combined.hh"
 #include "readers/range_tombstone_change_merger.hh"
 #include "readers/combined.hh"
+#include "utils/preemptor.hh"
 
 extern logging::logger mrlog;
 
@@ -225,6 +226,7 @@ private:
     const schema_ptr _schema;
     streamed_mutation::forwarding _fwd_sm;
     mutation_reader::forwarding _fwd_mr;
+    preemptor<64> _preemptor;
 private:
     void maybe_add_readers_at_partition_boundary();
     void maybe_add_readers(const std::optional<dht::ring_position_view>& pos);
@@ -477,7 +479,9 @@ future<mutation_fragment_batch> mutation_reader_merger::operator()() {
                 _current.clear();
                 return make_ready_future<mutation_fragment_batch>(_current, &_single_reader);
             }
-            return _single_reader.reader->fill_buffer().then([this] { return operator()(); });
+            return _single_reader.reader->fill_buffer().then([this] {
+                return _preemptor.maybe_after_preemption([this] { return (*this)(); });
+            });
         }
         _current.clear();
         _current.emplace_back(_single_reader.reader->pop_mutation_fragment(), &*_single_reader.reader);
@@ -495,12 +499,14 @@ future<mutation_fragment_batch> mutation_reader_merger::operator()() {
             }
             // Galloping reader may have lost to some other reader. In that case, we should proceed
             // with standard merging logic.
-            return (*this)();
+            return _preemptor.maybe_after_preemption([this] { return (*this)(); });
         });
     }
 
     if (!_next.empty()) {
-        return prepare_next().then([this] { return (*this)(); });
+        return prepare_next().then([this] {
+            return _preemptor.maybe_after_preemption([this] { return (*this)(); });
+        });
     }
 
     _current.clear();
@@ -823,6 +829,10 @@ class clustering_order_reader_merger {
     // reader in order to enter gallop mode. Must be greater than one.
     static constexpr int _gallop_mode_entering_threshold = 3;
 
+    // Helps protect from overflowing the stack when doing recursive calls
+    // by forcing a preemption.
+    preemptor<64> _preemptor;
+
     bool in_gallop_mode() const {
         return _gallop_mode_hits >= _gallop_mode_entering_threshold;
     }
@@ -969,7 +979,7 @@ class clustering_order_reader_merger {
           return maybe_erase.then([this] {
             _galloping_reader = {};
             _gallop_mode_hits = 0;
-            return (*this)();
+            return _preemptor.maybe_after_preemption([this] { return (*this)(); });
           });
         });
     }
@@ -1001,7 +1011,9 @@ public:
         }
 
         if (!_unpeeked_readers.empty()) {
-            return peek_readers().then([this] { return (*this)(); });
+            return peek_readers().then([this] {
+                return _preemptor.maybe_after_preemption([this] { return (*this)(); });
+            });
         }
 
         // Before we return a batch of fragments using currently opened readers we must check the queue
@@ -1026,7 +1038,9 @@ public:
                 _all_readers.push_front(std::move(r));
                 _unpeeked_readers.push_back(_all_readers.begin());
             }
-            return peek_readers().then([this] { return (*this)(); });
+            return peek_readers().then([this] {
+                return _preemptor.maybe_after_preemption([this] { return (*this)(); });
+            });
         }
 
         if (_peeked_readers.empty()) {
