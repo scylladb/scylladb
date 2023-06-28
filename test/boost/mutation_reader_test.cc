@@ -3648,9 +3648,13 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_next_pos_is_partition_start) {
     auto stop_rd = deferred_close(rd);
     rd.set_max_buffer_size(max_buf_size);
 
+    // #13491 - the reader must not consume the entire partition but a small batch of fragments based on the buffer size.
+    rd.fill_buffer().get();
     rd.fill_buffer().get();
     auto buf1 = rd.detach_buffer();
-    BOOST_REQUIRE_EQUAL(buf1.size(), 3);
+    // There should be 6-7 fragments, but to avoid computing the exact number of fragments that should fit in `max_buf_size`,
+    // just ensure that there are <= 10 (consuming the whole partition would give ~1000 fragments).
+    BOOST_REQUIRE_LE(buf1.size(), 10);
 }
 
 struct mutation_bounds {
