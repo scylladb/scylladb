@@ -20,8 +20,15 @@ SEASTAR_TEST_CASE(test_index_with_paging) {
 
         sstring big_string(100, 'j');
         // There should be enough rows to use multiple pages
+        auto prepared_id = e.prepare("INSERT INTO tab (pk, ck, v, v2, v3) VALUES (?, ?, 1, ?, ?)").get0();
+        auto big_string_v = cql3::raw_value::make_value(serialized(big_string));
         for (int i = 0; i < 64 * 1024; ++i) {
-            e.execute_cql(format("INSERT INTO tab (pk, ck, v, v2, v3) VALUES ({}, 'hello{}', 1, {}, '{}')", i % 3, i, i, big_string)).get();
+            e.execute_prepared(prepared_id, {
+                cql3::raw_value::make_value(serialized(i % 3)),                     // pk
+                cql3::raw_value::make_value(serialized(format("hello{}", i))),      // ck
+                cql3::raw_value::make_value(int32_type->decompose(data_value(i))),  // v2
+                big_string_v,                                                       // v3
+            }).get();
         }
 
         e.db().invoke_on_all([] (replica::database& db) {
