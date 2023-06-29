@@ -1717,7 +1717,7 @@ cql3::raw_value do_evaluate(const conjunction& conj, const evaluation_inputs& in
 
 static
 cql3::raw_value do_evaluate(const field_selection& field_select, const evaluation_inputs& inputs) {
-    const user_type_impl* udt_type = dynamic_cast<const user_type_impl*>(&field_select.type->without_reversed());
+    const user_type_impl* udt_type = dynamic_cast<const user_type_impl*>(&type_of(field_select.structure)->without_reversed());
     if (udt_type == nullptr) {
         on_internal_error(expr_logger, "evaluate(field_selection): type is not a user defined type");
     }
