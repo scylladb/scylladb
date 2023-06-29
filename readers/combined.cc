@@ -31,6 +31,7 @@ struct mutation_fragment_and_stream_id {
 };
 
 using mutation_fragment_batch = boost::iterator_range<merger_vector<mutation_fragment_and_stream_id>::iterator>;
+using mutation_fragment_batch_opt = std::optional<mutation_fragment_batch>;
 
 // Merges range tombstone changes coming from different streams (readers).
 //
@@ -301,6 +302,7 @@ private:
     streamed_mutation::forwarding _fwd_sm;
     mutation_reader::forwarding _fwd_mr;
 private:
+    future<mutation_fragment_batch_opt> maybe_produce_batch();
     void maybe_add_readers_at_partition_boundary();
     void maybe_add_readers(const std::optional<dht::ring_position_view>& pos);
     void add_readers(std::vector<flat_mutation_reader_v2> new_readers);
@@ -544,15 +546,21 @@ mutation_reader_merger::mutation_reader_merger(schema_ptr schema,
 }
 
 future<mutation_fragment_batch> mutation_reader_merger::operator()() {
+    return repeat_until_value([this] { return maybe_produce_batch(); });
+}
+
+future<mutation_fragment_batch_opt> mutation_reader_merger::maybe_produce_batch() {
     // Avoid merging-related logic if we know that only a single reader owns
     // current partition.
     if (_single_reader.reader != reader_iterator{}) {
         if (_single_reader.reader->is_buffer_empty()) {
             if (_single_reader.reader->is_end_of_stream()) {
                 _current.clear();
-                return make_ready_future<mutation_fragment_batch>(_current, &_single_reader);
+                return make_ready_future<mutation_fragment_batch_opt>(mutation_fragment_batch(_current, &_single_reader));
             }
-            return _single_reader.reader->fill_buffer().then([this] { return operator()(); });
+            return _single_reader.reader->fill_buffer().then([] {
+                return make_ready_future<mutation_fragment_batch_opt>();
+            });
         }
         _current.clear();
         _current.emplace_back(_single_reader.reader->pop_mutation_fragment(), &*_single_reader.reader);
@@ -560,22 +568,22 @@ future<mutation_fragment_batch> mutation_reader_merger::operator()() {
         if (_current.back().fragment.is_end_of_partition()) {
             _next.emplace_back(std::exchange(_single_reader.reader, {}), mutation_fragment_v2::kind::partition_end);
         }
-        return make_ready_future<mutation_fragment_batch>(_current);
+        return make_ready_future<mutation_fragment_batch_opt>(_current);
     }
 
     if (in_gallop_mode()) {
         return advance_galloping_reader().then([this] (needs_merge needs_merge) {
             if (!needs_merge) {
-                return make_ready_future<mutation_fragment_batch>(_current);
+                return make_ready_future<mutation_fragment_batch_opt>(_current);
             }
             // Galloping reader may have lost to some other reader. In that case, we should proceed
             // with standard merging logic.
-            return (*this)();
+            return make_ready_future<mutation_fragment_batch_opt>();
         });
     }
 
     if (!_next.empty()) {
-        return prepare_next().then([this] { return (*this)(); });
+        return prepare_next().then([] { return make_ready_future<mutation_fragment_batch_opt>(); });
     }
 
     _current.clear();
@@ -584,7 +592,7 @@ future<mutation_fragment_batch> mutation_reader_merger::operator()() {
     // readers for the next one.
     if (_fragment_heap.empty()) {
         if (!_halted_readers.empty() || _reader_heap.empty()) {
-            return make_ready_future<mutation_fragment_batch>(_current);
+            return make_ready_future<mutation_fragment_batch_opt>(_current);
         }
 
         auto key = [] (const merger_vector<reader_and_fragment>& heap) -> const dht::decorated_key& {
@@ -604,7 +612,7 @@ future<mutation_fragment_batch> mutation_reader_merger::operator()() {
             _current.emplace_back(std::move(_fragment_heap.back().fragment), &*_single_reader.reader);
             _fragment_heap.clear();
             _gallop_mode_hits = 0;
-            return make_ready_future<mutation_fragment_batch>(_current);
+            return make_ready_future<mutation_fragment_batch_opt>(_current);
         }
     }
 
@@ -630,7 +638,7 @@ future<mutation_fragment_batch> mutation_reader_merger::operator()() {
         _gallop_mode_hits = 1;
     }
 
-    return make_ready_future<mutation_fragment_batch>(_current);
+    return make_ready_future<mutation_fragment_batch_opt>(_current);
 }
 
 future<> mutation_reader_merger::next_partition() {
@@ -993,7 +1001,7 @@ class clustering_order_reader_merger {
     //
     // If the galloping reader wins with other readers again, the fragment is returned as the next batch.
     // Otherwise, the reader is pushed onto _peeked_readers and we retry in non-galloping mode.
-    future<mutation_fragment_batch> peek_galloping_reader() {
+    future<mutation_fragment_batch_opt> peek_galloping_reader() {
         return _galloping_reader->reader.peek().then([this] (mutation_fragment_v2* mf) {
             bool erase = false;
             if (mf) {
@@ -1018,7 +1026,7 @@ class clustering_order_reader_merger {
                                     || _cmp(mf->position(), _peeked_readers.front()->reader.peek_buffer().position()) < 0)) {
                         _current_batch.emplace_back(_galloping_reader->reader.pop_mutation_fragment(), &_galloping_reader->reader);
 
-                        return make_ready_future<mutation_fragment_batch>(_current_batch);
+                        return make_ready_future<mutation_fragment_batch_opt>(_current_batch);
                     }
 
                     // One of the existing readers won with the galloping reader,
@@ -1044,7 +1052,7 @@ class clustering_order_reader_merger {
           return maybe_erase.then([this] {
             _galloping_reader = {};
             _gallop_mode_hits = 0;
-            return (*this)();
+            return make_ready_future<mutation_fragment_batch_opt>();
           });
         });
     }
@@ -1069,6 +1077,10 @@ public:
     // returned by the previous operator() call after calling operator() again
     // (the data from the previous batch is destroyed).
     future<mutation_fragment_batch> operator()() {
+        return repeat_until_value([this] { return maybe_produce_batch(); });
+    }
+
+    future<mutation_fragment_batch_opt> maybe_produce_batch() {
         _current_batch.clear();
 
         if (in_gallop_mode()) {
@@ -1076,7 +1088,7 @@ public:
         }
 
         if (!_unpeeked_readers.empty()) {
-            return peek_readers().then([this] { return (*this)(); });
+            return peek_readers().then([] { return make_ready_future<mutation_fragment_batch_opt>(); });
         }
 
         // Before we return a batch of fragments using currently opened readers we must check the queue
@@ -1101,7 +1113,7 @@ public:
                 _all_readers.push_front(std::move(r));
                 _unpeeked_readers.push_back(_all_readers.begin());
             }
-            return peek_readers().then([this] { return (*this)(); });
+            return peek_readers().then([] { return make_ready_future<mutation_fragment_batch_opt>(); });
         }
 
         if (_peeked_readers.empty()) {
@@ -1115,7 +1127,7 @@ public:
                 }
                 _should_emit_partition_end = false;
             }
-            return make_ready_future<mutation_fragment_batch>(_current_batch);
+            return make_ready_future<mutation_fragment_batch_opt>(_current_batch);
         }
 
         // Take all fragments with the next smallest position (there may be multiple such fragments).
@@ -1149,7 +1161,7 @@ public:
             _gallop_mode_hits = 1;
         }
 
-        return make_ready_future<mutation_fragment_batch>(_current_batch);
+        return make_ready_future<mutation_fragment_batch_opt>(_current_batch);
     }
 
     future<> next_partition() {
