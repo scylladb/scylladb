@@ -247,7 +247,7 @@ public:
     }
 
     virtual bool is_aggregate() const override {
-        return _factories->does_aggregation();
+        return !_inner_loop.empty();
     }
 
     virtual bool is_count() const override {
@@ -373,7 +373,7 @@ protected:
         }
 
         virtual bool is_aggregate() const override {
-            return _factories->does_aggregation();
+            return !_sel._inner_loop.empty();
         }
 
         virtual std::vector<managed_bytes_opt> transform_input_row(result_set_builder& rs) override {
