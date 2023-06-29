@@ -474,6 +474,14 @@ uint32_t selection::add_column_for_post_processing(const column_definition& c) {
     ::shared_ptr<selector_factories> factories =
         selector_factories::create_factories_and_collect_column_definitions(
             cql3::selection::to_selectables(prepared_selectors, *schema, db, ks), db, schema, defs);
+    defs.clear();
+    for (auto&& [sel, alias] : prepared_selectors) {
+        expr::for_each_expression<expr::column_value>(sel, [&] (const expr::column_value& cv) {
+            if (std::find(defs.begin(), defs.end(), cv.col) == defs.end()) {
+                defs.push_back(cv.col);
+            }
+        });
+    }
 
     auto metadata = collect_metadata(*schema, prepared_selectors);
     if (processes_selection(prepared_selectors) || prepared_selectors.size() != defs.size()) {
