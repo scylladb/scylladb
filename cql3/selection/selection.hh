@@ -173,7 +173,7 @@ private:
     std::vector<managed_bytes_opt> _last_group; ///< Previous row's group: all of GROUP BY column values.
     bool _group_began; ///< Whether a group began being formed.
 public:
-    std::optional<std::vector<managed_bytes_opt>> current = std::vector<managed_bytes_opt>();
+    std::vector<managed_bytes_opt> current;
 private:
     std::vector<api::timestamp_type> _timestamps;
     std::vector<int32_t> _ttls;

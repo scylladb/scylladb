@@ -69,7 +69,7 @@ public:
         // https://cassandra.apache.org/doc/latest/cql/dml.html#grouping-results
         if (_first) {
             // TODO: can we steal it?
-            _current = (*rs.current)[_idx];
+            _current = rs.current[_idx];
             _first = false;
         }
     }

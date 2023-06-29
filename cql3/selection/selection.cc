@@ -153,7 +153,7 @@ protected:
         }
 
         virtual std::vector<managed_bytes_opt> transform_input_row(result_set_builder& rs) override {
-            return std::move(*rs.current);
+            return std::move(rs.current);
         }
 
         virtual bool is_aggregate() const override {
@@ -450,23 +450,23 @@ result_set_builder::result_set_builder(const selection& s, gc_clock::time_point 
 }
 
 void result_set_builder::add_empty() {
-    current->emplace_back();
+    current.emplace_back();
     if (!_timestamps.empty()) {
-        _timestamps[current->size() - 1] = api::missing_timestamp;
+        _timestamps[current.size() - 1] = api::missing_timestamp;
     }
     if (!_ttls.empty()) {
-        _ttls[current->size() - 1] = -1;
+        _ttls[current.size() - 1] = -1;
     }
 }
 
 void result_set_builder::add(bytes_opt value) {
-    current->emplace_back(std::move(value));
+    current.emplace_back(std::move(value));
 }
 
 void result_set_builder::add(const column_definition& def, const query::result_atomic_cell_view& c) {
-    current->emplace_back(get_value(def.type, c));
+    current.emplace_back(get_value(def.type, c));
     if (!_timestamps.empty()) {
-        _timestamps[current->size() - 1] = c.timestamp();
+        _timestamps[current.size() - 1] = c.timestamp();
     }
     if (!_ttls.empty()) {
         gc_clock::duration ttl_left(-1);
@@ -474,18 +474,18 @@ void result_set_builder::add(const column_definition& def, const query::result_a
         if (e) {
             ttl_left = *e - _now;
         }
-        _ttls[current->size() - 1] = ttl_left.count();
+        _ttls[current.size() - 1] = ttl_left.count();
     }
 }
 
 void result_set_builder::add_collection(const column_definition& def, bytes_view c) {
-    current->emplace_back(to_bytes(c));
+    current.emplace_back(to_bytes(c));
     // timestamps, ttls meaningless for collections
 }
 
 void result_set_builder::update_last_group() {
     _group_began = true;
-    boost::transform(_group_by_cell_indices, _last_group.begin(), [this](size_t i) { return (*current)[i]; });
+    boost::transform(_group_by_cell_indices, _last_group.begin(), [this](size_t i) { return current[i]; });
 }
 
 bool result_set_builder::last_group_ended() const {
@@ -499,7 +499,7 @@ bool result_set_builder::last_group_ended() const {
     using boost::adaptors::transformed;
     return !boost::equal(
             _last_group | reversed,
-            _group_by_cell_indices | reversed | transformed([this](size_t i) { return (*current)[i]; }));
+            _group_by_cell_indices | reversed | transformed([this](size_t i) { return current[i]; }));
 }
 
 void result_set_builder::flush_selectors() {
@@ -525,7 +525,7 @@ void result_set_builder::complete_row() {
 }
 
 void result_set_builder::start_new_row() {
-    current->clear();
+    current.clear();
 }
 
 std::unique_ptr<result_set> result_set_builder::build() {
