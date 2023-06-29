@@ -23,6 +23,7 @@
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
+#include "cql3/functions/aggregate_fcts.hh"
 
 namespace cql3 {
 
@@ -224,7 +225,11 @@ public:
     }
 
     virtual bool is_count() const override {
-        return _factories->does_count();
+        return _selectors.size() == 1
+            && expr::find_in_expression<expr::function_call>(_selectors[0], [] (const expr::function_call& fc) {
+                auto& func = std::get<shared_ptr<cql3::functions::function>>(fc.func);
+                return func->name() == functions::function_name::native_function(functions::aggregate_fcts::COUNT_ROWS_FUNCTION_NAME);
+            });
     }
 
     virtual bool is_reducible() const override {
