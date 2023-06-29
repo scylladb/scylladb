@@ -233,11 +233,67 @@ public:
     }
 
     virtual bool is_reducible() const override {
-        return _factories->does_reduction();
+        return boost::algorithm::all_of(
+                _selectors,
+               [] (const expr::expression& e) {
+                    auto fc = expr::as_if<expr::function_call>(&e);
+                    if (!fc) {
+                        return false;
+                    }
+                    auto func = std::get<shared_ptr<cql3::functions::function>>(fc->func);
+                    if (!func->is_aggregate()) {
+                        return false;
+                    }
+                    auto agg_func = dynamic_pointer_cast<functions::aggregate_function>(std::move(func));
+                    if (!agg_func->get_aggregate().state_reduction_function) {
+                        return false;
+                    }
+                    // We only support transforming columns directly for parallel queries
+                    if (!boost::algorithm::all_of(fc->args, expr::is<expr::column_value>)) {
+                        return false;
+                    }
+                    return true;
+                }
+        );
     }
 
     virtual query::forward_request::reductions_info get_reductions() const override {
-        return _factories->get_reductions();
+        std::vector<query::forward_request::reduction_type> types;
+        std::vector<query::forward_request::aggregation_info> infos;
+        auto bad = [] {
+            throw std::runtime_error("Selection doesn't have a reduction");
+        };
+        for (const auto& e : _selectors) {
+            auto fc = expr::as_if<expr::function_call>(&e);
+            if (!fc) {
+                bad();
+            }
+            auto func = std::get<shared_ptr<cql3::functions::function>>(fc->func);
+            if (!func->is_aggregate()) {
+                bad();
+            }
+            auto agg_func = dynamic_pointer_cast<functions::aggregate_function>(std::move(func));
+
+            auto type = (agg_func->name().name == "countRows") ? query::forward_request::reduction_type::count : query::forward_request::reduction_type::aggregate;
+
+            std::vector<sstring> column_names;
+            for (auto& arg : fc->args) {
+                auto col = expr::as_if<expr::column_value>(&arg);
+                if (!col) {
+                    bad();
+                }
+                column_names.push_back(col->col->name_as_text());
+            }
+
+            auto info = query::forward_request::aggregation_info {
+                .name = agg_func->name(),
+                .column_names = std::move(column_names),
+            };
+
+            types.push_back(type);
+            infos.push_back(std::move(info));
+        }
+        return {types, infos};
     }
 
     virtual std::vector<shared_ptr<functions::function>> used_functions() const override {
