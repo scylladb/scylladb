@@ -135,7 +135,12 @@ void filesystem_storage::open(sstable& sst) {
     // sstable being created in parallel with the same generation.
     file_output_stream_options options;
     options.buffer_size = 4096;
-    auto w = sst.make_component_file_writer(component_type::TemporaryTOC, std::move(options)).get0();
+    auto sink = make_component_sink(sst, component_type::TemporaryTOC,
+                                    open_flags::wo |
+                                    open_flags::create |
+                                    open_flags::exclusive,
+                                    options).get0();
+    auto w = file_writer(output_stream<char>(std::move(sink)), std::move(file_path));
 
     bool toc_exists = file_exists(sst.filename(component_type::TOC)).get0();
     if (toc_exists) {
