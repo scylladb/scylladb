@@ -18,11 +18,19 @@ SEASTAR_TEST_CASE(test_index_with_paging) {
         e.execute_cql("CREATE TABLE tab (pk int, ck text, v int, v2 int, v3 text, PRIMARY KEY (pk, ck))").get();
         e.execute_cql("CREATE INDEX ON tab (v)").get();
 
-        sstring big_string(4096, 'j');
+        sstring big_string(100, 'j');
         // There should be enough rows to use multiple pages
-        for (int i = 0; i < 64 * 1024; ++i) {
-            e.execute_cql(format("INSERT INTO tab (pk, ck, v, v2, v3) VALUES ({}, 'hello{}', 1, {}, '{}')", i % 3, i, i, big_string)).get();
-        }
+        auto prepared_id = e.prepare("INSERT INTO tab (pk, ck, v, v2, v3) VALUES (?, ?, 1, ?, ?)").get0();
+        auto big_string_v = cql3::raw_value::make_value(serialized(big_string));
+        max_concurrent_for_each(boost::irange(0, 64 * 1024), 2, [&] (auto i) {
+            return e.execute_prepared(prepared_id, {
+                cql3::raw_value::make_value(serialized(i % 3)),                     // pk
+                cql3::raw_value::make_value(serialized(format("hello{}", i))),      // ck
+                cql3::raw_value::make_value(int32_type->decompose(data_value(i))),  // v2
+                big_string_v,                                                       // v3
+
+            }).discard_result();
+        }).get();
 
         e.db().invoke_on_all([] (replica::database& db) {
             // The semaphore's queue has to able to absorb one read / row in this test.
