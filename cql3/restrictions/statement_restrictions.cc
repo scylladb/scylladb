@@ -386,24 +386,24 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         _partition_range_restrictions = extract_partition_range(*_where, _schema);
     }
     _has_multi_column = find_binop(_clustering_columns_restrictions, expr::is_multi_column);
-  if (_check_indexes) {
-    auto cf = db.find_column_family(schema);
-    auto& sim = cf.get_index_manager();
-    const expr::allow_local_index allow_local(
-            !has_partition_key_unrestricted_components()
-            && partition_key_restrictions_is_all_eq());
-    _has_multi_column = find_binop(_clustering_columns_restrictions, expr::is_multi_column);
-    _has_queriable_ck_index = clustering_columns_restrictions_have_supporting_index(sim, allow_local)
-            && !type.is_delete();
-    _has_queriable_pk_index = parition_key_restrictions_have_supporting_index(sim, allow_local)
-            && !type.is_delete();
-    _has_queriable_regular_index = expr::index_supports_some_column(_nonprimary_key_restrictions, sim, allow_local)
-            && !type.is_delete();
-  } else {
-    _has_queriable_ck_index = false;
-    _has_queriable_pk_index = false;
-    _has_queriable_regular_index = false;
-  }
+    if (_check_indexes) {
+        auto cf = db.find_column_family(schema);
+        auto& sim = cf.get_index_manager();
+        const expr::allow_local_index allow_local(
+                !has_partition_key_unrestricted_components()
+                && partition_key_restrictions_is_all_eq());
+        _has_multi_column = find_binop(_clustering_columns_restrictions, expr::is_multi_column);
+        _has_queriable_ck_index = clustering_columns_restrictions_have_supporting_index(sim, allow_local)
+                && !type.is_delete();
+        _has_queriable_pk_index = parition_key_restrictions_have_supporting_index(sim, allow_local)
+                && !type.is_delete();
+        _has_queriable_regular_index = expr::index_supports_some_column(_nonprimary_key_restrictions, sim, allow_local)
+                && !type.is_delete();
+    } else {
+        _has_queriable_ck_index = false;
+        _has_queriable_pk_index = false;
+        _has_queriable_regular_index = false;
+    }
 
     // At this point, the select statement if fully constructed, but we still have a few things to validate
     process_partition_key_restrictions(for_view, allow_filtering);
@@ -581,11 +581,11 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
     std::vector<const column_definition*> column_defs_for_filtering;
     if (need_filtering()) {
         std::optional<secondary_index::index> opt_idx;
-      if (_check_indexes) {
-        auto cf = db.find_column_family(_schema);
-        auto& sim = cf.get_index_manager();
-        opt_idx = std::get<0>(find_idx(sim));
-      }
+        if (_check_indexes) {
+            auto cf = db.find_column_family(_schema);
+            auto& sim = cf.get_index_manager();
+            opt_idx = std::get<0>(find_idx(sim));
+        }
         auto column_uses_indexing = [&opt_idx] (const column_definition* cdef, const expr::expression* single_col_restr) {
             return opt_idx && single_col_restr && is_supported_by(*single_col_restr, *opt_idx);
         };
