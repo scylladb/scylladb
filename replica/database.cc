@@ -401,7 +401,7 @@ const data_dictionary::user_types_storage& database::user_types() const noexcept
     return *_user_types;
 }
 
-locator::vnode_effective_replication_map_ptr keyspace::get_effective_replication_map() const {
+locator::vnode_effective_replication_map_ptr keyspace::erm() const {
     // FIXME: Examine all users.
     if (get_replication_strategy().is_per_table()) {
         on_internal_error(dblog, format("Tried to obtain per-keyspace effective replication map of {} but it's per-table", _metadata->name()));
@@ -975,7 +975,7 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     if (auto pt_rs = rs.maybe_as_per_table()) {
         erm = pt_rs->make_replication_map(schema->id(), _shared_token_metadata.get());
     } else {
-        erm = ks.get_effective_replication_map();
+        erm = ks.erm();
     }
     // avoid self-reporting
     auto& sst_manager = is_system_table(*schema) ? get_system_sstables_manager() : get_user_sstables_manager();
@@ -1209,7 +1209,7 @@ std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> databa
     for (auto const& i : _keyspaces) {
         auto&& rs = i.second.get_replication_strategy();
         if (rs.get_type() != locator::replication_strategy_type::local && !rs.is_per_table()) {
-            res.emplace(i.first, i.second.get_effective_replication_map());
+            res.emplace(i.first, i.second.erm());
         }
     }
     return res;
@@ -2529,7 +2529,7 @@ const sstring& database::get_snitch_name() const {
 }
 
 dht::token_range_vector database::get_keyspace_local_ranges(sstring ks) {
-    return find_keyspace(ks).get_effective_replication_map()->get_ranges(utils::fb_utilities::get_broadcast_address());
+    return find_keyspace(ks).erm()->get_ranges(utils::fb_utilities::get_broadcast_address());
 }
 
 /*!
@@ -2864,7 +2864,7 @@ flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::da
         }
     };
     auto& table = db.local().find_column_family(schema);
-    auto erm = table.get_effective_replication_map();
+    auto erm = table.erm();
     auto ms = mutation_source([&db, erm] (schema_ptr s,
             reader_permit permit,
             const dht::partition_range& pr,
@@ -2904,7 +2904,7 @@ future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations(
     auto max_size = db.local().get_unlimited_query_max_result_size();
     auto max_res_size = query::max_result_size(max_size.soft_limit, max_size.hard_limit, query::result_memory_limiter::maximum_result_size);
     auto cmd = query::read_command(s->id(), s->version(), ps, max_res_size, query::tombstone_limit::max);
-    auto erm = s->table().get_effective_replication_map();
+    auto erm = s->table().erm();
     if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
         auto shard = *shard_opt;
         co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, &pr, timeout] (replica::database& db) mutable {
@@ -2930,7 +2930,7 @@ future<foreign_ptr<lw_shared_ptr<query::result>>> query_data(
     auto cmd = query::read_command(s->id(), s->version(), ps, max_res_size, query::tombstone_limit::max);
     auto prs = dht::partition_range_vector{pr};
     auto opts = query::result_options::only_result();
-    auto erm = s->table().get_effective_replication_map();
+    auto erm = s->table().erm();
     if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
         auto shard = *shard_opt;
         co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, opts, &prs, timeout] (replica::database& db) mutable {

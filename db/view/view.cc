@@ -1556,7 +1556,7 @@ static std::optional<gms::inet_address>
 get_view_natural_endpoint(replica::database& db, const sstring& keyspace_name,
         const dht::token& base_token, const dht::token& view_token) {
     auto& ks = db.find_keyspace(keyspace_name);
-    auto erm = ks.get_effective_replication_map();
+    auto erm = ks.erm();
     auto& topology = erm->get_token_metadata_ptr()->get_topology();
     auto my_address = utils::fb_utilities::get_broadcast_address();
     auto my_datacenter = topology.get_datacenter();
@@ -1640,7 +1640,7 @@ future<> view_update_generator::mutate_MV(
         auto view_token = dht::get_token(*mut.s, mut.fm.key());
         auto& keyspace_name = mut.s->ks_name();
         auto target_endpoint = get_view_natural_endpoint(_proxy.local().local_db(), keyspace_name, base_token, view_token);
-        auto remote_endpoints = _proxy.local().local_db().find_keyspace(keyspace_name).get_effective_replication_map()->get_pending_endpoints(view_token);
+        auto remote_endpoints = _proxy.local().local_db().find_keyspace(keyspace_name).erm()->get_pending_endpoints(view_token);
         auto sem_units = pending_view_updates.split(mut.fm.representation().size());
 
         const bool update_synchronously = should_update_synchronously(*mut.s);

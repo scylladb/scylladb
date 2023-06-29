@@ -96,7 +96,7 @@ void run_sstable_resharding_test(sstables::test_env& env) {
 
     uint64_t bloom_filter_size_before = filter_size(sst);
 
-    auto erm = cf->get_effective_replication_map();
+    auto erm = cf->erm();
 
     auto descriptor = sstables::compaction_descriptor({sst}, 0, std::numeric_limits<uint64_t>::max());
     descriptor.options = sstables::compaction_type_options::make_reshard();

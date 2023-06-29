@@ -123,7 +123,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
     auto s = table.schema();
     const auto cf_id = s->id();
     const auto reason = streaming::stream_reason::repair;
-    auto erm = _db.local().find_column_family(s).get_effective_replication_map();
+    auto erm = _db.local().find_column_family(s).erm();
 
     // By sorting SSTables by their primary key, we allow SSTable runs to be
     // incrementally streamed.

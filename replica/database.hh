@@ -767,7 +767,7 @@ public:
     const schema_ptr& schema() const { return _schema; }
     void set_schema(schema_ptr);
     db::commitlog* commitlog() { return _commitlog; }
-    const locator::effective_replication_map_ptr& get_effective_replication_map() const { return _erm; }
+    const locator::effective_replication_map_ptr& erm() const { return _erm; }
     void update_effective_replication_map(locator::effective_replication_map_ptr);
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
     future<const_mutation_partition_ptr> find_partition_slow(schema_ptr, reader_permit permit, const partition_key& key) const;
@@ -1219,7 +1219,7 @@ public:
         return _replication_strategy;
     }
 
-    locator::vnode_effective_replication_map_ptr get_effective_replication_map() const;
+    locator::vnode_effective_replication_map_ptr erm() const;
 
     column_family::config make_column_family_config(const schema& s, const database& db) const;
     void add_or_update_column_family(const schema_ptr& s);

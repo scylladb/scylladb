@@ -220,7 +220,7 @@ public:
         :  _s(s)
         , _partition_ranges(v)
         , _range_idx(0)
-        , _erm(_s->table().get_effective_replication_map())
+        , _erm(_s->table().erm())
     {}
 
     // Return the next partition_range owned by this shard, or nullopt when the
@@ -541,7 +541,7 @@ future<> forward_service::uninit_messaging_service() {
 future<query::forward_result> forward_service::dispatch(query::forward_request req, tracing::trace_state_ptr tr_state) {
     schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
     replica::table& cf = _db.local().find_column_family(schema);
-    auto erm = cf.get_effective_replication_map();
+    auto erm = cf.erm();
     // next_vnode is used to iterate through all vnodes produced by
     // query_ranges_to_vnodes_generator.
     auto next_vnode = [
