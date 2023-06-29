@@ -8,8 +8,12 @@
 
 import pytest
 import random
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, HTTPClientError
 from util import random_string, full_scan, full_query, multiset, scylla_inject_error
+import urllib3
+import traceback
+import sys
+from conftest import new_dynamodb_session
 
 # Test ensuring that items inserted by a batched statement can be properly extracted
 # via GetItem. Schema has both hash and sort keys.
@@ -357,6 +361,43 @@ def test_batch_write_item_large(test_table_sn):
     assert 'UnprocessedItems' in write_reply and write_reply['UnprocessedItems'] == dict()
     assert full_query(test_table_sn, KeyConditionExpression='p=:p', ExpressionAttributeValues={':p': p}
         ) == [{'p': p, 'c': i, 'content': long_content} for i in range(25)]
+
+# Test if client breaking connection during HTTP response
+# streaming doesn't break the server.
+def test_batch_write_item_large_broken_connection(test_table_sn, request, dynamodb):
+    fn_name = sys._getframe().f_code.co_name
+    ses = new_dynamodb_session(request, dynamodb)
+
+    p = random_string()
+    long_content = random_string(100)*500
+    write_reply = test_table_sn.meta.client.batch_write_item(RequestItems = {
+        test_table_sn.name: [{'PutRequest': {'Item': {'p': p, 'c': i, 'content': long_content}}} for i in range(25)],
+    })
+    assert 'UnprocessedItems' in write_reply and write_reply['UnprocessedItems'] == dict()
+
+    read_fun = urllib3.HTTPResponse.read_chunked
+    triggered = False
+    def broken_read_fun(self, amt=None, decode_content=None):
+        ret =  read_fun(self, amt, decode_content)
+        st = traceback.extract_stack()
+        # Try to not disturb other tests if executed in parallel
+        if fn_name in str(st):
+            self._fp.fp.raw.close() # close the socket
+            nonlocal triggered
+            triggered = True
+        return ret
+    urllib3.HTTPResponse.read_chunked = broken_read_fun
+
+    try:
+        # This disruption doesn't always work so we repeat it.
+        for _ in range(1, 20):
+            with pytest.raises(HTTPClientError):
+                # Our monkey patched read_chunked function will make client unusable
+                # so we need to use separate session so that it doesn't affect other tests.
+                ses.meta.client.query(TableName=test_table_sn.name, KeyConditionExpression='p=:p', ExpressionAttributeValues={':p': p})
+            assert triggered
+    finally:
+        urllib3.HTTPResponse.read_chunked = read_fun
 
 # DynamoDB limits the number of items written by a BatchWriteItem operation
 # to 25, even if they are small. Exceeding this limit results in a
