@@ -499,7 +499,6 @@ public:
     static future<mutation> get_group0_history(distributed<replica::database>&);
 
     future<> sstables_registry_create_entry(sstring location, sstring status, sstables::entry_descriptor desc);
-    future<> sstables_registry_lookup_entry(sstring location, sstables::generation_type gen);
     future<> sstables_registry_update_entry_status(sstring location, sstables::generation_type gen, sstring status);
     future<> sstables_registry_delete_entry(sstring location, sstables::generation_type gen);
     using sstable_registry_entry_consumer = noncopyable_function<future<>(sstring state, sstables::entry_descriptor desc)>;

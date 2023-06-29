@@ -2737,18 +2737,6 @@ future<> system_keyspace::sstables_registry_create_entry(sstring location, sstri
     co_await execute_cql(req, location, desc.generation, status, fmt::to_string(desc.version), fmt::to_string(desc.format)).discard_result();
 }
 
-future<> system_keyspace::sstables_registry_lookup_entry(sstring location, sstables::generation_type gen) {
-    static const auto req = format("SELECT generation FROM system.{} WHERE location = ? AND generation = ?", SSTABLES_REGISTRY);
-    slogger.trace("Looking up {}.{} in {}", location, gen, SSTABLES_REGISTRY);
-    auto msg = co_await execute_cql(req, location, gen);
-    if (msg->empty() || !msg->one().has("generation")) {
-        slogger.trace("ERROR: Cannot find {}.{} in {}", location, gen, SSTABLES_REGISTRY);
-        co_await coroutine::return_exception(std::runtime_error("No entry in sstables registry"));
-    }
-
-    slogger.trace("Found {}.{} in {}", location, gen, SSTABLES_REGISTRY);
-}
-
 future<> system_keyspace::sstables_registry_update_entry_status(sstring location, sstables::generation_type gen, sstring status) {
     static const auto req = format("UPDATE system.{} SET status = ? WHERE location = ? AND generation = ?", SSTABLES_REGISTRY);
     slogger.trace("Updating {}.{} -> {} in {}", location, gen, status, SSTABLES_REGISTRY);

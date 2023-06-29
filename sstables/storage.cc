@@ -436,15 +436,12 @@ class s3_storage : public sstables::storage {
     shared_ptr<s3::client> _client;
     sstring _bucket;
     sstring _location;
-    std::optional<sstring> _remote_prefix;
 
     static constexpr auto status_creating = "creating";
     static constexpr auto status_sealed = "sealed";
     static constexpr auto status_removing = "removing";
 
     sstring make_s3_object_name(const sstable& sst, component_type type) const;
-
-    future<> ensure_remote_prefix(const sstable& sst);
 
     static future<> delete_with_system_keyspace(std::vector<shared_sstable>);
 
@@ -483,17 +480,9 @@ sstring s3_storage::make_s3_object_name(const sstable& sst, component_type type)
     return format("/{}/{}/{}", _bucket, sst.generation(), sstable_version_constants::get_component_map(sst.get_version()).at(type));
 }
 
-future<> s3_storage::ensure_remote_prefix(const sstable& sst) {
-    if (!_remote_prefix) {
-        co_await sst.manager().system_keyspace().sstables_registry_lookup_entry(_location, sst.generation());
-        _remote_prefix = fmt::to_string(sst.generation());
-    }
-}
-
 void s3_storage::open(sstable& sst) {
     entry_descriptor desc(sst._generation, sst._version, sst._format, component_type::TOC);
     sst.manager().system_keyspace().sstables_registry_create_entry(_location, status_creating, std::move(desc)).get();
-    _remote_prefix = fmt::to_string(sst._generation);
 
     memory_data_sink_buffers bufs;
     sst.write_toc(
@@ -509,19 +498,16 @@ void s3_storage::open(sstable& sst) {
 }
 
 future<file> s3_storage::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
-    co_await ensure_remote_prefix(sst);
     co_return _client->make_readable_file(make_s3_object_name(sst, type));
 }
 
 future<data_sink> s3_storage::make_data_or_index_sink(sstable& sst, component_type type) {
     assert(type == component_type::Data || type == component_type::Index);
-    co_await ensure_remote_prefix(sst);
     // FIXME: if we have file size upper bound upfront, it's better to use make_upload_sink() instead
     co_return _client->make_upload_jumbo_sink(make_s3_object_name(sst, type));
 }
 
 future<data_sink> s3_storage::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
-    co_await ensure_remote_prefix(sst);
     co_return _client->make_upload_sink(make_s3_object_name(sst, type));
 }
 
