@@ -173,7 +173,7 @@ private:
     std::vector<managed_bytes_opt> _last_group; ///< Previous row's group: all of GROUP BY column values.
     bool _group_began; ///< Whether a group began being formed.
 public:
-    std::optional<std::vector<managed_bytes_opt>> current;
+    std::optional<std::vector<managed_bytes_opt>> current = std::vector<managed_bytes_opt>();
 private:
     std::vector<api::timestamp_type> _timestamps;
     std::vector<int32_t> _ttls;
@@ -237,7 +237,8 @@ public:
     void add(bytes_opt value);
     void add(const column_definition& def, const query::result_atomic_cell_view& c);
     void add_collection(const column_definition& def, bytes_view c);
-    void new_row();
+    void start_new_row();
+    void complete_row();
     std::unique_ptr<result_set> build();
     api::timestamp_type timestamp_of(size_t idx);
     int32_t ttl_of(size_t idx);
@@ -304,7 +305,7 @@ public:
             if (!_filter(_selection, _partition_key, _clustering_key, static_row, &row)) {
                 return;
             }
-            _builder.new_row();
+            _builder.start_new_row();
             for (auto&& def : _selection.get_columns()) {
                 switch (def->kind) {
                 case column_kind::partition_key:
@@ -327,6 +328,7 @@ public:
                     assert(0);
                 }
             }
+            _builder.complete_row();
         }
 
         uint64_t accept_partition_end(const query::result_row_view& static_row) {
@@ -334,7 +336,7 @@ public:
                 if (!_filter(_selection, _partition_key, _clustering_key, static_row, nullptr)) {
                     return _filter.get_rows_dropped();
                 }
-                _builder.new_row();
+                _builder.start_new_row();
                 auto static_row_iterator = static_row.iterator();
                 for (auto&& def : _selection.get_columns()) {
                     if (def->is_partition_key()) {
@@ -345,6 +347,7 @@ public:
                         _builder.add_empty();
                     }
                 }
+                _builder.complete_row();
             }
             return _filter.get_rows_dropped();
         }
@@ -356,10 +359,6 @@ private:
     /// True iff the \c current row ends a previously started group, either according to
     /// _group_by_cell_indices or aggregation.
     bool last_group_ended() const;
-
-    /// If there is a valid row in this->current, process it; if \p more_rows_coming, get ready to
-    /// receive another.
-    void process_current_row(bool more_rows_coming);
 
     /// Gets output row from _selectors and resets them.
     void flush_selectors();

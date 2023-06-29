@@ -511,10 +511,7 @@ void result_set_builder::flush_selectors() {
     _selectors->reset();
 }
 
-void result_set_builder::process_current_row(bool more_rows_coming) {
-    if (!current) {
-        return;
-    }
+void result_set_builder::complete_row() {
     if (!_selectors->is_aggregate()) {
         // Fast path when not aggregating
         _result_set->add_row(_selectors->transform_input_row(*this));
@@ -525,23 +522,16 @@ void result_set_builder::process_current_row(bool more_rows_coming) {
     }
     update_last_group();
     _selectors->add_input_row(*this);
-    if (more_rows_coming) {
-        current->clear();
-    } else {
-        flush_selectors();
-    }
 }
 
-void result_set_builder::new_row() {
-    process_current_row(/*more_rows_coming=*/true);
-    // FIXME: we use optional<> here because we don't have an end_row() signal
-    //        instead, !current means that new_row has never been called, so this
-    //        call to new_row() does not end a previous row.
-    current.emplace();
+void result_set_builder::start_new_row() {
+    current->clear();
 }
 
 std::unique_ptr<result_set> result_set_builder::build() {
-    process_current_row(/*more_rows_coming=*/false);
+    if (_group_began && _selectors->is_aggregate()) {
+        flush_selectors();
+    }
     if (_result_set->empty() && _selectors->is_aggregate() && _group_by_cell_indices.empty()) {
         _result_set->add_row(_selectors->get_output_row());
     }
