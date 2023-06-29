@@ -1664,16 +1664,13 @@ select_statement::maybe_jsonize_select_clause(std::vector<selection::prepared_se
         std::vector<const column_definition*> defs;
         selector_names.reserve(prepared_selectors.size());
         selector_types.reserve(prepared_selectors.size());
-        auto selectables = selection::to_selectables(prepared_selectors, *schema, db, keyspace());
-        selection::selector_factories factories(selectables, db, schema, defs);
-        auto selectors = factories.new_instances();
-        for (size_t i = 0; i < selectors.size(); ++i) {
-            if (prepared_selectors[i].alias) {
-                selector_names.push_back(_select_clause[i]->alias->to_string());
+        for (auto&& [sel, alias] : prepared_selectors) {
+            if (alias) {
+                selector_names.push_back(alias->to_string());
             } else {
-                selector_names.push_back(selectables[i]->to_string());
+                selector_names.push_back(fmt::format("{:result_set_metadata}", sel));
             }
-            selector_types.push_back(selectors[i]->get_type());
+            selector_types.push_back(expr::type_of(sel));
         }
 
         // Prepare args for as_json_function

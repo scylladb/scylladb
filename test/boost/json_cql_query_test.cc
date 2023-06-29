@@ -107,7 +107,7 @@ SEASTAR_TEST_CASE(test_select_json_types) {
                     "\"s\": 00:00:00.000000001, "
                     "\"u\": \"1y2mo25d5h6m7s8ms9us10ns\", "
                     "\"w\": null, "
-                    "\"unixtimestampof(k)\": 1261009589805}"
+                    "\"system.unixtimestampof(k)\": 1261009589805}"
                 )
             }
          });
