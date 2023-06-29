@@ -83,8 +83,8 @@ SEASTAR_TEST_CASE(test_memtable_conforms_to_mutation_source) {
     });
 }
 
-SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) {
-    return seastar::async([] {
+static future<> test_memtable(void (*run_tests)(populate_fn_ex, bool)) {
+    return seastar::async([run_tests] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
         lw_shared_ptr<replica::memtable> mt;
         std::vector<flat_mutation_reader_v2> readers;
@@ -107,7 +107,7 @@ SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) 
             logalloc::shard_tracker().full_compaction();
             return seastar::sleep(100us);
         });
-        run_mutation_source_tests([&] (schema_ptr s, const std::vector<mutation>& muts) {
+        run_tests([&] (schema_ptr s, const std::vector<mutation>& muts, gc_clock::time_point) {
             clear_readers();
             mt = make_lw_shared<replica::memtable>(s);
 
@@ -121,10 +121,18 @@ SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) 
             }
 
             return mt->as_data_source();
-        });
+        }, true);
         *finished = true;
         full_compaction_in_background.get();
     });
+}
+
+SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source_plain) {
+    return test_memtable(run_mutation_source_tests_plain);
+}
+
+SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source_reverse) {
+    return test_memtable(run_mutation_source_tests_reverse);
 }
 
 SEASTAR_TEST_CASE(test_memtable_flush_reader) {
