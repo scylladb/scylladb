@@ -563,22 +563,32 @@ std::pair<std::optional<secondary_index::index>, expr::expression> statement_res
     int chosen_index_score = 0;
     expr::expression chosen_index_restrictions;
 
-    for (const auto& index : sim.list_indexes()) {
-        auto cdef = _schema->get_column_definition(to_bytes(index.target_column()));
-        for (const expr::expression& restriction : index_restrictions()) {
-            if (has_partition_token(restriction, *_schema) || contains_multi_column_restriction(restriction)) {
-                continue;
-            }
-
-            expr::single_column_restrictions_map rmap = expr::get_single_column_restrictions_map(restriction);
-            const auto found = rmap.find(cdef);
-            if (found != rmap.end() && is_supported_by(found->second, index)
-                && score(index) > chosen_index_score) {
-                chosen_index = index;
-                chosen_index_score = score(index);
-                chosen_index_restrictions = restriction;
-            }
+    // Several indexes may be usable for this query. When their score is tied,
+    // let's pick one by order of the columns mentioned in the restriction
+    // expression. This specific order isn't important (and maybe in the
+    // future we could plan a better order based on the specificity of each
+    // index), but it is critical that two coordinators - or the same
+    // coordinator over time - must choose the same index for the same query.
+    // Otherwise, paging can break (see issue #7969).
+    for (const expr::expression& restriction : index_restrictions()) {
+        if (has_partition_token(restriction, *_schema) || contains_multi_column_restriction(restriction)) {
+            continue;
         }
+        expr::for_each_expression<expr::column_value>(restriction, [&](const expr::column_value& cval) {
+            auto& cdef = cval.col;
+            expr::expression col_restrictions = expr::conjunction {
+                .children = expr::extract_single_column_restrictions_for_column(restriction, *cdef)
+            };
+            for (const auto& index : sim.list_indexes()) {
+                if (cdef->name_as_text() == index.target_column() &&
+                        expr::is_supported_by(col_restrictions, index) &&
+                        score(index) > chosen_index_score) {
+                    chosen_index = index;
+                    chosen_index_score = score(index);
+                    chosen_index_restrictions = restriction;
+                }
+            }
+        });
     }
     return {chosen_index, chosen_index_restrictions};
 }
