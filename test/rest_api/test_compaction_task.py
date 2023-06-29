@@ -32,7 +32,8 @@ def check_compaction_task(cql, this_dc, rest_api, run_compaction, compaction_typ
                 assert not failed, f"tasks with ids {failed} failed"
 
                 for top_level_task in statuses:
-                    check_child_parent_relationship(rest_api, top_level_task, depth)
+                    if top_level_task["type"] != "resharding compaction":
+                        check_child_parent_relationship(rest_api, top_level_task, depth)
 
 def test_major_keyspace_compaction_task(cql, this_dc, rest_api):
     task_tree_depth = 3
@@ -59,3 +60,7 @@ def test_rewrite_sstables_keyspace_compaction_task(cql, this_dc, rest_api):
 def test_reshaping_compaction_task(cql, this_dc, rest_api):
     task_tree_depth = 1
     check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"storage_service/sstables/{keyspace}", {'cf': table, 'load_and_stream': False}), "reshaping compaction", task_tree_depth)
+
+def test_resharding_compaction_task(cql, this_dc, rest_api):
+    task_tree_depth = 1
+    check_compaction_task(cql, this_dc, rest_api, lambda keyspace, table: rest_api.send("POST", f"storage_service/sstables/{keyspace}", {'cf': table, 'load_and_stream': False}), "resharding compaction", task_tree_depth)
