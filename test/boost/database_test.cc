@@ -291,20 +291,72 @@ static void test_database(void (*run_tests)(populate_fn_ex, bool), unsigned cgs)
     }).get();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_plain_cg0) {
-    test_database(run_mutation_source_tests_plain, 0);
+// plain cg0
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_plain_basic_cg0) {
+    test_database(run_mutation_source_tests_plain_basic, 0);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_plain_cg1) {
-    test_database(run_mutation_source_tests_plain, 1);
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_plain_reader_conversion_cg0) {
+    test_database(run_mutation_source_tests_plain_reader_conversion, 0);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_reverse_cg0) {
-    test_database(run_mutation_source_tests_reverse, 0);
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_plain_fragments_monotonic_cg0) {
+    test_database(run_mutation_source_tests_plain_fragments_monotonic, 0);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_reverse_cg1) {
-    test_database(run_mutation_source_tests_reverse, 1);
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_plain_read_back_cg0) {
+    test_database(run_mutation_source_tests_plain_read_back, 0);
+}
+
+// plain cg1
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_plain_basic_cg1) {
+    test_database(run_mutation_source_tests_plain_basic, 1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_plain_reader_conversion_cg1) {
+    test_database(run_mutation_source_tests_plain_reader_conversion, 1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_plain_fragments_monotonic_cg1) {
+    test_database(run_mutation_source_tests_plain_fragments_monotonic, 1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_plain_read_back_cg1) {
+    test_database(run_mutation_source_tests_plain_read_back, 1);
+}
+
+// reverse cg0
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_reverse_basic_cg0) {
+    test_database(run_mutation_source_tests_reverse_basic, 0);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_reverse_reader_conversion_cg0) {
+    test_database(run_mutation_source_tests_reverse_reader_conversion, 0);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_reverse_fragments_monotonic_cg0) {
+    test_database(run_mutation_source_tests_reverse_fragments_monotonic, 0);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_reverse_read_back_cg0) {
+    test_database(run_mutation_source_tests_reverse_read_back, 0);
+}
+
+// reverse cg1
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_reverse_basic_cg1) {
+    test_database(run_mutation_source_tests_reverse_basic, 1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_reverse_reader_conversion_cg1) {
+    test_database(run_mutation_source_tests_reverse_reader_conversion, 1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_reverse_fragments_monotonic_cg1) {
+    test_database(run_mutation_source_tests_reverse_fragments_monotonic, 1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source_reverse_read_back_cg1) {
+    test_database(run_mutation_source_tests_reverse_read_back, 1);
 }
 
 static void require_exist(const sstring& filename, bool should) {
