@@ -8,10 +8,9 @@ If you have root privileges, it is recommended to download the OS specific packa
 Supported distros
 =================
 
-* CentOS 7 (Only support root offline install)
-* CentOS 8
-* Ubuntu 18.04 (developer-mode is used if NOFILE rlimit is too low)
-* Debian 10
+See :doc:`OS Support </getting-started/os-support>` for information about supported Linux distributions and versions.
+
+Note that if you're on CentOS 7, only root offline install is supported.
 
 Download and install
 ====================
