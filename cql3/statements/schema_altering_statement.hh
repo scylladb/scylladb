@@ -18,6 +18,8 @@
 
 #include <seastar/core/shared_ptr.hh>
 
+#include "service/raft/raft_group0_client.hh"
+
 class mutation;
 
 namespace service {
@@ -62,7 +64,15 @@ protected:
     execute(query_processor& qp, service::query_state& state, const query_options& options) const override;
 
 public:
+    struct guard : public statement_guard {
+        service::group0_guard group0_guard;
+        service::migration_manager& mm;
+        gate::holder mm_holder;
+        guard(service::group0_guard&& g,service::migration_manager& mm_, gate::holder&& h);
+    };
+
     virtual future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type) const = 0;
+    virtual future<std::unique_ptr<statement_guard>> take_guard(query_processor& qp) const override;
 };
 
 }

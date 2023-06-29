@@ -42,6 +42,12 @@ class query_options;
 // A vector of CQL warnings generated during execution of a statement.
 using cql_warnings_vec = std::vector<sstring>;
 
+struct statement_guard {
+    size_t retry_count;
+    statement_guard(size_t rc) : retry_count(rc) {}
+    virtual ~statement_guard() {}
+};
+
 class cql_statement {
     timeout_config_selector _timeout_config_selector;
 public:
@@ -96,6 +102,10 @@ public:
     virtual seastar::future<seastar::shared_ptr<cql_transport::messages::result_message>>
             execute_without_checking_exception_message(query_processor& qp, service::query_state& state, const query_options& options) const {
         return execute(qp, state, options);
+    }
+
+    virtual future<std::unique_ptr<statement_guard>> take_guard(query_processor& qp) const {
+        return make_ready_future<std::unique_ptr<statement_guard>>(nullptr);
     }
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const = 0;

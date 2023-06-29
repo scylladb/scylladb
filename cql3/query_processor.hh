@@ -402,6 +402,9 @@ public:
     future<query::forward_result>
     forward(query::forward_request, tracing::trace_state_ptr);
 
+    struct retry_statement_execution_error : public std::exception {};
+
+    future<std::unique_ptr<statement_guard>> take_alter_schema_guard();
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_schema_statement(const statements::schema_altering_statement&, service::query_state& state, const query_options& options);
 
@@ -468,6 +471,9 @@ private:
      * Users of the paging, should not use the internal_query_state directly
      */
     bool has_more_results(cql3::internal_query_state& state) const;
+
+    template<std::invocable<service::query_state&> F>
+    future<::shared_ptr<cql_transport::messages::result_message>> execute_with_retry(::shared_ptr<cql_statement> statement, service::query_state& query_state, const F& fn);
 
     ///
     /// \tparam ResultMsgType type of the returned result message (CQL or Thrift)

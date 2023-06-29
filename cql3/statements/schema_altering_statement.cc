@@ -57,6 +57,10 @@ void schema_altering_statement::prepare_keyspace(const service::client_state& st
     }
 }
 
+future<std::unique_ptr<statement_guard>> schema_altering_statement::take_guard(query_processor& qp) const {
+    return qp.take_alter_schema_guard();
+}
+
 future<::shared_ptr<messages::result_message>>
 schema_altering_statement::execute(query_processor& qp, service::query_state& state, const query_options& options) const {
     bool internal = state.get_client_state().is_internal();
@@ -83,6 +87,8 @@ schema_altering_statement::execute(query_processor& qp, service::query_state& st
     });
 }
 
+schema_altering_statement::guard::guard(service::group0_guard&& g,service::migration_manager& mm_, gate::holder&& h)
+            : statement_guard(mm_.get_concurrent_ddl_retries()), group0_guard(std::move(g)), mm(mm_), mm_holder(std::move(h)) {}
 }
 
 }
