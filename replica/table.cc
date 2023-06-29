@@ -2723,6 +2723,16 @@ table::as_mutation_source_excluding_staging() const {
     });
 }
 
+std::vector<mutation_source> table::select_memtables_as_mutation_sources(dht::token token) const {
+    auto& cg = compaction_group_for_token(token);
+    std::vector<mutation_source> mss;
+    mss.reserve(cg.memtables()->size());
+    for (auto& mt : *cg.memtables()) {
+        mss.emplace_back(mt->as_data_source());
+    }
+    return mss;
+}
+
 class compaction_group::table_state : public compaction::table_state {
     table& _t;
     compaction_group& _cg;

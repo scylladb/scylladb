@@ -708,6 +708,11 @@ public:
     mutation_source as_mutation_source() const;
     mutation_source as_mutation_source_excluding_staging() const;
 
+    // Select all memtables which contain this token and return them as mutation sources.
+    // We could return memtables here, but table has no public memtable accessors so far.
+    // Memtables are mutable objects, so it is best to keep it this way.
+    std::vector<mutation_source> select_memtables_as_mutation_sources(dht::token) const;
+
     void set_virtual_reader(mutation_source virtual_reader) {
         _virtual_reader = std::move(virtual_reader);
     }
