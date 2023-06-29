@@ -98,14 +98,6 @@ bool selection::processes_selection(const std::vector<prepared_selector>& prepar
         [] (auto&& s) { return cql3::selection::processes_selection(s); });
 }
 
-std::vector<managed_bytes_opt>
-selectors::transform_input_row(result_set_builder& rs) {
-    add_input_row(rs);
-    auto ret = get_output_row();
-    reset();
-    return ret;
-}
-
 // Special cased selection for when no function is used (this save some allocations).
 class simple_selection : public selection {
 private:
@@ -217,6 +209,7 @@ public:
     virtual uint32_t add_column_for_post_processing(const column_definition& c) override {
         uint32_t index = selection::add_column_for_post_processing(c);
         _factories->add_selector_for_post_processing(c, index);
+        _selectors.push_back(expr::column_value(&c));
         return index;
     }
 
@@ -348,6 +341,26 @@ protected:
 
         virtual bool is_aggregate() const override {
             return _factories->does_aggregation();
+        }
+
+        virtual std::vector<managed_bytes_opt> transform_input_row(result_set_builder& rs) override {
+            std::vector<managed_bytes_opt> output_row;
+            output_row.reserve(_sel._selectors.size());
+            auto inputs = expr::evaluation_inputs{
+                    .partition_key = rs.current_partition_key,
+                    .clustering_key = rs.current_clustering_key,
+                    .static_and_regular_columns = rs.current,
+                    .selection = &_sel,
+                    .options = nullptr,
+                    .static_and_regular_timestamps = rs._timestamps,
+                    .static_and_regular_ttls = rs._ttls,
+                    .temporaries = {},
+            };
+            for (auto&& e : _sel._selectors) {
+                auto out = expr::evaluate(e, inputs);
+                output_row.emplace_back(std::move(out).to_managed_bytes_opt());
+            }
+            return output_row;
         }
 
         virtual std::vector<managed_bytes_opt> get_output_row() override {

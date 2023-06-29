@@ -55,7 +55,7 @@ public:
     virtual std::vector<managed_bytes_opt> get_output_row() = 0;
 
     // When not aggregating, each input row becomes one output row.
-    virtual std::vector<managed_bytes_opt> transform_input_row(result_set_builder& rs);
+    virtual std::vector<managed_bytes_opt> transform_input_row(result_set_builder& rs) = 0;
 
     virtual void reset() = 0;
 };
