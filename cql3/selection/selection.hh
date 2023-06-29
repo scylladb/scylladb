@@ -34,7 +34,6 @@ class statement_restrictions;
 namespace selection {
 
 class raw_selector;
-class selector_factories;
 
 class selectors {
 public:

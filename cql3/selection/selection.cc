@@ -16,7 +16,6 @@
 
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/raw_selector.hh"
-#include "cql3/selection/selector_factories.hh"
 #include "cql3/selection/abstract_function_selector.hh"
 #include "cql3/result_set.hh"
 #include "cql3/query_options.hh"
@@ -194,19 +193,17 @@ contains_ttl(const expr::expression& e) {
 
 class selection_with_processing : public selection {
 private:
-    ::shared_ptr<selector_factories> _factories;
     std::vector<expr::expression> _selectors;
     std::vector<expr::expression> _inner_loop;
     std::vector<expr::expression> _outer_loop;
     std::vector<raw_value> _initial_values_for_temporaries;
 public:
     selection_with_processing(schema_ptr schema, std::vector<const column_definition*> columns,
-            std::vector<lw_shared_ptr<column_specification>> metadata, ::shared_ptr<selector_factories> factories,
+            std::vector<lw_shared_ptr<column_specification>> metadata,
             std::vector<expr::expression> selectors)
         : selection(schema, std::move(columns), std::move(metadata),
             contains_writetime(expr::tuple_constructor{selectors}),
             contains_ttl(expr::tuple_constructor{selectors}))
-        , _factories(std::move(factories))
         , _selectors(std::move(selectors))
     {
         auto agg_split = expr::split_aggregation(_selectors);
@@ -217,7 +214,6 @@ public:
 
     virtual uint32_t add_column_for_post_processing(const column_definition& c) override {
         uint32_t index = selection::add_column_for_post_processing(c);
-        _factories->add_selector_for_post_processing(c, index);
         _selectors.push_back(expr::column_value(&c));
         if (_inner_loop.empty()) {
             // Simple case: no aggregation
@@ -346,16 +342,12 @@ public:
 protected:
     class selectors_with_processing : public selectors {
     private:
-        ::shared_ptr<selector_factories> _factories;
-        std::vector<::shared_ptr<selector>> _selectors;
         const selection_with_processing& _sel;
         std::vector<raw_value> _temporaries;
         bool _requires_thread;
     public:
-        selectors_with_processing(const selection_with_processing& sel, ::shared_ptr<selector_factories> factories)
-            : _factories(std::move(factories))
-            , _selectors(_factories->new_instances())
-            , _sel(sel)
+        explicit selectors_with_processing(const selection_with_processing& sel)
+            : _sel(sel)
             , _temporaries(_sel._initial_values_for_temporaries)
             , _requires_thread(boost::algorithm::any_of(sel._selectors, [] (const expr::expression& e) {
                 return expr::find_in_expression<expr::function_call>(e, [] (const expr::function_call& fc) {
@@ -438,7 +430,7 @@ protected:
     };
 
     std::unique_ptr<selectors> new_selectors() const override  {
-        return std::make_unique<selectors_with_processing>(*this, _factories);
+        return std::make_unique<selectors_with_processing>(*this);
     }
 };
 
@@ -471,10 +463,6 @@ uint32_t selection::add_column_for_post_processing(const column_definition& c) {
 ::shared_ptr<selection> selection::from_selectors(data_dictionary::database db, schema_ptr schema, const sstring& ks, const std::vector<prepared_selector>& prepared_selectors) {
     std::vector<const column_definition*> defs;
 
-    ::shared_ptr<selector_factories> factories =
-        selector_factories::create_factories_and_collect_column_definitions(
-            cql3::selection::to_selectables(prepared_selectors, *schema, db, ks), db, schema, defs);
-    defs.clear();
     for (auto&& [sel, alias] : prepared_selectors) {
         expr::for_each_expression<expr::column_value>(sel, [&] (const expr::column_value& cv) {
             if (std::find(defs.begin(), defs.end(), cv.col) == defs.end()) {
@@ -485,7 +473,7 @@ uint32_t selection::add_column_for_post_processing(const column_definition& c) {
 
     auto metadata = collect_metadata(*schema, prepared_selectors);
     if (processes_selection(prepared_selectors) || prepared_selectors.size() != defs.size()) {
-        return ::make_shared<selection_with_processing>(schema, std::move(defs), std::move(metadata), std::move(factories),
+        return ::make_shared<selection_with_processing>(schema, std::move(defs), std::move(metadata),
                 boost::copy_range<std::vector<expr::expression>>(prepared_selectors | boost::adaptors::transformed(std::mem_fn(&prepared_selector::expr))));
     } else {
         return ::make_shared<simple_selection>(schema, std::move(defs), std::move(metadata), false);
