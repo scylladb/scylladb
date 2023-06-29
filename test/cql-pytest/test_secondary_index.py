@@ -66,8 +66,9 @@ def test_partition_order_with_si(cql, test_keyspace):
 # The order tested in this case was decided as a good first step in issue
 # #7969, but it's possible that it will eventually be implemented another
 # way, e.g. dynamically based on estimated query selectivity statistics.
+# In any case, the order must be consistent across coordinators and time
+# (and upgrades...) to allow paged queries that use an index to continue.
 # Ref: #7969
-@pytest.mark.xfail(reason="The order of picking indexes is currently arbitrary. Issue #7969")
 def test_order_of_indexes(scylla_only, cql, test_keyspace):
     schema = 'p int primary key, v1 int, v2 int, v3 int'
     with new_test_table(cql, test_keyspace, schema) as table:
