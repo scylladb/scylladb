@@ -88,16 +88,20 @@ json::json_return_type make_streamed(rjson::value&& value) {
         // move objects to coroutine frame.
         auto los = std::move(os);
         auto lrs = std::move(rs);
+        std::exception_ptr ex;
         try {
             co_await rjson::print(*lrs, los);
-            co_await los.close();
         } catch (...) {
             // at this point, we cannot really do anything. HTTP headers and return code are
             // already written, and quite potentially a portion of the content data.
             // just log + rethrow. It is probably better the HTTP server closes connection
             // abruptly or something...
-            elogger.error("Unhandled exception in data streaming: {}", std::current_exception());
-            throw;
+            ex = std::current_exception();
+            elogger.error("Exception during streaming HTTP response: {}", ex);
+        }
+        co_await los.close();
+        if (ex) {
+            co_await coroutine::return_exception_ptr(std::move(ex));
         }
         co_return;
     };

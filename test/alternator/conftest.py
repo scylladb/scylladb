@@ -14,6 +14,7 @@ import boto3
 import requests
 import re
 from util import create_test_table, is_aws, scylla_log
+from urllib.parse import urlparse
 
 # When tests are run with HTTPS, the server often won't have its SSL
 # certificate signed by a known authority. So we will disable certificate
@@ -88,6 +89,18 @@ def dynamodb(request):
         return boto3.resource('dynamodb', endpoint_url=local_url, verify=verify,
             region_name='us-east-1', aws_access_key_id='alternator', aws_secret_access_key='secret_pass',
             config=boto_config.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300)))
+
+def new_dynamodb_session(request, dynamodb):
+    ses = boto3.Session()
+    host = urlparse(dynamodb.meta.client._endpoint.host)
+    conf = botocore.client.Config(parameter_validation=False)
+    if request.config.getoption('aws'):
+        return boto3.resource('dynamodb', config=conf)
+    if host.hostname == 'localhost':
+        conf = conf.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300))
+    return ses.resource('dynamodb', endpoint_url=dynamodb.meta.client._endpoint.host, verify=host.scheme != 'http',
+        region_name='us-east-1', aws_access_key_id='alternator', aws_secret_access_key='secret_pass',
+        config=conf)
 
 @pytest.fixture(scope="session")
 def dynamodbstreams(request):
