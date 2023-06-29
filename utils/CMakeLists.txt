@@ -35,6 +35,7 @@ target_sources(utils
     managed_bytes.cc
     multiprecision_int.cc
     murmur_hash.cc
+    pretty_printers.cc
     rate_limiter.cc
     rjson.cc
     runtime.cc
