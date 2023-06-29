@@ -2232,8 +2232,12 @@ std::vector<size_t> select_statement::prepare_group_by(const schema& schema, sel
             throw make_order_exception(*col);
         }
         ++expected_index;
-        const auto index = selection.index_of(*def);
-        indices.push_back(index != -1 ? index : selection.add_column_for_post_processing(*def));
+        auto index = selection.index_of(*def);
+        if (index == -1) {
+            selection.add_column_for_post_processing(*def);
+            index = selection.index_of(*def);
+        }
+        indices.push_back(index);
     }
 
     if (expected_index < schema.partition_key_size()) {

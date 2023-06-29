@@ -100,7 +100,8 @@ public:
     bool contains_only_static_columns() const;
 
     /**
-     * Returns the index of the specified column.
+     * Returns the index of the specified column, in the un-processed domain (before applying
+     * transformations to the input columns and aggregations)
      *
      * @param def the column definition
      * @return the index of the specified column
@@ -120,6 +121,7 @@ public:
     static ::shared_ptr<selection> wildcard(schema_ptr schema);
     static ::shared_ptr<selection> for_columns(schema_ptr schema, std::vector<const column_definition*> columns);
 
+    // Adds a column to the selection and result set. Returns an index within the result set row.
     virtual uint32_t add_column_for_post_processing(const column_definition& c);
 
     virtual std::vector<shared_ptr<functions::function>> used_functions() const { return {}; }
