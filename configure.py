@@ -2766,6 +2766,22 @@ def configure_using_cmake(args):
         settings['Boost_USE_STATIC_LIBS'] = 'ON'
     if args.clang_inline_threshold != -1:
         settings['Scylla_CLANG_INLINE_THRESHOLD'] = args.clang_inline_threshold
+    if args.cspgo:
+        settings['Scylla_BUILD_INSTRUMENTED'] = "CSIR"
+    elif args.pgo:
+        settings['Scylla_BUILD_INSTRUMENTED'] = "IR"
+    if args.use_profile:
+        settings['Scylla_PROFDATA_FILE'] = args.use_profile
+    elif args.use_profile is None:
+        profile_archive_path = f"pgo/profiles/{platform.machine()}/profile.profdata.xz"
+        if "compressed data" in subprocess.check_output(["file", profile_archive_path], text=True):
+            settings['Scylla_PROFDATA_COMPRESSED_FILE'] = profile_archive_path
+        else:
+            # Avoid breaking existing pipelines without git-lfs installed.
+            print(f"WARNING: {profile_archive_path} is not an archive. Building without a profile.", file=sys.stderr)
+    # scripts/refresh-pgo-profiles.sh does not specify the path to the profile
+    # so we don't define Scylla_PROFDATA_COMPRESSED_FILE, and use the default
+    # value
 
     source_dir = os.path.realpath(os.path.dirname(__file__))
     if os.path.isabs(args.build_dir):

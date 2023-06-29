@@ -355,3 +355,7 @@ add_dependencies(compiler-training
 if(Scylla_DIST)
   add_subdirectory(dist)
 endif()
+
+if(Scylla_BUILD_INSTRUMENTED)
+  add_subdirectory(pgo)
+endif()
