@@ -355,9 +355,11 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         prepare_context& ctx,
         bool selects_only_static_columns,
         bool for_view,
-        bool allow_filtering)
+        bool allow_filtering,
+        check_indexes do_check_indexes)
     : statement_restrictions(schema, allow_filtering)
 {
+    _check_indexes = do_check_indexes;
     for (auto&& relation_expr : boolean_factors(where_clause)) {
         const expr::binary_operator* relation_binop = expr::as_if<expr::binary_operator>(&relation_expr);
 
@@ -383,6 +385,8 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         _clustering_prefix_restrictions = extract_clustering_prefix_restrictions(*_where, _schema);
         _partition_range_restrictions = extract_partition_range(*_where, _schema);
     }
+    _has_multi_column = find_binop(_clustering_columns_restrictions, expr::is_multi_column);
+  if (_check_indexes) {
     auto cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
     const expr::allow_local_index allow_local(
@@ -395,6 +399,11 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
             && !type.is_delete();
     _has_queriable_regular_index = expr::index_supports_some_column(_nonprimary_key_restrictions, sim, allow_local)
             && !type.is_delete();
+  } else {
+    _has_queriable_ck_index = false;
+    _has_queriable_pk_index = false;
+    _has_queriable_regular_index = false;
+  }
 
     // At this point, the select statement if fully constructed, but we still have a few things to validate
     process_partition_key_restrictions(for_view, allow_filtering);
@@ -571,9 +580,12 @@ bool statement_restrictions::has_eq_restriction_on_column(const column_definitio
 std::vector<const column_definition*> statement_restrictions::get_column_defs_for_filtering(data_dictionary::database db) const {
     std::vector<const column_definition*> column_defs_for_filtering;
     if (need_filtering()) {
+        std::optional<secondary_index::index> opt_idx;
+      if (_check_indexes) {
         auto cf = db.find_column_family(_schema);
         auto& sim = cf.get_index_manager();
-        auto opt_idx = std::get<0>(find_idx(sim));
+        opt_idx = std::get<0>(find_idx(sim));
+      }
         auto column_uses_indexing = [&opt_idx] (const column_definition* cdef, const expr::expression* single_col_restr) {
             return opt_idx && single_col_restr && is_supported_by(*single_col_restr, *opt_idx);
         };
