@@ -329,7 +329,11 @@ protected:
             : _factories(std::move(factories))
             , _selectors(_factories->new_instances())
             , _sel(sel)
-            , _requires_thread(boost::algorithm::any_of(_selectors, [] (auto& s) { return s->requires_thread(); }))
+            , _requires_thread(boost::algorithm::any_of(sel._selectors, [] (const expr::expression& e) {
+                return expr::find_in_expression<expr::function_call>(e, [] (const expr::function_call& fc) {
+                    return std::get<shared_ptr<functions::function>>(fc.func)->requires_thread();
+                });
+             }))
         { }
 
         virtual bool requires_thread() const override {
