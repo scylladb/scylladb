@@ -297,7 +297,24 @@ public:
     }
 
     virtual std::vector<shared_ptr<functions::function>> used_functions() const override {
-        return selectors_with_processing(_factories).used_functions();
+        auto ret = std::vector<shared_ptr<functions::function>>();
+        expr::recurse_until(expr::tuple_constructor{_selectors}, [&] (const expr::expression& e) {
+            if (auto fc = expr::as_if<expr::function_call>(&e)) {
+                auto func = std::get<shared_ptr<functions::function>>(fc->func);
+                ret.push_back(func);
+                if (auto agg_func = dynamic_pointer_cast<functions::aggregate_function>(std::move(func))) {
+                    auto& agg = agg_func->get_aggregate();
+                    if (agg.aggregation_function) {
+                        ret.push_back(agg.aggregation_function);
+                    }
+                    if (agg.state_to_result_function) {
+                        ret.push_back(agg.state_to_result_function);
+                    }
+                }
+            }
+            return false;
+        });
+        return ret;
     }
 
 protected:
@@ -305,11 +322,13 @@ protected:
     private:
         ::shared_ptr<selector_factories> _factories;
         std::vector<::shared_ptr<selector>> _selectors;
+        const selection_with_processing& _sel;
         bool _requires_thread;
     public:
-        selectors_with_processing(::shared_ptr<selector_factories> factories)
+        selectors_with_processing(const selection_with_processing& sel, ::shared_ptr<selector_factories> factories)
             : _factories(std::move(factories))
             , _selectors(_factories->new_instances())
+            , _sel(sel)
             , _requires_thread(boost::algorithm::any_of(_selectors, [] (auto& s) { return s->requires_thread(); }))
         { }
 
@@ -343,22 +362,12 @@ protected:
         }
 
         std::vector<shared_ptr<functions::function>> used_functions() const {
-            std::vector<shared_ptr<functions::function>> functions;
-            for (const auto& selector : _selectors) {
-                if (auto fun_selector = dynamic_pointer_cast<abstract_function_selector>(selector); fun_selector) {
-                    functions.push_back(fun_selector->function());
-                    if (auto user_aggr = dynamic_pointer_cast<functions::user_aggregate>(fun_selector); user_aggr) {
-                        functions.push_back(user_aggr->sfunc());
-                        functions.push_back(user_aggr->finalfunc());
-                    }
-                }
-            }
-            return functions;
+            return _sel.used_functions();
         }
     };
 
     std::unique_ptr<selectors> new_selectors() const override  {
-        return std::make_unique<selectors_with_processing>(_factories);
+        return std::make_unique<selectors_with_processing>(*this, _factories);
     }
 };
 
