@@ -56,6 +56,8 @@ public:
                  bool durables_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{},
                  storage_options storage_opts = {});
+    static lw_shared_ptr<keyspace_metadata>
+    new_keyspace(const keyspace_metadata& ksm);
     void validate(const gms::feature_service&, const locator::topology&) const;
     const sstring& name() const {
         return _name;
