@@ -12,6 +12,7 @@
 #include <boost/range/algorithm/equal.hpp>
 #include <boost/range/algorithm/transform.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
+#include <boost/algorithm/cxx11/all_of.hpp>
 
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/raw_selector.hh"
@@ -177,16 +178,39 @@ selection_from_partition_slice(schema_ptr schema, const query::partition_slice& 
     return simple_selection::make(std::move(schema), std::move(cdefs), false);
 }
 
+static
+bool
+contains_column_mutation_attribute(expr::column_mutation_attribute::attribute_kind kind, const expr::expression& e) {
+    return expr::find_in_expression<expr::column_mutation_attribute>(e, [kind] (const expr::column_mutation_attribute& cma) {
+        return cma.kind == kind;
+    });
+}
+
+static
+bool
+contains_writetime(const expr::expression& e) {
+    return contains_column_mutation_attribute(expr::column_mutation_attribute::attribute_kind::writetime, e);
+}
+
+static
+bool
+contains_ttl(const expr::expression& e) {
+    return contains_column_mutation_attribute(expr::column_mutation_attribute::attribute_kind::ttl, e);
+}
+
 class selection_with_processing : public selection {
 private:
     ::shared_ptr<selector_factories> _factories;
+    std::vector<expr::expression> _selectors;
 public:
     selection_with_processing(schema_ptr schema, std::vector<const column_definition*> columns,
-            std::vector<lw_shared_ptr<column_specification>> metadata, ::shared_ptr<selector_factories> factories)
+            std::vector<lw_shared_ptr<column_specification>> metadata, ::shared_ptr<selector_factories> factories,
+            std::vector<expr::expression> selectors)
         : selection(schema, std::move(columns), std::move(metadata),
-            factories->contains_write_time_selector_factory(),
-            factories->contains_ttl_selector_factory())
+            contains_writetime(expr::tuple_constructor{selectors}),
+            contains_ttl(expr::tuple_constructor{selectors}))
         , _factories(std::move(factories))
+        , _selectors(std::move(selectors))
     { }
 
     virtual uint32_t add_column_for_post_processing(const column_definition& c) override {
@@ -312,7 +336,8 @@ uint32_t selection::add_column_for_post_processing(const column_definition& c) {
 
     auto metadata = collect_metadata(*schema, prepared_selectors);
     if (processes_selection(prepared_selectors) || prepared_selectors.size() != defs.size()) {
-        return ::make_shared<selection_with_processing>(schema, std::move(defs), std::move(metadata), std::move(factories));
+        return ::make_shared<selection_with_processing>(schema, std::move(defs), std::move(metadata), std::move(factories),
+                boost::copy_range<std::vector<expr::expression>>(prepared_selectors | boost::adaptors::transformed(std::mem_fn(&prepared_selector::expr))));
     } else {
         return ::make_shared<simple_selection>(schema, std::move(defs), std::move(metadata), false);
     }
