@@ -174,9 +174,11 @@ private:
     bool _group_began; ///< Whether a group began being formed.
 public:
     std::vector<managed_bytes_opt> current;
-private:
+    std::vector<bytes> current_partition_key;
+    std::vector<bytes> current_clustering_key;
     std::vector<api::timestamp_type> _timestamps;
     std::vector<int32_t> _ttls;
+private:
     const gc_clock::time_point _now;
 public:
     template<typename Func>
@@ -251,8 +253,8 @@ public:
         const schema& _schema;
         const selection& _selection;
         uint64_t _row_count;
-        std::vector<bytes> _partition_key;
-        std::vector<bytes> _clustering_key;
+        std::vector<bytes>& _partition_key;
+        std::vector<bytes>& _clustering_key;
         Filter _filter;
     public:
         visitor(cql3::selection::result_set_builder& builder, const schema& s,
@@ -261,6 +263,8 @@ public:
             , _schema(s)
             , _selection(selection)
             , _row_count(0)
+            , _partition_key(_builder.current_partition_key)
+            , _clustering_key(_builder.current_clustering_key)
             , _filter(filter)
         {}
         visitor(visitor&&) = default;
