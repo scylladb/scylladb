@@ -15,6 +15,7 @@
 #include <seastar/http/reply.hh>
 #include <seastar/net/api.hh>
 #include <seastar/net/dns.hh>
+#include <seastar/util/closeable.hh>
 
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -70,6 +71,8 @@ future<sstring> azure_snitch::azure_api_call(sstring path) {
         connected_socket sd(connect(socket_address(a, 80)).get0());
         input_stream<char> in(sd.input());
         output_stream<char> out(sd.output());
+        auto close_in = deferred_close(in);
+        auto close_out = deferred_close(out);
         sstring request(seastar::format("GET {} HTTP/1.1\r\nHost: {}\r\nMetadata: True\r\n\r\n", path, AZURE_SERVER_ADDR));
 
         out.write(request).get();
@@ -99,13 +102,7 @@ future<sstring> azure_snitch::azure_api_call(sstring path) {
         // Read HTTP response body
         temporary_buffer<char> buf = in.read_exactly(content_len).get0();
 
-        sstring res(buf.get(), buf.size());
-
-        // Close streams
-        out.close().get();
-        in.close().get();
-
-        return res;
+        return sstring(buf.get(), buf.size());
     });
 }
 
