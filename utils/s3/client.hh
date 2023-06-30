@@ -22,6 +22,13 @@ struct range {
     size_t len;
 };
 
+struct tag {
+    std::string key;
+    std::string value;
+    auto operator<=>(const tag&) const = default;
+};
+using tag_set = std::vector<tag>;
+
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_);
 
 class client : public enable_shared_from_this<client> {
@@ -51,6 +58,9 @@ public:
         std::time_t last_modified;
     };
     future<stats> get_object_stats(sstring object_name);
+    future<tag_set> get_object_tagging(sstring object_name);
+    future<> put_object_tagging(sstring object_name, tag_set tagging);
+    future<> delete_object_tagging(sstring object_name);
     future<temporary_buffer<char>> get_object_contiguous(sstring object_name, std::optional<range> range = {});
     future<> put_object(sstring object_name, temporary_buffer<char> buf);
     future<> put_object(sstring object_name, ::memory_data_sink_buffers bufs);

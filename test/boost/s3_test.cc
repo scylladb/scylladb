@@ -205,3 +205,30 @@ SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
     f.close().get();
     cln->close().get();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_client_put_get_tagging) {
+    const sstring name(fmt::format("/{}/testobject-{}",
+                                   tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
+    auto client = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config());
+    auto data = sstring("1234567890ABCDEF").release();
+    client->put_object(name, std::move(data)).get();
+    {
+        auto tagset = client->get_object_tagging(name).get0();
+        BOOST_CHECK(tagset.empty());
+    }
+    {
+        s3::tag_set expected_tagset{{"1", "one"}, {"2", "two"}};
+        client->put_object_tagging(name, expected_tagset).get();
+        auto actual_tagset = client->get_object_tagging(name).get0();
+        std::ranges::sort(actual_tagset);
+        std::ranges::sort(expected_tagset);
+        BOOST_CHECK(actual_tagset == expected_tagset);
+    }
+    {
+        client->delete_object_tagging(name).get();
+        auto tagset = client->get_object_tagging(name).get0();
+        BOOST_CHECK(tagset.empty());
+    }
+    client->delete_object(name).get();
+    client->close().get();
+}
