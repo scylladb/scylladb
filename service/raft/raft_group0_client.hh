@@ -129,7 +129,7 @@ public:
 
     template<typename Command>
     requires std::same_as<Command, broadcast_table_query> || std::same_as<Command, write_mutations>
-    group0_command prepare_command(Command change);
+    group0_command prepare_command(Command change, std::string_view description);
     template<typename Command>
     requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change>
     group0_command prepare_command(Command change, group0_guard& guard, std::string_view description);
