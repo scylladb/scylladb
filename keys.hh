@@ -16,9 +16,6 @@
 #include "utils/utf8.hh"
 #include "replica/database_fwd.hh"
 #include "schema/schema_fwd.hh"
-#include <boost/iterator/zip_iterator.hpp>
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/iterator_range_core.hpp>
 #include <compare>
 #include <span>
 
@@ -773,26 +770,23 @@ namespace detail {
 template <typename WithSchemaWrapper, typename FormatContext>
 auto format_pk(const WithSchemaWrapper& pk, FormatContext& ctx) {
     const auto& [schema, key] = pk;
-    const auto& types = key.get_compound_type(schema)->types();
-    const auto components = key.components(schema);
-    return fmt::format_to(
-            ctx.out(), "{}",
-            fmt::join(boost::make_iterator_range(
-                          boost::make_zip_iterator(boost::make_tuple(types.begin(),
-                                                                     components.begin())),
-                          boost::make_zip_iterator(boost::make_tuple(types.end(),
-                                                                     components.end()))) |
-                      boost::adaptors::transformed([](const auto& type_and_component) {
-                          auto& [type, component] = type_and_component;
-                          auto key = type->to_string(to_bytes(component));
-                          if (!utils::utf8::validate((const uint8_t *) key.data(), key.size())) {
-                              return sstring("<non-utf8-key>");
-                          }
-                          return key;
-                      }),
-                      ":"));
-
+    auto type_iterator = key.get_compound_type(schema)->types().begin();
+    bool first = true;
+    auto out = ctx.out();
+    for (auto&& component : key.components(schema)) {
+        if (!first) {
+            out = fmt::format_to(out, "{}", ":");
+        }
+        first = false;
+        auto key = (*type_iterator++)->to_string(to_bytes(component));
+        if (utils::utf8::validate((const uint8_t *) key.data(), key.size())) {
+            out = fmt::format_to(out, "{}", key);
+        } else {
+            out = fmt::format_to(out, "{}", "<non-utf8-key>");
+        }
     }
+    return out;
+}
 } // namespace detail
 
 template <>
