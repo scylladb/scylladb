@@ -12,6 +12,7 @@
 #include <seastar/core/seastar.hh>
 #include "locator/gce_snitch.hh"
 #include <seastar/http/reply.hh>
+#include <seastar/util/closeable.hh>
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -84,6 +85,8 @@ future<sstring> gce_snitch::gce_api_call(sstring addr, sstring cmd) {
         connected_socket sd(connect(socket_address(a, 80)).get0());
         input_stream<char> in(sd.input());
         output_stream<char> out(sd.output());
+        auto close_in = deferred_close(in);
+        auto close_out = deferred_close(out);
         sstring zone_req(seastar::format("GET {} HTTP/1.1\r\nHost: metadata\r\nMetadata-Flavor: Google\r\n\r\n", cmd));
 
         out.write(zone_req).get();
@@ -116,10 +119,6 @@ future<sstring> gce_snitch::gce_api_call(sstring addr, sstring cmd) {
         sstring res(buf.get(), buf.size());
         std::vector<std::string> splits;
         split(splits, res, is_any_of("/"));
-
-        // Close streams
-        out.close().get();
-        in.close().get();
 
         return sstring(splits[splits.size() - 1]);
     });
