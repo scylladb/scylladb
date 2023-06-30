@@ -77,6 +77,17 @@ public:
         struct progress {
             double completed = 0.0;         // Number of units completed so far.
             double total = 0.0;             // Total number of units to complete the task.
+
+            progress& operator+=(const progress& rhs) {
+                completed += rhs.completed;
+                total += rhs.total;
+                return *this;
+            }
+
+            friend progress operator+(progress lhs, const progress& rhs) {
+                lhs += rhs;
+                return lhs;
+            }
         };
 
         struct status {
@@ -96,7 +107,6 @@ public:
         class impl {
         protected:
             status _status;
-            progress _progress;             // Reliable only for tasks with no descendants.
             task_id _parent_id;
             foreign_task_vector _children;
             shared_promise<> _done;
@@ -112,12 +122,16 @@ public:
             virtual tasks::is_abortable is_abortable() const noexcept;
             virtual tasks::is_internal is_internal() const noexcept;
             virtual future<> abort() noexcept;
+            bool is_complete() const noexcept;
         protected:
             virtual future<> run() = 0;
             void run_to_completion();
             void finish() noexcept;
             void finish_failed(std::exception_ptr ex, std::string error) noexcept;
             void finish_failed(std::exception_ptr ex);
+            future<std::optional<double>> expected_total_workload() const;
+            std::optional<double> expected_children_number() const;
+            task_manager::task::progress get_binary_progress() const;
 
             friend task;
         };
@@ -146,6 +160,7 @@ public:
         void register_task();
         void unregister_task() noexcept;
         const foreign_task_vector& get_children() const noexcept;
+        bool is_complete() const noexcept;
 
         friend class test_task;
         friend class ::repair::task_manager_module;

@@ -36,11 +36,46 @@ task_manager::task::impl::impl(module_ptr module, task_id id, uint64_t sequence_
     }
 }
 
+future<std::optional<double>> task_manager::task::impl::expected_total_workload() const {
+    return make_ready_future<std::optional<double>>(std::nullopt);
+}
+
+std::optional<double> task_manager::task::impl::expected_children_number() const {
+    return std::nullopt;
+}
+
+task_manager::task::progress task_manager::task::impl::get_binary_progress() const {
+    return tasks::task_manager::task::progress{
+        .completed = is_complete(),
+        .total = 1.0
+    };
+}
+
 future<task_manager::task::progress> task_manager::task::impl::get_progress() const {
-    if (!_children.empty()) {
-        co_return progress{};
+    auto children_num = _children.size();
+    if (children_num == 0) {
+        co_return get_binary_progress();
     }
-    co_return _progress;
+
+    std::optional<double> expected_workload = std::nullopt;
+    auto expected_children_num = expected_children_number();
+    // When get_progress is called, the task can have some of its children unregistered yet.
+    // Then if total workload is not known, progress obtained from children may be deceiving.
+    // In such a situation it's safer to return binary progress value.
+    if (expected_children_num.value_or(0) != children_num && !(expected_workload = co_await expected_total_workload())) {
+        co_return get_binary_progress();
+    }
+
+    tasks::task_manager::task::progress progress{};
+    // _children vector may be modified in the meantime. Do not use foreach loop as the iterators may get invalidated.
+    for (unsigned i = 0; i < _children.size(); ++i) {
+        auto& child = _children[i];
+        progress += co_await smp::submit_to(child.get_owner_shard(), [&child] {
+            return child->get_progress();
+        });
+    }
+    progress.total = expected_workload.value_or(progress.total);
+    co_return progress;
 }
 
 is_abortable task_manager::task::impl::is_abortable() const noexcept {
@@ -70,6 +105,10 @@ future<> task_manager::task::impl::abort() noexcept {
             });
         });
     }
+}
+
+bool task_manager::task::impl::is_complete() const noexcept {
+    return _status.state == tasks::task_manager::task_state::done || _status.state == tasks::task_manager::task_state::failed;
 }
 
 void task_manager::task::impl::run_to_completion() {
@@ -202,6 +241,10 @@ void task_manager::task::unregister_task() noexcept {
 
 const task_manager::foreign_task_vector& task_manager::task::get_children() const noexcept {
     return _impl->_children;
+}
+
+bool task_manager::task::is_complete() const noexcept {
+    return _impl->is_complete();
 }
 
 task_manager::module::module(task_manager& tm, std::string name) noexcept : _tm(tm), _name(std::move(name)) {}
