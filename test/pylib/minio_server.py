@@ -12,6 +12,7 @@ import argparse
 import asyncio
 from asyncio.subprocess import Process
 from typing import Optional
+import json
 import logging
 import pathlib
 import subprocess
@@ -79,6 +80,54 @@ class MinioServer:
             else:
                 break
 
+    def _anonymous_public_policy(self):
+        # the default anonymous public policy does not allow us to access
+        # the taggings, so let's add the tagging actions manually.
+        #
+        # the original access policy is dumped using:
+        #   mc anonymous set public local/testbucket
+        #   mc anonymous get-json local/testbucket
+        #
+        # we added following actions to the policy for accessing objects in the
+        # bucket created for testing:
+        # - GetObjectTagging
+        # - PutObjectTagging
+        # - DeleteObjectTagging
+        #
+        # the full list of actions can be found at
+        #   https://docs.aws.amazon.com/AmazonS3/latest/API/API_Operations.html
+        bucket_actions = [
+            "s3:ListBucket",
+            "s3:ListBucketMultipartUploads",
+            "s3:GetBucketLocation",
+        ]
+        object_actions = [
+            "s3:AbortMultipartUpload",
+            "s3:DeleteObject",
+            "s3:GetObject",
+            "s3:ListMultipartUploadParts",
+            "s3:PutObject",
+            "s3:GetObjectTagging",
+            "s3:PutObjectTagging",
+            "s3:DeleteObjectTagging"
+        ]
+        statement = [
+            {
+                'Action': bucket_actions,
+                'Effect': 'Allow',
+                'Principal': {'AWS': ['*']},
+                'Resource': [ f'arn:aws:s3:::{self.bucket_name}' ]
+            },
+            {
+                'Action': object_actions,
+                'Effect': 'Allow',
+                'Principal': {'AWS': ['*']},
+                'Resource': [ f'arn:aws:s3:::{self.bucket_name}/*' ]
+            }
+        ]
+        return {'Statement': statement,
+                'Version': '2012-10-17'}
+
     async def start(self):
         if self.srv_exe is None:
             self.logger.info("Minio not installed, get it from https://dl.minio.io/server/minio/release/linux-amd64/minio and put into PATH")
@@ -119,7 +168,10 @@ class MinioServer:
             await self.mc('config', 'host', 'add', alias, f'http://{self.address}:{self.port}', self.default_user, self.default_pass, timeout=30)
             self.log_to_file(f'Configuring bucket {self.bucket_name}')
             await self.mc('mb', f'{alias}/{self.bucket_name}')
-            await self.mc('anonymous', 'set', 'public', f'{alias}/{self.bucket_name}')
+            with tempfile.NamedTemporaryFile(mode='w', encoding='UTF-8', suffix='.json') as policy_file:
+                json.dump(self._anonymous_public_policy(), policy_file, indent=2)
+                policy_file.flush()
+                await self.mc('anonymous', 'set-json', policy_file.name, f'{alias}/{self.bucket_name}')
 
         except Exception as e:
             self.logger.info(f'MC failed: {e}')

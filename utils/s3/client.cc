@@ -6,7 +6,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <initializer_list>
 #include <memory>
+#include <stdexcept>
 #include <rapidxml.h>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -27,6 +29,15 @@
 #include "utils/aws_sigv4.hh"
 #include "db_clock.hh"
 #include "log.hh"
+
+template <>
+struct fmt::formatter<s3::tag> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const s3::tag& tag, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "<Tag><Key>{}</Key><Value>{}</Value></Tag>",
+                              tag.key, tag.value);
+    }
+};
 
 namespace utils {
 
@@ -221,6 +232,92 @@ future<client::stats> client::get_object_stats(sstring object_name) {
         return make_ready_future<>();
     });
     co_return st;
+}
+
+static rapidxml::xml_node<>* first_node_of(rapidxml::xml_node<>* root,
+                                           std::initializer_list<std::string_view> names) {
+    assert(root);
+    auto* node = root;
+    for (auto name : names) {
+        node = node->first_node(name.data(), name.size());
+        if (!node) {
+            throw std::runtime_error(fmt::format("'{}' is not found", name));
+        }
+    }
+    return node;
+}
+
+static tag_set parse_tagging(sstring& body) {
+    auto doc = std::make_unique<rapidxml::xml_document<>>();
+    try {
+        doc->parse<0>(body.data());
+    } catch (const rapidxml::parse_error& e) {
+        s3l.warn("cannnot parse tagging response: {}", e.what());
+        throw std::runtime_error("cannot parse tagging response");
+    }
+    tag_set tags;
+    auto tagset_node = first_node_of(doc.get(), {"Tagging", "TagSet"});
+    for (auto tag_node = tagset_node->first_node("Tag"); tag_node; tag_node = tag_node->next_sibling()) {
+        auto key = tag_node->first_node("Key")->value();
+        auto value = tag_node->first_node("Value")->value();
+        tags.emplace_back(tag{key, value});
+    }
+    return tags;
+}
+
+future<tag_set> client::get_object_tagging(sstring object_name) {
+    // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectTagging.html
+    auto req = http::request::make("GET", _host, object_name);
+    req.query_parameters["tagging"] = "";
+    s3l.trace("GET {} tagging", object_name);
+    tag_set tags;
+    co_await make_request(std::move(req),
+                          [&tags] (const http::reply& reply, input_stream<char>&& in) mutable -> future<> {
+        auto& retval = tags;
+        auto input = std::move(in);
+        auto body = co_await util::read_entire_stream_contiguous(input);
+        retval = parse_tagging(body);
+    });
+    co_return tags;
+}
+
+static auto dump_tagging(const tag_set& tags) {
+    // print the tags as an XML as defined by the API definition.
+    fmt::memory_buffer body;
+    fmt::format_to(fmt::appender(body), "<Tagging><TagSet>{}</TagSet></Tagging>", fmt::join(tags, ""));
+    return body;
+}
+
+future<> client::put_object_tagging(sstring object_name, tag_set tagging) {
+    // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectTagging.html
+    auto req = http::request::make("PUT", _host, object_name);
+    req.query_parameters["tagging"] = "";
+    s3l.trace("PUT {} tagging", object_name);
+    auto body = dump_tagging(tagging);
+    size_t body_size = body.size();
+    req.write_body("xml", body_size, [body=std::move(body)] (output_stream<char>&& out) -> future<> {
+        auto output = std::move(out);
+        std::exception_ptr ex;
+        try {
+            co_await output.write(body.data(), body.size());
+            co_await output.flush();
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        co_await output.close();
+        if (ex) {
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+    });
+    co_await make_request(std::move(req));
+}
+
+future<> client::delete_object_tagging(sstring object_name) {
+    // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjectTagging.html
+    auto req = http::request::make("DELETE", _host, object_name);
+    req.query_parameters["tagging"] = "";
+    s3l.trace("DELETE {} tagging", object_name);
+    co_await make_request(std::move(req), ignore_reply, http::reply::status_type::no_content);
 }
 
 future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name, std::optional<range> range) {
