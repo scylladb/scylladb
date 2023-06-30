@@ -153,6 +153,8 @@ The stream is strictly ordered:
 Supported Operations
 --------------------
 
+.. _scylla-sstable-dump-data-operation:
+
 dump-data
 ^^^^^^^^^
 
