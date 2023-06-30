@@ -142,6 +142,7 @@ bool group0_guard::with_raft() const {
     return _impl->_raft_enabled;
 }
 
+void release_guard(group0_guard guard) {}
 
 void raft_group0_client::set_history_gc_duration(gc_clock::duration d) {
     _history_gc_duration = d;

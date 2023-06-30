@@ -55,6 +55,8 @@ public:
     bool with_raft() const;
 };
 
+void release_guard(group0_guard guard);
+
 class group0_concurrent_modification : public std::runtime_error {
 public:
     group0_concurrent_modification()
