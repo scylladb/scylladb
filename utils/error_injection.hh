@@ -12,6 +12,8 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/smp.hh>
+#include <seastar/core/condition-variable.hh>
+#include <seastar/core/on_internal_error.hh>
 #include "seastarx.hh"
 
 #include "log.hh"
@@ -24,6 +26,8 @@
 #include <optional>
 
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/adaptor/filtered.hpp>
+
 
 namespace utils {
 
@@ -70,7 +74,7 @@ extern logging::logger errinj_logger;
  * Enabled check is done at injection time. But if in the future it is
  * required to be checked inside the continuation the code must be updated.
  *
- * There are two predefined injections:
+ * The predefined injections are as follows:
  *
  * 1. inject(name, duration in milliseconds, future)
  *    Sleeps for a given amount of milliseconds. This is seastar::sleep,
@@ -93,6 +97,11 @@ extern logging::logger errinj_logger;
  *          }, f);
  *    Expected use case: emulate custom errors like timeouts.
  *
+ * 4. inject_with_handler(name, func)
+ *    Inserts code that can wait for an event.
+ *    Requires func to be a function taking an injection_handler reference and
+ *    returning a future<>.
+ *    Expected use case: wait for an event from tests.
  */
 
 template <bool injection_enabled>
@@ -100,11 +109,81 @@ class error_injection {
     inline static thread_local error_injection _local;
     using handler_fun = std::function<void()>;
 
+    /**
+     * It is shared between the injection_data. It is created once when enabling an injection
+     * on a given shard, and all injection_handlers, that are created separately for each firing of this injection.
+     */
+    struct received_messages_counter {
+        size_t counter{0};
+        condition_variable cv;
+    };
+
+    class injection_data;
+public:
+    /**
+     * The injection handler class is used to wait for events inside the injected code.
+     * If multiple inject_with_handler are called concurrently for the same injection_name,
+     * all of them will have separate handlers.
+     */
+    class injection_handler: public bi::list_base_hook<bi::link_mode<bi::auto_unlink>> {
+        lw_shared_ptr<received_messages_counter> _received_counter;
+        size_t _read_messages_counter{0};
+
+        explicit injection_handler(lw_shared_ptr<received_messages_counter> received_counter)
+            : _received_counter(std::move(received_counter)) {}
+
+    public:
+        template <typename Clock, typename Duration>
+        future<> wait_for_message(std::chrono::time_point<Clock, Duration> timeout) {
+            if (!_received_counter) {
+                on_internal_error(errinj_logger, "received_messages_counter is not initialized");
+            }
+
+            try {
+                co_await _received_counter->cv.wait(timeout, [&] { return _read_messages_counter < _received_counter->counter; });
+            }
+            catch (const std::exception& e) {
+                on_internal_error(errinj_logger, "Error injection wait_for_message timeout: " + std::string(e.what()));
+            }
+            ++_read_messages_counter;
+        }
+
+        friend class error_injection;
+    };
+
+private:
+    /**
+     * - there is a counter of received messages; it is shared between the injection_data,
+     *   which is created once when enabling an injection on a given shard, and all injection_handlers,
+     *   that are created separately for each firing of this injection.
+     * - the counter is incremented when receiving a message from the REST endpoint and the condition variable is signaled.
+     * - each injection_handler (separate for each firing) stores its own private counter, _read_messages_counter.
+     * - that private counter is incremented whenever we wait for a message, and compared to the received counter.
+     *   We sleep on the condition variable if not enough messages were received.
+     */
     struct injection_data {
         bool one_shot;
+        lw_shared_ptr<received_messages_counter> received_counter;
+        bi::list<injection_handler, bi::constant_time_size<false>> handlers;
 
         explicit injection_data(bool one_shot)
-            : one_shot{one_shot} {}
+            : one_shot(one_shot)
+            , received_counter(make_lw_shared<received_messages_counter>()) {}
+
+        void receive_message() {
+            assert(received_counter);
+
+            ++received_counter->counter;
+            received_counter->cv.broadcast();
+        }
+
+        bool is_one_shot() const {
+            return one_shot;
+        }
+
+        bool is_ongoing_oneshot() const {
+            return is_one_shot() && !handlers.empty();
+        }
     };
 
     // String cross-type comparator
@@ -133,6 +212,14 @@ class error_injection {
             return false;
         }
         return it->second.one_shot;
+    }
+
+    injection_data* get_data(const std::string_view& injection_name) {
+        const auto it = _enabled.find(injection_name);
+        if (it == _enabled.end()) {
+            return nullptr;
+        }
+        return &it->second;
     }
 
 public:
@@ -168,7 +255,9 @@ public:
     }
 
     std::vector<sstring> enabled_injections() const {
-        return boost::copy_range<std::vector<sstring>>(_enabled | boost::adaptors::map_keys);
+        return boost::copy_range<std::vector<sstring>>(_enabled | boost::adaptors::filtered([] (const auto& pair) {
+            return !pair.second.is_ongoing_oneshot();
+        }) | boost::adaptors::map_keys);
     }
 
     // \brief Inject a lambda call
@@ -256,6 +345,37 @@ public:
         return make_exception_future<>(exception_factory());
     }
 
+    // \brief Inject exception
+    // \param func function returning a future and taking an injection handler
+    template <typename Func>
+    requires std::is_invocable_r_v<future<>, Func, injection_handler&>
+    future<> inject_with_handler(const std::string_view& name,
+                                 Func&& func) {
+        auto* data = get_data(name);
+        if (!data) {
+            co_return;
+        }
+
+        bool one_shot = data->is_one_shot();
+        if (data->is_ongoing_oneshot()) {
+            // There is ongoing one-shot injection, so this one is not triggered.
+            // It is not removed from _enabled to keep the data associated with the injection as long as it is needed.
+            co_return;
+        }
+
+        errinj_logger.debug("Triggering injection \"{}\" with injection handler", name);
+        injection_handler handler(data->received_counter);
+        data->handlers.push_back(handler);
+
+        auto disable_one_shot = defer([this, one_shot, name = sstring(name)] {
+            if (one_shot) {
+                disable(name);
+            }
+        });
+
+        co_await func(handler);
+    }
+
     future<> enable_on_all(const std::string_view& injection_name, bool one_shot = false) {
         return smp::invoke_on_all([injection_name = sstring(injection_name), one_shot] {
             auto& errinj = _local;
@@ -274,6 +394,19 @@ public:
         return smp::invoke_on_all([] {
             auto& errinj = _local;
             errinj.disable_all();
+        });
+    }
+
+    void receive_message(const std::string_view& injection_name) {
+        if (auto* data = get_data(injection_name)) {
+            data->receive_message();
+        }
+    }
+
+    static future<> receive_message_on_all(const std::string_view& injection_name) {
+        return smp::invoke_on_all([injection_name = sstring(injection_name)] {
+            auto& errinj = _local;
+            errinj.receive_message(injection_name);
         });
     }
 
@@ -351,6 +484,16 @@ public:
         return make_ready_future<>();
     }
 
+    // \brief Inject exception
+    // \param func function returning a future and taking an injection handler
+    template <typename Func>
+    requires std::is_invocable_r_v<future<>, Func, error_injection<true>::injection_handler&>
+    [[gnu::always_inline]]
+    future<> inject_with_handler(const std::string_view& name,
+                                 Func&& func) {
+        return make_ready_future<>();
+    }
+
     [[gnu::always_inline]]
     static future<> enable_on_all(const std::string_view& injection_name, const bool one_shot = false) {
         return make_ready_future<>();
@@ -363,6 +506,11 @@ public:
 
     [[gnu::always_inline]]
     static future<> disable_on_all() {
+        return make_ready_future<>();
+    }
+
+    [[gnu::always_inline]]
+    static future<> receive_message_on_all(const std::string_view& injection_name) {
         return make_ready_future<>();
     }
 
