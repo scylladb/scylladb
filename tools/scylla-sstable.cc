@@ -514,7 +514,11 @@ void mutation_fragment_stream_json_writer::start_stream() {
 }
 
 void mutation_fragment_stream_json_writer::start_sstable(const sstables::sstable* const sst) {
-    writer().SstableKey(sst);
+    if (sst) {
+        writer().Key(sst->get_filename());
+    } else {
+        writer().Key("anonymous");
+    }
     writer().StartArray();
 }
 
@@ -1119,7 +1123,7 @@ void dump_index_operation(schema_ptr schema, reader_permit permit, const std::ve
         sstables::index_reader idx_reader(sst, permit);
         auto close_idx_reader = deferred_close(idx_reader);
 
-        writer.SstableKey(*sst);
+        writer.Key(sst->get_filename());
         writer.StartArray();
 
         while (!idx_reader.eof()) {
@@ -1158,7 +1162,7 @@ void dump_compression_info_operation(schema_ptr schema, reader_permit permit, co
     for (auto& sst : sstables) {
         const auto& compression = sst->get_compression();
 
-        writer.SstableKey(*sst);
+        writer.Key(sst->get_filename());
         writer.StartObject();
         writer.Key("name");
         writer.String(disk_string_to_string(compression.name));
@@ -1196,7 +1200,7 @@ void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::
     for (auto& sst : sstables) {
         auto& summary = sst->get_summary();
 
-        writer.SstableKey(*sst);
+        writer.Key(sst->get_filename());
         writer.StartObject();
 
         writer.Key("header");
@@ -1476,7 +1480,7 @@ void dump_statistics_operation(schema_ptr schema, reader_permit permit, const st
     for (auto& sst : sstables) {
         auto& statistics = sst->get_statistics();
 
-        writer.SstableKey(*sst);
+        writer.Key(sst->get_filename());
         writer.StartObject();
 
         writer.Key("offsets");
@@ -1636,7 +1640,7 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
-        writer.SstableKey(*sst);
+        writer.Key(sst->get_filename());
         writer.StartObject();
         auto m = sst->get_scylla_metadata();
         if (!m) {

@@ -73,16 +73,6 @@ public:
         EndObject();
         EndObject();
     }
-    void SstableKey(const sstables::sstable& sst) {
-        Key(sst.get_filename());
-    }
-    void SstableKey(const sstables::sstable* const sst) {
-        if (sst) {
-            SstableKey(*sst);
-        } else {
-            Key("anonymous");
-        }
-    }
 };
 
 class mutation_partition_json_writer {
