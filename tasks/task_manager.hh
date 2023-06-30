@@ -258,8 +258,8 @@ public:
         co_return std::move(res.value());
     }
 
-protected:
     seastar::abort_source& abort_source() noexcept;
+protected:
     std::chrono::seconds get_task_ttl() const noexcept;
 private:
     future<> update_task_ttl() noexcept {
