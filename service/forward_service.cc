@@ -45,7 +45,6 @@
 #include "cql3/result_set.hh"
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/selection/selectable-expr.hh"
-#include "cql3/selection/selectable.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_aggregate.hh"

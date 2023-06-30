@@ -380,19 +380,5 @@ get_castas_fctn_as_cql3_function(data_type to_type, data_type from_type) {
     return make_castas_function(to_type, from_type, f);
 }
 
-shared_ptr<function> castas_functions::get(data_type to_type, const std::vector<shared_ptr<cql3::selection::selector>>& provided_args) {
-    if (provided_args.size() != 1) {
-        throw exceptions::invalid_request_exception("Invalid CAST expression");
-    }
-    auto from_type = provided_args[0]->get_type();
-    auto from_type_key = from_type;
-    if (from_type_key->is_reversed()) {
-        from_type_key = dynamic_cast<const reversed_type_impl&>(*from_type).underlying_type();
-    }
-
-    auto f = get_castas_fctn(to_type, from_type_key);
-    return make_castas_function(to_type, from_type, f);
-}
-
 }
 }

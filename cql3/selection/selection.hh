@@ -13,9 +13,9 @@
 #include "bytes.hh"
 #include "schema/schema_fwd.hh"
 #include "query-result-reader.hh"
+#include "selector.hh"
 #include "cql3/column_specification.hh"
-#include "cql3/selection/selector.hh"
-#include "cql3/selection/selectable.hh"
+#include "cql3/functions/function.hh"
 #include "exceptions/exceptions.hh"
 #include "unimplemented.hh"
 #include <seastar/core/thread.hh>
@@ -23,7 +23,6 @@
 namespace cql3 {
 
 class result_set;
-class result_set_builder;
 class metadata;
 class query_options;
 
@@ -34,6 +33,7 @@ class statement_restrictions;
 namespace selection {
 
 class raw_selector;
+class result_set_builder;
 
 class selectors {
 public:

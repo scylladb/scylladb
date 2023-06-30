@@ -16,7 +16,6 @@ options {
 }
 
 @parser::includes {
-#include "cql3/selection/writetime_or_ttl.hh"
 #include "cql3/statements/raw/parsed_statement.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/statements/alter_keyspace_statement.hh"
@@ -67,8 +66,8 @@ options {
 #include "cql3/statements/index_target.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
+#include "cql3/selection/selectable-expr.hh"
 #include "cql3/keyspace_element_name.hh"
-#include "cql3/selection/selectable_with_field_selection.hh"
 #include "cql3/constants.hh"
 #include "cql3/operation_impl.hh"
 #include "cql3/error_listener.hh"

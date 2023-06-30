@@ -98,10 +98,7 @@ target_sources(cql3
     query_options.cc
     user_types.cc
     untyped_result_set.cc
-    selection/abstract_function_selector.cc
-    selection/simple_selector.cc
     selection/selectable.cc
-    selection/selector_factories.cc
     selection/selection.cc
     selection/selector.cc
     restrictions/statement_restrictions.cc

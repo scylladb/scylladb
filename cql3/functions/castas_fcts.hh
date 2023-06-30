@@ -18,7 +18,6 @@
 #include "exceptions/exceptions.hh"
 #include <seastar/core/print.hh>
 #include "cql3/cql3_type.hh"
-#include "cql3/selection/selector.hh"
 
 namespace cql3 {
 namespace functions {
@@ -31,11 +30,6 @@ using castas_fctn = data_value(*)(data_value);
 
 castas_fctn get_castas_fctn(data_type to_type, data_type from_type);
 ::shared_ptr<function> get_castas_fctn_as_cql3_function(data_type to_type, data_type from_type);
-
-class castas_functions {
-public:
-    static shared_ptr<function> get(data_type to_type, const std::vector<shared_ptr<cql3::selection::selector>>& provided_args);
-};
 
 }
 }

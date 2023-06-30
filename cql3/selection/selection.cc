@@ -16,7 +16,6 @@
 
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/raw_selector.hh"
-#include "cql3/selection/abstract_function_selector.hh"
 #include "cql3/result_set.hh"
 #include "cql3/query_options.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
