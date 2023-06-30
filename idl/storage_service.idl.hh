@@ -31,7 +31,7 @@ struct raft_topology_cmd_result {
 
 struct raft_topology_snapshot {
     std::vector<canonical_mutation> topology_mutations;
-    std::optional<canonical_mutation> cdc_generation_mutation;
+    std::vector<canonical_mutation> cdc_generation_mutations;
 };
 
 struct raft_topology_pull_params {};
