@@ -174,8 +174,7 @@ class OptimizationLevel:
             return
         print('\033[91mWARN\033[00m: '
               f'Changing optimization level to "-O{safe_level}" '
-              'due to https://github.com/llvm/llvm-project/issues/62842. '
-              'Please note -O0 is so slow that some tests might fail.')
+              'due to https://github.com/llvm/llvm-project/issues/62842.')
         cls.warned = True
 
     def __call__(self, cxx_compiler, default_level):
