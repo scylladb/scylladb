@@ -100,6 +100,13 @@ class error_injection {
     inline static thread_local error_injection _local;
     using handler_fun = std::function<void()>;
 
+    struct injection_data {
+        bool one_shot;
+
+        explicit injection_data(bool one_shot)
+            : one_shot{one_shot} {}
+    };
+
     // String cross-type comparator
     class str_less
     {
@@ -114,7 +121,7 @@ class error_injection {
     };
     // Map enabled-injection-name -> is-one-shot
     // TODO: change to unordered_set once we have heterogeneous lookups
-    std::map<sstring, bool, str_less> _enabled;
+    std::map<sstring, injection_data, str_less> _enabled;
 
     bool is_enabled(const std::string_view& injection_name) const {
         return _enabled.contains(injection_name);
@@ -125,7 +132,7 @@ class error_injection {
         if (it == _enabled.end()) {
             return false;
         }
-        return it->second;
+        return it->second.one_shot;
     }
 
 public:
@@ -142,7 +149,7 @@ public:
     }
 
     void enable(const std::string_view& injection_name, bool one_shot = false) {
-        _enabled.emplace(injection_name, one_shot);
+        _enabled.emplace(injection_name, injection_data{one_shot});
         errinj_logger.debug("Enabling injection {} \"{}\"",
                 one_shot? "one-shot ": "", injection_name);
     }
