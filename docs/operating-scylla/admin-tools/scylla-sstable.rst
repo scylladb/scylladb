@@ -925,7 +925,7 @@ Scylla.json_writer
 """"""""""""""""""
 
 A JSON writer object, with both low-level and high-level APIs.
-The low-level API allows you to write custom JSON and it loosely follows the API of `rapidjson::Writer <https://rapidjson.org/classrapidjson_1_1_writer.html_>`_ (upon which it is implemented).
+The low-level API allows you to write custom JSON and it loosely follows the API of `rapidjson::Writer <https://rapidjson.org/classrapidjson_1_1_writer.html>`_ (upon which it is implemented).
 The high-level API is for writing `mutation fragments <scylla-sstable-sstable-content_>`_ as JSON directly, using the built-in JSON conversion logic that is used by `dump-data <dump-data_>`_ operation.
 
 Low level API Methods:
@@ -1017,8 +1017,8 @@ Magic methods:
 
 See also:
 
-* `Scylla.unserialize_partition_key() <scylla-unserialize-partition-key-method_>`_.
-* `Scylla.token_of() <scylla-token-of-method>`_.
+* :ref:`Scylla.unserialize_partition_key() <scylla-unserialize-partition-key-method>`.
+* :ref:`Scylla.token_of() <scylla-token-of-method>`.
 
 .. _scylla-partition-start-type:
 
