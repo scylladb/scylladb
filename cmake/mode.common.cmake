@@ -47,8 +47,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_VERSION GREATER_
   if(NOT _original_level STREQUAL _safe_level)
     message(WARNING
       "Changing optimization level from -O${_original_level} to -O${_safe_level} "
-      "due to https://github.com/llvm/llvm-project/issues/62842. "
-      "Please note -O0 is very slow that some tests might fail.")
+      "due to https://github.com/llvm/llvm-project/issues/62842.")
     string(REPLACE " -O${_original_level} " " -O${_safe_level} "
       CMAKE_CXX_FLAGS_${build_mode}
       "${CMAKE_CXX_FLAGS_${build_mode}}")
