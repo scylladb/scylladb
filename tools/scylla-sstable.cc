@@ -159,7 +159,9 @@ schema_ptr try_load_schema_from_user_provided_source(const bpo::variables_map& a
             return tools::load_schema_from_schema_tables(std::filesystem::path(app_config["scylla-data-dir"].as<sstring>()), keyspace_name, table_name).get();
         }
         if (app_config.contains("scylla-yaml-file")) {
-            db::config cfg;
+            // Place on heap to avoid wasting stack space
+            auto pcfg = std::make_unique<db::config>();
+            auto& cfg = *pcfg;
             cfg.read_from_file(app_config["scylla-yaml-file"].as<sstring>()).get();
             cfg.setup_directories();
             return tools::load_schema_from_schema_tables(std::filesystem::path(cfg.data_file_directories()[0]), keyspace_name, table_name).get();
@@ -205,7 +207,9 @@ schema_ptr try_load_schema_autodetect(const bpo::variables_map& app_config) {
 
     try {
         auto scylla_yaml_file = db::config::get_conf_sub("scylla.yaml").string();
-        db::config cfg;
+        // Place on heap to avoid wasting stack space
+        auto pcfg = std::make_unique<db::config>();
+        auto& cfg = *pcfg;
         cfg.read_from_file(scylla_yaml_file).get();
         cfg.setup_directories();
         auto [keyspace_name, table_name] = get_keyspace_and_table_options(app_config);
@@ -215,7 +219,9 @@ schema_ptr try_load_schema_autodetect(const bpo::variables_map& app_config) {
     }
 
     try {
-        db::config cfg;
+        // Place on heap to avoid wasting stack space
+        auto pcfg = std::make_unique<db::config>();
+        auto& cfg = *pcfg;
         cfg.setup_directories();
         auto [keyspace_name, table_name] = get_keyspace_and_table_options(app_config);
         return tools::load_schema_from_schema_tables(std::filesystem::path(cfg.data_file_directories()[0]), keyspace_name, table_name).get();
@@ -3102,7 +3108,9 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
                 return 1;
             }
 
-            db::config dbcfg;
+            // Place on heap to avoid wasting stack space
+            auto pdbcfg = std::make_unique<db::config>();
+            auto& dbcfg = *pdbcfg;
             gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
             cache_tracker tracker;
             dbcfg.host_id = locator::host_id::create_random_id();
