@@ -631,17 +631,30 @@ public:
     }
 private:
     // Default range sstable reader that will only return mutation that belongs to current shard.
-    virtual flat_mutation_reader_v2 make_sstable_reader() const = 0;
+    virtual flat_mutation_reader_v2 make_sstable_reader(schema_ptr s,
+                                                        reader_permit permit,
+                                                        const dht::partition_range& range,
+                                                        const query::partition_slice& slice,
+                                                        tracing::trace_state_ptr,
+                                                        streamed_mutation::forwarding fwd,
+                                                        mutation_reader::forwarding) const = 0;
 
     // Make a filtering reader if needed
     // FIXME: the sstable reader itself should be pass the owned ranges
     // so it can skip over the disowned ranges efficiently using the index.
     // Ref https://github.com/scylladb/scylladb/issues/12998
     flat_mutation_reader_v2 setup_sstable_reader() const {
+        auto reader = make_sstable_reader(_schema,
+                                          _permit,
+                                          query::full_partition_range,
+                                          _schema->full_slice(),
+                                          tracing::trace_state_ptr(),
+                                          ::streamed_mutation::forwarding::no,
+                                          ::mutation_reader::forwarding::no);
         if (!_owned_ranges_checker) {
-            return make_sstable_reader();
+            return reader;
         }
-        return make_filtering_reader(make_sstable_reader(), make_partition_filter());
+        return make_filtering_reader(std::move(reader), make_partition_filter());
     }
 
     virtual sstables::sstable_set make_sstable_set_for_input() const {
@@ -1019,14 +1032,20 @@ public:
         return sstables::make_partitioned_sstable_set(_schema, false);
     }
 
-    flat_mutation_reader_v2 make_sstable_reader() const override {
-        return _compacting->make_local_shard_sstable_reader(_schema,
-                _permit,
-                query::full_partition_range,
-                _schema->full_slice(),
-                tracing::trace_state_ptr(),
-                ::streamed_mutation::forwarding::no,
-                ::mutation_reader::forwarding::no,
+    flat_mutation_reader_v2 make_sstable_reader(schema_ptr s,
+                                                reader_permit permit,
+                                                const dht::partition_range& range,
+                                                const query::partition_slice& slice,
+                                                tracing::trace_state_ptr trace,
+                                                streamed_mutation::forwarding sm_fwd,
+                                                mutation_reader::forwarding mr_fwd) const override {
+        return _compacting->make_local_shard_sstable_reader(std::move(s),
+                std::move(permit),
+                range,
+                slice,
+                std::move(trace),
+                sm_fwd,
+                mr_fwd,
                 default_read_monitor_generator());
     }
 
@@ -1064,14 +1083,20 @@ public:
     {
     }
 
-    flat_mutation_reader_v2 make_sstable_reader() const override {
-        return _compacting->make_local_shard_sstable_reader(_schema,
-                _permit,
-                query::full_partition_range,
-                _schema->full_slice(),
-                tracing::trace_state_ptr(),
-                ::streamed_mutation::forwarding::no,
-                ::mutation_reader::forwarding::no,
+    flat_mutation_reader_v2 make_sstable_reader(schema_ptr s,
+                                                reader_permit permit,
+                                                const dht::partition_range& range,
+                                                const query::partition_slice& slice,
+                                                tracing::trace_state_ptr trace,
+                                                streamed_mutation::forwarding sm_fwd,
+                                                mutation_reader::forwarding mr_fwd) const override {
+        return _compacting->make_local_shard_sstable_reader(std::move(s),
+                std::move(permit),
+                range,
+                slice,
+                std::move(trace),
+                sm_fwd,
+                mr_fwd,
                 _monitor_generator);
     }
 
@@ -1456,8 +1481,17 @@ public:
         return _scrub_finish_description;
     }
 
-    flat_mutation_reader_v2 make_sstable_reader() const override {
-        auto crawling_reader = _compacting->make_crawling_reader(_schema, _permit, nullptr);
+    flat_mutation_reader_v2 make_sstable_reader(schema_ptr s,
+                                                reader_permit permit,
+                                                const dht::partition_range& range,
+                                                const query::partition_slice& slice,
+                                                tracing::trace_state_ptr trace,
+                                                streamed_mutation::forwarding sm_fwd,
+                                                mutation_reader::forwarding mr_fwd) const override {
+        if (!range.is_full()) {
+            on_internal_error(clogger, fmt::format("Scrub compaction in mode {} expected full partition range, but got {} instead", _options.operation_mode, range));
+        }
+        auto crawling_reader = _compacting->make_crawling_reader(std::move(s), std::move(permit), nullptr);
         return make_flat_mutation_reader_v2<reader>(std::move(crawling_reader), _options.operation_mode, _validation_errors);
     }
 
@@ -1548,14 +1582,20 @@ public:
     ~resharding_compaction() { }
 
     // Use reader that makes sure no non-local mutation will not be filtered out.
-    flat_mutation_reader_v2 make_sstable_reader() const override {
-        return _compacting->make_range_sstable_reader(_schema,
-                _permit,
-                query::full_partition_range,
-                _schema->full_slice(),
+    flat_mutation_reader_v2 make_sstable_reader(schema_ptr s,
+                                                reader_permit permit,
+                                                const dht::partition_range& range,
+                                                const query::partition_slice& slice,
+                                                tracing::trace_state_ptr trace,
+                                                streamed_mutation::forwarding sm_fwd,
+                                                mutation_reader::forwarding mr_fwd) const override {
+        return _compacting->make_range_sstable_reader(std::move(s),
+                std::move(permit),
+                range,
+                slice,
                 nullptr,
-                ::streamed_mutation::forwarding::no,
-                ::mutation_reader::forwarding::no);
+                sm_fwd,
+                mr_fwd);
 
     }
 
