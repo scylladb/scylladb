@@ -39,6 +39,13 @@ public:
         return _it != _sorted_owned_ranges.end() && _it->contains(t, dht::token_comparator());
     }
 
+    const dht::token_range* next_owned_range() const noexcept {
+        if (_it == _sorted_owned_ranges.end()) {
+            return nullptr;
+        }
+        return &*_it++;
+    }
+
     static flat_mutation_reader_v2::filter make_partition_filter(const dht::token_range_vector& sorted_owned_ranges);
 };
 
