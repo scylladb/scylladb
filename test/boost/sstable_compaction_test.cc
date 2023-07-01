@@ -1966,6 +1966,8 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
 
             auto total_partitions = 10000U;
             auto local_keys = tests::generate_partition_keys(total_partitions, s);
+            dht::decorated_key::less_comparator cmp(s);
+            std::sort(local_keys.begin(), local_keys.end(), cmp);
             std::vector<mutation> mutations;
             for (auto i = 0U; i < total_partitions; i++) {
                 mutations.push_back(make_insert(local_keys.at(i)));
@@ -1978,7 +1980,7 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
             cf->start();
 
             auto local_ranges = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(ks_name));
-            auto descriptor = sstables::compaction_descriptor({std::move(sst)}, compaction_descriptor::default_level,
+            auto descriptor = sstables::compaction_descriptor({sst}, compaction_descriptor::default_level,
                 compaction_descriptor::default_max_sstable_bytes, run_identifier, compaction_type_options::make_cleanup(), std::move(local_ranges));
             auto ret = compact_sstables(std::move(descriptor), cf, sst_gen).get0();
 
@@ -1986,6 +1988,25 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
             BOOST_REQUIRE(ret.new_sstables.front()->get_estimated_key_count() >= total_partitions);
             BOOST_REQUIRE((ret.new_sstables.front()->get_estimated_key_count() - total_partitions) <= uint64_t(s->min_index_interval()));
             BOOST_REQUIRE(ret.new_sstables.front()->run_identifier() == run_identifier);
+
+            dht::token_range_vector ranges;
+            ranges.push_back(dht::token_range::make_singular(local_keys.at(0).token()));
+            ranges.push_back(dht::token_range::make_singular(local_keys.at(10).token()));
+            ranges.push_back(dht::token_range::make_singular(local_keys.at(100).token()));
+            ranges.push_back(dht::token_range::make_singular(local_keys.at(900).token()));
+            local_ranges = compaction::make_owned_ranges_ptr(std::move(ranges));
+            descriptor = sstables::compaction_descriptor({sst}, compaction_descriptor::default_level,
+                                            compaction_descriptor::default_max_sstable_bytes, run_identifier,
+                                            compaction_type_options::make_cleanup(), std::move(local_ranges));
+            ret = compact_sstables(std::move(descriptor), cf, sst_gen).get0();
+            BOOST_REQUIRE(ret.new_sstables.size() == 1);
+            auto reader = ret.new_sstables[0]->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
+            assert_that(std::move(reader))
+                    .produces(local_keys[0])
+                    .produces(local_keys[10])
+                    .produces(local_keys[100])
+                    .produces(local_keys[900])
+                    .produces_end_of_stream();
         });
     });
 }
