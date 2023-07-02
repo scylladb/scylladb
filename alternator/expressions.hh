@@ -28,7 +28,7 @@ public:
 
 parsed::update_expression parse_update_expression(std::string_view query);
 std::vector<parsed::path> parse_projection_expression(std::string_view query);
-parsed::condition_expression parse_condition_expression(std::string_view query);
+parsed::condition_expression parse_condition_expression(std::string_view query, const char* caller);
 
 void resolve_update_expression(parsed::update_expression& ue,
         const rjson::value* expression_attribute_names,

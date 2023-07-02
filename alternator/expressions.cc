@@ -29,7 +29,7 @@
 namespace alternator {
 
 template <typename Func, typename Result = std::result_of_t<Func(expressionsParser&)>>
-Result do_with_parser(std::string_view input, Func&& f) {
+static Result do_with_parser(std::string_view input, Func&& f) {
     expressionsLexer::InputStreamType input_stream{
         reinterpret_cast<const ANTLR_UINT8*>(input.data()),
         ANTLR_ENC_UTF8,
@@ -43,31 +43,41 @@ Result do_with_parser(std::string_view input, Func&& f) {
     return result;
 }
 
+template <typename Func, typename Result = std::result_of_t<Func(expressionsParser&)>>
+static Result parse(const char* input_name, std::string_view input, Func&& f) {
+    if (input.length() > 4096) {
+        throw expressions_syntax_error(format("{} expression size {} exceeds allowed maximum 4096.",
+            input_name, input.length()));
+    }
+    try {
+        return do_with_parser(input, f);
+    } catch (expressions_syntax_error& e) {
+        // If already an expressions_syntax_error, don't print the type's
+        // name (it's just ugly), just the message.
+        // TODO: displayRecognitionError could set a position inside the
+        // expressions_syntax_error in throws, and we could use it here to
+        // mark the broken position in 'input'.
+        throw expressions_syntax_error(format("Failed parsing {} '{}': {}",
+            input_name, input, e.what()));
+    } catch (...) {
+        throw expressions_syntax_error(format("Failed parsing {} '{}': {}",
+            input_name, input, std::current_exception()));
+    }
+}
+
 parsed::update_expression
 parse_update_expression(std::string_view query) {
-    try {
-        return do_with_parser(query,  std::mem_fn(&expressionsParser::update_expression));
-    } catch (...) {
-        throw expressions_syntax_error(format("Failed parsing UpdateExpression '{}': {}", query, std::current_exception()));
-    }
+    return parse("UpdateExpression", query,  std::mem_fn(&expressionsParser::update_expression));
 }
 
 std::vector<parsed::path>
 parse_projection_expression(std::string_view query) {
-    try {
-        return do_with_parser(query,  std::mem_fn(&expressionsParser::projection_expression));
-    } catch (...) {
-        throw expressions_syntax_error(format("Failed parsing ProjectionExpression '{}': {}", query, std::current_exception()));
-    }
+    return parse ("ProjectionExpression", query,  std::mem_fn(&expressionsParser::projection_expression));
 }
 
 parsed::condition_expression
-parse_condition_expression(std::string_view query) {
-    try {
-        return do_with_parser(query,  std::mem_fn(&expressionsParser::condition_expression));
-    } catch (...) {
-        throw expressions_syntax_error(format("Failed parsing ConditionExpression '{}': {}", query, std::current_exception()));
-    }
+parse_condition_expression(std::string_view query, const char* caller) {
+    return parse(caller, query,  std::mem_fn(&expressionsParser::condition_expression));
 }
 
 namespace parsed {

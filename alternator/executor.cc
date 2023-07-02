@@ -1648,7 +1648,7 @@ static parsed::condition_expression get_parsed_condition_expression(rjson::value
         throw api_error::validation("ConditionExpression must not be empty");
     }
     try {
-        return parse_condition_expression(rjson::to_string_view(*condition_expression));
+        return parse_condition_expression(rjson::to_string_view(*condition_expression), "ConditionExpression");
     } catch(expressions_syntax_error& e) {
         throw api_error::validation(e.what());
     }
@@ -3450,7 +3450,7 @@ filter::filter(const rjson::value& request, request_type rt,
             throw api_error::validation("Cannot use both old-style and new-style parameters in same request: FilterExpression and AttributesToGet");
         }
         try {
-            auto parsed = parse_condition_expression(rjson::to_string_view(*expression));
+            auto parsed = parse_condition_expression(rjson::to_string_view(*expression), "FilterExpression");
             const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
             const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
             resolve_condition_expression(parsed,
@@ -4078,7 +4078,7 @@ calculate_bounds_condition_expression(schema_ptr schema,
     // sort-key range.
     parsed::condition_expression p;
     try {
-        p = parse_condition_expression(rjson::to_string_view(expression));
+        p = parse_condition_expression(rjson::to_string_view(expression), "KeyConditionExpression");
     } catch(expressions_syntax_error& e) {
         throw api_error::validation(e.what());
     }
