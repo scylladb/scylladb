@@ -3884,9 +3884,9 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
 
     auto tmlock = std::make_unique<token_metadata_lock>(co_await get_token_metadata_lock());
     auto tmptr = co_await get_mutable_token_metadata_ptr();
-    std::unordered_set<inet_address> endpoints_to_remove;
+    std::unordered_map<inet_address, bool> endpoints_to_remove;
 
-    auto do_remove_node = [&] (gms::inet_address node) {
+    auto do_remove_node = [&] (gms::inet_address node, bool force = false) {
         // this lambda is called in three cases:
         // 1. old endpoint for the given host_id is ours, we remove the new endpoint;
         // 2. new endpoint for the given host_id has bigger generation, we remove the old endpoint;
@@ -3896,7 +3896,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
         // indirectly through the chain endpoints_to_remove->storage_service::remove_endpoint ->
         // _gossiper.remove_endpoint -> storage_service::on_remove.
 
-        endpoints_to_remove.insert(node);
+        endpoints_to_remove.insert_or_assign(node, force);
     };
     // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
     auto host_id = _gossiper.get_host_id(endpoint);
@@ -3921,7 +3921,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
             // We still need to call 'remove_endpoint' for existing IP to remove it from system.peers.
 
             slogger.warn("Host ID collision for {} between {} and {}; {} is the new owner", host_id, *existing, endpoint, endpoint);
-            do_remove_node(*existing);
+            do_remove_node(*existing, true);
             slogger.info("Set host_id={} to be owned by node={}, existing={}", host_id, endpoint, *existing);
             tmptr->update_host_id(host_id, endpoint);
         } else {
@@ -4046,7 +4046,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
 
     for (const auto& ep : candidates_for_removal) {
         slogger.info("handle_state_normal: endpoints_to_remove endpoint={}", ep);
-        endpoints_to_remove.insert(ep);
+        endpoints_to_remove.try_emplace(ep, false);
     }
 
     bool is_normal_token_owner = tmptr->is_normal_token_owner(host_id);
@@ -4084,8 +4084,8 @@ future<> storage_service::handle_state_normal(inet_address endpoint, gms::permit
     co_await replicate_to_all_cores(std::move(tmptr));
     tmlock.reset();
 
-    for (auto ep : endpoints_to_remove) {
-        co_await remove_endpoint(ep, ep == endpoint ? pid : gms::null_permit_id);
+    for (const auto& [ep, force] : endpoints_to_remove) {
+        co_await remove_endpoint(ep, ep == endpoint ? pid : gms::null_permit_id, force);
     }
     slogger.debug("handle_state_normal: endpoint={} is_normal_token_owner={} endpoint_to_remove={} owned_tokens={}", endpoint, is_normal_token_owner, endpoints_to_remove.contains(endpoint), owned_tokens);
     if (!is_me(endpoint) && !owned_tokens.empty() && !endpoints_to_remove.count(endpoint)) {
@@ -4736,8 +4736,8 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
     });
 }
 
-future<> storage_service::remove_endpoint(inet_address endpoint, gms::permit_id pid) {
-    co_await _gossiper.remove_endpoint(endpoint, pid);
+future<> storage_service::remove_endpoint(inet_address endpoint, gms::permit_id pid, bool force) {
+    co_await _gossiper.remove_endpoint(endpoint, pid, force);
     try {
         co_await _sys_ks.local().remove_endpoint(endpoint);
     } catch (...) {

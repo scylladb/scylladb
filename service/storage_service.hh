@@ -523,7 +523,7 @@ private:
     future<> excise(std::unordered_set<token> tokens, inet_address endpoint, long expire_time, gms::permit_id);
 
     /** unlike excise we just need this endpoint gone without going through any notifications **/
-    future<> remove_endpoint(inet_address endpoint, gms::permit_id pid);
+    future<> remove_endpoint(inet_address endpoint, gms::permit_id pid, bool force = false);
 
     void add_expire_time_if_found(inet_address endpoint, int64_t expire_time);
 
