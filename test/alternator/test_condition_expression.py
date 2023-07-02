@@ -1888,3 +1888,39 @@ def test_update_item_condition_key_attribute_not_exists(test_table_s):
     with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
         test_table_s.update_item(Key={'p': p},
             ConditionExpression='attribute_not_exists(p)')
+
+# DynamoDB considers duplicate parentheses in expressions, which it calls
+# "redundant parentheses", to be illegal. Outlawing them is also useful to
+# avoid very deep recursion in the parser (see test_limits.py).
+# Let's test here what is considered redendant parentheses, and what isn't.
+@pytest.mark.xfail(reason="Alternator doesn't forbid redundant parentheses")
+def test_redundant_parentheses(test_table_s):
+    # Putting one set of unnecessary parentheses is fine - e.g., "(p<>p)"
+    # works just as well as "p<>p" - it isn't considered "redundant
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        ConditionExpression='p <> :p',
+        ExpressionAttributeValues={':p': p})
+    assert 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        ConditionExpression='(p <> :p)',
+        ExpressionAttributeValues={':p': p})
+    assert 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+    # But putting two sets of parentheses, "((p<>p))", is considered redundant.
+    # DynamoDB prints: "Invalid ConditionExpression: The expression has
+    # redundant parentheses".
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*redundant parentheses'):
+        test_table_s.update_item(Key={'p': p},
+            ConditionExpression='((p <> :p))',
+            ExpressionAttributeValues={':p': p})
+    # The expression "((p<>p) and p<>p)" isn't considered to have redundant
+    # parentheses - it's just like one unnecessary parentheses which we showed
+    # above is allowed. So the parser can't just claim "redundant parentheses"
+    # when it sees two successive parentheses beginning the expression.
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        ConditionExpression='((p <> :p) and p <> :p)',
+        ExpressionAttributeValues={':p': p})
+    assert 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)

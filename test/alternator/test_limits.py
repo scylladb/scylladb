@@ -301,7 +301,6 @@ def test_limit_attribute_length_gsi_lsi_projection_all(dynamodb):
 # The maximum string length of any of the expression parameters is 4 KB.
 # Check that the length 4096 is allowed, 4097 isn't - on all four expression
 # types.
-@pytest.mark.xfail(reason="limits on expression length not yet enforced")
 def test_limit_expression_len(test_table_s):
     p = random_string()
     string4096 = 'x'*4096
@@ -339,6 +338,237 @@ def test_limit_expression_len(test_table_s):
             FilterExpression=f'a {spaces4085} = :theval',
             ExpressionAttributeValues={':theval': 2})
 
+# The previous test (test_limit_expression_len) makes the 4096-byte length
+# limit of expressions appear very benign - so what if we accept a 10,000-byte
+# expression? Issue #14473 shows one potential harm of long expressions:
+# A long expression can also be deeply nested, and recursive algorithms for
+# parsing or handling these expressions can cause Scylla to crash. The
+# following tests test_limit_expression_len_crash*() used to crash Scylla
+# before the expression length limit was enforced (issue #14473).
+# These tests use ConditionExpression to demonstrate the problem.
+def test_limit_expression_len_crash1(test_table_s):
+    # a<b and (a<b and (a<b and (a<b and (a<b and (...))))):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                              'b': {'Value': 2, 'Action': 'PUT'}})
+    depth = 20000
+    condition = "a<b " + "and (a<b "*depth +")"*depth
+    # For this expression longer than 4096 bytes, DynamoDB produces the
+    # error "Invalid ConditionExpression: Expression size has exceeded the
+    # maximum allowed size; expression size: 200004". Scylla used to crash
+    # here (after very deep recursion) instead of a clean error.
+    with pytest.raises(ClientError, match='ValidationException.*expression size'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+                ConditionExpression=condition,
+                ExpressionAttributeValues={':val': 1})
+
+def test_limit_expression_len_crash2(test_table_s):
+    # (((((((((((((((a<b)))))))))))))))
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                              'b': {'Value': 2, 'Action': 'PUT'}})
+    depth = 20000
+    condition = "("*depth + "a<b" + ")"*depth
+    with pytest.raises(ClientError, match='ValidationException.*expression size'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+                ConditionExpression=condition,
+                ExpressionAttributeValues={':val': 1})
+
+def test_limit_expression_len_crash3(test_table_s):
+    # ((((((((((((((((((((((((((( - a syntax error
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                              'b': {'Value': 2, 'Action': 'PUT'}})
+    condition = "("*15000
+    # Although this expression is a syntax error, the fact it is too long
+    # should be recognized first.
+    with pytest.raises(ClientError, match='ValidationException.*expression size'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+                ConditionExpression=condition,
+                ExpressionAttributeValues={':val': 1})
+
+def test_limit_expression_len_crash4(test_table_s):
+    # not not not not not ... not a<b
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                              'b': {'Value': 2, 'Action': 'PUT'}})
+    depth = 20000
+    condition = "not "*depth + "a<b"
+    with pytest.raises(ClientError, match='ValidationException.*expression size'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+                ConditionExpression=condition,
+                ExpressionAttributeValues={':val': 1})
+
+def test_limit_expression_len_crash5(test_table_s):
+    # a < f(f(f(f(...(b)))))
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                              'b': {'Value': 2, 'Action': 'PUT'}})
+    depth = 20000
+    condition = "a < " + "f("*depth + "b" + ")"*depth
+    with pytest.raises(ClientError, match='ValidationException.*expression size'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+                ConditionExpression=condition,
+                ExpressionAttributeValues={':val': 1})
+
+# The above tests test_limit_expression_len_crash* checked various cases
+# where very long (>4096 bytes) and very deeply nested expressions caused
+# Scylla to crash. We now need to check check that expressions in the
+# allowed length (4096 bytes), even if deeply nested, work fine.
+def test_deeply_nested_expression_1(test_table_s):
+    # ((((((((((((((((((((((((((( - a syntax error
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                              'b': {'Value': 2, 'Action': 'PUT'}})
+    condition = "(" * 4096
+    with pytest.raises(ClientError, match='ValidationException.*ConditionExpression'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+                ConditionExpression=condition,
+                ExpressionAttributeValues={':val': 1})
+
+# Continuing the above test, check that Alternator prints a normal "syntax
+# error" for just "(((" but a "expression nested too deeply" for 4096
+# parentheses. This is a Scylla-only test - DynamoDB doesn't make
+# this distinction, and the specific error message is not important.
+# But I wanted to test that Alternator's error messages are as designed.
+def test_deeply_nested_expression_1a(test_table_s, scylla_only):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*ConditionExpression.*syntax error'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :x', ExpressionAttributeValues={':x': 1},
+            ConditionExpression='(((')
+    with pytest.raises(ClientError, match='ValidationException.*ConditionExpression.*expression nested too deeply'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :x', ExpressionAttributeValues={':x': 1},
+            ConditionExpression='('*4000)
+
+# Even if an expression is shorter than 4096 bytes, DynamoDB can reject
+# if it has more than 300 "operators" - in the expression below we fit
+# 909 operators ("<" and "or") under 4096 bytes. DynamoDB rejects this
+# case with the message "Invalid ConditionExpression: The expression
+# contains too many operators; operator count: 301". Scylla currently
+# doesn't have this specific limit, but it rejects this expression because
+# it exceeds nesting depth MAX_DEPTH. The important thing is that the
+# expression is rejected cleanly, without crashing as it used to happen
+# on longer expressions.
+def test_deeply_nested_expression_2(test_table_s):
+    # a<b or (a<b or (a<b or (a<b or (...)))):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                              'b': {'Value': 2, 'Action': 'PUT'}})
+    # depth=149 has a total of 299 "<" and "or" operators so should work.
+    # Importantly, parentheses and spaces are *not* counted among the
+    # "operators", only the "<" and "or".
+    depth = 149
+    condition = "a<b " + "or (a<b "*depth +")"*depth
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET z = :val',
+            ConditionExpression=condition,
+            ExpressionAttributeValues={':val': 1})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 1
+    # depth=454 is still below 4096 bytes, but rejected by DynamoDB because
+    # it has more than 300 operators, and by Scylla because 454 > MAX_DEPTH.
+    depth = 454
+    condition = "a<b " + "or (a<b "*depth +")"*depth
+    assert len(condition) < 4096
+    with pytest.raises(ClientError, match='ValidationException.*ConditionExpression'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+                ConditionExpression=condition,
+                ExpressionAttributeValues={':val': 1})
+
+# Another deeply-recursive expression, (((((((((a<b))))))))), that used to
+# crash Scylla when the expression was very long but shouldn't crash it
+# for expressions shorter than the 4096-byte limit.
+# Currently, DynamoDB and Scylla reject this case with different reasons -
+# DynamoDB complains that "Invalid ConditionExpression: The expression has
+# redundant parentheses", and Scylla stops parsing after recursing too
+# deeply (MAX_DEPTH) and reports "Failed parsing ConditionExpression".
+# The really important thing is Scylla doesn't crash on this expression (as
+# it used to before implementating MAX_DEPTH).
+def test_deeply_nested_expression_3(test_table_s):
+    # (((((((((((((((a<b)))))))))))))))
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                              'b': {'Value': 2, 'Action': 'PUT'}})
+    depth = 2046
+    condition = "("*depth + "a<b" + ")"*depth
+    assert len(condition) < 4096
+    with pytest.raises(ClientError, match='ValidationException.*ConditionExpression'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+                ConditionExpression=condition,
+                ExpressionAttributeValues={':val': 2})
+
+# Another example of a deeply-nested expression which is shorter than
+# the 4096-byte limit, but has more than 300 operators (it has 1000 "NOT"
+# operators), so DynamoDB rejects it and Scylla rejects it because the
+# recursion is deeper than MAX_DEPTH. Of course the more interesting
+# observation is that it doesn't crash Scylla during parsing.
+def test_deeply_nested_expression_4(test_table_s):
+    # not not not not ... not not a<b
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                              'b': {'Value': 2, 'Action': 'PUT'}})
+    depth = 1000 # even, so condition is equivalent to just a<b
+    condition = "not "*depth + "a<b"
+    assert len(condition) < 4096
+    with pytest.raises(ClientError, match='ValidationException.*ConditionExpression'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+                ConditionExpression=condition,
+                ExpressionAttributeValues={':val': 2})
+
+# Another example of a deeply-nested expression shorter than the limit of
+# 4096 bytes, a < f(f(f(f(...(b))))). DynamoDB apparently doesn't count
+# function calls as "operations", so it isn't limited to 300 nested calls.
+# But it should print the correct error message, and obviously not crash.
+def test_deeply_nested_expression_5(test_table_s):
+    # a < f(f(f(f(...(b)))))
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                              'b': {'Value': 2, 'Action': 'PUT'}})
+    depth = 1355
+    condition = "a < " + "f("*depth + "b" + ")"*depth
+    assert len(condition) < 4096
+    # DynamoDB prints: "Invalid ConditionExpression: Invalid function name;
+    # function: f". Scylla fails parsing this expression because the depth
+    # exceeds MAX_DEPTH. We think this is fine.
+    with pytest.raises(ClientError, match='ValidationException.*ConditionExpression'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+                ConditionExpression=condition,
+                ExpressionAttributeValues={':val': 2})
+
+    # a < size(size(size(size(...size(b)))))
+    # Here the function exists, but the innermost size returns an integer,
+    # which the surrounding size() doesn't like (it's not defined on an int)
+    # In Scylla it is still rejected because of MAX_DEPTH.
+    depth = 680
+    condition = "a < " + "size("*depth + "b" + ")"*depth
+    assert len(condition) < 4096
+    with pytest.raises(ClientError, match='ValidationException.*ConditionExpression'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+                ConditionExpression=condition,
+                ExpressionAttributeValues={':val': 2})
+
 # TODO: additional expression limits documented in DynamoDB's documentation
 # that we should test here:
 # * a limit on the length of attribute or value references (#name or :val) -
@@ -346,8 +576,6 @@ def test_limit_expression_len(test_table_s):
 #   255 bytes.
 # * the sum of length of ExpressionAttributeValues and ExpressionAttributeNames
 #   is limited to 2MB (not a very interesting limit...)
-# * a limit on the number of operator or functions in an expression: 300
-#   (not a very interesting limit...)
 
 #############################################################################
 
