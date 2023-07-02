@@ -1503,7 +1503,7 @@ future<> compaction_group::stop() noexcept {
 }
 
 void compaction_group::clear_sstables() {
-    _main_sstables = _t._compaction_strategy.make_sstable_set(_t._schema);
+    _main_sstables = make_lw_shared<sstables::sstable_set>(_t._compaction_strategy.make_sstable_set(_t._schema));
     _maintenance_sstables = _t.make_maintenance_sstable_set();
 }
 
