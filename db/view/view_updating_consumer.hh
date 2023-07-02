@@ -49,6 +49,7 @@ private:
 private:
     void do_flush_buffer();
     void flush_builder();
+    void end_builder();
     void maybe_flush_buffer_mid_partition();
 
 public:
@@ -113,7 +114,7 @@ public:
         if (_as->abort_requested()) {
             return stop_iteration::yes;
         }
-        flush_builder();
+        end_builder();
         if (_buffer_size >= buffer_size_soft_limit) {
             do_flush_buffer();
         }
