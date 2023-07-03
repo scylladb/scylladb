@@ -1261,7 +1261,7 @@ void table::trigger_offstrategy_compaction() {
     // Run in background.
     // This is safe since the the compaction task is tracked
     // by the compaction_manager until stop()
-    (void)perform_offstrategy_compaction().then_wrapped([this] (future<bool> f) {
+    (void)perform_offstrategy_compaction(tasks::task_info{}).then_wrapped([this] (future<bool> f) {
         if (f.failed()) {
             auto ex = f.get_exception();
             tlogger.warn("Offstrategy compaction of {}.{} failed: {}, ignoring", schema()->ks_name(), schema()->cf_name(), ex);
@@ -1269,13 +1269,13 @@ void table::trigger_offstrategy_compaction() {
     });
 }
 
-future<bool> table::perform_offstrategy_compaction() {
+future<bool> table::perform_offstrategy_compaction(std::optional<tasks::task_info> info) {
     // If the user calls trigger_offstrategy_compaction() to trigger
     // off-strategy explicitly, cancel the timeout based automatic trigger.
     _off_strategy_trigger.cancel();
     bool performed = false;
-    co_await parallel_foreach_compaction_group([this, &performed] (compaction_group& cg) -> future<> {
-        performed |= co_await _compaction_manager.perform_offstrategy(cg.as_table_state());
+    co_await parallel_foreach_compaction_group([this, &performed, info] (compaction_group& cg) -> future<> {
+        performed |= co_await _compaction_manager.perform_offstrategy(cg.as_table_state(), info);
     });
     co_return performed;
 }

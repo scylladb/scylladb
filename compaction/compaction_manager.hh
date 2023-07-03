@@ -305,7 +305,7 @@ public:
 
     // Submit a table to be off-strategy compacted.
     // Returns true iff off-strategy compaction was required and performed.
-    future<bool> perform_offstrategy(compaction::table_state& t);
+    future<bool> perform_offstrategy(compaction::table_state& t, std::optional<tasks::task_info> info);
 
     // Submit a table to be cleaned up and wait for its termination.
     //

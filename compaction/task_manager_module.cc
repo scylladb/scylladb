@@ -360,8 +360,9 @@ tasks::is_internal table_offstrategy_keyspace_compaction_task_impl::is_internal(
 
 future<> table_offstrategy_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
-    co_await run_on_table("perform_keyspace_offstrategy_compaction", _db, _status.keyspace, _ti, [this] (replica::table& t) -> future<> {
-        _needed |= co_await t.perform_offstrategy_compaction();
+    tasks::task_info info{_status.id, _status.shard};
+    co_await run_on_table("perform_keyspace_offstrategy_compaction", _db, _status.keyspace, _ti, [this, info] (replica::table& t) -> future<> {
+        _needed |= co_await t.perform_offstrategy_compaction(info);
     });
 }
 

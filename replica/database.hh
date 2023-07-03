@@ -929,7 +929,7 @@ public:
     // Performs offstrategy compaction, if needed, returning
     // a future<bool> that is resolved when offstrategy_compaction completes.
     // The future value is true iff offstrategy compaction was required.
-    future<bool> perform_offstrategy_compaction();
+    future<bool> perform_offstrategy_compaction(std::optional<tasks::task_info> info = std::nullopt);
     future<> perform_cleanup_compaction(owned_ranges_ptr sorted_owned_ranges, std::optional<tasks::task_info> info = std::nullopt);
     unsigned estimate_pending_compactions() const;
 

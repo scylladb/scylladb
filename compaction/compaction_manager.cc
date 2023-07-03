@@ -1198,15 +1198,27 @@ future<> compaction_manager::maybe_wait_for_sstable_count_reduction(table_state&
 
 namespace compaction {
 
-class offstrategy_compaction_task_executor : public compaction_task_executor {
-    bool _performed = false;
+class offstrategy_compaction_task_executor : public compaction_task_executor, public offstrategy_compaction_task_impl {
+    bool& _performed;
 public:
-    offstrategy_compaction_task_executor(compaction_manager& mgr, table_state* t)
+    offstrategy_compaction_task_executor(compaction_manager& mgr, table_state* t, tasks::task_id parent_id, bool& performed)
         : compaction_task_executor(mgr, t, sstables::compaction_type::Reshape, "Offstrategy compaction")
-    {}
+        , offstrategy_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), parent_id ? 0 : mgr._task_manager_module->new_sequence_number(), t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
+        , _performed(performed)
+    {
+        _performed = false;
+    }
 
     bool performed() const noexcept {
         return _performed;
+    }
+
+    virtual tasks::is_internal is_internal() const noexcept override {
+        return tasks::is_internal(bool(_parent_id));
+    }
+protected:
+    virtual future<> run() override {
+        return compaction_done().discard_result();
     }
 private:
     future<> run_offstrategy_compaction(sstables::compaction_data& cdata) {
@@ -1340,13 +1352,14 @@ protected:
 
 }
 
-future<bool> compaction_manager::perform_offstrategy(table_state& t) {
+future<bool> compaction_manager::perform_offstrategy(table_state& t, std::optional<tasks::task_info> info) {
     if (_state != state::enabled) {
         co_return false;
     }
-    auto task = make_shared<offstrategy_compaction_task_executor>(*this, &t);
-    co_await perform_task(task);
-    co_return task->performed();
+
+    bool performed;
+    co_await perform_compaction<offstrategy_compaction_task_executor>(info, &t, info.value_or(tasks::task_info{}).id, performed);
+    co_return performed;
 }
 
 namespace compaction {
@@ -1785,7 +1798,7 @@ future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_r
         return stop_iteration(requires_cleanup(t, sst));
     }));
     if (found_maintenance_sstables) {
-        co_await perform_offstrategy(t);
+        co_await perform_offstrategy(t, info);
     }
 
     // Called with compaction_disabled
