@@ -1454,6 +1454,36 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
     co_return co_await perform_task(seastar::make_shared<TaskType>(*this, &t, std::move(options), std::move(owned_ranges_ptr), std::move(sstables), std::move(compacting), std::forward<Args>(args)...));
 }
 
+template<typename TaskType, typename... Args>
+requires std::derived_from<TaskType, compaction_task_executor> &&
+         std::derived_from<TaskType, compaction_task_impl>
+future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task_on_all_files(std::optional<tasks::task_info> info, table_state& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, Args... args) {
+    if (_state != state::enabled) {
+        co_return std::nullopt;
+    }
+
+    // since we might potentially have ongoing compactions, and we
+    // must ensure that all sstables created before we run are included
+    // in the re-write, we need to barrier out any previously running
+    // compaction.
+    std::vector<sstables::shared_sstable> sstables;
+    compacting_sstable_registration compacting(*this, get_compaction_state(&t));
+    co_await run_with_compaction_disabled(t, [&sstables, &compacting, get_func = std::move(get_func)] () -> future<> {
+        // Getting sstables and registering them as compacting must be atomic, to avoid a race condition where
+        // regular compaction runs in between and picks the same files.
+        sstables = co_await get_func();
+        compacting.register_compacting(sstables);
+
+        // sort sstables by size in descending order, such that the smallest files will be rewritten first
+        // (as sstable to be rewritten is popped off from the back of container), so rewrite will have higher
+        // chance to succeed when the biggest files are reached.
+        std::sort(sstables.begin(), sstables.end(), [](sstables::shared_sstable& a, sstables::shared_sstable& b) {
+            return a->data_size() > b->data_size();
+        });
+    });
+    co_return co_await perform_compaction<TaskType>(info, &t, info.value_or(tasks::task_info{}).id, std::move(options), std::move(owned_ranges_ptr), std::move(sstables), std::move(compacting), std::forward<Args>(args)...);
+}
+
 future<compaction_manager::compaction_stats_opt> compaction_manager::rewrite_sstables(table_state& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, can_purge_tombstones can_purge) {
     return perform_task_on_all_files<rewrite_sstables_compaction_task_executor>(t, std::move(options), std::move(owned_ranges_ptr), std::move(get_func), can_purge);
 }
@@ -1533,15 +1563,16 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
 
 namespace compaction {
 
-class cleanup_sstables_compaction_task_executor : public compaction_task_executor {
+class cleanup_sstables_compaction_task_executor : public compaction_task_executor, public cleanup_compaction_task_impl {
     const sstables::compaction_type_options _cleanup_options;
     owned_ranges_ptr _owned_ranges_ptr;
     compacting_sstable_registration _compacting;
     std::vector<sstables::compaction_descriptor> _pending_cleanup_jobs;
 public:
-    cleanup_sstables_compaction_task_executor(compaction_manager& mgr, table_state* t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
+    cleanup_sstables_compaction_task_executor(compaction_manager& mgr, table_state* t, tasks::task_id parent_id, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
                                      std::vector<sstables::shared_sstable> candidates, compacting_sstable_registration compacting)
             : compaction_task_executor(mgr, t, options.type(), sstring(sstables::to_string(options.type())))
+            , cleanup_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
             , _cleanup_options(std::move(options))
             , _owned_ranges_ptr(std::move(owned_ranges_ptr))
             , _compacting(std::move(compacting))
@@ -1556,7 +1587,15 @@ public:
     virtual ~cleanup_sstables_compaction_task_executor() {
         _cm._stats.pending_tasks -= _pending_cleanup_jobs.size();
     }
+
+    virtual tasks::is_internal is_internal() const noexcept override {
+        return tasks::is_internal::yes;
+    }
 protected:
+    virtual future<> run() override {
+        return compaction_done().discard_result();
+    }
+
     virtual future<compaction_manager::compaction_stats_opt>  do_run() override {
         switch_state(state::pending);
         auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem);
@@ -1670,12 +1709,12 @@ bool compaction_manager::requires_cleanup(table_state& t, const sstables::shared
     return cs.sstables_requiring_cleanup.contains(sst);
 }
 
-future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_ranges, table_state& t) {
+future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_ranges, table_state& t, std::optional<tasks::task_info> info) {
     constexpr auto sleep_duration = std::chrono::seconds(10);
     constexpr auto max_idle_duration = std::chrono::seconds(300);
     auto& cs = get_compaction_state(&t);
 
-    co_await try_perform_cleanup(sorted_owned_ranges, t);
+    co_await try_perform_cleanup(sorted_owned_ranges, t, info);
     auto last_idle = seastar::lowres_clock::now();
 
     while (!cs.sstables_requiring_cleanup.empty()) {
@@ -1701,12 +1740,12 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
         if (!has_sstables_eligible_for_compaction()) {
             continue;
         }
-        co_await try_perform_cleanup(sorted_owned_ranges, t);
+        co_await try_perform_cleanup(sorted_owned_ranges, t, info);
         last_idle = seastar::lowres_clock::now();
     }
 }
 
-future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, table_state& t) {
+future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, table_state& t, std::optional<tasks::task_info> info) {
     auto check_for_cleanup = [this, &t] {
         return boost::algorithm::any_of(_tasks, [&t] (auto& task) {
             return task->compacting_table() == &t && task->compaction_type() == sstables::compaction_type::Cleanup;
@@ -1755,7 +1794,7 @@ future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_r
         co_return get_candidates(t, cs.sstables_requiring_cleanup);
     };
 
-    co_await perform_task_on_all_files<cleanup_sstables_compaction_task_executor>(t, sstables::compaction_type_options::make_cleanup(), std::move(sorted_owned_ranges),
+    co_await perform_task_on_all_files<cleanup_sstables_compaction_task_executor>(info, t, sstables::compaction_type_options::make_cleanup(), std::move(sorted_owned_ranges),
                                                                          std::move(get_sstables));
 }
 

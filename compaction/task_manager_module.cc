@@ -323,7 +323,7 @@ future<> table_cleanup_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(_db.get_keyspace_local_ranges(_status.keyspace));
     co_await run_on_table("force_keyspace_cleanup", _db, _status.keyspace, _ti, [&] (replica::table& t) {
-        return t.perform_cleanup_compaction(owned_ranges_ptr);
+        return t.perform_cleanup_compaction(owned_ranges_ptr, tasks::task_info{_status.id, _status.shard});
     });
 }
 

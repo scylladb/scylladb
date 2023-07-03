@@ -228,6 +228,11 @@ private:
     requires std::derived_from<TaskType, compaction::compaction_task_executor>
     future<compaction_stats_opt> perform_task_on_all_files(compaction::table_state& t, sstables::compaction_type_options options, owned_ranges_ptr, get_candidates_func, Args... args);
 
+    template<typename TaskType, typename... Args>
+    requires std::derived_from<TaskType, compaction_task_executor> &&
+            std::derived_from<TaskType, compaction_task_impl>
+    future<compaction_manager::compaction_stats_opt> perform_task_on_all_files(std::optional<tasks::task_info> info, table_state& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, Args... args);
+
     future<compaction_stats_opt> rewrite_sstables(compaction::table_state& t, sstables::compaction_type_options options, owned_ranges_ptr, get_candidates_func, can_purge_tombstones can_purge = can_purge_tombstones::yes);
 
     // Stop all fibers, without waiting. Safe to be called multiple times.
@@ -309,9 +314,9 @@ public:
     // Cleanup is about discarding keys that are no longer relevant for a
     // given sstable, e.g. after node loses part of its token range because
     // of a newly added node.
-    future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t);
+    future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, std::optional<tasks::task_info> info);
 private:
-    future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t);
+    future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, std::optional<tasks::task_info> info);
 
     // Add sst to or remove it from the respective compaction_state.sstables_requiring_cleanup set.
     bool update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges);

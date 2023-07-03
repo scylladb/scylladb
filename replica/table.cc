@@ -1280,12 +1280,12 @@ future<bool> table::perform_offstrategy_compaction() {
     co_return performed;
 }
 
-future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges) {
+future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges, std::optional<tasks::task_info> info) {
     co_await flush();
 
     if (_compaction_groups.size() == 1) {
         auto& cg = *_compaction_groups[0];
-        co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg.as_table_state());
+        co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg.as_table_state(), info);
     }
 
     // candidate ranges for the next compaction_group
@@ -1320,7 +1320,7 @@ future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_o
     }
     co_await parallel_foreach_compaction_group([&] (compaction_group& cg) {
         auto&& cg_ranges = std::move(cg_ranges_map.at(cg.token_range()));
-        return get_compaction_manager().perform_cleanup(std::move(cg_ranges), cg.as_table_state());
+        return get_compaction_manager().perform_cleanup(std::move(cg_ranges), cg.as_table_state(), info);
     });
 }
 
