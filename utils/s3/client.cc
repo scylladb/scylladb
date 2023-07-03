@@ -183,8 +183,7 @@ client::group_client::group_client(std::unique_ptr<http::experimental::connectio
 {
 }
 
-future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, http::reply::status_type expected) {
-    authorize(req);
+client::group_client& client::find_or_create_client() {
     auto sg = current_scheduling_group();
     auto it = _https.find(sg);
     if (it == _https.end()) [[unlikely]] {
@@ -198,7 +197,13 @@ future<> client::make_request(http::request req, http::experimental::client::rep
             std::forward_as_tuple(std::move(factory), max_connections)
         ).first;
     }
-    return it->second.http.make_request(std::move(req), std::move(handle), expected);
+    return it->second;
+}
+
+future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, http::reply::status_type expected) {
+    authorize(req);
+    auto& gc = find_or_create_client();
+    return gc.http.make_request(std::move(req), std::move(handle), expected);
 }
 
 future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler) {

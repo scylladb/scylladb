@@ -54,6 +54,7 @@ class client : public enable_shared_from_this<client> {
     struct private_tag {};
 
     void authorize(http::request&);
+    group_client& find_or_create_client();
     future<> make_request(http::request req, http::experimental::client::reply_handler handle = ignore_reply, http::reply::status_type expected = http::reply::status_type::ok);
 
     future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler);
