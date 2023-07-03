@@ -1157,6 +1157,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 messaging.invoke_on_all(&netw::messaging_service::stop).get();
             });
 
+            // #14299 - do early init of messaging_service (or rather its TLS structures)
+            // since other things (failure_detector) might try to send messages vie it
+            // before start_listen is called.
+            messaging.invoke_on_all(&netw::messaging_service::start).get();
+
             supervisor::notify("starting gossiper");
             gms::gossip_config gcfg;
             gcfg.gossip_scheduling_group = dbcfg.gossip_scheduling_group;
