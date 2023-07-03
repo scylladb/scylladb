@@ -530,14 +530,8 @@ future<> compaction_manager::perform_major_compaction(table_state& t, tasks::tas
     if (_state != state::enabled) {
         co_return;
     }
-    auto task_executor = make_shared<major_compaction_task_executor>(*this, &t, info.id);
-    if (info) {
-        auto task = co_await _task_manager_module->make_task(task_executor, info);
-        task->start();
-        // We do not need to wait for the task to be done as compaction_task_executor side will take care of that.
-    }
 
-    co_await perform_task(std::move(task_executor)).discard_result();
+    co_await perform_compaction<major_compaction_task_executor>(info ? std::make_optional(info) : std::nullopt, &t, info.id).discard_result();
 }
 
 namespace compaction {
