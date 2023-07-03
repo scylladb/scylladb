@@ -398,9 +398,10 @@ tasks::is_internal table_upgrade_sstables_compaction_task_impl::is_internal() co
 future<> table_upgrade_sstables_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(_db.get_keyspace_local_ranges(_status.keyspace));
+    tasks::task_info info{_status.id, _status.shard};
     co_await run_on_table("upgrade_sstables", _db, _status.keyspace, _ti, [&] (replica::table& t) -> future<> {
         return t.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
-            return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, _exclude_current_version);
+            return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, _exclude_current_version, info);
         });
     });
 }
@@ -438,8 +439,9 @@ tasks::is_internal table_scrub_sstables_compaction_task_impl::is_internal() cons
 future<> table_scrub_sstables_compaction_task_impl::run() {
     auto& cm = _db.get_compaction_manager();
     auto& cf = _db.find_column_family(_status.keyspace, _status.table);
+    tasks::task_info info{_status.id, _status.shard};
     co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) mutable -> future<> {
-        auto r = co_await cm.perform_sstable_scrub(ts, _opts);
+        auto r = co_await cm.perform_sstable_scrub(ts, _opts, info);
         _stats += r.value_or(sstables::compaction_stats{});
     });
 }
