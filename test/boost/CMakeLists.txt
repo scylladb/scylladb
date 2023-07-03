@@ -129,6 +129,8 @@ add_scylla_test(frozen_mutation_test
   KIND SEASTAR)
 add_scylla_test(gossiping_property_file_snitch_test
   KIND SEASTAR)
+add_scylla_test(group0_cmd_merge_test
+  KIND SEASTAR)
 add_scylla_test(group0_test
   KIND SEASTAR)
 add_scylla_test(hash_test
@@ -166,6 +168,8 @@ add_scylla_test(linearizing_input_stream_test
 add_scylla_test(lister_test
   KIND SEASTAR)
 add_scylla_test(loading_cache_test
+  KIND SEASTAR)
+add_scylla_test(locator_topology_test
   KIND SEASTAR)
 add_scylla_test(log_heap_test
   KIND BOOST)
@@ -242,6 +246,8 @@ add_scylla_test(row_cache_test
 add_scylla_test(rust_test
   KIND BOOST
   LIBRARIES inc)
+add_scylla_test(s3_test
+  KIND SEASTAR)
 add_scylla_test(secondary_index_test
   KIND SEASTAR)
 add_scylla_test(serialization_test
@@ -264,7 +270,13 @@ add_scylla_test(sstable_mutation_test
   KIND SEASTAR)
 add_scylla_test(sstable_partition_index_cache_test
   KIND SEASTAR)
+add_scylla_test(schema_change_test
+  KIND SEASTAR)
 add_scylla_test(schema_changes_test
+  KIND SEASTAR)
+add_scylla_test(schema_loader_test
+  KIND SEASTAR)
+add_scylla_test(schema_registry_test
   KIND SEASTAR)
 add_scylla_test(sstable_conforms_to_mutation_source_test
   KIND SEASTAR)
@@ -290,6 +302,10 @@ add_scylla_test(storage_proxy_test
 add_scylla_test(string_format_test
   KIND BOOST)
 add_scylla_test(summary_test
+  KIND BOOST)
+add_scylla_test(tablets_test
+  KIND BOOST)
+add_scylla_test(tagged_integer_test
   KIND BOOST)
 add_scylla_test(top_k_test
   KIND BOOST)
