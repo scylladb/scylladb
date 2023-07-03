@@ -7,9 +7,11 @@
    Provides helpers to setup and manage minio server for testing.
 """
 import os
+import argparse
 import asyncio
 from asyncio.subprocess import Process
 from typing import Optional
+import logging
 import pathlib
 import subprocess
 import shutil
@@ -116,3 +118,44 @@ class MinioServer:
             self.logger.info('Killed minio server')
             self.cmd = None
             shutil.rmtree(self.tempdir)
+
+
+class HostRegistry:
+    def __init__(self, host: str) -> None:
+        self._host = host
+
+    async def lease_host(self) -> str:
+        assert self._host is not None
+        host = self._host
+        self._host = None
+        return host
+
+    async def release_host(self, host: str) -> None:
+        assert self._host is None
+        self._host = host
+
+
+async def main():
+    parser = argparse.ArgumentParser(description="Start a MinIO server")
+    parser.add_argument('--tempdir')
+    parser.add_argument('--host', default='127.0.0.1')
+    args = parser.parse_args()
+    host_registry = HostRegistry(args.host)
+    with tempfile.TemporaryDirectory(suffix='-minio', dir=args.tempdir) as tempdir:
+        if args.tempdir is None:
+            print(f'{tempdir=}')
+        server = MinioServer(tempdir, host_registry, logging.getLogger('minio'))
+        await server.start()
+        print(f'export S3_SERVER_ADDRESS_FOR_TEST={server.address}')
+        print(f'export S3_SERVER_PORT_FOR_TEST={server.port}')
+        print(f'export S3_PUBLIC_BUCKET_FOR_TEST={server.bucket_name}')
+        try:
+            _ = input('server started. press any key to stop: ')
+        except KeyboardInterrupt:
+            pass
+        finally:
+            await server.stop()
+
+if __name__ == '__main__':
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
