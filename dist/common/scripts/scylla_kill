@@ -1,0 +1,10 @@
+#!/bin/bash
+
+# When shutdown is being called, stop using systemd-coredump handler
+# since it does not work correctly
+st_jobs=$(systemctl list-jobs --no-pager shutdown.target)
+if [[ ! $st_jobs =~ (^No jobs .*\.$) ]]; then
+    sysctl -w kernel.core_pattern=/var/lib/scylla/coredump-shutdown/core.%e.%P.%u.%g.%s.%t.%c.%h
+fi
+# Shutdown Scylla
+pkill scylla

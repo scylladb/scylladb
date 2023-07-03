@@ -416,6 +416,7 @@ install -m755 -d "$rdata"/commitlog
 install -m755 -d "$rdata"/hints
 install -m755 -d "$rdata"/view_hints
 install -m755 -d "$rdata"/coredump
+install -m755 -d "$rdata"/coredump-shutdown
 install -m755 -d "$rprefix"/swagger-ui
 cp -r swagger-ui/dist "$rprefix"/swagger-ui
 install -d -m755 -d "$rprefix"/api

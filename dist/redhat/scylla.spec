@@ -144,6 +144,7 @@ rm -rf $RPM_BUILD_ROOT
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/hints
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/view_hints
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/coredump
+%attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/coredump-shutdown
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla-housekeeping
 %ghost /etc/systemd/system/scylla-helper.slice.d/
 %ghost /etc/systemd/system/scylla-helper.slice.d/memory.conf

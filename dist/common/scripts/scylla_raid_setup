@@ -217,7 +217,7 @@ WantedBy=multi-user.target
     gid = grp.getgrnam('scylla').gr_gid
     os.chown(root, uid, gid)
 
-    for d in ['coredump', 'data', 'commitlog', 'hints', 'view_hints', 'saved_caches']:
+    for d in ['coredump', 'coredump-shutdown', 'data', 'commitlog', 'hints', 'view_hints', 'saved_caches']:
         dpath = '{}/{}'.format(root, d)
         os.makedirs(dpath, exist_ok=True)
         os.chown(dpath, uid, gid)
