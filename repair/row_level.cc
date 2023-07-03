@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <exception>
 #include <seastar/util/defer.hh>
 #include "repair/repair.hh"
 #include "message/messaging_service.hh"
@@ -24,6 +25,7 @@
 #include <seastar/util/bool_class.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <list>
 #include <vector>
@@ -1020,17 +1022,17 @@ private:
         });
     }
 
-    stop_iteration handle_mutation_fragment(mutation_fragment& mf, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
+    void handle_mutation_fragment(mutation_fragment& mf, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
         if (mf.is_partition_start()) {
             auto& start = mf.as_partition_start();
             _repair_reader.set_current_dk(start.key());
             if (!start.partition_tombstone()) {
                 // Ignore partition_start with empty partition tombstone
-                return stop_iteration::no;
+                return;
             }
         } else if (mf.is_end_of_partition()) {
             _repair_reader.clear_current_dk();
-            return stop_iteration::no;
+            return;
         }
         auto hash = _repair_hasher.do_hash_for_mf(*_repair_reader.get_current_dk(), mf);
         repair_row r(freeze(*_schema, mf), position_in_partition(mf.position()), _repair_reader.get_current_dk(), hash, is_dirty_on_master::no);
@@ -1040,7 +1042,6 @@ private:
         cur_size += r.size();
         new_rows_size += r.size();
         cur_rows.push_back(std::move(r));
-        return stop_iteration::no;
     }
 
     // Read rows from sstable until the size of rows exceeds _max_row_buf_size  - current_size
@@ -1049,30 +1050,28 @@ private:
     future<std::tuple<std::list<repair_row>, size_t>>
     read_rows_from_disk(size_t cur_size) {
         using value_type = std::tuple<std::list<repair_row>, size_t>;
-        return do_with(cur_size, size_t(0), std::list<repair_row>(), [this] (size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
-            return repeat([this, &cur_size, &cur_rows, &new_rows_size] () mutable {
-                if (cur_size >= _max_row_buf_size) {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
+        size_t new_rows_size = 0;
+        std::list<repair_row> cur_rows;
+        std::exception_ptr ex;
+        try {
+            while (cur_size < _max_row_buf_size) {
                 _gate.check();
-                return _repair_reader.read_mutation_fragment().then([this, &cur_size, &new_rows_size, &cur_rows] (mutation_fragment_opt mfopt) mutable {
-                    if (!mfopt) {
-                      return _repair_reader.on_end_of_stream().then([] {
-                        return stop_iteration::yes;
-                      });
-                    }
-                    return make_ready_future<stop_iteration>(handle_mutation_fragment(*mfopt, cur_size, new_rows_size, cur_rows));
-                });
-            }).then_wrapped([this, &cur_rows, &new_rows_size] (future<> fut) mutable {
-                if (fut.failed()) {
-                    return make_exception_future<value_type>(fut.get_exception()).finally([this] {
-                        return _repair_reader.on_end_of_stream();
-                    });
+                mutation_fragment_opt mfopt = co_await _repair_reader.read_mutation_fragment();
+                if (!mfopt) {
+                    co_await _repair_reader.on_end_of_stream();
+                    break;
                 }
-                _repair_reader.pause();
-                return make_ready_future<value_type>(value_type(std::move(cur_rows), new_rows_size));
-            });
-        });
+                handle_mutation_fragment(*mfopt, cur_size, new_rows_size, cur_rows);
+            }
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        if (ex) {
+            co_await _repair_reader.on_end_of_stream();
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+        _repair_reader.pause();
+        co_return value_type(std::move(cur_rows), new_rows_size);
     }
 
     future<> clear_row_buf() {
@@ -1090,69 +1089,57 @@ private:
     // Calculate the total size of the rows in _row_buf
     future<get_sync_boundary_response>
     get_sync_boundary(std::optional<repair_sync_boundary> skipped_sync_boundary) {
-        auto f = make_ready_future<>();
         if (skipped_sync_boundary) {
             _current_sync_boundary = skipped_sync_boundary;
-            f = clear_row_buf();
+            co_await clear_row_buf();
         }
         // Here is the place we update _last_sync_boundary
         rlogger.trace("SET _last_sync_boundary from {} to {}", _last_sync_boundary, _current_sync_boundary);
         _last_sync_boundary = _current_sync_boundary;
-      return f.then([this, sb = std::move(skipped_sync_boundary)] () mutable {
-       return clear_working_row_buf().then([this, sb = sb] () mutable {
-        return row_buf_size().then([this, sb = std::move(sb)] (size_t cur_size) {
-            return read_rows_from_disk(cur_size).then_unpack([this, sb = std::move(sb)] (std::list<repair_row> new_rows, size_t new_rows_size) mutable {
-                size_t new_rows_nr = new_rows.size();
-                _row_buf.splice(_row_buf.end(), new_rows);
-                return row_buf_csum().then([this, new_rows_size, new_rows_nr, sb = std::move(sb)] (repair_hash row_buf_combined_hash) {
-                    return row_buf_size().then([this, new_rows_size, new_rows_nr, row_buf_combined_hash, sb = std::move(sb)] (size_t row_buf_bytes) {
-                        std::optional<repair_sync_boundary> sb_max;
-                        if (!_row_buf.empty()) {
-                            sb_max = _row_buf.back().boundary();
-                        }
-                        rlogger.debug("get_sync_boundary: Got nr={} rows, sb_max={}, row_buf_size={}, repair_hash={}, skipped_sync_boundary={}",
-                                new_rows_nr, sb_max, row_buf_bytes, row_buf_combined_hash, sb);
-                        return get_sync_boundary_response{sb_max, row_buf_combined_hash, row_buf_bytes, new_rows_size, new_rows_nr};
-                    });
-                });
-            });
-        });
-       });
-      });
+        co_await clear_working_row_buf();
+        size_t cur_size = co_await row_buf_size();
+        auto rows = co_await read_rows_from_disk(cur_size);
+        auto&& [new_rows, new_rows_size] = rows;
+        size_t new_rows_nr = new_rows.size();
+        _row_buf.splice(_row_buf.end(), new_rows);
+        repair_hash row_buf_combined_hash = co_await row_buf_csum();
+        size_t row_buf_bytes = co_await row_buf_size();
+        std::optional<repair_sync_boundary> sb_max;
+        if (!_row_buf.empty()) {
+            sb_max = _row_buf.back().boundary();
+        }
+        rlogger.debug("get_sync_boundary: Got nr={} rows, sb_max={}, row_buf_size={}, repair_hash={}, skipped_sync_boundary={}",
+                      new_rows_nr, sb_max, row_buf_bytes, row_buf_combined_hash, skipped_sync_boundary);
+        co_return get_sync_boundary_response{sb_max, row_buf_combined_hash, row_buf_bytes, new_rows_size, new_rows_nr};
     }
 
     future<> move_row_buf_to_working_row_buf() {
         if (_cmp(_row_buf.back().boundary(), *_current_sync_boundary) <= 0) {
             // Fast path
             _working_row_buf.swap(_row_buf);
-            return make_ready_future<>();
+            co_return;
         }
-        return do_with(_row_buf.rbegin(), [this, sz = _row_buf.size()] (auto& it) {
+        size_t sz = _row_buf.size();
+        for (auto it = _row_buf.rbegin(); it != _row_buf.rend(); ++it) {
             // Move the rows > _current_sync_boundary to _working_row_buf
             // Delete the rows > _current_sync_boundary from _row_buf
             // Swap _working_row_buf and _row_buf so that _working_row_buf
             // contains rows within (_last_sync_boundary,
             // _current_sync_boundary], _row_buf contains rows wthin
             // (_current_sync_boundary, ...]
-            return repeat([this, &it] () {
-                if (it == _row_buf.rend()) {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-                repair_row& r = *(it++);
-                if (_cmp(r.boundary(), *_current_sync_boundary) > 0) {
-                    _working_row_buf.push_front(std::move(r));
-                    return make_ready_future<stop_iteration>(stop_iteration::no);
-                }
-                return make_ready_future<stop_iteration>(stop_iteration::yes);
-            }).then([this, sz] {
-                _row_buf.resize(_row_buf.size() - _working_row_buf.size());
-                _row_buf.swap(_working_row_buf);
-                if (sz != _working_row_buf.size() + _row_buf.size()) {
-                    throw std::runtime_error(format("incorrect row_buf and working_row_buf size, before={}, after={} + {}",
-                            sz, _working_row_buf.size(), _row_buf.size()));
-                }
-            });
-        });
+            repair_row& r = *it;
+            if (_cmp(r.boundary(), *_current_sync_boundary) <= 0) {
+                break;
+            }
+            _working_row_buf.push_front(std::move(r));
+            co_await coroutine::maybe_yield();
+        }
+        _row_buf.resize(_row_buf.size() - _working_row_buf.size());
+        _row_buf.swap(_working_row_buf);
+        if (sz != _working_row_buf.size() + _row_buf.size()) {
+            throw std::runtime_error(format("incorrect row_buf and working_row_buf size, before={}, after={} + {}",
+                                            sz, _working_row_buf.size(), _row_buf.size()));
+        }
     }
 
     // Move rows from <_row_buf> to <_working_row_buf> according to
