@@ -424,7 +424,6 @@ scylla_tests = set([
     'test/boost/data_listeners_test',
     'test/boost/database_test',
     'test/boost/dirty_memory_manager_test',
-    'test/boost/double_decker_test',
     'test/boost/duration_test',
     'test/boost/dynamic_bitset_test',
     'test/boost/enum_option_test',
