@@ -198,6 +198,11 @@ future<> migration_notifier::unregister_listener(migration_listener* listener)
 
 void migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state)
 {
+    if (!_enable_schema_pulls) {
+        mlogger.debug("Not pulling schema because schema pulls were disabled due to Raft.");
+        return;
+    }
+
     const auto* value = state.get_application_state_ptr(gms::application_state::SCHEMA);
 
     if (endpoint != utils::fb_utilities::get_broadcast_address() && value) {
@@ -295,6 +300,12 @@ future<> migration_manager::maybe_schedule_schema_pull(const table_schema_versio
             return submit_migration_task(endpoint);
         });
     }).finally([me = shared_from_this()] {});
+}
+
+future<> migration_manager::disable_schema_pulls() {
+    return container().invoke_on_all([] (migration_manager& mm) {
+        mm._enable_schema_pulls = false;
+    });
 }
 
 future<> migration_manager::submit_migration_task(const gms::inet_address& endpoint, bool can_ignore_down_node)
@@ -1132,18 +1143,21 @@ future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version 
         co_return s;
     }
 
-    if (_group0_client.using_raft()) {
-        // batch group0 raft barriers
+    // `_enable_schema_pulls` may change concurrently with this function (but only from `true` to `false`).
+    bool use_raft = !_enable_schema_pulls;
+
+    if (use_raft) {
+        // Schema is synchronized through Raft, so perform a group 0 read barrier.
+        // Batch the barriers so we don't invoke them redundantly.
         co_await (as ? _group0_barrier.trigger(*as) : _group0_barrier.trigger());
     }
 
     s = co_await get_schema_definition(v, dst, ms, _storage_proxy);
 
-    if (_group0_client.using_raft()) {
-        // Mark entry as synced
+    if (use_raft) {
+        // If Raft is used the schema is synced already (through barrier above), mark it as such.
         co_await s->registry_entry()->maybe_sync([] { return make_ready_future<>(); });
     } else {
-        // If raft is used the schema is synced already
         co_await maybe_sync(s, dst);
     }
 
@@ -1178,9 +1192,7 @@ future<column_mapping> get_column_mapping(table_id table_id, table_schema_versio
 }
 
 future<> migration_manager::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-    if (!_group0_client.using_raft()) {
-        schedule_schema_pull(endpoint, ep_state);
-    }
+    schedule_schema_pull(endpoint, ep_state);
     return make_ready_future();
 }
 
@@ -1192,18 +1204,14 @@ future<> migration_manager::on_change(gms::inet_address endpoint, gms::applicati
             return make_ready_future();
         }
         if (_storage_proxy.get_token_metadata_ptr()->is_normal_token_owner(endpoint)) {
-            if (!_group0_client.using_raft()) {
-                schedule_schema_pull(endpoint, *ep_state);
-            }
+            schedule_schema_pull(endpoint, *ep_state);
         }
     }
     return make_ready_future();
 }
 
 future<> migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
-    if (!_group0_client.using_raft()) {
-        schedule_schema_pull(endpoint, state);
-    }
+    schedule_schema_pull(endpoint, state);
     return make_ready_future();
 }
 

@@ -139,9 +139,12 @@ public:
     future<> setup_group0(db::system_keyspace&, const std::unordered_set<gms::inet_address>& initial_contact_nodes,
                           std::optional<replace_info>, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, cdc::generation_service& cdc_gen_service);
 
-    // Call during the startup procedure before networking is enabled during restart
+    // Call during the startup procedure before networking is enabled.
     //
-    // If the local RAFT feature is enabled start existing group 0 server.
+    // If the local RAFT feature is enabled and we're not in RECOVERY mode:
+    // - start group 0 server if it exists,
+    // - disable migration_manager schema pulls if we're bootstrapping
+    //   or Raft is already fully functioning.
     //
     // Cannot be called twice.
     //
