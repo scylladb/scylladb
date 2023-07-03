@@ -224,7 +224,7 @@ static std::time_t parse_http_last_modified_time(const sstring& object_name, sst
     return std::mktime(&tm);
 }
 
-future<client::stats> client::get_object_stats(sstring object_name) {
+future<stats> client::get_object_stats(sstring object_name) {
     struct stats st{};
     co_await get_object_header(object_name, [&] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         st.size = rep.content_length;

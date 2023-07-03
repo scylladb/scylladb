@@ -29,6 +29,11 @@ struct tag {
 };
 using tag_set = std::vector<tag>;
 
+struct stats {
+    uint64_t size;
+    std::time_t last_modified;
+};
+
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_);
 
 class client : public enable_shared_from_this<client> {
@@ -53,10 +58,6 @@ public:
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, global_factory gf = {});
 
     future<uint64_t> get_object_size(sstring object_name);
-    struct stats {
-        uint64_t size;
-        std::time_t last_modified;
-    };
     future<stats> get_object_stats(sstring object_name);
     future<tag_set> get_object_tagging(sstring object_name);
     future<> put_object_tagging(sstring object_name, tag_set tagging);
