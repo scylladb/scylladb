@@ -220,9 +220,10 @@ they should be easy to detect. Here is a list of these unimplemented features:
   are projected. This wastes some disk space when it is not needed.
   <https://github.com/scylladb/scylla/issues/5036>
 
-* DynamoDB's new multi-item transaction feature (TransactWriteItems,
+* DynamoDB's multi-item transaction feature (TransactWriteItems,
   TransactGetItems) is not supported. Note that the older single-item
   conditional updates feature are fully supported.
+  This feature was added to DynamoDB in November 2018.
   <https://github.com/scylladb/scylla/issues/5064>
 
 * Alternator does not yet support the DynamoDB API calls that control which
@@ -240,6 +241,7 @@ they should be easy to detect. Here is a list of these unimplemented features:
   also for the similar Kinesis Streams. Alternator doesn't support this yet,
   and the related operations DescribeKinesisStreamingDestination,
   DisableKinesisStreamingDestination, and EnableKinesisStreamingDestination.
+  This feature was added to DynamoDB in November 2020.
   <https://github.com/scylladb/scylla/issues/8786>
 
 * The on-demand backup APIs are not supported: CreateBackup, DescribeBackup,
@@ -276,11 +278,12 @@ they should be easy to detect. Here is a list of these unimplemented features:
   <https://github.com/scylladb/scylla/issues/7550>
   <https://github.com/scylladb/scylla/issues/7551>
 
-* The recently-added PartiQL syntax (SQL-like SELECT/UPDATE/INSERT/DELETE
-  expressions) and the new operations ExecuteStatement, BatchExecuteStatement
-  and ExecuteTransaction is not yet supported.
+* The PartiQL syntax (SQL-like SELECT/UPDATE/INSERT/DELETE expressions)
+  and the operations ExecuteStatement, BatchExecuteStatement and
+  ExecuteTransaction are not yet supported.
   A user that is interested in an SQL-like syntax can consider using Scylla's
   CQL protocol instead.
+  This feature was added to DynamoDB in November 2020.
   <https://github.com/scylladb/scylla/issues/8787>
 
 * As mentioned above, Alternator has its own powerful monitoring framework,
@@ -291,10 +294,28 @@ they should be easy to detect. Here is a list of these unimplemented features:
   same information, such as which items were accessed most often.
   <https://github.com/scylladb/scylla/issues/8788>
 
-* Alternator does not support the new DynamoDB feature "export to S3",
+* Alternator does not support the DynamoDB feature "export to S3",
   and its operations DescribeExport, ExportTableToPointInTime, ListExports.
+  This feature was added to DynamoDB in November 2020.
   <https://github.com/scylladb/scylla/issues/8789>
 
-* Alternator does not support the new DynamoDB feature "import from S3",
+* Alternator does not support the DynamoDB feature "import from S3",
   and its operations ImportTable, DescribeImport, ListImports.
+  This feature was added to DynamoDB in August 2022.
   <https://github.com/scylladb/scylla/issues/11739>
+
+* Alternator does not support the TableClass table option choosing between
+  several storage options with different cost/performance characteristics.
+  All Alternator tables are stored the same way. This table option was added
+  to DynamoDB in December 2021.
+  <https://github.com/scylladb/scylla/issues/10431>
+
+* Alternator does not support the table option DeletionProtectionEnabled
+  that can be used to forbid table deletion. This table option was added to
+  DynamoDB in March 2023.
+  <https://github.com/scylladb/scylla/issues/14482>
+
+* Alternator does not support the ReturnValuesOnConditionCheckFailure
+  option on writes added to DynamoDB in June 2023. The older ReturnValues
+  is supported.
+  <https://github.com/scylladb/scylla/issues/14481>
