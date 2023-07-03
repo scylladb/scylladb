@@ -63,15 +63,13 @@ future<> storage_manager::stop() {
 
 void storage_manager::update_config(const db::config& cfg) {
     for (auto [ep, ecfg] : cfg.object_storage_config()) {
-        auto it = _s3_endpoints.find(ep);
         auto s3_cfg = make_lw_shared<s3::endpoint_config>(std::move(ecfg));
-        if (it != _s3_endpoints.end()) {
-            it->second.cfg = std::move(s3_cfg);
+        auto [it, added] = _s3_endpoints.try_emplace(ep, std::move(s3_cfg));
+        if (!added) {
             if (it->second.client != nullptr) {
-                it->second.client->update_config(it->second.cfg);
+                it->second.client->update_config(s3_cfg);
             }
-        } else {
-            _s3_endpoints.emplace(std::make_pair(std::move(ep), std::move(s3_cfg)));
+            it->second.cfg = std::move(s3_cfg);
         }
     }
 }
