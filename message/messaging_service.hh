@@ -332,6 +332,7 @@ public:
     messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder>);
     ~messaging_service();
 
+    future<> start();
     future<> start_listen(locator::shared_token_metadata& stm);
     uint16_t port();
     gms::inet_address listen_address();

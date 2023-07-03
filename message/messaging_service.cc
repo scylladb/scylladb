@@ -249,8 +249,7 @@ rpc_resource_limits(size_t memory_limit) {
     return limits;
 }
 
-future<> messaging_service::start_listen(locator::shared_token_metadata& stm) {
-    _token_metadata = &stm;
+future<> messaging_service::start() {
     if (_credentials_builder && !_credentials) {
         return _credentials_builder->build_reloadable_server_credentials([](const std::unordered_set<sstring>& files, std::exception_ptr ep) {
             if (ep) {
@@ -260,9 +259,13 @@ future<> messaging_service::start_listen(locator::shared_token_metadata& stm) {
             }
         }).then([this](shared_ptr<seastar::tls::server_credentials> creds) {
             _credentials = std::move(creds);
-            do_start_listen();
         });
     }
+    return make_ready_future<>();
+}
+
+future<> messaging_service::start_listen(locator::shared_token_metadata& stm) {
+    _token_metadata = &stm;
     do_start_listen();
     return make_ready_future<>();
 }
@@ -865,6 +868,8 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     opts.tcp_nodelay = must_tcp_nodelay;
     opts.reuseaddr = true;
     opts.isolation_cookie = _scheduling_info_for_connection_index[idx].isolation_cookie;
+
+    assert(!must_encrypt || _credentials);
 
     auto client = must_encrypt ?
                     ::make_shared<rpc_protocol_client_wrapper>(_rpc->protocol(), std::move(opts),
