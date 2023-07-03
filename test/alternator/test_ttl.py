@@ -49,8 +49,11 @@ def passes_or_raises(expected_exception, match=None):
 # it very low, but Scylla may have been run manually.
 @pytest.fixture(scope="session")
 def waits_for_expiration(dynamodb, request):
-    if is_aws(dynamodb) and not request.config.getoption('runveryslow'):
-        pytest.skip('need --runveryslow option to run')
+    if is_aws(dynamodb):
+        if request.config.getoption('runveryslow'):
+            return
+        else:
+            pytest.skip('need --runveryslow option to run')
     config_table = dynamodb.Table('.scylla.alternator.system.config')
     resp = config_table.query(
             KeyConditionExpression='#key=:val',
@@ -529,13 +532,8 @@ def test_ttl_expiration_gsi_lsi(dynamodb, waits_for_expiration):
         c = random_string()
         g = random_string()
         l = random_string()
-        # expiration one minute in the past, so item should expire ASAP.
-        expiration = int(time.time()) - 60
-        table.put_item(Item={'p': p, 'c': c, 'g': g, 'l': l, 'expiration': expiration})
-        start_time = time.time()
-        gsi_was_alive = False
-        while time.time() < start_time + max_duration:
-            print(f"--- {int(time.time()-start_time)} seconds")
+
+        def check_alive():
             base_alive = 'Item' in table.get_item(Key={'p': p, 'c': c})
             gsi_alive = bool(full_query(table, IndexName='gsi',
                 ConsistentRead=False,
@@ -544,20 +542,32 @@ def test_ttl_expiration_gsi_lsi(dynamodb, waits_for_expiration):
             lsi_alive = bool(full_query(table, IndexName='lsi',
                 KeyConditionExpression="p=:p and l=:l",
                 ExpressionAttributeValues={':p': p, ':l': l}))
-            if base_alive:
-                print("base alive")
-            if gsi_alive:
-                print("gsi alive")
-                # gsi takes time to go up, so make sure it did
-                gsi_was_alive = True
-            if lsi_alive:
-                print("lsi alive")
+            return (base_alive, gsi_alive, lsi_alive)
+
+        # Non-expiring item, so should be visible in the base table, GSI and
+        # LSI. It can take a bit of time for the GSI value to become visible.
+        table.put_item(Item={'p': p, 'c': c, 'g': g, 'l': l})
+        start_time = time.time()
+        while time.time() < start_time + 30:
+            base_alive, gsi_alive, lsi_alive = check_alive()
+            if base_alive and gsi_alive and lsi_alive:
+                break
+            time.sleep(sleep)
+        assert base_alive and gsi_alive and lsi_alive
+
+        # Rewrite the item with expiration one minute in the past, so item
+        # should expire ASAP - in all of base, GSI and LSI.
+        expiration = int(time.time()) - 60
+        table.put_item(Item={'p': p, 'c': c, 'g': g, 'l': l, 'expiration': expiration})
+        start_time = time.time()
+        while time.time() < start_time + max_duration:
+            base_alive, gsi_alive, lsi_alive = check_alive()
             # If the base item, gsi item and lsi item have all expired, the
             # test is done - and successful:
-            if not base_alive and not gsi_alive and gsi_was_alive and not lsi_alive:
+            if not base_alive and not gsi_alive and not lsi_alive:
                 return
             time.sleep(sleep)
-        pytest.fail('base, gsi, or lsi not expired')
+        assert not base_alive and not gsi_alive and not lsi_alive
 
 # Above in test_ttl_expiration_hash() and test_ttl_expiration_range() we
 # checked the case where TTL's expiration-time attribute is not a regular
