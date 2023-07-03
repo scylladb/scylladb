@@ -1225,7 +1225,7 @@ compaction_group::update_main_sstable_list_on_compaction_completion(sstables::co
 }
 
 future<>
-table::compact_all_sstables(tasks::task_info info) {
+table::compact_all_sstables(std::optional<tasks::task_info> info) {
     co_await flush();
     co_await parallel_foreach_compaction_group([this, info] (compaction_group& cg) {
         return _compaction_manager.perform_major_compaction(cg.as_table_state(), info);

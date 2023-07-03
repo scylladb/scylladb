@@ -857,7 +857,7 @@ public:
     // Start a compaction of all sstables in a process known as major compaction
     // Active memtable is flushed first to guarantee that data like tombstone,
     // sitting in the memtable, will be compacted with shadowed data.
-    future<> compact_all_sstables(tasks::task_info info = {});
+    future<> compact_all_sstables(std::optional<tasks::task_info> info = std::nullopt);
 
     future<bool> snapshot_exists(sstring name);
 

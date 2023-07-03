@@ -323,7 +323,7 @@ public:
     future<compaction_stats_opt> perform_sstable_scrub(compaction::table_state& t, sstables::compaction_type_options::scrub opts);
 
     // Submit a table for major compaction.
-    future<> perform_major_compaction(compaction::table_state& t, tasks::task_info info = {});
+    future<> perform_major_compaction(compaction::table_state& t, std::optional<tasks::task_info> info = std::nullopt);
 
 
     // Run a custom job for a given table, defined by a function

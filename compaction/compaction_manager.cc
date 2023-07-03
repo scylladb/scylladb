@@ -526,12 +526,12 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_com
     co_return co_await perform_task(std::move(task_executor));
 }
 
-future<> compaction_manager::perform_major_compaction(table_state& t, tasks::task_info info) {
+future<> compaction_manager::perform_major_compaction(table_state& t, std::optional<tasks::task_info> info) {
     if (_state != state::enabled) {
         co_return;
     }
 
-    co_await perform_compaction<major_compaction_task_executor>(info ? std::make_optional(info) : std::nullopt, &t, info.id).discard_result();
+    co_await perform_compaction<major_compaction_task_executor>(info, &t, info.value_or(tasks::task_info{}).id).discard_result();
 }
 
 namespace compaction {
