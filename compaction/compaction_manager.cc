@@ -482,6 +482,23 @@ protected:
 
 }
 
+template<typename TaskExecutor, typename... Args>
+requires std::is_base_of_v<compaction_task_executor, TaskExecutor> &&
+        std::is_base_of_v<compaction_task_impl, TaskExecutor> &&
+requires (compaction_manager& cm, Args&&... args) {
+    {TaskExecutor(cm, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
+}
+future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(std::optional<tasks::task_info> parent_info, Args&&... args) {
+    auto task_executor = seastar::make_shared<TaskExecutor>(*this, std::forward<Args>(args)...);
+    if (parent_info) {
+        auto task = co_await get_task_manager_module().make_task(task_executor, parent_info.value());
+        task->start();
+        // We do not need to wait for the task to be done as compaction_task_executor side will take care of that.
+    }
+
+    co_return co_await perform_task(std::move(task_executor));
+}
+
 future<> compaction_manager::perform_major_compaction(table_state& t, tasks::task_info info) {
     if (_state != state::enabled) {
         co_return;
