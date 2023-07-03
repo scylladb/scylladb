@@ -126,7 +126,7 @@ distribute_reshard_jobs(sstables::sstable_directory::sstable_open_info_vector so
 // A creator function must be passed that will create an SSTable object in the correct shard,
 // and an I/O priority must be specified.
 future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::sstable_open_info_vector shared_info, replica::table& table,
-                           sstables::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr)
+                           sstables::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr, std::optional<tasks::task_info> parent_info)
 {
     // Resharding doesn't like empty sstable sets, so bail early. There is nothing
     // to reshard in this shard.
@@ -169,7 +169,7 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
             // input sstables are moved, to guarantee their resources are released once we're done
             // resharding them.
             co_await when_all_succeed(dir.collect_output_unshared_sstables(std::move(result.new_sstables), sstables::sstable_directory::can_be_remote::yes), dir.remove_sstables(std::move(sstlist))).discard_result();
-        });
+        }, parent_info);
     });
 }
 
@@ -470,6 +470,7 @@ tasks::is_internal shard_reshaping_compaction_task_impl::is_internal() const noe
 future<> shard_reshaping_compaction_task_impl::run() {
     auto& table = _db.local().find_column_family(_status.keyspace, _status.table);
     uint64_t reshaped_size = 0;
+    tasks::task_info info{_status.id, _status.shard};
 
     while (true) {
         auto reshape_candidates = boost::copy_range<std::vector<sstables::shared_sstable>>(_dir.get_unshared_local_sstables()
@@ -499,7 +500,7 @@ future<> shard_reshaping_compaction_task_impl::run() {
                 sstables::compaction_result result = co_await sstables::compact_sstables(std::move(desc), info, table.as_table_state());
                 co_await dir.remove_unshared_sstables(std::move(sstlist));
                 co_await dir.collect_output_unshared_sstables(std::move(result.new_sstables), sstables::sstable_directory::can_be_remote::no);
-            });
+            }, info);
         } catch (...) {
             ex = std::current_exception();
         }
@@ -557,7 +558,8 @@ tasks::is_internal shard_resharding_compaction_task_impl::is_internal() const no
 future<> shard_resharding_compaction_task_impl::run() {
     auto& table = _db.find_column_family(_status.keyspace, _status.table);
     auto info_vec = std::move(_destinations[this_shard_id()].info_vec);
-    co_await reshard(_dir.local(), std::move(info_vec), table, _creator, std::move(_local_owned_ranges_ptr));
+    tasks::task_info info{_status.id, _status.shard};
+    co_await reshard(_dir.local(), std::move(info_vec), table, _creator, std::move(_local_owned_ranges_ptr), info);
     co_await _dir.local().move_foreign_sstables(_dir);
 }
 

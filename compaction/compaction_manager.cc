@@ -546,16 +546,28 @@ future<> compaction_manager::perform_major_compaction(table_state& t, std::optio
 
 namespace compaction {
 
-class custom_compaction_task_executor : public compaction_task_executor {
+class custom_compaction_task_executor : public compaction_task_executor, public compaction_task_impl {
     noncopyable_function<future<>(sstables::compaction_data&)> _job;
 
 public:
-    custom_compaction_task_executor(compaction_manager& mgr, table_state* t, sstables::compaction_type type, sstring desc, noncopyable_function<future<>(sstables::compaction_data&)> job)
+    custom_compaction_task_executor(compaction_manager& mgr, table_state* t, tasks::task_id parent_id, sstables::compaction_type type, sstring desc, noncopyable_function<future<>(sstables::compaction_data&)> job)
         : compaction_task_executor(mgr, t, type, std::move(desc))
+        , compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
         , _job(std::move(job))
     {}
 
+    virtual std::string type() const override {
+        return fmt::format("{} compaction", compaction_type());
+    }
+
+    virtual tasks::is_internal is_internal() const noexcept override {
+        return tasks::is_internal::yes;
+    }
 protected:
+    virtual future<> run() override {
+        return compaction_done().discard_result();
+    }
+
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
         if (!can_proceed(throw_if_stopping::yes)) {
             co_return std::nullopt;
@@ -580,12 +592,12 @@ protected:
 
 }
 
-future<> compaction_manager::run_custom_job(table_state& t, sstables::compaction_type type, const char* desc, noncopyable_function<future<>(sstables::compaction_data&)> job) {
+future<> compaction_manager::run_custom_job(table_state& t, sstables::compaction_type type, const char* desc, noncopyable_function<future<>(sstables::compaction_data&)> job, std::optional<tasks::task_info> info) {
     if (_state != state::enabled) {
         return make_ready_future<>();
     }
 
-    return perform_task(make_shared<custom_compaction_task_executor>(*this, &t, type, desc, std::move(job))).discard_result();
+    return perform_compaction<custom_compaction_task_executor>(info, &t, info.value_or(tasks::task_info{}).id, type, desc, std::move(job)).discard_result();
 }
 
 future<> compaction_manager::update_static_shares(float static_shares) {
