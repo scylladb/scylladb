@@ -9,6 +9,7 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/metrics.hh>
 #include <seastar/http/client.hh>
 #include "utils/s3/creds.hh"
 
@@ -45,7 +46,9 @@ class client : public enable_shared_from_this<client> {
     endpoint_config_ptr _cfg;
     struct group_client {
         http::experimental::client http;
+        seastar::metrics::metric_groups metrics;
         group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn);
+        void register_metrics(std::string class_name, std::string host);
     };
     std::unordered_map<seastar::scheduling_group, group_client> _https;
     using global_factory = std::function<shared_ptr<client>(std::string)>;

@@ -183,6 +183,20 @@ client::group_client::group_client(std::unique_ptr<http::experimental::connectio
 {
 }
 
+void client::group_client::register_metrics(std::string class_name, std::string host) {
+    namespace sm = seastar::metrics;
+    auto ep_label = sm::label("endpoint")(host);
+    auto sg_label = sm::label("class")(class_name);
+    metrics.add_group("s3", {
+        sm::make_gauge("nr_connections", [this] { return http.connections_nr(); },
+                sm::description("Total number of connections"), {ep_label, sg_label}),
+        sm::make_gauge("nr_active_connections", [this] { return http.connections_nr() - http.idle_connections_nr(); },
+                sm::description("Total number of connections with running requests"), {ep_label, sg_label}),
+        sm::make_counter("total_new_connections", [this] { return http.total_new_connections_nr(); },
+                sm::description("Total number of new connections created so far"), {ep_label, sg_label}),
+    });
+}
+
 client::group_client& client::find_or_create_client() {
     auto sg = current_scheduling_group();
     auto it = _https.find(sg);
@@ -196,6 +210,8 @@ client::group_client& client::find_or_create_client() {
             std::forward_as_tuple(sg),
             std::forward_as_tuple(std::move(factory), max_connections)
         ).first;
+
+        it->second.register_metrics(sg.name(), _host);
     }
     return it->second;
 }
