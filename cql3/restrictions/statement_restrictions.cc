@@ -189,6 +189,10 @@ static std::vector<expr::expression> extract_partition_range(
         void operator()(const usertype_constructor&) {
             on_internal_error(rlogger, "extract_partition_range(usertype_constructor)");
         }
+
+        void operator()(const temporary&) {
+            on_internal_error(rlogger, "extract_partition_range(temporary)");
+        }
     };
 
     extract_partition_range_visitor v {
@@ -316,6 +320,10 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
 
         void operator()(const usertype_constructor&) {
             on_internal_error(rlogger, "extract_clustering_prefix_restrictions(usertype_constructor)");
+        }
+
+        void operator()(const temporary&) {
+            on_internal_error(rlogger, "extract_clustering_prefix_restrictions(temporary)");
         }
     };
     visitor v {
@@ -1352,6 +1360,10 @@ struct multi_column_range_accumulator {
 
     void operator()(const usertype_constructor&) {
         on_internal_error(rlogger, "collection constructor encountered outside binary operator");
+    }
+
+    void operator()(const temporary&) {
+        on_internal_error(rlogger, "temporary encountered outside binary operator");
     }
 
     /// Intersects each range with v.  If any intersection is empty, clears ranges.

@@ -24,7 +24,6 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
-#include "cql3/selection/selector_factories.hh"
 #include "validation.hh"
 #include "exceptions/unrecognized_entity_exception.hh"
 #include <optional>
@@ -48,6 +47,8 @@
 #include "utils/result_combinators.hh"
 #include "utils/result_loop.hh"
 #include "replica/database.hh"
+
+#include <boost/algorithm/cxx11/all_of.hpp>
 
 template<typename T = void>
 using coordinator_result = cql3::statements::select_statement::coordinator_result<T>;
@@ -1643,15 +1644,16 @@ select_statement::select_statement(cf_name cf_name,
     validate_attrs(*_attrs);
 }
 
-void select_statement::maybe_jsonize_select_clause(data_dictionary::database db, schema_ptr schema) {
+std::vector<selection::prepared_selector>
+select_statement::maybe_jsonize_select_clause(std::vector<selection::prepared_selector> prepared_selectors, data_dictionary::database db, schema_ptr schema) {
     // Fill wildcard clause with explicit column identifiers for as_json function
     if (_parameters->is_json()) {
-        if (_select_clause.empty()) {
-            _select_clause.reserve(schema->all_columns().size());
+        if (prepared_selectors.empty()) {
+            prepared_selectors.reserve(schema->all_columns().size());
             for (const column_definition& column_def : schema->all_columns_in_select_order()) {
-                _select_clause.push_back(make_shared<selection::raw_selector>(
-                    expr::unresolved_identifier{::make_shared<column_identifier::raw>(column_def.name_as_text(), true)},
-                    nullptr));
+                prepared_selectors.push_back(selection::prepared_selector{
+                    .expr = expr::column_value{&column_def},
+                });
             }
         }
 
@@ -1659,43 +1661,62 @@ void select_statement::maybe_jsonize_select_clause(data_dictionary::database db,
         std::vector<sstring> selector_names;
         std::vector<data_type> selector_types;
         std::vector<const column_definition*> defs;
-        selector_names.reserve(_select_clause.size());
-        selector_types.reserve(_select_clause.size());
-        auto selectables = selection::raw_selector::to_selectables(_select_clause, *schema, db, keyspace());
-        selection::selector_factories factories(selectables, db, schema, defs);
-        auto selectors = factories.new_instances();
-        for (size_t i = 0; i < selectors.size(); ++i) {
-            if (_select_clause[i]->alias) {
-                selector_names.push_back(_select_clause[i]->alias->to_string());
+        selector_names.reserve(prepared_selectors.size());
+        selector_types.reserve(prepared_selectors.size());
+        for (auto&& [sel, alias] : prepared_selectors) {
+            if (alias) {
+                selector_names.push_back(alias->to_string());
             } else {
-                selector_names.push_back(selectables[i]->to_string());
+                selector_names.push_back(fmt::format("{:result_set_metadata}", sel));
             }
-            selector_types.push_back(selectors[i]->get_type());
+            selector_types.push_back(expr::type_of(sel));
         }
 
         // Prepare args for as_json_function
-        std::vector<expr::expression> raw_selectables;
-        raw_selectables.reserve(_select_clause.size());
-        for (const auto& raw_selector : _select_clause) {
-            raw_selectables.push_back(raw_selector->selectable_);
+        std::vector<expr::expression> args;
+        args.reserve(prepared_selectors.size());
+        for (const auto& prepared_selector : prepared_selectors) {
+            args.push_back(std::move(prepared_selector.expr));
         }
         auto as_json = ::make_shared<functions::as_json_function>(std::move(selector_names), std::move(selector_types));
-        auto as_json_selector = ::make_shared<selection::raw_selector>(
-                expr::function_call{as_json, std::move(raw_selectables)}, nullptr);
-        _select_clause.clear();
-        _select_clause.push_back(as_json_selector);
+        auto as_json_selector = selection::prepared_selector{.expr = expr::function_call{as_json, std::move(args)}, .alias = nullptr};
+        prepared_selectors.clear();
+        prepared_selectors.push_back(as_json_selector);
     }
+    return prepared_selectors;
 }
 
 std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::database db, cql_stats& stats, bool for_view) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     prepare_context& ctx = get_prepare_context();
 
-    maybe_jsonize_select_clause(db, schema);
+    auto prepared_selectors = selection::raw_selector::to_prepared_selectors(_select_clause, *schema, db, keyspace());
 
-    auto selection = _select_clause.empty()
+    prepared_selectors = maybe_jsonize_select_clause(std::move(prepared_selectors), db, schema);
+
+    auto aggregation_depth = 0u;
+
+    // Force aggregation if GROUP BY is used. This will wrap every column x as first(x).
+    if (!_group_by_columns.empty()) {
+        aggregation_depth = std::max(aggregation_depth, 1u);
+    }
+
+    for (auto& ps : prepared_selectors) {
+        aggregation_depth = std::max(aggregation_depth, expr::aggregation_depth(ps.expr));
+    }
+    if (aggregation_depth > 1) {
+        throw exceptions::invalid_request_exception("SELECT clause contains aggeregation of an aggregation");
+    }
+
+    auto levellized_prepared_selectors = prepared_selectors;
+
+    for (auto& ps : levellized_prepared_selectors) {
+        ps.expr = levellize_aggregation_depth(ps.expr, aggregation_depth);
+    }
+
+    auto selection = prepared_selectors.empty()
                      ? selection::selection::wildcard(schema)
-                     : selection::selection::from_selectors(db, schema, keyspace(), _select_clause);
+                     : selection::selection::from_selectors(db, schema, keyspace(), levellized_prepared_selectors);
 
     auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering());
 
@@ -1725,10 +1746,27 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     auto prepared_attrs = _attrs->prepare(db, keyspace(), column_family());
     prepared_attrs->fill_prepare_context(ctx);
 
+    auto all_aggregates = [] (const std::vector<selection::prepared_selector>& prepared_selectors) {
+        return boost::algorithm::all_of(
+            prepared_selectors | boost::adaptors::transformed(std::mem_fn(&selection::prepared_selector::expr)),
+            [] (const expr::expression& e) {
+                auto fn_expr = expr::as_if<expr::function_call>(&e);
+                if (!fn_expr) {
+                    return false;
+                }
+                auto func = std::get_if<shared_ptr<functions::function>>(&fn_expr->func);
+                if (!func) {
+                    return false;
+                }
+                return (*func)->is_aggregate();
+            }
+        );
+    };
+
     // Used to determine if an execution of this statement can be parallelized
     // using `forward_service`.
     auto can_be_forwarded = [&] {
-        return selection->is_aggregate()        // Aggregation only
+        return all_aggregates(prepared_selectors)   // Note: before we levellized aggregation depth
             && ( // SUPPORTED PARALLELIZATION
                  // All potential intermediate coordinators must support forwarding
                 (db.features().parallelized_aggregation && selection->is_count())
@@ -2190,8 +2228,12 @@ std::vector<size_t> select_statement::prepare_group_by(const schema& schema, sel
             throw make_order_exception(*col);
         }
         ++expected_index;
-        const auto index = selection.index_of(*def);
-        indices.push_back(index != -1 ? index : selection.add_column_for_post_processing(*def));
+        auto index = selection.index_of(*def);
+        if (index == -1) {
+            selection.add_column_for_post_processing(*def);
+            index = selection.index_of(*def);
+        }
+        indices.push_back(index);
     }
 
     if (expected_index < schema.partition_key_size()) {

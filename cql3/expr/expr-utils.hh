@@ -352,5 +352,39 @@ bool has_only_eq_binops(const expression&);
 data_type column_mutation_attribute_type(const column_mutation_attribute& e);
 
 
+// How deep aggregations are nested. e.g. sum(avg(count(col))) == 3
+unsigned aggregation_depth(const cql3::expr::expression& e);
+
+// Make sure evey column_value is nested in exactly `depth` aggregations, by adding
+// first() calls at the deepest level. e.g. if depth=3, then
+//
+//    my_agg(sum(x), y)
+//
+// becomes
+//
+//    my_agg(sum(first(x)), first(first(y)))
+//
+cql3::expr::expression levellize_aggregation_depth(const cql3::expr::expression& e, unsigned depth);
+
+
+struct aggregation_split_result {
+    std::vector<expression> inner_loop;
+    std::vector<expression> outer_loop;
+    std::vector<cql3::raw_value> initial_values_for_temporaries; // same size as inner_loop
+};
+
+// Given a vector of aggergation expressions, split them into an inner loop that
+// calls the aggregating function on each input row, and an outer loop that calls
+// the final function on temporaries and generate the result.
+//
+// inner_loop should be evaluated with for each input row in a group, and its
+// results stored in temporaries seeded from initial_values_for_temporaries
+//
+// outer_loop should be evaluated once for each group, just with temporaries
+// as input.
+//
+// If the expressions don't contain aggregates, inner_loop and initial_values_for_temporaries
+// are empty, and outer_loop should be evaluated for each loop.
+aggregation_split_result split_aggregation(std::span<const expression> aggregation);
 
 }

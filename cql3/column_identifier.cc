@@ -86,10 +86,6 @@ column_identifier_raw::prepare_column_identifier(const schema& schema) const {
     return ::make_shared<column_identifier>(schema.regular_column_name_type()->from_string(_raw_text), _text);
 }
 
-bool column_identifier_raw::processes_selection() const {
-    return false;
-}
-
 bool column_identifier_raw::operator==(const column_identifier_raw& other) const {
     return _text == other._text;
 }

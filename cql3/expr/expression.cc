@@ -19,6 +19,7 @@
 #include <boost/range/algorithm/set_algorithm.hpp>
 #include <boost/range/algorithm/unique.hpp>
 #include <boost/range/algorithm/sort.hpp>
+#include <boost/range/numeric.hpp>
 #include <fmt/ostream.h>
 #include <unordered_map>
 
@@ -39,6 +40,7 @@
 #include "cql3/maps.hh"
 #include "cql3/user_types.hh"
 #include "cql3/functions/scalar_function.hh"
+#include "cql3/functions/first_function.hh"
 #include "cql3/prepare_context.hh"
 
 namespace cql3 {
@@ -838,6 +840,9 @@ static value_set possible_lhs_values(const column_definition* cdef,
                         [] (const usertype_constructor&) -> value_set {
                             on_internal_error(expr_logger, "possible_lhs_values: user type constructors are not supported as the LHS of a binary expression");
                         },
+                        [] (const temporary&) -> value_set {
+                            on_internal_error(expr_logger, "possible_lhs_values: temporaries are not supported as the LHS of a binary expression");
+                        },
                     }, oper.lhs);
             },
             [] (const column_value&) -> value_set {
@@ -875,6 +880,9 @@ static value_set possible_lhs_values(const column_definition* cdef,
             },
             [] (const usertype_constructor&) -> value_set {
                 on_internal_error(expr_logger, "possible_lhs_values: a user type constructor cannot serve as a restriction by itself");
+            },
+            [] (const temporary&) -> value_set {
+                on_internal_error(expr_logger, "possible_lhs_values: a temporary cannot serve as a restriction by itself");
             },
         }, expr);
 }
@@ -972,6 +980,9 @@ secondary_index::index::supports_expression_v is_supported_by_helper(const expre
                         [&] (const usertype_constructor&) -> ret_t {
                             on_internal_error(expr_logger, "is_supported_by: user type constructors are not supported as the LHS of a binary expression");
                         },
+                        [&] (const temporary&) -> ret_t {
+                            on_internal_error(expr_logger, "is_supported_by: temporaries are not supported as the LHS of a binary expression");
+                        },
                     }, oper.lhs);
             },
             [] (const auto& default_case) { return index::supports_expression_v::from_bool(false); }
@@ -1031,7 +1042,8 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
     auto to_printer = [&pr] (const expression& expr) -> expression::printer {
         return expression::printer {
             .expr_to_print = expr,
-            .debug_mode = pr.debug_mode
+            .debug_mode = pr.debug_mode,
+            .for_metadata = pr.for_metadata,
         };
     };
 
@@ -1078,7 +1090,11 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                 }
             },
             [&] (const column_value& col) {
-                fmt::print(os, "{}", cql3::util::maybe_quote(col.col->name_as_text()));
+                if (pr.for_metadata) {
+                    fmt::print(os, "{}", col.col->name_as_text());
+                } else {
+                    fmt::print(os, "{}", col.col->name_as_cql_string());
+                }
             },
             [&] (const subscript& sub) {
                 fmt::print(os, "{}[{}]", to_printer(sub.val), to_printer(sub.sub));
@@ -1091,20 +1107,38 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                 }
             },
             [&] (const column_mutation_attribute& cma)  {
-                fmt::print(os, "{}({})",
-                        cma.kind,
-                        to_printer(cma.column));
+                if (!pr.for_metadata) {
+                    fmt::print(os, "{}({})",
+                            cma.kind,
+                            to_printer(cma.column));
+                } else {
+                    auto kind = fmt::format("{}", cma.kind);
+                    std::transform(kind.begin(), kind.end(), kind.begin(), [] (unsigned char c) { return std::tolower(c); });
+                    fmt::print(os, "{}({})", kind, to_printer(cma.column));
+                }
             },
             [&] (const function_call& fc)  {
                 if (is_token_function(fc)) {
-                    fmt::print(os, "token({})", fmt::join(fc.args | transformed(to_printer), ", "));
+                    if (!pr.for_metadata) {
+                        fmt::print(os, "token({})", fmt::join(fc.args | transformed(to_printer), ", "));
+                    } else {
+                        fmt::print(os, "system.token({})", fmt::join(fc.args | transformed(to_printer), ", "));
+                    }
                 } else {
                     std::visit(overloaded_functor{
                         [&] (const functions::function_name& named) {
                             fmt::print(os, "{}({})", named, fmt::join(fc.args | transformed(to_printer), ", "));
                         },
-                        [&] (const shared_ptr<functions::function>& anon) {
-                            fmt::print(os, "<anonymous function>({})", fmt::join(fc.args | transformed(to_printer), ", "));
+                        [&] (const shared_ptr<functions::function>& fn) {
+                            if (!pr.debug_mode && fn->name() == cql3::functions::aggregate_fcts::first_function_name()) {
+                                // The "first" function is artificial, don't emit it
+                                fmt::print(os, "{}", to_printer(fc.args[0]));
+                            } else if (!pr.for_metadata) {
+                                fmt::print(os, "{}({})", fn->name(), fmt::join(fc.args | transformed(to_printer), ", "));
+                            } else {
+                                auto args = boost::copy_range<std::vector<sstring>>(fc.args | transformed(to_printer) | transformed(fmt::to_string<expression::printer>));
+                                fmt::print(os, "{}", fn->column_name(args));
+                            }
                         },
                     }, fc.func);
                 }
@@ -1191,6 +1225,9 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                 }
                 fmt::print(os, "}}");
             },
+            [&] (const temporary& t) {
+                fmt::print(os, "@temporary{}", t.index);
+            }
         }, pr.expr_to_print);
     return os;
 }
@@ -1530,6 +1567,7 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
         void operator()(const tuple_constructor&) {}
         void operator()(const collection_constructor&) {}
         void operator()(const usertype_constructor&) {}
+        void operator()(const temporary&) {}
     };
 
     visitor v {
@@ -1679,7 +1717,7 @@ cql3::raw_value do_evaluate(const conjunction& conj, const evaluation_inputs& in
 
 static
 cql3::raw_value do_evaluate(const field_selection& field_select, const evaluation_inputs& inputs) {
-    const user_type_impl* udt_type = dynamic_cast<const user_type_impl*>(&field_select.type->without_reversed());
+    const user_type_impl* udt_type = dynamic_cast<const user_type_impl*>(&type_of(field_select.structure)->without_reversed());
     if (udt_type == nullptr) {
         on_internal_error(expr_logger, "evaluate(field_selection): type is not a user defined type");
     }
@@ -1788,6 +1826,12 @@ static
 cql3::raw_value
 do_evaluate(const constant& c, const evaluation_inputs& inputs) {
     return c.value;
+}
+
+static
+cql3::raw_value
+do_evaluate(const temporary& t, const evaluation_inputs& inputs) {
+    return inputs.temporaries[t.index];
 }
 
 cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
@@ -2315,6 +2359,7 @@ void fill_prepare_context(expression& e, prepare_context& ctx) {
         },
         [](untyped_constant&) {},
         [](constant&) {},
+        [](temporary&) {},
     }, e);
 }
 
@@ -2743,20 +2788,214 @@ bool is_partition_token_for_schema(const expression& maybe_token, const schema& 
 
 void
 verify_no_aggregate_functions(const expression& expr, std::string_view context_for_errors) {
-    auto find_agg = overloaded_functor{
-            [] (const functions::function_name& f) -> bool {
-                on_internal_error(expr_logger, "verify_no_aggregate_functions: unprepared function_call");
-            },
-            [] (const shared_ptr<functions::function> f) -> bool {
-                return f->is_aggregate();
-            }
-        };
-    bool found_agg = find_in_expression<function_call>(expr, [find_agg] (const function_call& fc) {
-        return std::visit(find_agg, fc.func);
-    });
-    if (found_agg) {
+    if (aggregation_depth(expr) > 0) {
         throw exceptions::invalid_request_exception(fmt::format("Aggregation functions are not supported in the {}", context_for_errors));
     }
+}
+
+unsigned
+aggregation_depth(const cql3::expr::expression& e) {
+    static constexpr auto max = static_cast<const unsigned& (*)(const unsigned&, const unsigned&)>(std::max<unsigned>);
+    static constexpr auto max_over_range = [] (std::ranges::range auto&& rng) -> unsigned {
+        return boost::accumulate(rng | boost::adaptors::transformed(aggregation_depth), 0u, max);
+    };
+    return visit(overloaded_functor{
+        [] (const conjunction& c) {
+            return max_over_range(c.children);
+        },
+        [] (const binary_operator& bo) {
+            return std::max(aggregation_depth(bo.lhs), aggregation_depth(bo.rhs));
+        },
+        [] (const subscript& s) {
+            return std::max(aggregation_depth(s.val), aggregation_depth(s.sub));
+        },
+        [] (const column_mutation_attribute& cma) {
+            return aggregation_depth(cma.column);
+        },
+        [] (const function_call& fc) {
+            unsigned this_function_depth = std::visit(overloaded_functor{
+                [] (const functions::function_name& n) -> unsigned {
+                    on_internal_error(expr_logger, "unprepared function_call in aggregation_depth()");
+                },
+                [] (const shared_ptr<functions::function>& fn) -> unsigned {
+                    return unsigned(fn->is_aggregate());
+                }
+            }, fc.func);
+            auto arg_depth = max_over_range(fc.args);
+            return this_function_depth + arg_depth;
+        },
+        [] (const cast& c) {
+            return aggregation_depth(c.arg);
+        },
+        [] (const field_selection& fs) {
+            return aggregation_depth(fs.structure);
+        },
+        [] (const LeafExpression auto&) {
+            return 0u;
+        },
+        [] (const tuple_constructor& tc) {
+            return max_over_range(tc.elements);
+        },
+        [] (const collection_constructor& cc) {
+            return max_over_range(cc.elements);
+        },
+        [] (const usertype_constructor& uc) {
+            return max_over_range(uc.elements | boost::adaptors::map_values);
+        }
+    }, e);
+}
+
+cql3::expr::expression
+levellize_aggregation_depth(const cql3::expr::expression& e, unsigned desired_depth) {
+    auto recurse = [&] (expression& e) {
+        e = levellize_aggregation_depth(e, desired_depth);
+    };
+    auto recurse_over_range = [&] (std::ranges::range auto&& rng) {
+        for (auto& e : rng) {
+            recurse(e);
+        }
+    };
+    // Implementation trick: we're returning a new expression, so have the visitor
+    // accept everything by value to generate a clean copy for us to mutate.
+    return visit(overloaded_functor{
+        [&] (column_value cv) -> expression {
+            expression ret = std::move(cv);
+            while (desired_depth) {
+                ret = function_call({
+                    .func = functions::aggregate_fcts::make_first_function(type_of(ret)),
+                    .args = {std::move(ret)},
+                });
+                desired_depth -= 1;
+            }
+            return ret;
+        },
+        [&] (conjunction c) -> expression {
+            recurse_over_range(c.children);
+            return c;
+        },
+        [&] (binary_operator bo) -> expression {
+            recurse(bo.lhs);
+            recurse(bo.rhs);
+            return bo;
+        },
+        [&] (subscript s) -> expression {
+            recurse(s.val);
+            recurse(s.sub);
+            return s;
+        },
+        [&] (column_mutation_attribute cma) -> expression {
+            recurse(cma.column);
+            return cma;
+        },
+        [&] (function_call fc) -> expression {
+            unsigned this_function_depth = std::visit(overloaded_functor{
+                [] (const functions::function_name& n) -> unsigned {
+                    on_internal_error(expr_logger, "unprepared function_call in aggregation_depth()");
+                },
+                [] (const shared_ptr<functions::function>& fn) -> unsigned {
+                    return unsigned(fn->is_aggregate());
+                }
+            }, fc.func);
+            if (this_function_depth > desired_depth) {
+                on_internal_error(expr_logger, "expression aggregation depth exceeds expectations");
+            }
+            desired_depth -= this_function_depth;
+            recurse_over_range(fc.args);
+            return fc;
+        },
+        [&] (cast c) -> expression {
+            recurse(c.arg);
+            return c;
+        },
+        [&] (field_selection fs) -> expression {
+            recurse(fs.structure);
+            return fs;
+        },
+        [&] (LeafExpression auto leaf) -> expression {
+            return leaf;
+        },
+        [&] (tuple_constructor tc) -> expression {
+            recurse_over_range(tc.elements);
+            return tc;
+        },
+        [&] (collection_constructor cc) -> expression {
+            recurse_over_range(cc.elements);
+            return cc;
+        },
+        [&] (usertype_constructor uc) -> expression {
+            recurse_over_range(uc.elements | boost::adaptors::map_values);
+            return uc;
+        }
+    }, e);
+}
+
+aggregation_split_result
+split_aggregation(std::span<const expression> aggregation) {
+    size_t nr_temporaries = 0;
+    auto allocate_temporary = [&] () -> size_t {
+        return nr_temporaries++;
+    };
+    std::vector<expression> inner_vec;
+    std::vector<expression> outer_vec;
+    std::vector<raw_value> initial_values_vec;
+    for (auto& e : aggregation) {
+        auto outer = search_and_replace(e, [&] (const expression& e) -> std::optional<expression> {
+            auto fc = as_if<function_call>(&e);
+            if (!fc) {
+                return std::nullopt;
+            }
+            return std::visit(overloaded_functor{
+                [] (const functions::function_name& n) -> std::optional<expression> {
+                    on_internal_error(expr_logger, "unprepared function_call in split_aggregation()");
+                },
+                [&] (const shared_ptr<functions::function>& fn) -> std::optional<expression> {
+                    if (!fn->is_aggregate()) {
+                        return std::nullopt;
+                    }
+                    // Split the aggregate. The aggregation function becomes the inner loop, the final
+                    // function becomes the outer loop, and they're connected with a temporary.
+                    auto temp = allocate_temporary();
+                    auto agg_fn = dynamic_pointer_cast<cql3::functions::aggregate_function>(fn);
+                    auto& agg = agg_fn->get_aggregate();
+                    auto inner_fn = agg.aggregation_function;
+                    auto outer_fn = agg.state_to_result_function;
+                    auto inner_args = std::vector<expression>();
+                    inner_args.push_back(temporary{.index = temp, .type = agg.state_type});
+                    inner_args.insert(inner_args.end(), fc->args.begin(), fc->args.end());
+                    auto inner = function_call{
+                        .func = std::move(inner_fn),
+                        .args = std::move(inner_args),
+                    };
+                    // The result of evaluating inner should be stored in the same temporary.
+                    auto outer_args = std::vector<expression>();
+                    outer_args.push_back(temporary{.index = temp, .type = agg.state_type});
+                    auto outer = std::invoke([&] () -> expression {
+                        if (outer_fn) {
+                            return function_call{
+                                    .func = std::move(outer_fn),
+                                    .args = std::move(outer_args),
+                            };
+                        } else {
+                            // When executing automatically parallelized queries,
+                            // we get no state_to_result_function since we have to return
+                            // the state. Just return the temporary that holds the state.
+                            return outer_args[0];
+                        }
+                    });
+                    inner_vec.push_back(std::move(inner));
+                    initial_values_vec.push_back(raw_value::make_value(agg.initial_state));
+                    return outer;
+                }
+            }, fc->func);
+        });
+        outer_vec.push_back(std::move(outer));
+    }
+    // Whew!
+    return aggregation_split_result{
+        .inner_loop = std::move(inner_vec),
+        .outer_loop = std::move(outer_vec),
+        .initial_values_for_temporaries = std::move(initial_values_vec),
+    };
 }
 
 
