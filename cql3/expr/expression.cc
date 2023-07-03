@@ -1103,8 +1103,8 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                         [&] (const functions::function_name& named) {
                             fmt::print(os, "{}({})", named, fmt::join(fc.args | transformed(to_printer), ", "));
                         },
-                        [&] (const shared_ptr<functions::function>& anon) {
-                            fmt::print(os, "<anonymous function>({})", fmt::join(fc.args | transformed(to_printer), ", "));
+                        [&] (const shared_ptr<functions::function>& fn) {
+                            fmt::print(os, "{}({})", fn->name(), fmt::join(fc.args | transformed(to_printer), ", "));
                         },
                     }, fc.func);
                 }
