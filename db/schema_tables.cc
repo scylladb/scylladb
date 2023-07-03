@@ -1370,7 +1370,7 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
         auto v = co_await db::schema_tables::read_schema_partition_for_keyspace(proxy, db::schema_tables::KEYSPACES, name);
         auto scylla_specific_rs = co_await db::schema_tables::extract_scylla_specific_keyspace_info(proxy, v);
         auto tmp_ksm = db::schema_tables::create_keyspace_from_schema_partition(v, scylla_specific_rs);
-        co_await replica::database::update_keyspace_on_all_shards(sharded_db, proxy, *tmp_ksm);
+        co_await replica::database::update_keyspace_on_all_shards(sharded_db, *tmp_ksm);
     }
     co_return dropped;
 }
