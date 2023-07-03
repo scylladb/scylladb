@@ -178,6 +178,11 @@ void client::authorize(http::request& req) {
     req._headers["Authorization"] = format("AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}", _cfg->aws->key, time_point_st, _cfg->aws->region, signed_headers_list, sig);
 }
 
+client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn)
+        : http(std::move(f), max_conn)
+{
+}
+
 future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, http::reply::status_type expected) {
     authorize(req);
     auto sg = current_scheduling_group();
@@ -193,7 +198,7 @@ future<> client::make_request(http::request req, http::experimental::client::rep
             std::forward_as_tuple(std::move(factory), max_connections)
         ).first;
     }
-    return it->second.make_request(std::move(req), std::move(handle), expected);
+    return it->second.http.make_request(std::move(req), std::move(handle), expected);
 }
 
 future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler) {
@@ -880,7 +885,7 @@ file client::make_readable_file(sstring object_name) {
 
 future<> client::close() {
     co_await coroutine::parallel_for_each(_https, [] (auto& it) -> future<> {
-        co_await it.second.close();
+        co_await it.second.http.close();
     });
 }
 
