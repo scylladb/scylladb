@@ -888,7 +888,7 @@ future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, 
     co_await sharded_db.invoke_on_all(notifier);
 }
 
-future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const keyspace_metadata& tmp_ksm) {
+future<> database::update_keyspace(const keyspace_metadata& tmp_ksm) {
     auto& ks = find_keyspace(tmp_ksm.name());
     auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm.name(), tmp_ksm.strategy_name(), tmp_ksm.strategy_options(), tmp_ksm.durable_writes(),
                     boost::copy_range<std::vector<schema_ptr>>(ks.metadata()->cf_meta_data() | boost::adaptors::map_values), std::move(ks.metadata()->user_types()));
@@ -907,7 +907,7 @@ future<> database::update_keyspace(sharded<service::storage_proxy>& proxy, const
 
 future<> database::update_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ksm) {
     return modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) {
-        return db.update_keyspace(proxy, ksm);
+        return db.update_keyspace(ksm);
     }, [&] (replica::database& db) {
         const auto& ks = db.find_keyspace(ksm.name());
         return db.get_notifier().update_keyspace(ks.metadata());
