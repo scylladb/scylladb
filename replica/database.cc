@@ -905,7 +905,7 @@ future<> database::update_keyspace(const keyspace_metadata& tmp_ksm) {
     co_await ks.update_from(get_shared_token_metadata(), std::move(new_ksm));
 }
 
-future<> database::update_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ksm) {
+future<> database::update_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm) {
     return modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) {
         return db.update_keyspace(ksm);
     }, [&] (replica::database& db) {
