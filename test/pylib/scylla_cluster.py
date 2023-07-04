@@ -47,6 +47,7 @@ class ReplaceConfig(NamedTuple):
     replaced_id: ServerNum
     reuse_ip_addr: bool
     use_host_id: bool
+    ignore_dead_nodes: list[IPAddress | HostID] = []
 
 
 def make_scylla_conf(workdir: pathlib.Path, host_addr: str, seed_addrs: List[str], cluster_name: str) -> dict[str, object]:
@@ -678,6 +679,9 @@ class ScyllaCluster:
                 extra_config['replace_node_first_boot'] = replaced_srv.host_id
             else:
                 extra_config['replace_address_first_boot'] = replaced_srv.ip_addr
+
+            if replace_cfg.ignore_dead_nodes:
+                extra_config['ignore_dead_nodes_for_replace'] = ','.join(replace_cfg.ignore_dead_nodes)
 
             assert replaced_id not in self.removed, \
                 f"add_server: cannot replace removed server {replaced_srv}"
