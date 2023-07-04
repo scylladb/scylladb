@@ -64,13 +64,6 @@ statement_restrictions::statement_restrictions(schema_ptr schema, bool allow_fil
     : _schema(schema)
     , _partition_range_is_simple(true)
 { }
-#if 0
-static const column_definition*
-to_column_definition(const schema_ptr& schema, const ::shared_ptr<column_identifier::raw>& entity) {
-    return get_column_definition(schema,
-            *entity->prepare_column_identifier(schema));
-}
-#endif
 
 template <typename Visitor>
 concept visitor_with_binary_operator_context = requires (Visitor v) {
@@ -444,30 +437,6 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         _index_restrictions.push_back(_clustering_columns_restrictions);
     } else if (find_binop(_clustering_columns_restrictions, expr::is_on_collection)) {
         fail(unimplemented::cause::INDEXES);
-#if 0
-        _index_restrictions.push_back(new Forwardingprimary_key_restrictions() {
-
-            @Override
-            protected primary_key_restrictions getDelegate()
-            {
-                return _clustering_columns_restrictions;
-            }
-
-            @Override
-            public void add_index_expression_to(List<::shared_ptr<index_expression>> expressions, const query_options& options) throws InvalidRequestException
-            {
-                List<::shared_ptr<index_expression>> list = new ArrayList<>();
-                super.add_index_expression_to(list, options);
-
-                for (::shared_ptr<index_expression> expression : list)
-                {
-                    if (expression.is_contains() || expression.is_containsKey())
-                        expressions.add(expression);
-                }
-            }
-        });
-        uses_secondary_indexing = true;
-#endif
     }
 
     if (!expr::is_empty_restriction(_nonprimary_key_restrictions)) {
