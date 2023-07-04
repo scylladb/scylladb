@@ -833,7 +833,7 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
     if (fast_path) {
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(make_shared<cql_transport::messages::result_message::rows>(result(
             result_generator(_schema, std::move(results), std::move(cmd), _selection, _stats),
-            ::make_shared<metadata>(*_selection->get_result_metadata()))
+            _selection->get_result_metadata())
         ));
     }
     return process_results_complex(std::move(results), std::move(cmd), options, now);
@@ -1607,7 +1607,7 @@ parallelized_select_statement::do_execute(
 
     // dispatch execution of this statement to other nodes
     return qp.forward(req, state.get_trace_state()).then([this] (query::forward_result res) {
-        auto meta = make_shared<metadata>(*_selection->get_result_metadata());
+        auto meta = _selection->get_result_metadata();
         auto rs = std::make_unique<result_set>(std::move(meta));
         rs->add_row(res.query_results);
         update_stats_rows_read(rs->size());
