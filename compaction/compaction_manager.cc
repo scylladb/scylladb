@@ -436,7 +436,7 @@ future<> compaction_manager::get_compaction_history(compaction_history_consumer&
 
 namespace compaction {
 
-class sstables_task_executor : public compaction_task_executor {
+class sstables_task_executor : public compaction_task_executor, public sstables_compaction_task_impl {
 protected:
     std::vector<sstables::shared_sstable> _sstables;
 
@@ -444,13 +444,23 @@ protected:
     sstables::shared_sstable consume_sstable();
 
 public:
-    explicit sstables_task_executor(compaction_manager& mgr, table_state* t, sstables::compaction_type compaction_type, sstring desc, std::vector<sstables::shared_sstable> sstables)
+    explicit sstables_task_executor(compaction_manager& mgr, table_state* t, sstables::compaction_type compaction_type, sstring desc, std::vector<sstables::shared_sstable> sstables, tasks::task_id parent_id, sstring entity = "")
         : compaction_task_executor(mgr, t, compaction_type, std::move(desc))
+        , sstables_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, t->schema()->ks_name(), t->schema()->cf_name(), std::move(entity), parent_id)
     {
         set_sstables(std::move(sstables));
     }
 
     virtual ~sstables_task_executor();
+
+
+    virtual tasks::is_internal is_internal() const noexcept override {
+        return tasks::is_internal::yes;
+    }
+protected:
+    virtual future<> run() override {
+        return compaction_done().discard_result();
+    }
 };
 
 class major_compaction_task_executor : public compaction_task_executor, public major_compaction_task_impl {
@@ -1371,10 +1381,10 @@ class rewrite_sstables_compaction_task_executor : public sstables_task_executor 
     compaction_manager::can_purge_tombstones _can_purge;
 
 public:
-    rewrite_sstables_compaction_task_executor(compaction_manager& mgr, table_state* t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
+    rewrite_sstables_compaction_task_executor(compaction_manager& mgr, table_state* t, tasks::task_id parent_id, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
                                      std::vector<sstables::shared_sstable> sstables, compacting_sstable_registration compacting,
                                      compaction_manager::can_purge_tombstones can_purge)
-        : sstables_task_executor(mgr, t, options.type(), sstring(sstables::to_string(options.type())), std::move(sstables))
+        : sstables_task_executor(mgr, t, options.type(), sstring(sstables::to_string(options.type())), std::move(sstables), parent_id, options.type() == sstables::compaction_type::Scrub ? fmt::format("mode: {};\nquarantine_mode: {}\n", std::get<sstables::compaction_type_options::scrub>(options.options()).operation_mode, std::get<sstables::compaction_type_options::scrub>(options.options()).quarantine_operation_mode) : "")
         , _options(std::move(options))
         , _owned_ranges_ptr(std::move(owned_ranges_ptr))
         , _compacting(std::move(compacting))
@@ -1440,34 +1450,6 @@ private:
 }
 
 template<typename TaskType, typename... Args>
-requires std::derived_from<TaskType, compaction_task_executor>
-future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task_on_all_files(table_state& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, Args... args) {
-    if (_state != state::enabled) {
-        co_return std::nullopt;
-    }
-
-    // since we might potentially have ongoing compactions, and we
-    // must ensure that all sstables created before we run are included
-    // in the re-write, we need to barrier out any previously running
-    // compaction.
-    std::vector<sstables::shared_sstable> sstables;
-    compacting_sstable_registration compacting(*this, get_compaction_state(&t));
-    co_await run_with_compaction_disabled(t, [&sstables, &compacting, get_func = std::move(get_func)] () -> future<> {
-        // Getting sstables and registering them as compacting must be atomic, to avoid a race condition where
-        // regular compaction runs in between and picks the same files.
-        sstables = co_await get_func();
-        compacting.register_compacting(sstables);
-    });
-    // sort sstables by size in descending order, such that the smallest files will be rewritten first
-    // (as sstable to be rewritten is popped off from the back of container), so rewrite will have higher
-    // chance to succeed when the biggest files are reached.
-    std::ranges::sort(sstables, [](sstables::shared_sstable& a, sstables::shared_sstable& b) {
-        return a->data_size() > b->data_size();
-    });
-    co_return co_await perform_task(seastar::make_shared<TaskType>(*this, &t, std::move(options), std::move(owned_ranges_ptr), std::move(sstables), std::move(compacting), std::forward<Args>(args)...));
-}
-
-template<typename TaskType, typename... Args>
 requires std::derived_from<TaskType, compaction_task_executor> &&
          std::derived_from<TaskType, compaction_task_impl>
 future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task_on_all_files(std::optional<tasks::task_info> info, table_state& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, Args... args) {
@@ -1498,15 +1480,15 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
 }
 
 future<compaction_manager::compaction_stats_opt> compaction_manager::rewrite_sstables(table_state& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, std::optional<tasks::task_info> info, can_purge_tombstones can_purge) {
-    return perform_task_on_all_files<rewrite_sstables_compaction_task_executor>(t, std::move(options), std::move(owned_ranges_ptr), std::move(get_func), can_purge);
+    return perform_task_on_all_files<rewrite_sstables_compaction_task_executor>(info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_func), can_purge);
 }
 
 namespace compaction {
 
 class validate_sstables_compaction_task_executor : public sstables_task_executor {
 public:
-    validate_sstables_compaction_task_executor(compaction_manager& mgr, table_state* t, std::vector<sstables::shared_sstable> sstables)
-        : sstables_task_executor(mgr, t, sstables::compaction_type::Scrub, "Scrub compaction in validate mode", std::move(sstables))
+    validate_sstables_compaction_task_executor(compaction_manager& mgr, table_state* t, tasks::task_id parent_id, std::vector<sstables::shared_sstable> sstables)
+        : sstables_task_executor(mgr, t, sstables::compaction_type::Scrub, "Scrub compaction in validate mode", std::move(sstables), parent_id)
     {}
 
 protected:
@@ -1571,7 +1553,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
     }
     // All sstables must be included, even the ones being compacted, such that everything in table is validated.
     auto all_sstables = get_all_sstables(t);
-    return perform_task(seastar::make_shared<validate_sstables_compaction_task_executor>(*this, &t, std::move(all_sstables)));
+    return perform_compaction<validate_sstables_compaction_task_executor>(info, &t, info.value_or(tasks::task_info{}).id, std::move(all_sstables));
 }
 
 namespace compaction {

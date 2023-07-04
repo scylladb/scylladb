@@ -225,10 +225,6 @@ private:
     // Guarantees that a maintenance task, e.g. cleanup, will be performed on all files available at the time
     // by retrieving set of candidates only after all compactions for table T were stopped, if any.
     template<typename TaskType, typename... Args>
-    requires std::derived_from<TaskType, compaction::compaction_task_executor>
-    future<compaction_stats_opt> perform_task_on_all_files(compaction::table_state& t, sstables::compaction_type_options options, owned_ranges_ptr, get_candidates_func, Args... args);
-
-    template<typename TaskType, typename... Args>
     requires std::derived_from<TaskType, compaction_task_executor> &&
             std::derived_from<TaskType, compaction_task_impl>
     future<compaction_manager::compaction_stats_opt> perform_task_on_all_files(std::optional<tasks::task_info> info, table_state& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, Args... args);
