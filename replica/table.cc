@@ -78,10 +78,6 @@ void table::update_sstables_known_generation(sstables::generation_type generatio
 }
 
 sstables::generation_type table::calculate_generation_for_new_table() {
-    // FIXME: better way of ensuring we don't attempt to
-    // overwrite an existing table.
-    // See https://github.com/scylladb/scylladb/issues/10459
-    // for uuid-based sstable generation
     assert(_sstable_generation_generator);
     auto ret = std::invoke(*_sstable_generation_generator,
                            uuid_identifiers{_sstables_manager.uuid_sstable_identifiers()});
