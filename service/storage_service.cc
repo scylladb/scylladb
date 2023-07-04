@@ -2251,21 +2251,6 @@ std::unordered_set<gms::inet_address> storage_service::parse_node_list(sstring c
     return ignore_nodes;
 }
 
-future<std::unordered_set<gms::inet_address>> storage_service::get_nodes_to_sync_with(
-        const std::unordered_set<gms::inet_address>& ignore_nodes) {
-    std::unordered_set<gms::inet_address> result;
-    for (const auto& node :_gossiper.get_endpoints()) {
-        co_await coroutine::maybe_yield();
-        slogger.info("Check node={}, status={}", node, _gossiper.get_gossip_status(node));
-        if (node != get_broadcast_address() &&
-                _gossiper.is_normal_ring_member(node) &&
-                !ignore_nodes.contains(node)) {
-            result.insert(node);
-        }
-    }
-    co_return result;
-}
-
 // Runs inside seastar::async context
 future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, std::unordered_set<token>& bootstrap_tokens, std::optional<cdc::generation_id>& cdc_gen_id, const std::optional<replacement_info>& replacement_info) {
     return seastar::async([this, &bootstrap_tokens, &cdc_gen_id, &cdc_gen_service, &replacement_info] {

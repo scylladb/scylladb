@@ -293,8 +293,6 @@ private:
     void run_replace_ops(std::unordered_set<token>& bootstrap_tokens, replacement_info replace_info);
     void run_bootstrap_ops(std::unordered_set<token>& bootstrap_tokens);
 
-    future<std::unordered_set<gms::inet_address>> get_nodes_to_sync_with(
-            const std::unordered_set<gms::inet_address>& ignore_dead_nodes);
     future<> wait_for_ring_to_settle();
 
 public:
