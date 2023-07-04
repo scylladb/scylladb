@@ -1599,6 +1599,8 @@ future<> topology_coordinator::run() {
             }
         } catch (raft::request_aborted&) {
             slogger.debug("raft topology: topology change coordinator fiber aborted");
+        } catch (raft::commit_status_unknown&) {
+            slogger.warn("raft topology: topology change coordinator fiber got commit_status_unknown");
         } catch (group0_concurrent_modification&) {
         } catch (term_changed_error&) {
             // Term changed. We may no longer be a leader
