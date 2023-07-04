@@ -1,5 +1,5 @@
 ====================================================
-ScyllaDB Unified Installer (relocatable executable)
+Install ScyllaDB Without root Privileges
 ====================================================
 
 This document covers installing, uninstalling, and upgrading ScyllaDB using Unified Installer. 

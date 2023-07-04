@@ -34,6 +34,6 @@ Keep your versions up-to-date. The two latest versions are supported. Also, alwa
 
   * :doc:`Install ScyllaDB with Web Installer (recommended) </getting-started/installation-common/scylla-web-installer>`
   * :doc:`Install ScyllaDB Linux Packages </getting-started/install-scylla/install-on-linux>`
-  * :doc:`ScyllaDB Unified Installer (relocatable executable) </getting-started/installation-common/unified-installer>`
+  * :doc:`Install ScyllaDB Without root Privileges </getting-started/installation-common/unified-installer>`
   * :doc:`Air-gapped Server Installation </getting-started/installation-common/air-gapped-install>`
   * :doc:`ScyllaDB Developer Mode </getting-started/installation-common/dev-mod>`
