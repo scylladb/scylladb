@@ -1958,15 +1958,6 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         // Node state changes are propagated to the cluster through explicit global barriers.
         co_await wait_for_normal_state_handled_on_boot();
 
-        auto ignore_nodes = ri
-                ? parse_node_list(_db.local().get_config().ignore_dead_nodes_for_replace(), get_token_metadata())
-                // TODO: specify ignore_nodes for bootstrap
-                : std::unordered_set<gms::inet_address>{};
-        auto sync_nodes = co_await get_nodes_to_sync_with(ignore_nodes);
-        if (ri) {
-            sync_nodes.erase(ri->address);
-        }
-
         // NORMAL doesn't necessarily mean UP (#14042). Wait for these nodes to be UP as well
         // to reduce flakiness (we need them to be UP to perform CDC generation write and for repair/streaming).
         //
@@ -1974,10 +1965,30 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         // has to be done based on topology state machine instead of gossiper as it is here;
         // furthermore, the place in the code where we do this has to be different (it has to be coordinated
         // by the topology coordinator after it joins the node to the cluster).
-        std::vector<gms::inet_address> sync_nodes_vec{sync_nodes.begin(), sync_nodes.end()};
-        slogger.info("Waiting for nodes {} to be alive", sync_nodes_vec);
-        co_await _gossiper.wait_alive(sync_nodes_vec, std::chrono::seconds{30});
-        slogger.info("Nodes {} are alive", sync_nodes_vec);
+        //
+        // We calculate nodes to wait for based on token_metadata. Previously we would use gossiper
+        // directly for this, but gossiper may still contain obsolete entries from 1. replaced nodes
+        // and 2. nodes that have changed their IPs; these entries are eventually garbage-collected,
+        // but here they may still be present if we're performing topology changes in quick succession.
+        // `token_metadata` has all host ID / token collisions resolved so in particular it doesn't contain
+        // these obsolete IPs. Refs: #14487, #14468
+        auto& tm = get_token_metadata();
+        auto ignore_nodes = ri
+                ? parse_node_list(_db.local().get_config().ignore_dead_nodes_for_replace(), tm)
+                // TODO: specify ignore_nodes for bootstrap
+                : std::unordered_set<gms::inet_address>{};
+
+        std::vector<gms::inet_address> sync_nodes;
+        tm.get_topology().for_each_node([&] (const locator::node* np) {
+            auto ep = np->endpoint();
+            if (!ignore_nodes.contains(ep) && (!ri || ep != ri->address)) {
+                sync_nodes.push_back(ep);
+            }
+        });
+
+        slogger.info("Waiting for nodes {} to be alive", sync_nodes);
+        co_await _gossiper.wait_alive(sync_nodes, std::chrono::seconds{30});
+        slogger.info("Nodes {} are alive", sync_nodes);
     }
 
     assert(_group0);
