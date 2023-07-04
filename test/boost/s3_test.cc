@@ -65,6 +65,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
 
     testlog.info("Make client\n");
     auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config());
+    auto close_client = deferred_close(*cln);
 
     testlog.info("Put object {}\n", name);
     temporary_buffer<char> data = sstring("1234567890").release();
@@ -95,9 +96,6 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object) {
     BOOST_REQUIRE_EXCEPTION(cln->get_object_size(name).get(), seastar::httpd::unexpected_status_error, [] (const seastar::httpd::unexpected_status_error& ex) {
         return ex.status() == http::reply::status_type::not_found;
     });
-
-    testlog.info("Closing\n");
-    cln->close().get();
 }
 
 void do_test_client_multipart_upload(bool with_copy_upload) {
@@ -105,6 +103,7 @@ void do_test_client_multipart_upload(bool with_copy_upload) {
 
     testlog.info("Make client\n");
     auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config());
+    auto close_client = deferred_close(*cln);
 
     testlog.info("Upload object (with copy = {})\n", with_copy_upload);
     auto out = output_stream<char>(
@@ -150,8 +149,6 @@ void do_test_client_multipart_upload(bool with_copy_upload) {
 
     testlog.info("Delete object\n");
     cln->delete_object(name).get();
-
-    cln->close().get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload) {
@@ -167,12 +164,14 @@ SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
 
     testlog.info("Make client\n");
     auto cln = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config());
+    auto close_client = deferred_close(*cln);
 
     testlog.info("Put object {}\n", name);
     temporary_buffer<char> data = sstring("1234567890ABCDEF").release();
     cln->put_object(name, std::move(data)).get();
 
     auto f = cln->make_readable_file(name);
+    auto close_readable_file = deferred_close(f);
 
     testlog.info("Check file size\n");
     size_t sz = f.size().get0();
@@ -201,15 +200,13 @@ SEASTAR_THREAD_TEST_CASE(test_client_readable_file) {
 
     testlog.info("Delete object\n");
     cln->delete_object(name).get();
-    testlog.info("Closing\n");
-    f.close().get();
-    cln->close().get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_put_get_tagging) {
     const sstring name(fmt::format("/{}/testobject-{}",
                                    tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"), ::getpid()));
     auto client = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_minio_config());
+    auto close_client = deferred_close(*client);
     auto data = sstring("1234567890ABCDEF").release();
     client->put_object(name, std::move(data)).get();
     {
@@ -230,5 +227,4 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_tagging) {
         BOOST_CHECK(tagset.empty());
     }
     client->delete_object(name).get();
-    client->close().get();
 }
