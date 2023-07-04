@@ -97,14 +97,13 @@ namespace db {
 
 /// Enumeration of all valid values for the `experimental` config entry.
 struct experimental_features_t {
-    // NOTE: RAFT and BROADCAST_TABLES features are not enabled via `experimental` umbrella flag.
+    // NOTE: CONSISTENT_TOPOLOGY_CHANGES and BROADCAST_TABLES features are not enabled via `experimental` umbrella flag.
     // These options should be enabled explicitly.
-    // RAFT feature has to be enabled if BROADCAST_TABLES or TABLETS is enabled.
     enum class feature {
         UNUSED,
         UDF,
         ALTERNATOR_STREAMS,
-        RAFT,
+        CONSISTENT_TOPOLOGY_CHANGES,
         BROADCAST_TABLES,
         KEYSPACE_STORAGE_OPTIONS,
         TABLETS,

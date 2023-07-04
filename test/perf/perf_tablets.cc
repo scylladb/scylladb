@@ -36,7 +36,7 @@ cql_test_config tablet_cql_test_config() {
     cql_test_config c;
     c.db_config->experimental_features({
                db::experimental_features_t::feature::TABLETS,
-               db::experimental_features_t::feature::RAFT
+               db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES
        }, db::config::config_source::CommandLine);
     return c;
 }

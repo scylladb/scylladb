@@ -71,7 +71,7 @@ def make_scylla_conf(workdir: pathlib.Path, host_addr: str, seed_addrs: List[str
         # to add here specific experimental features as they are introduced.
         'enable_user_defined_functions': True,
         'experimental': True,
-        'experimental_features': ['udf', 'raft'],
+        'experimental_features': ['udf', 'consistent-topology-changes'],
 
         'consistent_cluster_management': True,
 

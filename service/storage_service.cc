@@ -2962,7 +2962,7 @@ future<> storage_service::uninit_messaging_service_part() {
 
 void storage_service::set_group0(raft_group0& group0) {
     _group0 = &group0;
-    _raft_topology_change_enabled = _group0->is_raft_enabled() && _db.local().get_config().check_experimental(db::experimental_features_t::feature::RAFT);
+    _raft_topology_change_enabled = _group0->is_raft_enabled() && _db.local().get_config().check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES);
 }
 
 future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,
