@@ -371,6 +371,36 @@ protected:
     virtual future<> run() override;
 };
 
+class table_upgrade_sstables_compaction_task_impl : public sstables_compaction_task_impl {
+private:
+    replica::database& _db;
+    table_info _ti;
+    seastar::condition_variable& _cv;
+    tasks::task_manager::task_ptr& _current_task;
+    bool _exclude_current_version;
+public:
+    table_upgrade_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
+            std::string keyspace,
+            std::string table,
+            tasks::task_id parent_id,
+            replica::database& db,
+            table_info ti,
+            seastar::condition_variable& cv,
+            tasks::task_manager::task_ptr& current_task,
+            bool exclude_current_version) noexcept
+        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), std::move(table), "", parent_id)
+        , _db(db)
+        , _ti(std::move(ti))
+        , _cv(cv)
+        , _current_task(current_task)
+        , _exclude_current_version(exclude_current_version)
+    {}
+
+    virtual tasks::is_internal is_internal() const noexcept override;
+protected:
+    virtual future<> run() override;
+};
+
 class scrub_sstables_compaction_task_impl : public sstables_compaction_task_impl {
 private:
     sharded<replica::database>& _db;
@@ -437,36 +467,6 @@ public:
         , _db(db)
         , _opts(opts)
         , _stats(stats)
-    {}
-
-    virtual tasks::is_internal is_internal() const noexcept override;
-protected:
-    virtual future<> run() override;
-};
-
-class table_upgrade_sstables_compaction_task_impl : public sstables_compaction_task_impl {
-private:
-    replica::database& _db;
-    table_info _ti;
-    seastar::condition_variable& _cv;
-    tasks::task_manager::task_ptr& _current_task;
-    bool _exclude_current_version;
-public:
-    table_upgrade_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            std::string table,
-            tasks::task_id parent_id,
-            replica::database& db,
-            table_info ti,
-            seastar::condition_variable& cv,
-            tasks::task_manager::task_ptr& current_task,
-            bool exclude_current_version) noexcept
-        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), std::move(table), "", parent_id)
-        , _db(db)
-        , _ti(std::move(ti))
-        , _cv(cv)
-        , _current_task(current_task)
-        , _exclude_current_version(exclude_current_version)
     {}
 
     virtual tasks::is_internal is_internal() const noexcept override;
