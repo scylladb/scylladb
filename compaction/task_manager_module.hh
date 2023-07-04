@@ -322,7 +322,7 @@ public:
     }
 
     virtual std::string type() const override {
-        return "rewrite sstables compaction";
+        return "sstables compaction";
     }
 protected:
     virtual future<> run() override = 0;
@@ -344,6 +344,10 @@ public:
         , _table_infos(std::move(table_infos))
         , _exclude_current_version(exclude_current_version)
     {}
+
+    virtual std::string type() const override {
+        return "upgrade " + sstables_compaction_task_impl::type();
+    }
 protected:
     virtual future<> run() override;
 };
@@ -365,6 +369,10 @@ public:
         , _table_infos(std::move(table_infos))
         , _exclude_current_version(exclude_current_version)
     {}
+
+    virtual std::string type() const override {
+        return "upgrade " + sstables_compaction_task_impl::type();
+    }
 
     virtual tasks::is_internal is_internal() const noexcept override;
 protected:
@@ -396,6 +404,10 @@ public:
         , _exclude_current_version(exclude_current_version)
     {}
 
+    virtual std::string type() const override {
+        return "upgrade " + sstables_compaction_task_impl::type();
+    }
+
     virtual tasks::is_internal is_internal() const noexcept override;
 protected:
     virtual future<> run() override;
@@ -420,6 +432,10 @@ public:
         , _opts(opts)
         , _stats(stats)
     {}
+
+    virtual std::string type() const override {
+        return "scrub " + sstables_compaction_task_impl::type();
+    }
 protected:
     virtual future<> run() override;
 };
@@ -445,6 +461,10 @@ public:
         , _stats(stats)
     {}
 
+    virtual std::string type() const override {
+        return "scrub " + sstables_compaction_task_impl::type();
+    }
+
     virtual tasks::is_internal is_internal() const noexcept override;
 protected:
     virtual future<> run() override;
@@ -468,6 +488,10 @@ public:
         , _opts(opts)
         , _stats(stats)
     {}
+
+    virtual std::string type() const override {
+        return "scrub " + sstables_compaction_task_impl::type();
+    }
 
     virtual tasks::is_internal is_internal() const noexcept override;
 protected:
