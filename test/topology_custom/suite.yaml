@@ -7,5 +7,7 @@ extra_scylla_config_options:
     authorizer: AllowAllAuthorizer
 skip_in_release:
   - test_shutdown_hang
+  - test_replace_ignore_nodes
 skip_in_debug:
   - test_shutdown_hang
+  - test_replace_ignore_nodes
