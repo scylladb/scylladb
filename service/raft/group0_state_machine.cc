@@ -91,7 +91,8 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
         merger(group0_state_machine& sm_, utils::UUID id, semaphore_units<> mux) : last_group0_state_id(id)
             , sm(sm_)
             , read_apply_mutex_holder(std::move(mux))
-            , max_command_size(sm._sp.data_dictionary().get_config().commitlog_segment_size_in_mb() * 1024 * 1024 / 2) {}
+            // max_mutation_size = 1/2 of commitlog segment size, thus max_command_size is set 1/3 of commitlog segment size to leave space for metadata.
+            , max_command_size(sm._sp.data_dictionary().get_config().commitlog_segment_size_in_mb() * 1024 * 1024 / 3) {}
 
         size_t cmd_size(group0_command& cmd) {
             if (holds_alternative<broadcast_table_query>(cmd.change)) {
