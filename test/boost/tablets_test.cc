@@ -124,6 +124,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                 tb = *tmap.next_tablet(tb);
 
                 tmap.set_tablet_transition_info(tb, tablet_transition_info{
+                    tablet_transition_stage::allow_write_both_read_old,
                     tablet_replica_set {
                         tablet_replica {h3, 3},
                         tablet_replica {h1, 7},
@@ -133,6 +134,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
 
                 tb = *tmap.next_tablet(tb);
                 tmap.set_tablet_transition_info(tb, tablet_transition_info{
+                    tablet_transition_stage::use_new,
                     tablet_replica_set {
                         tablet_replica {h1, 4},
                         tablet_replica {h2, 2},
@@ -243,6 +245,7 @@ SEASTAR_TEST_CASE(test_get_shard) {
                 }
             });
             tmap.set_tablet_transition_info(tid, tablet_transition_info {
+                tablet_transition_stage::allow_write_both_read_old,
                 tablet_replica_set {
                     tablet_replica {h1, 0},
                     tablet_replica {h2, 3},
@@ -307,6 +310,7 @@ SEASTAR_TEST_CASE(test_sharder) {
                 }
             });
             tmap.set_tablet_transition_info(tid, tablet_transition_info {
+                tablet_transition_stage::use_new,
                 tablet_replica_set {
                     tablet_replica {h1, 1},
                     tablet_replica {h2, 3},

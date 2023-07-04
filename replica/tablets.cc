@@ -75,6 +75,7 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
         auto ck = clustering_key::from_single_value(*s, data_value(dht::token::to_int64(last_token)).serialize_nonnull());
         m.set_clustered_cell(ck, "replicas", make_set_value(replica_set_type, replicas_to_data_value(tablet.replicas)), ts);
         if (auto tr_info = tablets.get_tablet_transition_info(tid)) {
+            m.set_clustered_cell(ck, "stage", tablet_transition_stage_to_string(tr_info->stage), ts);
             m.set_clustered_cell(ck, "new_replicas", make_set_value(replica_set_type, replicas_to_data_value(tr_info->next)), ts);
         }
         tid = *tablets.next_tablet(tid);
@@ -153,7 +154,9 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
             new_tablet_replicas = deserialize_replica_set(row.get_view("new_replicas"));
         }
 
-        if (!new_tablet_replicas.empty()) {
+        if (row.has("stage")) {
+            auto stage = tablet_transition_stage_from_string(row.get_as<sstring>("stage"));
+
             std::unordered_set<tablet_replica> pending(new_tablet_replicas.begin(), new_tablet_replicas.end());
             for (auto&& r : tablet_replicas) {
                 pending.erase(r);
@@ -162,7 +165,7 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
                 throw std::runtime_error(format("Too many pending replicas for table {} tablet {}: {}",
                                                 table, current->tid, pending));
             }
-            current->map.set_tablet_transition_info(current->tid, tablet_transition_info{
+            current->map.set_tablet_transition_info(current->tid, tablet_transition_info{stage,
                     std::move(new_tablet_replicas), *pending.begin()});
         }
 

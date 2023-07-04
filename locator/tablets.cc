@@ -135,6 +135,36 @@ const tablet_transition_info* tablet_map::get_tablet_transition_info(tablet_id i
     return &i->second;
 }
 
+// The names are persisted in system tables so should not be changed.
+static const std::unordered_map<tablet_transition_stage, sstring> tablet_transition_stage_to_name = {
+    {tablet_transition_stage::allow_write_both_read_old, "allow_write_both_read_old"},
+    {tablet_transition_stage::write_both_read_old, "write_both_read_old"},
+    {tablet_transition_stage::write_both_read_new, "write_both_read_new"},
+    {tablet_transition_stage::streaming, "streaming"},
+    {tablet_transition_stage::use_new, "use_new"},
+    {tablet_transition_stage::cleanup, "cleanup"},
+};
+
+static const std::unordered_map<sstring, tablet_transition_stage> tablet_transition_stage_from_name = std::invoke([] {
+    std::unordered_map<sstring, tablet_transition_stage> result;
+    for (auto&& [v, s] : tablet_transition_stage_to_name) {
+        result.emplace(s, v);
+    }
+    return result;
+});
+
+sstring tablet_transition_stage_to_string(tablet_transition_stage stage) {
+    auto i = tablet_transition_stage_to_name.find(stage);
+    if (i == tablet_transition_stage_to_name.end()) {
+        on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
+    }
+    return i->second;
+}
+
+tablet_transition_stage tablet_transition_stage_from_string(const sstring& name) {
+    return tablet_transition_stage_from_name.at(name);
+}
+
 std::ostream& operator<<(std::ostream& out, tablet_id id) {
     return out << size_t(id);
 }
@@ -156,7 +186,7 @@ std::ostream& operator<<(std::ostream& out, const tablet_map& r) {
         }
         out << format("\n    [{}]: last_token={}, replicas={}", tid, r.get_last_token(tid), tablet.replicas);
         if (auto tr = r.get_tablet_transition_info(tid)) {
-            out << format(", new_replicas={}, pending={}", tr->next, tr->pending_replica);
+            out << format(", stage={}, new_replicas={}, pending={}", tr->stage, tr->next, tr->pending_replica);
         }
         first = false;
         tid = *r.next_tablet(tid);
@@ -351,4 +381,9 @@ effective_replication_map_ptr tablet_aware_replication_strategy::do_make_replica
     return seastar::make_shared<tablet_effective_replication_map>(table, std::move(rs), std::move(tm), replication_factor);
 }
 
+}
+
+auto fmt::formatter<locator::tablet_transition_stage>::format(const locator::tablet_transition_stage& stage, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", locator::tablet_transition_stage_to_string(stage));
 }

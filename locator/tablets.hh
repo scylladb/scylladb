@@ -55,9 +55,35 @@ struct tablet_info {
     bool operator==(const tablet_info&) const = default;
 };
 
+/// Represents states of the tablet migration state machine.
+///
+/// The stage serves two major purposes:
+///
+/// Firstly, it determines which action should be taken by the topology change coordinator on behalf
+/// of the tablet before it can move to the next step. When stage is advanced, it means that
+/// expected invariants about cluster-wide state relevant to the tablet, associated with the new stage, hold.
+///
+/// Also, stage affects which replicas are used by the coordinator for reads and writes.
+/// Replica selectors kept in tablet_transition_info::writes and tablet_transition_info::reads,
+/// are directly derived from the stage stored in group0.
+///
+/// See "Tablet migration" in docs/dev/topology-over-raft.md
+enum class tablet_transition_stage {
+    allow_write_both_read_old,
+    write_both_read_old,
+    streaming,
+    write_both_read_new,
+    use_new,
+    cleanup,
+};
+
+sstring tablet_transition_stage_to_string(tablet_transition_stage);
+tablet_transition_stage tablet_transition_stage_from_string(const sstring&);
+
 /// Used for storing tablet state transition during topology changes.
 /// Describes transition of a single tablet.
 struct tablet_transition_info {
+    tablet_transition_stage stage;
     tablet_replica_set next;
     tablet_replica pending_replica; // Optimization (next - tablet_info::replicas)
 
@@ -232,3 +258,8 @@ struct hash<locator::tablet_replica> {
 };
 
 }
+
+template <>
+struct fmt::formatter<locator::tablet_transition_stage> : fmt::formatter<std::string_view> {
+    auto format(const locator::tablet_transition_stage&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
