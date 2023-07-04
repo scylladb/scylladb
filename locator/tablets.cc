@@ -260,8 +260,8 @@ public:
         return {get_endpoint_for_host_id(info->pending_replica.host)};
     }
 
-    virtual std::optional<inet_address_vector_replica_set> get_endpoints_for_reading(const token& search_token) const override {
-        return std::nullopt;
+    virtual inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const override {
+        return get_natural_endpoints_without_node_being_replaced(search_token);
     }
 
     virtual bool has_pending_ranges(inet_address endpoint) const override {
