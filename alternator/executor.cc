@@ -507,11 +507,20 @@ static rjson::value fill_table_description(schema_ptr schema, table_status tbl_s
     // Use map built by describe_key_schema() for base and indexes to produce
     // AttributeDefinitions for all key columns:
     rjson::value attribute_definitions = rjson::empty_array();
+    std::unordered_set<std::string> attributes_names;
     for (auto& type : key_attribute_types) {
-        rjson::value key = rjson::empty_object();
-        rjson::add(key, "AttributeName", rjson::from_string(type.first));
-        rjson::add(key, "AttributeType", rjson::from_string(type.second));
-        rjson::push_back(attribute_definitions, std::move(key));
+        const std::string& attribute_name = type.first;
+        const std::string& attribute_type = type.second;
+        if (attributes_names.find(attribute_name) == attributes_names.end()) {
+            rjson::value key = rjson::empty_object();
+            rjson::add(key, "AttributeName", rjson::from_string(attribute_name));
+            rjson::add(key, "AttributeType", rjson::from_string(attribute_type));
+            rjson::push_back(attribute_definitions, std::move(key));
+            attributes_names.insert(attribute_name);
+        } else {
+            throw api_error::validation(
+                format("when calling the CreateTable operation: Attribute Name is duplicated: {}", attribute_name));
+        }
     }
     rjson::add(table_description, "AttributeDefinitions", std::move(attribute_definitions));
 
