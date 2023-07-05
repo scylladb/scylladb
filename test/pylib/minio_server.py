@@ -38,7 +38,7 @@ class MinioServer:
         self.default_user = 'minioadmin'
         self.default_pass = 'minioadmin'
         self.bucket_name = 'testbucket'
-        self.log_filename = (self.tempdir / 'minio').with_suffix(".log")
+        self.log_filename = os.path.join(tempdir_base, 'minio.log')
 
     def check_server(self):
         s = socket.socket()
@@ -61,7 +61,7 @@ class MinioServer:
             return
 
         self.address = await self.hosts.lease_host()
-        self.log_file = self.log_filename.open("wb")
+        self.log_file = open(self.log_filename, "wb")
         os.environ['S3_SERVER_ADDRESS_FOR_TEST'] = f'{self.address}'
         os.environ['S3_SERVER_PORT_FOR_TEST'] = f'{self.port}'
         os.environ['S3_PUBLIC_BUCKET_FOR_TEST'] = f'{self.bucket_name}'
@@ -119,6 +119,7 @@ class MinioServer:
             self.logger.info('Killed minio server')
             self.cmd = None
             shutil.rmtree(self.tempdir)
+            self.log_file.close()
 
 
 class HostRegistry:
