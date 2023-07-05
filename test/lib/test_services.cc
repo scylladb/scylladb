@@ -228,7 +228,7 @@ future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, te
 data_dictionary::storage_options make_test_object_storage_options() {
     data_dictionary::storage_options ret;
     ret.value = data_dictionary::storage_options::s3 {
-        .bucket = tests::getenv_safe("S3_PUBLIC_BUCKET_FOR_TEST"),
+        .bucket = tests::getenv_safe("S3_BUCKET_FOR_TEST"),
         .endpoint = tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"),
     };
     return ret;

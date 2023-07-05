@@ -28,7 +28,7 @@ class MinioServer:
     ENV_CONFFILE = 'S3_CONFFILE_FOR_TEST'
     ENV_ADDRESS = 'S3_SERVER_ADDRESS_FOR_TEST'
     ENV_PORT = 'S3_SERVER_PORT_FOR_TEST'
-    ENV_BUCKET = 'S3_PUBLIC_BUCKET_FOR_TEST'
+    ENV_BUCKET = 'S3_BUCKET_FOR_TEST'
 
     log_file: BufferedWriter
 
@@ -245,7 +245,7 @@ async def main():
         await server.start()
         print(f'export S3_SERVER_ADDRESS_FOR_TEST={server.address}')
         print(f'export S3_SERVER_PORT_FOR_TEST={server.port}')
-        print(f'export S3_PUBLIC_BUCKET_FOR_TEST={server.bucket_name}')
+        print(f'export S3_BUCKET_FOR_TEST={server.bucket_name}')
         print(f'Please run scylla with: --object-storage-config-file {server.config_file}')
         try:
             _ = input('server started. press any key to stop: ')
