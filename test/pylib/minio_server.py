@@ -22,6 +22,8 @@ import time
 import tempfile
 import socket
 import yaml
+import random
+import string
 from io import BufferedWriter
 
 class MinioServer:
@@ -29,6 +31,8 @@ class MinioServer:
     ENV_ADDRESS = 'S3_SERVER_ADDRESS_FOR_TEST'
     ENV_PORT = 'S3_SERVER_PORT_FOR_TEST'
     ENV_BUCKET = 'S3_BUCKET_FOR_TEST'
+    ENV_ACCESS_KEY = 'AWS_ACCESS_KEY_ID'
+    ENV_SECRET_KEY = 'AWS_SECRET_ACCESS_KEY'
 
     log_file: BufferedWriter
 
@@ -46,6 +50,8 @@ class MinioServer:
         self.default_user = 'minioadmin'
         self.default_pass = 'minioadmin'
         self.bucket_name = 'testbucket'
+        self.access_key = ''.join(random.choice(string.hexdigits) for i in range(16))
+        self.secret_key = ''.join(random.choice(string.hexdigits) for i in range(32))
         self.log_filename = (self.tempdir / 'minio').with_suffix(".log")
 
     def check_server(self, port):
@@ -198,6 +204,8 @@ class MinioServer:
         os.environ[self.ENV_ADDRESS] = f'{self.address}'
         os.environ[self.ENV_PORT] = f'{self.port}'
         os.environ[self.ENV_BUCKET] = f'{self.bucket_name}'
+        os.environ[self.ENV_ACCESS_KEY] = f'{self.access_key}'
+        os.environ[self.ENV_SECRET_KEY] = f'{self.secret_key}'
 
         try:
             alias = 'local'
@@ -205,6 +213,8 @@ class MinioServer:
             await self.mc('config', 'host', 'rm', alias, ignore_failure=True)
             # wait for the server to be ready when running the first command which should not fail
             await self.mc('config', 'host', 'add', alias, f'http://{self.address}:{self.port}', self.default_user, self.default_pass, timeout=30)
+            self.log_to_file(f'Creating user with key {self.access_key}')
+            await self.mc('admin', 'user', 'add', alias, self.access_key, self.secret_key)
             self.log_to_file(f'Configuring bucket {self.bucket_name}')
             await self.mc('mb', f'{alias}/{self.bucket_name}')
             with tempfile.NamedTemporaryFile(mode='w', encoding='UTF-8', suffix='.json') as policy_file:
@@ -246,6 +256,8 @@ async def main():
         print(f'export S3_SERVER_ADDRESS_FOR_TEST={server.address}')
         print(f'export S3_SERVER_PORT_FOR_TEST={server.port}')
         print(f'export S3_BUCKET_FOR_TEST={server.bucket_name}')
+        print(f'export AWS_ACCESS_KEY_ID={server.access_key}')
+        print(f'export AWS_SECRET_ACCESS_KEY={server.secret_key}')
         print(f'Please run scylla with: --object-storage-config-file {server.config_file}')
         try:
             _ = input('server started. press any key to stop: ')
