@@ -112,13 +112,14 @@ class MinioServer:
             await asyncio.sleep(0.1)
 
         try:
+            alias = 'local'
             self.log_to_file(f'Configuring access to {self.address}:{self.port}')
-            await self.mc('config', 'host', 'rm', 'local', ignore_failure=True)
+            await self.mc('config', 'host', 'rm', alias, ignore_failure=True)
             # wait for the server to be ready when running the first command which should not fail
-            await self.mc('config', 'host', 'add', 'local', f'http://{self.address}:{self.port}', self.default_user, self.default_pass, timeout=30)
+            await self.mc('config', 'host', 'add', alias, f'http://{self.address}:{self.port}', self.default_user, self.default_pass, timeout=30)
             self.log_to_file(f'Configuring bucket {self.bucket_name}')
-            await self.mc('mb', f'local/{self.bucket_name}')
-            await self.mc('anonymous', 'set', 'public', f'local/{self.bucket_name}')
+            await self.mc('mb', f'{alias}/{self.bucket_name}')
+            await self.mc('anonymous', 'set', 'public', f'{alias}/{self.bucket_name}')
 
         except Exception as e:
             self.logger.info(f'MC failed: {e}')
