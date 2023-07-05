@@ -34,7 +34,28 @@ using token = dht::token;
 // Different tablets in subsequent token metadata version can have the same tablet_id.
 // When splitting a tablet, one of the new tablets (in the new token metadata version)
 // will have the same tablet_id as the old one.
-enum class tablet_id : size_t;
+struct tablet_id {
+    size_t id;
+    explicit tablet_id(size_t id) : id(id) {}
+    size_t value() const { return id; }
+    explicit operator size_t() const { return id; }
+    bool operator<=>(const tablet_id&) const = default;
+};
+
+}
+
+namespace std {
+
+template<>
+struct hash<locator::tablet_id> {
+    size_t operator()(const locator::tablet_id& id) const {
+        return std::hash<size_t>()(id.value());
+    }
+};
+
+}
+
+namespace locator {
 
 struct tablet_replica {
     host_id host;

@@ -225,8 +225,8 @@ SEASTAR_TEST_CASE(test_get_shard) {
         auto table1 = table_id(utils::UUID_gen::get_time_UUID());
 
         tablet_metadata tm;
-        tablet_id tid;
-        tablet_id tid1;
+        tablet_id tid(0);
+        tablet_id tid1(0);
 
         {
             tablet_map tmap(2);
