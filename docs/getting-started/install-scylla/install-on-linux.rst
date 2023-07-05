@@ -23,12 +23,8 @@ Prerequisites
   for details about supported versions and architecture)
 * Root or ``sudo`` access to the system
 * Open :ref:`ports used by ScyllaDB <networking-ports>`
-
-Additional requirements for CentOS and RHEL:
-
-* YUM package management tool
-* Removing Automatic Bug Reporting Tool (ABRT) if installed before installing ScyllaDB, as it may
-  conflict with ScyllaDB coredump configuration:
+* (CentOS and RHEL only) Removing Automatic Bug Reporting Tool (ABRT) if installed before installing ScyllaDB, 
+  as it may conflict with ScyllaDB coredump configuration:
 
   .. code-block:: console
 
