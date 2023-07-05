@@ -745,23 +745,25 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
                     total_rows,
                     _buffer_rows);
 
-            BOOST_REQUIRE(current_rows);
+            BOOST_REQUIRE(!mut.partition().empty());
             BOOST_REQUIRE(current_rows <= _max_rows_hard);
             BOOST_REQUIRE(_buffer_rows <= _max_rows_hard);
 
             // The current partition doesn't have all of its rows yet, verify
             // that the new mutation contains the next rows for the same
             // partition
-            if (!_collected_muts.empty() && rows_in_mut(_collected_muts.back()) < _partition_rows.at(_collected_muts.back().decorated_key())) {
-                BOOST_REQUIRE(_collected_muts.back().decorated_key().equal(*mut.schema(), mut.decorated_key()));
-                const auto& previous_ckey = (--_collected_muts.back().partition().clustered_rows().end())->key();
-                const auto& next_ckey = mut.partition().clustered_rows().begin()->key();
-                BOOST_REQUIRE(_less_cmp(previous_ckey, next_ckey));
+            if (!_collected_muts.empty() && _collected_muts.back().decorated_key().equal(*mut.schema(), mut.decorated_key())) {
+                if (rows_in_mut(_collected_muts.back()) && rows_in_mut(mut)) {
+                    const auto& previous_ckey = (--_collected_muts.back().partition().clustered_rows().end())->key();
+                    const auto& next_ckey = mut.partition().clustered_rows().begin()->key();
+                    BOOST_REQUIRE(_less_cmp(previous_ckey, next_ckey));
+                }
                 mutation_application_stats stats;
                 _collected_muts.back().partition().apply(*_schema, mut.partition(), *mut.schema(), stats);
             // The new mutation is a new partition.
             } else {
                 if (!_collected_muts.empty()) {
+                    BOOST_REQUIRE(rows_in_mut(_collected_muts.back()) == _partition_rows.at(_collected_muts.back().decorated_key()));
                     BOOST_REQUIRE(!_collected_muts.back().decorated_key().equal(*mut.schema(), mut.decorated_key()));
                 }
                 _collected_muts.push_back(std::move(mut));
@@ -830,6 +832,8 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
             for (auto ck = 0; ck < partition_size_100kb; ++ck) {
                 mut_desc.add_clustered_cell({int32_type->decompose(data_value(ck))}, "v", tests::data_model::mutation_description::value(blob_100kb));
             }
+            // Reproduces #14503
+            mut_desc.add_range_tombstone(nonwrapping_range<tests::data_model::mutation_description::key>::make_open_ended_both_sides());
             muts.push_back(mut_desc.build(schema));
             partition_rows.emplace(muts.back().decorated_key(), partition_size_100kb);
         }
