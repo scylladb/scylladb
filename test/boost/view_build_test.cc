@@ -770,8 +770,8 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
             , _rl(std::make_unique<row_locker>(_schema))
             , _rl_stats(std::make_unique<row_locker::stats>())
             , _less_cmp(*_schema)
-            , _max_rows_soft(rows_in_limit(db::view::view_updating_consumer::buffer_size_soft_limit))
-            , _max_rows_hard(rows_in_limit(db::view::view_updating_consumer::buffer_size_hard_limit))
+            , _max_rows_soft(rows_in_limit(db::view::view_updating_consumer::buffer_size_soft_limit_default))
+            , _max_rows_hard(rows_in_limit(db::view::view_updating_consumer::buffer_size_hard_limit_default))
             , _ok(ok)
         { }
 

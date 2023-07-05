@@ -2552,9 +2552,6 @@ future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_d
     });
 }
 
-const size_t view_updating_consumer::buffer_size_soft_limit{1 * 1024 * 1024};
-const size_t view_updating_consumer::buffer_size_hard_limit{2 * 1024 * 1024};
-
 void view_updating_consumer::do_flush_buffer() {
     _staging_reader_handle.pause();
 
@@ -2589,7 +2586,7 @@ void view_updating_consumer::end_builder() {
 }
 
 void view_updating_consumer::maybe_flush_buffer_mid_partition() {
-    if (_buffer_size >= buffer_size_hard_limit) {
+    if (_buffer_size >= _buffer_size_hard_limit) {
         flush_builder();
         do_flush_buffer();
     }
