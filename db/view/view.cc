@@ -2570,9 +2570,6 @@ future<bool> check_needs_view_update_path(db::system_distributed_keyspace& sys_d
     });
 }
 
-const size_t view_updating_consumer::buffer_size_soft_limit{1 * 1024 * 1024};
-const size_t view_updating_consumer::buffer_size_hard_limit{2 * 1024 * 1024};
-
 void view_updating_consumer::do_flush_buffer() {
     _staging_reader_handle.pause();
 
@@ -2595,6 +2592,10 @@ void view_updating_consumer::do_flush_buffer() {
 }
 
 void view_updating_consumer::flush_builder() {
+    _buffer.emplace_back(_mut_builder->flush());
+}
+
+void view_updating_consumer::end_builder() {
     _mut_builder->consume_end_of_partition();
     if (auto mut_opt = _mut_builder->consume_end_of_stream()) {
         _buffer.emplace_back(std::move(*mut_opt));
@@ -2603,11 +2604,9 @@ void view_updating_consumer::flush_builder() {
 }
 
 void view_updating_consumer::maybe_flush_buffer_mid_partition() {
-    if (_buffer_size >= buffer_size_hard_limit) {
+    if (_buffer_size >= _buffer_size_hard_limit) {
         flush_builder();
-        auto dk = _buffer.back().decorated_key();
         do_flush_buffer();
-        consume_new_partition(dk);
     }
 }
 
