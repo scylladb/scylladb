@@ -25,8 +25,8 @@
 #include "gc_clock.hh"
 
 // The test can be run on real AWS-S3 bucket. For that, create a bucket with
-// permissive enough policy and then run the test with AWS_S3_EXTRA env set
-// to key:secret:region string. E.g. like this
+// permissive enough policy and then run the test with env set respectively
+// E.g. like this
 //
 //   export S3_SERVER_ADDRESS_FOR_TEST=s3.us-east-2.amazonaws.com
 //   export S3_SERVER_PORT_FOR_TEST=443
@@ -34,7 +34,6 @@
 //   export AWS_ACCESS_KEY_ID=${aws_key}
 //   export AWS_SECRET_ACCESS_KEY=${aws_secret}
 //   export AWS_DEFAULT_REGION="us-east-2"
-//   export AWS_S3_EXTRA="${aws_key}:${aws_secret}:us-east-2"
 
 s3::endpoint_config_ptr make_minio_config() {
     s3::endpoint_config cfg = {
@@ -46,19 +45,6 @@ s3::endpoint_config_ptr make_minio_config() {
             .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
         }},
     };
-    auto extra = ::getenv("AWS_S3_EXTRA");
-    if (extra) {
-        std::vector<std::string> items;
-        boost::split(items, extra, boost::is_any_of(":"));
-        if (items.size() != 3) {
-            throw std::runtime_error("Invalid endpoint format, expected host:port");
-        }
-        testlog.info("Adding AWS configuration to endpoint");
-        cfg.use_https = true;
-        cfg.aws->key = items[0];
-        cfg.aws->secret = items[1];
-        cfg.aws->region = items[2];
-    }
     return make_lw_shared<s3::endpoint_config>(std::move(cfg));
 }
 
