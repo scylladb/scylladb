@@ -7,7 +7,6 @@ The following migration tools are available for migrating to Scylla from Compati
 * From SSTable to SSTable
     - Based on Scylla refresh
     - On a large scale, it requires tooling to upload / transfer files from location to location.
-    - For example, `unirestore <https://github.com/scylladb/field-engineering/tree/master/unirestore>`_: SSTable to SSTable
 * From SSTable to CQL.
     - :doc:`sstableloader</operating-scylla/admin-tools/sstableloader/>`
 * From CQL to CQL
