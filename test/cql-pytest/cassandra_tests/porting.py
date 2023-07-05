@@ -273,6 +273,7 @@ def assert_all_rows(cql, table, *expected):
 # converted to "m__1".
 def assert_column_names(result, *expected):
     assert result.one()._fields == expected
+assertColumnNames = assert_column_names
 
 def flush(cql, table):
     nodetool.flush(cql, table)
