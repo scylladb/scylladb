@@ -17,6 +17,7 @@
 #include "schema/schema_builder.hh"
 
 #include "replica/tablets.hh"
+#include "replica/tablet_mutation_builder.hh"
 #include "locator/tablets.hh"
 #include "service/tablet_allocator.hh"
 #include "locator/tablet_sharder.hh"
@@ -277,6 +278,149 @@ SEASTAR_TEST_CASE(test_get_shard) {
         BOOST_REQUIRE_EQUAL(tmap.get_shard(tid, h2), std::make_optional(shard_id(3)));
         BOOST_REQUIRE_EQUAL(tmap.get_shard(tid, h3), std::make_optional(shard_id(5)));
 
+    }, tablet_cql_test_config());
+}
+
+SEASTAR_TEST_CASE(test_mutation_builder) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+
+        auto table1 = add_table(e).get0();
+
+        tablet_metadata tm;
+        tablet_id tid(0);
+        tablet_id tid1(0);
+
+        {
+            tablet_map tmap(2);
+            tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 0},
+                    tablet_replica {h3, 5},
+                }
+            });
+            tid1 = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid1, tablet_info {
+                tablet_replica_set {
+                    tablet_replica {h1, 2},
+                    tablet_replica {h3, 1},
+                }
+            });
+            tm.set_tablet_map(table1, std::move(tmap));
+        }
+
+        save_tablet_metadata(e.local_db(), tm, next_timestamp++).get();
+
+        {
+            tablet_mutation_builder b(next_timestamp++, "ks", table1);
+            auto last_token = tm.get_tablet_map(table1).get_last_token(tid1);
+            b.set_new_replicas(last_token, tablet_replica_set {
+                    tablet_replica {h1, 2},
+                    tablet_replica {h2, 3},
+            });
+            b.set_stage(last_token, tablet_transition_stage::write_both_read_new);
+            e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
+        }
+
+        {
+            tablet_map expected_tmap(2);
+            tid = expected_tmap.first_tablet();
+            expected_tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {h1, 0},
+                            tablet_replica {h3, 5},
+                    }
+            });
+            tid1 = *expected_tmap.next_tablet(tid);
+            expected_tmap.set_tablet(tid1, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {h1, 2},
+                            tablet_replica {h3, 1},
+                    }
+            });
+            expected_tmap.set_tablet_transition_info(tid1, tablet_transition_info {
+                    tablet_transition_stage::write_both_read_new,
+                    tablet_replica_set {
+                            tablet_replica {h1, 2},
+                            tablet_replica {h2, 3},
+                    },
+                    tablet_replica {h2, 3}
+            });
+
+            auto tm_from_disk = read_tablet_metadata(e.local_qp()).get0();
+            BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
+        }
+
+        {
+            tablet_mutation_builder b(next_timestamp++, "ks", table1);
+            auto last_token = tm.get_tablet_map(table1).get_last_token(tid1);
+            b.set_stage(last_token, tablet_transition_stage::use_new);
+            e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
+        }
+
+        {
+            tablet_map expected_tmap(2);
+            tid = expected_tmap.first_tablet();
+            expected_tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {h1, 0},
+                            tablet_replica {h3, 5},
+                    }
+            });
+            tid1 = *expected_tmap.next_tablet(tid);
+            expected_tmap.set_tablet(tid1, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {h1, 2},
+                            tablet_replica {h3, 1},
+                    }
+            });
+            expected_tmap.set_tablet_transition_info(tid1, tablet_transition_info {
+                    tablet_transition_stage::use_new,
+                    tablet_replica_set {
+                            tablet_replica {h1, 2},
+                            tablet_replica {h2, 3},
+                    },
+                    tablet_replica {h2, 3}
+            });
+
+            auto tm_from_disk = read_tablet_metadata(e.local_qp()).get0();
+            BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
+        }
+
+        {
+            tablet_mutation_builder b(next_timestamp++, "ks", table1);
+            auto last_token = tm.get_tablet_map(table1).get_last_token(tid1);
+            b.set_replicas(last_token, tablet_replica_set {
+                tablet_replica {h1, 2},
+                tablet_replica {h2, 3},
+            });
+            b.del_transition(last_token);
+            e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
+        }
+
+        {
+            tablet_map expected_tmap(2);
+            tid = expected_tmap.first_tablet();
+            expected_tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {h1, 0},
+                            tablet_replica {h3, 5},
+                    }
+            });
+            tid1 = *expected_tmap.next_tablet(tid);
+            expected_tmap.set_tablet(tid1, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {h1, 2},
+                            tablet_replica {h2, 3},
+                    }
+            });
+
+            auto tm_from_disk = read_tablet_metadata(e.local_qp()).get0();
+            BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
+        }
     }, tablet_cql_test_config());
 }
 

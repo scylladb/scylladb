@@ -15,6 +15,7 @@
 #include "cql3/untyped_result_set.hh"
 #include "replica/database.hh"
 #include "replica/tablets.hh"
+#include "replica/tablet_mutation_builder.hh"
 
 namespace replica {
 
@@ -41,23 +42,23 @@ schema_ptr make_tablets_schema() {
             .build();
 }
 
+static
+std::vector<data_value> replicas_to_data_value(const tablet_replica_set& replicas) {
+    std::vector<data_value> result;
+    result.reserve(replicas.size());
+    for (auto&& replica : replicas) {
+        result.emplace_back(make_tuple_value(replica_type, {
+                data_value(utils::UUID(replica.host.uuid())),
+                data_value(int(replica.shard))
+        }));
+    }
+    return result;
+};
+
 future<mutation>
 tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& keyspace_name, const sstring& table_name,
                        api::timestamp_type ts) {
     auto s = db::system_keyspace::tablets();
-
-    auto replicas_to_data_value = [&] (const tablet_replica_set& replicas) {
-        std::vector<data_value> result;
-        result.reserve(replicas.size());
-        for (auto&& replica : replicas) {
-            result.emplace_back(make_tuple_value(replica_type, {
-                data_value(utils::UUID(replica.host.uuid())),
-                data_value(int(replica.shard))
-            }));
-        }
-        return result;
-    };
-
     auto gc_now = gc_clock::now();
     auto tombstone_ts = ts - 1;
 
@@ -82,6 +83,34 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
         co_await coroutine::maybe_yield();
     }
     co_return std::move(m);
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::set_new_replicas(dht::token last_token, locator::tablet_replica_set replicas) {
+    _m.set_clustered_cell(get_ck(last_token), "new_replicas", make_set_value(replica_set_type, replicas_to_data_value(replicas)), _ts);
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::set_replicas(dht::token last_token, locator::tablet_replica_set replicas) {
+    _m.set_clustered_cell(get_ck(last_token), "replicas", make_set_value(replica_set_type, replicas_to_data_value(replicas)), _ts);
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::set_stage(dht::token last_token, locator::tablet_transition_stage stage) {
+    _m.set_clustered_cell(get_ck(last_token), "stage", data_value(tablet_transition_stage_to_string(stage)), _ts);
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::del_transition(dht::token last_token) {
+    auto ck = get_ck(last_token);
+    auto stage_col = _s->get_column_definition("stage");
+    _m.set_clustered_cell(ck, *stage_col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    auto new_replicas_col = _s->get_column_definition("new_replicas");
+    _m.set_clustered_cell(ck, *new_replicas_col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    return *this;
 }
 
 mutation make_drop_tablet_map_mutation(const sstring& keyspace_name, table_id id, api::timestamp_type ts) {
