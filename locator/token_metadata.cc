@@ -85,6 +85,7 @@ private:
     void sort_tokens();
 
     const tablet_metadata& tablets() const { return _tablets; }
+    tablet_metadata& tablets() { return _tablets; }
 
     void set_tablets(tablet_metadata&& tablets) {
         _tablets = std::move(tablets);
@@ -402,6 +403,10 @@ void token_metadata_impl::sort_tokens() {
 }
 
 const tablet_metadata& token_metadata::tablets() const {
+    return _impl->tablets();
+}
+
+tablet_metadata& token_metadata::tablets() {
     return _impl->tablets();
 }
 
