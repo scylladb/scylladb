@@ -160,8 +160,6 @@ public:
         return _hints_batchlog_flushed;
     }
 
-    future<> repair_range(const dht::token_range& range, table_info table);
-
     size_t ranges_size();
 protected:
     future<> do_repair_ranges();
@@ -189,6 +187,8 @@ public:
         , _range(range)
         , _table_id(table.id)
     {}
+
+    future<> repair_range();
 
     table_info get_table_info() const noexcept {
         return table_info{
