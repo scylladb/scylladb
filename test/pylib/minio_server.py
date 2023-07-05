@@ -55,6 +55,30 @@ class MinioServer:
         self.log_file.write('\n'.encode())
         self.log_file.flush()
 
+    async def mc(self, *args, ignore_failure=False, timeout=0):
+        retry_until: float = time.time() + timeout
+        retry_step: float = 0.1
+        cmd = ['mc',
+               '--debug',
+               '--config-dir', self.mcdir]
+        cmd.extend(args)
+
+        while True:
+            try:
+                subprocess.check_call(cmd, stdout=self.log_file, stderr=self.log_file)
+            except subprocess.CalledProcessError:
+                if ignore_failure:
+                    self.log_to_file('ignoring')
+                    break
+                command = ' '.join(args)
+                self.log_to_file(f'failed to run "mc {command}"')
+                if time.time() >= retry_until:
+                    raise
+                self.log_to_file(f'retry after {retry_step} seconds')
+                await asyncio.sleep(retry_step)
+            else:
+                break
+
     async def start(self):
         if self.srv_exe is None:
             self.logger.info("Minio not installed, get it from https://dl.minio.io/server/minio/release/linux-amd64/minio and put into PATH")
@@ -88,18 +112,15 @@ class MinioServer:
             await asyncio.sleep(0.1)
 
         try:
+            alias = 'local'
             self.log_to_file(f'Configuring access to {self.address}:{self.port}')
-            try:
-                subprocess.check_call(['mc', '--debug', '-C', self.mcdir, 'config', 'host', 'rm', 'local'], stdout=self.log_file, stderr=self.log_file)
-            except:
-                self.log_to_file('Failed to remove local alias, ignoring')
-                pass
-
-            subprocess.check_call(['mc', '--debug', '-C', self.mcdir, 'config', 'host', 'add', 'local', f'http://{self.address}:{self.port}', self.default_user, self.default_pass], stdout=self.log_file, stderr=self.log_file)
-
+            await self.mc('config', 'host', 'rm', alias, ignore_failure=True)
+            # wait for the server to be ready when running the first command which should not fail
+            await self.mc('config', 'host', 'add', alias, f'http://{self.address}:{self.port}', self.default_user, self.default_pass, timeout=30)
             self.log_to_file(f'Configuring bucket {self.bucket_name}')
-            subprocess.check_call(['mc', '--debug', '-C', self.mcdir, 'mb', f'local/{self.bucket_name}'], stdout=self.log_file, stderr=self.log_file)
-            subprocess.check_call(['mc', '--debug', '-C', self.mcdir, 'anonymous', 'set', 'public', f'local/{self.bucket_name}'], stdout=self.log_file, stderr=self.log_file)
+            await self.mc('mb', f'{alias}/{self.bucket_name}')
+            await self.mc('anonymous', 'set', 'public', f'{alias}/{self.bucket_name}')
+
         except Exception as e:
             self.logger.info(f'MC failed: {e}')
             await self.stop()
