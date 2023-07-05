@@ -66,7 +66,7 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                 auto source_reader = partition_nr > 0 ? make_flat_mutation_reader_from_mutations_v2(gen.schema(), make_reader_permit(e), muts) : make_empty_flat_reader_v2(s, make_reader_permit(e));
                 auto close_source_reader = deferred_close(source_reader);
                 auto& sharder = s->get_sharder();
-                size_t partitions_received = distribute_reader_and_consume_on_shards(s,
+                size_t partitions_received = distribute_reader_and_consume_on_shards(s, sharder,
                     std::move(source_reader),
                     [&sharder, &shards_after, error] (flat_mutation_reader_v2 reader) mutable {
                         if (error) {
@@ -137,7 +137,7 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
             };
             auto& sharder = s->get_sharder();
             try {
-                distribute_reader_and_consume_on_shards(s,
+                distribute_reader_and_consume_on_shards(s, sharder,
                     make_generating_reader_v2(s, make_reader_permit(e), std::move(get_next_mutation_fragment)),
                     [&sharder, error] (flat_mutation_reader_v2 reader) mutable {
                         if (error) {

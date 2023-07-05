@@ -166,13 +166,15 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
           try {
             // Make sure the table with cf_id is still present at this point.
             // Close the sink in case the table is dropped.
-            auto op = _db.local().find_column_family(cf_id).stream_in_progress();
+            auto& table = _db.local().find_column_family(cf_id);
+            auto erm = table.get_effective_replication_map();
+            auto op = table.stream_in_progress();
             //FIXME: discarded future.
-            (void)mutation_writer::distribute_reader_and_consume_on_shards(s,
+            (void)mutation_writer::distribute_reader_and_consume_on_shards(s, erm->get_sharder(*s),
                 make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment)),
                 make_streaming_consumer("streaming", _db, _sys_dist_ks, _view_update_generator, estimated_partitions, reason, is_offstrategy_supported(reason)),
                 std::move(op)
-            ).then_wrapped([s, plan_id, from, sink, estimated_partitions] (future<uint64_t> f) mutable {
+            ).then_wrapped([s, plan_id, from, sink, estimated_partitions, erm] (future<uint64_t> f) mutable {
                 int32_t status = 0;
                 uint64_t received_partitions = 0;
                 if (f.failed()) {
