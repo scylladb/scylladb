@@ -31,11 +31,20 @@
 //   export S3_SERVER_ADDRESS_FOR_TEST=s3.us-east-2.amazonaws.com
 //   export S3_SERVER_PORT_FOR_TEST=443
 //   export S3_BUCKET_FOR_TEST=xemul
+//   export AWS_ACCESS_KEY_ID=${aws_key}
+//   export AWS_SECRET_ACCESS_KEY=${aws_secret}
+//   export AWS_DEFAULT_REGION="us-east-2"
 //   export AWS_S3_EXTRA="${aws_key}:${aws_secret}:us-east-2"
 
 s3::endpoint_config_ptr make_minio_config() {
     s3::endpoint_config cfg = {
         .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
+        .use_https = ::getenv("AWS_DEFAULT_REGION") != nullptr,
+        .aws = {{
+            .key = tests::getenv_safe("AWS_ACCESS_KEY_ID"),
+            .secret = tests::getenv_safe("AWS_SECRET_ACCESS_KEY"),
+            .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
+        }},
     };
     auto extra = ::getenv("AWS_S3_EXTRA");
     if (extra) {
@@ -46,7 +55,6 @@ s3::endpoint_config_ptr make_minio_config() {
         }
         testlog.info("Adding AWS configuration to endpoint");
         cfg.use_https = true;
-        cfg.aws.emplace();
         cfg.aws->key = items[0];
         cfg.aws->secret = items[1];
         cfg.aws->region = items[2];

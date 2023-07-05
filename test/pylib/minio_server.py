@@ -22,6 +22,7 @@ import time
 import tempfile
 import socket
 import yaml
+import json
 import random
 import string
 from io import BufferedWriter
@@ -33,6 +34,7 @@ class MinioServer:
     ENV_BUCKET = 'S3_BUCKET_FOR_TEST'
     ENV_ACCESS_KEY = 'AWS_ACCESS_KEY_ID'
     ENV_SECRET_KEY = 'AWS_SECRET_ACCESS_KEY'
+    DEFAULT_REGION = 'local'
 
     log_file: BufferedWriter
 
@@ -93,7 +95,7 @@ class MinioServer:
             else:
                 break
 
-    def _anonymous_public_policy(self):
+    def _bucket_policy(self):
         # the default anonymous public policy does not allow us to access
         # the taggings, so let's add the tagging actions manually.
         #
@@ -148,10 +150,14 @@ class MinioServer:
             yield random.randint(min_port, max_port)
 
     @staticmethod
-    def create_conf_file(address: str, port: int, path: str):
+    def create_conf_file(address: str, port: int, acc_key: str, secret_key: str, region: str, path: str):
         with open(path, 'w', encoding='ascii') as config_file:
             endpoint = {'name': address,
-                        'port': port}
+                        'port': port,
+                        'aws_key': acc_key,
+                        'aws_secret': secret_key,
+                        'aws_region': region,
+                        }
             yaml.dump({'endpoints': [endpoint]}, config_file)
 
     async def _run_server(self, port):
@@ -199,7 +205,7 @@ class MinioServer:
             self.logger.info("Failed to start Minio server")
             return
 
-        self.create_conf_file(self.address, self.port, self.config_file)
+        self.create_conf_file(self.address, self.port, self.access_key, self.secret_key, self.DEFAULT_REGION, self.config_file)
         os.environ[self.ENV_CONFFILE] = f'{self.config_file}'
         os.environ[self.ENV_ADDRESS] = f'{self.address}'
         os.environ[self.ENV_PORT] = f'{self.port}'
@@ -218,9 +224,10 @@ class MinioServer:
             self.log_to_file(f'Configuring bucket {self.bucket_name}')
             await self.mc('mb', f'{alias}/{self.bucket_name}')
             with tempfile.NamedTemporaryFile(mode='w', encoding='UTF-8', suffix='.json') as policy_file:
-                json.dump(self._anonymous_public_policy(), policy_file, indent=2)
+                json.dump(self._bucket_policy(), policy_file, indent=2)
                 policy_file.flush()
-                await self.mc('anonymous', 'set-json', policy_file.name, f'{alias}/{self.bucket_name}')
+                await self.mc('admin', 'policy', 'create', alias, 'test-policy', policy_file.name)
+            await self.mc('admin', 'policy', 'attach', alias, 'test-policy', '--user', self.access_key)
 
         except Exception as e:
             self.logger.info(f'MC failed: {e}')
