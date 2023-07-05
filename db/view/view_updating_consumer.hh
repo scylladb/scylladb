@@ -33,8 +33,17 @@ public:
     // We prefer flushing on partition boundaries, so at the end of a partition,
     // we flush on reaching the soft limit. Otherwise we continue accumulating
     // data. We flush mid-partition if we reach the hard limit.
-    static const size_t buffer_size_soft_limit;
-    static const size_t buffer_size_hard_limit;
+    static constexpr size_t buffer_size_soft_limit_default = 1 * 1024 * 1024;
+    static constexpr size_t buffer_size_hard_limit_default = 2 * 1024 * 1024;
+private:
+    size_t _buffer_size_soft_limit = buffer_size_soft_limit_default;
+    size_t _buffer_size_hard_limit = buffer_size_hard_limit_default;
+public:
+    // Meant only for usage in tests.
+    void set_buffer_size_limit_for_testing_purposes(size_t sz) {
+        _buffer_size_soft_limit = sz;
+        _buffer_size_hard_limit = sz;
+    }
 
 private:
     schema_ptr _schema;
@@ -115,7 +124,7 @@ public:
             return stop_iteration::yes;
         }
         end_builder();
-        if (_buffer_size >= buffer_size_soft_limit) {
+        if (_buffer_size >= _buffer_size_soft_limit) {
             do_flush_buffer();
         }
         return stop_iteration::no;
