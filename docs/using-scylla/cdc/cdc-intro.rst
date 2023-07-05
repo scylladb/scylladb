@@ -82,6 +82,7 @@ The following libraries are available:
 
 * `Go <https://github.com/scylladb/scylla-cdc-go>`_
 * `Java <https://github.com/scylladb/scylla-cdc-java>`_
+* `Rust <https://github.com/scylladb/scylla-cdc-rust>`_
 
 More information
 ----------------

@@ -25,7 +25,7 @@ With the above approach you can, for instance, build a distributed CDC consumer,
 
    If you use CDC in Scylla 4.3 and your application is constantly querying CDC log tables and using the old description table to learn about new generations and stream IDs, you should upgrade your application before upgrading to 4.4. The upgraded application should dynamically switch from using the old description table to the new description tables when the cluster is upgraded from 4.3 to 4.4. We present an example algorithm that the application can perform in the last section.
 
-   We highly recommend using the newest releases of our client CDC libraries (`Java CDC library <https://github.com/scylladb/scylla-cdc-java>`_, `Go CDC library <https://github.com/scylladb/scylla-cdc-go>`_). They take care of correctly querying the stream description tables and they handle the upgrade procedure for you.
+   We highly recommend using the newest releases of our client CDC libraries (`Java CDC library <https://github.com/scylladb/scylla-cdc-java>`_, `Go CDC library <https://github.com/scylladb/scylla-cdc-go>`_, `Rust CDC library <https://github.com/scylladb/scylla-cdc-rust>`_). They take care of correctly querying the stream description tables and they handle the upgrade procedure for you.
 
 Learning about available streams
 --------------------------------
@@ -216,4 +216,4 @@ You may also decide that it's safe to switch to the new tables even though not a
 Note that after upgrading the cluster to 4.4, all new generations (which are created when bootstrapping new nodes) appear only in the new tables. After upgrading your application and your cluster, and ensuring that either all generations have been rewritten to the new tables or that you're not interested in the data from old generations, it is safe to remove the old description table.
 
 .. note::
-   We highly recommend using the newest releases of our client CDC libraries (`Java CDC library <https://github.com/scylladb/scylla-cdc-java>`_, `Go CDC library <https://github.com/scylladb/scylla-cdc-go>`_). They take care of correctly querying the stream description tables and they handle the upgrade procedure for you.
+   We highly recommend using the newest releases of our client CDC libraries (`Java CDC library <https://github.com/scylladb/scylla-cdc-java>`_, `Go CDC library <https://github.com/scylladb/scylla-cdc-go>`_, `Rust CDC library <https://github.com/scylladb/scylla-cdc-rust>`_). They take care of correctly querying the stream description tables and they handle the upgrade procedure for you.
