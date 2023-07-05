@@ -15,3 +15,12 @@ Although optimized for ScyllaDB, the driver is also compatible with Apache Cassa
 **To download and install the driver**, visit the `Github project <https://github.com/scylladb/scylla-rust-driver>`_.
 
 Read the `Documentation <https://rust-driver.docs.scylladb.com>`_.
+
+Using CDC with Rust
+----------------------
+
+When writing applications, you can use ScyllaDB's `Rust CDC Library <https://github.com/scylladb/scylla-cdc-rust>`_ 
+to simplify writing applications that read from ScyllaDB's CDC.
+
+Use `Rust CDC Library <https://github.com/scylladb/scylla-cdc-rust>`_ to read 
+:doc:`ScyllaDB's CDC </using-scylla/cdc/index>` update streams.
