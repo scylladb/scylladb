@@ -12,6 +12,7 @@ For more information, please see the [ScyllaDB web site].
 
 [ScyllaDB web site]: https://www.scylladb.com
 
+TEST
 ## Build Prerequisites
 
 Scylla is fairly fussy about its build environment, requiring very recent
