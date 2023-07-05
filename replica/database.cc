@@ -1302,8 +1302,10 @@ keyspace::create_replication_strategy(const locator::shared_token_metadata& stm,
             abstract_replication_strategy::create_replication_strategy(
                 _metadata->strategy_name(), options);
     rslogger.debug("replication strategy for keyspace {} is {}, opts={}", _metadata->name(), _metadata->strategy_name(), options);
-    auto erm = co_await _erm_factory.create_effective_replication_map(_replication_strategy, stm.get());
-    update_effective_replication_map(std::move(erm));
+    if (!_replication_strategy->is_per_table()) {
+        auto erm = co_await _erm_factory.create_effective_replication_map(_replication_strategy, stm.get());
+        update_effective_replication_map(std::move(erm));
+    }
 }
 
 void
