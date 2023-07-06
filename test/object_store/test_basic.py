@@ -14,10 +14,11 @@ import pytest
 from contextlib import contextmanager
 
 def get_scylla_with_s3_cmd(tempdir, ssl, s3_server):
-    '''return the command args and environmental variables for running scylla'''
+    '''return a function which in turn returns the command for running scylla'''
     scylla = run.find_scylla()
     print('Scylla under test:', scylla)
     def make_run_cmd(pid, d):
+        '''return the command args and environmental variables for running scylla'''
         if ssl:
             cmd, env = run.run_scylla_ssl_cql_cmd(pid, d)
         else:
@@ -81,7 +82,10 @@ def kill_with_dir(old_pid, run_dir):
 
 @contextmanager
 def managed_cluster(run_dir, ssl, s3_server):
-    '''return scylla's pid, IP and a connection to it'''
+    # launch a one-node scylla cluster which uses the give s3_server as its
+    # object storage backend, it yields an instance of cassandra.Cluster
+    # referencing this cluster. before this function returns, the cluster is
+    # teared down.
     run_scylla_cmd = get_scylla_with_s3_cmd(run_dir, ssl, s3_server)
     pid = run_with_dir(run_scylla_cmd, run_dir)
     ip = run.pid_to_ip(pid)
