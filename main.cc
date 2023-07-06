@@ -1206,7 +1206,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 fd.stop().get();
             });
 
-            raft_gr.start(cfg->consistent_cluster_management(),
+            raft_gr.start(cfg->consistent_cluster_management(), raft::server_id{cfg->host_id.id},
                 std::ref(raft_address_map), std::ref(messaging), std::ref(gossiper), std::ref(fd)).get();
 
             // group0 client exists only on shard 0.
@@ -1317,10 +1317,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     startlog.error("Bad configuration: consistent_cluster_management requires schema commit log to be enabled");
                     throw bad_configuration_error();
                 }
-                auto my_raft_id = raft::server_id{cfg->host_id.uuid()};
                 supervisor::notify("starting Raft Group Registry service");
-                raft_gr.invoke_on_all([my_raft_id] (service::raft_group_registry& raft_gr) {
-                    return raft_gr.start(my_raft_id);
+                raft_gr.invoke_on_all([] (service::raft_group_registry& raft_gr) {
+                    return raft_gr.start();
                 }).get();
             } else {
                 if (cfg->check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {

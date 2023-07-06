@@ -792,7 +792,9 @@ public:
             });
 
             raft_gr.start(cfg->consistent_cluster_management(),
-                std::ref(raft_address_map), std::ref(ms), std::ref(gossiper), std::ref(fd)).get();
+                raft::server_id{cfg->host_id.id},
+                std::ref(raft_address_map),
+                std::ref(ms), std::ref(gossiper), std::ref(fd)).get();
             auto stop_raft_gr = deferred_stop(raft_gr);
 
             stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(sys_dist_ks), std::ref(view_update_generator), std::ref(ms), std::ref(mm), std::ref(gossiper), scheduling_groups.streaming_scheduling_group).get();
@@ -865,9 +867,8 @@ public:
             }).get();
 
             if (raft_gr.local().is_enabled()) {
-                auto my_raft_id = raft::server_id{cfg->host_id.uuid()};
-                raft_gr.invoke_on_all([my_raft_id] (service::raft_group_registry& raft_gr) {
-                    return raft_gr.start(my_raft_id);
+                raft_gr.invoke_on_all([] (service::raft_group_registry& raft_gr) {
+                    return raft_gr.start();
                 }).get();
             }
 
