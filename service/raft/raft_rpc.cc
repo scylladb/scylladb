@@ -27,8 +27,8 @@ raft_ticker_type::time_point timeout() {
 }
 
 raft_rpc::raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
-        raft_address_map& address_map, raft::group_id gid, raft::server_id srv_id)
-    : _sm(sm), _group_id(std::move(gid)), _server_id(srv_id), _messaging(ms)
+        raft_address_map& address_map, raft::group_id gid, raft::server_id my_id)
+    : _sm(sm), _group_id(std::move(gid)), _my_id(my_id), _messaging(ms)
     , _address_map(address_map)
 {}
 
@@ -43,7 +43,7 @@ raft_rpc::one_way_rpc(sloc loc, raft::server_id id,
                 loc.file_name(), loc.line(), loc.function_name(), id);
             return make_ready_future<>();
         }
-        return verb(&_messaging, netw::msg_addr(*ip_addr), timeout(), _group_id, _server_id, id, std::forward<Msg>(msg))
+        return verb(&_messaging, netw::msg_addr(*ip_addr), timeout(), _group_id, _my_id, id, std::forward<Msg>(msg))
             .handle_exception([loc = std::move(loc), id] (std::exception_ptr ex) {
                 try {
                     std::rethrow_exception(ex);
@@ -61,13 +61,13 @@ auto
 raft_rpc::two_way_rpc(sloc loc, raft::server_id id,
         Verb&& verb, Args&&... args) {
     auto ip_addr = _address_map.find(id);
-    using Fut = decltype(verb(&_messaging, netw::msg_addr(*ip_addr), db::no_timeout, _group_id, _server_id, id, std::forward<Args>(args)...));
+    using Fut = decltype(verb(&_messaging, netw::msg_addr(*ip_addr), db::no_timeout, _group_id, _my_id, id, std::forward<Args>(args)...));
     using Ret = typename Fut::value_type;
     if (!ip_addr) {
         const auto msg = format("Failed to send {} {}: ip address not found", loc.function_name(), id);
         return make_exception_future<Ret>(raft::transport_error(msg));
     }
-    return verb(&_messaging, netw::msg_addr(*ip_addr), db::no_timeout, _group_id, _server_id, id, std::forward<Args>(args)...)
+    return verb(&_messaging, netw::msg_addr(*ip_addr), db::no_timeout, _group_id, _my_id, id, std::forward<Args>(args)...)
         .handle_exception_type([loc= std::move(loc), id] (const seastar::rpc::closed_error& e) {;
             const auto msg = format("Failed to execute {} on leader {}: {}", loc.function_name(), id, e);
             rlogger.trace(std::string_view(msg));
@@ -86,7 +86,7 @@ future<> raft_rpc::send_append_entries(raft::server_id id, const raft::append_re
         co_await coroutine::return_exception_ptr(std::make_exception_ptr(raft::transport_error(msg)));
     }
     co_return co_await ser::raft_rpc_verbs::send_raft_append_entries(&_messaging, netw::msg_addr(*ip_addr),
-            db::no_timeout, _group_id, _server_id, id, append_request);
+            db::no_timeout, _group_id, _my_id, id, append_request);
 }
 
 void raft_rpc::send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) {
