@@ -1594,6 +1594,7 @@ future<> topology_coordinator::run() {
     });
 
     while (!_as.abort_requested()) {
+        bool sleep = false;
         try {
             auto guard = co_await start_operation();
             co_await cleanup_group0_config_if_needed();
@@ -1615,6 +1616,10 @@ future<> topology_coordinator::run() {
             slogger.debug("raft topology: topology change coordinator fiber notices term change {} -> {}", _term, _raft.get_current_term());
         } catch (...) {
             slogger.error("raft topology: topology change coordinator fiber got error {}", std::current_exception());
+            sleep = true;
+        }
+        if (sleep) {
+            co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
         }
         co_await coroutine::maybe_yield();
     }
