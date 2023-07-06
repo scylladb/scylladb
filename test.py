@@ -1440,7 +1440,7 @@ def summarize_tests(tests):
         test.insert(0, message)
 
         message = ET.Element('Info', file=test.attrib['file'], line=test.attrib['line'])
-        message.text = f'{num_failed} out of {num_total} times failed: failed.'
+        message.text = f'{num_failed} out of {num_total} times failed.'
         test.insert(0, message)
     return test
 
