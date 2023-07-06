@@ -114,7 +114,6 @@ returns
 Additional Information
 ----------------------
 
-* :doc:`Consistency Level Calculator <consistency-calculator>`
 * :doc:`Fault Tolerance </architecture/architecture-fault-tolerance/>`
 * :doc:`Cluster membership changes and LWT consistency </operating-scylla/procedures/cluster-management/membership-changes/>`
 * :ref:`Consistency Level Compatibility <consistency-level-read-and-write>`

@@ -9,7 +9,6 @@ CQL Reference
    appendices
    compaction
    consistency
-   consistency-calculator
    ddl
    dml
    types
@@ -40,7 +39,6 @@ It allows you to create keyspaces and tables, insert and query tables, and more.
   * :doc:`Appendices </cql/appendices>`
   * :doc:`Compaction </cql/compaction>`
   * :doc:`Consistency Levels </cql/consistency>`
-  * :doc:`Consistency Levels Calculator</cql/consistency-calculator>`
   * :doc:`Data Definition </cql/ddl>`
   * :doc:`Data Manipulation </cql/dml>`
   * :doc:`Data Types </cql/types>`
