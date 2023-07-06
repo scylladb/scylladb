@@ -59,6 +59,30 @@
          ]
       },
       {
+         "path":"/v2/error_injection/injection/{injection}/message",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Send message to trigger an event in injection's code",
+               "type":"void",
+               "nickname":"message_injection",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"injection",
+                     "description":"injection name, should correspond to an injection added in code",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/v2/error_injection/injection",
          "operations":[
             {

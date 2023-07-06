@@ -52,6 +52,13 @@ void set_error_injection(http_context& ctx, routes& r) {
         });
     });
 
+    hf::message_injection.set(r, [](std::unique_ptr<request> req) {
+        sstring injection = req->param["injection"];
+        auto& errinj = utils::get_local_injector();
+        return errinj.receive_message_on_all(injection).then([] {
+            return make_ready_future<json::json_return_type>(json::json_void());
+        });
+    });
 }
 
 } // namespace api
