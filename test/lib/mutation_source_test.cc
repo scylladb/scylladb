@@ -968,13 +968,13 @@ void test_mutation_reader_fragments_have_monotonic_positions(tests::reader_concu
     });
 }
 
-static void test_date_tiered_clustering_slicing(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
+static void test_time_window_clustering_slicing(tests::reader_concurrency_semaphore_wrapper& semaphore, populate_fn_ex populate) {
     testlog.info(__PRETTY_FUNCTION__);
 
     simple_schema ss;
 
     auto s = schema_builder(ss.schema())
-        .set_compaction_strategy(sstables::compaction_strategy_type::date_tiered)
+        .set_compaction_strategy(sstables::compaction_strategy_type::time_window)
         .build();
 
     auto pkey = ss.make_pkey();
@@ -1601,7 +1601,7 @@ void run_mutation_reader_tests(populate_fn_ex populate, bool with_partition_rang
 
     test_range_tombstones_v2(semaphore, populate);
     test_reader_conversions(semaphore, populate);
-    test_date_tiered_clustering_slicing(semaphore, populate);
+    test_time_window_clustering_slicing(semaphore, populate);
     test_clustering_slices(semaphore, populate);
     test_mutation_reader_fragments_have_monotonic_positions(semaphore, populate);
     test_streamed_mutation_forwarding_across_range_tombstones(semaphore, populate);

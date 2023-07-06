@@ -445,24 +445,6 @@ std::optional<sstring> check_restricted_table_properties(
     // Evaluate whether the strategy to evaluate was explicitly passed
     auto cs = (strategy) ? strategy : current_strategy;
 
-    if (strategy && *strategy == sstables::compaction_strategy_type::date_tiered) {
-        switch(qp.db().get_config().restrict_dtcs()) {
-        case db::tri_mode_restriction_t::mode::TRUE:
-            throw exceptions::configuration_exception(
-                "DateTieredCompactionStrategy is deprecated, and "
-                "forbidden by the current configuration. Please use "
-                "TimeWindowCompactionStrategy instead. You may also override this "
-                "restriction by setting the restrict_dtcs configuration option "
-                "to false.");
-        case db::tri_mode_restriction_t::mode::WARN:
-            return format("DateTieredCompactionStrategy is deprecated, "
-                "but was used for table {}.{}. The restrict_dtcs "
-                "configuration option can be changed to silence this warning "
-                " or make it into an error.", keyspace, table);
-        case db::tri_mode_restriction_t::mode::FALSE:
-            break;
-        }
-    }
     if (cs == sstables::compaction_strategy_type::time_window) {
         std::map<sstring, sstring> options = (strategy) ? cfprops.get_compaction_type_options() : (*schema)->compaction_strategy_options();
         sstables::time_window_compaction_strategy_options twcs_options(options);

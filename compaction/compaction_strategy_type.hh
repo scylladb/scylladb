@@ -14,7 +14,6 @@ enum class compaction_strategy_type {
     null,
     size_tiered,
     leveled,
-    date_tiered,
     time_window,
 };
 

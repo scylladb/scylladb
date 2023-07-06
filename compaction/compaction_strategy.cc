@@ -24,7 +24,6 @@
 #include <boost/range/adaptors.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "size_tiered_compaction_strategy.hh"
-#include "date_tiered_compaction_strategy.hh"
 #include "leveled_compaction_strategy.hh"
 #include "time_window_compaction_strategy.hh"
 #include "backlog_controller.hh"
@@ -32,7 +31,6 @@
 #include "size_tiered_backlog_tracker.hh"
 #include "leveled_manifest.hh"
 
-logging::logger date_tiered_manifest::logger = logging::logger("DateTieredCompactionStrategy");
 logging::logger leveled_manifest::logger("LeveledManifest");
 
 namespace sstables {
@@ -499,194 +497,7 @@ std::unique_ptr<compaction_backlog_tracker::impl> time_window_compaction_strateg
 
 } // namespace sstables
 
-std::vector<sstables::shared_sstable>
-date_tiered_manifest::get_next_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& uncompacting, gc_clock::time_point compaction_time) {
-    if (table_s.main_sstable_set().all()->empty()) {
-        return {};
-    }
-
-    // Find fully expired SSTables. Those will be included no matter what.
-    auto expired = table_s.fully_expired_sstables(uncompacting, compaction_time);
-
-    if (!expired.empty()) {
-        auto is_expired = [&] (const sstables::shared_sstable& s) { return expired.contains(s); };
-        uncompacting.erase(boost::remove_if(uncompacting, is_expired), uncompacting.end());
-    }
-
-    auto compaction_candidates = get_next_non_expired_sstables(table_s, uncompacting, compaction_time);
-    if (!expired.empty()) {
-        compaction_candidates.insert(compaction_candidates.end(), expired.begin(), expired.end());
-    }
-    return compaction_candidates;
-}
-
-int64_t date_tiered_manifest::get_estimated_tasks(table_state& table_s) const {
-    int base = table_s.schema()->min_compaction_threshold();
-    int64_t now = get_now(table_s.main_sstable_set().all());
-    std::vector<sstables::shared_sstable> sstables;
-    int64_t n = 0;
-
-    auto all_sstables = table_s.main_sstable_set().all();
-    sstables.reserve(all_sstables->size());
-    for (auto& entry : *all_sstables) {
-        sstables.push_back(entry);
-    }
-    auto candidates = filter_old_sstables(sstables, _options.max_sstable_age, now);
-    auto buckets = get_buckets(create_sst_and_min_timestamp_pairs(candidates), _options.base_time, base, now);
-
-    for (auto& bucket : buckets) {
-        if (bucket.size() >= size_t(table_s.schema()->min_compaction_threshold())) {
-            n += std::ceil(double(bucket.size()) / table_s.schema()->max_compaction_threshold());
-        }
-    }
-    return n;
-}
-
-std::vector<sstables::shared_sstable>
-date_tiered_manifest::get_next_non_expired_sstables(table_state& table_s, std::vector<sstables::shared_sstable>& non_expiring_sstables, gc_clock::time_point compaction_time) {
-    int base = table_s.schema()->min_compaction_threshold();
-    int64_t now = get_now(table_s.main_sstable_set().all());
-    auto most_interesting = get_compaction_candidates(table_s, non_expiring_sstables, now, base);
-
-    return most_interesting;
-
-    // FIXME: implement functionality below that will look for a single sstable with worth dropping tombstone,
-    // iff strategy didn't find anything to compact. So it's not essential.
-#if 0
-    // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
-    // ratio is greater than threshold.
-
-    List<SSTableReader> sstablesWithTombstones = Lists.newArrayList();
-    for (SSTableReader sstable : nonExpiringSSTables)
-    {
-        if (worthDroppingTombstones(sstable, gcBefore))
-            sstablesWithTombstones.add(sstable);
-    }
-    if (sstablesWithTombstones.isEmpty())
-        return Collections.emptyList();
-
-    return Collections.singletonList(Collections.min(sstablesWithTombstones, new SSTableReader.SizeComparator()));
-#endif
-}
-
-std::vector<sstables::shared_sstable>
-date_tiered_manifest::get_compaction_candidates(table_state& table_s, std::vector<sstables::shared_sstable> candidate_sstables, int64_t now, int base) {
-    int min_threshold = table_s.schema()->min_compaction_threshold();
-    int max_threshold = table_s.schema()->max_compaction_threshold();
-    auto candidates = filter_old_sstables(candidate_sstables, _options.max_sstable_age, now);
-
-    auto buckets = get_buckets(create_sst_and_min_timestamp_pairs(candidates), _options.base_time, base, now);
-
-    return newest_bucket(buckets, min_threshold, max_threshold, now, _options.base_time);
-}
-
-int64_t date_tiered_manifest::get_now(lw_shared_ptr<const sstables::sstable_list> shared_set) {
-    int64_t max_timestamp = 0;
-    for (auto& sst : *shared_set) {
-        int64_t candidate = sst->get_stats_metadata().max_timestamp;
-        max_timestamp = candidate > max_timestamp ? candidate : max_timestamp;
-    }
-    return max_timestamp;
-}
-
-std::vector<sstables::shared_sstable>
-date_tiered_manifest::filter_old_sstables(std::vector<sstables::shared_sstable> sstables, api::timestamp_type max_sstable_age, int64_t now) {
-    if (max_sstable_age == 0) {
-        return sstables;
-    }
-    int64_t cutoff = now - max_sstable_age;
-
-    std::erase_if(sstables, [cutoff] (auto& sst) {
-        return sst->get_stats_metadata().max_timestamp < cutoff;
-    });
-
-    return sstables;
-}
-
-std::vector<std::pair<sstables::shared_sstable,int64_t>>
-date_tiered_manifest::create_sst_and_min_timestamp_pairs(const std::vector<sstables::shared_sstable>& sstables) {
-    std::vector<std::pair<sstables::shared_sstable,int64_t>> sstable_min_timestamp_pairs;
-    sstable_min_timestamp_pairs.reserve(sstables.size());
-    for (auto& sst : sstables) {
-        sstable_min_timestamp_pairs.emplace_back(sst, sst->get_stats_metadata().min_timestamp);
-    }
-    return sstable_min_timestamp_pairs;
-}
-
-date_tiered_compaction_strategy_options::date_tiered_compaction_strategy_options(const std::map<sstring, sstring>& options) {
-    using namespace cql3::statements;
-
-    auto tmp_value = sstables::compaction_strategy_impl::get_value(options, TIMESTAMP_RESOLUTION_KEY);
-    auto target_unit = tmp_value ? tmp_value.value() : DEFAULT_TIMESTAMP_RESOLUTION;
-
-    tmp_value = sstables::compaction_strategy_impl::get_value(options, MAX_SSTABLE_AGE_KEY);
-    auto fractional_days = property_definitions::to_double(MAX_SSTABLE_AGE_KEY, tmp_value, DEFAULT_MAX_SSTABLE_AGE_DAYS);
-    int64_t max_sstable_age_in_hours = std::lround(fractional_days * 24);
-    max_sstable_age = duration_conversor::convert(target_unit, std::chrono::hours(max_sstable_age_in_hours));
-
-    tmp_value = sstables::compaction_strategy_impl::get_value(options, BASE_TIME_KEY);
-    auto base_time_seconds = property_definitions::to_long(BASE_TIME_KEY, tmp_value, DEFAULT_BASE_TIME_SECONDS);
-    base_time = duration_conversor::convert(target_unit, std::chrono::seconds(base_time_seconds));
-}
-
-date_tiered_compaction_strategy_options::date_tiered_compaction_strategy_options() {
-    auto max_sstable_age_in_hours = int64_t(DEFAULT_MAX_SSTABLE_AGE_DAYS * 24);
-    max_sstable_age = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::hours(max_sstable_age_in_hours)).count();
-    base_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::seconds(DEFAULT_BASE_TIME_SECONDS)).count();
-}
-
 namespace sstables {
-
-date_tiered_compaction_strategy::date_tiered_compaction_strategy(const std::map<sstring, sstring>& options)
-    : compaction_strategy_impl(options)
-    , _manifest(options)
-{
-    clogger.warn("DateTieredCompactionStrategy is deprecated. Usually cases for which it is used are better handled by TimeWindowCompactionStrategy."
-            " Please change your compaction strategy to TWCS as DTCS will be retired in the near future");
-
-    // tombstone compaction is disabled by default because:
-    // - deletion shouldn't be used with DTCS; rather data is deleted through TTL.
-    // - with time series workloads, it's usually better to wait for whole sstable to be expired rather than
-    // compacting a single sstable when it's more than 20% (default value) expired.
-    // For more details, see CASSANDRA-9234
-    if (!options.contains(TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.contains(TOMBSTONE_THRESHOLD_OPTION)) {
-        _disable_tombstone_compaction = true;
-        date_tiered_manifest::logger.debug("Disabling tombstone compactions for DTCS");
-    } else {
-        date_tiered_manifest::logger.debug("Enabling tombstone compactions for DTCS");
-    }
-
-    _use_clustering_key_filter = true;
-}
-
-compaction_descriptor date_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control, std::vector<sstables::shared_sstable> candidates) {
-    auto compaction_time = gc_clock::now();
-    auto sstables = _manifest.get_next_sstables(table_s, candidates, compaction_time);
-
-    if (!sstables.empty()) {
-        date_tiered_manifest::logger.debug("datetiered: Compacting {} out of {} sstables", sstables.size(), candidates.size());
-        return sstables::compaction_descriptor(std::move(sstables));
-    }
-
-    // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
-    auto e = boost::range::remove_if(candidates, [this, compaction_time, &table_s] (const sstables::shared_sstable& sst) -> bool {
-        return !worth_dropping_tombstones(sst, compaction_time, table_s.get_tombstone_gc_state());
-    });
-    candidates.erase(e, candidates.end());
-    if (candidates.empty()) {
-        return sstables::compaction_descriptor();
-    }
-    // find oldest sstable which is worth dropping tombstones because they are more unlikely to
-    // shadow data from other sstables, and it also tends to be relatively big.
-    auto it = std::min_element(candidates.begin(), candidates.end(), [] (auto& i, auto& j) {
-        return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
-    });
-    return sstables::compaction_descriptor({ *it });
-}
-
-std::unique_ptr<compaction_backlog_tracker::impl> date_tiered_compaction_strategy::make_backlog_tracker() const {
-    return std::make_unique<unimplemented_backlog_tracker>();
-}
 
 size_tiered_compaction_strategy::size_tiered_compaction_strategy(const std::map<sstring, sstring>& options)
     : compaction_strategy_impl(options)
@@ -775,9 +586,6 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
     case compaction_strategy_type::leveled:
         impl = ::make_shared<leveled_compaction_strategy>(options);
         break;
-    case compaction_strategy_type::date_tiered:
-        impl = ::make_shared<date_tiered_compaction_strategy>(options);
-        break;
     case compaction_strategy_type::time_window:
         impl = ::make_shared<time_window_compaction_strategy>(options);
         break;
@@ -796,7 +604,6 @@ compaction_strategy_state compaction_strategy_state::make(const compaction_strat
     switch (cs.type()) {
         case compaction_strategy_type::null:
         case compaction_strategy_type::size_tiered:
-        case compaction_strategy_type::date_tiered:
             return compaction_strategy_state(default_empty_state{});
         case compaction_strategy_type::leveled:
             return compaction_strategy_state(leveled_compaction_strategy_state{});
