@@ -1161,7 +1161,7 @@ future<> repair::user_requested_repair_task_impl::run() {
     auto id = get_repair_uniq_id();
 
     return module->run(id, [this, &rs, &db, id, keyspace = _status.keyspace, germs = std::move(_germs),
-            cfs = std::move(_cfs), ranges = std::move(_ranges), hosts = std::move(_hosts), data_centers = std::move(_data_centers), ignore_nodes = std::move(_ignore_nodes)] () mutable {
+            &cfs = _cfs, &ranges = _ranges, hosts = std::move(_hosts), data_centers = std::move(_data_centers), ignore_nodes = std::move(_ignore_nodes)] () mutable {
         auto uuid = node_ops_id{id.uuid().uuid()};
 
         bool needs_flush_before_repair = false;
@@ -1288,6 +1288,14 @@ future<> repair::user_requested_repair_task_impl::run() {
     });
 }
 
+future<std::optional<double>> repair::user_requested_repair_task_impl::expected_total_workload() const {
+    co_return _ranges.size() * _cfs.size() * smp::count;
+}
+
+std::optional<double> repair::user_requested_repair_task_impl::expected_children_number() const {
+    return smp::count;
+}
+
 future<int> repair_start(seastar::sharded<repair_service>& repair,
         sstring keyspace, std::unordered_map<sstring, sstring> options) {
     return repair.invoke_on(0, [keyspace = std::move(keyspace), options = std::move(options)] (repair_service& local_repair) {
@@ -1351,6 +1359,7 @@ future<> repair::data_sync_repair_task_impl::run() {
     rlogger.info("repair[{}]: sync data for keyspace={}, status=started", id.uuid(), keyspace);
     co_await module->run(id, [this, &rs, id, &db, keyspace, germs = std::move(germs), &ranges = _ranges, &neighbors = _neighbors, reason = _reason] () mutable {
         auto cfs = list_column_families(db, keyspace);
+        _cfs_size = cfs.size();
         if (cfs.empty()) {
             rlogger.warn("repair[{}]: sync data for keyspace={}, no table in this keyspace", id.uuid(), keyspace);
             return;
@@ -1402,6 +1411,14 @@ future<> repair::data_sync_repair_task_impl::run() {
         rlogger.warn("repair[{}]: sync data for keyspace={}, status=failed: {}", id.uuid(), keyspace,  ep);
         return make_exception_future<>(ep);
     });
+}
+
+future<std::optional<double>> repair::data_sync_repair_task_impl::expected_total_workload() const {
+    co_return _cfs_size ? std::make_optional<double>(_ranges.size() * _cfs_size * smp::count) : std::nullopt;
+}
+
+std::optional<double> repair::data_sync_repair_task_impl::expected_children_number() const {
+    return smp::count;
 }
 
 future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
