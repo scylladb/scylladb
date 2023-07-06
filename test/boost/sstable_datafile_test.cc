@@ -2766,7 +2766,7 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
         }
 
         return make_ready_future<>();
-    });
+    }, test_env_config{ .use_uuid = false });
 }
 
 SEASTAR_TEST_CASE(sstable_reader_with_timeout) {

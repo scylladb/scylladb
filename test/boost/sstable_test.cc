@@ -212,7 +212,7 @@ write_and_validate_sst(schema_ptr s, sstring dir, noncopyable_function<future<> 
         auto sst1 = do_write_sst(env, s, dir, env.tempdir().path().native(), env.new_generation()).get();
         auto sst2 = env.make_sstable(s, sst1->get_version());
         func(std::move(sst1), std::move(sst2)).get();
-    });
+    }, test_env_config{ .use_uuid = false });
 }
 
 SEASTAR_TEST_CASE(check_summary_func) {

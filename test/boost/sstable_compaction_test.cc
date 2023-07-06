@@ -2919,7 +2919,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
                 .produces(make_insert(keys[i]))
                 .produces_end_of_stream();
         }
-    });
+    }, test_env_config{ .use_uuid = false });
 }
 
 SEASTAR_TEST_CASE(compaction_strategy_aware_major_compaction_test) {
@@ -3051,7 +3051,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
 
         // make sure partial sstable run has none of its fragments compacted.
         BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
-    });
+    }, test_env_config{ .use_uuid = false });
 }
 
 // Make sure that a custom tombstone-gced-only writer will be feeded with gc'able tombstone
@@ -5099,7 +5099,7 @@ static future<> run_incremental_compaction_test(sstables::offstrategy offstrateg
 
         BOOST_REQUIRE(sstables_closed == sstables_nr);
         BOOST_REQUIRE(sstables_closed_during_cleanup >= sstables_nr / 2);
-    });
+    }, test_env_config{ .use_uuid = false });
 }
 
 SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
@@ -5180,7 +5180,6 @@ SEASTAR_TEST_CASE(cleanup_during_offstrategy_incremental_compaction_test) {
             for (auto&& sst : ssts) {
                 testlog.info("run id {}", sst->run_identifier());
                 column_family_test(t).add_sstable(sst, sstables::offstrategy::yes).get();
-                column_family_test::update_sstables_known_generation(*t, sst->generation());
                 observers.push_back(sst->add_on_closed_handler([&] (sstable& sst) mutable {
                     auto sstables = t->get_sstables();
                     testlog.info("Closing sstable of generation {}, table set size: {}", sst.generation(), sstables->size());

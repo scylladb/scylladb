@@ -47,6 +47,7 @@ public:
 struct test_env_config {
     db::large_data_handler* large_data_handler = nullptr;
     data_dictionary::storage_options storage; // will be local by default
+    bool use_uuid = false;
 };
 
 data_dictionary::storage_options make_test_object_storage_options();
@@ -62,6 +63,7 @@ class test_env {
         test_env_sstables_manager mgr;
         reader_concurrency_semaphore semaphore;
         sstables::sstable_generation_generator gen{0};
+        sstables::uuid_identifiers use_uuid;
         data_dictionary::storage_options storage;
 
         impl(test_env_config cfg, sstables::storage_manager* sstm);
@@ -69,7 +71,7 @@ class test_env {
         impl(const impl&) = delete;
 
         sstables::generation_type new_generation() noexcept {
-            return gen(sstables::uuid_identifiers::no);
+            return gen(use_uuid);
         }
     };
     std::unique_ptr<impl> _impl;

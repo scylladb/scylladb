@@ -203,8 +203,14 @@ test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm)
         feature_service, cache_tracker, memory::stats().total_memory(), dir_sem,
         [host_id = locator::host_id::create_random_id()]{ return host_id; }, sstm)
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env")
+    , use_uuid(cfg.use_uuid)
     , storage(std::move(cfg.storage))
-{ }
+{
+    if (!storage.is_local_type()) {
+        // remote storage requires uuid-based identifier for naming sstables
+        assert(use_uuid == uuid_identifiers::yes);
+    }
+}
 
 future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, test_env_config cfg) {
     if (!cfg.storage.is_local_type()) {
