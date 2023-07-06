@@ -62,7 +62,8 @@ public:
 protected:
     future<> run() override;
 
-    // TODO: implement progress for user-requested repairs
+    virtual future<std::optional<double>> expected_total_workload() const override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class data_sync_repair_task_impl : public repair_task_impl {
@@ -70,6 +71,7 @@ private:
     dht::token_range_vector _ranges;
     std::unordered_map<dht::token_range, repair_neighbors> _neighbors;
     optimized_optional<abort_source::subscription> _abort_subscription;
+    size_t _cfs_size = 0;
 public:
     data_sync_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string entity, dht::token_range_vector ranges, std::unordered_map<dht::token_range, repair_neighbors> neighbors, streaming::stream_reason reason, shared_ptr<node_ops_info> ops_info)
         : repair_task_impl(module, id.uuid(), id.id, std::move(keyspace), "", std::move(entity), tasks::task_id::create_null_id(), reason)
@@ -89,7 +91,8 @@ public:
 protected:
     future<> run() override;
 
-    // TODO: implement progress for data-sync repairs
+    virtual future<std::optional<double>> expected_total_workload() const override;
+    virtual std::optional<double> expected_children_number() const override;
 };
 
 class shard_repair_task_impl : public repair_task_impl {
@@ -164,6 +167,9 @@ public:
 protected:
     future<> do_repair_ranges();
     future<> run() override;
+
+    virtual future<std::optional<double>> expected_total_workload() const override;
+    virtual std::optional<double> expected_children_number() const override;
 
     friend class range_repair_task_impl;
 };
