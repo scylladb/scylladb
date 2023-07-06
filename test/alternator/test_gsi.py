@@ -1383,3 +1383,136 @@ def test_gsi_query_select_2(dynamodb):
             IndexName='hello',
             Select='COUNT',
             KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+
+# Test that trying to create a table with two GSIs with the same name is an
+# error.
+# In test_gsi_backfill we also check that adding a second GSI with the same
+# name later, after the already exists table exists, is also an error.
+# See also test_lsi.py::test_lsi_and_gsi_same_same which shows even GSIs
+# and LSIs may not have the same name (and explains why)
+def test_gsi_same_name_forbidden(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*Duplicate.*index1'):
+        with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'x', 'AttributeType': 'S' },
+                { 'AttributeName': 'y', 'AttributeType': 'S' }
+            ],
+            GlobalSecondaryIndexes=[
+                {   'IndexName': 'index1',
+                    'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                },
+                {   'IndexName': 'index1', # different index, samed name!
+                    'KeySchema': [{ 'AttributeName': 'y', 'KeyType': 'HASH' }],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                }
+            ]) as table:
+            pass
+    # Even if the two indexes are identical twins - having the same definition
+    # exactly - it's not allowed.
+    with pytest.raises(ClientError, match='ValidationException.*Duplicate.*index1'):
+        with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'x', 'AttributeType': 'S' },
+            ],
+            GlobalSecondaryIndexes=[
+                {   'IndexName': 'index1',
+                    'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                },
+                {   'IndexName': 'index1',
+                    'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                }
+            ]) as table:
+            pass
+
+# Trying to create two differently-named GSIs in the same table indexing
+# the same attribute with exactly the same parameters is redundant, but
+# allowed, and works (and not recommended because it is very wasteful...)
+def test_gsi_duplicate_with_different_name(dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        AttributeDefinitions=[
+            { 'AttributeName': 'p', 'AttributeType': 'S' },
+            { 'AttributeName': 'x', 'AttributeType': 'S' },
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'index1',
+                'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                'Projection': { 'ProjectionType': 'ALL' }
+            },
+            {   'IndexName': 'index2', # same index, different name
+                'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ]) as table:
+        pass
+
+# But, trying to create two different GSIs with different type for the same
+# key is NOT allowed. The reason is that DynamoDB wants to insist that future
+# writes to this attribute must have the declared type - and can't insist on
+# two different types at the same time.
+# We have two versions of this test: One when the conflict happens during
+# the table creation, and one where the second GSI is added after the table
+# already exists with the first GSI.
+# Reproduces #13870 (see also test_create_table_duplicate_attribute_name in
+# test_table.py).
+def test_gsi_key_type_conflict_on_create(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*uplicate.*xyz'):
+        with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
+            # Note how because how this API works, having two different types
+            # for the same attribute 'xyz' looks very strange (there is not even
+            # a way to say which definition applies to which index) so
+            # unsurprisingly it's not accepted.
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'xyz', 'AttributeType': 'S' },
+                { 'AttributeName': 'xyz', 'AttributeType': 'N' },
+            ],
+            GlobalSecondaryIndexes=[
+                {   'IndexName': 'index1',
+                    'KeySchema': [{ 'AttributeName': 'xyz', 'KeyType': 'HASH' }],
+                    'Projection': { 'ProjectionType': 'ALL' }
+            },
+                {   'IndexName': 'index2',
+                    'KeySchema': [{ 'AttributeName': 'xyz', 'KeyType': 'HASH' }],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                }
+            ]) as table:
+            pass
+
+@pytest.mark.xfail(reason="issue #11567")
+def test_gsi_key_type_conflict_on_update(dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        AttributeDefinitions=[
+            { 'AttributeName': 'p', 'AttributeType': 'S' },
+            { 'AttributeName': 'xyz', 'AttributeType': 'S' },
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'index1',
+                'KeySchema': [{ 'AttributeName': 'xyz', 'KeyType': 'HASH' }],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ]) as table:
+        # Now use UpdateTable to create a second GSI, with a different
+        # type for attribute xyz. DynamoDB gives a lengthy error message:
+        #   "One or more parameter values were invalid: Attributes cannot be
+        #    redefined. Please check that your attribute has the same type as
+        #    previously defined.
+        #    Existing schema: Schema:[SchemaElement: key{xyz:S:HASH}]
+        #    New schema: Schema:[SchemaElement: key{xyz:N:HASH}]"
+        with pytest.raises(ClientError, match='ValidationException.*redefined'):
+            dynamodb.meta.client.update_table(TableName=table.name,
+                AttributeDefinitions=[{ 'AttributeName': 'xyz', 'AttributeType': 'N' }],
+                GlobalSecondaryIndexUpdates=[ {  'Create':
+                    {  'IndexName': 'index2',
+                        'KeySchema': [{ 'AttributeName': 'xyz', 'KeyType': 'HASH' }],
+                        'Projection': { 'ProjectionType': 'ALL' }
+                    }}])

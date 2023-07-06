@@ -184,6 +184,60 @@ def test_create_table_invalid_schema(dynamodb):
             ],
         )
 
+# Another case of an invalid schema is repeating the same AttributeName
+# twice in AttributeDefinitions. DynamoDB has no way of knowing which of
+# the two definitions was intended.
+# Reproduces #13870
+def test_create_table_duplicate_attribute_name(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*uplicate.*xyz'):
+        dynamodb.create_table(
+            TableName='name_doesnt_matter',
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[
+                { 'AttributeName': 'xyz', 'KeyType': 'HASH' },
+            ],
+            AttributeDefinitions=[
+                { 'AttributeName': 'xyz', 'AttributeType': 'S' },
+                { 'AttributeName': 'xyz', 'AttributeType': 'N' }
+            ],
+        )
+
+# In addition to the specific AttributeDefinitions error reported in
+# issue #13870, there are other ways which AttributeDefinitions can be
+# invalid - let's check they are detected correctly:
+def test_create_table_invalid_attribute_definitions(dynamodb):
+    # Missing "AttributeName" in one of the members of AttributeDefinitions.
+    # DynamoDB prints a rather ugly error message: "1 validation error
+    # detected: Value null at 'attributeDefinitions.1.member.attributeName'
+    # failed to satisfy constraint: Member must not be null".
+    with pytest.raises(ClientError, match='ValidationException.*ttributeName'):
+        dynamodb.create_table(
+            TableName='name_doesnt_matter',
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[
+                { 'AttributeName': 'xyz', 'KeyType': 'HASH' },
+            ],
+            AttributeDefinitions=[
+                { 'AttributeType': 'S' }, # missing AttributeName
+            ],
+        )
+    # Missing "AttributeType" in one of the members of AttributeDefinitions.
+    with pytest.raises(ClientError, match='ValidationException.*ttributeType'):
+        dynamodb.create_table(
+            TableName='name_doesnt_matter',
+            BillingMode='PAY_PER_REQUEST',
+            KeySchema=[
+                { 'AttributeName': 'xyz', 'KeyType': 'HASH' },
+            ],
+            AttributeDefinitions=[
+                { 'AttributeName': 'xyz' }, # missing AttributeType
+            ],
+        )
+
+    # I'm not sure why, but even though we tried to disable boto3's paramter
+    # validation in conftest.py, boto3 still doesn't us test the case of
+    # extra fields in AttributeDefinitions, and catches such errors itself.
+
 # Test that trying to create a table that already exists fails in the
 # appropriate way (ResourceInUseException)
 def test_create_table_already_exists(dynamodb, test_table):
