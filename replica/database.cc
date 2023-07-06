@@ -1427,6 +1427,10 @@ future<> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metada
         // don't make system keyspace writes wait for user writes (if under pressure)
         kscfg.dirty_memory_manager = &_system_dirty_memory_manager;
     }
+    if (extensions().is_extension_internal_keyspace(ksm->name())) {
+        // don't make internal keyspaces write wait for user writes (if under pressure), and also to avoid possible deadlocks.
+        kscfg.dirty_memory_manager = &_system_dirty_memory_manager;
+    }
     keyspace ks(ksm, std::move(kscfg), erm_factory);
     co_await ks.create_replication_strategy(get_shared_token_metadata(), ksm->strategy_options());
     _keyspaces.emplace(ksm->name(), std::move(ks));
