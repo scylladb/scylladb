@@ -2155,7 +2155,7 @@ lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const sch
                 for (const auto& entry : *options) {
                     values.emplace(value_cast<sstring>(entry.first), value_cast<sstring>(entry.second));
                 }
-                storage_opts.value = data_dictionary::storage_options::from_map(std::string_view(*storage_type), values);
+                storage_opts.value = storage_opts.from_map(std::string_view(*storage_type), values);
             }
         }
     }

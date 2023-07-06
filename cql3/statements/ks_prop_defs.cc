@@ -101,7 +101,7 @@ data_dictionary::storage_options ks_prop_defs::get_storage_options() const {
         if (it != options_map->end()) {
             sstring storage_type = it->second;
             options_map->erase(it);
-            opts.value = data_dictionary::storage_options::from_map(storage_type, std::move(*options_map));
+            opts.value = opts.from_map(storage_type, std::move(*options_map));
         }
     }
     return opts;
