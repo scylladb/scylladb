@@ -71,8 +71,6 @@ public:
             return "SizeTieredCompactionStrategy";
         case compaction_strategy_type::leveled:
             return "LeveledCompactionStrategy";
-        case compaction_strategy_type::date_tiered:
-            return "DateTieredCompactionStrategy";
         case compaction_strategy_type::time_window:
             return "TimeWindowCompactionStrategy";
         default:
@@ -89,8 +87,6 @@ public:
             return compaction_strategy_type::size_tiered;
         } else if (short_name == "LeveledCompactionStrategy") {
             return compaction_strategy_type::leveled;
-        } else if (short_name == "DateTieredCompactionStrategy") {
-            return compaction_strategy_type::date_tiered;
         } else if (short_name == "TimeWindowCompactionStrategy") {
             return compaction_strategy_type::time_window;
         } else {
