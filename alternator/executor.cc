@@ -882,6 +882,38 @@ static void verify_billing_mode(const rjson::value& request) {
     }
 }
 
+// Validate that a AttributeDefinitions parameter in CreateTable is valid, and
+// throws user-facing api_error::validation if it's not.
+// In particular, verify that the same AttributeName doesn't appear more than
+// once (Issue #13870).
+static void validate_attribute_definitions(const rjson::value& attribute_definitions){
+    if (!attribute_definitions.IsArray()) {
+        throw api_error::validation("AttributeDefinitions must be an array");
+    }
+    std::unordered_set<std::string> seen_attribute_names;
+    for (auto it = attribute_definitions.Begin(); it != attribute_definitions.End(); ++it) {
+        const rjson::value* attribute_name = rjson::find(*it, "AttributeName");
+        if (!attribute_name) {
+            throw api_error::validation("AttributeName missing in AttributeDefinitions");
+        }
+        if (!attribute_name->IsString()) {
+            throw api_error::validation("AttributeName in AttributeDefinitions must be a string");
+        }
+        auto [it2, added] = seen_attribute_names.emplace(rjson::to_string_view(*attribute_name));
+        if (!added) {
+            throw api_error::validation(format("Duplicate AttributeName={} in AttributeDefinitions",
+                rjson::to_string_view(*attribute_name)));
+        }
+        const rjson::value* attribute_type = rjson::find(*it, "AttributeType");
+        if (!attribute_type) {
+            throw api_error::validation("AttributeType missing in AttributeDefinitions");
+        }
+        if (!attribute_type->IsString()) {
+            throw api_error::validation("AttributeType in AttributeDefinitions must be a string");
+        }
+    }
+}
+
 static future<executor::request_return_type> create_table_on_shard0(tracing::trace_state_ptr trace_state, rjson::value request, service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper) {
     assert(this_shard_id() == 0);
 
@@ -897,6 +929,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     }
     std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
     const rjson::value& attribute_definitions = request["AttributeDefinitions"];
+    validate_attribute_definitions(attribute_definitions);
 
     tracing::add_table_name(trace_state, keyspace_name, table_name);
 
