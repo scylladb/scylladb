@@ -273,9 +273,9 @@ future<> range_streamer::stream_async() {
                             nr_ranges_streamed, nr_ranges_streamed + ranges_to_stream.size(), nr_ranges_total);
                     auto ranges_streamed = ranges_to_stream.size();
                     if (_nr_rx_added) {
-                        sp.request_ranges(source, keyspace, std::move(ranges_to_stream));
+                        sp.request_ranges(source, keyspace, std::move(ranges_to_stream), _tables);
                     } else if (_nr_tx_added) {
-                        sp.transfer_ranges(source, keyspace, std::move(ranges_to_stream));
+                        sp.transfer_ranges(source, keyspace, std::move(ranges_to_stream), _tables);
                     }
                     sp.execute().discard_result().get();
                     // Update finished percentage

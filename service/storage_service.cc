@@ -19,6 +19,7 @@
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/consistency_level.hh"
+#include "locator/tablets.hh"
 #include <seastar/core/smp.hh>
 #include "mutation/canonical_mutation.hh"
 #include "seastar/core/on_internal_error.hh"
@@ -5358,6 +5359,100 @@ future<> storage_service::update_fence_version(token_metadata::version_t new_ver
     });
 }
 
+static
+locator::tablet_replica get_leaving_replica(const locator::tablet_info& tinfo, const locator::tablet_transition_info& trinfo) {
+    std::unordered_set<locator::tablet_replica> leaving(tinfo.replicas.begin(), tinfo.replicas.end());
+    for (auto&& r : trinfo.next) {
+        leaving.erase(r);
+    }
+    if (leaving.empty()) {
+        throw std::runtime_error(format("No leaving replicas"));
+    }
+    if (leaving.size() > 1) {
+        throw std::runtime_error(format("More than one leaving replica"));
+    }
+    return *leaving.begin();
+}
+
+inet_address storage_service::host2ip(locator::host_id host) {
+    auto ip = _group0->address_map().find(raft::server_id(host.uuid()));
+    if (!ip) {
+        throw std::runtime_error(::format("Cannot map host {} to ip", host));
+    }
+    return *ip;
+}
+
+// Streams data to the pending tablet replica of a given tablet on this node.
+// The source tablet replica is determined from the current transition info of the tablet.
+future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
+    // The coordinator does not execute global token metadata barrier before jumping to "streaming" stage, so we need
+    // a barrier here to see the token metadata which is at least as recent as that of the sender.
+    auto& raft_server = _group0->group0_server();
+    co_await raft_server.read_barrier(&_abort_source);
+
+    auto tm = _shared_token_metadata.get();
+    auto& tmap = tm->tablets().get_tablet_map(tablet.table);
+    auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+
+    // Check if the request is still valid.
+    // If there is mismatch, it means this streaming was canceled and the coordinator moved on.
+    if (!trinfo) {
+        throw std::runtime_error(format("No transition info for tablet {}", tablet));
+    }
+    if (trinfo->stage != locator::tablet_transition_stage::streaming) {
+        throw std::runtime_error(format("Tablet {} stage is not at streaming", tablet));
+    }
+    if (trinfo->pending_replica.host != tm->get_my_id()) {
+        throw std::runtime_error(format("Tablet {} has pending replica different than this one", tablet));
+    }
+
+    auto& tinfo = tmap.get_tablet_info(tablet.tablet);
+    auto range = tmap.get_token_range(tablet.tablet);
+    locator::tablet_replica leaving_replica = get_leaving_replica(tinfo, *trinfo);
+    if (leaving_replica.host == tm->get_my_id()) {
+        // The algorithm doesn't work with tablet migration within the same node because
+        // it assumes there is only one tablet replica, picked by the sharder, on local node.
+        throw std::runtime_error(format("Cannot stream within the same node, tablet: {}, shard {} -> {}",
+                                        tablet, leaving_replica.shard, trinfo->pending_replica.shard));
+    }
+    auto leaving_replica_ip = host2ip(leaving_replica.host);
+
+    if (_tablet_streaming[tablet]) {
+        slogger.debug("Streaming retry joining with existing session for tablet {}", tablet);
+        co_await _tablet_streaming[tablet]->get_future();
+        co_return;
+    }
+
+    auto async_gate_holder = _async_gate.hold();
+    promise<> p;
+    _tablet_streaming[tablet] = seastar::shared_future<>(p.get_future());
+    auto erase_tablet_streaming = seastar::defer([&] {
+        _tablet_streaming.erase(tablet);
+    });
+
+    try {
+        auto& table = _db.local().find_column_family(tablet.table);
+        std::vector<sstring> tables = {table.schema()->cf_name()};
+        auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tm, _abort_source,
+               get_broadcast_address(), _sys_ks.local().local_dc_rack(),
+               "Tablet migration", streaming::stream_reason::tablet_migration, std::move(tables));
+        streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(
+                _gossiper.get_unreachable_members()));
+
+        std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
+        ranges_per_endpoint[leaving_replica_ip].emplace_back(range);
+        streamer->add_rx_ranges(table.schema()->ks_name(), std::move(ranges_per_endpoint));
+        co_await streamer->stream_async();
+
+        p.set_value();
+        slogger.info("Streaming for tablet migration of {} successful", tablet);
+    } catch (...) {
+        p.set_exception(std::current_exception());
+        slogger.warn("Streaming for tablet migration of {} from {} failed: {}", tablet, leaving_replica, std::current_exception());
+        throw;
+    }
+}
+
 void storage_service::init_messaging_service(sharded<service::storage_proxy>& proxy, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
     _messaging.local().register_node_ops_cmd([this] (const rpc::client_info& cinfo, node_ops_cmd_request req) {
         auto coordinator = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
@@ -5420,6 +5515,9 @@ void storage_service::init_messaging_service(sharded<service::storage_proxy>& pr
                 .cdc_generation_mutations = std::move(cdc_generation_mutations),
             };
         });
+    });
+    ser::storage_service_rpc_verbs::register_tablet_stream_data(&_messaging.local(), [this] (locator::global_tablet_id tablet) {
+        return stream_tablet(tablet);
     });
 }
 

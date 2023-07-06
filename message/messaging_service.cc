@@ -18,6 +18,7 @@
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"
 #include "gms/gossip_digest_ack2.hh"
+#include "locator/tablets.hh"
 #include "query-request.hh"
 #include "query-result.hh"
 #include <seastar/rpc/rpc.hh>
@@ -593,6 +594,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::REPAIR_FLUSH_HINTS_BATCHLOG:
     case messaging_verb::NODE_OPS_CMD:
     case messaging_verb::HINT_MUTATION:
+    case messaging_verb::TABLET_STREAM_DATA:
         return 1;
     case messaging_verb::CLIENT_ID:
     case messaging_verb::MUTATION:

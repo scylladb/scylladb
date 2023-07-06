@@ -6,6 +6,19 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+namespace locator {
+
+struct tablet_id final {
+    uint64_t value();
+};
+
+struct global_tablet_id final {
+    ::table_id table;
+    locator::tablet_id tablet;
+};
+
+}
+
 namespace service {
 struct fencing_token {
     service::topology::version_t topology_version;
@@ -38,4 +51,5 @@ struct raft_topology_pull_params {};
 
 verb raft_topology_cmd (raft::term_t term, uint64_t cmd_index, service::raft_topology_cmd) -> service::raft_topology_cmd_result;
 verb raft_pull_topology_snapshot (service::raft_topology_pull_params) -> service::raft_topology_snapshot;
+verb [[cancellable]] tablet_stream_data (locator::global_tablet_id);
 }

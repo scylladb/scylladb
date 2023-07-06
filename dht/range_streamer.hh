@@ -77,7 +77,8 @@ public:
     };
 
     range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens,
-            inet_address address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason)
+            inet_address address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason,
+            std::vector<sstring> tables = {})
         : _db(db)
         , _stream_manager(sm)
         , _token_metadata_ptr(std::move(tmptr))
@@ -87,13 +88,14 @@ public:
         , _dr(std::move(dr))
         , _description(std::move(description))
         , _reason(reason)
+        , _tables(std::move(tables))
     {
         _abort_source.check();
     }
 
     range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source,
-            inet_address address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason)
-        : range_streamer(db, sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, std::move(dr), description, reason) {
+            inet_address address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason, std::vector<sstring> tables = {})
+        : range_streamer(db, sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, std::move(dr), description, reason, std::move(tables)) {
     }
 
     void add_source_filter(std::unique_ptr<i_source_filter> filter) {
@@ -155,6 +157,7 @@ private:
     locator::endpoint_dc_rack _dr;
     sstring _description;
     streaming::stream_reason _reason;
+    std::vector<sstring> _tables;
     std::unordered_multimap<sstring, std::unordered_map<inet_address, dht::token_range_vector>> _to_stream;
     std::unordered_set<std::unique_ptr<i_source_filter>> _source_filters;
     // Number of tx and rx ranges added
