@@ -27,8 +27,14 @@ logging::logger rslog("raft_group_registry");
 
 class direct_fd_proxy : public raft::failure_detector, public direct_failure_detector::listener {
     std::unordered_set<raft::server_id> _alive_set;
+    raft::server_id _my_id;
 
 public:
+    direct_fd_proxy(raft::server_id my_id)
+            : _my_id(my_id)
+    {
+    }
+
     future<> mark_alive(direct_failure_detector::pinger::endpoint_id id) override {
         static const auto msg = "marking Raft server {} as alive for raft groups";
 
@@ -63,7 +69,7 @@ public:
     }
 
     bool is_alive(raft::server_id srv) override {
-        return _alive_set.contains(srv);
+        return srv == _my_id || _alive_set.contains(srv);
     }
 };
 // }}} direct_fd_proxy
@@ -145,7 +151,7 @@ raft_group_registry::raft_group_registry(bool is_enabled,
     , _gossiper_proxy(make_shared<gossiper_state_change_subscriber_proxy>(address_map))
     , _address_map{address_map}
     , _direct_fd(fd)
-    , _direct_fd_proxy(make_shared<direct_fd_proxy>())
+    , _direct_fd_proxy(make_shared<direct_fd_proxy>(my_id))
     , _my_id(my_id)
 {
 }
