@@ -41,6 +41,8 @@ namespace hints {
 //       Flattened representation was chosen in order to save space on
 //       vector lengths etc.
 
+static constexpr size_t version_size = sizeof(uint8_t);
+
 static std::vector<sync_point::shard_rps> decode_one_type_v1(uint16_t shard_count, const per_manager_sync_point_v1& v1) {
     std::vector<sync_point::shard_rps> ret;
 
@@ -72,11 +74,14 @@ sync_point sync_point::decode(sstring_view s) {
     if (raw.empty()) {
         throw std::runtime_error("Could not decode the sync point - not a valid hex string");
     }
-    if (raw[0] != 1) {
-        throw std::runtime_error(format("Unsupported sync point format version: {}", int(raw[0])));
+
+    seastar::simple_memory_input_stream in{reinterpret_cast<const char*>(raw.data()), raw.size()};
+
+    uint8_t version = ser::serializer<uint8_t>::read(in);
+    if (version != 1) {
+        throw std::runtime_error(format("Unsupported sync point format version: {}", int(version)));
     }
 
-    seastar::simple_memory_input_stream in{reinterpret_cast<const char*>(raw.data()) + 1, raw.size() - 1};
     sync_point_v1 v1 = ser::serializer<sync_point_v1>::read(in);
 
     return sync_point{
@@ -133,10 +138,10 @@ sstring sync_point::encode() const {
     seastar::measuring_output_stream measure;
     ser::serializer<sync_point_v1>::write(measure, v1);
 
-    // Reserve 1 byte for the version
-    bytes serialized{bytes::initialized_later{}, 1 + measure.size()};
-    serialized[0] = 1;
-    seastar::simple_memory_output_stream out{reinterpret_cast<char*>(serialized.data()), measure.size(), 1};
+    // Reserve version_size bytes for the version
+    bytes serialized{bytes::initialized_later{}, version_size + measure.size()};
+    seastar::simple_memory_output_stream out{reinterpret_cast<char*>(serialized.data()), serialized.size()};
+    ser::serializer<uint8_t>::write(out, 1);
     ser::serializer<sync_point_v1>::write(out, v1);
 
     return base64_encode(serialized);
