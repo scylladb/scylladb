@@ -3329,7 +3329,7 @@ static future<int> remove_dir(fs::path dir, bool recursive) {
             // Ignore missing directories
             co_return 0;
         }
-        if (error_code == EEXIST && !recursive) {
+        if ((error_code == EEXIST || error_code == ENOTEMPTY) && !recursive) {
             // Just return failure if the directory is not empty
             // Let the caller decide what to do about it.
             co_return error_code;
