@@ -119,13 +119,13 @@ future<sstring> ec2_snitch::aws_api_call_once(sstring addr, uint16_t port, sstri
 
             // Read HTTP response header first
             auto _rsp = _parser.get_parsed_response();
-            auto rc = _rsp->_status_code;
+            auto rc = _rsp->_status;
             // Verify EC2 instance metadata access
-            if (rc == 403) {
+            if (rc == http::reply::status_type::forbidden) {
                 return make_exception_future<sstring>(std::runtime_error("Error: Unauthorized response received when trying to communicate with instance metadata service."));
             }
-            if (_rsp->_status_code != static_cast<int>(http::reply::status_type::ok)) {
-                return make_exception_future<sstring>(std::runtime_error(format("Error: HTTP response status {}", _rsp->_status_code)));
+            if (_rsp->_status != http::reply::status_type::ok) {
+                return make_exception_future<sstring>(std::runtime_error(format("Error: HTTP response status {}", _rsp->_status)));
             }
 
             auto it = _rsp->_headers.find("Content-Length");
