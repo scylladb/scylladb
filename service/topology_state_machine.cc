@@ -45,6 +45,12 @@ static std::unordered_map<topology::transition_state, sstring> transition_state_
     {topology::transition_state::publish_cdc_generation, "publish cdc generation"},
     {topology::transition_state::write_both_read_old, "write both read old"},
     {topology::transition_state::write_both_read_new, "write both read new"},
+    {topology::transition_state::tablet_allow_write_both_read_old, "tablet allow write both read old"},
+    {topology::transition_state::tablet_write_both_read_old, "tablet write both read old"},
+    {topology::transition_state::tablet_write_both_read_new, "tablet write both read new"},
+    {topology::transition_state::tablet_streaming, "tablet streaming"},
+    {topology::transition_state::tablet_use_new, "tablet use new"},
+    {topology::transition_state::tablet_cleanup, "tablet cleanup"},
 };
 
 std::ostream& operator<<(std::ostream& os, topology::transition_state s) {

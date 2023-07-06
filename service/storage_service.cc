@@ -19,7 +19,9 @@
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/consistency_level.hh"
+#include "service/tablet_allocator.hh"
 #include "locator/tablets.hh"
+#include "replica/tablet_mutation_builder.hh"
 #include <seastar/core/smp.hh>
 #include "mutation/canonical_mutation.hh"
 #include "seastar/core/on_internal_error.hh"
@@ -27,6 +29,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
+#include "locator/load_sketch.hh"
 #include "log.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/raft_group0.hh"
@@ -385,6 +388,18 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
                 return read_new_t::no;
             }
             switch (*state) {
+                case topology::transition_state::tablet_allow_write_both_read_old:
+                    [[fallthrough]];
+                case topology::transition_state::tablet_write_both_read_new:
+                    [[fallthrough]];
+                case topology::transition_state::tablet_write_both_read_old:
+                    [[fallthrough]];
+                case topology::transition_state::tablet_streaming:
+                    [[fallthrough]];
+                case topology::transition_state::tablet_use_new:
+                    [[fallthrough]];
+                case topology::transition_state::tablet_cleanup:
+                    [[fallthrough]];
                 case topology::transition_state::commit_cdc_generation:
                     [[fallthrough]];
                 case topology::transition_state::publish_cdc_generation:
@@ -934,6 +949,14 @@ class topology_coordinator {
         return {};
     }
 
+    inet_address id2ip(locator::host_id id) {
+        auto ip = _address_map.find(raft::server_id(id.uuid()));
+        if (!ip) {
+            throw std::runtime_error(::format("no ip address mapping for {}", id));
+        }
+        return *ip;
+    }
+
     future<> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, const raft_topology_cmd& cmd) {
         auto ip = _address_map.find(id);
         if (!ip) {
@@ -1149,6 +1172,133 @@ class topology_coordinator {
         co_return std::move(node);
     }
 
+    future<group0_guard> global_tablet_token_metadata_barrier(group0_guard guard) {
+        // FIXME: Don't require all nodes to be up, only tablet replicas.
+        guard = co_await exec_global_command(std::move(guard),
+            raft_topology_cmd { raft_topology_cmd::command::barrier_and_drain }, {});
+        guard = co_await exec_global_command(std::move(guard),
+            raft_topology_cmd { raft_topology_cmd::command::fence }, {});
+        co_return std::move(guard);
+    }
+
+    future<> set_tablet_transition_stage(std::vector<canonical_mutation>& out, group0_guard& guard,
+                                         locator::tablet_transition_stage stage) {
+        auto tm = get_token_metadata_ptr();
+        for (auto&& [table, tmap] : tm->tablets().all_tables()) {
+            co_await coroutine::maybe_yield();
+            auto s = _db.find_schema(table);
+            for (auto&& [tablet, trinfo] : tmap.transitions()) {
+                co_await coroutine::maybe_yield();
+                auto last_token = tmap.get_last_token(tablet);
+                out.emplace_back(
+                    replica::tablet_mutation_builder(guard.write_timestamp(), s->ks_name(), table)
+                        .set_stage(last_token, stage)
+                        .build());
+            }
+        }
+    }
+
+    future<> del_tablet_transitions(std::vector<canonical_mutation>& out, group0_guard& guard) {
+        auto tm = get_token_metadata_ptr();
+        for (auto&& [table, tmap] : tm->tablets().all_tables()) {
+            co_await coroutine::maybe_yield();
+            auto s = _db.find_schema(table);
+            for (auto&& [tablet, trinfo] : tmap.transitions()) {
+                co_await coroutine::maybe_yield();
+                auto last_token = tmap.get_last_token(tablet);
+                out.emplace_back(
+                    replica::tablet_mutation_builder(guard.write_timestamp(), s->ks_name(), table)
+                        .del_transition(last_token)
+                        .set_replicas(last_token, trinfo.next)
+                        .build());
+            }
+        }
+    }
+
+    future<> transition_tablets_to_stage(group0_guard guard, locator::tablet_transition_stage stage, topology::transition_state topo_state) {
+        std::vector<canonical_mutation> updates;
+        co_await set_tablet_transition_stage(updates, guard, stage);
+        updates.emplace_back(
+            topology_mutation_builder(guard.write_timestamp())
+                .set_transition_state(topo_state)
+                .set_version(_topo_sm._topology.version + 1)
+                .build());
+        co_await update_topology_state(std::move(guard), std::move(updates), format("Moved tablet migration to stage: {}", stage));
+    }
+
+    future<> handle_tablet_allow_write_both_read_old(group0_guard guard) {
+        guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
+        co_await transition_tablets_to_stage(std::move(guard),
+                                     locator::tablet_transition_stage::write_both_read_old,
+                                     topology::transition_state::tablet_write_both_read_old);
+    }
+
+    future<> handle_tablet_write_both_read_old(group0_guard guard) {
+        guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
+        co_await transition_tablets_to_stage(std::move(guard),
+                                     locator::tablet_transition_stage::streaming,
+                                     topology::transition_state::tablet_streaming);
+    }
+
+    // The state "streaming" is needed to ensure that stale stream_tablet() RPC doesn't
+    // get admitted before global_tablet_token_metadata_barrier() is finished in
+    // handle_tablet_write_both_read_old().
+    future<> handle_tablet_streaming(group0_guard guard) {
+        std::vector<future<>> calls;
+        auto tm = get_token_metadata_ptr();
+        for (auto&& [table, tmap] : tm->tablets().all_tables()) {
+            co_await coroutine::maybe_yield();
+            for (auto&& [tablet, trinfo] : tmap.transitions()) {
+                co_await coroutine::maybe_yield();
+                auto gid = locator::global_tablet_id{table, tablet};
+                auto dst = trinfo.pending_replica.host;
+                slogger.info("Initiating tablet streaming of {} to {}", gid, trinfo.pending_replica);
+                calls.emplace_back(futurize_invoke([&] {
+                    return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
+                        netw::msg_addr(id2ip(dst)), _as, gid);
+                }).handle_exception([gid, dst](auto ep) {
+                    slogger.error("Failed to stream tablet {} to {}: {}", gid, dst, ep);
+                    std::rethrow_exception(ep);
+                }));
+            }
+        }
+
+        release_guard(std::move(guard));
+        co_await seastar::when_all_succeed(calls.begin(), calls.end());
+
+        guard = co_await start_operation();
+        co_await transition_tablets_to_stage(std::move(guard),
+                                     locator::tablet_transition_stage::write_both_read_new,
+                                     topology::transition_state::tablet_write_both_read_new);
+    }
+
+    future<> handle_tablet_write_both_read_new(group0_guard guard) {
+        guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
+        co_await transition_tablets_to_stage(std::move(guard),
+                                     locator::tablet_transition_stage::use_new,
+                                     topology::transition_state::tablet_use_new);
+    }
+
+    future<> handle_tablet_use_new(group0_guard guard) {
+        guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
+        co_await transition_tablets_to_stage(std::move(guard),
+                                     locator::tablet_transition_stage::cleanup,
+                                     topology::transition_state::tablet_cleanup);
+    }
+
+    future<> handle_tablet_cleanup(group0_guard guard) {
+        // FIXME: Actually perform cleanup
+
+        std::vector<canonical_mutation> updates;
+        co_await del_tablet_transitions(updates, guard);
+        updates.emplace_back(
+            topology_mutation_builder(guard.write_timestamp())
+                .del_transition_state()
+                .set_version(_topo_sm._topology.version + 1)
+                .build());
+        co_await update_topology_state(std::move(guard), std::move(updates), "Finished tablet migration");
+    }
+
     // Returns `true` iff there was work to do.
     future<bool> handle_topology_transition(group0_guard guard) {
         auto tstate = _topo_sm._topology.tstate;
@@ -1164,6 +1314,11 @@ class topology_coordinator {
                 co_await handle_global_request(std::move(guard));
                 co_return true;
             }
+            // If there is no other work, evaluate load and start tablet migration if there is imbalance.
+            if (co_await maybe_start_tablet_migration(std::move(guard))) {
+                co_return true;
+            }
+
             co_return false;
         }
 
@@ -1376,6 +1531,24 @@ class topology_coordinator {
                 // Reads are fenced. We can now remove topology::transition_state and move node state to normal
             }
                 break;
+            case topology::transition_state::tablet_allow_write_both_read_old:
+                co_await handle_tablet_allow_write_both_read_old(std::move(guard));
+                break;
+            case topology::transition_state::tablet_write_both_read_old:
+                co_await handle_tablet_write_both_read_old(std::move(guard));
+                break;
+            case topology::transition_state::tablet_streaming:
+                co_await handle_tablet_streaming(std::move(guard));
+                break;
+            case topology::transition_state::tablet_write_both_read_new:
+                co_await handle_tablet_write_both_read_new(std::move(guard));
+                break;
+            case topology::transition_state::tablet_use_new:
+                co_await handle_tablet_use_new(std::move(guard));
+                break;
+            case topology::transition_state::tablet_cleanup:
+                co_await handle_tablet_cleanup(std::move(guard));
+                break;
         }
         co_return true;
     };
@@ -1569,6 +1742,8 @@ class topology_coordinator {
         }
     };
 
+    // Returns true if the state machine was transitioned into tablet migration path.
+    future<bool> maybe_start_tablet_migration(group0_guard);
 public:
     topology_coordinator(
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
@@ -1586,6 +1761,44 @@ public:
 
     future<> run();
 };
+
+future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard guard) {
+    slogger.debug("raft topology: Evaluating tablet balance");
+
+    auto tm = get_token_metadata_ptr();
+    auto plan = co_await balance_tablets(tm);
+    if (plan.empty()) {
+        slogger.debug("raft topology: Tablets are balanced");
+        co_return false;
+    }
+
+    std::vector<canonical_mutation> updates;
+
+    for (const tablet_migration_info& mig : plan) {
+        co_await coroutine::maybe_yield();
+        auto s = _db.find_schema(mig.tablet.table);
+        auto& tmap = tm->tablets().get_tablet_map(mig.tablet.table);
+        auto last_token = tmap.get_last_token(mig.tablet.tablet);
+        if (tmap.get_tablet_transition_info(mig.tablet.tablet)) {
+            slogger.warn("Tablet {} is already in transition, ignoring migration", mig.tablet);
+            continue;
+        }
+        updates.emplace_back(
+            replica::tablet_mutation_builder(guard.write_timestamp(), s->ks_name(), mig.tablet.table)
+                .set_new_replicas(last_token, replace_replica(tmap.get_tablet_info(mig.tablet.tablet).replicas, mig.src, mig.dst))
+                .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
+                .build());
+    }
+
+    updates.emplace_back(
+        topology_mutation_builder(guard.write_timestamp())
+            .set_transition_state(topology::transition_state::tablet_allow_write_both_read_old)
+            .set_version(_topo_sm._topology.version + 1)
+            .build());
+
+    co_await update_topology_state(std::move(guard), std::move(updates), "Starting tablet migration");
+    co_return true;
+}
 
 future<> topology_coordinator::run() {
     slogger.info("raft topology: start topology coordinator fiber");
