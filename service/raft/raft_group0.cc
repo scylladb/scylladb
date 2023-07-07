@@ -112,7 +112,10 @@ public:
             _address_map.set_nonexpiring(addr.id);
             // Notify the direct failure detector that it should track
             // (or liveness of a specific raft server id.
-            _direct_fd.add_endpoint(addr.id.id);
+            if (addr != _my_id) {
+                // No need to ping self to know it's alive
+                _direct_fd.add_endpoint(addr.id.id);
+            }
         }
         for (const auto& addr: del) {
             // RPC 'send' may yield before resolving IP address,

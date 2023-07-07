@@ -27,8 +27,14 @@ logging::logger rslog("raft_group_registry");
 
 class direct_fd_proxy : public raft::failure_detector, public direct_failure_detector::listener {
     std::unordered_set<raft::server_id> _alive_set;
+    raft::server_id _my_id;
 
 public:
+    direct_fd_proxy(raft::server_id my_id)
+            : _my_id(my_id)
+    {
+    }
+
     future<> mark_alive(direct_failure_detector::pinger::endpoint_id id) override {
         static const auto msg = "marking Raft server {} as alive for raft groups";
 
@@ -63,7 +69,7 @@ public:
     }
 
     bool is_alive(raft::server_id srv) override {
-        return _alive_set.contains(srv);
+        return srv == _my_id || _alive_set.contains(srv);
     }
 };
 // }}} direct_fd_proxy
@@ -135,7 +141,9 @@ public:
 
 // }}} gossiper_state_change_subscriber_proxy
 
-raft_group_registry::raft_group_registry(bool is_enabled, raft_address_map& address_map,
+raft_group_registry::raft_group_registry(bool is_enabled,
+        raft::server_id my_id,
+        raft_address_map& address_map,
         netw::messaging_service& ms, gms::gossiper& gossiper, direct_failure_detector::failure_detector& fd)
     : _is_enabled(is_enabled)
     , _ms(ms)
@@ -143,7 +151,8 @@ raft_group_registry::raft_group_registry(bool is_enabled, raft_address_map& addr
     , _gossiper_proxy(make_shared<gossiper_state_change_subscriber_proxy>(address_map))
     , _address_map{address_map}
     , _direct_fd(fd)
-    , _direct_fd_proxy(make_shared<direct_fd_proxy>())
+    , _direct_fd_proxy(make_shared<direct_fd_proxy>(my_id))
+    , _my_id(my_id)
 {
 }
 
@@ -152,13 +161,12 @@ void raft_group_registry::init_rpc_verbs() {
             const rpc::client_info& cinfo,
             const raft::group_id& gid, raft::server_id from, raft::server_id dst, auto handler) {
         constexpr bool is_one_way = std::is_void_v<std::invoke_result_t<decltype(handler), raft_rpc&>>;
-        const auto& my_id = get_my_raft_id();
-        if (my_id != dst) {
+        if (_my_id != dst) {
             if constexpr (is_one_way) {
-                rslog.debug("Got message for server {}, but my id is {}", dst, my_id);
+                rslog.debug("Got message for server {}, but my id is {}", dst, _my_id);
                 return make_ready_future<rpc::no_wait_type>(netw::messaging_service::no_wait());
             } else {
-                throw raft_destination_id_not_correct{*_my_id, dst};
+                throw raft_destination_id_not_correct{_my_id, dst};
             }
         }
 
@@ -270,11 +278,10 @@ void raft_group_registry::init_rpc_verbs() {
             [this] (const rpc::client_info&, raft::server_id dst) -> future<direct_fd_ping_reply> {
         // XXX: update address map here as well?
 
-        const raft::server_id& my_id = get_my_raft_id();
-        if (my_id != dst) {
+        if (_my_id != dst) {
             co_return direct_fd_ping_reply {
                 .result = wrong_destination {
-                    .reached_id = my_id,
+                    .reached_id = _my_id,
                 },
             };
         }
@@ -321,11 +328,8 @@ future<> raft_group_registry::stop_servers() noexcept {
     co_await g.close();
 }
 
-seastar::future<> raft_group_registry::start(raft::server_id my_id) {
+seastar::future<> raft_group_registry::start() {
     assert(_is_enabled);
-    assert(!_my_id);
-
-    _my_id = my_id;
 
     _gossiper.register_(_gossiper_proxy);
 
@@ -339,10 +343,7 @@ seastar::future<> raft_group_registry::start(raft::server_id my_id) {
 }
 
 const raft::server_id& raft_group_registry::get_my_raft_id() {
-    if (!_my_id) {
-        on_internal_error(rslog, "get_my_raft_id(): Raft ID not initialized");
-    }
-    return *_my_id;
+    return _my_id;
 }
 
 seastar::future<> raft_group_registry::stop() {

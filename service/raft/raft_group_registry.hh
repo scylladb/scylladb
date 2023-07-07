@@ -97,23 +97,17 @@ private:
     std::optional<raft::group_id> _group0_id;
 
     // My Raft ID. Shared between different Raft groups.
-    // Once set, must not be changed.
-    //
-    // FIXME: ideally we'd like this to be passed to the constructor.
-    // However storage_proxy/query_processor/system_keyspace are unavailable
-    // when we start raft_group_registry so we have to set it later,
-    // after system_keyspace is initialized.
-    std::optional<raft::server_id> _my_id;
+    raft::server_id _my_id;
 
 public:
     // `is_enabled` must be `true` iff the local RAFT feature is enabled.
-    raft_group_registry(bool is_enabled, raft_address_map&,
+    raft_group_registry(bool is_enabled, raft::server_id my_id, raft_address_map&,
             netw::messaging_service& ms, gms::gossiper& gs, direct_failure_detector::failure_detector& fd);
     ~raft_group_registry();
 
     // If is_enabled(),
-    // Called manually at start on every shard, after system_keyspace is initialized.
-    seastar::future<> start(raft::server_id my_id);
+    // Called manually at start on every shard.
+    seastar::future<> start();
     // Called by sharded<>::stop()
     seastar::future<> stop();
 

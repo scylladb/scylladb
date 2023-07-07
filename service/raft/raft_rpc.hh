@@ -25,13 +25,13 @@ class raft_rpc : public raft::rpc {
 protected:
     raft_state_machine& _sm;
     raft::group_id _group_id;
-    raft::server_id _server_id;
+    raft::server_id _my_id;                     // Raft server id of this node.
     netw::messaging_service& _messaging;
     raft_address_map& _address_map;
     seastar::gate _shutdown_gate;
 
     explicit raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
-            raft_address_map& address_map, raft::group_id gid, raft::server_id srv_id);
+            raft_address_map& address_map, raft::group_id gid, raft::server_id my_id);
 
 private:
     template <typename Verb, typename Msg> void
