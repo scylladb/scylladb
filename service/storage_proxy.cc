@@ -250,11 +250,11 @@ public:
 
     future<> send_counter_mutation(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
-            std::vector<frozen_mutation> fms, db::consistency_level cl) {
+            std::vector<frozen_mutation> fms, db::consistency_level cl, fencing_token fence) {
         tracing::trace(tr_state, "Enqueuing counter update to {}", addr);
         auto&& opt_exception = co_await ser::storage_proxy_rpc_verbs::send_counter_mutation(
             &_ms, std::move(addr), timeout,
-            std::move(fms), cl, tracing::make_trace_info(tr_state));
+            std::move(fms), cl, tracing::make_trace_info(tr_state), fence);
         if (opt_exception.has_value() && *opt_exception) {
             co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
         }
@@ -407,7 +407,8 @@ private:
 
     future<replica::exception_variant> handle_counter_mutation(
             const rpc::client_info& cinfo, rpc::opt_time_point t,
-            std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
+            std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info,
+            rpc::optional<service::fencing_token> fence_opt) {
         auto src_addr = netw::messaging_service::get_source(cinfo);
 
         tracing::trace_state_ptr trace_state_ptr;
@@ -415,6 +416,12 @@ private:
             trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
+        }
+
+        const auto fence = fence_opt.value_or(fencing_token{});
+        if (auto stale = _sp.apply_fence(fence, src_addr.addr)) {
+            co_return co_await encode_replica_exception_for_rpc<replica::exception_variant>(_sp.features(),
+                make_exception_ptr(std::move(*stale)));
         }
 
         std::vector<frozen_mutation_and_schema> mutations;
@@ -429,6 +436,10 @@ private:
         });
         auto& sp = _sp;
         co_await sp.mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
+        if (auto stale = _sp.apply_fence(fence, src_addr.addr)) {
+            co_return co_await encode_replica_exception_for_rpc<replica::exception_variant>(_sp.features(),
+                make_exception_ptr(std::move(*stale)));
+        }
         co_return replica::exception_variant{};
     }
 
@@ -3294,6 +3305,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
     // so we need a container for them. std::set<> will result in the fewest allocations if there is just one.
     std::set<locator::effective_replication_map_ptr> erms;
 
+    const auto fence = fencing_token{_shared_token_metadata.get()->get_version()};
     for (auto& m : mutations) {
         auto& table = _db.local().find_column_family(m.schema()->id());
         auto erm = table.get_effective_replication_map();
@@ -3305,14 +3317,14 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 
     // Forward mutations to the leaders chosen for them
     auto my_address = utils::fb_utilities::get_broadcast_address();
-    co_await coroutine::parallel_for_each(leaders, [this, cl, timeout, tr_state = std::move(tr_state), permit = std::move(permit), my_address] (auto& endpoint_and_mutations) -> future<> {
+    co_await coroutine::parallel_for_each(leaders, [this, cl, timeout, tr_state = std::move(tr_state), permit = std::move(permit), my_address, fence] (auto& endpoint_and_mutations) -> future<> {
       auto first_schema = endpoint_and_mutations.second[0].s;
 
       try {
         auto endpoint = endpoint_and_mutations.first;
 
         if (endpoint == my_address) {
-            co_await this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state, permit);
+            co_await apply_fence(this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state, permit), fence, my_address);
         } else {
             auto& mutations = endpoint_and_mutations.second;
             auto fms = boost::copy_range<std::vector<frozen_mutation>>(mutations | boost::adaptors::transformed([] (auto& m) {
@@ -3325,7 +3337,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 
             co_await remote().send_counter_mutation(
                     netw::messaging_service::msg_addr{ endpoint_and_mutations.first, 0 }, timeout, tr_state,
-                    std::move(fms), cl);
+                    std::move(fms), cl, fence);
         }
       } catch (...) {
         // The leader receives a vector of mutations and processes them together,
@@ -3350,6 +3362,8 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
                 throw mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER);
             } catch (rpc::closed_error&) {
                 throw mutation_write_failure_exception(s->ks_name(), s->cf_name(), cl, 0, 1, db::block_for(*erm, cl), db::write_type::COUNTER);
+            } catch (replica::stale_topology_exception& e) {
+                throw mutation_write_failure_exception(e.what(), cl, 0, 1, db::block_for(*erm, cl), db::write_type::COUNTER);
             }
         }
       }
