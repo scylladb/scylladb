@@ -89,6 +89,8 @@ scylla-server
 -------------
 The :code:`scylla-server` file contains configuration related to starting up the Scylla server.
 
+.. _admin-scylla.yaml:
+
 .. include:: /operating-scylla/scylla-yaml.inc
 
 Compression
