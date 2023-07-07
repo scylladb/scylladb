@@ -39,6 +39,7 @@
 #include <boost/range/algorithm/transform.hpp>
 #include <optional>
 #include "db/config.hh"
+#include "replica/database.hh"
 
 namespace service {
 
@@ -60,6 +61,22 @@ static mutation convert_history_mutation(canonical_mutation m, const data_dictio
     return m.to_mutation(db.find_schema(db::system_keyspace::NAME, db::system_keyspace::GROUP0_HISTORY));
 }
 
+static future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_address from, std::vector<canonical_mutation> cms) {
+    std::vector<mutation> mutations;
+    mutations.reserve(cms.size());
+    try {
+        for (const auto& cm : cms) {
+            auto& tbl = proxy.local_db().find_column_family(cm.column_family_id());
+            mutations.emplace_back(cm.to_mutation(tbl.schema()));
+        }
+    } catch (replica::no_such_column_family& e) {
+        slogger.error("Error while applying mutations from {}: {}", from, e);
+        throw std::runtime_error(::format("Error while applying mutations: {}", e));
+    }
+
+    co_await proxy.mutate_locally(std::move(mutations), tracing::trace_state_ptr());
+}
+
 future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
     slogger.trace("apply() is called with {} commands", command.size());
 
@@ -74,7 +91,8 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
         merger(group0_state_machine& sm_, utils::UUID id, semaphore_units<> mux) : last_group0_state_id(id)
             , sm(sm_)
             , read_apply_mutex_holder(std::move(mux))
-            , max_command_size(sm._sp.data_dictionary().get_config().commitlog_segment_size_in_mb() * 1024 * 1024 / 2) {}
+            // max_mutation_size = 1/2 of commitlog segment size, thus max_command_size is set 1/3 of commitlog segment size to leave space for metadata.
+            , max_command_size(sm._sp.data_dictionary().get_config().commitlog_segment_size_in_mb() * 1024 * 1024 / 3) {}
 
         size_t cmd_size(group0_command& cmd) {
             if (holds_alternative<broadcast_table_query>(cmd.change)) {
@@ -103,7 +121,7 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
         void add(group0_command&& cmd, size_t added_size) {
             slogger.trace("add to merging set new_state_id: {}", cmd.new_state_id);
             auto m = convert_history_mutation(std::move(cmd.history_append), sm._sp.data_dictionary());
-            last_group0_state_id = cmd.new_state_id;
+            last_group0_state_id = std::max(last_group0_state_id, cmd.new_state_id);
             cmd_to_merge.push_back(std::move(cmd));
             size += added_size;
             if (merged_history_mutation) {
@@ -123,6 +141,9 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
                 },
                 [] (topology_change& chng) -> std::vector<canonical_mutation>& {
                     return chng.mutations;
+                },
+                [] (write_mutations& muts) -> std::vector<canonical_mutation>& {
+                    return muts.mutations;
                 }
             ), cmd.change);
         }
@@ -186,7 +207,11 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
                 sm._client.set_query_result(cmd.new_state_id, std::move(result));
             },
             [&] (topology_change& chng) -> future<> {
-            return sm._ss.topology_transition(sm._sp, sm._cdc_gen_svc, cmd.creator_addr, std::move(chng.mutations));
+                co_await write_mutations_to_database(sm._sp, cmd.creator_addr, std::move(chng.mutations));
+                co_await sm._ss.topology_transition(sm._cdc_gen_svc);
+            },
+            [&] (write_mutations& muts) -> future<> {
+                return write_mutations_to_database(sm._sp, cmd.creator_addr, std::move(muts.mutations));
             }
             ), cmd.change);
 

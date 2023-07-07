@@ -246,6 +246,8 @@ public:
     // Server id of this server
     virtual raft::server_id id() const = 0;
     virtual void set_applier_queue_max_size(size_t queue_max_size) = 0;
+
+    virtual size_t max_command_size() const = 0;
 };
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,

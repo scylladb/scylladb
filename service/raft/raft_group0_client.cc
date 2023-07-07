@@ -19,6 +19,7 @@
 #include "idl/experimental/broadcast_tables_lang.dist.impl.hh"
 #include "idl/group0_state_machine.dist.hh"
 #include "idl/group0_state_machine.dist.impl.hh"
+#include "service/raft/group0_state_machine.hh"
 
 
 namespace service {
@@ -141,6 +142,7 @@ bool group0_guard::with_raft() const {
     return _impl->_raft_enabled;
 }
 
+void release_guard(group0_guard guard) {}
 
 void raft_group0_client::set_history_gc_duration(gc_clock::duration d) {
     _history_gc_duration = d;
@@ -305,13 +307,15 @@ group0_command raft_group0_client::prepare_command(Command change, group0_guard&
     return group0_cmd;
 }
 
-group0_command raft_group0_client::prepare_command(broadcast_table_query query) {
+template<typename Command>
+requires std::same_as<Command, broadcast_table_query> || std::same_as<Command, write_mutations>
+group0_command raft_group0_client::prepare_command(Command change, std::string_view description) {
     const auto new_group0_state_id = generate_group0_state_id(utils::UUID{});
 
     group0_command group0_cmd {
-        .change{std::move(query)},
+        .change{std::move(change)},
         .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
-            new_group0_state_id, _history_gc_duration, "")},
+            new_group0_state_id, _history_gc_duration, description)},
 
         .prev_state_id{std::nullopt},
         .new_state_id{new_group0_state_id},
@@ -463,5 +467,7 @@ void raft_group0_client::set_query_result(utils::UUID query_id, service::broadca
 
 template group0_command raft_group0_client::prepare_command(schema_change change, group0_guard& guard, std::string_view description);
 template group0_command raft_group0_client::prepare_command(topology_change change, group0_guard& guard, std::string_view description);
+template group0_command raft_group0_client::prepare_command(broadcast_table_query change, std::string_view description);
+template group0_command raft_group0_client::prepare_command(write_mutations change, std::string_view description);
 
 }

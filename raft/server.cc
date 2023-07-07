@@ -98,6 +98,7 @@ public:
     future<> modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as = nullptr) override;
     future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as);
     void register_metrics() override;
+    size_t max_command_size() const override;
 private:
     std::unique_ptr<rpc> _rpc;
     std::unique_ptr<state_machine> _state_machine;
@@ -1684,6 +1685,10 @@ future<> server_impl::stepdown(logical_clock::duration timeout) {
     }
     _stepdown_promise = promise<>();
     return _stepdown_promise->get_future();
+}
+
+size_t server_impl::max_command_size() const {
+    return _config.max_command_size;
 }
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,

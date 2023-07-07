@@ -25,6 +25,7 @@
 #include "gms/inet_address.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
+#include "utils/error_injection.hh"
 #include "utils/UUID_gen.hh"
 
 #include "cdc/generation.hh"
@@ -272,8 +273,10 @@ future<utils::chunked_vector<mutation>> get_cdc_generation_mutations(
     res.emplace_back(s, partition_key::from_singular(*s, id));
     res.back().set_static_cell(to_bytes("num_ranges"), int32_t(desc.entries().size()), ts);
     size_t size_estimate = 0;
+    size_t total_size_estimate = 0;
     for (auto& e : desc.entries()) {
         if (size_estimate >= mutation_size_threshold) {
+            total_size_estimate += size_estimate;
             res.emplace_back(s, partition_key::from_singular(*s, id));
             size_estimate = 0;
         }
@@ -291,6 +294,20 @@ future<utils::chunked_vector<mutation>> get_cdc_generation_mutations(
 
         co_await coroutine::maybe_yield();
     }
+
+    total_size_estimate += size_estimate;
+
+    // Copy mutations n times, where n is picked so that the memory size of all mutations together exceeds `max_command_size`.
+    utils::get_local_injector().inject("cdc_generation_mutations_replication", [&res, total_size_estimate, mutation_size_threshold] {
+        utils::chunked_vector<mutation> new_res;
+
+        size_t number_of_copies = (mutation_size_threshold / total_size_estimate + 1) * 2;
+        for (size_t i = 0; i < number_of_copies; ++i) {
+            std::copy(res.begin(), res.end(), std::back_inserter(new_res));
+        }
+
+        res = std::move(new_res);
+    });
 
     co_return res;
 }

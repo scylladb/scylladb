@@ -37,8 +37,14 @@ struct topology_change {
     std::vector<canonical_mutation> mutations;
 };
 
+// This command is used to write data to tables other than topology or
+// schema tables and it doesn't update any in-memory data structures.
+struct write_mutations {
+    std::vector<canonical_mutation> mutations;
+};
+
 struct group0_command {
-    std::variant<schema_change, broadcast_table_query, topology_change> change;
+    std::variant<schema_change, broadcast_table_query, topology_change, write_mutations> change;
 
     // Mutation of group0 history table, appending a new state ID and optionally a description.
     canonical_mutation history_append;
