@@ -248,9 +248,12 @@ public:
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
             std::vector<frozen_mutation> fms, db::consistency_level cl) {
         tracing::trace(tr_state, "Enqueuing counter update to {}", addr);
-        return ser::storage_proxy_rpc_verbs::send_counter_mutation(
-                &_ms, std::move(addr), timeout,
-                std::move(fms), cl, tracing::make_trace_info(tr_state));
+        auto&& opt_exception = co_await ser::storage_proxy_rpc_verbs::send_counter_mutation(
+            &_ms, std::move(addr), timeout,
+            std::move(fms), cl, tracing::make_trace_info(tr_state));
+        if (opt_exception.has_value() && *opt_exception) {
+            co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
+        }
     }
 
     future<> send_mutation_done(
@@ -398,7 +401,7 @@ private:
         co_return co_await _mm.get_schema_for_write(std::move(v), std::move(from), _ms, &aoe.abort_source());
     }
 
-    future<> handle_counter_mutation(
+    future<replica::exception_variant> handle_counter_mutation(
             const rpc::client_info& cinfo, rpc::opt_time_point t,
             std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info) {
         auto src_addr = netw::messaging_service::get_source(cinfo);
@@ -422,6 +425,7 @@ private:
         });
         auto& sp = _sp;
         co_await sp.mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
+        co_return replica::exception_variant{};
     }
 
     future<rpc::no_wait_type> handle_write(
