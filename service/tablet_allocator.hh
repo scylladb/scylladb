@@ -10,9 +10,38 @@
 
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
+#include "locator/tablets.hh"
 #include <any>
 
 namespace service {
+
+/// Represents intention to move a single tablet replica from src to dst.
+struct tablet_migration_info {
+    locator::global_tablet_id tablet;
+    locator::tablet_replica src;
+    locator::tablet_replica dst;
+};
+
+using migration_plan = utils::chunked_vector<tablet_migration_info>;
+
+/// Returns a tablet migration plan that aims to achieve better load balance in the whole cluster.
+/// The plan is computed based on information in the given token_metadata snapshot
+/// and thus should be executed and reflected, at least as pending tablet transitions, in token_metadata
+/// before this is called again.
+///
+/// For any given global_tablet_id there is at most one tablet_migration_info in the returned plan.
+///
+/// To achieve full balance, do:
+///
+///    while (true) {
+///        auto plan = co_await balance_tablets(get_token_metadata());
+///        if (plan.empty()) {
+///            break;
+///        }
+///        co_await execute(plan);
+///    }
+///
+future<migration_plan> balance_tablets(locator::token_metadata_ptr);
 
 class tablet_allocator_impl;
 

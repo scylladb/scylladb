@@ -80,6 +80,22 @@ std::ostream& operator<<(std::ostream&, const tablet_replica&);
 
 using tablet_replica_set = utils::small_vector<tablet_replica, 3>;
 
+/// Creates a new replica set with old_replica replaced by new_replica.
+/// If there is no old_replica, the set is returned unchanged.
+inline
+tablet_replica_set replace_replica(const tablet_replica_set& rs, tablet_replica old_replica, tablet_replica new_replica) {
+    tablet_replica_set result;
+    result.reserve(rs.size());
+    for (auto&& r : rs) {
+        if (r == old_replica) {
+            result.push_back(new_replica);
+        } else {
+            result.push_back(r);
+        }
+    }
+    return result;
+}
+
 /// Stores information about a single tablet.
 struct tablet_info {
     tablet_replica_set replicas;

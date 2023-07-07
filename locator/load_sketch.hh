@@ -12,6 +12,7 @@
 #include "locator/token_metadata.hh"
 #include "locator/tablets.hh"
 #include "utils/stall_free.hh"
+#include "utils/div_ceil.hh"
 
 #include <seastar/core/smp.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -44,6 +45,14 @@ class load_sketch {
                 s.id = next_shard++;
                 s.load = 0;
             }
+        }
+
+        uint64_t load() const {
+            uint64_t result = 0;
+            for (auto&& s : _shards) {
+                result += s.load;
+            }
+            return result;
         }
     };
     std::unordered_map<host_id, node_load> _nodes;
@@ -94,6 +103,21 @@ public:
         s.load += 1;
         std::push_heap(n._shards.begin(), n._shards.end(), shard_load_cmp());
         return shard;
+    }
+
+    uint64_t get_load(host_id node) const {
+        if (!_nodes.contains(node)) {
+            return 0;
+        }
+        return _nodes.at(node).load();
+    }
+
+    uint64_t get_avg_shard_load(host_id node) const {
+        if (!_nodes.contains(node)) {
+            return 0;
+        }
+        auto& n = _nodes.at(node);
+        return div_ceil(n.load(), n._shards.size());
     }
 };
 
