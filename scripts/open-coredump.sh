@@ -128,6 +128,7 @@ done
 VERBOSE_LEVEL=1
 SCYLLA_S3_RELOC_SERVER_URL="${SCYLLA_S3_RELOC_SERVER_URL:-$SCYLLA_S3_RELOC_SERVER_DEFAULT_URL}"
 SCYLLA_REPO_PATH="${SCYLLA_REPO_PATH}"
+SCYLLA_BUILD_ID="${SCYLLA_BUILD_ID}"
 SCYLLA_GDB_PY_SOURCE="${SCYLLA_GDB_PY_SOURCE:-repo}"
 ARTIFACT_DIR=${ARTIFACT_DIR:-${SCRIPT_NAME}.dir}
 
@@ -161,6 +162,10 @@ do
             ;;
         "--scylla-gdb-py-source"|"-s")
             SCYLLA_GDB_PY_SOURCE=$2
+            shift 2
+            ;;
+        "--scylla-build-id"|"-b")
+            SCYLLA_BUILD_ID=$2
             shift 2
             ;;
         *)
@@ -207,7 +212,10 @@ case "${SCYLLA_GDB_PY_SOURCE}" in
         ;;
 esac
 
-BUILD_ID=$(eu-unstrip -n --core ${COREFILE} | grep 'scylla$' | cut -f2 -d' ' | cut -f1 -d@)
+BUILD_ID="${SCYLLA_BUILD_ID}"
+if [[ -z "${BUILD_ID}" ]]; then
+    BUILD_ID=$(eu-unstrip -n --core ${COREFILE} | grep 'scylla$' | cut -f2 -d' ' | cut -f1 -d@)
+fi
 
 log "Build id: ${BUILD_ID}"
 
