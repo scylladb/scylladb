@@ -57,6 +57,14 @@ struct hash<locator::tablet_id> {
 
 namespace locator {
 
+/// Identifies tablet (not be confused with tablet replica) in the scope of the whole cluster.
+struct global_tablet_id {
+    table_id table;
+    tablet_id tablet;
+
+    bool operator<=>(const global_tablet_id&) const = default;
+};
+
 struct tablet_replica {
     host_id host;
     shard_id shard;
@@ -290,9 +298,23 @@ struct hash<locator::tablet_replica> {
     }
 };
 
+template<>
+struct hash<locator::global_tablet_id> {
+    size_t operator()(const locator::global_tablet_id& id) const {
+        return utils::hash_combine(
+                std::hash<table_id>()(id.table),
+                std::hash<locator::tablet_id>()(id.tablet));
+    }
+};
+
 }
 
 template <>
 struct fmt::formatter<locator::tablet_transition_stage> : fmt::formatter<std::string_view> {
     auto format(const locator::tablet_transition_stage&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<locator::global_tablet_id> : fmt::formatter<std::string_view> {
+    auto format(const locator::global_tablet_id&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

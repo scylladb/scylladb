@@ -472,6 +472,11 @@ effective_replication_map_ptr tablet_aware_replication_strategy::do_make_replica
 
 }
 
+auto fmt::formatter<locator::global_tablet_id>::format(const locator::global_tablet_id& id, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}:{}", id.table, id.tablet);
+}
+
 auto fmt::formatter<locator::tablet_transition_stage>::format(const locator::tablet_transition_stage& stage, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
     return fmt::format_to(ctx.out(), "{}", locator::tablet_transition_stage_to_string(stage));
