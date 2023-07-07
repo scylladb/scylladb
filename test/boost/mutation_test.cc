@@ -2360,8 +2360,14 @@ SEASTAR_THREAD_TEST_CASE(test_external_memory_usage) {
         auto m = mutation(s.schema(), s.make_pkey("pk"));
 
         auto row_count = tests::random::get_int(1, 16);
+        auto ck_values = std::set<sstring>();
         for (auto i = 0; i < row_count; i++) {
             auto ck_value = to_hex(tests::random::get_bytes(tests::random::get_int(1023) + 1));
+            if (!ck_values.insert(ck_value).second) {
+                // This clustering key was already added. Retry.
+                --i;
+                continue;
+            }
             data_size += ck_value.size();
             auto ck = s.make_ckey(ck_value);
 
@@ -2402,8 +2408,14 @@ SEASTAR_THREAD_TEST_CASE(test_external_memory_usage_v2) {
         auto m = mutation(s.schema(), s.make_pkey("pk"));
 
         auto row_count = tests::random::get_int(1, 16);
+        auto ck_values = std::set<sstring>();
         for (auto i = 0; i < row_count; i++) {
             auto ck_value = to_hex(tests::random::get_bytes(tests::random::get_int(1023) + 1));
+            if (!ck_values.insert(ck_value).second) {
+                // This clustering key was already added. Retry.
+                --i;
+                continue;
+            }
             data_size += ck_value.size();
             auto ck = s.make_ckey(ck_value);
 
