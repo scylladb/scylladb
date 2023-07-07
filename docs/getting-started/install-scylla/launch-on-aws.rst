@@ -22,27 +22,35 @@ Launching Instances from ScyllaDB AMI
      * Select your VPC.
      * Configure the security group. Ensure that all :ref:`ScyllaDB ports <networking-ports>` are open.
 
-   * **Advanced Details> User Data** – You can add the following options in the JSON format:
+   * **Advanced Details> User Data** – Here, you can add ScyllaDB configuration options in the JSON format.
+     See :ref:`scylla.yaml <admin-scylla.yaml>` for information about supported options.
+
+     .. TODO Replace the link to scylla.yaml to the full list of supported options - when all the options are documented.
+    
+     The following example shows a configuration using the most popular options. 
 
      * ``cluster_name`` - The name of the cluster.
-     * ``experimental`` - If set to ``true``, it enables all experimental features.
-     * ``seed_provider`` - The IP of the first node. New nodes will use the IP of this seed node to connect to the cluster and learn the cluster topology and state. See `ScyllaDB Seed Nodes </kb/seed-nodes>`_.
-     * ``developer_mode`` - If set to ``true``, ScyllaDB will run in :doc:`developer mode </getting-started/installation-common/dev-mod>`.
+     * ``seed_provider`` - The IP of the first node. New nodes will use the IP of this seed node to connect to the cluster and learn the cluster topology and state. See :doc:`ScyllaDB Seed Nodes </kb/seed-nodes>`.
      * ``post_configuration_script`` - A base64 encoded bash script that will be executed after the configuration is completed.
-     * ``start_scylla_on_first_boot`` - Start ScyllaDB once the configuration is completed.
+     * ``start_scylla_on_first_boot`` - Starts ScyllaDB once the configuration is completed.
 
-     For full documentation of ScyllaDB AMI user data, see the `ScyllaDB Image documentation <https://github.com/scylladb/scylla-machine-image>`_.
-
+     
      Example:
 
-     .. code-block:: console
+     .. code-block:: json
 
         {
-        "scylla_yaml": {
-          "cluster_name": "my-test-cluster",
-          "experimental": true
-          }
+             "scylla_yaml": {
+                 "cluster_name": "test-cluster",
+                 "seed_provider": [{"class_name": "org.apache.cassandra.locator.SimpleSeedProvider",
+                                    "parameters": [{"seeds": "10.0.219.209"}]}],
+             },
+             "post_configuration_script": "#! /bin/bash\nyum install cloud-init-cfn",
+             "start_scylla_on_first_boot": true
         }
+      
+     For full documentation of ScyllaDB AMI user data, see the `ScyllaDB Image documentation <https://github.com/scylladb/scylla-machine-image>`_.
+
 
 #. Add storage.
 
