@@ -1717,19 +1717,6 @@ cql3::raw_value do_evaluate(const conjunction& conj, const evaluation_inputs& in
 
 static
 cql3::raw_value do_evaluate(const field_selection& field_select, const evaluation_inputs& inputs) {
-    const user_type_impl* udt_type = dynamic_cast<const user_type_impl*>(&type_of(field_select.structure)->without_reversed());
-    if (udt_type == nullptr) {
-        on_internal_error(expr_logger, "evaluate(field_selection): type is not a user defined type");
-    }
-
-    const sstring& selected_field_name = field_select.field->text();
-    std::optional<std::size_t> selected_field_idx = udt_type->idx_of_field(to_bytes_view(selected_field_name));
-    if (!selected_field_idx.has_value()) {
-        throw exceptions::invalid_request_exception(
-            format("Unknown field '{}' in expression {}, user type {} doesn't have a field with this name.",
-                   selected_field_name, field_select, udt_type->get_name_as_string()));
-    }
-
     cql3::raw_value udt_value = evaluate(field_select.structure, inputs);
     if (udt_value.is_null()) {
         // `<null>.field` should evaluate to NULL.
@@ -1739,7 +1726,7 @@ cql3::raw_value do_evaluate(const field_selection& field_select, const evaluatio
     cql3::raw_value field_value = udt_value.view().with_value(
         [&](const FragmentedView auto& udt_serialized_bytes) -> cql3::raw_value {
             // std::optional<FragmentedView> read_field
-            auto read_field = read_nth_user_type_field(udt_serialized_bytes, *selected_field_idx);
+            auto read_field = read_nth_user_type_field(udt_serialized_bytes, field_select.field_idx);
 
             if (read_field.has_value()) {
                 return cql3::raw_value::make_value(managed_bytes(*read_field));

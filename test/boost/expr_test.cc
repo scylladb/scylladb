@@ -3245,6 +3245,9 @@ BOOST_AUTO_TEST_CASE(evaluate_conjunction_of_conjunctions_with_invalid) {
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_field_selection) {
+    auto schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(schema);
+
     // The user defined type has 5 fields:
     // CREATE TYPE test_ks.my_type (
     //   int_field int,
@@ -3275,19 +3278,25 @@ BOOST_AUTO_TEST_CASE(evaluate_field_selection) {
             .structure = value, .field = make_shared<column_identifier_raw>(selected_field, true), .type = field_type};
     };
 
+
+    auto prepare_and_evaluate = [&,db = db] (const expression& e, const evaluation_inputs& inputs) {
+        auto prepared = prepare_expression(e, db, "", schema.get(), nullptr);
+        return evaluate(prepared, inputs);
+    };
+
     // Evaluate the fields, check that field values are correct
-    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(udt_value, "int_field", int32_type), evaluation_inputs{}), make_int_raw(123));
-    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(udt_value, "float_field", float_type), evaluation_inputs{}),
+    BOOST_REQUIRE_EQUAL(prepare_and_evaluate(make_field_selection(udt_value, "int_field", int32_type), evaluation_inputs{}), make_int_raw(123));
+    BOOST_REQUIRE_EQUAL(prepare_and_evaluate(make_field_selection(udt_value, "float_field", float_type), evaluation_inputs{}),
                         cql3::raw_value::make_null());
-    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(udt_value, "text_field", utf8_type), evaluation_inputs{}),
+    BOOST_REQUIRE_EQUAL(prepare_and_evaluate(make_field_selection(udt_value, "text_field", utf8_type), evaluation_inputs{}),
                         make_text_raw("abcdef"));
-    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(udt_value, "bigint_field", long_type), evaluation_inputs{}),
+    BOOST_REQUIRE_EQUAL(prepare_and_evaluate(make_field_selection(udt_value, "bigint_field", long_type), evaluation_inputs{}),
                         make_empty_raw());
-    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(udt_value, "int_field2", int32_type), evaluation_inputs{}),
+    BOOST_REQUIRE_EQUAL(prepare_and_evaluate(make_field_selection(udt_value, "int_field2", int32_type), evaluation_inputs{}),
                         make_int_raw(1337));
 
     // Evaluate a nonexistent field, should throw an exception
-    BOOST_REQUIRE_THROW(evaluate(make_field_selection(udt_value, "field_testing", int32_type), evaluation_inputs{}),
+    BOOST_REQUIRE_THROW(prepare_and_evaluate(make_field_selection(udt_value, "field_testing", int32_type), evaluation_inputs{}),
                         exceptions::invalid_request_exception);
 
     // Create a UDT value with values for the first 3 fields.
@@ -3299,21 +3308,21 @@ BOOST_AUTO_TEST_CASE(evaluate_field_selection) {
         constant(make_tuple_raw({make_int_raw(123), cql3::raw_value::make_null(), make_text_raw("")}), udt_type);
 
     // Evaluate the first 3 fields, check that the value is correct
-    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(short_udt_value, "int_field", int32_type), evaluation_inputs{}),
+    BOOST_REQUIRE_EQUAL(prepare_and_evaluate(make_field_selection(short_udt_value, "int_field", int32_type), evaluation_inputs{}),
                         make_int_raw(123));
-    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(short_udt_value, "float_field", float_type), evaluation_inputs{}),
+    BOOST_REQUIRE_EQUAL(prepare_and_evaluate(make_field_selection(short_udt_value, "float_field", float_type), evaluation_inputs{}),
                         cql3::raw_value::make_null());
-    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(short_udt_value, "text_field", utf8_type), evaluation_inputs{}),
+    BOOST_REQUIRE_EQUAL(prepare_and_evaluate(make_field_selection(short_udt_value, "text_field", utf8_type), evaluation_inputs{}),
                         make_text_raw(""));
 
     // The serialized value doesn't contain any data for the 4th or 5th field, so they should be NULL.
-    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(short_udt_value, "bigint_field", long_type), evaluation_inputs{}),
+    BOOST_REQUIRE_EQUAL(prepare_and_evaluate(make_field_selection(short_udt_value, "bigint_field", long_type), evaluation_inputs{}),
                         cql3::raw_value::make_null());
-    BOOST_REQUIRE_EQUAL(evaluate(make_field_selection(short_udt_value, "int_field2", int32_type), evaluation_inputs{}),
+    BOOST_REQUIRE_EQUAL(prepare_and_evaluate(make_field_selection(short_udt_value, "int_field2", int32_type), evaluation_inputs{}),
                         cql3::raw_value::make_null());
 
     // Evaluate a nonexistent field, should throw an exception
-    BOOST_REQUIRE_THROW(evaluate(make_field_selection(short_udt_value, "field_testing", int32_type), evaluation_inputs{}),
+    BOOST_REQUIRE_THROW(prepare_and_evaluate(make_field_selection(short_udt_value, "field_testing", int32_type), evaluation_inputs{}),
                         exceptions::invalid_request_exception);
 }
 
