@@ -130,6 +130,76 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_operations) {
         manual_clock::advance(expiration_time);
         BOOST_CHECK(m.find(id1) && *m.find(id1) == addr2);
     }
+    {
+        // Check that set_expiring() doesn't insert a new entry
+        sharded<raft_address_map_t<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
+        m.set_expiring(id1);
+        BOOST_CHECK(!m.find(id1));
+    }
+    {
+        // Check that set_nonexpiring() inserts a new non-expiring entry if the
+        // entry is missing
+        sharded<raft_address_map_t<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
+        m.set_nonexpiring(id1);
+        manual_clock::advance(expiration_time);
+        // find() returns std::nullopt when an entry doesn't contain an address
+        // or it is not present in the address map, so we have to update the
+        // inserted entry's address before checking if it is in the address map
+        m.add_or_update_entry(id1, addr1);
+        BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
+    }
+    {
+        // Check that add_or_update_entry() throws when called without an actual IP address
+        sharded<raft_address_map_t<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
+        scoped_no_abort_on_internal_error abort_guard;
+        BOOST_CHECK_THROW(m.add_or_update_entry(id1, gms::inet_address{}), std::runtime_error);
+    }
+    {
+        // Check that opt_add_entry() throws when called without an actual IP address
+        sharded<raft_address_map_t<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
+        scoped_no_abort_on_internal_error abort_guard;
+        BOOST_CHECK_THROW(m.opt_add_entry(id1, gms::inet_address{}), std::runtime_error);
+    }
+    {
+        // Check that add_or_update_entry() doesn't overwrite a new IP address
+        // with an obsolete one
+        sharded<raft_address_map_t<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
+        m.add_or_update_entry(id1, addr1, gms::generation_type(1));
+        m.add_or_update_entry(id1, addr2, gms::generation_type(0));
+        BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
+    }
+    {
+        // Check that add_or_update_entry() adds an IP address if the entry
+        // doesn't have it regardless of the generation number
+        sharded<raft_address_map_t<manual_clock>> m_svc;
+        m_svc.start().get();
+        auto stop_map = defer([&m_svc] { m_svc.stop().get(); });
+        auto& m = m_svc.local();
+
+        m.set_nonexpiring(id1);
+        m.add_or_update_entry(id1, addr1, gms::generation_type(-1));
+        BOOST_CHECK(m.find(id1) && *m.find(id1) == addr1);
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_raft_address_map_replication) {
@@ -215,6 +285,13 @@ SEASTAR_THREAD_TEST_CASE(test_raft_address_map_replication) {
         m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
             scoped_no_abort_on_internal_error abort_guard;
             BOOST_CHECK_THROW(m.set_expiring(id2), std::runtime_error);
+        }).get();
+
+        // Cannot set it to non-expiring on shard 1
+        m.set_expiring(id2);
+        m_svc.invoke_on(1, [] (raft_address_map_t<manual_clock>& m) {
+            scoped_no_abort_on_internal_error abort_guard;
+            BOOST_CHECK_THROW(m.set_nonexpiring(id2), std::runtime_error);
         }).get();
     }
 }
