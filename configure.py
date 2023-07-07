@@ -187,7 +187,7 @@ class OptimizationLevel:
                               capture_output=True,
                               check=True,
                               text=True)
-        matched = re.match(r'clang version (\d+\.\d+.\d+)', proc.stdout)
+        matched = re.search(r'clang version (\d+\.\d+.\d+)', proc.stdout)
         if matched is None:
             raise Exception(f'Unable to tell version of {cxx_compiler}')
         if parse_version(matched.group(1)) < parse_version('16.0.0'):
