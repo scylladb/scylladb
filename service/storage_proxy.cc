@@ -178,7 +178,7 @@ public:
     {
         ser::storage_proxy_rpc_verbs::register_counter_mutation(&_ms, std::bind_front(&remote::handle_counter_mutation, this));
         ser::storage_proxy_rpc_verbs::register_mutation(&_ms, std::bind_front(&remote::receive_mutation_handler, this, _sp._write_smp_service_group));
-        ser::storage_proxy_rpc_verbs::register_hint_mutation(&_ms, [this] <typename... Args>(Args&&... args) { return receive_mutation_handler(_sp._hints_write_smp_service_group, std::forward<Args>(args)..., std::monostate(), rpc::optional<fencing_token>{}); });
+        ser::storage_proxy_rpc_verbs::register_hint_mutation(&_ms, std::bind_front(&remote::receive_hint_mutation_handler, this));
         ser::storage_proxy_rpc_verbs::register_paxos_learn(&_ms, std::bind_front(&remote::handle_paxos_learn, this));
         ser::storage_proxy_rpc_verbs::register_mutation_done(&_ms, std::bind_front(&remote::handle_mutation_done, this));
         ser::storage_proxy_rpc_verbs::register_mutation_failed(&_ms, std::bind_front(&remote::handle_mutation_failed, this));
@@ -235,12 +235,13 @@ public:
     future<> send_hint_mutation(
             netw::msg_addr addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
             const frozen_mutation& m, const inet_address_vector_replica_set& forward, gms::inet_address reply_to, unsigned shard,
-            storage_proxy::response_id_type response_id, db::per_partition_rate_limit::info rate_limit_info) {
+            storage_proxy::response_id_type response_id, db::per_partition_rate_limit::info rate_limit_info,
+            fencing_token fence) {
         tracing::trace(tr_state, "Sending a hint to /{}", addr.addr);
         return ser::storage_proxy_rpc_verbs::send_hint_mutation(
                 &_ms, std::move(addr), timeout,
                 m, forward, std::move(reply_to), shard,
-                response_id, tracing::make_trace_info(tr_state));
+                response_id, tracing::make_trace_info(tr_state), fence);
     }
 
     future<> send_counter_mutation(
@@ -554,6 +555,17 @@ private:
                         const std::optional<tracing::trace_info>& trace_info, fencing_token fence) {
                     return send_mutation(addr, timeout, trace_info, m, {}, reply_to, shard, response_id, rate_limit_info, fence);
                 });
+    }
+
+    future<rpc::no_wait_type> receive_hint_mutation_handler(
+            const rpc::client_info& cinfo, rpc::opt_time_point t,
+            frozen_mutation in, inet_address_vector_replica_set forward, gms::inet_address reply_to,
+            unsigned shard, storage_proxy::response_id_type response_id,
+            rpc::optional<std::optional<tracing::trace_info>> trace_info,
+            rpc::optional<fencing_token> fence) {
+        return receive_mutation_handler(_sp._hints_write_smp_service_group, cinfo, t, std::move(in),
+            std::move(forward), std::move(reply_to), shard, response_id, std::move(trace_info),
+            std::monostate(), fence);
     }
 
     future<rpc::no_wait_type> handle_paxos_learn(
@@ -1081,17 +1093,17 @@ public:
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
-            fencing_token) override {
+            fencing_token fence) override {
         // A hint will be sent to all relevant endpoints when the endpoint it was originally intended for
         // becomes unavailable - this might include the current node
-        return sp.mutate_hint(_schema, *_mutation, std::move(tr_state), timeout);
+        return sp.apply_fence(sp.mutate_hint(_schema, *_mutation, std::move(tr_state), timeout), fence, utils::fb_utilities::get_broadcast_address());
     }
     virtual future<> apply_remotely(storage_proxy& sp, gms::inet_address ep, const inet_address_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info, fencing_token) override {
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info, fencing_token fence) override {
         return sp.remote().send_hint_mutation(
                 netw::messaging_service::msg_addr{ep, 0}, timeout, tr_state,
-                *_mutation, forward, utils::fb_utilities::get_broadcast_address(), this_shard_id(), response_id, rate_limit_info);
+                *_mutation, forward, utils::fb_utilities::get_broadcast_address(), this_shard_id(), response_id, rate_limit_info, fence);
     }
 };
 
