@@ -477,6 +477,18 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
                             _cql_stats.maximum_replication_factor_fail_violations,
                             sm::description("Counts the number of maximum_replication_factor_fail_threshold guardrail violations, "
                                             "i.e. attempts to create a keyspace with RF on one of the DCs above the set guardrail.")),
+
+                    sm::make_counter(
+                            "replication_strategy_warn_list_violations",
+                            _cql_stats.replication_strategy_warn_list_violations,
+                            sm::description("Counts the number of replication_strategy_warn_list guardrail violations, "
+                                            "i.e. attempts to set a discouraged replication strategy in a keyspace via CREATE/ALTER KEYSPACE.")),
+
+                    sm::make_counter(
+                            "replication_strategy_fail_list_violations",
+                            _cql_stats.replication_strategy_fail_list_violations,
+                            sm::description("Counts the number of replication_strategy_fail_list guardrail violations, "
+                                            "i.e. attempts to set a forbidden replication strategy in a keyspace via CREATE/ALTER KEYSPACE.")),
             });
 
     _mnotifier.register_listener(_migration_subscriber.get());

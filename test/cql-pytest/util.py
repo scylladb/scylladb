@@ -6,6 +6,7 @@
 # Various utility functions which are useful for multiple tests.
 # Note that fixtures aren't here - they are in conftest.py.
 
+from ast import literal_eval
 import string
 import random
 import time
@@ -294,7 +295,10 @@ class config_value_context:
         self._original_value = None
 
     def __enter__(self):
-        self._original_value = self._cql.execute(f"SELECT value FROM system.config WHERE name='{self._key}'").one().value
+        self._original_value = literal_eval(
+            self._cql.execute(f"SELECT value FROM system.config WHERE name='{self._key}'").one().value)
+        if isinstance(self._original_value, list):
+            self._original_value = "".join(c for c in self._original_value if c.isalnum())
         self._cql.execute(f"UPDATE system.config SET value='{self._value}' WHERE name='{self._key}'")
 
     def __exit__(self, exc_type, exc_value, exc_traceback):

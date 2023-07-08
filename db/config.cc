@@ -146,6 +146,9 @@ const config_type config_type_for<db::seed_provider_type> = config_type("seed pr
 template <>
 const config_type config_type_for<std::vector<enum_option<db::experimental_features_t>>> = config_type(
         "experimental features", printable_vector_to_json<enum_option<db::experimental_features_t>>);
+template <>
+const config_type config_type_for<std::vector<enum_option<db::replication_strategy_restriction_t>>> = config_type(
+        "replication strategy list", printable_vector_to_json<enum_option<db::replication_strategy_restriction_t>>);
 
 template <>
 const config_type config_type_for<enum_option<db::tri_mode_restriction_t>> = config_type(
@@ -218,6 +221,23 @@ template <>
 class convert<enum_option<db::experimental_features_t>> {
 public:
     static bool decode(const Node& node, enum_option<db::experimental_features_t>& rhs) {
+        std::string name;
+        if (!convert<std::string>::decode(node, name)) {
+            return false;
+        }
+        try {
+            std::istringstream(name) >> rhs;
+        } catch (boost::program_options::invalid_option_value&) {
+            return false;
+        }
+        return true;
+    }
+};
+
+template <>
+class convert<enum_option<db::replication_strategy_restriction_t>> {
+public:
+    static bool decode(const Node& node, enum_option<db::replication_strategy_restriction_t>& rhs) {
         std::string name;
         if (!convert<std::string>::decode(node, name)) {
             return false;
@@ -1057,7 +1077,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "In debug mode, report log-structured allocator sanitizer violations with a backtrace. Slow.")
     , flush_schema_tables_after_modification(this, "flush_schema_tables_after_modification", liveness::LiveUpdate, value_status::Used, true,
         "Flush tables in the system_schema keyspace after schema modification. This is required for crash recovery, but slows down tests and can be disabled for them")
-    , restrict_replication_simplestrategy(this, "restrict_replication_simplestrategy", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::FALSE, "Controls whether to disable SimpleStrategy replication. Can be true, false, or warn.")
+    , restrict_replication_simplestrategy(this, "restrict_replication_simplestrategy", liveness::LiveUpdate, value_status::Unused, db::tri_mode_restriction_t::mode::FALSE, "Controls whether to disable SimpleStrategy replication. Can be true, false, or warn.")
     , restrict_dtcs(this, "restrict_dtcs", liveness::LiveUpdate, value_status::Unused, db::tri_mode_restriction_t::mode::TRUE, "Controls whether to prevent setting DateTieredCompactionStrategy. Can be true, false, or warn.")
     , restrict_twcs_without_default_ttl(this, "restrict_twcs_without_default_ttl", liveness::LiveUpdate, value_status::Used, db::tri_mode_restriction_t::mode::WARN, "Controls whether to prevent creating TimeWindowCompactionStrategy tables without a default TTL. Can be true, false, or warn.")
     , restrict_future_timestamp(this, "restrict_future_timestamp",liveness::LiveUpdate, value_status::Used, true, "Controls whether to detect and forbid unreasonable USING TIMESTAMP, more than 3 days into the future.")
@@ -1093,6 +1113,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , minimum_replication_factor_warn_threshold(this, "minimum_replication_factor_warn_threshold", liveness::LiveUpdate, value_status::Used,  3, "")
     , maximum_replication_factor_warn_threshold(this, "maximum_replication_factor_warn_threshold", liveness::LiveUpdate, value_status::Used, -1, "")
     , maximum_replication_factor_fail_threshold(this, "maximum_replication_factor_fail_threshold", liveness::LiveUpdate, value_status::Used, -1, "")
+    , replication_strategy_warn_list(this, "replication_strategy_warn_list", liveness::LiveUpdate, value_status::Used, {locator::replication_strategy_type::simple}, "Controls which replication strategies to warn about when creating/altering a keyspace. Doesn't affect the pre-existing keyspaces.")
+    , replication_strategy_fail_list(this, "replication_strategy_fail_list", liveness::LiveUpdate, value_status::Used, {}, "Controls which replication strategies are disallowed to be used when creating/altering a keyspace. Doesn't affect the pre-existing keyspaces.")
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")
     , default_log_level(this, "default_log_level", value_status::Used)
     , logger_log_level(this, "logger_log_level", value_status::Used)
@@ -1267,6 +1289,13 @@ std::map<sstring, db::experimental_features_t::feature> db::experimental_feature
         {"keyspace-storage-options", feature::KEYSPACE_STORAGE_OPTIONS},
         {"tablets", feature::TABLETS},
     };
+}
+
+std::unordered_map<sstring, locator::replication_strategy_type> db::replication_strategy_restriction_t::map() {
+    return {{"SimpleStrategy", locator::replication_strategy_type::simple},
+            {"LocalStrategy", locator::replication_strategy_type::local},
+            {"NetworkTopologyStrategy", locator::replication_strategy_type::network_topology},
+            {"EverywhereStrategy", locator::replication_strategy_type::everywhere_topology}};
 }
 
 std::vector<enum_option<db::experimental_features_t>> db::experimental_features_t::all() {

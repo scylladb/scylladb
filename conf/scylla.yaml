@@ -623,3 +623,15 @@ strict_is_not_null_in_views: true
 # minimum_replication_factor_warn_threshold:  3
 # maximum_replication_factor_warn_threshold: -1
 # maximum_replication_factor_fail_threshold: -1
+
+# Guardrails to warn about or disallow creating a keyspace with specific replication strategy.
+# Each of these 2 settings is a list storing replication strategies considered harmful.
+# The replication strategies to choose from are:
+# 1) SimpleStrategy,
+# 2) NetworkTopologyStrategy,
+# 3) LocalStrategy,
+# 4) EverywhereStrategy
+#
+# replication_strategy_warn_list:
+#  - SimpleStrategy
+# replication_strategy_fail_list:
