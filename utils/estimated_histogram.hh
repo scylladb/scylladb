@@ -626,7 +626,6 @@ public:
             max_name_len = std::max(max_name_len, names.back().size());
         }
 
-        sstring formatstr = format("{{:{:d}s}}: {{:d}}\n", max_name_len);
         for (size_t i = 0; i < name_count; i++) {
             int64_t count = h.buckets[i];
             // sort-of-hack to not print empty ranges at the start that are only used to demarcate the
@@ -635,7 +634,7 @@ public:
             if (i == 0 && count == 0) {
                 continue;
             }
-            out << format(formatstr.c_str(), names[i], count);
+            fmt::print(out, "{:{}s}: {:d}", names[i], max_name_len, count);
         }
         return out;
     }
