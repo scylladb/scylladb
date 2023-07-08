@@ -560,7 +560,7 @@ public:
             auto marker = it->second;
             ++it;
             if (it != e && marker != composite::eoc::none) {
-                throw runtime_exception(format("non-zero component divider found ({:d}) mid", format("0x{:02x}", composite::eoc_type(marker) & 0xff)));
+                throw runtime_exception(format("non-zero component divider found ({:#02x}) mid", composite::eoc_type(marker) & 0xff));
             }
         }
         return ret;
