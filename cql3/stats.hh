@@ -85,6 +85,9 @@ struct cql_stats {
     uint64_t maximum_replication_factor_warn_violations = 0;
     uint64_t maximum_replication_factor_fail_violations = 0;
 
+    uint64_t replication_strategy_warn_list_violations = 0;
+    uint64_t replication_strategy_fail_list_violations = 0;
+
 private:
     uint64_t _unpaged_select_queries[(size_t)ks_selector::SIZE] = {0ul};
     uint64_t _query_cnt[(size_t)source_selector::SIZE]

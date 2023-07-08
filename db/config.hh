@@ -17,6 +17,7 @@
 #include <seastar/util/program-options.hh>
 #include <seastar/util/log.hh>
 
+#include "locator/abstract_replication_strategy.hh"
 #include "seastarx.hh"
 #include "utils/config_file.hh"
 #include "utils/enum_option.hh"
@@ -118,6 +119,10 @@ struct tri_mode_restriction_t {
     static std::unordered_map<sstring, mode> map(); // for enum_option<>
 };
 using tri_mode_restriction = enum_option<tri_mode_restriction_t>;
+
+struct replication_strategy_restriction_t {
+    static std::unordered_map<sstring, locator::replication_strategy_type> map(); // for enum_option<>
+};
 
 constexpr unsigned default_murmur3_partitioner_ignore_msb_bits = 12;
 
@@ -455,6 +460,8 @@ public:
     named_value<int> minimum_replication_factor_warn_threshold;
     named_value<int> maximum_replication_factor_warn_threshold;
     named_value<int> maximum_replication_factor_fail_threshold;
+    named_value<std::vector<enum_option<replication_strategy_restriction_t>>> replication_strategy_warn_list;
+    named_value<std::vector<enum_option<replication_strategy_restriction_t>>> replication_strategy_fail_list;
 
     seastar::logging_settings logging_settings(const log_cli::options&) const;
 

@@ -134,50 +134,58 @@ future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creat
 // Check for replication strategy choices which are restricted by the
 // configuration. This check can throw a configuration_exception immediately
 // if the strategy is forbidden by the configuration, or return a warning
-// string if the restriction was set to "warn".
+// string if the restriction was set to warning level.
 // This function is only supposed to check for replication strategies
 // restricted by the configuration. Checks for other types of strategy
 // errors (such as unknown replication strategy name or unknown options
 // to a known replication strategy) are done elsewhere.
-std::optional<sstring> check_restricted_replication_strategy(
+std::vector<sstring> check_against_restricted_replication_strategies(
     query_processor& qp,
     const sstring& keyspace,
     const ks_prop_defs& attrs,
     cql_stats& stats)
 {
     if (!attrs.get_replication_strategy_class()) {
-        return std::nullopt;
+        return {};
     }
-    sstring replication_strategy = locator::abstract_replication_strategy::to_qualified_class_name(
-        *attrs.get_replication_strategy_class());
-    auto& topology = qp.proxy().get_token_metadata_ptr()->get_topology();
-    // SimpleStrategy is not recommended in any setup which already has - or
-    // may have in the future - multiple racks or DCs. So depending on how
-    // protective we are configured, let's prevent it or allow with a warning:
-    if (replication_strategy == "org.apache.cassandra.locator.SimpleStrategy") {
-        switch(qp.db().get_config().restrict_replication_simplestrategy()) {
-        case db::tri_mode_restriction_t::mode::TRUE:
-            throw exceptions::configuration_exception(
-                "SimpleStrategy replication class is not recommended, and "
-                "forbidden by the current configuration. Please use "
-                "NetworkToplogyStrategy instead. You may also override this "
-                "restriction with the restrict_replication_simplestrategy=false "
-                "configuration option.");
-        case db::tri_mode_restriction_t::mode::WARN:
-            return format("SimpleStrategy replication class is not "
-                "recommended, but was used for keyspace {}. The "
-                "restrict_replication_simplestrategy configuration option "
-                "can be changed to silence this warning or make it into an error.",
-                keyspace);
-        case db::tri_mode_restriction_t::mode::FALSE:
+
+    std::vector<sstring> warnings;
+    auto replication_strategy = locator::abstract_replication_strategy::create_replication_strategy(
+            locator::abstract_replication_strategy::to_qualified_class_name(
+                    *attrs.get_replication_strategy_class()), {})->get_type();
+    auto rs_warn_list = qp.db().get_config().replication_strategy_warn_list();
+    auto rs_fail_list = qp.db().get_config().replication_strategy_fail_list();
+
+    if (replication_strategy == locator::replication_strategy_type::simple) {
+        if (auto simple_strategy_restriction = qp.db().get_config().restrict_replication_simplestrategy();
+                simple_strategy_restriction == db::tri_mode_restriction_t::mode::TRUE) {
+            rs_fail_list.emplace_back(locator::replication_strategy_type::simple);
+        } else if (simple_strategy_restriction == db::tri_mode_restriction_t::mode::WARN) {
+            rs_warn_list.emplace_back(locator::replication_strategy_type::simple);
+        } else if (auto &topology = qp.proxy().get_token_metadata_ptr()->get_topology();
+                topology.get_datacenter_endpoints().size() > 1) {
             // Scylla was configured to allow SimpleStrategy, but let's warn
             // if it's used on a cluster which *already* has multiple DCs:
-            if (topology.get_datacenter_endpoints().size() > 1) {
-                return "Using SimpleStrategy in a multi-datacenter environment is not recommended.";
-            }
-            break;
+            warnings.emplace_back("Using SimpleStrategy in a multi-datacenter environment is not recommended.");
         }
     }
+
+    if (auto present_on_fail_list = std::find(rs_fail_list.begin(), rs_fail_list.end(), replication_strategy); present_on_fail_list != rs_fail_list.end()) {
+        ++stats.replication_strategy_fail_list_violations;
+        throw exceptions::configuration_exception(format(
+                "{} replication class is not recommended, and forbidden by the current configuration, "
+                "but was used for keyspace {}. You may override this restriction by modifying "
+                "replication_strategy_fail_list configuration option to not list {}.",
+                *attrs.get_replication_strategy_class(), keyspace, *attrs.get_replication_strategy_class()));
+    }
+    if (auto present_on_warn_list = std::find(rs_warn_list.begin(), rs_warn_list.end(), replication_strategy); present_on_warn_list != rs_warn_list.end()) {
+        ++stats.replication_strategy_warn_list_violations;
+        warnings.push_back(format("{} replication class is not recommended, but was used for keyspace {}. "
+                           "You may suppress this warning by delisting {} from replication_strategy_warn_list configuration option, "
+                           "or make it into an error by listing this replication strategy on replication_strategy_fail_list.",
+                           *attrs.get_replication_strategy_class(), keyspace, *attrs.get_replication_strategy_class()));
+    }
+
     // The {minimum,maximum}_replication_factor_{warn,fail}_threshold configuration option can be used to forbid
     // a smaller/greater replication factor. We assume that all numeric replication
     // options are replication factors - this is true for SimpleStrategy and
@@ -215,33 +223,33 @@ std::optional<sstring> check_restricted_replication_strategy(
                          min_warn >= 0 && rf < min_warn)
                 {
                     ++stats.minimum_replication_factor_warn_violations;
-                    return format("Using Replication Factor {}={} lower than the "
-                                  "minimum_replication_factor_warn_threshold={} is not recommended.",
-                                  opt.first, rf, qp.proxy().data_dictionary().get_config().minimum_replication_factor_warn_threshold());
+                    warnings.push_back(format("Using Replication Factor {}={} lower than the "
+                                              "minimum_replication_factor_warn_threshold={} is not recommended.", opt.first, rf,
+                                              qp.proxy().data_dictionary().get_config().minimum_replication_factor_warn_threshold()));
                 }
                 else if (auto max_warn = qp.proxy().data_dictionary().get_config().maximum_replication_factor_warn_threshold();
                         max_warn >= 0 && rf > max_warn)
                 {
                     ++stats.maximum_replication_factor_warn_violations;
-                    return format("Using Replication Factor {}={} greater than the "
-                                  "maximum_replication_factor_warn_threshold={} is not recommended.",
-                                  opt.first, rf, qp.proxy().data_dictionary().get_config().maximum_replication_factor_warn_threshold());
+                    warnings.push_back(format("Using Replication Factor {}={} greater than the "
+                                              "maximum_replication_factor_warn_threshold={} is not recommended.", opt.first, rf,
+                                              qp.proxy().data_dictionary().get_config().maximum_replication_factor_warn_threshold()));
                 }
             }
         } catch (std::invalid_argument&) {
         } catch (std::out_of_range& ) {
         }
     }
-    return std::nullopt;
+    return warnings;
 }
 
 future<::shared_ptr<messages::result_message>>
 create_keyspace_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
-    std::optional<sstring> warning = check_restricted_replication_strategy(qp, keyspace(), *_attrs, qp.get_cql_stats());
-    return schema_altering_statement::execute(qp, state, options, std::move(guard)).then([warning = std::move(warning)] (::shared_ptr<messages::result_message> msg) {
-        if (warning) {
-            msg->add_warning(*warning);
-            mylogger.warn("{}", *warning);
+    std::vector<sstring> warnings = check_against_restricted_replication_strategies(qp, keyspace(), *_attrs, qp.get_cql_stats());
+        return schema_altering_statement::execute(qp, state, options, std::move(guard)).then([warnings = std::move(warnings)] (::shared_ptr<messages::result_message> msg) {
+        for (const auto& warning : warnings) {
+            msg->add_warning(warning);
+            mylogger.warn("{}", warning);
         }
         return msg;
     });

@@ -78,10 +78,10 @@ def test_system_config_read(scylla_only, cql):
     assert obj[0] and obj[0].isascii() and obj[0].isprintable()
     assert not obj[0].isnumeric()  # issue #11003
     # Check formatting of tri_mode_restriction like
-    # restrict_replication_simplestrategy. These need to be one of
+    # restrict_dtcs. These need to be one of
     # allowed string values 0, 1, true, false or warn - but in particular
     # non-empty and printable ASCII, not garbage.
-    assert 'restrict_replication_simplestrategy' in values
-    obj = json.loads(values['restrict_replication_simplestrategy'])
+    assert 'restrict_dtcs' in values
+    obj = json.loads(values['restrict_dtcs'])
     assert isinstance(obj, str)
     assert obj and obj.isascii() and obj.isprintable()

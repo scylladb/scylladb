@@ -76,7 +76,7 @@ public:
     lw_shared_ptr<data_dictionary::keyspace_metadata> get_keyspace_metadata(const locator::token_metadata& tm);
 };
 
-std::optional<sstring> check_restricted_replication_strategy(
+std::vector<sstring> check_against_restricted_replication_strategies(
     query_processor& qp,
     const sstring& keyspace,
     const ks_prop_defs& attrs,
