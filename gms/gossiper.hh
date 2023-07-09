@@ -230,12 +230,6 @@ private:
     // Replicates given endpoint_state to all other shards.
     // The state state doesn't have to be kept alive around until completes.
     future<> replicate(inet_address, const endpoint_state&);
-    // Replicates "states" from "src" to all other shards.
-    // "src" and "states" must be kept alive until completes and must not change.
-    future<> replicate(inet_address, const std::map<application_state, versioned_value>& src, const utils::chunked_vector<application_state>& states);
-    // Replicates given value to all other shards.
-    // The value must be kept alive until completes and not change.
-    future<> replicate(inet_address, application_state key, const versioned_value& value);
 public:
     explicit gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, const db::config& cfg, gossip_config gcfg);
 

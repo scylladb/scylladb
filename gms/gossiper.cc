@@ -1150,24 +1150,6 @@ future<> gossiper::replicate(inet_address ep, const endpoint_state& es) {
     });
 }
 
-future<> gossiper::replicate(inet_address ep, const std::map<application_state, versioned_value>& src, const utils::chunked_vector<application_state>& changed) {
-    return container().invoke_on_all([ep, &src, &changed, orig = this_shard_id(), self = shared_from_this()] (gossiper& g) {
-        if (this_shard_id() != orig) {
-            for (auto&& key : changed) {
-                g._endpoint_state_map[ep].add_application_state(key, src.at(key));
-            }
-        }
-    });
-}
-
-future<> gossiper::replicate(inet_address ep, application_state key, const versioned_value& value) {
-    return container().invoke_on_all([ep, key, &value, orig = this_shard_id(), self = shared_from_this()] (gossiper& g) {
-        if (this_shard_id() != orig) {
-            g._endpoint_state_map[ep].add_application_state(key, value);
-        }
-    });
-}
-
 future<> gossiper::advertise_token_removed(inet_address endpoint, locator::host_id host_id) {
     auto& eps = get_endpoint_state(endpoint);
     eps.update_timestamp(); // make sure we don't evict it too soon
@@ -1702,7 +1684,7 @@ future<> gossiper::apply_new_states(inet_address addr, endpoint_state& local_sta
     // Exceptions during replication will cause abort because node's state
     // would be inconsistent across shards. Changes listeners depend on state
     // being replicated to all shards.
-    co_await replicate(addr, remote_map, changed);
+    co_await replicate(addr, local_state);
 
     // Exceptions thrown from listeners will result in abort because that could leave the node in a bad
     // state indefinitely. Unless the value changes again, we wouldn't retry notifications.
@@ -2074,6 +2056,13 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
                 // Add to local application state
                 es->add_application_state(state, value);
             }
+
+            // It is OK to replicate the new endpoint_state
+            // after all application states were modified as a batch.
+            // We guarantee that the on_change notifications
+            // will be called in the order given by `states` anyhow.
+            gossiper.replicate(ep_addr, *es).get();
+
             for (auto& p : states) {
                 auto& state = p.first;
                 auto& value = p.second;
@@ -2081,7 +2070,6 @@ future<> gossiper::add_local_application_state(std::list<std::pair<application_s
                 // now we might defer again, so this could be reordered. But we've
                 // ensured the whole set of values are monotonically versioned and
                 // applied to endpoint state.
-                gossiper.replicate(ep_addr, state, value).get();
                 gossiper.do_on_change_notifications(ep_addr, state, value).get();
             }
         }).handle_exception([] (auto ep) {
