@@ -1328,6 +1328,55 @@ def test_update_condition_size(test_table_s):
             ConditionExpression='size(a, a)=:arg',
             ExpressionAttributeValues={':val': 1, ':arg': 5})
 
+# The documentation claims that the size() function requires a path parameter
+# so we check that both direct and reference paths work. But it turns out
+# that size() can *also* be run on values set in the query.
+# Reproduces #14592.
+def test_update_condition_size_parameter(test_table_s):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+        AttributeUpdates={'a': {'Value': 'hello', 'Action': 'PUT'}})
+    # size(a) - works:
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET z = :val',
+            ConditionExpression='size(a)>=:arg',
+            ExpressionAttributeValues={':val': 1, ':arg': 2})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 1
+    # size(#zyz) - works
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET z = :val',
+            ConditionExpression='size(#xyz)>=:arg',
+            ExpressionAttributeNames={'#xyz': 'a'},
+            ExpressionAttributeValues={':val': 2, ':arg': 2})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 2
+    # size(:xyz) returns the size of the value defined as :xyz, it does NOT
+    # take the value of :xyz as referring to the path! If the value :xyz
+    # is a string, its size is defined. But it's an integer, it's not.
+    # Because the error is in the query (not the data from the database),
+    # it generates a ValidationException in this case, *not* a
+    # ConditionalCheckFailedException. This is different from the case we
+    # tested above in test_update_condition_size, of invalid type in the
+    # database.  The error ValidationException message is "Invalid
+    # ConditionExpression: Incorrect operand type for operator or function;
+    # operator or function: size, operand type: N".
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET z = :val',
+            ConditionExpression='size(:xyz)>=:arg',
+            ExpressionAttributeValues={':val': 3, ':arg': 2, ':xyz': 'abc'})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 3
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+                ConditionExpression='size(:xyz)>=:arg',
+                ExpressionAttributeValues={':val': 3, ':arg': 2, ':xyz': 123})
+    # Similarly, size(size(a)) is a ValidationException as well - because
+    # size(a) is a number, for which size() is not defined.
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+                ConditionExpression='size(size(a))>=:arg',
+                ExpressionAttributeValues={':val': 2, ':arg': 2})
+
 # The above test tested conditions involving size() in a comparison.
 # Trying to use just size(a) as a condition (as we use the rest of the
 # functions supported by ConditionExpression) does not work - DynamoDB

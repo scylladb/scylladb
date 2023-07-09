@@ -418,9 +418,14 @@ void for_condition_expression_on(const parsed::condition_expression& ce, const n
 // calculate_size() is ConditionExpression's size() function, i.e., it takes
 // a JSON-encoded value and returns its "size" as defined differently for the
 // different types - also as a JSON-encoded number.
-// It return a JSON-encoded "null" value if this value's type has no size
-// defined. Comparisons against this non-numeric value will later fail.
-static rjson::value calculate_size(const rjson::value& v) {
+// If the value's type (e.g. number) has no size defined, there are two cases:
+// 1. If from_data (the value came directly from an attribute of the data),
+//    It returns a JSON-encoded "null" value. Comparisons against this
+//    non-numeric value will later fail, so eventually the application will
+//    get a ConditionalCheckFailedException.
+// 2. Otherwise (the value came from a constant in the query or some other
+//    calculation), throw a ValidationException.
+static rjson::value calculate_size(const rjson::value& v, bool from_data) {
     // NOTE: If v is improperly formatted for our JSON value encoding, it
     // must come from the request itself, not from the database, so it makes
     // sense to throw a ValidationException if we see such a problem.
@@ -449,10 +454,12 @@ static rjson::value calculate_size(const rjson::value& v) {
             throw api_error::validation(format("invalid byte string: {}", v));
         }
         ret = base64_decoded_len(rjson::to_string_view(it->value));
-    } else {
+    } else if (from_data) {
         rjson::value json_ret = rjson::empty_object();
         rjson::add(json_ret, "null", rjson::value(true));
         return json_ret;
+    } else {
+        throw api_error::validation(format("Unsupported operand type {} for function size()", it->name));
     }
     rjson::value json_ret = rjson::empty_object();
     rjson::add(json_ret, "N", rjson::from_string(std::to_string(ret)));
@@ -534,7 +541,7 @@ std::unordered_map<std::string_view, function_handler_type*> function_handlers {
                         format("{}: size() accepts 1 parameter, got {}", caller, f._parameters.size()));
             }
             rjson::value v = calculate_value(f._parameters[0], caller, previous_item);
-            return calculate_size(v);
+            return calculate_size(v, f._parameters[0].is_path());
         }
     },
     {"attribute_exists", [] (calculate_value_caller caller, const rjson::value* previous_item, const parsed::value::function_call& f) {
