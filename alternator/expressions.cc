@@ -662,7 +662,7 @@ static rjson::value extract_path(const rjson::value* item,
             // objects. But today Alternator does not validate the structure
             // of nested documents before storing them, so this can happen on
             // read.
-            throw api_error::validation(format("{}: malformed item read: {}", *item));
+            throw api_error::validation(format("{}: malformed item read: {}", caller, *item));
         }
         const char* type = v->MemberBegin()->name.GetString();
         v = &(v->MemberBegin()->value);
