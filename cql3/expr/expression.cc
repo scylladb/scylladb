@@ -2444,7 +2444,7 @@ type_of(const expression& e) {
 static std::optional<std::reference_wrapper<const column_value>> get_single_column_restriction_column(const expression& e) {
     if (find_in_expression<unresolved_identifier>(e, [](const auto&) {return true;})) {
         on_internal_error(expr_logger,
-            format("get_single_column_restriction_column expects a prepared expression, but it's not: {}}", e));
+            format("get_single_column_restriction_column expects a prepared expression, but it's not: {}", e));
     }
 
     const column_value* the_only_column = nullptr;
