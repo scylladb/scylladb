@@ -14,8 +14,9 @@ namespace streaming {
 
 std::ostream& operator<<(std::ostream& os, const progress_info& x) {
     sstring dir = x.dir == progress_info::direction::OUT ? "sent to " : "received from ";
-    return os << format("{} {:d}/({:f}%) {} {}", x.file_name, x.current_bytes,
-            x.current_bytes * 100 / x.total_bytes, dir, x.peer);
+    fmt::print(os, "{} {:d}/({:f}%) {} {}", x.file_name, x.current_bytes,
+            x.current_bytes * 100.F / x.total_bytes, dir, x.peer);
+    return os;
 }
 
 }
