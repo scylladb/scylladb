@@ -82,6 +82,7 @@
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/trim_all.hpp>
+#include <boost/algorithm/string/join.hpp>
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -1982,18 +1983,9 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         // may trivially finish without waiting for anyone.
         co_await _gossiper.wait_for_live_nodes_to_show_up(2);
 
-        auto ignore_nodes = ri
-                ? parse_node_list(_db.local().get_config().ignore_dead_nodes_for_replace(), get_token_metadata())
-                // TODO: specify ignore_nodes for bootstrap
-                : std::unordered_set<gms::inet_address>{};
-        auto sync_nodes = co_await get_nodes_to_sync_with(ignore_nodes);
-        if (ri) {
-            sync_nodes.erase(ri->address);
-        }
-
         // Note: in Raft topology mode this is unnecessary.
         // Node state changes are propagated to the cluster through explicit global barriers.
-        co_await wait_for_normal_state_handled_on_boot(sync_nodes);
+        co_await wait_for_normal_state_handled_on_boot();
 
         // NORMAL doesn't necessarily mean UP (#14042). Wait for these nodes to be UP as well
         // to reduce flakiness (we need them to be UP to perform CDC generation write and for repair/streaming).
@@ -2002,10 +1994,30 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
         // has to be done based on topology state machine instead of gossiper as it is here;
         // furthermore, the place in the code where we do this has to be different (it has to be coordinated
         // by the topology coordinator after it joins the node to the cluster).
-        std::vector<gms::inet_address> sync_nodes_vec{sync_nodes.begin(), sync_nodes.end()};
-        slogger.info("Waiting for nodes {} to be alive", sync_nodes_vec);
-        co_await _gossiper.wait_alive(sync_nodes_vec, std::chrono::seconds{30});
-        slogger.info("Nodes {} are alive", sync_nodes_vec);
+        //
+        // We calculate nodes to wait for based on token_metadata. Previously we would use gossiper
+        // directly for this, but gossiper may still contain obsolete entries from 1. replaced nodes
+        // and 2. nodes that have changed their IPs; these entries are eventually garbage-collected,
+        // but here they may still be present if we're performing topology changes in quick succession.
+        // `token_metadata` has all host ID / token collisions resolved so in particular it doesn't contain
+        // these obsolete IPs. Refs: #14487, #14468
+        auto& tm = get_token_metadata();
+        auto ignore_nodes = ri
+                ? parse_node_list(_db.local().get_config().ignore_dead_nodes_for_replace(), tm)
+                // TODO: specify ignore_nodes for bootstrap
+                : std::unordered_set<gms::inet_address>{};
+
+        std::vector<gms::inet_address> sync_nodes;
+        tm.get_topology().for_each_node([&] (const locator::node* np) {
+            auto ep = np->endpoint();
+            if (!ignore_nodes.contains(ep) && (!ri || ep != ri->address)) {
+                sync_nodes.push_back(ep);
+            }
+        });
+
+        slogger.info("Waiting for nodes {} to be alive", sync_nodes);
+        co_await _gossiper.wait_alive(sync_nodes, std::chrono::seconds{30});
+        slogger.info("Nodes {} are alive", sync_nodes);
     }
 
     assert(_group0);
@@ -2266,21 +2278,6 @@ std::unordered_set<gms::inet_address> storage_service::parse_node_list(sstring c
         }
     }
     return ignore_nodes;
-}
-
-future<std::unordered_set<gms::inet_address>> storage_service::get_nodes_to_sync_with(
-        const std::unordered_set<gms::inet_address>& ignore_nodes) {
-    std::unordered_set<gms::inet_address> result;
-    for (const auto& node :_gossiper.get_endpoints()) {
-        co_await coroutine::maybe_yield();
-        slogger.info("Check node={}, status={}", node, _gossiper.get_gossip_status(node));
-        if (node != get_broadcast_address() &&
-                _gossiper.is_normal_ring_member(node) &&
-                !ignore_nodes.contains(node)) {
-            result.insert(node);
-        }
-    }
-    co_return result;
 }
 
 // Runs inside seastar::async context
@@ -5726,21 +5723,45 @@ bool storage_service::is_normal_state_handled_on_boot(gms::inet_address node) {
     return _normal_state_handled_on_boot.contains(node);
 }
 
-// Wait for normal state handler to finish on boot
-future<> storage_service::wait_for_normal_state_handled_on_boot(const std::unordered_set<gms::inet_address>& nodes) {
-    slogger.info("Started waiting for normal state handler for nodes {}", nodes);
+// Wait for normal state handlers to finish on boot
+future<> storage_service::wait_for_normal_state_handled_on_boot() {
+    static logger::rate_limit rate_limit{std::chrono::seconds{5}};
+    static auto fmt_nodes_with_statuses = [this] (const auto& eps) {
+        return boost::algorithm::join(
+                eps | boost::adaptors::transformed([this] (const auto& ep) {
+                    return ::format("({}, status={})", ep, _gossiper.get_gossip_status(ep));
+                }), ", ");
+    };
+
+    slogger.info("Started waiting for normal state handlers to finish");
     auto start_time = std::chrono::steady_clock::now();
-    for (auto& node: nodes) {
-        while (!is_normal_state_handled_on_boot(node)) {
-            slogger.debug("Waiting for normal state handler for node {}", node);
-            co_await sleep_abortable(std::chrono::milliseconds(100), _abort_source);
-            if (std::chrono::steady_clock::now() > start_time + std::chrono::seconds(60)) {
-                throw std::runtime_error(::format("Node {} did not finish normal state handler, reject the node ops", node));
-            }
+    std::vector<gms::inet_address> eps;
+    while (true) {
+        eps = _gossiper.get_endpoints();
+        auto it = std::partition(eps.begin(), eps.end(),
+                [this, me = get_broadcast_address()] (const gms::inet_address& ep) {
+            return ep == me || !_gossiper.is_normal_ring_member(ep) || is_normal_state_handled_on_boot(ep);
+        });
+
+        if (it == eps.end()) {
+            break;
         }
+
+        if (std::chrono::steady_clock::now() > start_time + std::chrono::seconds(60)) {
+            auto err = ::format("Timed out waiting for normal state handlers to finish for nodes {}",
+                    fmt_nodes_with_statuses(boost::make_iterator_range(it, eps.end())));
+            slogger.error("{}", err);
+            throw std::runtime_error{std::move(err)};
+        }
+
+        slogger.log(log_level::info, rate_limit, "Normal state handlers not yet finished for nodes {}",
+                    fmt_nodes_with_statuses(boost::make_iterator_range(it, eps.end())));
+
+        co_await sleep_abortable(std::chrono::milliseconds{100}, _abort_source);
     }
-    slogger.info("Finished waiting for normal state handler for nodes {}", nodes);
-    co_return;
+
+    slogger.info("Finished waiting for normal state handlers; endpoints observed in gossip: {}",
+                 fmt_nodes_with_statuses(eps));
 }
 
 future<bool> storage_service::is_cleanup_allowed(sstring keyspace) {
