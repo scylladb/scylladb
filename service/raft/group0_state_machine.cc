@@ -121,7 +121,12 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
         void add(group0_command&& cmd, size_t added_size) {
             slogger.trace("add to merging set new_state_id: {}", cmd.new_state_id);
             auto m = convert_history_mutation(std::move(cmd.history_append), sm._sp.data_dictionary());
-            last_group0_state_id = std::max(last_group0_state_id, cmd.new_state_id);
+            // Set `last_group0_state_id` to the maximum of the current value and `cmd.new_state_id`,
+            // but make sure we compare them the same way timeuuids are compared in clustering keys
+            // (i.e. in the same order that the history table is sorted).
+            if (utils::timeuuid_tri_compare(last_group0_state_id, cmd.new_state_id) < 0) {
+                last_group0_state_id = cmd.new_state_id;
+            }
             cmd_to_merge.push_back(std::move(cmd));
             size += added_size;
             if (merged_history_mutation) {
