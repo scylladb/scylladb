@@ -428,6 +428,7 @@ void time_window_compaction_strategy::update_estimated_compaction_by_tasks(time_
             break;
         case bucket_compaction_mode::major:
             n++;
+            break;
         default:
             break;
         }

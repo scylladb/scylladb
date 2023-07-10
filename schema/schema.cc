@@ -409,6 +409,7 @@ schema::schema(private_tag, const raw_schema& raw, std::optional<raw_view_info> 
                     def._thrift_bits.is_on_all_components = true;
                     break;
                 }
+                [[fallthrough]];
             default:
                 // Or any other column where "comparator" is not compound
                 def._thrift_bits.is_on_all_components = !thrift().has_compound_comparator();

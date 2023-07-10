@@ -68,7 +68,7 @@ public:
                 _state = 1;
                 break;
             }
-            // fall-through
+            [[fallthrough]];
         case 1:
             check(_u64);
             ++_count;

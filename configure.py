@@ -1415,6 +1415,7 @@ wasm_deps['wasm/test_word_double.wat'] = 'test/resource/wasm/c/test_word_double.
 warnings = [
     '-Wall',
     '-Werror',
+    '-Wimplicit-fallthrough',
     '-Wno-mismatched-tags',  # clang-only
     '-Wno-tautological-compare',
     '-Wno-c++11-narrowing',

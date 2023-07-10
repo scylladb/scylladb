@@ -123,6 +123,7 @@ public:
                 _state = state::CK_KIND;
                 return read_status::waiting;
             }
+            [[fallthrough]];
         case state::CK_KIND:
             kind = bound_kind_m{_primitive._u8};
             if (kind == bound_kind_m::clustering) {
@@ -133,10 +134,12 @@ public:
                 _state = state::CK_SIZE;
                 return read_status::waiting;
             }
+            [[fallthrough]];
         case state::CK_SIZE:
             if (_primitive._u16 < _s.clustering_key_size()) {
                 ck_range.drop_back(_s.clustering_key_size() - _primitive._u16);
             }
+            [[fallthrough]];
         case state::CK_BLOCK:
         ck_block_label:
             if (no_more_ck_blocks()) {
@@ -152,8 +155,10 @@ public:
                 _state = state::CK_BLOCK_HEADER;
                 return read_status::waiting;
             }
+            [[fallthrough]];
         case state::CK_BLOCK_HEADER:
             ck_blocks_header = _primitive._u64;
+            [[fallthrough]];
         case state::CK_BLOCK2:
         ck_block2_label:
         {
@@ -177,6 +182,7 @@ public:
                 return read_status::waiting;
             }
         }
+            [[fallthrough]];
         case state::CK_BLOCK_END:
             clustering_key_values.push_back(std::move(column_value));
             move_to_next_ck_block();
@@ -254,25 +260,27 @@ public:
             _start_pos = _clustering.get_and_reset();
             _clustering.set_parsing_start_key(false);
             _state = state::END;
-            // fall-through
+            [[fallthrough]];
         case state::END:
             if (_clustering.consume(data) == read_status::waiting) {
                 return read_status::waiting;
             }
             _end_pos = _clustering.get_and_reset();
             _state = state::OFFSET;
-            // fall-through
+            [[fallthrough]];
         case state::OFFSET:
             if (_primitive.read_unsigned_vint(data) != read_status::ready) {
                 _state = state::WIDTH;
                 return read_status::waiting;
             }
+            [[fallthrough]];
         case state::WIDTH:
             _offset = _primitive._u64;
             if (_primitive.read_signed_vint(data) != read_status::ready) {
                 _state = state::END_OPEN_MARKER_FLAG;
                 return read_status::waiting;
             }
+            [[fallthrough]];
         case state::END_OPEN_MARKER_FLAG:
             assert(_primitive._i64 + width_base > 0);
             _width = (_primitive._i64 + width_base);
@@ -280,6 +288,7 @@ public:
                 _state = state::END_OPEN_MARKER_LOCAL_DELETION_TIME;
                 return read_status::waiting;
             }
+            [[fallthrough]];
         case state::END_OPEN_MARKER_LOCAL_DELETION_TIME:
             if (_primitive._u8 == 0) {
                 _state = state::DONE;
@@ -290,12 +299,14 @@ public:
                 _state = state::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_1;
                 return read_status::waiting;
             }
+            [[fallthrough]];
         case state::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_1:
             _end_open_marker->local_deletion_time = _primitive._u32;
             if (_primitive.read_64(data) != read_status::ready) {
                 _state = state::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2;
                 return read_status::waiting;
             }
+            [[fallthrough]];
         case state::END_OPEN_MARKER_MARKED_FOR_DELETE_AT_2:
             _end_open_marker->marked_for_delete_at = _primitive._u64;
             _state = state::DONE;

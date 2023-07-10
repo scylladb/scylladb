@@ -106,16 +106,22 @@ uint64_t hash2_64(bytes_view key, uint64_t seed)
         break;
     case 7:
         h64 ^= (uint64_t) key[length - rem + 6] << 48;
+        [[fallthrough]];
     case 6:
         h64 ^= (uint64_t) key[length - rem + 5] << 40;
+        [[fallthrough]];
     case 5:
         h64 ^= (uint64_t) key[length - rem + 4] << 32;
+        [[fallthrough]];
     case 4:
         h64 ^= (uint64_t) key[length - rem + 3] << 24;
+        [[fallthrough]];
     case 3:
         h64 ^= (uint64_t) key[length - rem + 2] << 16;
+        [[fallthrough]];
     case 2:
         h64 ^= (uint64_t) key[length - rem + 1] << 8;
+        [[fallthrough]];
     case 1:
         h64 ^= (uint64_t) key[length - rem];
         h64 *= m64;
@@ -182,20 +188,34 @@ void hash3_x64_128(bytes_view key, uint64_t seed, std::array<uint64_t,2> &result
     switch (length & 15)
     {
     case 15: k2 ^= ((uint64_t) key[14]) << 48;
+        [[fallthrough]];
     case 14: k2 ^= ((uint64_t) key[13]) << 40;
+        [[fallthrough]];
     case 13: k2 ^= ((uint64_t) key[12]) << 32;
+        [[fallthrough]];
     case 12: k2 ^= ((uint64_t) key[11]) << 24;
+        [[fallthrough]];
     case 11: k2 ^= ((uint64_t) key[10]) << 16;
+        [[fallthrough]];
     case 10: k2 ^= ((uint64_t) key[9]) << 8;
+        [[fallthrough]];
     case  9: k2 ^= ((uint64_t) key[8]) << 0;
         k2 *= c2; k2  = rotl64(k2,33); k2 *= c1; h2 ^= k2;
+        [[fallthrough]];
     case  8: k1 ^= ((uint64_t) key[7]) << 56;
+        [[fallthrough]];
     case  7: k1 ^= ((uint64_t) key[6]) << 48;
+        [[fallthrough]];
     case  6: k1 ^= ((uint64_t) key[5]) << 40;
+        [[fallthrough]];
     case  5: k1 ^= ((uint64_t) key[4]) << 32;
+        [[fallthrough]];
     case  4: k1 ^= ((uint64_t) key[3]) << 24;
+        [[fallthrough]];
     case  3: k1 ^= ((uint64_t) key[2]) << 16;
+        [[fallthrough]];
     case  2: k1 ^= ((uint64_t) key[1]) << 8;
+        [[fallthrough]];
     case  1: k1 ^= ((uint64_t) key[0]);
         k1 *= c1; k1  = rotl64(k1,31); k1 *= c2; h1 ^= k1;
     };
