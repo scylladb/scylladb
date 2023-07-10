@@ -8,7 +8,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import os
-import re
 from scylla_util import *
 import subprocess
 import argparse
@@ -17,33 +16,19 @@ import logging
 import sys
 import scylla_blocktune as blocktune
 
-
-# Regular expression helpers
-# non-advancing comment matcher
-_nocomment = r"^\s*(?!#)"
-# non-capturing grouping
-_scyllaeq = r"(?:\s*|=)"
-_cpuset = r"(?:\s*--cpuset" + _scyllaeq + r"(?P<cpuset>\d+(?:[-,]\d+)*))"
-_smp = r"(?:\s*--smp" + _scyllaeq + r"(?P<smp>\d+))"
-
-
-def _reopt(s):
-    return s + r"?"
-
 class scylla_cpuinfo:
     """Class containing information about how Scylla sees CPUs in this machine.
     Information that can be probed include in which hyperthreads Scylla is configured
     to run, how many total threads exist in the system, etc"""
 
     def __parse_cpuset(self):
-        f = open(etcdir() + "/scylla.d/cpuset.conf", "r")
-        pattern = re.compile(_nocomment + r"CPUSET=\s*\"" + _reopt(_cpuset) + _reopt(_smp) + "\s*\"")
-        grp = [pattern.match(x) for x in f.readlines() if pattern.match(x)]
-        if not grp:
-            d = {"cpuset": None, "smp": None}
-        else:
-            # if more than one, use last
-            d = grp[-1].groupdict()
+        conf = seastar_conf()
+        cpuset = smp = None
+        if conf.has_option('cpuset'):
+            cpuset = conf.get('cpuset')
+        if conf.has_option('smp'):
+            smp = conf.get('smp')
+        d = {"cpuset": cpuset, "smp": smp}
         actual_set = set()
         if d["cpuset"]:
             groups = d["cpuset"].split(",")
@@ -145,7 +130,6 @@ def run_iotune():
             try:
                 subprocess.check_call([bindir() + "/iotune",
                                        "--format", "envfile",
-                                       "--options-file", etcdir() + "/scylla.d/io.conf",
                                        "--properties-file", etcdir() + "/scylla.d/io_properties.yaml"] + iotune_args)
             except Exception as e:
                 logging.error(e)
@@ -169,5 +153,8 @@ if __name__ == "__main__":
     cpudata = scylla_cpuinfo()
     if not is_developer_mode():
         run_iotune()
-        os.chmod(etcdir() + '/scylla.d/io_properties.yaml', 0o644)
-        os.chmod(etcdir() + '/scylla.d/io.conf', 0o644)
+        io_properties_file = etcdir_p() / 'scylla.d/io_properties.yaml'
+        io_properties_file.chmod(0o644)
+        conf = seastar_conf()
+        conf.set('io-properties-file', str(io_properties_file))
+        conf.commit()

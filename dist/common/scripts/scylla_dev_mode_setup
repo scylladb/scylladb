@@ -21,10 +21,6 @@ if __name__ == '__main__':
                         help='enable/disable developer mode')
     args = parser.parse_args()
 
-    if args.developer_mode == 0:
-        with open(etcdir()+'/scylla.d/dev-mode.conf', 'w') as f:
-            f.close()
-    else:
-        cfg = sysconfig_parser(etcdir()+'/scylla.d/dev-mode.conf')
-        cfg.set('DEV_MODE', '--developer-mode=1')
-        cfg.commit()
+    developer_mode = int(is_developer_mode())
+    if args.developer_mode != developer_mode:
+        scylla_yaml_modify('developer_mode', bool(args.developer_mode))

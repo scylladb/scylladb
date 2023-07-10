@@ -10,6 +10,7 @@
 import os
 import sys
 import argparse
+from subprocess import run
 from scylla_util import *
 
 if __name__ == '__main__':
@@ -27,20 +28,14 @@ if __name__ == '__main__':
         sys.exit(1)
 
     cpuset = smp = None
-    try:
-        cfg = sysconfig_parser('/etc/scylla.d/cpuset.conf')
-        line = cfg.get('CPUSET')
-        cpuset_args = parser.parse_args(line.split())
-        cpuset = cpuset_args.cpuset
-        smp = cpuset_args.smp
-    except:
-        pass
+    conf = seastar_conf()
+    if conf.has_option('cpuset'):
+        cpuset = conf.get('cpuset')
+    if conf.has_option('smp'):
+        smp = conf.get('smp')
     if cpuset != args.cpuset or smp != args.smp:
         if os.path.exists('/etc/scylla.d/perftune.yaml'):
-            os.remove('/etc/scylla.d/perftune.yaml')
+            run(f'{scriptsdir()}/scylla_perftune_setup --regenerate', shell=True, check=True)
 
-        cfg.set('CPUSET', '{cpuset}{smp}'.format( \
-                cpuset='--cpuset {} '.format(args.cpuset) if args.cpuset else '', \
-                smp='--smp {} '.format(args.smp) if args.smp else '' \
-                ))
-        cfg.commit()
+        conf.update_with_args(args)
+        conf.commit()

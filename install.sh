@@ -306,12 +306,14 @@ if ! $nonroot; then
     rdoc="$rprefix/share/doc"
     rdata=$(realpath -m "$root/var/lib/scylla")
     rhkdata=$(realpath -m "$root/var/lib/scylla-housekeeping")
+    rseastar="$rdata/.config/seastar"
 else
     retc="$rprefix/etc"
     rsysconfdir="$rprefix/$sysconfdir"
     rsystemd="$HOME/.config/systemd/user"
     rdoc="$rprefix/share/doc"
     rdata="$rprefix"
+    rseastar="$HOME/.config/seastar"
 fi
 
 # scylla-conf
@@ -376,9 +378,7 @@ install -m755 -d "$rprefix"
 install -m755 -d "$retc/scylla.d"
 installconfig 644 dist/common/sysconfig/scylla-housekeeping "$rsysconfdir"
 installconfig 644 dist/common/sysconfig/scylla-server "$rsysconfdir"
-for file in dist/common/scylla.d/*.conf; do
-    installconfig 644 "$file" "$retc"/scylla.d
-done
+installconfig 644 dist/common/scylla.d/seastar.conf "$retc"/scylla.d
 
 install -d -m755 "$retc"/scylla "$rprefix/bin" "$rprefix/libexec" "$rprefix/libreloc" "$rprefix/scripts" "$rprefix/bin"
 if ! $without_systemd; then
@@ -416,6 +416,15 @@ install -m755 -d "$rdata"/commitlog
 install -m755 -d "$rdata"/hints
 install -m755 -d "$rdata"/view_hints
 install -m755 -d "$rdata"/coredump
+
+# XXX: we will drop this once we support to customize seastar.conf path
+install -m755 -d "$rseastar"
+if ! $nonroot; then
+    ln -sf /etc/scylla.d/seastar.conf "$rseastar"
+else
+    ln -sf "$prefix"/etc/scylla.d/seastar.conf "$rseastar"
+fi
+
 install -m755 -d "$rprefix"/swagger-ui
 cp -r swagger-ui/dist "$rprefix"/swagger-ui
 install -d -m755 -d "$rprefix"/api
@@ -446,7 +455,6 @@ if ! $nonroot && ! $without_systemd; then
 [Service]
 EnvironmentFile=
 EnvironmentFile=$sysconfdir/scylla-server
-EnvironmentFile=/etc/scylla.d/*.conf
 EOS
         for i in daily restart; do
             install -d -m755 "$retc"/systemd/system/scylla-housekeeping-$i.service.d
@@ -462,20 +470,24 @@ elif ! $without_systemd; then
     if [ -d /var/log/journal ]; then
         cat << EOS > "$rsystemd"/scylla-server.service.d/nonroot.conf
 [Service]
-Environment=SCYLLA_HOME=$rdata SCYLLA_CONF=$retc/scylla
+EnvironmentFile=
+EnvironmentFile=$(realpath -m "$rsysconfdir/scylla-server")
+Environment=SCYLLA_HOME=$rdata SCYLLA_CONF=$retc/scylla SEASTAR_CONF_FILE=$retc/scylla.d/seastar.conf
 ExecStartPre=
 ExecStart=
-ExecStart=$rprefix/bin/scylla \$SCYLLA_ARGS \$SEASTAR_IO \$DEV_MODE \$CPUSET
+ExecStart=$rprefix/bin/scylla \$SCYLLA_ARGS
 User=
 EOS
     else
         cat << EOS > "$rsystemd"/scylla-server.service.d/nonroot.conf
 [Service]
-Environment=SCYLLA_HOME=$rdata SCYLLA_CONF=$retc/scylla
+EnvironmentFile=
+EnvironmentFile=$(realpath -m "$rsysconfdir/scylla-server")
+Environment=SCYLLA_HOME=$rdata SCYLLA_CONF=$retc/scylla SEASTAR_CONF_FILE=$retc/scylla.d/seastar.conf
 ExecStartPre=
 ExecStartPre=$rprefix/scripts/scylla_logrotate
 ExecStart=
-ExecStart=$rprefix/bin/scylla \$SCYLLA_ARGS \$SEASTAR_IO \$DEV_MODE \$CPUSET
+ExecStart=$rprefix/bin/scylla \$SCYLLA_ARGS
 User=
 StandardOutput=
 StandardOutput=file:$rprefix/scylla-server.log

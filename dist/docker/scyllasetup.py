@@ -2,6 +2,10 @@ import subprocess
 import logging
 import yaml
 import os
+import sys
+
+sys.path.append('/opt/scylladb/scripts')
+from scylla_util import seastar_conf
 
 
 class ScyllaSetup:
@@ -87,18 +91,19 @@ class ScyllaSetup:
                 f.write("False\n")
 
     def arguments(self):
-        args = []
+        conf = seastar_conf()
+        y = yaml.safe_load(open('/etc/scylla/scylla.yaml'))
         if self._memory is not None:
-            args += ["--memory %s" % self._memory]
+            conf.set('memory', self._memory)
 
         if self._reserveMemory is not None:
-            args += ["--reserve-memory %s" % self._reserveMemory]
+            conf.set('reserve-memory', self._reserveMemory)
 
         if self._smp is not None:
-            args += ["--smp %s" % self._smp]
+            conf.set('smp', self._smp)
 
         if self._overprovisioned == "1" or (self._overprovisioned is None and self._cpuset is None):
-            args += ["--overprovisioned"]
+            conf.set('overprovisioned', 1)
 
         if self._listenAddress is None:
             self._listenAddress = subprocess.check_output(['hostname', '-i']).decode('ascii').strip()
@@ -115,51 +120,51 @@ class ScyllaSetup:
             else:
                 self._seeds = self._listenAddress
 
-        args += ["--listen-address %s" % self._listenAddress,
-                 "--rpc-address %s" % self._rpcAddress,
-                 "--seed-provider-parameters seeds=%s" % self._seeds]
+        y['listen_address'] = self._listenAddress
+        y['rpc_address'] = self._rpcAddress
+        y['seed_provider'][0]['parameters'][0]['seeds'] = self._seeds
 
         if self._broadcastAddress is not None:
-            args += ["--broadcast-address %s" % self._broadcastAddress]
+            y['broadcast_address'] = self._broadcastAddress
         if self._broadcastRpcAddress is not None:
-            args += ["--broadcast-rpc-address %s" % self._broadcastRpcAddress]
+            y['broadcast_rpc_address'] = self._broadcastRpcAddress
 
         if self._apiAddress is not None:
-            args += ["--api-address %s" % self._apiAddress]
+            y['api_address'] = self._apiAddress
 
         if self._alternatorAddress is not None:
-            args += ["--alternator-address %s" % self._alternatorAddress]
+            y['alternator_address'] = self._alternatorAddress
 
         if self._alternatorPort is not None:
-            args += ["--alternator-port %s" % self._alternatorPort]
+            y['alternator_port'] = self._alternatorPort
 
         if self._alternatorHttpsPort is not None:
-            args += ["--alternator-https-port %s" % self._alternatorHttpsPort]
+            y['alternator_https_port'] = self._alternatorHttpsPort
 
         if self._alternatorWriteIsolation is not None:
-            args += ["--alternator-write-isolation %s" % self._alternatorWriteIsolation]
+            y['alternator_write_isolation'] = self._alternatorWriteIsolation
 
         if self._authenticator is not None:
-            args += ["--authenticator %s" % self._authenticator]
+            y['authenticator'] = self._authenticator
 
         if self._authorizer is not None:
-            args += ["--authorizer %s" % self._authorizer]
+            y['authorizer'] = self._authorizer
 
         if self._experimental == "1":
-            args += ["--experimental=on"]
+            y['experimental'] = 'on'
 
         if self._clusterName is not None:
-            args += ["--cluster-name %s" % self._clusterName]
+            y['cluster_name'] = self._clusterName
 
         if self._endpointSnitch is not None:
-            args += ["--endpoint-snitch %s" % self._endpointSnitch]
+            y['endpoint_snitch'] = self.endpointSnitch
 
         if self._replaceNodeFirstBoot is not None:
-            args += ["--replace-node-first-boot %s" % self._replaceNodeFirstBoot]
+            y['replace_node_first_boot'] = self._replaceNodeFirstBoot
         elif self._replaceAddressFirstBoot is not None:
-            args += ["--replace-address-first-boot %s" % self._replaceAddressFirstBoot]
+            y['replace_address_first_boot'] = self._replaceAddressFirstBoot
 
-        args += ["--blocked-reactor-notify-ms 999999999"]
-
-        with open("/etc/scylla.d/docker.conf", "w") as cqlshrc:
-            cqlshrc.write("SCYLLA_DOCKER_ARGS=\"%s\"\n" % (" ".join(args) + " " + " ".join(self._extra_args)))
+        conf.set('blocked-reactor-notify-ms', 999999999)
+        conf.commit()
+        with open('/etc/scylla/scylla.yaml', 'w') as f:
+            yaml.dump(y, f)

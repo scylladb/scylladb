@@ -18,11 +18,6 @@ from pathlib import Path
 
 perftune_yaml = Path('/etc/scylla.d/perftune.yaml')
 
-def get_cur_cpuset():
-    cfg = sysconfig_parser('/etc/scylla.d/cpuset.conf')
-    cpuset = cfg.get('CPUSET')
-    return re.sub(r'^--cpuset (.+)$', r'\1', cpuset).strip()
-
 def cpu_mask_is_zero(cpu_mask):
     """
     The cpu_mask is a comma-separated list of 32-bit hex values with possibly omitted zero components,
@@ -69,9 +64,10 @@ def get_irq_cpu_mask():
     hwloc-calc --pi all ~PU:0 ~PU:2-7 ~PU:17-24 ~PU:35
     """
 
-    if not os.path.exists('/etc/scylla.d/cpuset.conf'):
-        raise Exception('/etc/scylla.d/cpuset.conf not found')
-    cur_cpuset = get_cur_cpuset()
+    conf = seastar_conf()
+    if not conf.has_option('cpuset'):
+        raise Exception('cpuset not found in seastar.conf')
+    cur_cpuset = conf.get('cpuset')
 
     hwloc_cmd = "/opt/scylladb/bin/hwloc-calc --pi all {}".\
         format(" ".join(['~PU:{}'.format(c) for c in cur_cpuset.split(",")]))
@@ -121,8 +117,9 @@ def create_perftune_conf(args):
         return False
 
 def generate_cpuset(args):
+    conf = seastar_conf()
     # skip generating cpuset when it's already configured
-    if os.path.exists('/etc/scylla.d/cpuset.conf') and get_cur_cpuset() != '':
+    if conf.has_option('cpuset'):
         return
     res = out(f'/opt/scylladb/scripts/perftune.py --tune net --nic {args.nic} --get-cpu-mask')
     # we need to extract CPU mask from output, since perftune.py may also print warning messages (#10082)
