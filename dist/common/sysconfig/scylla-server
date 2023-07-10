@@ -1,14 +1,1 @@
-# ethernet device name
-IFNAME=eth0
-
-# setup NIC's and disks' interrupts, RPS, XPS, nomerges and I/O scheduler
-SET_NIC_AND_DISKS=no
-
-# tune clocksource
-SET_CLOCKSOURCE=no
-
-# scylla arguments
 SCYLLA_ARGS="--log-to-syslog 1 --log-to-stdout 0 --default-log-level info"
-
-# Disable disk writeback cache
-DISABLE_WRITEBACK_CACHE=no
