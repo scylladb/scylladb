@@ -67,3 +67,10 @@ def check_child_parent_relationship(rest_api, parent, tree_depth, depth=0):
         assert child["parent_id"] == parent["id"], f"Parent id of task with id {child_id} is not set"
         if depth + 1 < tree_depth:
             check_child_parent_relationship(rest_api, child, tree_depth, depth + 1)
+
+def drain_module_tasks(rest_api, module_name):
+    tasks = [task for task in list_tasks(rest_api, module_name, True)]
+    for task in tasks:
+        resp = rest_api.send("GET", f"task_manager/wait_task/{task['task_id']}")
+        # The task may be already unregistered.
+        assert resp.status_code == requests.codes.ok or resp.status_code == requests.codes.bad_request, "Invalid status code"
