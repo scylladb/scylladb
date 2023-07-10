@@ -86,6 +86,7 @@ size_t block_for_each_quorum(const locator::effective_replication_map& erm) {
 size_t block_for(const locator::effective_replication_map& erm, consistency_level cl) {
     switch (cl) {
     case consistency_level::ONE:
+        [[fallthrough]];
     case consistency_level::LOCAL_ONE:
         return 1;
     case consistency_level::ANY:
@@ -95,11 +96,13 @@ size_t block_for(const locator::effective_replication_map& erm, consistency_leve
     case consistency_level::THREE:
         return 3;
     case consistency_level::QUORUM:
+        [[fallthrough]];
     case consistency_level::SERIAL:
         return quorum_for(erm);
     case consistency_level::ALL:
         return erm.get_replication_factor();
     case consistency_level::LOCAL_QUORUM:
+        [[fallthrough]];
     case consistency_level::LOCAL_SERIAL:
         return block_for_local_serial(erm);
     case consistency_level::EACH_QUORUM:
@@ -216,6 +219,7 @@ void assure_sufficient_live_nodes(
             break;
         }
     // Fallthough on purpose for SimpleStrategy
+        [[fallthrough]];
     default:
         size_t live = live_endpoints.size();
         size_t pending = pending_endpoints.size();
@@ -373,6 +377,7 @@ is_sufficient_live_nodes(consistency_level cl,
             return true;
         }
     }
+        [[fallthrough]];
         // Fallthough on purpose for SimpleStrategy
     default:
         return live_endpoints.size() >= block_for(erm, cl);
@@ -393,6 +398,7 @@ void validate_for_read(consistency_level cl) {
 void validate_for_write(consistency_level cl) {
     switch (cl) {
         case consistency_level::SERIAL:
+            [[fallthrough]];
         case consistency_level::LOCAL_SERIAL:
             throw exceptions::invalid_request_exception("You must use conditional updates for serializable writes");
         default:
@@ -404,6 +410,7 @@ void validate_for_write(consistency_level cl) {
 void validate_for_cas_learn(consistency_level cl, const sstring& keyspace) {
     switch (cl) {
     case consistency_level::SERIAL:
+        [[fallthrough]];
     case consistency_level::LOCAL_SERIAL:
         throw exceptions::invalid_request_exception(format("{} is not supported as conditional update commit consistency. Use ANY if you mean \"make sure it is accepted but I don't care how many replicas commit it for non-SERIAL reads\"", cl));
     default:

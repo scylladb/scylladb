@@ -193,18 +193,21 @@ public:
                 _state = state::KEY_BYTES;
                 break;
             }
+            [[fallthrough]];
         case state::KEY_BYTES:
             sstlog.trace("{}: pos {} state {} - size={}", fmt::ptr(this), current_pos(), state::KEY_BYTES, this->_u16);
             if (this->read_bytes_contiguous(data, this->_u16, _key) != continuous_data_consumer::read_status::ready) {
                 _state = state::POSITION;
                 break;
             }
+            [[fallthrough]];
         case state::POSITION:
             sstlog.trace("{}: pos {} state {}", fmt::ptr(this), current_pos(), state::POSITION);
             if (read_vint_or_uint64(data) != continuous_data_consumer::read_status::ready) {
                 _state = state::PROMOTED_SIZE;
                 break;
             }
+            [[fallthrough]];
         case state::PROMOTED_SIZE:
             sstlog.trace("{}: pos {} state {}", fmt::ptr(this), current_pos(), state::PROMOTED_SIZE);
             _position = this->_u64;
@@ -212,6 +215,7 @@ public:
                 _state = state::PARTITION_HEADER_LENGTH_1;
                 break;
             }
+            [[fallthrough]];
         case state::PARTITION_HEADER_LENGTH_1: {
             sstlog.trace("{}: pos {} state {}", fmt::ptr(this), current_pos(), state::PARTITION_HEADER_LENGTH_1);
             auto promoted_index_size_with_header = get_uint32();
@@ -230,10 +234,12 @@ public:
                 break;
             }
         }
+            [[fallthrough]];
         case state::PARTITION_HEADER_LENGTH_2:
             sstlog.trace("{}: pos {} state {} {}", fmt::ptr(this), current_pos(), state::PARTITION_HEADER_LENGTH_2, this->_u64);
             _partition_header_length = this->_u64;
         state_LOCAL_DELETION_TIME:
+            [[fallthrough]];
         case state::LOCAL_DELETION_TIME:
             sstlog.trace("{}: pos {} state {}", fmt::ptr(this), current_pos(), state::LOCAL_DELETION_TIME);
             _deletion_time.emplace();
@@ -241,6 +247,7 @@ public:
                 _state = state::MARKED_FOR_DELETE_AT;
                 break;
             }
+            [[fallthrough]];
         case state::MARKED_FOR_DELETE_AT:
             sstlog.trace("{}: pos {} state {}", fmt::ptr(this), current_pos(), state::MARKED_FOR_DELETE_AT);
             _deletion_time->local_deletion_time = this->_u32;
@@ -248,6 +255,7 @@ public:
                 _state = state::NUM_PROMOTED_INDEX_BLOCKS;
                 break;
             }
+            [[fallthrough]];
         case state::NUM_PROMOTED_INDEX_BLOCKS:
             sstlog.trace("{}: pos {} state {}", fmt::ptr(this), current_pos(), state::NUM_PROMOTED_INDEX_BLOCKS);
             _deletion_time->marked_for_delete_at = this->_u64;
@@ -256,6 +264,7 @@ public:
                 break;
             }
         state_CONSUME_ENTRY:
+            [[fallthrough]];
         case state::CONSUME_ENTRY: {
             auto promoted_index_start = current_pos();
             auto promoted_index_size = _promoted_index_end - promoted_index_start;

@@ -385,7 +385,9 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
             }
             switch (*state) {
                 case topology::transition_state::commit_cdc_generation:
+                    [[fallthrough]];
                 case topology::transition_state::publish_cdc_generation:
+                    [[fallthrough]];
                 case topology::transition_state::write_both_read_old:
                     return read_new_t::no;
                 case topology::transition_state::write_both_read_new:
@@ -1322,6 +1324,7 @@ class topology_coordinator {
                     break;
                 case node_state::removing:
                     co_await remove_from_group0(node.id);
+                    [[fallthrough]];
                 case node_state::decommissioning: {
                     topology_mutation_builder builder(node.guard.write_timestamp());
                     auto next_state = node.rs->state == node_state::decommissioning

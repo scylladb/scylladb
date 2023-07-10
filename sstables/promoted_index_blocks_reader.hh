@@ -90,32 +90,38 @@ private:
                     ctx.state = state_k_l::START_NAME_BYTES;
                     return;
                 }
+                [[fallthrough]];
             case state_k_l::START_NAME_BYTES:
                 if (this->read_bytes_contiguous(data, this->_u16, ctx.start) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_k_l::END_NAME_LENGTH;
                     return;
                 }
+                [[fallthrough]];
             case state_k_l::END_NAME_LENGTH:
                 if (this->read_16(data) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_k_l::END_NAME_BYTES;
                     return;
                 }
+                [[fallthrough]];
             case state_k_l::END_NAME_BYTES:
                 if (this->read_bytes_contiguous(data, this->_u16, ctx.end) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_k_l::OFFSET;
                     return;
                 }
+                [[fallthrough]];
             case state_k_l::OFFSET:
                 if (this->read_64(data) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_k_l::WIDTH;
                     return;
                 }
+                [[fallthrough]];
             case state_k_l::WIDTH:
                 ctx.offset = this->_u64;
                 if (this->read_64(data) != continuous_data_consumer::read_status::ready) {
                     ctx.state = state_k_l::ADD_BLOCK;
                     return;
                 }
+                [[fallthrough]];
             case state_k_l::ADD_BLOCK:
                 ctx.width = this->_u64;
                 ctx.state = state_k_l::START_NAME_LENGTH;

@@ -273,6 +273,7 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source* 
 
         case group0_upgrade_state::recovery:
             logger.warn("starting operation in RECOVERY mode (using old procedures)");
+            [[fallthrough]];
         case group0_upgrade_state::use_pre_raft_procedures:
             co_return group0_guard {
                 std::make_unique<group0_guard::impl>(
