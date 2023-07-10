@@ -304,24 +304,21 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
     cfg.commitlog_sync_period_in_ms = 1;
     return cl_test(cfg, [](commitlog& log) {
             auto sem = make_lw_shared<semaphore>(0);
-            auto segments = make_lw_shared<segment_names>();
+            auto segments = make_lw_shared<std::set<sstring>>();
 
             // add a flush handler that simply says we're done with the range.
             auto r = log.add_flush_handler([&log, sem, segments](cf_id_type id, replay_position pos) {
-                auto f = make_ready_future<>();
-                // #6195 only get segment list at first callback. We can (not often)
-                // be called again, but reading segment list at that point might (will)
-                // render same list as in the diff check below. 
-                if (segments->empty()) {
-                    *segments = log.get_active_segment_names();
-                    // Verify #5899 - file size should not exceed the config max. 
-                    f = parallel_for_each(*segments, [](sstring filename) {
-                        return file_size(filename).then([](uint64_t size) {
-                            BOOST_REQUIRE_LE(size, max_size_mb * 1024 * 1024);
-                        });
-                    });
+                auto active_segments = log.get_active_segment_names();
+                for (auto&& s : active_segments) {
+                    segments->insert(s);
                 }
-                return f.then([&log, sem, id] {
+
+                // Verify #5899 - file size should not exceed the config max.
+                return parallel_for_each(active_segments, [](sstring filename) {
+                    return file_size(filename).then([](uint64_t size) {
+                        BOOST_REQUIRE_LE(size, max_size_mb * 1024 * 1024);
+                    });
+                }).then([&log, sem, id] {
                     log.discard_completed_segments(id);
                     sem->signal();
                 });
@@ -339,7 +336,8 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
                                     set->insert(h.release().id);
                                 });
                     }).then([&log, segments]() {
-                        auto diff = segment_diff(log, *segments);
+                        segment_names names(segments->begin(), segments->end());
+                        auto diff = segment_diff(log, names);
                         auto nn = diff.size();
                         auto dn = log.get_num_segments_destroyed();
 
