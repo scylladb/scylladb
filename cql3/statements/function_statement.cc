@@ -141,7 +141,7 @@ seastar::future<shared_ptr<db::functions::function>> drop_function_statement_bas
     if (_args_present) {
         func = functions::instance().find(_name, _arg_types);
         if (!func && !_if_exists) {
-            throw exceptions::invalid_request_exception(format("User function {}({}) doesn't exist", _name, _arg_types));
+            throw exceptions::invalid_request_exception(seastar::format("User function {}({}) doesn't exist", _name, _arg_types));
         }
     } else {
         auto funcs = functions::instance().find(_name);

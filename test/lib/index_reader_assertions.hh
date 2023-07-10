@@ -48,7 +48,7 @@ public:
             while (auto ei_opt = cur->next_entry().get()) {
                 sstables::clustered_index_cursor::entry_info& ei = *ei_opt;
                 if (prev_end && pos_cmp(ei.start, sstables::to_view(*prev_end))) {
-                    BOOST_FAIL(format("Index blocks are not monotonic: {} > {}", *prev_end, ei.start));
+                    BOOST_FAIL(seastar::format("Index blocks are not monotonic: {} > {}", *prev_end, ei.start));
                 }
                 prev_end = sstables::materialize(ei.end);
             }

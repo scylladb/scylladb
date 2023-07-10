@@ -46,7 +46,7 @@ future<> maintenance_socket_role_manager::stop() {
 template<typename T = void>
 future<T> operation_not_supported_exception(std::string_view operation) {
     return make_exception_future<T>(
-        std::runtime_error(format("role manager: {} operation not supported through maintenance socket", operation)));
+        std::runtime_error(fmt::format("role manager: {} operation not supported through maintenance socket", operation)));
 }
 
 future<> maintenance_socket_role_manager::create(std::string_view role_name, const role_config&, ::service::group0_batch&) {

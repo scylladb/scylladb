@@ -57,10 +57,10 @@ static Result parse(const char* input_name, std::string_view input, Func&& f) {
         // TODO: displayRecognitionError could set a position inside the
         // expressions_syntax_error in throws, and we could use it here to
         // mark the broken position in 'input'.
-        throw expressions_syntax_error(format("Failed parsing {} '{}': {}",
+        throw expressions_syntax_error(fmt::format("Failed parsing {} '{}': {}",
             input_name, input, e.what()));
     } catch (...) {
-        throw expressions_syntax_error(format("Failed parsing {} '{}': {}",
+        throw expressions_syntax_error(fmt::format("Failed parsing {} '{}': {}",
             input_name, input, std::current_exception()));
     }
 }
@@ -160,12 +160,12 @@ static std::optional<std::string> resolve_path_component(const std::string& colu
     if (column_name.size() > 0 && column_name.front() == '#') {
         if (!expression_attribute_names) {
             throw api_error::validation(
-                    format("ExpressionAttributeNames missing, entry '{}' required by expression", column_name));
+                    fmt::format("ExpressionAttributeNames missing, entry '{}' required by expression", column_name));
         }
         const rjson::value* value = rjson::find(*expression_attribute_names, column_name);
         if (!value || !value->IsString()) {
             throw api_error::validation(
-                    format("ExpressionAttributeNames missing entry '{}' required by expression", column_name));
+                    fmt::format("ExpressionAttributeNames missing entry '{}' required by expression", column_name));
         }
         used_attribute_names.emplace(column_name);
         return std::string(rjson::to_string_view(*value));
@@ -202,16 +202,16 @@ static void resolve_constant(parsed::constant& c,
         [&] (const std::string& valref) {
             if (!expression_attribute_values) {
                 throw api_error::validation(
-                        format("ExpressionAttributeValues missing, entry '{}' required by expression", valref));
+                        fmt::format("ExpressionAttributeValues missing, entry '{}' required by expression", valref));
             }
             const rjson::value* value = rjson::find(*expression_attribute_values, valref);
             if (!value) {
                 throw api_error::validation(
-                        format("ExpressionAttributeValues missing entry '{}' required by expression", valref));
+                        fmt::format("ExpressionAttributeValues missing entry '{}' required by expression", valref));
             }
             if (value->IsNull()) {
                 throw api_error::validation(
-                        format("ExpressionAttributeValues null value for entry '{}' required by expression", valref));
+                        fmt::format("ExpressionAttributeValues null value for entry '{}' required by expression", valref));
             }
             validate_value(*value, "ExpressionAttributeValues");
             used_attribute_values.emplace(valref);
@@ -708,7 +708,7 @@ rjson::value calculate_value(const parsed::value& v,
             auto function_it = function_handlers.find(std::string_view(f._function_name));
             if (function_it == function_handlers.end()) {
                 throw api_error::validation(
-                        format("{}: unknown function '{}' called.", caller, f._function_name));
+                        fmt::format("{}: unknown function '{}' called.", caller, f._function_name));
             }
             return function_it->second(caller, previous_item, f);
         },

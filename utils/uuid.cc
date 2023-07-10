@@ -42,7 +42,7 @@ UUID::UUID(sstring_view uuid) {
     boost::erase_all(uuid_string, "-");
     auto size = uuid_string.size() / 2;
     if (size != 16) {
-        throw marshal_exception(format("UUID string size mismatch: '{}'", uuid));
+        throw marshal_exception(seastar::format("UUID string size mismatch: '{}'", uuid));
     }
     sstring most = sstring(uuid_string.begin(), uuid_string.begin() + size);
     sstring least = sstring(uuid_string.begin() + size, uuid_string.end());
@@ -58,7 +58,7 @@ UUID::UUID(sstring_view uuid) {
             throw std::invalid_argument("");
         }
     } catch (const std::logic_error&) {
-        throw marshal_exception(format("invalid UUID: '{}'", uuid));
+        throw marshal_exception(seastar::format("invalid UUID: '{}'", uuid));
     }
 }
 

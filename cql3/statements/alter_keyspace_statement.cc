@@ -77,7 +77,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                 throw exceptions::invalid_request_exception("Keyspace storage options not supported in the cluster");
             }
             if (!current_options.can_update_to(new_options)) {
-                throw exceptions::invalid_request_exception(format("Cannot alter storage options: {} to {} is not supported",
+                throw exceptions::invalid_request_exception(seastar::format("Cannot alter storage options: {} to {} is not supported",
                         current_options.type_string(), new_options.type_string()));
             }
 

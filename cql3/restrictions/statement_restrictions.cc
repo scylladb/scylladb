@@ -678,7 +678,7 @@ void statement_restrictions::add_single_column_parition_key_restriction(const ex
     }
     if (has_token_restrictions()) {
         throw exceptions::invalid_request_exception(
-                format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
+                seastar::format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
                        fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
                                  boost::adaptors::transformed([](auto* p) {
                                    return maybe_column_definition{p};
@@ -693,7 +693,7 @@ void statement_restrictions::add_single_column_parition_key_restriction(const ex
 void statement_restrictions::add_token_partition_key_restriction(const expr::binary_operator& restr) {
     if (!partition_key_restrictions_is_empty() && !has_token_restrictions()) {
         throw exceptions::invalid_request_exception(
-                format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
+                seastar::format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
                         fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
                                   boost::adaptors::transformed([](auto* p) {
                                     return maybe_column_definition{p};

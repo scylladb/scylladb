@@ -66,8 +66,8 @@ void cdc::stats::parts_touched_stats::register_metrics(seastar::metrics::metric_
     namespace sm = seastar::metrics;
     auto register_part = [&] (part_type part, sstring part_name) {
         metrics.add_group(cdc_group_name, {
-                sm::make_total_operations(format("operations_on_{}_performed_{}", part_name, suffix), count[(size_t)part],
-                        sm::description(format("number of {} CDC operations that processed a {}", suffix, part_name)),
+                sm::make_total_operations(seastar::format("operations_on_{}_performed_{}", part_name, suffix), count[(size_t)part],
+                        sm::description(seastar::format("number of {} CDC operations that processed a {}", suffix, part_name)),
                         {})
             });
     };

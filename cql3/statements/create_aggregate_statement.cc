@@ -41,7 +41,7 @@ seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement:
     auto state_func = dynamic_pointer_cast<functions::scalar_function>(functions::instance().find(functions::function_name{_name.keyspace, _sfunc}, acc_types));
     if (!state_func) {
         auto acc_type_names = acc_types | boost::adaptors::transformed([] (auto&& t) { return t->cql3_type_name(); });
-        throw exceptions::invalid_request_exception(format("State function {}({}) not found", _sfunc, fmt::join(acc_type_names, ", ")));
+        throw exceptions::invalid_request_exception(seastar::format("State function {}({}) not found", _sfunc, fmt::join(acc_type_names, ", ")));
     }
     if (state_func->return_type() != state_type) {
         throw exceptions::invalid_request_exception(format("State function '{}' doesn't return state ({})", _sfunc, state_type->cql3_type_name()));

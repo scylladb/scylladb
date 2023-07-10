@@ -262,7 +262,7 @@ class cql3_type::raw_tuple : public raw {
     std::vector<shared_ptr<raw>> _types;
 
     virtual sstring to_string() const override {
-        return format("tuple<{}>", fmt::join(_types, ", "));
+        return seastar::format("tuple<{}>", fmt::join(_types, ", "));
     }
 public:
     raw_tuple(std::vector<shared_ptr<raw>> types)

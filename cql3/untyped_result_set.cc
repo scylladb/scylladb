@@ -22,7 +22,7 @@ private:
 public:
     missing_column(std::string_view column_name)
             : bad_variant_access()
-            , _msg(format("missing column: {}", column_name))
+            , _msg(seastar::format("missing column: {}", column_name))
     {}
 
     const char* what() const noexcept override {

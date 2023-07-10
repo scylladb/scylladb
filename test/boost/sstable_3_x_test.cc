@@ -121,7 +121,7 @@ public:
     void assert_toc(const std::set<component_type>& expected_components) {
         for (auto& expected : expected_components) {
             if(!_sst->_recognized_components.contains(expected)) {
-                BOOST_FAIL(format("Expected component of TOC missing: {}\n ... in: {}",
+                BOOST_FAIL(seastar::format("Expected component of TOC missing: {}\n ... in: {}",
                                   expected,
                                   std::set<component_type>(
                                       cbegin(_sst->_recognized_components),
@@ -130,7 +130,7 @@ public:
         }
         for (auto& present : _sst->_recognized_components) {
             if (!expected_components.contains(present)) {
-                BOOST_FAIL(format("Unexpected component of TOC: {}\n ... when expecting: {}",
+                BOOST_FAIL(seastar::format("Unexpected component of TOC: {}\n ... when expecting: {}",
                                   present,
                                   expected_components));
             }

@@ -180,11 +180,11 @@ template <typename T> static T parse_int(const integer_type_impl<T>& t, sstring_
         auto value64 = boost::lexical_cast<int64_t>(s.begin(), s.size());
         auto value = static_cast<T>(value64);
         if (value != value64) {
-            throw marshal_exception(format("Value out of range for type {}: '{}'", t.name(), s));
+            throw marshal_exception(seastar::format("Value out of range for type {}: '{}'", t.name(), s));
         }
         return static_cast<T>(value);
     } catch (const boost::bad_lexical_cast& e) {
-        throw marshal_exception(format("Invalid number format '{}'", s));
+        throw marshal_exception(seastar::format("Invalid number format '{}'", s));
     }
 }
 
@@ -286,7 +286,7 @@ int64_t timestamp_from_string(sstring_view s) {
         static const boost::regex date_re("^(\\d{4})-(\\d+)-(\\d+)([ tT](\\d+):(\\d+)(:(\\d+)(\\.(\\d+))?)?)?");
         boost::smatch dsm;
         if (!boost::regex_search(str, dsm, date_re)) {
-            throw marshal_exception(format("Unable to parse timestamp from '{}'", str));
+            throw marshal_exception(seastar::format("Unable to parse timestamp from '{}'", str));
         }
         auto t = get_time(dsm);
 
@@ -304,13 +304,14 @@ int64_t timestamp_from_string(sstring_view s) {
             auto dst_offset = t2 - t;
             t -= tz_offset + dst_offset;
         } else if (tz != "z") {
-            throw marshal_exception(format("Unable to parse timezone '{}'", tz));
+            throw marshal_exception(seastar::format("Unable to parse timezone '{}'", tz));
         }
         return (t - boost::posix_time::from_time_t(0)).total_milliseconds();
     } catch (const marshal_exception& me) {
-        throw marshal_exception(format("unable to parse date '{}': {}", s, me.what()));
+        throw marshal_exception(
+            seastar::format("unable to parse date '{}': {}", s, me.what()));
     } catch (...) {
-        throw marshal_exception(format("unable to parse date '{}': {}", s, std::current_exception()));
+        throw marshal_exception(seastar::format("unable to parse date '{}': {}", s, std::current_exception()));
     }
 }
 
@@ -332,10 +333,10 @@ static date::year_month_day get_simple_date_time(const boost::match_results<Cons
 }
 static uint32_t serialize(sstring_view input, int64_t days) {
     if (days < std::numeric_limits<int32_t>::min()) {
-        throw marshal_exception(format("Input date {} is less than min supported date -5877641-06-23", input));
+        throw marshal_exception(seastar::format("Input date {} is less than min supported date -5877641-06-23", input));
     }
     if (days > std::numeric_limits<int32_t>::max()) {
-        throw marshal_exception(format("Input date {} is greater than max supported date 5881580-07-11", input));
+        throw marshal_exception(seastar::format("Input date {} is greater than max supported date 5881580-07-11", input));
     }
     days += 1UL << 31;
     return static_cast<uint32_t>(days);
@@ -348,7 +349,7 @@ uint32_t simple_date_type_impl::from_sstring(sstring_view s) {
         static const boost::regex date_re("^(-?\\d+)-(\\d+)-(\\d+)");
         boost::match_results<sstring_view::const_iterator> dsm;
         if (!boost::regex_match(s.begin(), s.end(), dsm, date_re)) {
-        throw marshal_exception(format("Unable to coerce '{}' to a formatted date (long)", s));
+        throw marshal_exception(seastar::format("Unable to coerce '{}' to a formatted date (long)", s));
         }
         auto t = get_simple_date_time(dsm);
         return serialize(s, date::local_days(t).time_since_epoch().count());
@@ -395,7 +396,7 @@ int64_t time_type_impl::from_sstring(sstring_view s) {
         nanoseconds = std::stol(sstring(s.substr(seconds_end + 1)));
         auto nano_digits = s.length() - (seconds_end + 1);
         if (nano_digits > 9) {
-            throw marshal_exception(format("more than 9 nanosecond digits: {}", s));
+            throw marshal_exception(seastar::format("more than 9 nanosecond digits: {}", s));
         }
         nanoseconds *= std::pow(10, 9 - nano_digits);
         if (nanoseconds < 0 || nanoseconds >= 1000 * 1000 * 1000) {
@@ -1041,7 +1042,7 @@ static sstring cql3_type_name_impl(const abstract_type& t) {
         sstring operator()(const time_type_impl&) { return "time"; }
         sstring operator()(const timeuuid_type_impl&) { return "timeuuid"; }
         sstring operator()(const tuple_type_impl& t) {
-            return format("tuple<{}>", fmt::join(t.all_types() | boost::adaptors::transformed(std::mem_fn(
+            return seastar::format("tuple<{}>", fmt::join(t.all_types() | boost::adaptors::transformed(std::mem_fn(
                                                                             &abstract_type::as_cql3_type)), ", "));
         }
         sstring operator()(const user_type_impl& u) { return u.get_name_as_cql_string(); }
@@ -1708,7 +1709,7 @@ struct validate_visitor {
             using counter_value_type = decltype(counter_value_type_instance);
 
             if (static_cast<counter_value_type>(value) != value) {
-                throw marshal_exception(format("The duration {} ({:d}) must be a {:d} bit integer", counter_name, value,
+                throw marshal_exception(seastar::format("The duration {} ({:d}) must be a {:d} bit integer", counter_name, value,
                         std::numeric_limits<counter_value_type>::digits + 1));
             }
         };
@@ -2694,14 +2695,14 @@ seastar::net::inet_address inet_addr_type_impl::from_sstring(sstring_view s) {
     try {
         return inet_address(std::string(s.data(), s.size()));
     } catch (...) {
-        throw marshal_exception(format("Failed to parse inet_addr from '{}'", s));
+        throw marshal_exception(seastar::format("Failed to parse inet_addr from '{}'", s));
     }
 }
 
 utils::UUID uuid_type_impl::from_sstring(sstring_view s) {
     static const boost::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
     if (!boost::regex_match(s.begin(), s.end(), re)) {
-        throw marshal_exception(format("Cannot parse uuid from '{}'", s));
+        throw marshal_exception(seastar::format("Cannot parse uuid from '{}'", s));
     }
     return utils::UUID(s);
 }
@@ -2709,7 +2710,7 @@ utils::UUID uuid_type_impl::from_sstring(sstring_view s) {
 utils::UUID timeuuid_type_impl::from_sstring(sstring_view s) {
     static const boost::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
     if (!boost::regex_match(s.begin(), s.end(), re)) {
-        throw marshal_exception(format("Invalid UUID format ({})", s));
+        throw marshal_exception(seastar::format("Invalid UUID format ({})", s));
     }
     utils::UUID v(s);
     if (v.version() != 1) {
@@ -2729,7 +2730,7 @@ struct from_string_visitor {
         if (utils::ascii::validate(bv)) {
             return to_bytes(bv);
         } else {
-            throw marshal_exception(format("Invalid ASCII character in string literal: '{}'", s));
+            throw marshal_exception(seastar::format("Invalid ASCII character in string literal: '{}'", s));
         }
     }
     bytes operator()(const string_type_impl&) {
@@ -2745,7 +2746,7 @@ struct from_string_visitor {
         } else if (s_lower == "true") {
             v = true;
         } else {
-            throw marshal_exception(format("unable to make boolean from '{}'", s));
+            throw marshal_exception(seastar::format("unable to make boolean from '{}'", s));
         }
         return serialize_value(t, v);
     }
@@ -2787,7 +2788,7 @@ struct from_string_visitor {
             auto d = boost::lexical_cast<T>(s.begin(), s.size());
             return serialize_value(t, d);
         } catch (const boost::bad_lexical_cast& e) {
-            throw marshal_exception(format("Invalid number format '{}'", s));
+            throw marshal_exception(seastar::format("Invalid number format '{}'", s));
         }
     }
     bytes operator()(const varint_type_impl& t) {
@@ -2799,7 +2800,7 @@ struct from_string_visitor {
             varint_type_impl::native_type num(str);
             return serialize_value(t, num);
         } catch (...) {
-            throw marshal_exception(format("unable to make int from '{}'", s));
+            throw marshal_exception(seastar::format("unable to make int from '{}'", s));
         }
     }
     bytes operator()(const decimal_type_impl& t) {
@@ -2810,7 +2811,7 @@ struct from_string_visitor {
             decimal_type_impl::native_type bd(s);
             return serialize_value(t, bd);
         } catch (...) {
-            throw marshal_exception(format("unable to make BigDecimal from '{}'", s));
+            throw marshal_exception(seastar::format("unable to make BigDecimal from '{}'", s));
         }
     }
     bytes operator()(const duration_type_impl& t) {
@@ -3061,7 +3062,7 @@ tuple_type_impl::make_name(const std::vector<data_type>& types) {
     // "org.apache.cassandra.db.marshal.FrozenType(...)".
     // Even when the tuple is frozen.
     // For more details see #4087
-    return format("org.apache.cassandra.db.marshal.TupleType({})", fmt::join(types | boost::adaptors::transformed(std::mem_fn(&abstract_type::name)), ", "));
+    return seastar::format("org.apache.cassandra.db.marshal.TupleType({})", fmt::join(types | boost::adaptors::transformed(std::mem_fn(&abstract_type::name)), ", "));
 }
 
 static std::optional<std::vector<data_type>>

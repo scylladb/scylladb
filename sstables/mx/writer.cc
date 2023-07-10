@@ -365,11 +365,11 @@ static sstring pk_type_to_string(const schema& s) {
     if (s.partition_key_size() == 1) {
         return s.partition_key_columns().begin()->type->name();
     } else {
-        auto type_params = fmt::join(s.partition_key_columns()
+        return seastar::format("org.apache.cassandra.db.marshal.CompositeType({})",
+                               fmt::join(s.partition_key_columns()
                                           | boost::adaptors::transformed(std::mem_fn(&column_definition::type))
                                           | boost::adaptors::transformed(std::mem_fn(&abstract_type::name)),
-                                        ",");
-        return format("org.apache.cassandra.db.marshal.CompositeType({})", type_params);
+                                        ","));
     }
 }
 

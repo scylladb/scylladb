@@ -121,7 +121,7 @@ public:
 class no_generation_data_exception : public std::runtime_error {
 public:
     no_generation_data_exception(cdc::generation_id generation_ts)
-        : std::runtime_error(format("could not find generation data for timestamp {}", generation_ts))
+        : std::runtime_error(fmt::format("could not find generation data for timestamp {}", generation_ts))
     {}
 };
 

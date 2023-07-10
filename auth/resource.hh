@@ -33,7 +33,7 @@ namespace auth {
 class invalid_resource_name : public std::invalid_argument {
 public:
     explicit invalid_resource_name(std::string_view name)
-            : std::invalid_argument(format("The resource name '{}' is invalid.", name)) {
+            : std::invalid_argument(fmt::format("The resource name '{}' is invalid.", name)) {
     }
 };
 
@@ -149,7 +149,7 @@ class resource_kind_mismatch : public std::invalid_argument {
 public:
     explicit resource_kind_mismatch(resource_kind expected, resource_kind actual)
         : std::invalid_argument(
-            format("This resource has kind '{}', but was expected to have kind '{}'.", actual, expected)) {
+            fmt::format("This resource has kind '{}', but was expected to have kind '{}'.", actual, expected)) {
     }
 };
 

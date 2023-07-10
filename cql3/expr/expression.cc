@@ -2161,7 +2161,7 @@ static cql3::raw_value do_evaluate(const function_call& fun_call, const evaluati
     try {
         scalar_fun->return_type()->validate(*result);
     } catch (marshal_exception&) {
-        throw runtime_exception(format("Return of function {} ({}) is not a valid value for its declared return type {}",
+        throw runtime_exception(fmt::format("Return of function {} ({}) is not a valid value for its declared return type {}",
                                        *scalar_fun, to_hex(result),
                                        scalar_fun->return_type()->as_cql3_type()
                                        ));
@@ -2407,7 +2407,7 @@ type_of(const expression& e) {
 static std::optional<std::reference_wrapper<const column_value>> get_single_column_restriction_column(const expression& e) {
     if (find_in_expression<unresolved_identifier>(e, [](const auto&) {return true;})) {
         on_internal_error(expr_logger,
-            format("get_single_column_restriction_column expects a prepared expression, but it's not: {}", e));
+            seastar::format("get_single_column_restriction_column expects a prepared expression, but it's not: {}", e));
     }
 
     const column_value* the_only_column = nullptr;

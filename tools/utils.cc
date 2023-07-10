@@ -196,7 +196,7 @@ int tool_app_template::run_async(int argc, char** argv, noncopyable_function<int
     app_cfg.name = format("scylla-{}", _cfg.name);
 
     if (found_op) {
-        app_cfg.description = format("{}\n\n{}\n", found_op->summary(), found_op->description());
+        app_cfg.description = seastar::format("{}\n\n{}\n", found_op->summary(), found_op->description());
     } else {
         app_cfg.description = _cfg.description;
     }

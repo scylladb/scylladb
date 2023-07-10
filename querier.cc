@@ -386,7 +386,7 @@ std::optional<Querier> querier_cache::lookup_querier(
                     reinterpret_cast<uintptr_t>(&current_sem));
     }
     else if (can_be_used == can_use::no_fatal_semaphore_mismatch) {
-        on_internal_error(qlogger, format("semaphore mismatch detected, dropping reader {}: "
+        on_internal_error(qlogger, seastar::format("semaphore mismatch detected, dropping reader {}: "
                 "reader belongs to {} (0x{:x}) but the query class appropriate is {} (0x{:x})",
                 permit.description(),
                 q_semaphore_name,

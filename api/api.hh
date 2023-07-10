@@ -246,7 +246,7 @@ public:
                 value = T{boost::lexical_cast<Base>(param)};
             }
         } catch (boost::bad_lexical_cast&) {
-            throw httpd::bad_param_exception(format("{} ({}): type error - should be {}", name, param, boost::units::detail::demangle(typeid(Base).name())));
+            throw httpd::bad_param_exception(fmt::format("{} ({}): type error - should be {}", name, param, boost::units::detail::demangle(typeid(Base).name())));
         }
     }
 

@@ -20,7 +20,6 @@ shared_ptr<T> make_shared(A&&... a);
 
 }
 
-
 using namespace seastar;
 using seastar::shared_ptr;
 using seastar::make_shared;

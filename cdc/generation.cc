@@ -872,7 +872,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
             return;
         }
         if (!_gossiper.is_normal(addr)) {
-            throw std::runtime_error(format("All nodes must be in NORMAL or LEFT state while performing check_and_repair_cdc_streams"
+            throw std::runtime_error(fmt::format("All nodes must be in NORMAL or LEFT state while performing check_and_repair_cdc_streams"
                     " ({} is in state {})", addr, _gossiper.get_gossip_status(state)));
         }
 
@@ -1111,7 +1111,7 @@ future<bool> generation_service::legacy_do_handle_cdc_generation(cdc::generation
     auto sys_dist_ks = get_sys_dist_ks();
     auto gen = co_await retrieve_generation_data(gen_id, _sys_ks.local(), *sys_dist_ks, { _token_metadata.get()->count_normal_token_owners() });
     if (!gen) {
-        throw std::runtime_error(format(
+        throw std::runtime_error(fmt::format(
             "Could not find CDC generation {} in distributed system tables (current time: {}),"
             " even though some node gossiped about it.",
             gen_id, db_clock::now()));

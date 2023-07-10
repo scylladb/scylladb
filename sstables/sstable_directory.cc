@@ -371,7 +371,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
     // log and proceed.
     for (auto& path : _state->generations_found | boost::adaptors::map_values) {
         if (flags.throw_on_missing_toc) {
-            throw sstables::malformed_sstable_exception(format("At directory: {}: no TOC found for SSTable {}!. Refusing to boot", _directory.native(), path.native()));
+            throw sstables::malformed_sstable_exception(seastar::format("At directory: {}: no TOC found for SSTable {}!. Refusing to boot", _directory.native(), path.native()));
         } else {
             dirlog.info("Found incomplete SSTable {} at directory {}. Removing", path.native(), _directory.native());
             _state->files_for_removal.insert(path.native());

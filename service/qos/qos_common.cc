@@ -144,7 +144,7 @@ static service_level_options::timeout_type get_duration(const cql3::untyped_resu
 };
 
 future<qos::service_levels_info> get_service_levels(cql3::query_processor& qp, std::string_view ks_name, std::string_view cf_name, db::consistency_level cl) {
-    sstring prepared_query = format("SELECT * FROM {}.{};", ks_name, cf_name);
+    sstring prepared_query = seastar::format("SELECT * FROM {}.{};", ks_name, cf_name);
     auto result_set = co_await qp.execute_internal(prepared_query, cl, qos_query_state(), cql3::query_processor::cache_internal::yes);
  
     qos::service_levels_info service_levels;
@@ -166,7 +166,7 @@ future<qos::service_levels_info> get_service_levels(cql3::query_processor& qp, s
 }
 
 future<service_levels_info> get_service_level(cql3::query_processor& qp, std::string_view ks_name, std::string_view cf_name, sstring service_level_name, db::consistency_level cl) {
-    sstring prepared_query = format("SELECT * FROM {}.{} WHERE service_level = ?;", ks_name, cf_name);
+    sstring prepared_query = seastar::format("SELECT * FROM {}.{} WHERE service_level = ?;", ks_name, cf_name);
     auto result_set = co_await  qp.execute_internal(prepared_query, cl, qos_query_state(), {service_level_name}, cql3::query_processor::cache_internal::yes);
 
     qos::service_levels_info service_levels;

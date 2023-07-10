@@ -246,7 +246,7 @@ static future<> update_item(const test_config& _, http::experimental::client& cl
                 }}
             }},)", seq, seq);
 
-    return make_request(cli, "UpdateItem", prefix + format(update_item_suffix, ""));
+    return make_request(cli, "UpdateItem", prefix + seastar::format(update_item_suffix, ""));
 }
 
 static future<> update_item_gsi(const test_config& _, http::experimental::client& cli, uint64_t seq) {
@@ -401,7 +401,7 @@ void workload_main(const test_config& c) {
 
     auto it = workloads.find(c.workload);
     if (it == workloads.end()) {
-        throw std::runtime_error(format("unknown workload '{}'", c.workload));
+        throw std::runtime_error(fmt::format("unknown workload '{}'", c.workload));
     }
     fun_t fun = it->second;
 

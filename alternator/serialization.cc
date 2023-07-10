@@ -143,17 +143,17 @@ static big_decimal parse_and_validate_number(std::string_view s) {
         big_decimal ret(s);
         auto [magnitude, precision] = internal::get_magnitude_and_precision(s);
         if (magnitude > 125) {
-            throw api_error::validation(format("Number overflow: {}. Attempting to store a number with magnitude larger than supported range.", s));
+            throw api_error::validation(fmt::format("Number overflow: {}. Attempting to store a number with magnitude larger than supported range.", s));
         }
         if (magnitude < -130) {
-            throw api_error::validation(format("Number underflow: {}. Attempting to store a number with magnitude lower than supported range.", s));
+            throw api_error::validation(fmt::format("Number underflow: {}. Attempting to store a number with magnitude lower than supported range.", s));
         }
         if (precision > 38) {
-            throw api_error::validation(format("Number too precise: {}. Attempting to store a number with more significant digits than supported.", s));
+            throw api_error::validation(fmt::format("Number too precise: {}. Attempting to store a number with more significant digits than supported.", s));
         }
         return ret;
     } catch (const marshal_exception& e) {
-        throw api_error::validation(format("The parameter cannot be converted to a numeric value: {}", s));
+        throw api_error::validation(fmt::format("The parameter cannot be converted to a numeric value: {}", s));
     }
 
 }
@@ -265,7 +265,7 @@ bytes get_key_column_value(const rjson::value& item, const column_definition& co
     std::string column_name = column.name_as_text();
     const rjson::value* key_typed_value = rjson::find(item, column_name);
     if (!key_typed_value) {
-        throw api_error::validation(format("Key column {} not found", column_name));
+        throw api_error::validation(fmt::format("Key column {} not found", column_name));
     }
     return get_key_from_typed_value(*key_typed_value, column);
 }
@@ -279,21 +279,21 @@ bytes get_key_column_value(const rjson::value& item, const column_definition& co
 static const rjson::value& get_typed_value(const rjson::value& key_typed_value, std::string_view type_str, std::string_view name, std::string_view value_name) {
     if (!key_typed_value.IsObject() || key_typed_value.MemberCount() != 1) {
         throw api_error::validation(
-                format("Malformed value object for {} {}: {}",
+                fmt::format("Malformed value object for {} {}: {}",
                         value_name, name, key_typed_value));
     }
 
     auto it = key_typed_value.MemberBegin();
     if (rjson::to_string_view(it->name) != type_str) {
         throw api_error::validation(
-                format("Type mismatch: expected type {} for {} {}, got type {}",
+                fmt::format("Type mismatch: expected type {} for {} {}, got type {}",
                         type_str, value_name, name, it->name));
     }
     // We assume this function is called just for key types (S, B, N), and
     // all of those always have a string value in the JSON.
     if (!it->value.IsString()) {
         throw api_error::validation(
-            format("Malformed value object for {} {}: {}",
+            fmt::format("Malformed value object for {} {}: {}",
                     value_name, name, key_typed_value));
 
     }
@@ -402,16 +402,16 @@ position_in_partition pos_from_json(const rjson::value& item, schema_ptr schema)
 
 big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic) {
     if (!v.IsObject() || v.MemberCount() != 1) {
-        throw api_error::validation(format("{}: invalid number object", diagnostic));
+        throw api_error::validation(fmt::format("{}: invalid number object", diagnostic));
     }
     auto it = v.MemberBegin();
     if (it->name != "N") {
-        throw api_error::validation(format("{}: expected number, found type '{}'", diagnostic, it->name));
+        throw api_error::validation(fmt::format("{}: expected number, found type '{}'", diagnostic, it->name));
     }
     if (!it->value.IsString()) {
         // We shouldn't reach here. Callers normally validate their input
         // earlier with validate_value().
-        throw api_error::validation(format("{}: improperly formatted number constant", diagnostic));
+        throw api_error::validation(fmt::format("{}: improperly formatted number constant", diagnostic));
     }
     big_decimal ret = parse_and_validate_number(rjson::to_string_view(it->value));
     return ret;
@@ -492,7 +492,7 @@ rjson::value set_sum(const rjson::value& v1, const rjson::value& v2) {
     auto [set1_type, set1] = unwrap_set(v1);
     auto [set2_type, set2] = unwrap_set(v2);
     if (set1_type != set2_type) {
-        throw api_error::validation(format("Mismatched set types: {} and {}", set1_type, set2_type));
+        throw api_error::validation(fmt::format("Mismatched set types: {} and {}", set1_type, set2_type));
     }
     if (!set1 || !set2) {
         throw api_error::validation("UpdateExpression: ADD operation for sets must be given sets as arguments");
@@ -520,7 +520,7 @@ std::optional<rjson::value> set_diff(const rjson::value& v1, const rjson::value&
     auto [set1_type, set1] = unwrap_set(v1);
     auto [set2_type, set2] = unwrap_set(v2);
     if (set1_type != set2_type) {
-        throw api_error::validation(format("Set DELETE type mismatch: {} and {}", set1_type, set2_type));
+        throw api_error::validation(fmt::format("Set DELETE type mismatch: {} and {}", set1_type, set2_type));
     }
     if (!set1 || !set2) {
         throw api_error::validation("UpdateExpression: DELETE operation can only be performed on a set");

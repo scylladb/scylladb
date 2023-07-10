@@ -162,7 +162,7 @@ inline sstable_state state_from_dir(std::string_view dir) {
         return sstable_state::upload;
     }
 
-    throw std::runtime_error(format("Unknown sstable state dir {}", dir));
+    throw std::runtime_error(seastar::format("Unknown sstable state dir {}", dir));
 }
 
 // FIXME -- temporary, move to fs storage after patching the rest

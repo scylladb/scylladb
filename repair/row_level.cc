@@ -2623,7 +2623,7 @@ public:
             }
         }
         if (_all_live_peer_shards.size() != _all_live_peer_nodes.size()) {
-            on_internal_error(rlogger, format("The size of shards and nodes do not match table={} range={} shards={} nodes={}",
+            on_internal_error(rlogger, seastar::format("The size of shards and nodes do not match table={} range={} shards={} nodes={}",
                 _cf_name, _range, _all_live_peer_shards, _all_live_peer_nodes));
         }
 
@@ -3088,7 +3088,7 @@ public:
                 if (table_dropped) {
                     throw replica::no_such_column_family(_shard_task.get_keyspace(),  _cf_name);
                 } else {
-                    throw nested_exception(std::make_exception_ptr(std::runtime_error(format("Failed to repair for keyspace={}, cf={}, range={}", _shard_task.get_keyspace(),
+                    throw nested_exception(std::make_exception_ptr(std::runtime_error(fmt::format("Failed to repair for keyspace={}, cf={}, range={}", _shard_task.get_keyspace(),
                                             _cf_name, _range))), std::move(ex));
                 }
             } else {

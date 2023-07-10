@@ -241,7 +241,7 @@ public:
         };
         for (const auto& [dc, rf] : dc_rf) {
             if (rf > endpoints_in(dc)) {
-                throw exceptions::configuration_exception(fmt::format(
+                throw exceptions::configuration_exception(seastar::format(
                         "Datacenter {} doesn't have enough token-owning nodes for replication_factor={}", dc, rf));
             }
         }
@@ -471,7 +471,7 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
 
     if (candidate_racks.empty()) {
         on_internal_error(tablet_logger,
-                format("allocate_replica {}.{}: no candidate racks found for dc={} allocated={} rf={}: existing={}",
+                seastar::format("allocate_replica {}.{}: no candidate racks found for dc={} allocated={} rf={}: existing={}",
                         s->ks_name(), s->cf_name(), dc, dc_node_count, dc_rf, replicas_per_rack));
     }
 
@@ -482,7 +482,7 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
         auto& nodes = candidate->nodes;
         if (nodes.empty()) {
             on_internal_error(tablet_logger,
-                    format("allocate_replica {}.{} tablet_id={}: candidates vector for rack={} is empty for allocating tablet replicas in dc={} allocated={} rf={}",
+                    seastar::format("allocate_replica {}.{} tablet_id={}: candidates vector for rack={} is empty for allocating tablet replicas in dc={} allocated={} rf={}",
                             s->ks_name(), s->cf_name(), tb.id, rack, dc, dc_node_count, dc_rf));
         }
         auto host_id = nodes.back().host;
@@ -492,7 +492,7 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
         // Sanity check that a node is not used more than once
         if (!inserted) {
             on_internal_error(tablet_logger,
-                    format("allocate_replica {}.{} tablet_id={}: allocated replica={} node already used when allocating tablet replicas in dc={} allocated={} rf={}: replicas={}",
+                    seastar::format("allocate_replica {}.{} tablet_id={}: allocated replica={} node already used when allocating tablet replicas in dc={} allocated={} rf={}: replicas={}",
                             s->ks_name(), s->cf_name(), tb.id, replica, dc, dc_node_count, dc_rf, replicas));
         }
         nodes.pop_back();

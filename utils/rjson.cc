@@ -284,14 +284,14 @@ rjson::malformed_value::malformed_value(std::string_view name, const rjson::valu
 {}
 
 rjson::malformed_value::malformed_value(std::string_view name, std::string_view value)
-    : error(format("Malformed value {} : {}", name, value))
+    : error(seastar::format("Malformed value {} : {}", name, value))
 {}
 
 rjson::missing_value::missing_value(std::string_view name) 
     // TODO: using old message here, but as pointed out. 
     // "parameter" is not really a JSON concept. It is a value
     // missing according to (implicit) schema. 
-    : error(format("JSON parameter {} not found", name))
+    : error(seastar::format("JSON parameter {} not found", name))
 {}
 
 rjson::value copy(const rjson::value& value) {

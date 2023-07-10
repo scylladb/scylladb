@@ -231,11 +231,11 @@ public:
         std::tie(value, t) = _t.s.get_value(*_s, row);
         testlog.trace("reader {}: {} @{}, {}", _id, value, t, clustering_row::printer(*_s, row));
         if (_value && value != _value) {
-            throw std::runtime_error(format("Saw values from two different writes in partition {:d}: {} and {}", _key, _value, value));
+            throw std::runtime_error(fmt::format("Saw values from two different writes in partition {:d}: {} and {}", _key, _value, value));
         }
         auto lowest_timestamp = _writetimes[_key];
         if (t < lowest_timestamp) {
-            throw std::runtime_error(format("Expected to see the write @{:d}, but saw @{:d} ({}), c_key={}", lowest_timestamp, t, value, row.key()));
+            throw std::runtime_error(fmt::format("Expected to see the write @{:d}, but saw @{:d} ({}), c_key={}", lowest_timestamp, t, value, row.key()));
         }
         _value = std::move(value);
         return stop_iteration::no;

@@ -1271,7 +1271,7 @@ public:
             }
 
             if (!min_dst) {
-                on_internal_error(lblogger, format("No destination shards on {}", best_hosts));
+                on_internal_error(lblogger, fmt::format("No destination shards on {}", best_hosts));
             }
 
             auto candidate = migration_candidate{
@@ -1601,7 +1601,7 @@ public:
                 if (skip) {
                     if (src_node_info.drained && skip->viable_targets.empty()) {
                         auto replicas = tmap.get_tablet_info(source_tablet.tablet).replicas;
-                        throw std::runtime_error(format("Unable to find new replica for tablet {} on {} when draining {} (nodes {}, replicas {})",
+                        throw std::runtime_error(fmt::format("Unable to find new replica for tablet {} on {} when draining {} (nodes {}, replicas {})",
                                                         source_tablet, src, nodes_to_drain, nodes_by_load_dst, replicas));
                     }
                     src_node_info.skipped_candidates.emplace_back(src, source_tablet, std::move(skip->viable_targets));

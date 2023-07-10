@@ -88,7 +88,7 @@ std::string get_signature(std::string_view access_key_id, std::string_view secre
         check_expiry(amz_date);
         if (datestamp != *orig_datestamp) {
             throw std::runtime_error(
-                    format("X-Amz-Date date does not match the provided datestamp. Expected {}, got {}",
+                    fmt::format("X-Amz-Date date does not match the provided datestamp. Expected {}, got {}",
                             *orig_datestamp, datestamp));
         }
     }

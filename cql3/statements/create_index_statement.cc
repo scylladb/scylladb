@@ -249,7 +249,7 @@ void create_index_statement::validate_for_collection(const index_target& target,
         case index_target::target_type::keys_and_values:
             if (!cd.type->is_map()) {
                 constexpr const char* msg_format = "Cannot create secondary index on {} of column {} with non-map type";
-                throw exceptions::invalid_request_exception(format(msg_format, to_sstring(target.type), cd.name_as_text()));
+                throw exceptions::invalid_request_exception(seastar::format(msg_format, to_sstring(target.type), cd.name_as_text()));
             }
             break;
     }

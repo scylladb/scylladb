@@ -124,7 +124,7 @@ void client::authorize(http::request& req) {
     }
     unsigned header_nr = signed_headers.size();
     for (const auto& h : signed_headers) {
-        signed_headers_list += format("{}{}", h.first, header_nr == 1 ? "" : ";");
+        signed_headers_list += seastar::format("{}{}", h.first, header_nr == 1 ? "" : ";");
         header_nr--;
     }
     sstring query_string = "";
@@ -134,7 +134,7 @@ void client::authorize(http::request& req) {
     }
     unsigned query_nr = query_parameters.size();
     for (const auto& q : query_parameters) {
-        query_string += format("{}={}{}", http::internal::url_encode(q.first), http::internal::url_encode(q.second), query_nr == 1 ? "" : "&");
+        query_string += seastar::format("{}={}{}", http::internal::url_encode(q.first), http::internal::url_encode(q.second), query_nr == 1 ? "" : "&");
         query_nr--;
     }
     auto sig = utils::aws::get_signature(
@@ -144,7 +144,7 @@ void client::authorize(http::request& req) {
         signed_headers_list, signed_headers,
         utils::aws::unsigned_content,
         _cfg->aws->region, "s3", query_string);
-    req._headers["Authorization"] = format("AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}", _cfg->aws->access_key_id, time_point_st, _cfg->aws->region, signed_headers_list, sig);
+    req._headers["Authorization"] = seastar::format("AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}", _cfg->aws->access_key_id, time_point_st, _cfg->aws->region, signed_headers_list, sig);
 }
 
 future<semaphore_units<>> client::claim_memory(size_t size) {
@@ -606,7 +606,7 @@ future<> client::upload_sink_base::start_upload() {
     auto rep = http::request::make("POST", _client->_host, _object_name);
     rep.query_parameters["uploads"] = "";
     if (_tag) {
-        rep._headers["x-amz-tagging"] = format("{}={}", _tag->key, _tag->value);
+        rep._headers["x-amz-tagging"] = seastar::format("{}={}", _tag->key, _tag->value);
     }
     co_await _client->make_request(std::move(rep), [this] (const http::reply& rep, input_stream<char>&& in_) -> future<> {
         auto in = std::move(in_);
@@ -631,8 +631,8 @@ future<> client::upload_sink_base::upload_part(memory_data_sink_buffers bufs) {
     s3l.trace("PUT part {} {} bytes in {} buffers (upload id {})", part_number, bufs.size(), bufs.buffers().size(), _upload_id);
     auto req = http::request::make("PUT", _client->_host, _object_name);
     auto size = bufs.size();
-    req._headers["Content-Length"] = format("{}", size);
-    req.query_parameters["partNumber"] = format("{}", part_number + 1);
+    req._headers["Content-Length"] = seastar::format("{}", size);
+    req.query_parameters["partNumber"] = seastar::format("{}", part_number + 1);
     req.query_parameters["uploadId"] = _upload_id;
     req.write_body("bin", size, [this, part_number, bufs = std::move(bufs), p = std::move(claim)] (output_stream<char>&& out_) mutable -> future<> {
         auto out = std::move(out_);

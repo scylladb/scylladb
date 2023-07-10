@@ -42,7 +42,7 @@ bytes from_hex(sstring_view s) {
         auto half_byte1 = hex_to_int(s[i * 2]);
         auto half_byte2 = hex_to_int(s[i * 2 + 1]);
         if (half_byte1 == -1 || half_byte2 == -1) {
-            throw std::invalid_argument(format("Non-hex characters in {}", s));
+            throw std::invalid_argument(fmt::format("Non-hex characters in {}", s));
         }
         out[i] = (half_byte1 << 4) | half_byte2;
     }

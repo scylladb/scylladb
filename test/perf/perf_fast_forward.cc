@@ -162,7 +162,7 @@ public:
             : _name(name)
             , _message(message)
             , _table_name(boost::replace_all_copy(name, "-", "_"))
-           , _create_table_statement(format(create_table_statement_pattern, _table_name))
+           , _create_table_statement(fmt::format(fmt::runtime(create_table_statement_pattern), _table_name))
     { }
 
     const std::string& name() const { return _name; }
@@ -278,7 +278,7 @@ private:
     template <std::size_t... Is>
     inline sstring_vec stats_values_to_strings_impl(const stats_values& values, std::index_sequence<Is...> seq) {
         static_assert(stats_formats.size() == seq.size());
-        sstring_vec result {format(stats_formats[Is].c_str(), std::get<Is>(values))...};
+        sstring_vec result {seastar::format(stats_formats[Is].c_str(), std::get<Is>(values))...};
         return result;
     }
 
@@ -301,10 +301,10 @@ public:
 
     void write_test_names(const output_items& param_names, const output_items& stats_names) override {
         for (const auto& name: param_names) {
-            std::cout << format(name.format.c_str(), name.value) << " ";
+            std::cout << fmt::format(fmt::runtime(name.format.c_str()), name.value) << " ";
         }
         for (const auto& name: stats_names) {
-            std::cout << format(name.format.c_str(), name.value) << " ";
+            std::cout << fmt::format(fmt::runtime(name.format.c_str()), name.value) << " ";
         }
        std::cout << std::endl;
     }
@@ -317,11 +317,11 @@ public:
             const output_items& param_names, const output_items& stats_names) override {
         for (auto& value : values) {
             for (size_t i = 0; i < param_names.size(); ++i) {
-                std::cout << format(param_names.at(i).format.c_str(), params.at(i)) << " ";
+                std::cout << fmt::format(fmt::runtime(param_names.at(i).format.c_str()), params.at(i)) << " ";
             }
             auto stats_strings = stats_values_to_strings(value);
             for (size_t i = 0; i < stats_names.size(); ++i) {
-                std::cout << format(stats_names.at(i).format.c_str(), stats_strings.at(i)) << " ";
+                std::cout << fmt::format(fmt::runtime(stats_names.at(i).format.c_str()), stats_strings.at(i)) << " ";
             }
             std::cout << "\n";
         }
@@ -330,11 +330,11 @@ public:
     void write_test_values(const sstring_vec& params, const stats_values& stats,
             const output_items& param_names, const output_items& stats_names) override {
         for (size_t i = 0; i < param_names.size(); ++i) {
-            std::cout << format(param_names.at(i).format.c_str(), params.at(i)) << " ";
+            std::cout << fmt::format(fmt::runtime(param_names.at(i).format.c_str()), params.at(i)) << " ";
         }
         sstring_vec stats_strings = stats_values_to_strings(stats);
         for (size_t i = 0; i < stats_names.size(); ++i) {
-            std::cout << format(stats_names.at(i).format.c_str(), stats_strings.at(i)) << " ";
+            std::cout << fmt::format(fmt::runtime(stats_names.at(i).format.c_str()), stats_strings.at(i)) << " ";
         }
         std::cout << std::endl;
     }
@@ -1727,7 +1727,7 @@ auto make_datasets() {
     std::map<std::string, std::unique_ptr<dataset>> dsets;
     auto add = [&] (std::unique_ptr<dataset> ds) {
         if (dsets.contains(ds->name())) {
-            throw std::runtime_error(format("Dataset with name '{}' already exists", ds->name()));
+            throw std::runtime_error(seastar::format("Dataset with name '{}' already exists", ds->name()));
         }
         auto name = ds->name();
         dsets.emplace(std::move(name), std::move(ds));
@@ -1770,7 +1770,7 @@ void populate(const std::vector<dataset*>& datasets, cql_test_env& env, const ta
         dataset& ds = *ds_ptr;
         output_mgr->add_dataset_population(ds);
 
-        env.execute_cql(format("{} WITH compression = {{ 'sstable_compression': '{}' }};",
+        env.execute_cql(seastar::format("{} WITH compression = {{ 'sstable_compression': '{}' }};",
             ds.create_table_statement(), cfg.compressor)).get();
 
         replica::column_family& cf = find_table(db, ds);
@@ -2008,7 +2008,7 @@ int scylla_fast_forward_main(int argc, char** argv) {
                 auto enabled_datasets = boost::copy_range<std::vector<dataset*>>(enabled_dataset_names
                                         | boost::adaptors::transformed([&](auto&& name) {
                     if (!datasets.contains(name)) {
-                        throw std::runtime_error(format("No such dataset: {}", name));
+                        throw std::runtime_error(seastar::format("No such dataset: {}", name));
                     }
                     return datasets[name].get();
                 }));

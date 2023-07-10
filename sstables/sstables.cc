@@ -1938,7 +1938,7 @@ future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
         }
     } catch (const malformed_sstable_exception& e) {
         try {
-            error_handler(format("unrecoverable error: {}", e));
+            error_handler(seastar::format("unrecoverable error: {}", e));
             ++errors;
         } catch (...) {
             ex = std::current_exception();
