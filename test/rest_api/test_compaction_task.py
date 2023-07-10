@@ -4,11 +4,13 @@ import sys
 sys.path.insert(1, sys.path[0] + '/../cql-pytest')
 from util import new_test_table, new_test_keyspace
 from rest_util import set_tmp_task_ttl
-from task_manager_utils import wait_for_task, list_tasks, check_child_parent_relationship
+from task_manager_utils import wait_for_task, list_tasks, check_child_parent_relationship, drain_module_tasks
 
 # depth parameter means the number of edges in the longest path from root to leaves in task tree.
 def check_compaction_task(cql, this_dc, rest_api, run_compaction, compaction_type, depth):
+    module_name = "compaction"
     long_time = 1000000000
+    drain_module_tasks(rest_api, module_name)
     with set_tmp_task_ttl(rest_api, long_time):
         with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
             schema = 'p int, v text, primary key (p)'
@@ -23,7 +25,7 @@ def check_compaction_task(cql, this_dc, rest_api, run_compaction, compaction_typ
                 resp.raise_for_status()
 
                 # Get list of compaction tasks.
-                tasks = [task for task in list_tasks(rest_api, "compaction") if task["type"] == compaction_type]
+                tasks = [task for task in list_tasks(rest_api, module_name) if task["type"] == compaction_type]
                 assert tasks, "compaction task was not created"
 
                 # Check if all tasks finished successfully.
@@ -33,6 +35,7 @@ def check_compaction_task(cql, this_dc, rest_api, run_compaction, compaction_typ
 
                 for top_level_task in statuses:
                     check_child_parent_relationship(rest_api, top_level_task, depth)
+    drain_module_tasks(rest_api, module_name)
 
 def test_major_keyspace_compaction_task(cql, this_dc, rest_api):
     task_tree_depth = 3
