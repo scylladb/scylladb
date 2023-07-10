@@ -1449,7 +1449,7 @@ private:
     Future update_write_metrics(Future&& f);
     void update_write_metrics_for_timed_out_write();
     future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
-    void remove(table&) noexcept;
+    future<> remove(table&) noexcept;
     void drop_keyspace(const sstring& name);
     future<> update_keyspace(const keyspace_metadata& tmp_ksm);
     static future<> modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func, std::function<future<>(replica::database&)> notifier);
@@ -1703,7 +1703,7 @@ public:
 public:
     bool update_column_family(schema_ptr s);
 private:
-    void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
+    future<> add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
     future<> detach_column_family(table& cf);
 
     struct table_truncate_state;

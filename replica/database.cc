@@ -990,10 +990,10 @@ future<> database::create_local_system_table(
         cfg.memtable_scheduling_group = default_scheduling_group();
         cfg.memtable_to_cache_scheduling_group = default_scheduling_group();
     }
-    add_column_family(ks, table, std::move(cfg));
+    co_await add_column_family(ks, table, std::move(cfg));
 }
 
-void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg) {
+future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg) {
     schema = local_schema_registry().learn(schema);
     schema->registry_entry()->mark_synced();
     auto&& rs = ks.get_replication_strategy();
@@ -1032,14 +1032,15 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     if (schema->is_view()) {
         find_column_family(schema->view_info()->base_id()).add_or_update_view(view_ptr(schema));
     }
+    return make_ready_future();
 }
 
 future<> database::add_column_family_and_make_directory(schema_ptr schema) {
     auto& ks = find_keyspace(schema->ks_name());
-    add_column_family(ks, schema, ks.make_column_family_config(*schema, *this));
+    co_await add_column_family(ks, schema, ks.make_column_family_config(*schema, *this));
     auto& cf = find_column_family(schema);
     cf.get_index_manager().reload();
-    return cf.init_storage();
+    co_await cf.init_storage();
 }
 
 bool database::update_column_family(schema_ptr new_schema) {
@@ -1060,7 +1061,7 @@ bool database::update_column_family(schema_ptr new_schema) {
     return columns_changed;
 }
 
-void database::remove(table& cf) noexcept {
+future<> database::remove(table& cf) noexcept {
     auto s = cf.schema();
     auto& ks = find_keyspace(s->ks_name());
     cf.deregister_metrics();
@@ -1074,11 +1075,12 @@ void database::remove(table& cf) noexcept {
             // Drop view mutations received after base table drop.
         }
     }
+    return make_ready_future();
 }
 
 future<> database::detach_column_family(table& cf) {
     auto uuid = cf.schema()->id();
-    remove(cf);
+    co_await remove(cf);
     cf.clear_views();
     co_await cf.await_pending_ops();
     for (auto* sem : {&_read_concurrency_sem, &_streaming_concurrency_sem, &_compaction_concurrency_sem, &_system_read_concurrency_sem}) {
