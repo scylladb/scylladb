@@ -224,7 +224,8 @@ private:
     std::map<sstring, injection_data, str_less> _enabled;
 
     bool is_enabled(const std::string_view& injection_name) const {
-        return _enabled.contains(injection_name);
+        auto data = get_data(injection_name);
+        return data && !data->is_ongoing_oneshot();
     }
 
     bool is_one_shot(const std::string_view& injection_name) const {
@@ -233,6 +234,14 @@ private:
             return false;
         }
         return it->second.one_shot;
+    }
+
+    injection_data const* get_data(const std::string_view& injection_name) const {
+        const auto it = _enabled.find(injection_name);
+        if (it == _enabled.end()) {
+            return nullptr;
+        }
+        return &it->second;
     }
 
     injection_data* get_data(const std::string_view& injection_name) {
