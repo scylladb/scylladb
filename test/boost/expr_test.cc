@@ -1,3 +1,6 @@
+// Copyright (C) 2023-present ScyllaDB
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 #include "cql3/column_identifier.hh"
 #include "cql3/util.hh"
 #include <seastar/core/shared_ptr.hh>
