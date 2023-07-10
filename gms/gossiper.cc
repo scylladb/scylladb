@@ -2289,7 +2289,6 @@ future<> gossiper::mark_as_shutdown(const inet_address& endpoint) {
         ep_state.get_heart_beat_state().force_highest_possible_version_unsafe();
         co_await replicate(endpoint, ep_state);
         co_await mark_dead(endpoint, ep_state);
-        co_await convict(endpoint);
     }
 }
 
