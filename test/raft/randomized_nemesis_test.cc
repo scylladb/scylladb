@@ -1459,7 +1459,7 @@ public:
                 for (const auto& p: *_snapshots) {
                     snapshot_ids.push_back(p.first);
                 }
-                BOOST_TEST_INFO(format("snapshot ids: [{}]", snapshot_ids));
+                BOOST_TEST_INFO(seastar::format("snapshot ids: [{}]", snapshot_ids));
                 BOOST_CHECK_LE(snapshot_ids.size(), 2);
             }
         }
@@ -3088,7 +3088,7 @@ struct append_reg_model {
         try {
             completion(x, prev);
         } catch (inconsistency& e) {
-            e.what += format("\nwhen completing append: {}\nprev: {}\nmodel: {}", x, prev, seq);
+            e.what += fmt::format("\nwhen completing append: {}\nprev: {}\nmodel: {}", x, prev, seq);
             throw;
         }
         returned.insert(x);
@@ -3153,14 +3153,14 @@ private:
             SCYLLA_ASSERT(idx < seq.size());
 
             if (prev_x != seq[idx - 1].elem) {
-                throw inconsistency{format(
+                throw inconsistency{fmt::format(
                     "elem {} completed again (existing at idx {}), but prev elem does not match existing model"
                     "\nprev elem: {}\nmodel prev elem: {}\nprev: {} model up to idx: {}",
                     x, idx, prev_x, seq[idx - 1].elem, prev, std::vector<entry>{seq.begin(), seq.begin()+idx})};
             }
 
             if (prev.digest() != seq[idx - 1].digest) {
-                auto err = format(
+                auto err = fmt::format(
                     "elem {} completed again (existing at idx {}), but prev does not match existing model"
                     "\n prev: {}\nmodel up to idx: {}",
                     x, idx, prev, std::vector<entry>{seq.begin(), seq.begin()+idx});
@@ -3185,13 +3185,13 @@ private:
         // Check that the existing tail matches our tail.
         SCYLLA_ASSERT(!seq.empty());
         if (prev_x != seq.back().elem) {
-            throw inconsistency{format(
+            throw inconsistency{fmt::format(
                 "new completion (elem: {}) but prev elem does not match existing model"
                 "\nprev elem: {}\nmodel prev elem: {}\nprev: {}\n model: {}",
                 x, prev_x, seq.back().elem, prev, seq)};
         }
         if (prev.digest() != seq.back().digest) {
-            auto err = format(
+            auto err = fmt::format(
                 "new completion (elem: {}) but prev does not match existing model"
                 "\nprev: {}\n model: {}",
                 x, prev, seq);

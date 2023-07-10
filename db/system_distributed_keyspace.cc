@@ -189,7 +189,7 @@ static void check_exists(std::string_view ks_name, std::string_view cf_name, con
         // 'upgrade' Scylla from Cassandra work directories (which is an unsupported upgrade path)
         // on which this check does not pass. We don't want the node to crash in these dtests,
         // but throw an error instead. In production clusters we don't crash on `on_internal_error` anyway.
-        auto err = format("expected {}.{} to exist but it doesn't", ks_name, cf_name);
+        auto err = fmt::format("expected {}.{} to exist but it doesn't", ks_name, cf_name);
         dlogger.error("{}", err);
         throw std::runtime_error{std::move(err)};
     }

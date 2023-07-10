@@ -253,7 +253,7 @@ static bytes from_json_object_aux(const user_type_impl& ut, const rjson::value& 
     }
 
     if (!remaining_names.empty()) {
-        throw marshal_exception(format(
+        throw marshal_exception(seastar::format(
                 "Extraneous field definition for user type {}: {}", ut.get_name_as_string(), *remaining_names.begin()));
     }
     return ut.build_value(std::move(raw_tuple));

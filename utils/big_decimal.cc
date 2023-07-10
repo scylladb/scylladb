@@ -49,7 +49,7 @@ big_decimal::big_decimal(sstring_view text)
     if (e_pos != std::string_view::npos) {
         exponent = text.substr(e_pos + 1);
         if (exponent.empty()) {
-            throw marshal_exception(format("big_decimal - incorrect empty exponent: {}", text));
+            throw marshal_exception(seastar::format("big_decimal - incorrect empty exponent: {}", text));
         }
     }
     size_t dot_pos = base.find_first_of(".");
@@ -66,14 +66,14 @@ big_decimal::big_decimal(sstring_view text)
     if (integer.empty()) {
         throw marshal_exception(format("big_decimal - both integer and fraction are empty"));
     } else if (!::isdigit(integer.front())) {
-        throw marshal_exception(format("big_decimal - incorrect integer: {}", text));
+        throw marshal_exception(seastar::format("big_decimal - incorrect integer: {}", text));
     }
 
     integer.remove_prefix(std::min(integer.find_first_not_of("0"), integer.size() - 1));
     try {
         _unscaled_value = boost::multiprecision::cpp_int(string_view_workaround(integer));
     } catch (...) {
-        throw marshal_exception(format("big_decimal - failed to parse integer value: {}", integer));
+        throw marshal_exception(seastar::format("big_decimal - failed to parse integer value: {}", integer));
     }
     if (negative) {
         _unscaled_value *= -1;
@@ -81,7 +81,7 @@ big_decimal::big_decimal(sstring_view text)
     try {
         _scale = exponent.empty() ? 0 : -boost::lexical_cast<int32_t>(exponent);
     } catch (...) {
-        throw marshal_exception(format("big_decimal - failed to parse exponent: {}", exponent));
+        throw marshal_exception(seastar::format("big_decimal - failed to parse exponent: {}", exponent));
     }
     _scale += fraction.size();
 }

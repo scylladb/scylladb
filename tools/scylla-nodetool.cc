@@ -755,7 +755,7 @@ void describering_operation(scylla_rest_client& client, const bpo::variables_map
         const auto endpoints = ring_info["endpoints"].GetArray() | std::views::transform([] (const auto& ep) { return rjson::to_string_view(ep); });
         const auto rpc_endpoints = ring_info["rpc_endpoints"].GetArray() | std::views::transform([] (const auto& ep) { return rjson::to_string_view(ep); });
         const auto endpoint_details = ring_info["endpoint_details"].GetArray() | std::views::transform([] (const auto& ep_details) {
-            return format("EndpointDetails(host:{}, datacenter:{}, rack:{})",
+            return seastar::format("EndpointDetails(host:{}, datacenter:{}, rack:{})",
                     rjson::to_string_view(ep_details["host"]),
                     rjson::to_string_view(ep_details["datacenter"]),
                     rjson::to_string_view(ep_details["rack"]));
@@ -1419,7 +1419,7 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
     if (vm.contains("start-token") || vm.contains("end-token")) {
         const auto st = vm.contains("start-token") ? fmt::to_string(vm["start-token"].as<uint64_t>()) : "";
         const auto et = vm.contains("end-token") ? fmt::to_string(vm["end-token"].as<uint64_t>()) : "";
-        repair_params["ranges"] = format("{}:{}", st, et);
+        repair_params["ranges"] = seastar::format("{}:{}", st, et);
     }
 
     if (vm.contains("ignore-unreplicated-keyspaces")) {
@@ -2180,7 +2180,7 @@ void tablehistograms_operation(scylla_rest_client& client, const bpo::variables_
     const auto [keyspace, table] = parse_keyspace_and_table(client, vm, "table");
 
     auto get_estimated_histogram = [&client, &keyspace, &table] (std::string_view histogram) {
-        const auto res = client.get(format("/column_family/metrics/{}/{}:{}", histogram, keyspace, table));
+        const auto res = client.get(seastar::format("/column_family/metrics/{}/{}:{}", histogram, keyspace, table));
         const auto res_object = res.GetObject();
         if (!res.HasMember("bucket_offsets")) {
             return utils::estimated_histogram(0);
@@ -2189,7 +2189,7 @@ void tablehistograms_operation(scylla_rest_client& client, const bpo::variables_
         const auto& bucket_offsets_array = res["bucket_offsets"].GetArray();
 
         if (bucket_offsets_array.Size() + 1 != buckets_array.Size()) {
-            throw std::runtime_error(format("invalid estimated histogram {}, buckets must have one more element than bucket_offsets", histogram));
+            throw std::runtime_error(fmt::format("invalid estimated histogram {}, buckets must have one more element than bucket_offsets", histogram));
         }
 
         std::vector<int64_t> bucket_offsets, buckets;
@@ -4477,8 +4477,8 @@ For more information, see: {})";
     const auto operations = boost::copy_range<std::vector<operation>>(get_operations_with_func() | boost::adaptors::map_keys);
     tool_app_template::config app_cfg{
             .name = app_name,
-            .description = format(description_template, app_name, nlog.name(), boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
-                return format("* {}: {}", op.name(), op.summary());
+            .description = seastar::format(description_template, app_name, nlog.name(), boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
+                return seastar::format("* {}: {}", op.name(), op.summary());
             }), "\n"), doc_link("operating-scylla/nodetool.html")),
             .logger_name = nlog.name(),
             .lsa_segment_pool_backend_size_mb = 1,

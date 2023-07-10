@@ -671,11 +671,11 @@ static bool has_sufficient_replicas(const sstring& dc,
                 const std::unordered_map<sstring, size_t>& datacenters) noexcept {
     auto dc_replicas_it = dc_replicas.find(dc);
     if (dc_replicas_it == dc_replicas.end()) {
-        BOOST_TEST_FAIL(format("has_sufficient_replicas: dc {} not found in dc_replicas: {}", dc, dc_replicas));
+        BOOST_TEST_FAIL(seastar::format("has_sufficient_replicas: dc {} not found in dc_replicas: {}", dc, dc_replicas));
     }
     auto endpoint_it = all_endpoints.find(dc);
     if (endpoint_it == all_endpoints.end()) {
-        BOOST_TEST_MESSAGE(format("has_sufficient_replicas: dc {} not found in all_endpoints: {}", dc, all_endpoints));
+        BOOST_TEST_MESSAGE(seastar::format("has_sufficient_replicas: dc {} not found in all_endpoints: {}", dc, all_endpoints));
         return true;
     }
     return dc_replicas_it->second.size()

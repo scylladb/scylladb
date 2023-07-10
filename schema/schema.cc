@@ -1107,11 +1107,11 @@ schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_nam
     // avoided this case in the first place.
     if (ks_name.find_first_of('/') != std::string_view::npos ||
         ks_name.find_first_of('\0') != std::string_view::npos) {
-        throw std::logic_error(format("Tried to create a schema with illegal characters in keyspace name: {}", ks_name));
+        throw std::logic_error(fmt::format("Tried to create a schema with illegal characters in keyspace name: {}", ks_name));
     }
     if (cf_name.find_first_of('/') != std::string_view::npos ||
         cf_name.find_first_of('\0') != std::string_view::npos) {
-        throw std::logic_error(format("Tried to create a schema with illegal characters in table name: {}", cf_name));
+        throw std::logic_error(fmt::format("Tried to create a schema with illegal characters in table name: {}", cf_name));
     }
     _raw._ks_name = sstring(ks_name);
     _raw._cf_name = sstring(cf_name);

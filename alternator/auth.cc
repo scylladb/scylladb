@@ -34,7 +34,7 @@ future<std::string> get_key_from_roles(service::storage_proxy& proxy, auth::serv
     const column_definition* salted_hash_col = schema->get_column_definition(bytes("salted_hash"));
     const column_definition* can_login_col = schema->get_column_definition(bytes("can_login"));
     if (!salted_hash_col || !can_login_col) {
-        co_await coroutine::return_exception(api_error::unrecognized_client(format("Credentials cannot be fetched for: {}", username)));
+        co_await coroutine::return_exception(api_error::unrecognized_client(fmt::format("Credentials cannot be fetched for: {}", username)));
     }
     auto selection = cql3::selection::selection::for_columns(schema, {salted_hash_col, can_login_col});
     auto partition_slice = query::partition_slice(std::move(bounds), {}, query::column_id_vector{salted_hash_col->id, can_login_col->id}, selection->get_query_options());
@@ -51,18 +51,18 @@ future<std::string> get_key_from_roles(service::storage_proxy& proxy, auth::serv
 
     auto result_set = builder.build();
     if (result_set->empty()) {
-        co_await coroutine::return_exception(api_error::unrecognized_client(format("User not found: {}", username)));
+        co_await coroutine::return_exception(api_error::unrecognized_client(fmt::format("User not found: {}", username)));
     }
     const auto& result = result_set->rows().front();
     bool can_login = result[1] && value_cast<bool>(boolean_type->deserialize(*result[1]));
     if (!can_login) {
         // This is a valid role name, but has "login=False" so should not be
         // usable for authentication (see #19735).
-        co_await coroutine::return_exception(api_error::unrecognized_client(format("Role {} has login=false so cannot be used for login", username)));
+        co_await coroutine::return_exception(api_error::unrecognized_client(fmt::format("Role {} has login=false so cannot be used for login", username)));
     }
     const managed_bytes_opt& salted_hash = result.front();
     if (!salted_hash) {
-        co_await coroutine::return_exception(api_error::unrecognized_client(format("No password found for user: {}", username)));
+        co_await coroutine::return_exception(api_error::unrecognized_client(fmt::format("No password found for user: {}", username)));
     }
     co_return value_cast<sstring>(utf8_type->deserialize(*salted_hash));
 }

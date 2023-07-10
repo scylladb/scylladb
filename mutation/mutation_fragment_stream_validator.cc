@@ -8,6 +8,7 @@
 
 #include "mutation/mutation_fragment_stream_validator.hh"
 #include "utils/to_string.hh"
+#include "seastarx.hh"
 
 logging::logger validator_log("mutation_fragment_stream_validator");
 
@@ -262,7 +263,7 @@ bool mutation_fragment_stream_validating_filter::operator()(const dht::decorated
 
 sstring mutation_fragment_stream_validating_filter::full_name() const {
     const auto& s = _validator.schema();
-    return format("{} ({}.{} {})", _name_view, s.ks_name(), s.cf_name(), s.id());
+    return seastar::format("{} ({}.{} {})", _name_view, s.ks_name(), s.cf_name(), s.id());
 }
 
 mutation_fragment_stream_validating_filter::mutation_fragment_stream_validating_filter(const char* name_literal, sstring name_value, const schema& s,

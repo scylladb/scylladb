@@ -2797,7 +2797,7 @@ db::system_keyspace::peer_info storage_service::get_peer_info_for_update(inet_ad
         try {
             field = T(value.value());
         } catch (...) {
-            on_internal_error(slogger, format("failed to parse {} {} for {}: {}", name, value.value(),
+            on_internal_error(slogger, fmt::format("failed to parse {} {} for {}: {}", name, value.value(),
                 endpoint, std::current_exception()));
         }
     };
@@ -6129,14 +6129,14 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         auto gid = locator::global_tablet_id{table, tid};
 
         if (!locator::contains(tinfo.replicas, src)) {
-            throw std::runtime_error(format("Tablet {} has no replica on {}", gid, src));
+            throw std::runtime_error(seastar::format("Tablet {} has no replica on {}", gid, src));
         }
         auto* node = get_token_metadata().get_topology().find_node(dst.host);
         if (!node) {
-            throw std::runtime_error(format("Unknown host: {}", dst.host));
+            throw std::runtime_error(seastar::format("Unknown host: {}", dst.host));
         }
         if (dst.shard >= node->get_shard_count()) {
-            throw std::runtime_error(format("Host {} does not have shard {}", *node, dst.shard));
+            throw std::runtime_error(seastar::format("Host {} does not have shard {}", *node, dst.shard));
         }
 
         if (src == dst) {

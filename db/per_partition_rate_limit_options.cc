@@ -43,7 +43,7 @@ per_partition_rate_limit_options::per_partition_rate_limit_options(std::map<sstr
     _max_reads_per_second = handle_uint32_arg(max_reads_per_second_key);
 
     if (!map.empty()) {
-        throw exceptions::configuration_exception(format(
+        throw exceptions::configuration_exception(seastar::format(
                 "Unknown keys in map for per_partition_rate_limit extension: {}",
                 fmt::join(map | boost::adaptors::map_keys, ", ")));
     }

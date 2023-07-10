@@ -343,7 +343,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
 #endif
         } else {
             if (stmt->_columns.size() > 1) {
-                throw exceptions::invalid_request_exception(format("COMPACT STORAGE with composite PRIMARY KEY allows no more than one column not part of the PRIMARY KEY (got: {})",
+                throw exceptions::invalid_request_exception(seastar::format("COMPACT STORAGE with composite PRIMARY KEY allows no more than one column not part of the PRIMARY KEY (got: {})",
                     fmt::join(stmt->_columns | boost::adaptors::map_keys, ", ")));
             }
 #if 0

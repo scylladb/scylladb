@@ -435,11 +435,11 @@ modification_statement::process_where_clause(data_dictionary::database db, expr:
                 to_string(_restrictions->get_partition_key_restrictions())));
     }
     if (!_restrictions->get_non_pk_restriction().empty()) {
-        auto column_names = fmt::join(_restrictions->get_non_pk_restriction()
+        throw exceptions::invalid_request_exception(seastar::format("Invalid where clause contains non PRIMARY KEY columns: {}",
+                                                                    fmt::join(_restrictions->get_non_pk_restriction()
                                          | boost::adaptors::map_keys
                                          | boost::adaptors::indirected
-                                         | boost::adaptors::transformed(std::mem_fn(&column_definition::name_as_text)), ", ");
-        throw exceptions::invalid_request_exception(format("Invalid where clause contains non PRIMARY KEY columns: {}", column_names));
+                                         | boost::adaptors::transformed(std::mem_fn(&column_definition::name_as_text)), ", ")));
     }
     const expr::expression& ck_restrictions = _restrictions->get_clustering_columns_restrictions();
     if (has_slice(ck_restrictions) && !allow_clustering_key_slices()) {

@@ -263,7 +263,7 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
     std::string_view authorization_header = authorization_it->second;
     auto pos = authorization_header.find_first_of(' ');
     if (pos == std::string_view::npos || authorization_header.substr(0, pos) != "AWS4-HMAC-SHA256") {
-        throw api_error::invalid_signature(format("Authorization header must use AWS4-HMAC-SHA256 algorithm: {}", authorization_header));
+        throw api_error::invalid_signature(fmt::format("Authorization header must use AWS4-HMAC-SHA256 algorithm: {}", authorization_header));
     }
     authorization_header.remove_prefix(pos+1);
     std::string credential;
@@ -298,7 +298,7 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
 
     std::vector<std::string_view> credential_split = split(credential, '/');
     if (credential_split.size() != 5) {
-        throw api_error::validation(format("Incorrect credential information format: {}", credential));
+        throw api_error::validation(fmt::format("Incorrect credential information format: {}", credential));
     }
     std::string user(credential_split[0]);
     std::string datestamp(credential_split[1]);
@@ -383,7 +383,7 @@ static tracing::trace_state_ptr maybe_trace_query(service::client_state& client_
         std::string buf;
         tracing::add_session_param(trace_state, "alternator_op", op);
         tracing::add_query(trace_state, truncated_content_view(query, buf));
-        tracing::begin(trace_state, format("Alternator {}", op), client_state.get_client_address());
+        tracing::begin(trace_state, seastar::format("Alternator {}", op), client_state.get_client_address());
         if (!username.empty()) {
             tracing::set_username(trace_state, auth::authenticated_user(username));
         }
@@ -419,7 +419,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     auto callback_it = _callbacks.find(op);
     if (callback_it == _callbacks.end()) {
         _executor._stats.unsupported_operations++;
-        co_return api_error::unknown_operation(format("Unsupported operation {}", op));
+        co_return api_error::unknown_operation(fmt::format("Unsupported operation {}", op));
     }
     if (_pending_requests.get_count() >= _max_concurrent_requests) {
         _executor._stats.requests_shed++;
@@ -643,7 +643,7 @@ future<> server::json_parser::stop() {
 
 const char* api_error::what() const noexcept {
     if (_what_string.empty()) {
-        _what_string = format("{} {}: {}", std::to_underlying(_http_code), _type, _msg);
+        _what_string = fmt::format("{} {}: {}", std::to_underlying(_http_code), _type, _msg);
     }
     return _what_string.c_str();
 }

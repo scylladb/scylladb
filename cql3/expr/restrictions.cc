@@ -110,7 +110,7 @@ void validate_token_relation(const std::vector<const column_definition*> column_
                 "The token() function must be applied to all partition key components or none of them");
         }
         throw exceptions::invalid_request_exception(
-                format("The token function arguments must be in the partition key order: {}",
+                seastar::format("The token function arguments must be in the partition key order: {}",
                        fmt::join(boost::adaptors::transform(pk, [](const column_definition& cd) {
                            return cd.name_as_text();
                        }), ", ")));

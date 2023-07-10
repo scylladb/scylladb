@@ -31,7 +31,7 @@ private:
                         auto r = _cmp(a, b);
                         auto actual = r;
                         if (actual != order) {
-                            BOOST_FAIL(format("Expected cmp({}, {}) == {}, but got {}", a, b, order, actual));
+                            BOOST_FAIL(seastar::format("Expected cmp({}, {}) == {}, but got {}", a, b, order, actual));
                         }
                     });
                 });

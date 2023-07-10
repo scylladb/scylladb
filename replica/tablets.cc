@@ -297,7 +297,7 @@ tablet_id process_one_row(table_id table, tablet_map& map, tablet_id tid, const 
         }
         std::optional<tablet_replica> pending_replica;
         if (pending.size() > 1) {
-            throw std::runtime_error(format("Too many pending replicas for table {} tablet {}: {}",
+            throw std::runtime_error(fmt::format("Too many pending replicas for table {} tablet {}: {}",
                                             table, tid, pending));
         }
         if (pending.size() != 0) {

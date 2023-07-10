@@ -4900,7 +4900,7 @@ static future<> test_clustering_filtering_with_compaction_strategy(std::string_v
     db_config->sstable_format("me");
 
     return do_with_cql_env_thread([cs] (cql_test_env& e) {
-        cquery_nofail(e, format("CREATE TABLE cf(pk text, ck int, v text, PRIMARY KEY(pk, ck)) WITH COMPACTION = {{'class': '{}'}}", cs));
+        cquery_nofail(e, seastar::format("CREATE TABLE cf(pk text, ck int, v text, PRIMARY KEY(pk, ck)) WITH COMPACTION = {{'class': '{}'}}", cs));
         cquery_nofail(e, "INSERT INTO  cf(pk, ck, v) VALUES ('a', 1, 'a1')");
         e.db().invoke_on_all([] (replica::database& db) { return db.flush_all_memtables(); }).get();
         e.db().invoke_on_all([] (replica::database& db) { db.row_cache_tracker().clear(); }).get();
@@ -4924,7 +4924,7 @@ static future<> test_clustering_filtering_2_with_compaction_strategy(std::string
     db_config->sstable_format("me");
 
     return do_with_cql_env_thread([cs] (cql_test_env& e) {
-        cquery_nofail(e, format("CREATE TABLE cf(pk text, ck int, v text, PRIMARY KEY(pk, ck)) WITH COMPACTION = {{'class': '{}'}}", cs));
+        cquery_nofail(e, seastar::format("CREATE TABLE cf(pk text, ck int, v text, PRIMARY KEY(pk, ck)) WITH COMPACTION = {{'class': '{}'}}", cs));
         cquery_nofail(e, "INSERT INTO  cf(pk, ck, v) VALUES ('a', 1, 'a1')");
         cquery_nofail(e, "INSERT INTO  cf(pk, ck, v) VALUES ('b', 2, 'b2')");
         e.db().invoke_on_all([] (replica::database& db) { return db.flush_all_memtables(); }).get();
@@ -4949,7 +4949,7 @@ static future<> test_clustering_filtering_3_with_compaction_strategy(std::string
     db_config->sstable_format("me");
 
     return do_with_cql_env_thread([cs] (cql_test_env& e) {
-        cquery_nofail(e, format("CREATE TABLE cf(pk text, ck int, v text, PRIMARY KEY(pk, ck)) WITH COMPACTION = {{'class': '{}'}}", cs));
+        cquery_nofail(e, seastar::format("CREATE TABLE cf(pk text, ck int, v text, PRIMARY KEY(pk, ck)) WITH COMPACTION = {{'class': '{}'}}", cs));
         e.db().invoke_on_all([] (replica::database& db) {
             auto& table = db.find_column_family("ks", "cf");
             return table.disable_auto_compaction();
@@ -5182,15 +5182,15 @@ SEASTAR_TEST_CASE(timeuuid_fcts_prepared_re_evaluation) {
         };
         for (const auto& t : sub_tests) {
             BOOST_TEST_CHECKPOINT(t.first);
-            e.execute_cql(format("CREATE TABLE test_{} (pk {} PRIMARY KEY)", t.first, t.second)).get();
-            auto drop_test_table = defer([&e, &t] { e.execute_cql(format("DROP TABLE test_{}", t.first)).get(); });
-            auto insert_stmt = e.prepare(format("INSERT INTO test_{0} (pk) VALUES ({0}())", t.first)).get();
+            e.execute_cql(seastar::format("CREATE TABLE test_{} (pk {} PRIMARY KEY)", t.first, t.second)).get();
+            auto drop_test_table = defer([&e, &t] { e.execute_cql(seastar::format("DROP TABLE test_{}", t.first)).get(); });
+            auto insert_stmt = e.prepare(seastar::format("INSERT INTO test_{0} (pk) VALUES ({0}())", t.first)).get();
             e.execute_prepared(insert_stmt, {}).get();
             sleep(1ms).get();
             // Check that the second execution is evaluated again and yields a
             // different value.
             e.execute_prepared(insert_stmt, {}).get();
-            auto msg = e.execute_cql(format("SELECT * FROM test_{}", t.first)).get();
+            auto msg = e.execute_cql(seastar::format("SELECT * FROM test_{}", t.first)).get();
             assert_that(msg).is_rows().with_size(2);
         }
     });

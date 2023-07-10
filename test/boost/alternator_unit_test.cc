@@ -147,9 +147,9 @@ BOOST_AUTO_TEST_CASE(test_magnitude_and_precision) {
             std::string number = prefix + test.number;
             auto res = alternator::internal::get_magnitude_and_precision(number);
             BOOST_CHECK_MESSAGE(res.magnitude == test.magnitude,
-                format("{}: expected magnitude {}, got {}", number, test.magnitude, res.magnitude));
+                seastar::format("{}: expected magnitude {}, got {}", number, test.magnitude, res.magnitude));
             BOOST_CHECK_MESSAGE(res.precision == test.precision,
-                format("{}: expected precision {}, got {}", number, test.precision, res.precision));
+                seastar::format("{}: expected precision {}, got {}", number, test.precision, res.precision));
         }
     }
     // Huge exponents like 1e1000000 are not guaranteed to return that

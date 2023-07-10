@@ -48,14 +48,14 @@ public:
 class role_already_exists : public roles_argument_exception {
 public:
     explicit role_already_exists(std::string_view role_name)
-            : roles_argument_exception(format("Role {} already exists.", role_name)) {
+            : roles_argument_exception(seastar::format("Role {} already exists.", role_name)) {
     }
 };
 
 class nonexistant_role : public roles_argument_exception {
 public:
     explicit nonexistant_role(std::string_view role_name)
-            : roles_argument_exception(format("Role {} doesn't exist.", role_name)) {
+            : roles_argument_exception(seastar::format("Role {} doesn't exist.", role_name)) {
     }
 };
 
@@ -63,7 +63,7 @@ class role_already_included : public roles_argument_exception {
 public:
     role_already_included(std::string_view grantee_name, std::string_view role_name)
             : roles_argument_exception(
-                      format("{} already includes role {}.", grantee_name, role_name)) {
+                      seastar::format("{} already includes role {}.", grantee_name, role_name)) {
     }
 };
 
@@ -71,7 +71,7 @@ class revoke_ungranted_role : public roles_argument_exception {
 public:
     revoke_ungranted_role(std::string_view revokee_name, std::string_view role_name)
             : roles_argument_exception(
-                      format("{} was not granted role {}, so it cannot be revoked.", revokee_name, role_name)) {
+                      seastar::format("{} was not granted role {}, so it cannot be revoked.", revokee_name, role_name)) {
     }
 };
 

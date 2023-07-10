@@ -166,7 +166,7 @@ db::view::base_dependent_view_info::base_dependent_view_info(bool has_base_non_p
 const std::vector<column_id>& db::view::base_dependent_view_info::base_regular_columns_in_view_pk() const {
     if (use_only_for_reads) {
         on_internal_error(vlogger,
-                format("base_regular_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
+                seastar::format("base_regular_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
                 "Missing column in the base table: {}", to_sstring_view(_column_missing_in_base.value_or(bytes()))));
     }
     return _base_regular_columns_in_view_pk;
@@ -175,7 +175,7 @@ const std::vector<column_id>& db::view::base_dependent_view_info::base_regular_c
 const std::vector<column_id>& db::view::base_dependent_view_info::base_static_columns_in_view_pk() const {
     if (use_only_for_reads) {
         on_internal_error(vlogger,
-                format("base_static_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
+                seastar::format("base_static_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
                 "Missing column in the base table: {}", to_sstring_view(_column_missing_in_base.value_or(bytes()))));
     }
     return _base_static_columns_in_view_pk;
@@ -184,7 +184,7 @@ const std::vector<column_id>& db::view::base_dependent_view_info::base_static_co
 const schema_ptr& db::view::base_dependent_view_info::base_schema() const {
     if (use_only_for_reads) {
         on_internal_error(vlogger,
-                format("base_schema(): operation unsupported when initialized only for view reads. "
+                seastar::format("base_schema(): operation unsupported when initialized only for view reads. "
                 "Missing column in the base table: {}", to_sstring_view(_column_missing_in_base.value_or(bytes()))));
     }
     return _base_schema;

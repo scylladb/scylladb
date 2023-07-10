@@ -907,7 +907,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 }
                 ignore_nodes.push_back(std::move(hoep));
             } catch (...) {
-                throw std::runtime_error(format("Failed to parse ignore_nodes parameter: ignore_nodes={}, node={}: {}", ignore_nodes_strs, n, std::current_exception()));
+                throw std::runtime_error(fmt::format("Failed to parse ignore_nodes parameter: ignore_nodes={}, node={}: {}", ignore_nodes_strs, n, std::current_exception()));
             }
         }
         return ss.local().removenode(host_id, std::move(ignore_nodes)).then([] {

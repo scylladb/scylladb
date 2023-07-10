@@ -42,12 +42,12 @@ comparison_operator_type get_comparison_operator(const rjson::value& comparison_
             {"NOT_CONTAINS", comparison_operator_type::NOT_CONTAINS},
     };
     if (!comparison_operator.IsString()) {
-        throw api_error::validation(format("Invalid comparison operator definition {}", rjson::print(comparison_operator)));
+        throw api_error::validation(fmt::format("Invalid comparison operator definition {}", rjson::print(comparison_operator)));
     }
     std::string op = comparison_operator.GetString();
     auto it = ops.find(op);
     if (it == ops.end()) {
-        throw api_error::validation(format("Unsupported comparison operator {}", op));
+        throw api_error::validation(fmt::format("Unsupported comparison operator {}", op));
     }
     return it->second;
 }
@@ -429,7 +429,7 @@ static bool check_BETWEEN(const T& v, const T& lb, const T& ub, bool bounds_from
     if (cmp_lt()(ub, lb)) {
         if (bounds_from_query) {
             throw api_error::validation(
-                format("BETWEEN operator requires lower_bound <= upper_bound, but {} > {}", lb, ub));
+                fmt::format("BETWEEN operator requires lower_bound <= upper_bound, but {} > {}", lb, ub));
         } else {
             return false;
         }
@@ -613,7 +613,7 @@ conditional_operator_type get_conditional_operator(const rjson::value& req) {
         return conditional_operator_type::OR;
     } else {
         throw api_error::validation(
-                format("'ConditionalOperator' parameter must be AND, OR or missing. Found {}.", s));
+                fmt::format("'ConditionalOperator' parameter must be AND, OR or missing. Found {}.", s));
     }
 }
 

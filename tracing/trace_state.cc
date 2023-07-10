@@ -179,7 +179,7 @@ void trace_state::build_parameters_map_for_one_prepared(const prepared_checked_w
 
         auto& names = names_opt.value();
         for (; i < values.values.size(); ++i) {
-            params_map.emplace(format("{}[{:d}]({})", param_name_prefix, i, names[i]), raw_value_to_sstring(values.values[i], values.unset[i], prepared_ptr ? prepared_ptr->bound_names[i]->type : nullptr));
+            params_map.emplace(seastar::format("{}[{:d}]({})", param_name_prefix, i, names[i]), raw_value_to_sstring(values.values[i], values.unset[i], prepared_ptr ? prepared_ptr->bound_names[i]->type : nullptr));
         }
     } else {
         for (; i < values.values.size(); ++i) {

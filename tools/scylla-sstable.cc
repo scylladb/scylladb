@@ -3071,8 +3071,8 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
     const auto operations = boost::copy_range<std::vector<operation>>(operations_with_func | boost::adaptors::map_keys);
     tool_app_template::config app_cfg{
             .name = app_name,
-            .description = format(description_template, app_name, sst_log.name(), boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
-                return format("* {}: {}", op.name(), op.summary());
+            .description = seastar::format(description_template, app_name, sst_log.name(), boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
+                return seastar::format("* {}: {}", op.name(), op.summary());
             }), "\n")),
             .logger_name = sst_log.name(),
             .lsa_segment_pool_backend_size_mb = 100,
@@ -3137,7 +3137,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             schema = std::move(schema_with_source->schema);
             sst_log.debug("Succesfully loaded schema from {}{}, obtained from {}",
                     schema_with_source->source,
-                    schema_with_source->path ? format(" ({})", schema_with_source->path->native()) : "",
+                    schema_with_source->path ? seastar::format(" ({})", schema_with_source->path->native()) : "",
                     schema_with_source->obtained_from);
             sst_log.trace("Loaded schema: {}", schema);
         } else {

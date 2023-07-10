@@ -279,7 +279,7 @@ public:
         }
 
         if (_need_cpu_branches) {
-            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {}.{}:{} destroyed with {} need_cpu branches",
+            on_internal_error_noexcept(rcslog, seastar::format("reader_permit::impl::~impl(): permit {}.{}:{} destroyed with {} need_cpu branches",
                         _schema ? _schema->ks_name() : "*",
                         _schema ? _schema->cf_name() : "*",
                         _op_name_view,
@@ -288,7 +288,7 @@ public:
         }
 
         if (_awaits_branches) {
-            on_internal_error_noexcept(rcslog, format("reader_permit::impl::~impl(): permit {}.{}:{} destroyed with {} awaits branches",
+            on_internal_error_noexcept(rcslog, seastar::format("reader_permit::impl::~impl(): permit {}.{}:{} destroyed with {} awaits branches",
                         _schema ? _schema->ks_name() : "*",
                         _schema ? _schema->cf_name() : "*",
                         _op_name_view,
@@ -406,7 +406,7 @@ public:
     }
 
     sstring description() const {
-        return format("{}.{}:{}",
+        return seastar::format("{}.{}:{}",
                 _schema ? _schema->ks_name() : "*",
                 _schema ? _schema->cf_name() : "*",
                 _op_name_view);
@@ -1286,7 +1286,7 @@ std::exception_ptr reader_concurrency_semaphore::check_queue_size(std::string_vi
     if (_stats.waiters >= _max_queue_length) {
         _stats.total_reads_shed_due_to_overload++;
         maybe_dump_reader_permit_diagnostics(*this, fmt::format("{} queue overload", queue_name));
-        return std::make_exception_ptr(std::runtime_error(format("{}: {} queue overload", _name, queue_name)));
+        return std::make_exception_ptr(std::runtime_error(fmt::format("{}: {} queue overload", _name, queue_name)));
     }
     return {};
 }

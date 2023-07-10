@@ -41,7 +41,7 @@ rows_assertions::is_empty() {
     auto row_count = rs.size();
     if (row_count != 0) {
         auto&& first_row = *rs.rows().begin();
-        fail(format("Expected no rows, but got {:d}. First row: {}", row_count, first_row));
+        fail(seastar::format("Expected no rows, but got {:d}. First row: {}", row_count, first_row));
     }
     return {*this};
 }
@@ -62,7 +62,7 @@ rows_assertions::rows_assertions::is_null() {
     for (auto&& row : rs.rows()) {
         for (const managed_bytes_opt& v : row) {
             if (v) {
-                fail(format("Expected null values. Found: {}\n", v));
+                fail(seastar::format("Expected null values. Found: {}\n", v));
             }
         }
     }
@@ -75,7 +75,7 @@ rows_assertions::rows_assertions::is_not_null() {
     for (auto&& row : rs.rows()) {
         for (const managed_bytes_opt& v : row) {
             if (!v) {
-                fail(format("Expected non-null values. {}\n", fmt::to_string(row)));
+                fail(seastar::format("Expected non-null values. {}\n", fmt::to_string(row)));
             }
         }
     }
@@ -110,7 +110,7 @@ rows_assertions::with_row(std::initializer_list<bytes_opt> values) {
             return {*this};
         }
     }
-    fail(format("Expected row not found: {} not in {}\n", fmt::to_string(expected_row), _rows));
+    fail(seastar::format("Expected row not found: {} not in {}\n", fmt::to_string(expected_row), _rows));
     return {*this};
 }
 
@@ -130,13 +130,13 @@ rows_assertions::with_rows(std::vector<std::vector<bytes_opt>> rows) {
         if (!std::equal(
             std::begin(expected_row), std::end(expected_row),
             std::begin(actual), std::end(actual))) {
-            fail(format("row {:d} differs, expected {} got {}", row_nr, fmt::to_string(row), fmt::to_string(actual)));
+            fail(seastar::format("row {:d} differs, expected {} got {}", row_nr, fmt::to_string(row), fmt::to_string(actual)));
         }
         ++actual_i;
         ++row_nr;
     }
     if (actual_i != actual_end) {
-        fail(format("Expected less rows ({:d}), got {:d}. Next row is: {}", rows.size(), rs.size(),
+        fail(seastar::format("Expected less rows ({:d}), got {:d}. Next row is: {}", rows.size(), rs.size(),
                     fmt::to_string(*actual_i)));
     }
     return {*this};
@@ -155,7 +155,7 @@ rows_assertions::with_rows_ignore_order(std::vector<std::vector<bytes_opt>> rows
                     std::begin(expected_row), std::end(expected_row));
         });
         if (found == std::end(actual)) {
-            fail(format("row {} not found in result set ({})", fmt::to_string(expected),
+            fail(seastar::format("row {} not found in result set ({})", fmt::to_string(expected),
                fmt::join(actual | boost::adaptors::transformed([] (auto& r) { return fmt::to_string(r); }), ", ")));
         }
     }
@@ -198,7 +198,7 @@ shared_ptr<cql_transport::messages::result_message> cquery_nofail(
             return env.execute_cql(query).get();
         }
     } catch (...) {
-        BOOST_FAIL(format("query '{}' failed: {}\n{}:{}: originally from here",
+        BOOST_FAIL(seastar::format("query '{}' failed: {}\n{}:{}: originally from here",
                           query, std::current_exception(), loc.file_name(), loc.line()));
     }
     return shared_ptr<cql_transport::messages::result_message>(nullptr);
@@ -212,7 +212,7 @@ void require_rows(cql_test_env& e,
         assert_that(cquery_nofail(e, qstr, nullptr, loc)).is_rows().with_rows_ignore_order(expected);
     }
     catch (const std::exception& e) {
-        BOOST_FAIL(format("query '{}' failed: {}\n{}:{}: originally from here",
+        BOOST_FAIL(seastar::format("query '{}' failed: {}\n{}:{}: originally from here",
                           qstr, e.what(), loc.file_name(), loc.line()));
     }
 }
@@ -224,7 +224,7 @@ void eventually_require_rows(cql_test_env& e, sstring_view qstr, const std::vect
             assert_that(cquery_nofail(e, qstr, nullptr, loc)).is_rows().with_rows_ignore_order(expected);
         });
     } catch (const std::exception& e) {
-        BOOST_FAIL(format("query '{}' failed: {}\n{}:{}: originally from here",
+        BOOST_FAIL(seastar::format("query '{}' failed: {}\n{}:{}: originally from here",
                           qstr, e.what(), loc.file_name(), loc.line()));
     }
 }

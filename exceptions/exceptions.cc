@@ -47,7 +47,7 @@ const std::unordered_map<exception_code, sstring>& exception_map() {
 template<typename... Args>
 static inline sstring prepare_message(const char* fmt, Args&&... args) noexcept {
     try {
-        return format(fmt, std::forward<Args>(args)...);
+        return seastar::format(fmt, std::forward<Args>(args)...);
     } catch (...) {
         return sstring();
     }

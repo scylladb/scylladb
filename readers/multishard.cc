@@ -199,7 +199,7 @@ mutation_reader make_foreign_reader(schema_ptr schema,
 template <typename... Arg>
 static void require(bool condition, const char* msg, const Arg&... arg) {
     if (!condition) {
-        on_internal_error(mrlog, format(msg, arg...));
+        on_internal_error(mrlog, seastar::format(msg, arg...));
     }
 }
 

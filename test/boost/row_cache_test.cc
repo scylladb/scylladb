@@ -2968,7 +2968,7 @@ SEASTAR_TEST_CASE(test_no_misses_when_read_is_repeated) {
             auto s2 = tracker.get_stats();
 
             if (s1.reads_with_misses != s2.reads_with_misses) {
-                BOOST_FAIL(format("Got cache miss when repeating read of {} on {}", ranges, m1));
+                BOOST_FAIL(seastar::format("Got cache miss when repeating read of {} on {}", ranges, m1));
             }
         }
     });
@@ -3418,7 +3418,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                         }
                         return m2 == actual;
                     })) {
-                        BOOST_FAIL(format("Mutation read doesn't match any expected version, slice: {}, read: {}\nexpected: [{}]",
+                        BOOST_FAIL(seastar::format("Mutation read doesn't match any expected version, slice: {}, read: {}\nexpected: [{}]",
                             slice, actual, fmt::join(possible_versions, ",\n")));
                     }
                 }

@@ -67,7 +67,7 @@ bool default_authorizer::legacy_metadata_exists() const {
 }
 
 future<bool> default_authorizer::legacy_any_granted() const {
-    static const sstring query = format("SELECT * FROM {}.{} LIMIT 1", meta::legacy::AUTH_KS, PERMISSIONS_CF);
+    static const sstring query = seastar::format("SELECT * FROM {}.{} LIMIT 1", meta::legacy::AUTH_KS, PERMISSIONS_CF);
 
     return _qp.execute_internal(
             query,
@@ -80,7 +80,7 @@ future<bool> default_authorizer::legacy_any_granted() const {
 
 future<> default_authorizer::migrate_legacy_metadata() {
     alogger.info("Starting migration of legacy permissions metadata.");
-    static const sstring query = format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, legacy_table_name);
+    static const sstring query = seastar::format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, legacy_table_name);
 
     return _qp.execute_internal(
             query,
@@ -163,7 +163,7 @@ default_authorizer::authorize(const role_or_anonymous& maybe_role, const resourc
         co_return permissions::NONE;
     }
 
-    const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ? AND {} = ?",
+    const sstring query = seastar::format("SELECT {} FROM {}.{} WHERE {} = ? AND {} = ?",
             PERMISSIONS_NAME,
             get_auth_ks_name(_qp),
             PERMISSIONS_CF,
@@ -188,7 +188,7 @@ default_authorizer::modify(
         const resource& resource,
         std::string_view op,
         ::service::group0_batch& mc) {
-    const sstring query = format("UPDATE {}.{} SET {} = {} {} ? WHERE {} = ? AND {} = ?",
+    const sstring query = seastar::format("UPDATE {}.{} SET {} = {} {} ? WHERE {} = ? AND {} = ?",
             get_auth_ks_name(_qp),
             PERMISSIONS_CF,
             PERMISSIONS_NAME,
@@ -218,7 +218,7 @@ future<> default_authorizer::revoke(std::string_view role_name, permission_set s
 }
 
 future<std::vector<permission_details>> default_authorizer::list_all() const {
-    const sstring query = format("SELECT {}, {}, {} FROM {}.{}",
+    const sstring query = seastar::format("SELECT {}, {}, {} FROM {}.{}",
             ROLE_NAME,
             RESOURCE_NAME,
             PERMISSIONS_NAME,
@@ -246,7 +246,7 @@ future<std::vector<permission_details>> default_authorizer::list_all() const {
 
 future<> default_authorizer::revoke_all(std::string_view role_name, ::service::group0_batch& mc) {
     try {
-        const sstring query = format("DELETE FROM {}.{} WHERE {} = ?",
+        const sstring query = seastar::format("DELETE FROM {}.{} WHERE {} = ?",
                 get_auth_ks_name(_qp),
                 PERMISSIONS_CF,
                 ROLE_NAME);
@@ -266,7 +266,7 @@ future<> default_authorizer::revoke_all(std::string_view role_name, ::service::g
 }
 
 future<> default_authorizer::revoke_all_legacy(const resource& resource) {
-    static const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ? ALLOW FILTERING",
+    static const sstring query = seastar::format("SELECT {} FROM {}.{} WHERE {} = ? ALLOW FILTERING",
             ROLE_NAME,
             get_auth_ks_name(_qp),
             PERMISSIONS_CF,
@@ -283,7 +283,7 @@ future<> default_authorizer::revoke_all_legacy(const resource& resource) {
                     res->begin(),
                     res->end(),
                     [this, res, resource](const cql3::untyped_result_set::row& r) {
-                static const sstring query = format("DELETE FROM {}.{} WHERE {} = ? AND {} = ?",
+                static const sstring query = seastar::format("DELETE FROM {}.{} WHERE {} = ? AND {} = ?",
                         get_auth_ks_name(_qp),
                         PERMISSIONS_CF,
                         ROLE_NAME,
@@ -323,7 +323,7 @@ future<> default_authorizer::revoke_all(const resource& resource, ::service::gro
 
     auto name = resource.name();
     auto gen = [this, name] (api::timestamp_type t) -> ::service::mutations_generator {
-        const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ? ALLOW FILTERING",
+        const sstring query = seastar::format("SELECT {} FROM {}.{} WHERE {} = ? ALLOW FILTERING",
                 ROLE_NAME,
                 get_auth_ks_name(_qp),
                 PERMISSIONS_CF,
@@ -334,7 +334,7 @@ future<> default_authorizer::revoke_all(const resource& resource, ::service::gro
                 {name},
                 cql3::query_processor::cache_internal::no);
         for (const auto& r : *res) {
-            const sstring query = format("DELETE FROM {}.{} WHERE {} = ? AND {} = ?",
+            const sstring query = seastar::format("DELETE FROM {}.{} WHERE {} = ? AND {} = ?",
                     get_auth_ks_name(_qp),
                     PERMISSIONS_CF,
                     ROLE_NAME,
@@ -346,7 +346,7 @@ future<> default_authorizer::revoke_all(const resource& resource, ::service::gro
                     {r.get_as<sstring>(ROLE_NAME), name});
             if (muts.size() != 1) {
                 on_internal_error(alogger,
-                    format("expecting single delete mutation, got {}", muts.size()));
+                    seastar::format("expecting single delete mutation, got {}", muts.size()));
             }
             co_yield std::move(muts[0]);
         }
@@ -357,7 +357,7 @@ future<> default_authorizer::revoke_all(const resource& resource, ::service::gro
 void default_authorizer::revoke_all_keyspace_resources(const resource& ks_resource, ::service::group0_batch& mc) {
     auto ks_name = ks_resource.name();
     auto gen = [this, ks_name] (api::timestamp_type t) -> ::service::mutations_generator {
-        const sstring query = format("SELECT {}, {} FROM {}.{}",
+        const sstring query = seastar::format("SELECT {}, {} FROM {}.{}",
                 ROLE_NAME,
                 RESOURCE_NAME,
                 get_auth_ks_name(_qp),
@@ -374,7 +374,7 @@ void default_authorizer::revoke_all_keyspace_resources(const resource& ks_resour
                 // r doesn't represent resource related to ks_resource
                 continue;
             }
-            const sstring query = format("DELETE FROM {}.{} WHERE {} = ? AND {} = ?",
+            const sstring query = seastar::format("DELETE FROM {}.{} WHERE {} = ? AND {} = ?",
                     get_auth_ks_name(_qp),
                     PERMISSIONS_CF,
                     ROLE_NAME,

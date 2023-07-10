@@ -193,7 +193,7 @@ service_level_resource_view::service_level_resource_view(const resource &r) {
 }
 
 sstring encode_signature(std::string_view name, std::vector<data_type> args) {
-    return format("{}[{}]", name,
+    return seastar::format("{}[{}]", name,
             fmt::join(args | boost::adaptors::transformed([] (const data_type t) {
                 return t->name();
             }), "^"));
@@ -222,7 +222,7 @@ std::pair<sstring, std::vector<data_type>> decode_signature(std::string_view enc
 // to the short form (int)
 static sstring decoded_signature_string(std::string_view encoded_signature) {
     auto [function_name, arg_types] = decode_signature(encoded_signature);
-    return format("{}({})", cql3::util::maybe_quote(sstring(function_name)),
+    return seastar::format("{}({})", cql3::util::maybe_quote(sstring(function_name)),
             boost::algorithm::join(arg_types | boost::adaptors::transformed([] (data_type t) {
                 return t->cql3_type_name();
             }), ", "));

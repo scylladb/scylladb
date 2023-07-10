@@ -44,7 +44,7 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
             if (!std::equal(actual.begin(), actual.end(), expected.begin(), [&s](auto&& r1, auto&& r2) {
                 return r1.equal(r2, dht::ring_position_comparator(*s));
             })) {
-                BOOST_FAIL(format("Ranges differ, expected {} but got {}", expected, actual));
+                BOOST_FAIL(fmt::format("Ranges differ, expected {} but got {}", expected, actual));
             }
         };
 

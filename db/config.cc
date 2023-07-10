@@ -356,7 +356,7 @@ static std::vector<sstring> experimental_feature_names() {
 // created on-the-fly below with format(). Instead, we need to save the
 // help string to a static object, and return a string_view to it:
 static std::string_view experimental_features_help_string() {
-    static sstring s = format("Unlock experimental features provided as the "
+    static sstring s = seastar::format("Unlock experimental features provided as the "
         "option arguments (possible values: {}). Can be repeated.",
         experimental_feature_names());
     return s;

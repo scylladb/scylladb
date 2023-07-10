@@ -223,7 +223,7 @@ public:
         }
         MyType & operator()(const T& t, config_source src = config_source::Internal) {
             if (!_allowed_values.empty() && std::find(_allowed_values.begin(), _allowed_values.end(), t) == _allowed_values.end()) {
-                throw std::invalid_argument(format("Invalid value for {}: got {} which is not inside the set of allowed values {}", name(), t, _allowed_values));
+                throw std::invalid_argument(fmt::format("Invalid value for {}: got {} which is not inside the set of allowed values {}", name(), t, _allowed_values));
             }
             the_value().set(t);
             if (src > config_source::None) {
@@ -233,7 +233,7 @@ public:
         }
         MyType & operator()(T&& t, config_source src = config_source::Internal) {
             if (!_allowed_values.empty() && std::find(_allowed_values.begin(), _allowed_values.end(), t) == _allowed_values.end()) {
-                throw std::invalid_argument(format("Invalid value for {}: got {} which is not inside the set of allowed values {}", name(), t, _allowed_values));
+                throw std::invalid_argument(fmt::format("Invalid value for {}: got {} which is not inside the set of allowed values {}", name(), t, _allowed_values));
             }
             the_value().set(std::move(t));
             if (src > config_source::None) {

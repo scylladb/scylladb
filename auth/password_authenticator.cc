@@ -75,7 +75,7 @@ static bool has_salted_hash(const cql3::untyped_result_set_row& row) {
 }
 
 sstring password_authenticator::update_row_query() const {
-    return format("UPDATE {}.{} SET {} = ? WHERE {} = ?",
+    return seastar::format("UPDATE {}.{} SET {} = ? WHERE {} = ?",
             get_auth_ks_name(_qp),
             meta::roles_table::name,
             SALTED_HASH,
@@ -90,7 +90,7 @@ bool password_authenticator::legacy_metadata_exists() const {
 
 future<> password_authenticator::migrate_legacy_metadata() const {
     plogger.info("Starting migration of legacy authentication metadata.");
-    static const sstring query = format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, legacy_table_name);
+    static const sstring query = seastar::format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, legacy_table_name);
 
     return _qp.execute_internal(
             query,
@@ -223,7 +223,7 @@ future<authenticated_user> password_authenticator::authenticate(
     // obsolete prepared statements pretty quickly.
     // Rely on query processing caching statements instead, and lets assume
     // that a map lookup string->statement is not gonna kill us much.
-    const sstring query = format("SELECT {} FROM {}.{} WHERE {} = ?",
+    const sstring query = seastar::format("SELECT {} FROM {}.{} WHERE {} = ?",
                 SALTED_HASH,
                 get_auth_ks_name(_qp),
                 meta::roles_table::name,
@@ -280,7 +280,7 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
         co_return;
     }
 
-    const sstring query = format("UPDATE {}.{} SET {} = ? WHERE {} = ?",
+    const sstring query = seastar::format("UPDATE {}.{} SET {} = ? WHERE {} = ?",
             get_auth_ks_name(_qp),
             meta::roles_table::name,
             SALTED_HASH,
@@ -299,7 +299,7 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
 }
 
 future<> password_authenticator::drop(std::string_view name, ::service::group0_batch& mc) {
-    const sstring query = format("DELETE {} FROM {}.{} WHERE {} = ?",
+    const sstring query = seastar::format("DELETE {} FROM {}.{} WHERE {} = ?",
             SALTED_HASH,
             get_auth_ks_name(_qp),
             meta::roles_table::name,

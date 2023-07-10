@@ -211,7 +211,7 @@ struct from_val_visitor {
             "externref",
         };
         if (val.kind() != expected) {
-            throw wasm::exception(format("Incorrect wasm value kind returned. Expected {}, got {}", kind_str[size_t(expected)], kind_str[size_t(val.kind())]));
+            throw wasm::exception(seastar::format("Incorrect wasm value kind returned. Expected {}, got {}", kind_str[size_t(expected)], kind_str[size_t(val.kind())]));
         }
     }
 };
@@ -253,7 +253,7 @@ seastar::future<bytes_opt> run_script(context& ctx, wasmtime::Store& store, wasm
         } else if (param) {
             visit(type, init_arg_visitor{param, *argv, store, instance});
         } else {
-            co_await coroutine::return_exception(wasm::exception(format("Function {} cannot be called on null values", ctx.function_name)));
+            co_await coroutine::return_exception(wasm::exception(seastar::format("Function {} cannot be called on null values", ctx.function_name)));
         }
     }
     auto rets = wasmtime::get_val_vec();

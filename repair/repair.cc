@@ -650,7 +650,7 @@ void repair::shard_repair_task_impl::check_failed_ranges() {
         if (!_aborted) {
             failed_because = _failed_because ? *_failed_because : "unknown";
         }
-        auto msg = format("repair[{}]: {} out of {} ranges failed, keyspace={}, tables={}, repair_reason={}, nodes_down_during_repair={}, aborted_by_user={}, failed_because={}",
+        auto msg = seastar::format("repair[{}]: {} out of {} ranges failed, keyspace={}, tables={}, repair_reason={}, nodes_down_during_repair={}, aborted_by_user={}, failed_because={}",
                 global_repair_id.uuid(), nr_failed_ranges, ranges_size(), _status.keyspace, table_names(), _reason, nodes_down, _aborted, failed_because);
         rlogger.warn("{}", msg);
         throw std::runtime_error(msg);
@@ -706,7 +706,7 @@ future<> repair::shard_repair_task_impl::repair_range(const dht::token_range& ra
                     global_repair_id.uuid(), ranges_index, ranges_size(), _status.keyspace, table.name, range, neighbors, live_neighbors, status);
             // If the task is aborted, its state will change to failed. One can wait for this with task_manager::task::done().
             abort();
-            co_await coroutine::return_exception(std::runtime_error(format("Repair mandatory neighbor={} is not alive, keyspace={}, mandatory_neighbors={}",
+            co_await coroutine::return_exception(std::runtime_error(fmt::format("Repair mandatory neighbor={} is not alive, keyspace={}, mandatory_neighbors={}",
                 node, _status.keyspace, mandatory_neighbors)));
         }
     }
@@ -794,7 +794,7 @@ sstring repair_stats::get_stats() {
             row_from_disk_rows_per_sec[x.first] = 0;
         }
     }
-    return format("round_nr={}, round_nr_fast_path_already_synced={}, round_nr_fast_path_same_combined_hashes={}, round_nr_slow_path={}, rpc_call_nr={}, tx_hashes_nr={}, rx_hashes_nr={}, duration={} seconds, tx_row_nr={}, rx_row_nr={}, tx_row_bytes={}, rx_row_bytes={}, row_from_disk_bytes={}, row_from_disk_nr={}, row_from_disk_bytes_per_sec={} MiB/s, row_from_disk_rows_per_sec={} Rows/s, tx_row_nr_peer={}, rx_row_nr_peer={}",
+    return seastar::format("round_nr={}, round_nr_fast_path_already_synced={}, round_nr_fast_path_same_combined_hashes={}, round_nr_slow_path={}, rpc_call_nr={}, tx_hashes_nr={}, rx_hashes_nr={}, duration={} seconds, tx_row_nr={}, rx_row_nr={}, tx_row_bytes={}, rx_row_bytes={}, row_from_disk_bytes={}, row_from_disk_nr={}, row_from_disk_bytes_per_sec={} MiB/s, row_from_disk_rows_per_sec={} Rows/s, tx_row_nr_peer={}, rx_row_nr_peer={}",
             round_nr,
             round_nr_fast_path_already_synced,
             round_nr_fast_path_same_combined_hashes,
@@ -894,7 +894,7 @@ struct repair_options {
         // The parsing code above removed from the map options we have parsed.
         // If anything is left there in the end, it's an unsupported option.
         if (!options.empty()) {
-            throw std::runtime_error(format("unsupported repair options: {}",
+            throw std::runtime_error(fmt::format("unsupported repair options: {}",
                     options));
         }
     }
@@ -1194,7 +1194,7 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
                     auto node = gms::inet_address(n);
                     hosts.insert(node);
                 } catch(...) {
-                    throw std::invalid_argument(format("Failed to parse node={} in hosts={} specified by user: {}",
+                    throw std::invalid_argument(fmt::format("Failed to parse node={} in hosts={} specified by user: {}",
                         n, options.hosts, std::current_exception()));
                 }
             }
@@ -1204,7 +1204,7 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
                     auto node = gms::inet_address(n);
                     ignore_nodes.insert(node);
                 } catch(...) {
-                    throw std::invalid_argument(format("Failed to parse node={} in ignore_nodes={} specified by user: {}",
+                    throw std::invalid_argument(fmt::format("Failed to parse node={} in ignore_nodes={} specified by user: {}",
                         n, options.ignore_nodes, std::current_exception()));
                 }
             }
@@ -1271,7 +1271,7 @@ future<int> repair_service::do_repair_start(sstring keyspace, std::unordered_map
             auto node = gms::inet_address(n);
             ignore_nodes.insert(node);
         } catch(...) {
-            throw std::invalid_argument(format("Failed to parse node={} in ignore_nodes={} specified by user: {}",
+            throw std::invalid_argument(fmt::format("Failed to parse node={} in ignore_nodes={} specified by user: {}",
                 n, options.ignore_nodes, std::current_exception()));
         }
     }
@@ -1409,7 +1409,7 @@ future<> repair::user_requested_repair_task_impl::run() {
                 }
             }
             if (!errors.empty()) {
-                return make_exception_future<>(std::runtime_error(format("{}", errors)));
+                return make_exception_future<>(std::runtime_error(fmt::format("{}", errors)));
             }
             return make_ready_future<>();
         }).get();
@@ -1534,7 +1534,7 @@ future<> repair::data_sync_repair_task_impl::run() {
                 }
             }
             if (!errors.empty()) {
-                return make_exception_future<>(std::runtime_error(format("{}", errors)));
+                return make_exception_future<>(std::runtime_error(fmt::format("{}", errors)));
             }
             return make_ready_future<>();
         }).get();
@@ -1649,7 +1649,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                             auto nodes = boost::copy_range<std::vector<gms::inet_address>>(old_nodes |
                                     boost::adaptors::filtered([&] (const gms::inet_address& node) { return !new_nodes.contains(node); }));
                             if (nodes.size() != 1) {
-                                throw std::runtime_error(format("bootstrap_with_repair: keyspace={}, range={}, expected 1 node losing range but found {} nodes={}",
+                                throw std::runtime_error(fmt::format("bootstrap_with_repair: keyspace={}, range={}, expected 1 node losing range but found {} nodes={}",
                                         keyspace_name, desired_range, nodes.size(), nodes));
                             }
                             return nodes;
@@ -1721,7 +1721,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
                             }
                           }
                         } else {
-                            throw std::runtime_error(format("bootstrap_with_repair: keyspace={}, range={}, wrong number of old_endpoints={}, rf={}",
+                            throw std::runtime_error(fmt::format("bootstrap_with_repair: keyspace={}, range={}, wrong number of old_endpoints={}, rf={}",
                                         keyspace_name, desired_range, old_endpoints, replication_factor));
                         }
                         rlogger.debug("bootstrap_with_repair: keyspace={}, range={}, neighbors={}, mandatory_neighbors={}",
@@ -1883,7 +1883,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                         neighbors_set = get_neighbors_set(boost::copy_range<std::vector<inet_address>>(new_eps));
                     }
                 } else {
-                    throw std::runtime_error(format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, wrong number of new owner node={}",
+                    throw std::runtime_error(fmt::format("{}: keyspace={}, range={}, current_replica_endpoints={}, new_replica_endpoints={}, wrong number of new owner node={}",
                             op, keyspace_name, r, current_eps, new_eps, new_owner));
                 }
                 neighbors_set.erase(myip);
@@ -2012,7 +2012,7 @@ future<> repair_service::do_rebuild_replace_with_repair(std::unordered_map<sstri
         rlogger.debug("lost_nodes_per_dc={}", lost_nodes_per_dc);
         if (source_dc) {
             if (!topology.get_datacenters().contains(*source_dc)) {
-                throw std::runtime_error(format("{}: Could not find source_dc={} in datacenters={}", op, *source_dc, topology.get_datacenters()));
+                throw std::runtime_error(fmt::format("{}: Could not find source_dc={} in datacenters={}", op, *source_dc, topology.get_datacenters()));
             }
             if (topology.get_datacenters().size() == 1) {
                 rlogger.info("{}: source_dc={} ignored since the cluster has a single datacenter", op, *source_dc);
@@ -2107,7 +2107,7 @@ future<> repair_service::do_rebuild_replace_with_repair(std::unordered_map<sstri
                 }
             }
             if (!source_dc_for_keyspace.empty() && !live_nodes_per_dc.contains(source_dc_for_keyspace)) {
-                on_internal_error(rlogger, format("do_rebuild_replace_with_repair: cannot find source_dc_for_keyspace={} in live_nodes_per_dc={}", source_dc_for_keyspace, live_nodes_per_dc));
+                on_internal_error(rlogger, fmt::format("do_rebuild_replace_with_repair: cannot find source_dc_for_keyspace={} in live_nodes_per_dc={}", source_dc_for_keyspace, live_nodes_per_dc));
             }
             const auto& sync_nodes = source_dc_for_keyspace.empty() ? all_live_nodes : live_nodes_per_dc.at(source_dc_for_keyspace);
             rlogger.info("{}: started with keyspace={}, nr_ranges={}, sync_nodes={}, ignore_nodes={} replaced_node={}", op, keyspace_name, ranges.size() * nr_tables, sync_nodes, ignore_nodes, replaced_node);

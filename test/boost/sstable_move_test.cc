@@ -41,7 +41,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move) {
     generation_type gen{0};
     for (auto i = 0; i < 2; i++) {
         gen = gen_generator();
-        auto new_dir = format("{}/gen-{}", fs::path(cur_dir).parent_path().native(), gen);
+        auto new_dir = seastar::format("{}/gen-{}", fs::path(cur_dir).parent_path().native(), gen);
         touch_directory(new_dir).get();
         test(sst).move_to_new_dir(new_dir, gen).get();
         // the source directory must be empty now
@@ -110,7 +110,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move_replay) {
     int count = 0;
     do {
         auto gen = gen_generator();
-        auto new_dir = format("{}/gen-{}", fs::path(cur_dir).parent_path().native(), gen);
+        auto new_dir = seastar::format("{}/gen-{}", fs::path(cur_dir).parent_path().native(), gen);
         touch_directory(new_dir).get();
         done = partial_create_links(sst, fs::path(new_dir), gen, count++);
         test(sst).move_to_new_dir(new_dir, gen).get();

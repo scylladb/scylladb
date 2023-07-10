@@ -194,7 +194,7 @@ functions::make_arg_spec(const sstring& receiver_ks, std::optional<const std::st
     std::transform(name.begin(), name.end(), name.begin(), ::tolower);
     return make_lw_shared<column_specification>(receiver_ks,
                                    receiver_cf,
-                                   ::make_shared<column_identifier>(format("arg{:d}({})", i, name), true),
+                                   ::make_shared<column_identifier>(seastar::format("arg{:d}({})", i, name), true),
                                    fun.arg_types()[i]);
 }
 
@@ -329,7 +329,7 @@ functions::get(data_dictionary::database db,
             throw exceptions::invalid_request_exception("functions::get for token doesn't have a known column family");
         }
         if (schema == nullptr) {
-            throw exceptions::invalid_request_exception(format("functions::get for token cannot find {} table", *receiver_cf));
+            throw exceptions::invalid_request_exception(seastar::format("functions::get for token cannot find {} table", *receiver_cf));
         }
         auto fun = ::make_shared<token_fct>(schema);
         validate_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf);
@@ -410,13 +410,13 @@ functions::get(data_dictionary::database db,
 
     if (compatibles.empty()) {
         throw exceptions::invalid_request_exception(
-                format("Invalid call to function {}, none of its type signatures match (known type signatures: {})",
+                seastar::format("Invalid call to function {}, none of its type signatures match (known type signatures: {})",
                                                         name, fmt::join(candidates, ", ")));
     }
 
     if (compatibles.size() > 1) {
         throw exceptions::invalid_request_exception(
-                format("Ambiguous call to function {} (can be matched by following signatures: {}): use type casts to disambiguate",
+                seastar::format("Ambiguous call to function {} (can be matched by following signatures: {}): use type casts to disambiguate",
                     name, fmt::join(compatibles, ", ")));
     }
 

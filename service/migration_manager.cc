@@ -778,7 +778,7 @@ future<std::vector<mutation>> prepare_column_family_drop_announcement(storage_pr
             auto explicit_view_names = views
                                     | boost::adaptors::filtered([&old_cfm](const view_ptr& v) { return !old_cfm.get_index_manager().is_index(v); })
                                     | boost::adaptors::transformed([](const view_ptr& v) { return v->cf_name(); });
-            co_await coroutine::return_exception(exceptions::invalid_request_exception(format("Cannot drop table when materialized views still depend on it ({}.{{{}}})",
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(seastar::format("Cannot drop table when materialized views still depend on it ({}.{{{}}})",
                         schema->ks_name(), fmt::join(explicit_view_names, ", "))));
         }
         mlogger.info("Drop table '{}.{}'", schema->ks_name(), schema->cf_name());

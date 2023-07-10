@@ -87,7 +87,7 @@ aggregate_function::column_name(const std::vector<sstring>& column_names) const 
     if (_agg.column_name_override) {
         return *_agg.column_name_override;
     }
-    return format("{}({})", _agg.name, fmt::join(column_names, ", "));
+    return seastar::format("{}({})", _agg.name, fmt::join(column_names, ", "));
 }
 
 }

@@ -1812,7 +1812,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
             auto last_host = state->get_last_replicas().begin()->second.front();
             if (last_host != this_node) {
                 const auto last_node = topo.find_node(last_host);
-                throw exceptions::invalid_request_exception(format(
+                throw exceptions::invalid_request_exception(seastar::format(
                             "Moving between coordinators is not allowed in SELECT FROM MUTATION_FRAGMENTS() statements, last page's coordinator was {}{}",
                             last_host,
                             last_node ? fmt::format("({})", last_node->endpoint()) : ""));

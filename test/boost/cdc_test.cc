@@ -274,30 +274,30 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_description) {
             BOOST_REQUIRE(e.local_db().has_schema(t.substr(0, dot_pos), t.substr(dot_pos + 1)));
 
             // Disallow DROP
-            assert_unauthorized(format("DROP TABLE {}", t));
+            assert_unauthorized(seastar::format("DROP TABLE {}", t));
 
             // Allow SELECT
-            e.execute_cql(format("SELECT * FROM {}", t)).get();
+            e.execute_cql(seastar::format("SELECT * FROM {}", t)).get();
         }
 
         // Disallow ALTER
         for (auto& t : {streams}) {
-            assert_unauthorized(format("ALTER TABLE {} ALTER time TYPE blob", t));
+            assert_unauthorized(seastar::format("ALTER TABLE {} ALTER time TYPE blob", t));
         }
-        assert_unauthorized(format("ALTER TABLE {} ALTER id TYPE blob", generations_v2));
-        assert_unauthorized(format("ALTER TABLE {} ALTER key TYPE blob", timestamps));
+        assert_unauthorized(seastar::format("ALTER TABLE {} ALTER id TYPE blob", generations_v2));
+        assert_unauthorized(seastar::format("ALTER TABLE {} ALTER key TYPE blob", timestamps));
 
         // Allow DELETE
         for (auto& t : {streams}) {
-            e.execute_cql(format("DELETE FROM {} WHERE time = toTimeStamp(now())", t)).get();
+            e.execute_cql(seastar::format("DELETE FROM {} WHERE time = toTimeStamp(now())", t)).get();
         }
-        e.execute_cql(format("DELETE FROM {} WHERE id = uuid()", generations_v2)).get();
-        e.execute_cql(format("DELETE FROM {} WHERE key = 'timestamps'", timestamps)).get();
+        e.execute_cql(seastar::format("DELETE FROM {} WHERE id = uuid()", generations_v2)).get();
+        e.execute_cql(seastar::format("DELETE FROM {} WHERE key = 'timestamps'", timestamps)).get();
 
         // Allow UPDATE, INSERT
-        e.execute_cql(format("INSERT INTO {} (id, range_end) VALUES (uuid(), 0)", generations_v2)).get();
-        e.execute_cql(format("INSERT INTO {} (time, range_end) VALUES (toTimeStamp(now()), 0)", streams)).get();
-        e.execute_cql(format("UPDATE {} SET expired = toTimeStamp(now()) WHERE key = 'timestamps' AND time = toTimeStamp(now())", timestamps)).get();
+        e.execute_cql(seastar::format("INSERT INTO {} (id, range_end) VALUES (uuid(), 0)", generations_v2)).get();
+        e.execute_cql(seastar::format("INSERT INTO {} (time, range_end) VALUES (toTimeStamp(now()), 0)", streams)).get();
+        e.execute_cql(seastar::format("UPDATE {} SET expired = toTimeStamp(now()) WHERE key = 'timestamps' AND time = toTimeStamp(now())", timestamps)).get();
     }).get();
 }
 
@@ -782,9 +782,9 @@ SEASTAR_THREAD_TEST_CASE(test_ttls) {
     do_with_cql_env_thread([](cql_test_env& e) {
         auto test_ttl = [&e] (int ttl_seconds) {
             const auto base_tbl_name = "tbl" + std::to_string(ttl_seconds);
-            cquery_nofail(e, format("CREATE TABLE ks.{} (pk int, ck int, val int, PRIMARY KEY(pk, ck)) WITH cdc = {{'enabled':'true', 'ttl':{}}}", base_tbl_name, ttl_seconds));
+            cquery_nofail(e, seastar::format("CREATE TABLE ks.{} (pk int, ck int, val int, PRIMARY KEY(pk, ck)) WITH cdc = {{'enabled':'true', 'ttl':{}}}", base_tbl_name, ttl_seconds));
             BOOST_REQUIRE_EQUAL(e.local_db().find_schema("ks", base_tbl_name)->cdc_options().ttl(), ttl_seconds);
-            cquery_nofail(e, format("INSERT INTO ks.{} (pk, ck, val) VALUES(1, 11, 111)", base_tbl_name));
+            cquery_nofail(e, seastar::format("INSERT INTO ks.{} (pk, ck, val) VALUES(1, 11, 111)", base_tbl_name));
 
             auto log_schema = e.local_db().find_schema("ks", cdc::log_name(base_tbl_name));
 
@@ -1682,7 +1682,7 @@ static void test_pre_post_image(cql_test_env& e, const std::vector<image_persist
             processed_times.insert(time);
         }
 
-        BOOST_TEST_MESSAGE(format("Returned rows: {}", groups));
+        BOOST_TEST_MESSAGE(seastar::format("Returned rows: {}", groups));
 
         // Assert that there is the same number of groups differentiated by cdc$time
         BOOST_REQUIRE_EQUAL(groups.size(), t.groups.size());
@@ -1708,12 +1708,12 @@ static void test_pre_post_image(cql_test_env& e, const std::vector<image_persist
                     actual_values.push_back(std::move(actual_value));
                 }
 
-                BOOST_TEST_MESSAGE(format("Looking up corresponding row to {}", actual_values));
+                BOOST_TEST_MESSAGE(seastar::format("Looking up corresponding row to {}", actual_values));
 
                 // Order in pre-postimage is unspecified
                 const auto it = std::find(expected.begin(), expected.end(), actual_values);
                 if (it == expected.end()) {
-                    BOOST_FAIL(format("Failed to find corresponding expected row for {}", actual_values));
+                    BOOST_FAIL(seastar::format("Failed to find corresponding expected row for {}", actual_values));
                 }
                 expected.erase(it);
             }

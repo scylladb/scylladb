@@ -148,7 +148,7 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_msb_is_monotonic) {
             bool t1 = utils::timeuuid_tri_compare(next, prev) > 0;
             bool t2 = utils::timeuuid_tri_compare(next, first) > 0;
             if (!t1 || !t2) {
-                BOOST_CHECK_MESSAGE(t1 && t2, format("a UUID {}{} later is not great than at test start: {} {}", i, str(scale), t1, t2));
+                BOOST_CHECK_MESSAGE(t1 && t2, seastar::format("a UUID {}{} later is not great than at test start: {} {}", i, str(scale), t1, t2));
             }
             prev = next;
         }
@@ -174,7 +174,7 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_tri_compare_legacy) {
             bool t1 = utils::timeuuid_tri_compare(next, prev) == timeuuid_legacy_tri_compare(next, prev);
             bool t2 = utils::timeuuid_tri_compare(next, first) == timeuuid_legacy_tri_compare(next, first);
             if (!t1 || !t2) {
-                BOOST_CHECK_MESSAGE(t1 && t2, format("a UUID {}{} later violates compare order", i, str(scale)));
+                BOOST_CHECK_MESSAGE(t1 && t2, seastar::format("a UUID {}{} later violates compare order", i, str(scale)));
             }
             prev = next;
         }
