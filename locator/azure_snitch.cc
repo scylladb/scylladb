@@ -88,8 +88,8 @@ future<sstring> azure_snitch::azure_api_call(sstring path) {
 
         // Read HTTP response header first
         auto rsp = parser.get_parsed_response();
-        if (rsp->_status_code != static_cast<int>(http::reply::status_type::ok)) {
-            throw std::runtime_error(format("Error: HTTP response status {}", rsp->_status_code));
+        if (rsp->_status != http::reply::status_type::ok) {
+            throw std::runtime_error(format("Error: HTTP response status {}", rsp->_status));
         }
 
         auto it = rsp->_headers.find("Content-Length");
