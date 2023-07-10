@@ -1030,8 +1030,8 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
     if (_tables_metadata.contains(kscf)) {
         throw std::invalid_argument("Column family " + schema->cf_name() + " exists");
     }
-    ks.add_or_update_column_family(schema);
     cf->start();
+    ks.add_or_update_column_family(schema);
     schema->registry_entry()->set_table(cf->weak_from_this());
     co_await _tables_metadata.add_table(schema);
     if (schema->is_view()) {
