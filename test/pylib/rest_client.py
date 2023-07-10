@@ -196,13 +196,13 @@ class ScyllaRESTAPIClient():
         assert(type(data) == list)
         return data
 
-    async def enable_injection(self, node_ip: str, injection: str, one_shot: bool) -> None:
+    async def enable_injection(self, node_ip: str, injection: str, one_shot: bool, parameters: dict[str, Any] = {}) -> None:
         """Enable error injection named `injection` on `node_ip`. Depending on `one_shot`,
            the injection will be executed only once or every time the process passes the injection point.
            Note: this only has an effect in specific build modes: debug,dev,sanitize.
         """
         await self.client.post(f"/v2/error_injection/injection/{injection}",
-                               host=node_ip, params={"one_shot": str(one_shot)})
+                               host=node_ip, params={"one_shot": str(one_shot)}, json={ key: str(value) for key, value in parameters.items() })
 
     async def disable_injection(self, node_ip: str, injection: str) -> None:
         await self.client.delete(f"/v2/error_injection/injection/{injection}", host=node_ip)
@@ -237,13 +237,13 @@ class InjectionHandler():
         await self.api.message_injection(self.node_ip, self.injection)
 
 @asynccontextmanager
-async def inject_error(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: str) -> InjectionHandler:
+async def inject_error(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: str, parameters: dict[str, Any] = {}) -> InjectionHandler:
     """Attempts to inject an error. Works only in specific build modes: debug,dev,sanitize.
        It will trigger a test to be skipped if attempting to enable an injection has no effect.
        This is a context manager for enabling and disabling when done, therefore it can't be
        used for one shot.
     """
-    await api.enable_injection(node_ip, injection, False)
+    await api.enable_injection(node_ip, injection, False, parameters)
     enabled = await api.get_enabled_injections(node_ip)
     logging.info(f"Error injections enabled on {node_ip}: {enabled}")
     if not enabled:
@@ -255,12 +255,12 @@ async def inject_error(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: 
         await api.disable_injection(node_ip, injection)
 
 
-async def inject_error_one_shot(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: str) -> InjectionHandler:
+async def inject_error_one_shot(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: str, parameters: dict[str, Any] = {}) -> InjectionHandler:
     """Attempts to inject an error. Works only in specific build modes: debug,dev,sanitize.
        It will trigger a test to be skipped if attempting to enable an injection has no effect.
        This is a one-shot injection enable.
     """
-    await api.enable_injection(node_ip, injection, True)
+    await api.enable_injection(node_ip, injection, True, parameters)
     enabled = await api.get_enabled_injections(node_ip)
     logging.info(f"Error injections enabled on {node_ip}: {enabled}")
     if not enabled:
