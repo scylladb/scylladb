@@ -24,6 +24,7 @@
 #include <type_traits>
 #include <concepts>
 #include <optional>
+#include <unordered_map>
 
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/filtered.hpp>
@@ -39,6 +40,8 @@ public:
 };
 
 extern logging::logger errinj_logger;
+
+using error_injection_parameters = std::unordered_map<sstring, sstring>;
 
 /**
  * Error injection class can be used to create and manage code injections
@@ -116,6 +119,10 @@ class error_injection {
     struct injection_shared_data {
         size_t received_message_count{0};
         condition_variable received_message_cv;
+        error_injection_parameters parameters;
+
+        explicit injection_shared_data(error_injection_parameters parameters)
+            : parameters(std::move(parameters)) {}
     };
 
     class injection_data;
@@ -150,6 +157,18 @@ public:
             ++_read_messages_counter;
         }
 
+        std::optional<std::string_view> get(std::string_view key) {
+            if (!_shared_data) {
+                on_internal_error(errinj_logger, "injection_shared_data is not initialized");
+            }
+
+            auto it = _shared_data->parameters.find(std::string(key));
+            if (it == _shared_data->parameters.end()) {
+                return std::nullopt;
+            }
+            return it->second;
+        }
+
         friend class error_injection;
     };
 
@@ -168,9 +187,9 @@ private:
         lw_shared_ptr<injection_shared_data> shared_data;
         bi::list<injection_handler, bi::constant_time_size<false>> handlers;
 
-        explicit injection_data(bool one_shot)
+        explicit injection_data(bool one_shot, error_injection_parameters parameters)
             : one_shot(one_shot)
-            , shared_data(make_lw_shared<injection_shared_data>()) {}
+            , shared_data(make_lw_shared<injection_shared_data>(std::move(parameters))) {}
 
         void receive_message() {
             assert(shared_data);
@@ -237,8 +256,8 @@ public:
         return true;
     }
 
-    void enable(const std::string_view& injection_name, bool one_shot = false) {
-        _enabled.emplace(injection_name, injection_data{one_shot});
+    void enable(const std::string_view& injection_name, bool one_shot = false, error_injection_parameters parameters = {}) {
+        _enabled.emplace(injection_name, injection_data{one_shot, std::move(parameters)});
         errinj_logger.debug("Enabling injection {} \"{}\"",
                 one_shot? "one-shot ": "", injection_name);
     }
@@ -378,10 +397,10 @@ public:
         co_await func(handler);
     }
 
-    future<> enable_on_all(const std::string_view& injection_name, bool one_shot = false) {
-        return smp::invoke_on_all([injection_name = sstring(injection_name), one_shot] {
+    future<> enable_on_all(const std::string_view& injection_name, bool one_shot = false, error_injection_parameters parameters = {}) {
+        return smp::invoke_on_all([injection_name = sstring(injection_name), one_shot, parameters = std::move(parameters)] {
             auto& errinj = _local;
-            errinj.enable(injection_name, one_shot);
+            errinj.enable(injection_name, one_shot, parameters);
         });
     }
 
@@ -438,7 +457,7 @@ public:
     }
 
     [[gnu::always_inline]]
-    void enable(const std::string_view& injection_name, const bool one_shot = false) {}
+    void enable(const std::string_view& injection_name, const bool one_shot = false, error_injection_parameters parameters = {}) {}
 
     [[gnu::always_inline]]
     void disable(const std::string_view& injection_name) {}
@@ -497,7 +516,7 @@ public:
     }
 
     [[gnu::always_inline]]
-    static future<> enable_on_all(const std::string_view& injection_name, const bool one_shot = false) {
+    static future<> enable_on_all(const std::string_view& injection_name, const bool one_shot = false, const error_injection_parameters& parameters = {}) {
         return make_ready_future<>();
     }
 
