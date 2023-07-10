@@ -13,7 +13,6 @@
 #include "service/client_state.hh"
 #include "tracing/tracing.hh"
 #include "service_permit.hh"
-#include "cql3/cql_statement.hh"
 
 namespace qos {
 class service_level_controller;
@@ -27,8 +26,6 @@ private:
     service_permit _permit;
 
 public:
-    std::unique_ptr<cql3::statement_guard> statement_guard;
-
     query_state(client_state& client_state, service_permit permit)
             : _client_state(client_state)
             , _trace_state_ptr(tracing::trace_state_ptr())
