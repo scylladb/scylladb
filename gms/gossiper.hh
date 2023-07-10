@@ -152,6 +152,7 @@ public:
         endpoint_locks_map::entry_ptr _ptr;
         semaphore_units<> _units;
     };
+    // Must be called on shard 0
     future<endpoint_permit> lock_endpoint(inet_address);
 
 private:

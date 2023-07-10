@@ -732,6 +732,7 @@ future<> gossiper::do_status_check() {
 }
 
 future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep) {
+    assert(this_shard_id() == 0);
     return _endpoint_locks.get_or_load(ep, [] (const inet_address& ep) { return semaphore(1); }).then([] (auto eptr) {
         return get_units(*eptr, 1).then([eptr] (auto units) mutable {
             return endpoint_permit{std::move(eptr), std::move(units)};
