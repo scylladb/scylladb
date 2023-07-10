@@ -113,9 +113,9 @@ class error_injection {
      * It is shared between the injection_data. It is created once when enabling an injection
      * on a given shard, and all injection_handlers, that are created separately for each firing of this injection.
      */
-    struct received_messages_counter {
-        size_t counter{0};
-        condition_variable cv;
+    struct injection_shared_data {
+        size_t received_message_count{0};
+        condition_variable received_message_cv;
     };
 
     class injection_data;
@@ -126,21 +126,23 @@ public:
      * all of them will have separate handlers.
      */
     class injection_handler: public bi::list_base_hook<bi::link_mode<bi::auto_unlink>> {
-        lw_shared_ptr<received_messages_counter> _received_counter;
+        lw_shared_ptr<injection_shared_data> _shared_data;
         size_t _read_messages_counter{0};
 
-        explicit injection_handler(lw_shared_ptr<received_messages_counter> received_counter)
-            : _received_counter(std::move(received_counter)) {}
+        explicit injection_handler(lw_shared_ptr<injection_shared_data> shared_data)
+            : _shared_data(std::move(shared_data)) {}
 
     public:
         template <typename Clock, typename Duration>
         future<> wait_for_message(std::chrono::time_point<Clock, Duration> timeout) {
-            if (!_received_counter) {
-                on_internal_error(errinj_logger, "received_messages_counter is not initialized");
+            if (!_shared_data) {
+                on_internal_error(errinj_logger, "injection_shared_data is not initialized");
             }
 
             try {
-                co_await _received_counter->cv.wait(timeout, [&] { return _read_messages_counter < _received_counter->counter; });
+                co_await _shared_data->received_message_cv.wait(timeout, [&] {
+                    return _read_messages_counter < _shared_data->received_message_count;
+                });
             }
             catch (const std::exception& e) {
                 on_internal_error(errinj_logger, "Error injection wait_for_message timeout: " + std::string(e.what()));
@@ -163,18 +165,18 @@ private:
      */
     struct injection_data {
         bool one_shot;
-        lw_shared_ptr<received_messages_counter> received_counter;
+        lw_shared_ptr<injection_shared_data> shared_data;
         bi::list<injection_handler, bi::constant_time_size<false>> handlers;
 
         explicit injection_data(bool one_shot)
             : one_shot(one_shot)
-            , received_counter(make_lw_shared<received_messages_counter>()) {}
+            , shared_data(make_lw_shared<injection_shared_data>()) {}
 
         void receive_message() {
-            assert(received_counter);
+            assert(shared_data);
 
-            ++received_counter->counter;
-            received_counter->cv.broadcast();
+            ++shared_data->received_message_count;
+            shared_data->received_message_cv.broadcast();
         }
 
         bool is_one_shot() const {
@@ -364,7 +366,7 @@ public:
         }
 
         errinj_logger.debug("Triggering injection \"{}\" with injection handler", name);
-        injection_handler handler(data->received_counter);
+        injection_handler handler(data->shared_data);
         data->handlers.push_back(handler);
 
         auto disable_one_shot = defer([this, one_shot, name = sstring(name)] {
