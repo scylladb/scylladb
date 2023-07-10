@@ -4041,7 +4041,7 @@ class scylla_netw(gdb.Command):
         gdb.write('Dropped messages: %s\n' % ms['_dropped_messages'])
         gdb.write('Outgoing connections:\n')
         for (addr, shard_info) in unordered_map(std_vector(ms['_clients'])[0]):
-            ip = ip_to_str(int(get_ip(addr['addr'])), byteorder=sys.byteorder)
+            ip = ip_to_str(int(get_ip(addr['addr'])), byteorder='big')
             client = shard_info['rpc_client']['_p']
             rpc_client = std_unique_ptr(client['_p'])
             gdb.write('IP: %s, (netw::messaging_service::rpc_protocol_client_wrapper*) %s:\n' % (ip, client))
