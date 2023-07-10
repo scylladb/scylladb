@@ -11,4 +11,4 @@ done
 if is_privileged; then
     "$scriptsdir"/scylla_prepare
 fi
-execsudo /usr/bin/env SCYLLA_HOME=$SCYLLA_HOME SCYLLA_CONF=$SCYLLA_CONF "$bindir"/scylla $SCYLLA_ARGS $SEASTAR_IO $DEV_MODE $CPUSET $SCYLLA_DOCKER_ARGS
+execsudo /usr/bin/env SCYLLA_HOME=/var/lib/scylla SCYLLA_CONF=/etc/scylla "$bindir"/scylla $SCYLLA_ARGS $SEASTAR_IO $DEV_MODE $CPUSET $SCYLLA_DOCKER_ARGS

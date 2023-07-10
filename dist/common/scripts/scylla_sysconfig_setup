@@ -39,18 +39,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Setting parameters on Scylla sysconfig file.')
     parser.add_argument('--nic',
                         help='specify NIC')
-    parser.add_argument('--mode',
-                        help='network mode (posix, dpdk)')
-    parser.add_argument('--nr-hugepages', type=int,
-                        help='number of hugepages')
-    parser.add_argument('--user',
-                        help='user (dpdk requires root)')
-    parser.add_argument('--group',
-                        help='group (dpdk requires root)')
-    parser.add_argument('--homedir',
-                        help='scylla home directory')
-    parser.add_argument('--confdir',
-                        help='scylla config directory')
     parser.add_argument('--setup-nic-and-disks', action='store_true', default=set_nic_and_disks,
                         help='setup NIC\'s and disks\' interrupts, RPS, XPS, nomerges and I/O scheduler')
     parser.add_argument('--set-clocksource', action='store_true', default=set_clocksource,
@@ -64,7 +52,6 @@ if __name__ == '__main__':
             sys.exit(1)
 
     ifname = args.nic if args.nic else cfg.get('IFNAME')
-    network_mode = args.mode if args.mode else cfg.get('NETWORK_MODE')
 
     if args.setup_nic_and_disks:
         res = out('{} --tune net --nic {} --get-cpu-mask'.format(perftune_base_command(), ifname))
@@ -82,33 +69,8 @@ if __name__ == '__main__':
             cpuset = hex2list(rps_cpus)
             run('/opt/scylladb/scripts/scylla_cpuset_setup --cpuset {}'.format(cpuset), shell=True, check=True)
 
-    ethdrv = ''
-    ethpciid = ''
-    if network_mode == 'dpdk':
-        dpdk_status = out('/opt/scylladb/scripts/dpdk-devbind.py --status')
-        match = re.search('if={} drv=(\S+)'.format(ifname), dpdk_status, flags=re.MULTILINE)
-        ethdrv = match.group(1)
-        match = re.search('^(\\S+:\\S+:\\S+\.\\S+) [^\n]+ if={} '.format(ifname), dpdk_status, flags=re.MULTILINE)
-        ethpciid = match.group(1)
-
-    if args.mode:
-        cfg.set('NETWORK_MODE', args.mode)
     if args.nic:
         cfg.set('IFNAME', args.nic)
-    if cfg.get('ETHDRV') != ethdrv:
-        cfg.set('ETHDRV', ethdrv)
-    if cfg.get('ETHPCIID') != ethpciid:
-        cfg.set('ETHPCIID', ethpciid)
-    if args.nr_hugepages:
-        cfg.set('NR_HUGEPAGES', args.nr_hugepages)
-    if args.user:
-        cfg.set('USER', args.user)
-    if args.group:
-        cfg.set('GROUP', args.group)
-    if args.homedir:
-        cfg.set('SCYLLA_HOME', args.homedir)
-    if args.confdir:
-        cfg.set('SCYLLA_CONF', args.confdir)
 
     if str2bool(get_set_nic_and_disks_config_value(cfg)) != args.setup_nic_and_disks:
         if cfg.has_option('SET_NIC'):

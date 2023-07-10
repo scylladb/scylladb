@@ -462,26 +462,20 @@ elif ! $without_systemd; then
     if [ -d /var/log/journal ]; then
         cat << EOS > "$rsystemd"/scylla-server.service.d/nonroot.conf
 [Service]
-EnvironmentFile=
-EnvironmentFile=$(realpath -m "$rsysconfdir/scylla-server")
-EnvironmentFile=$retc/scylla.d/*.conf
+Environment=SCYLLA_HOME=$rdata SCYLLA_CONF=$retc/scylla
 ExecStartPre=
 ExecStart=
 ExecStart=$rprefix/bin/scylla \$SCYLLA_ARGS \$SEASTAR_IO \$DEV_MODE \$CPUSET
-ExecStopPost=
 User=
 EOS
     else
         cat << EOS > "$rsystemd"/scylla-server.service.d/nonroot.conf
 [Service]
-EnvironmentFile=
-EnvironmentFile=$(realpath -m "$rsysconfdir/scylla-server")
-EnvironmentFile=$retc/scylla.d/*.conf
+Environment=SCYLLA_HOME=$rdata SCYLLA_CONF=$retc/scylla
 ExecStartPre=
 ExecStartPre=$rprefix/scripts/scylla_logrotate
 ExecStart=
 ExecStart=$rprefix/bin/scylla \$SCYLLA_ARGS \$SEASTAR_IO \$DEV_MODE \$CPUSET
-ExecStopPost=
 User=
 StandardOutput=
 StandardOutput=file:$rprefix/scylla-server.log

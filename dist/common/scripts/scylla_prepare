@@ -139,42 +139,19 @@ if __name__ == '__main__':
         print('Requires root permission.')
         sys.exit(1)
     cfg = sysconfig_parser(sysconfdir_p() / 'scylla-server')
-    mode = cfg.get('NETWORK_MODE')
 
-    if mode == 'virtio':
-        tap = cfg.get('TAP')
-        user = cfg.get('USER')
-        group = cfg.get('GROUP')
-        bridge = cfg.get('BRIDGE')
-        run('ip tuntap del mode tap dev {TAP}'.format(TAP=tap), shell=True, check=True)
-        run('ip tuntap add mode tap dev {TAP} user {USER} one_queue vnet_hdr'.format(TAP=tap, USER=user), shell=True, check=True)
-        run('ip link set dev {TAP} up'.format(TAP=tap), shell=True, check=True)
-        run('ip link set dev {TAP} master {BRIDGE}'.format(TAP=tap, BRIDGE=bridge), shell=True, check=True)
-        run('chown {USER}.{GROUP} /dev/vhost-net'.format(USER=user, GROUP=group), shell=True, check=True)
-    elif mode == 'dpdk':
-        ethpciid = cfg.get('ETHPCIID')
-        nr_hugepages = cfg.get('NR_HUGEPAGES')
-        run('modprobe uio', shell=True, check=True)
-        run('modprobe uio_pci_generic', shell=True, check=True)
-        run('/opt/scylladb/scripts/dpdk-devbind.py --force --bind=uio_pci_generic {ETHPCIID}'.format(ETHPCIID=ethpciid), shell=True, check=True)
-        for n in glob.glob('/sys/devices/system/node/node?'):
-            with open('{n}/hugepages/hugepages-2048kB/nr_hugepages'.format(n=n), 'w') as f:
-                f.write(nr_hugepages)
-        if distro.name() == 'Ubuntu':
-            run('hugeadm --create-mounts', shell=True, check=True)
-    else:
-        try:
-            res = create_perftune_conf(cfg)
-        except Exception as e:
-            print(f'Exception occurred while creating perftune.yaml:\n')
-            scylla_excepthook(*sys.exc_info())
-            print('\nTo fix the error, please re-run scylla_setup.')
-            sys.exit(1)
-        try:
-            if res:
-                run("{} --options-file /etc/scylla.d/perftune.yaml".format(perftune_base_command()), shell=True, check=True)
-        except Exception as e:
-            print(f'Exception occurred while tuning system using perftune.yaml:\n')
-            traceback.print_exc()
-            print('\nTo fix the error, please re-run scylla_setup.')
-            sys.exit(1)
+    try:
+        res = create_perftune_conf(cfg)
+    except Exception as e:
+        print(f'Exception occurred while creating perftune.yaml:\n')
+        scylla_excepthook(*sys.exc_info())
+        print('\nTo fix the error, please re-run scylla_setup.')
+        sys.exit(1)
+    try:
+        if res:
+            run("{} --options-file /etc/scylla.d/perftune.yaml".format(perftune_base_command()), shell=True, check=True)
+    except Exception as e:
+        print(f'Exception occurred while tuning system using perftune.yaml:\n')
+        traceback.print_exc()
+        print('\nTo fix the error, please re-run scylla_setup.')
+        sys.exit(1)
