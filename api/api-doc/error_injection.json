@@ -34,6 +34,14 @@
                      "allowMultiple":false,
                      "type":"boolean",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"parameters",
+                     "description":"dict of parameters to pass to the injection (json format)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"dict",
+                     "paramType":"body"
                   }
                ]
             },
@@ -110,5 +118,15 @@
             }
          ]
       }
-   ]
+   ],
+   "components":{
+      "schemas": {
+         "dict": {
+            "type": "object",
+            "additionalProperties": {
+               "type": "string"
+            }
+         }
+      }
+   }
 }
