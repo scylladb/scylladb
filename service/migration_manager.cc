@@ -981,7 +981,7 @@ future<group0_guard> migration_manager::start_group0_operation() {
 void migration_manager::passive_announce(table_schema_version version) {
     _schema_version_to_publish = version;
     (void)_schema_push.trigger().handle_exception([version = std::move(version)] (std::exception_ptr ex) {
-        mlogger.warn("Passive announcing of version {} failed: {}. Ignored.", version);
+        mlogger.warn("Passive announcing of version {} failed: {}. Ignored.", version, ex);
     });
 }
 
