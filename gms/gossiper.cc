@@ -1218,7 +1218,8 @@ future<> gossiper::replicate(inet_address ep, const endpoint_state& es, permit_i
 }
 
 future<> gossiper::advertise_token_removed(inet_address endpoint, locator::host_id host_id, permit_id pid) {
-    // FIXME: need to lock_endpoint (with null permit_id)
+    auto permit = co_await lock_endpoint(endpoint, pid);
+    pid = permit.id();
     auto& eps = get_endpoint_state(endpoint);
     eps.update_timestamp(); // make sure we don't evict it too soon
     eps.get_heart_beat_state().force_newer_generation_unsafe();
