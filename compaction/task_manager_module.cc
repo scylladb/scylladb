@@ -534,7 +534,12 @@ future<> table_resharding_compaction_task_impl::run() {
     co_await _db.invoke_on_all(coroutine::lambda([&] (replica::database& db) -> future<> {
         tasks::task_info parent_info{_status.id, _status.shard};
         auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<shard_resharding_compaction_task_impl>(parent_info, _status.keyspace, _status.table, _status.id, _dir, db, _creator, _owned_ranges_ptr, destinations);
+        // make shard-local copy of owned_ranges
+        compaction::owned_ranges_ptr local_owned_ranges_ptr;
+        if (_owned_ranges_ptr) {
+            local_owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(*_owned_ranges_ptr);
+        }
+        auto task = co_await compaction_module.make_and_start_task<shard_resharding_compaction_task_impl>(parent_info, _status.keyspace, _status.table, _status.id, _dir, db, _creator, std::move(local_owned_ranges_ptr), destinations);
         co_await task->done();
     }));
 
@@ -549,12 +554,7 @@ tasks::is_internal shard_resharding_compaction_task_impl::is_internal() const no
 future<> shard_resharding_compaction_task_impl::run() {
     auto& table = _db.find_column_family(_status.keyspace, _status.table);
     auto info_vec = std::move(_destinations[this_shard_id()].info_vec);
-    // make shard-local copy of owned_ranges
-    compaction::owned_ranges_ptr local_owned_ranges_ptr;
-    if (_owned_ranges_ptr) {
-        local_owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(*_owned_ranges_ptr);
-    }
-    co_await reshard(_dir.local(), std::move(info_vec), table, _creator, std::move(local_owned_ranges_ptr));
+    co_await reshard(_dir.local(), std::move(info_vec), table, _creator, std::move(_local_owned_ranges_ptr));
     co_await _dir.local().move_foreign_sstables(_dir);
 }
 

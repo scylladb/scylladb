@@ -606,7 +606,7 @@ private:
     sharded<sstables::sstable_directory>& _dir;
     replica::database& _db;
     sstables::compaction_sstable_creator_fn _creator;
-    compaction::owned_ranges_ptr _owned_ranges_ptr;
+    compaction::owned_ranges_ptr _local_owned_ranges_ptr;
     std::vector<replica::reshard_shard_descriptor>& _destinations;
 public:
     shard_resharding_compaction_task_impl(tasks::task_manager::module_ptr module,
@@ -616,13 +616,13 @@ public:
             sharded<sstables::sstable_directory>& dir,
             replica::database& db,
             sstables::compaction_sstable_creator_fn creator,
-            compaction::owned_ranges_ptr owned_ranges_ptr,
+            compaction::owned_ranges_ptr local_owned_ranges_ptr,
             std::vector<replica::reshard_shard_descriptor>& destinations) noexcept
         : resharding_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, std::move(keyspace), std::move(table), "", parent_id)
         , _dir(dir)
         , _db(db)
         , _creator(std::move(creator))
-        , _owned_ranges_ptr(std::move(owned_ranges_ptr))
+        , _local_owned_ranges_ptr(std::move(local_owned_ranges_ptr))
         , _destinations(destinations)
     {}
 
