@@ -55,6 +55,17 @@ public:
         return stop_iteration::yes;
     }
 
+    // Might only be called between consume_new_partition()
+    // and consume_end_of_partition().
+    //
+    // Returns (and forgets) the partition contents consumed so far.
+    // Can be used to split the processing of a large mutation into
+    // multiple smaller `mutation` objects (which add up to the full mutation).
+    mutation flush() {
+        assert(_m);
+        return std::exchange(*_m, mutation(_s, _m->decorated_key()));
+    }
+
     mutation_opt consume_end_of_stream() {
         return std::move(_m);
     }
@@ -67,6 +78,7 @@ class mutation_rebuilder_v2 {
     schema_ptr _s;
     mutation_rebuilder _builder;
     range_tombstone_assembler _rt_assembler;
+    position_in_partition _pos = position_in_partition::before_all_clustered_rows();
 public:
     mutation_rebuilder_v2(schema_ptr s) : _s(std::move(s)), _builder(_s) { }
 public:
@@ -91,6 +103,7 @@ public:
     }
 
     stop_iteration consume(range_tombstone_change&& rt) {
+        _pos = rt.position();
         if (auto rt_opt = _rt_assembler.consume(*_s, std::move(rt))) {
             _builder.consume(std::move(*rt_opt));
         }
@@ -103,6 +116,7 @@ public:
     }
 
     stop_iteration consume(clustering_row&& cr) {
+        _pos = position_in_partition::after_key(*_s, cr.position());
         _builder.consume(std::move(cr));
         return stop_iteration::no;
     }
@@ -115,5 +129,23 @@ public:
     mutation_opt consume_end_of_stream() {
         _rt_assembler.on_end_of_stream();
         return _builder.consume_end_of_stream();
+    }
+
+    // Might only be called between consume_new_partition()
+    // and consume_end_of_partition().
+    //
+    // Returns (and forgets) the partition contents consumed so far.
+    // Can be used to split the processing of a large mutation into
+    // multiple smaller `mutation` objects (which add up to the full mutation).
+    //
+    // The active range tombstone (if present) is flushed with end bound
+    // just after the last seen clustered position, but the range tombstone
+    // remains active, and the next mutation will see it restarted at the
+    // position it was flushed at.
+    mutation flush() {
+        if (auto rt_opt = _rt_assembler.flush(*_s, _pos)) {
+            _builder.consume(std::move(*rt_opt));
+        }
+        return _builder.flush();
     }
 };
