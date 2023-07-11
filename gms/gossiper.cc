@@ -1510,10 +1510,7 @@ void gossiper::update_timestamp_for_nodes(const std::map<inet_address, endpoint_
 }
 
 void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
-    // if (MessagingService.instance().getVersion(addr) < MessagingService.VERSION_20) {
-    //     real_mark_alive(addr, local_state);
-    //     return;
-    // }
+    // Enter the _background_msg gate so stop() would wait on it
     auto inserted = _pending_mark_alive_endpoints.insert(addr).second;
     if (inserted) {
         // The node is not in the _pending_mark_alive_endpoints
@@ -1523,6 +1520,11 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
         logger.debug("Node {} is being marked as up, ignoring duplicated mark alive operation", addr);
         return;
     }
+
+    // unmark addr as pending on exception or after background continuation completes
+    auto unmark_pending = deferred_action([this, addr, g = shared_from_this()] () noexcept {
+        _pending_mark_alive_endpoints.erase(addr);
+    });
 
     local_state.mark_dead();
     msg_addr id = get_msg_addr(addr);
@@ -1544,9 +1546,7 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
             return real_mark_alive(addr, state);
         }
         return make_ready_future();
-    }).finally([this, addr] {
-        _pending_mark_alive_endpoints.erase(addr);
-    }).handle_exception([addr, gh = std::move(gh)] (auto ep) {
+    }).handle_exception([addr, gh = std::move(gh), unmark_pending = std::move(unmark_pending)] (auto ep) {
         logger.warn("Fail to send EchoMessage to {}: {}", addr, ep);
     });
 }
