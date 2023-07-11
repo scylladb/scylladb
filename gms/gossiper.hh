@@ -422,7 +422,7 @@ private:
 
     void mark_alive(inet_address addr, endpoint_state& local_state);
 
-    future<> real_mark_alive(inet_address addr, endpoint_state& local_state);
+    future<> real_mark_alive(inet_address addr);
 
     future<> mark_dead(inet_address addr, endpoint_state& local_state, permit_id);
 

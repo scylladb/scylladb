@@ -1545,36 +1545,34 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     logger.debug("Sending a EchoMessage to {}, with generation_number={}", id, generation);
     (void)_messaging.send_gossip_echo(id, generation.value(), std::chrono::milliseconds(15000)).then([this, addr] {
         logger.trace("Got EchoMessage Reply");
-        // After sending echo message, the Node might not be in the
-        // _endpoint_state_map anymore, use the reference of local_state
-        // might cause user-after-free
-        auto es = get_endpoint_state_for_endpoint_ptr(addr);
-        if (!es) {
-            logger.info("Node {} is not in endpoint_state_map anymore", addr);
-        } else {
-            endpoint_state& state = *es;
-            logger.debug("Mark Node {} alive after EchoMessage", addr);
-            return real_mark_alive(addr, state);
-        }
-        return make_ready_future();
+        return real_mark_alive(addr);
     }).handle_exception([addr, gh = std::move(gh), unmark_pending = std::move(unmark_pending)] (auto ep) {
         logger.warn("Fail to send EchoMessage to {}: {}", addr, ep);
     });
 }
 
-future<> gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
-    logger.trace("marking as alive {}", addr);
+future<> gossiper::real_mark_alive(inet_address addr) {
+    auto permit = co_await lock_endpoint(addr, null_permit_id);
 
-    // FIXME: need to lock_endpoint
-    permit_id pid;
+    // After sending echo message, the Node might not be in the
+    // _endpoint_state_map anymore, use the reference of local_state
+    // might cause user-after-free
+    auto* es = get_endpoint_state_for_endpoint_ptr(addr);
+    if (!es) {
+        logger.info("Node {} is not in endpoint_state_map anymore", addr);
+        co_return;
+    }
 
     // Do not mark a node with status shutdown as UP.
-    auto status = sstring(get_gossip_status(local_state));
+    auto status = sstring(get_gossip_status(*es));
     if (status == sstring(versioned_value::SHUTDOWN)) {
         logger.warn("Skip marking node {} with status = {} as UP", addr, status);
         co_return;
     }
 
+    logger.debug("Mark Node {} alive after EchoMessage", addr);
+
+    auto& local_state = *es;
     local_state.mark_alive();
     local_state.update_timestamp(); // prevents do_status_check from racing us and evicting if it was down > A_VERY_LONG_TIME
 
@@ -1602,7 +1600,7 @@ future<> gossiper::real_mark_alive(inet_address addr, endpoint_state& local_stat
         logger.info("InetAddress {} is now UP, status = {}", addr, status);
     }
 
-    co_await _subscribers.for_each([addr, state, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
+    co_await _subscribers.for_each([addr, state = std::move(state), pid = permit.id()] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
         co_await subscriber->on_alive(addr, state, pid);
         logger.trace("Notified {}", fmt::ptr(subscriber.get()));
     });
