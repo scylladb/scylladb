@@ -1517,6 +1517,8 @@ class scylla_tables(gdb.Command):
                 schema = schema_ptr(value['_schema'])
                 if args.user and schema.is_system():
                     continue
+                if args.keyspace and schema.ks_name != args.keyspace:
+                    continue
                 schema_version = str(schema['_raw']['_version'])
                 gdb.write('{:5} {} v={} {:45} (replica::table*){}\n'.format(shard, key, schema_version, schema.table_name(), value.address))
 
