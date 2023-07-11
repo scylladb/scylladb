@@ -1514,7 +1514,11 @@ private:
     bool is_initialized() const {
         return bool(_context);
     }
-    future<> initialize() {
+    // Returns true if reader is initialized, by either a previous or current request
+    future<bool> maybe_initialize() {
+        if (is_initialized()) {
+            co_return true;
+        }
         if (_single_partition_read) {
             _sst->get_stats().on_single_partition_read();
             const auto& key = dht::ring_position_view(_pr.start()->value());
@@ -1523,7 +1527,7 @@ private:
 
             if (!present) {
                 _sst->get_filter_tracker().add_false_positive();
-                co_return;
+                co_return false;
             }
 
             _sst->get_filter_tracker().add_true_positive();
@@ -1558,12 +1562,7 @@ private:
         _monitor.on_read_started(_context->reader_position());
         _index_in_current_partition = true;
         _will_likely_slice = will_likely_slice(_slice);
-    }
-    future<> ensure_initialized() {
-        if (is_initialized()) {
-            return make_ready_future<>();
-        }
-        return initialize();
+        co_return true;
     }
     future<> skip_to(indexable_element el, uint64_t begin) {
         sstlog.trace("sstable_reader: {}: skip_to({} -> {}, el={})", fmt::ptr(_context.get()), _context->position(), begin, static_cast<int>(el));
@@ -1591,8 +1590,8 @@ public:
             on_internal_error(sstlog, "mx reader: fast_forward_to(partition_range) not supported for reversed queries");
         }
 
-        return ensure_initialized().then([this, &pr] {
-            if (!is_initialized()) {
+        return maybe_initialize().then([this, &pr] (bool initialized) {
+            if (!initialized) {
                 _end_of_stream = true;
                 return make_ready_future<>();
             } else {
@@ -1623,8 +1622,8 @@ public:
             return make_ready_future<>();
         }
         if (!is_initialized()) {
-            return initialize().then([this] {
-                if (!is_initialized()) {
+            return maybe_initialize().then([this] (bool initialized) {
+                if (!initialized) {
                     _end_of_stream = true;
                     return make_ready_future<>();
                 } else {
