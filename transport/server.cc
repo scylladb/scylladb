@@ -668,7 +668,7 @@ future<> cql_server::connection::process_request() {
             ++_server._stats.requests_shed;
             return _read_buf.skip(f.length).then([this, stream = f.stream] {
                 const char* message = "request shed due to coordinator overload";
-                clogger.debug("{}: {}, stream {}", _client_state.get_remote_address(), message);
+                clogger.debug("{}: {}, stream {}", _client_state.get_remote_address(), message, stream);
                 write_response(make_error(stream, exceptions::exception_code::OVERLOADED,
                     message, tracing::trace_state_ptr()));
                 return make_ready_future<>();
