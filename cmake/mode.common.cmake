@@ -15,6 +15,7 @@ string(JOIN " " CMAKE_CXX_FLAGS
   "-Wall"
   "-Werror"
   "-Wno-error=deprecated-declarations"
+  "-Wimplicit-fallthrough"
   ${_supported_warnings})
 
 function(default_target_arch arch)
