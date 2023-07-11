@@ -270,11 +270,6 @@ public:
     int64_t get_endpoint_downtime(inet_address ep) const noexcept;
 
     /**
-     * @param endpoint end point that is convicted.
-     */
-    future<> convict(inet_address endpoint);
-
-    /**
      * Return either: the greatest heartbeat or application state
      *
      * @param ep_state
@@ -284,6 +279,11 @@ public:
 
 
 private:
+    /**
+     * @param endpoint end point that is convicted.
+     */
+    future<> convict(inet_address endpoint);
+
     /**
      * Removes the endpoint from gossip completely
      *
