@@ -6123,7 +6123,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
         write ? get_stats().cas_write_unavailables.mark() :  get_stats().cas_read_unavailables.mark();
         throw;
     } catch (seastar::semaphore_timed_out& ex) {
-        paxos::paxos_state::logger.trace("CAS[{}]: timeout while waiting for row lock {}", handler->id());
+        paxos::paxos_state::logger.trace("CAS[{}]: timeout while waiting for row lock {}", handler->id(), ex.what());
         if (write) {
             get_stats().cas_write_timeouts.mark();
             throw mutation_write_timeout_exception(schema->ks_name(), schema->cf_name(), cl_for_paxos, 0,  handler->block_for(), db::write_type::CAS);
