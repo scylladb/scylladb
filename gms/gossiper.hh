@@ -414,6 +414,8 @@ private:
 
     future<> mark_dead(inet_address addr, endpoint_state& local_state);
 
+    future<> mark_as_shutdown(const inet_address& endpoint);
+
     /**
      * This method is called whenever there is a "big" change in ep state (a generation change for a known node).
      *
@@ -564,7 +566,6 @@ public:
     bool is_normal_ring_member(const inet_address& endpoint) const;
     bool is_cql_ready(const inet_address& endpoint) const;
     bool is_silent_shutdown_state(const endpoint_state& ep_state) const;
-    future<> mark_as_shutdown(const inet_address& endpoint);
     void force_newer_generation();
 public:
     std::string_view get_gossip_status(const endpoint_state& ep_state) const noexcept;
