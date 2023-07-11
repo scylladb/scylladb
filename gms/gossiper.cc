@@ -2343,7 +2343,8 @@ sstring gossiper::get_application_state_value(inet_address endpoint, application
  * @param endpoint endpoint that has shut itself down
  */
 future<> gossiper::mark_as_shutdown(const inet_address& endpoint, permit_id pid) {
-    // FIXME: need to lock_endpoint (if pid is null)
+    auto permit = co_await lock_endpoint(endpoint, pid);
+    pid = permit.id();
     auto es = get_endpoint_state_for_endpoint_ptr(endpoint);
     if (es) {
         auto& ep_state = *es;
