@@ -485,6 +485,11 @@ future<> messaging_service::stop_client() {
             return c.second.rpc_client->stop().then([addr = c.first] {
                 mlogger.info("Stopping client for address: {} - Done", addr);
             });
+        }).finally([&m] {
+            // no new clients should be added by get_rpc_client(), as it
+            // asserts that _shutting_down is true
+            m.clear();
+            mlogger.info("Stopped clients");
         });
     });
 }
