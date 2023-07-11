@@ -541,9 +541,6 @@ public:
             cfg->ring_delay_ms.set(500);
             cfg->shutdown_announce_in_ms.set(0);
             cfg->broadcast_to_all_shards().get();
-            if (!cfg->host_id) {
-                cfg->host_id = locator::host_id::create_random_id();
-            }
             create_directories((data_dir_path + "/system").c_str());
             create_directories(cfg->commitlog_directory().c_str());
             create_directories(cfg->schema_commitlog_directory().c_str());
@@ -591,7 +588,8 @@ public:
 
             sharded<locator::shared_token_metadata> token_metadata;
             locator::token_metadata::config tm_cfg;
-            tm_cfg.topo_cfg.this_host_id = cfg->host_id;
+            // We assign null ID, the same as main.cc.
+            tm_cfg.topo_cfg.this_host_id = locator::host_id::create_null_id();
             tm_cfg.topo_cfg.this_endpoint = utils::fb_utilities::get_broadcast_address();
             tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
             token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
@@ -720,6 +718,10 @@ public:
             auto stop_sys_kd = defer([&sys_ks] { sys_ks.stop().get(); });
             for (const auto p: all_system_table_load_phases) {
                 replica::distributed_loader::init_system_keyspace(sys_ks, erm_factory, db, *cfg, p).get();
+            }
+
+            if (!cfg->host_id) {
+                cfg->host_id = sys_ks.local().load_local_host_id().get0();
             }
 
             // don't start listening so tests can be run in parallel
