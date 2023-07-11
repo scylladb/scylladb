@@ -1527,8 +1527,9 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     local_state.mark_dead();
     msg_addr id = get_msg_addr(addr);
     int64_t generation = _endpoint_state_map[get_broadcast_address()].get_heart_beat_state().get_generation();
+    // Enter the _background_msg gate so stop() would wait on it
+    auto gh = _background_msg.hold();
     logger.debug("Sending a EchoMessage to {}, with generation_number={}", id, generation);
-    // Do it in the background.
     (void)_messaging.send_gossip_echo(id, generation, std::chrono::milliseconds(15000)).then([this, addr] {
         logger.trace("Got EchoMessage Reply");
         // After sending echo message, the Node might not be in the
@@ -1545,7 +1546,7 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
         return make_ready_future();
     }).finally([this, addr] {
         _pending_mark_alive_endpoints.erase(addr);
-    }).handle_exception([addr] (auto ep) {
+    }).handle_exception([addr, gh = std::move(gh)] (auto ep) {
         logger.warn("Fail to send EchoMessage to {}: {}", addr, ep);
     });
 }
