@@ -2590,6 +2590,75 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_consume_position_monotonicity) {
     }
 }
 
+// Tests mutation_rebuilder_v2::flush().
+SEASTAR_THREAD_TEST_CASE(test_mutation_rebuilder_v2_flush) {
+    simple_schema ss;
+    schema_ptr s = ss.schema();
+    auto pk = ss.make_pkey();
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto p = semaphore.make_permit();
+
+    // Main idea of the test: we prepare a stream with all "interesting"
+    // situations (with respect to positions), for example:
+    // - RTC right before and after a key
+    // - Overlapping RTCs
+    // - Keys without a RTC in between, but with an active RTC from before
+    // - Keys without a RTC in between, but without an active RTC from before
+    // etc.
+    //
+    // Then we pass this stream through mutation_rebuilder_v2 with two flushes
+    // in between (on all possible positions), and check that the result is
+    // the same as without flushes.
+    auto frags = std::vector<mutation_fragment_v2>();
+    frags.emplace_back(*s, p, partition_start(pk, {}));
+    frags.emplace_back(*s, p, range_tombstone_change(position_in_partition::before_all_clustered_rows(), ss.new_tombstone()));
+    frags.emplace_back(*s, p, clustering_row(ss.make_ckey(0)));
+    frags.emplace_back(*s, p, range_tombstone_change(position_in_partition::before_key(ss.make_ckey(1)), ss.new_tombstone()));
+    frags.emplace_back(*s, p, clustering_row(ss.make_ckey(1)));
+    frags.emplace_back(*s, p, range_tombstone_change(position_in_partition::after_key(ss.make_ckey(1)), ss.new_tombstone()));
+    frags.emplace_back(*s, p, range_tombstone_change(position_in_partition::after_key(ss.make_ckey(1)), ss.new_tombstone()));
+    frags.emplace_back(*s, p, clustering_row(ss.make_ckey(2)));
+    frags.emplace_back(*s, p, range_tombstone_change(position_in_partition::before_key(ss.make_ckey(3)), tombstone{}));
+    frags.emplace_back(*s, p, clustering_row(ss.make_ckey(3)));
+    frags.emplace_back(*s, p, clustering_row(ss.make_ckey(4)));
+    frags.emplace_back(*s, p, range_tombstone_change(position_in_partition::after_key(ss.make_ckey(4)), ss.new_tombstone()));
+    frags.emplace_back(*s, p, range_tombstone_change(position_in_partition::before_key(ss.make_ckey(5)), ss.new_tombstone()));
+    frags.emplace_back(*s, p, clustering_row(ss.make_ckey(5)));
+    frags.emplace_back(*s, p, clustering_row(ss.make_ckey(6)));
+    frags.emplace_back(*s, p, range_tombstone_change(position_in_partition::after_all_clustered_rows(), tombstone{}));
+    frags.emplace_back(*s, p, partition_end());
+
+    mutation_rebuilder_v2 rebuilder_without_flush(s);
+    for (int i = 0; i < frags.size(); ++i) {
+        rebuilder_without_flush.consume(mutation_fragment_v2(*s, p, frags[i]));
+    }
+    auto m_expected = std::move(*rebuilder_without_flush.consume_end_of_stream());
+
+    // We do two flushes (we test all possible combinations of their positions,
+    // including no flush).
+    // This is to test that the first flush doesn't break the rebuilder in
+    // a way that prevents another flush.
+    for (int first_flush = 0; first_flush < frags.size(); ++first_flush) {
+        for (int second_flush = first_flush; second_flush < frags.size(); ++second_flush) {
+            mutation_rebuilder_v2 rebuilder(s);
+            auto m1 = mutation(s, pk); // Contents of flush 1.
+            auto m2 = mutation(s, pk); // Contents of flush 2.
+            auto m3 = mutation(s, pk); // Contents of final flush. 
+            for (int i = 0; i < frags.size(); ++i) {
+                rebuilder.consume(mutation_fragment_v2(*s, p, frags[i]));
+                if (i == first_flush) {
+                    m1 = rebuilder.flush();
+                }
+                if (i == second_flush) {
+                    m2 = rebuilder.flush();
+                }
+            }
+            m3 = std::move(*rebuilder.consume_end_of_stream());
+            assert_that(m1 + m2 + m3).is_equal_to(m_expected);
+        }
+    }
+}
+
 SEASTAR_TEST_CASE(mutation_with_dummy_clustering_row_is_consumed_monotonically) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
