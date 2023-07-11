@@ -55,8 +55,12 @@ static bool is_broken_pipe_or_connection_reset(std::exception_ptr ep) {
     try {
         std::rethrow_exception(ep);
     } catch (const std::system_error& e) {
-        return e.code().category() == std::system_category()
-            && (e.code().value() == EPIPE || e.code().value() == ECONNRESET);
+        return (e.code().category() == std::system_category()
+            && (e.code().value() == EPIPE || e.code().value() == ECONNRESET))
+            // tls version:
+            || (e.code().category() == tls::error_category()
+            && (e.code().value() == tls::ERROR_PREMATURE_TERMINATION))
+            ;
     } catch (...) {}
     return false;
 }
