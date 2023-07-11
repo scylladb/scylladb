@@ -699,8 +699,8 @@ future<> gossiper::do_status_check() {
             continue;
         }
 
-        // FIXME: need to lock_endpoint
-        permit_id pid;
+        auto permit = co_await lock_endpoint(endpoint, null_permit_id);
+        const auto& pid = permit.id();
 
         auto eps = get_endpoint_state_for_endpoint_ptr(endpoint);
         if (!eps) {
@@ -709,7 +709,6 @@ future<> gossiper::do_status_check() {
         auto& ep_state = *eps;
         bool is_alive = ep_state.is_alive();
         auto update_timestamp = ep_state.get_update_timestamp();
-        // ep_state cannot be used after yielding
 
         // check if this is a fat client. fat clients are removed automatically from
         // gossip after FatClientTimeout.  Do not remove dead states here.
