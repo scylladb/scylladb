@@ -1470,6 +1470,11 @@ class scylla_table(gdb.Command):
 
         return None, None
 
+    @staticmethod
+    def phased_barrier_count(table, barrier_name):
+        g = seastar_lw_shared_ptr(table[barrier_name]['_gate']).get()
+        return int(g['_count'])
+
     def invoke(self, arg, from_tty):
         if arg is None or arg == '':
             gdb.write("Specify keyspace.table argument\n")
@@ -1483,6 +1488,10 @@ class scylla_table(gdb.Command):
 
         gdb.write(f'(replica::table*){table.address}\n')
         gdb.write(f'schema version: {schema["_raw"]["_version"]}\n')
+        gdb.write('pending ops:')
+        for barrier_name in ['_pending_flushes_phaser', '_pending_writes_phaser', '_pending_reads_phaser', '_pending_streams_phaser']:
+            gdb.write(f' {barrier_name}: {scylla_table.phased_barrier_count(table, barrier_name)}')
+        gdb.write('\n')
 
 
 class scylla_task_histogram(gdb.Command):
@@ -2015,8 +2024,7 @@ class scylla_memory(gdb.Command):
         tables_by_count = defaultdict(list)
         for table in for_each_table():
             schema = schema_ptr(table['_schema'])
-            g = seastar_lw_shared_ptr(table[barrier_name]['_gate']).get()
-            count = int(g['_count'])
+            count = scylla_table.phased_barrier_count(table, barrier_name)
             if count > 0:
                 tables_by_count[count].append(str(schema.table_name()).replace('"', ''))
 
