@@ -103,7 +103,7 @@ public:
         return b;
     }
 
-    static size_t serialized_size() noexcept {
+    constexpr static size_t serialized_size() noexcept {
         return 16;
     }
 
@@ -166,6 +166,20 @@ inline std::strong_ordering timeuuid_tri_compare(const int8_t* o1, const int8_t*
 
 inline std::strong_ordering timeuuid_tri_compare(bytes_view o1, bytes_view o2) noexcept {
     return timeuuid_tri_compare(o1.begin(), o2.begin());
+}
+
+inline std::strong_ordering timeuuid_tri_compare(const UUID& u1, const UUID& u2) noexcept {
+    std::array<int8_t, UUID::serialized_size()> buf1;
+    {
+        auto i = buf1.begin();
+        u1.serialize(i);
+    }
+    std::array<int8_t, UUID::serialized_size()> buf2;
+    {
+        auto i = buf2.begin();
+        u2.serialize(i);
+    }
+    return timeuuid_tri_compare(buf1.begin(), buf2.begin());
 }
 
 // Compare two values of UUID type, if they happen to be
