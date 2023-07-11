@@ -41,6 +41,8 @@ public:
     virtual std::string type() const override = 0;
 protected:
     virtual future<> run() override = 0;
+
+    future<tasks::task_manager::task::progress> get_progress(const sstables::compaction_data& cdata, const sstables::compaction_progress_monitor& progress_monitor) const;
 };
 
 class major_compaction_task_impl : public compaction_task_impl {

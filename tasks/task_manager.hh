@@ -127,6 +127,7 @@ public:
             virtual tasks::is_internal is_internal() const noexcept;
             virtual future<> abort() noexcept;
             bool is_complete() const noexcept;
+            bool is_done() const noexcept;
             virtual void release_resources() noexcept {}
         protected:
             virtual future<> run() = 0;

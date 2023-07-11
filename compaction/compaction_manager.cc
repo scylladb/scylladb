@@ -477,12 +477,17 @@ public:
         : compaction_task_executor(mgr, do_throw_if_stopping, t, compaction_type, std::move(desc))
         , sstables_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), std::move(entity), parent_id)
     {
+        _status.progress_units = "bytes";
         set_sstables(std::move(sstables));
     }
 
     virtual ~sstables_task_executor() = default;
 
     virtual void release_resources() noexcept override;
+
+    virtual future<tasks::task_manager::task::progress> get_progress() const override {
+        return compaction_task_impl::get_progress(_compaction_data, _progress_monitor);
+    }
 protected:
     virtual future<> run() override {
         return perform();
@@ -497,7 +502,13 @@ public:
             tasks::task_id parent_id)
         : compaction_task_executor(mgr, do_throw_if_stopping, t, sstables::compaction_type::Compaction, "Major compaction")
         , major_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
-    {}
+    {
+        _status.progress_units = "bytes";
+    }
+
+    virtual future<tasks::task_manager::task::progress> get_progress() const override {
+        return compaction_task_impl::get_progress(_compaction_data, _progress_monitor);
+    }
 protected:
     virtual future<> run() override {
         return perform();
@@ -599,10 +610,16 @@ public:
         : compaction_task_executor(mgr, do_throw_if_stopping, t, type, std::move(desc))
         , compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
         , _job(std::move(job))
-    {}
+    {
+        _status.progress_units = "bytes";
+    }
 
     virtual std::string type() const override {
         return fmt::format("{} compaction", compaction_type());
+    }
+
+    virtual future<tasks::task_manager::task::progress> get_progress() const override {
+        return compaction_task_impl::get_progress(_compaction_data, _progress_monitor);
     }
 protected:
     virtual future<> run() override {
@@ -1291,11 +1308,16 @@ public:
         , offstrategy_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), parent_id ? 0 : mgr._task_manager_module->new_sequence_number(), "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
         , _performed(performed)
     {
+        _status.progress_units = "bytes";
         _performed = false;
     }
 
     bool performed() const noexcept {
         return _performed;
+    }
+
+    virtual future<tasks::task_manager::task::progress> get_progress() const override {
+        return compaction_task_impl::get_progress(_compaction_data, _progress_monitor);
     }
 protected:
     virtual future<> run() override {
@@ -1630,6 +1652,7 @@ public:
         // will have more space available released by previous jobs.
         std::ranges::sort(_pending_cleanup_jobs, std::ranges::greater(), std::mem_fn(&sstables::compaction_descriptor::sstables_size));
         _cm._stats.pending_tasks += _pending_cleanup_jobs.size();
+        _status.progress_units = "bytes";
     }
 
     virtual ~cleanup_sstables_compaction_task_executor() = default;
@@ -1639,6 +1662,10 @@ public:
         _pending_cleanup_jobs = {};
         _compacting.release_all();
         _owned_ranges_ptr = nullptr;
+    }
+
+    virtual future<tasks::task_manager::task::progress> get_progress() const override {
+        return compaction_task_impl::get_progress(_compaction_data, _progress_monitor);
     }
 protected:
     virtual future<> run() override {
