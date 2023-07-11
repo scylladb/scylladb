@@ -532,6 +532,7 @@ public:
                     return make_ready_future<>();
                 }
                 if (auto r = next()) {
+                    mrlog.trace("flat_multi_range_mutation_reader {}: fast forwarding to range {}", fmt::ptr(this), *r);
                     return _reader.fast_forward_to(*r);
                 } else {
                     _end_of_stream = true;

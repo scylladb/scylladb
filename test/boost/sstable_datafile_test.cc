@@ -1643,6 +1643,19 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
             .produces_end_of_stream()
             .fast_forward_to(dht::partition_range::make({ dht::ring_position(keys[8]), false }, { dht::ring_position(keys[9]), false }))
             .produces_end_of_stream();
+
+        pr = dht::partition_range::make(dht::ring_position(keys[0]), dht::ring_position(keys[1]));
+        assert_that(sstable_reader_v2(sst, s, env.make_reader_permit(), pr))
+            .fast_forward_to(dht::partition_range::make(dht::ring_position::starting_at(keys[0].token()), dht::ring_position::ending_at(keys[1].token())))
+            .produces(keys[0])
+            .produces(keys[1])
+            .fast_forward_to(dht::partition_range::make(dht::ring_position::starting_at(keys[3].token()), dht::ring_position::ending_at(keys[4].token())))
+            .produces(keys[3])
+            .produces(keys[4])
+            .fast_forward_to(dht::partition_range::make_starting_with(dht::ring_position::starting_at(keys[8].token())))
+            .produces(keys[8])
+            .produces(keys[9])
+            .produces_end_of_stream();
       }
     });
 }
