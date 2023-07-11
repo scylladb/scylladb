@@ -79,6 +79,9 @@ public:
     // monotonicity. For this reason you should avoid using it for
     // UUIDs that could store timeuuids, otherwise bugs like
     // https://github.com/scylladb/scylla/issues/7729 may happen.
+    //
+    // For comparing timeuuids, you can use `timeuuid_tri_compare`
+    // functions from this file.
     std::strong_ordering operator<=>(const UUID& v) const noexcept {
         auto cmp = uint64_t(most_sig_bits) <=> uint64_t(v.most_sig_bits);
         if (cmp != 0) {
