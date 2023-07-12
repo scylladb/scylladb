@@ -91,11 +91,16 @@ The :code:`scylla-server` file contains configuration related to starting up the
 
 .. include:: /operating-scylla/scylla-yaml.inc
 
+.. _admin-compression:
+
 Compression
 -----------
 
 In Scylla, you can configure compression at rest and compression in transit.
 For compression in transit, you can configure compression between nodes or between the client and the node.
+
+
+.. _admin-client-node-compression:
 
 Client - Node Compression
 ^^^^^^^^^^^^^^^^^^^^^^^^^^

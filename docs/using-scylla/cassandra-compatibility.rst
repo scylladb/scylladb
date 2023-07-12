@@ -101,32 +101,32 @@ Consistency Level (read and write)
 | LOCAL_SERIAL                        | |v|:sup:`*`  |
 +-------------------------------------+--------------+
 
-:sup:`*` From ScyllaDB 4.0. See `Scylla LWT`_
+:sup:`*` From ScyllaDB 4.0. See :doc:`Scylla LWT </using-scylla/lwt>`.
 
 
 Snitches
 ^^^^^^^^
-+-------------------------------------+--------+
-|   Options                           | Support|
-+=====================================+========+
-| SimpleSnitch_                       |   |v|  |
-+-------------------------------------+--------+
-| RackInferringSnitch_                |   |v|  |
-+-------------------------------------+--------+
-| PropertyFileSnitch                  |   |x|  |
-+-------------------------------------+--------+
-| GossipingPropertyFileSnitch_        |   |v|  |
-+-------------------------------------+--------+
-| Dynamic snitching                   |   |x|  |
-+-------------------------------------+--------+
-| EC2Snitch_                          |   |v|  |
-+-------------------------------------+--------+
-| EC2MultiRegionSnitch_               |   |v|  |
-+-------------------------------------+--------+
-| GoogleCloudSnitch_                  |   |v|  |
-+-------------------------------------+--------+
-| CloudstackSnitch                    |   |x|  |
-+-------------------------------------+--------+
++-----------------------------------------------------------------------------+--------+
+|   Options                                                                   | Support|
++=============================================================================+========+
+|:ref:`SimpleSnitch <snitch-simple-snitch>`                                   |   |v|  |
++-----------------------------------------------------------------------------+--------+
+| :ref:`RackInferringSnitch <snitch-rack-inferring-snitch>`                   |   |v|  |
++-----------------------------------------------------------------------------+--------+
+| PropertyFileSnitch                                                          |   |x|  |
++-----------------------------------------------------------------------------+--------+
+| :ref:`GossipingPropertyFileSnitch <snitch-gossiping-property-file-snitch>`  |   |v|  |
++-----------------------------------------------------------------------------+--------+
+| Dynamic snitching                                                           |   |x|  |
++-----------------------------------------------------------------------------+--------+
+| :ref:`EC2Snitch <snitch-ec2-snitch>`                                        |   |v|  |
++-----------------------------------------------------------------------------+--------+
+| :ref:`EC2MultiRegionSnitch <snitch-ec2-multi-region-snitch>`                |   |v|  |
++-----------------------------------------------------------------------------+--------+
+| :ref:`GoogleCloudSnitch <GoogleCloudSnitch>`                                |   |v|  |
++-----------------------------------------------------------------------------+--------+
+| CloudstackSnitch                                                            |   |x|  |
++-----------------------------------------------------------------------------+--------+
 
 Partitioners
 ^^^^^^^^^^^^
@@ -148,61 +148,61 @@ Partitioners
 
 Protocol Options
 ^^^^^^^^^^^^^^^^
-+-------------------------------------+--------------+
-|   Options                           | Support      |
-+=====================================+==============+
-| Encryption_                         |   |v|        |
-+-------------------------------------+--------------+
-| Authentication_                     |   |v|        |
-+-------------------------------------+--------------+
-| Compression_  (see below)           |   |v|        |
-+-------------------------------------+--------------+
++--------------------------------------------------------------------------+--------------+
+|   Options                                                                | Support      |
++==========================================================================+==============+
+| :doc:`Encryption </operating-scylla/security/client-node-encryption>`    |   |v|        |
++--------------------------------------------------------------------------+--------------+
+| :doc:`Authentication </operating-scylla/security/authentication>`        |   |v|        |
++--------------------------------------------------------------------------+--------------+
+| :ref:`Compression <admin-compression>`  (see below)                      |   |v|        |
++--------------------------------------------------------------------------+--------------+
 
 
 Compression
 ^^^^^^^^^^^
-+-------------------------------------+--------------+
-|   Options                           | Support      |
-+=====================================+==============+
-|CQL Compression                      |   |v|        |
-+-------------------------------------+--------------+
-| LZ4                                 |   |v|        |
-+-------------------------------------+--------------+
-| Snappy                              |   |v|        |
-+-------------------------------------+--------------+
-| `Node to Node Compression`_         |   |v|        |
-+-------------------------------------+--------------+
-| `Client to Node Compression`_       |   |v|        |
-+-------------------------------------+--------------+
++-------------------------------------------------------------------+--------------+
+|   Options                                                         | Support      |
++===================================================================+==============+
+|CQL Compression                                                    |   |v|        |
++-------------------------------------------------------------------+--------------+
+| LZ4                                                               |   |v|        |
++-------------------------------------------------------------------+--------------+
+| Snappy                                                            |   |v|        |
++-------------------------------------------------------------------+--------------+
+| :ref:`Node to Node Compression <internode-compression>`           |   |v|        |
++-------------------------------------------------------------------+--------------+
+| :ref:`Client to Node Compression <admin-client-node-compression>` |   |v|        |
++-------------------------------------------------------------------+--------------+
 
 Backup and Restore
 ^^^^^^^^^^^^^^^^^^
-+-------------------------------------+--------------+
-|   Options                           | Support      |
-+=====================================+==============+
-| Snapshot_                           |   |v|        |
-+-------------------------------------+--------------+
-| `Incremental backup`_               |   |v|        |
-+-------------------------------------+--------------+
-| Restore_                            |   |v|        |
-+-------------------------------------+--------------+
++-----------------------------------------------------------------------+--------------+
+|   Options                                                             | Support      |
++=======================================================================+==============+
+| :ref:`Snapshot <backup-full-backup-snapshots>`                        |   |v|        |
++-----------------------------------------------------------------------+--------------+
+| :ref:`Incremental backup <backup-incremental-backup>`                 |   |v|        |
++-----------------------------------------------------------------------+--------------+
+| :doc:`Restore </operating-scylla/procedures/backup-restore/restore>`  |   |v|        |
++-----------------------------------------------------------------------+--------------+
 
 Repair and Consistency
 ^^^^^^^^^^^^^^^^^^^^^^
-+-------------------------------------+--------------+
-|   Options                           | Support      |
-+=====================================+==============+
-| `Nodetool Repair`_                  |   |v|        |
-+-------------------------------------+--------------+
-| Incremental Repair                  | |x|          |
-+-------------------------------------+--------------+
-|`Hinted Handoff`_                    | |v|          |
-+-------------------------------------+--------------+
-|`Lightweight transactions`_          |  |v|:sup:`*` |
-+-------------------------------------+--------------+
++----------------------------------------------------------------------+--------------+
+|   Options                                                            | Support      |
++======================================================================+==============+
+| :doc:`Nodetool Repair </operating-scylla/nodetool-commands/repair>`  |   |v|        |
++----------------------------------------------------------------------+--------------+
+| Incremental Repair                                                   | |x|          |
++----------------------------------------------------------------------+--------------+
+|:doc:`Hinted Handoff </architecture/anti-entropy/hinted-handoff>`     | |v|          |
++----------------------------------------------------------------------+--------------+
+|:doc:`Lightweight Transactions </using-scylla/lwt>`                   |  |v|:sup:`*` |
++----------------------------------------------------------------------+--------------+
 
 
-:sup:`*` From ScyllaDB 4.0. See `Scylla LWT`_
+:sup:`*` From ScyllaDB 4.0. See :doc:`Scylla LWT </using-scylla/lwt>`.
 
 Replica Replacement Strategy
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -230,15 +230,15 @@ Security
 Indexing and Caching
 ^^^^^^^^^^^^^^^^^^^^^
 
-+-------------------------------------+-----------------------------------------+
-|   Options                           | Support                                 |
-+=====================================+=========================================+
-|row / key cache                      | |x| (More on `Scylla memory and cache`_)|
-+-------------------------------------+-----------------------------------------+
-|`Secondary Index`_                   | |v| :sup:`*`                            |
-+-------------------------------------+-----------------------------------------+
-|`Materialized Views`_                |  |v|:sup:`*`                            |
-+-------------------------------------+-----------------------------------------+
++--------------------------------------------------------------+--------------------------------------------------------------------------------------+
+|   Options                                                    | Support                                                                              |
++==============================================================+======================================================================================+
+|row / key cache                                               | |x| (More on `Scylla memory and cache <http://www.scylladb.com/technology/memory/>`_)|
++--------------------------------------------------------------+--------------------------------------------------------------------------------------+
+|:doc:`Secondary Index </using-scylla/secondary-indexes>`      | |v| :sup:`*`                                                                         |
++--------------------------------------------------------------+--------------------------------------------------------------------------------------+
+|:doc:`Materialized Views </using-scylla/materialized-views>`  |  |v|:sup:`*`                                                                         |
++--------------------------------------------------------------+--------------------------------------------------------------------------------------+
 
 :sup:`*` In ScyllaDB Open Source and ScyllaDB Enterprise from 2019.1
 
@@ -269,32 +269,6 @@ Additional Features
 
 :sup:`*`  Experimental 
 
-.. _`Secondary Index`: /using-scylla/secondary-indexes/
-.. _`Lightweight Transactions`: /using-scylla/lwt/
-.. _`Materialized Views`: /using-scylla/materialized-views/
-.. _`Node to Node Compression`: /operating-scylla/admin/#internode-compression
-.. _`Client to Node Compression`: /operating-scylla/admin/#client-node-compression
-.. _`Compression`: /operating-scylla/admin/#compression
-.. _`Scylla LWT`: /using-scylla/lwt/
-.. _401: https://github.com/scylladb/scylla/issues/401
-.. _1141: https://github.com/scylladb/scylla/issues/1141
-.. _1619: https://github.com/scylladb/scylla/issues/1619
-.. _577: https://github.com/scylladb/scylla/issues/577
-.. _`Scylla memory and cache`: http://www.scylladb.com/technology/memory/
-.. _Encryption: /operating-scylla/security/client_node_encryption/
-.. _Authentication: /operating-scylla/security/authentication/
-.. _Authorization: /operating-scylla/security/authorization/
-.. _`Nodetool Repair`: /operating-scylla/nodetool-commands/repair/
-.. _Snapshot: /operating-scylla/procedures/backup-restore/backup/#full-backup-snapshots
-.. _`Incremental backup`: /operating-scylla/procedures/backup-restore/backup/#incremental-backup
-.. _Restore: /operating-scylla/procedures/backup-restore/restore/
-.. _SimpleSnitch: /operating-scylla/system-configuration/snitch/#simplesnitch
-.. _RackInferringSnitch: /operating-scylla/system-configuration/snitch/#rackinferringsnitch
-.. _GossipingPropertyFileSnitch: /operating-scylla/system-configuration/snitch/#gossipingpropertyfilesnitch/
-.. _EC2Snitch: /operating-scylla/system-configuration/snitch/#ec2snitch/
-.. _EC2MultiRegionSnitch: /operating-scylla/system-configuration/snitch/#ec2multiregionsnitch
-.. _GoogleCloudSnitch: /operating-scylla/system-configuration/snitch/#googlecloudsnitch
-.. _`Hinted Handoff`: /architecture/anti-entropy/hinted-handoff/
 
 CQL Command Compatibility
 -------------------------
@@ -384,17 +358,17 @@ Create Table Att
 Create Table Compaction
 .......................
 
-+----------------------------------------+-------------------------------------+
-| Feature                                | Support                             |
-+========================================+=====================================+
-| SizeTieredCompactionStrategy_ (STCS)   | |v|                                 |
-+----------------------------------------+-------------------------------------+
-|LeveledCompactionStrategy_ (LCS)        | |v|                                 |
-+----------------------------------------+-------------------------------------+
-|DateTieredCompactionStrategy (DTCS)     | |v|  :sup:`*`                       |
-+----------------------------------------+-------------------------------------+
-|TimeWindowCompactionStrategy_ (TWCS)    | |v|                                 |
-+----------------------------------------+-------------------------------------+
++----------------------------------------------------+-------------------------------------+
+| Feature                                            | Support                             |
++====================================================+=====================================+
+| :ref:`SizeTieredCompactionStrategy <STCS>` (STCS)  | |v|                                 |
++----------------------------------------------------+-------------------------------------+
+|:ref:`LeveledCompactionStrategy <LCS>` (LCS)        | |v|                                 |
++----------------------------------------------------+-------------------------------------+
+|DateTieredCompactionStrategy (DTCS)                 | |v|  :sup:`*`                       |
++----------------------------------------------------+-------------------------------------+
+|:ref:`TimeWindowCompactionStrategy <TWCS>` (TWCS)   | |v|                                 |
++----------------------------------------------------+-------------------------------------+
 
 :sup:`*`  Deprecated in ScyllaDB 4.0, use TWCS instead
 
@@ -533,15 +507,6 @@ Index commands
 +----------------------------------------+-------------------------------------+
 |DROP INDEX                              | |v|                                 |
 +----------------------------------------+-------------------------------------+
-
-
-.. _SizeTieredCompactionStrategy: /getting-started/compaction/#size-tiered-compaction-strategy
-
-.. _LeveledCompactionStrategy: /getting-started/compaction/#leveled-compaction-strategy
-
-.. _TimeWindowCompactionStrategy: /getting-started/compaction/#time-window-compactionstrategy
-
-.. _1432: https://github.com/scylladb/scylla/issues/1432
 
 .. include:: /rst_include/apache-copyrights-index.rst
 

@@ -4,9 +4,8 @@ A Removed Node was not Removed Properly from the Seed Node List
 Phenonoma
 ^^^^^^^^^
 
-Failed to create `materialized view`_ after node was removed from the cluster. 
+Failed to create :doc:`materialized view </cql/mv>` after node was removed from the cluster. 
 
-.. _`materialized view`: /getting-started/mv/
 
 Error message:
 
@@ -27,9 +26,7 @@ How to Verify
 
 Scylla logs show the error message above.
 
-To verify that the node wasn't remove properly use the `nodetool gossipinfo`_ command
-
-.. _`nodetool gossipinfo`: /operating-scylla/nodetool-commands/gossipinfo/
+To verify that the node wasn't remove properly use the :doc:`nodetool gossipinfo </operating-scylla/nodetool-commands/gossipinfo>` command
 
 For example:
 
