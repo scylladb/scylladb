@@ -555,8 +555,7 @@ bool manager::end_point_hints_manager::sender::can_send() noexcept {
     }
 
     try {
-        auto ep_state_ptr = _gossiper. get_endpoint_state_for_endpoint_ptr(end_point_key());
-        if (ep_state_ptr && ep_state_ptr->is_alive()) {
+        if (_gossiper.is_alive(end_point_key())) {
             _state.remove(state::ep_state_left_the_ring);
             return true;
         } else {

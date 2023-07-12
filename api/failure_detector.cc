@@ -22,7 +22,7 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
         for (auto i : g.get_endpoint_states()) {
             fd::endpoint_state val;
             val.addrs = fmt::to_string(i.first);
-            val.is_alive = i.second.is_alive();
+            val.is_alive = g.is_alive(i.first);
             val.generation = i.second.get_heart_beat_state().get_generation().value();
             val.version = i.second.get_heart_beat_state().get_heart_beat_version().value();
             val.update_time = i.second.get_update_timestamp().time_since_epoch().count();
@@ -57,7 +57,7 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
     fd::get_simple_states.set(r, [&g] (std::unique_ptr<request> req) {
         std::map<sstring, sstring> nodes_status;
         for (auto& entry : g.get_endpoint_states()) {
-            nodes_status.emplace(entry.first.to_sstring(), entry.second.is_alive() ? "UP" : "DOWN");
+            nodes_status.emplace(entry.first.to_sstring(), g.is_alive(entry.first) ? "UP" : "DOWN");
         }
         return make_ready_future<json::json_return_type>(map_to_key_value<fd::mapper>(nodes_status));
     });

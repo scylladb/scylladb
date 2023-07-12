@@ -118,6 +118,7 @@ public:
         _update_timestamp = clk::now();
     }
 
+private:
     bool is_alive() const noexcept {
         return _is_alive;
     }
@@ -134,6 +135,7 @@ public:
         set_alive(false);
     }
 
+public:
     std::string_view get_status() const noexcept {
         constexpr std::string_view empty = "";
         auto* app_state = get_application_state_ptr(application_state::STATUS);
@@ -166,6 +168,7 @@ public:
     bool is_cql_ready() const noexcept;
 
     friend std::ostream& operator<<(std::ostream& os, const endpoint_state& x);
+    friend class gossiper;
 };
 
 // The endpoint state is protected with an endpoint lock
