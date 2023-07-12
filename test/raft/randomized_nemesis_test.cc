@@ -1035,7 +1035,7 @@ public:
 };
 
 template <typename State>
-class direct_fd_pinger : public direct_failure_detector::pinger {
+class direct_fd_pinger final : public direct_failure_detector::pinger {
     ::rpc<State>& _rpc;
 
 public:
@@ -1057,7 +1057,7 @@ public:
     }
 };
 
-class direct_fd_clock : public direct_failure_detector::clock {
+class direct_fd_clock final : public direct_failure_detector::clock {
     // We use `logical_timer` for an implementation of `sleep_until`
     // (for simplicity of implementation we route the sleep to shard 0),
     // but we also need a separate atomic _ticks counter because we need a `now` function callable from every shard.
