@@ -3316,9 +3316,9 @@ future<> storage_service::uninit_messaging_service_part() {
     return container().invoke_on_all(&service::storage_service::uninit_messaging_service);
 }
 
-void storage_service::set_group0(raft_group0& group0) {
+void storage_service::set_group0(raft_group0& group0, bool raft_topology_change_enabled) {
     _group0 = &group0;
-    _raft_topology_change_enabled = _group0->is_raft_enabled() && _db.local().get_config().check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES);
+    _raft_topology_change_enabled = raft_topology_change_enabled;
 }
 
 future<> storage_service::join_cluster(cdc::generation_service& cdc_gen_service,

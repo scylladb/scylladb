@@ -335,7 +335,7 @@ public:
     future<> join_cluster(cdc::generation_service& cdc_gen_service,
             sharded<db::system_distributed_keyspace>& sys_dist_ks, sharded<service::storage_proxy>& proxy, cql3::query_processor& qp);
 
-    void set_group0(service::raft_group0&);
+    void set_group0(service::raft_group0&, bool raft_topology_change_enabled);
 
     future<> drain_on_shutdown();
 

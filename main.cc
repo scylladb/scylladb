@@ -1306,6 +1306,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sst_format_selector.stop().get();
             });
 
+            const bool raft_topology_change_enabled = group0_service.is_raft_enabled()
+                    && cfg->check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES);
+
             // Re-enable previously enabled features on node startup.
             // This should be done before commitlog starts replaying
             // since some features affect storage.
@@ -1609,7 +1612,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             load_address_map(sys_ks.local(), raft_address_map.local()).get();
 
             // Set up group0 service earlier since it is needed by group0 setup just below
-            ss.local().set_group0(group0_service);
+            ss.local().set_group0(group0_service, raft_topology_change_enabled);
 
             // Setup group0 early in case the node is bootstrapped already and the group exists.
             // Need to do it before allowing incomming messaging service connections since
