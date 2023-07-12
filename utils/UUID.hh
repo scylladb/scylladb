@@ -79,6 +79,9 @@ public:
     // monotonicity. For this reason you should avoid using it for
     // UUIDs that could store timeuuids, otherwise bugs like
     // https://github.com/scylladb/scylla/issues/7729 may happen.
+    //
+    // For comparing timeuuids, you can use `timeuuid_tri_compare`
+    // functions from this file.
     std::strong_ordering operator<=>(const UUID& v) const noexcept {
         auto cmp = uint64_t(most_sig_bits) <=> uint64_t(v.most_sig_bits);
         if (cmp != 0) {
@@ -103,7 +106,7 @@ public:
         return b;
     }
 
-    static size_t serialized_size() noexcept {
+    constexpr static size_t serialized_size() noexcept {
         return 16;
     }
 
@@ -153,15 +156,33 @@ inline uint64_t uuid_read_lsb(const int8_t *b) noexcept {
 // To avoid breaking ordering in existing sstables, Scylla preserves
 // Cassandra compare order.
 //
-inline std::strong_ordering timeuuid_tri_compare(bytes_view o1, bytes_view o2) noexcept {
-    auto timeuuid_read_lsb = [](bytes_view o) -> uint64_t {
-        return uuid_read_lsb(o.begin()) ^ 0x8080808080808080;
+inline std::strong_ordering timeuuid_tri_compare(const int8_t* o1, const int8_t* o2) noexcept {
+    auto timeuuid_read_lsb = [](const int8_t* o) -> uint64_t {
+        return uuid_read_lsb(o) ^ 0x8080808080808080;
     };
-    auto res = timeuuid_read_msb(o1.begin()) <=> timeuuid_read_msb(o2.begin());
+    auto res = timeuuid_read_msb(o1) <=> timeuuid_read_msb(o2);
     if (res == 0) {
         res = timeuuid_read_lsb(o1) <=> timeuuid_read_lsb(o2);
     }
     return res;
+}
+
+inline std::strong_ordering timeuuid_tri_compare(bytes_view o1, bytes_view o2) noexcept {
+    return timeuuid_tri_compare(o1.begin(), o2.begin());
+}
+
+inline std::strong_ordering timeuuid_tri_compare(const UUID& u1, const UUID& u2) noexcept {
+    std::array<int8_t, UUID::serialized_size()> buf1;
+    {
+        auto i = buf1.begin();
+        u1.serialize(i);
+    }
+    std::array<int8_t, UUID::serialized_size()> buf2;
+    {
+        auto i = buf2.begin();
+        u2.serialize(i);
+    }
+    return timeuuid_tri_compare(buf1.begin(), buf2.begin());
 }
 
 // Compare two values of UUID type, if they happen to be
