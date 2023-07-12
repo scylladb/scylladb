@@ -40,6 +40,7 @@ public:
     // UUID timestamp time component is represented in intervals
     // of 1/10 of a microsecond since the beginning of GMT epoch.
     using decimicroseconds = std::chrono::duration<int64_t, std::ratio<1, 10'000'000>>;
+    using microseconds = std::chrono::microseconds;
     using milliseconds = std::chrono::milliseconds;
 private:
     // A grand day! millis at 00:00:00.000 15 Oct 1582.
@@ -316,11 +317,29 @@ public:
 
     /**
      * @param uuid
+     * @return decimicroseconds since Unix epoch
+     */
+    static decimicroseconds unix_timestamp_decimicros(UUID uuid)
+    {
+        return decimicroseconds(uuid.timestamp()) + START_EPOCH;
+    }
+
+    /**
+     * @param uuid
+     * @return microseconds since Unix epoch
+     */
+    static microseconds unix_timestamp_micros(UUID uuid)
+    {
+        return duration_cast<microseconds>(unix_timestamp_decimicros(uuid));
+    }
+
+    /**
+     * @param uuid
      * @return milliseconds since Unix epoch
      */
     static milliseconds unix_timestamp(UUID uuid)
     {
-        return duration_cast<milliseconds>(decimicroseconds(uuid.timestamp()) + START_EPOCH);
+        return duration_cast<milliseconds>(unix_timestamp_decimicros(uuid));
     }
 
     /**
