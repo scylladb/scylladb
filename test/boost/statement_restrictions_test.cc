@@ -391,7 +391,8 @@ BOOST_AUTO_TEST_CASE(expression_extract_column_restrictions) {
         // column_definition has to have column_specifiction because to_string uses it for column name
         ::shared_ptr<column_identifier> identifier = ::make_shared<column_identifier>(name, true);
         column_specification specification("ks", "cf", std::move(identifier), int32_type);
-        definition.column_specification = std::move(specification);
+        definition.column_specification = make_lw_shared<column_specification>(
+            std::move(specification));
 
         return definition;
     };
