@@ -27,6 +27,10 @@ function(add_scylla_test name)
     "KIND"
     "LIBRARIES;SOURCES"
     ${ARGN})
+  if(parsed_args_UNPARSED_ARGUMENTS)
+    message(FATAL_ERROR "Unknown keywords given to 'add_scylla_test()': \"${parsed_args_UNPARSED_ARGUMENTS}\"")
+  endif()
+
   if(parsed_args_KIND)
     set(kind ${parsed_args_KIND})
   else()
