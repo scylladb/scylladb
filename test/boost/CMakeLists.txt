@@ -306,9 +306,9 @@ add_scylla_test(string_format_test
 add_scylla_test(summary_test
   KIND BOOST)
 add_scylla_test(tablets_test
-  KIND BOOST)
+  KIND SEASTAR)
 add_scylla_test(tagged_integer_test
-  KIND BOOST)
+  KIND SEASTAR)
 add_scylla_test(top_k_test
   KIND BOOST)
 add_scylla_test(tracing_test
