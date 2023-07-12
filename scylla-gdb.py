@@ -1521,6 +1521,49 @@ class scylla_tables(gdb.Command):
                 gdb.write('{:5} {} v={} {:45} (replica::table*){}\n'.format(shard, key, schema_version, schema.table_name(), value.address))
 
 
+class scylla_table(gdb.Command):
+    """Prints various info about individial table
+        Example:
+          scylla table ks.cf
+    """
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla table', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    def _find_table(self, ks, cf):
+        db = find_db()
+        cfs = db['_column_families']
+        for (key, value) in unordered_map(cfs):
+            value = seastar_lw_shared_ptr(value).get().dereference()
+            schema = schema_ptr(value['_schema'])
+            if schema.ks_name == ks and schema.cf_name == cf:
+                return value, schema
+
+        return None, None
+
+    @staticmethod
+    def phased_barrier_count(table, barrier_name):
+        g = seastar_lw_shared_ptr(table[barrier_name]['_gate']).get()
+        return int(g['_count'])
+
+    def invoke(self, arg, from_tty):
+        if arg is None or arg == '':
+            gdb.write("Specify keyspace.table argument\n")
+            return
+
+        [ ks, cf ] = arg.split('.', 2)
+        [ table, schema ] = self._find_table(ks, cf)
+        if table is None:
+            gdb.write("No such table\n")
+            return
+
+        gdb.write(f'(replica::table*){table.address}\n')
+        gdb.write(f'schema version: {schema["_raw"]["_version"]}\n')
+        gdb.write('pending ops:')
+        for barrier_name in ['_pending_flushes_phaser', '_pending_writes_phaser', '_pending_reads_phaser', '_pending_streams_phaser']:
+            gdb.write(f' {barrier_name}: {scylla_table.phased_barrier_count(table, barrier_name)}')
+        gdb.write('\n')
+
+
 class scylla_task_histogram(gdb.Command):
     """Print a histogram of the virtual objects found in memory.
 
@@ -2051,8 +2094,7 @@ class scylla_memory(gdb.Command):
         tables_by_count = defaultdict(list)
         for table in for_each_table():
             schema = schema_ptr(table['_schema'])
-            g = seastar_lw_shared_ptr(table[barrier_name]['_gate']).get()
-            count = int(g['_count'])
+            count = scylla_table.phased_barrier_count(table, barrier_name)
             if count > 0:
                 tables_by_count[count].append(str(schema.table_name()).replace('"', ''))
 

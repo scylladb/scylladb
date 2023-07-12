@@ -33,6 +33,9 @@ def test_commitlog(gdb):
 def test_tables(gdb):
     scylla(gdb, 'tables')
 
+def test_table(gdb):
+    scylla(gdb, 'table system.local')
+
 def test_keyspaces(gdb):
     scylla(gdb, 'keyspaces')
 
