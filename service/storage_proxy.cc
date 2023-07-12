@@ -659,7 +659,11 @@ private:
         auto cmd = make_lw_shared<query::read_command>(std::move(cmd1));
         auto src_ip = src_addr.addr;
         auto timeout = t ? *t : db::no_timeout;
-        schema_ptr s = co_await get_schema_for_read(cmd->schema_version, std::move(src_addr), timeout);
+        auto f_s = co_await coroutine::as_future(get_schema_for_read(cmd->schema_version, std::move(src_addr), timeout));
+        if (f_s.failed()) {
+            co_return co_await encode_replica_exception_for_rpc<Result>(p->features(), f_s.get_exception());
+        }
+        schema_ptr s = f_s.get();
         auto pr2 = ::compat::unwrap(std::move(pr), *s);
         auto do_query = [&]() {
             if constexpr (verb == read_verb::read_data) {
