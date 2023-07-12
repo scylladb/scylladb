@@ -1657,7 +1657,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         // test ability of histogram to return a good estimation after merging keys.
         static int total_keys = std::ceil(sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE/expired)*1.5;
 
-        auto insert_key = [&] (bytes k, uint32_t ttl, uint32_t expiration_time) {
+        auto insert_key = [&s, &mt] (bytes k, uint32_t ttl, uint32_t expiration_time) {
             auto key = partition_key::from_exploded(*s, {k});
             mutation m(s, key);
             auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
@@ -1718,7 +1718,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         BOOST_REQUIRE(descriptor.sstables.front()->get_sstable_level() == 1U);
 
         // check tombstone compaction is disabled by default for TWCS
-        auto twcs_table = env.make_table_for_tests(make_schema(sstables::compaction_strategy_type::time_window));
+        auto twcs_table = env.make_table_for_tests(make_schema("twcs", sstables::compaction_strategy_type::time_window));
         auto close_twcs_table = deferred_stop(twcs_table);
         cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::time_window, {});
         descriptor = cs.get_sstables_for_compaction(twcs_table.as_table_state(), *strategy_c, { sst });
