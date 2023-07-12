@@ -115,12 +115,12 @@ SEASTAR_TEST_CASE(test_group0_history_clearing_old_entries) {
             co_await perform_schema_change();
         }
 
-        auto get_history_timestamps = [&] () -> future<std::vector<milliseconds>> {
+        auto get_history_timestamps = [&] () -> future<std::vector<microseconds>> {
             auto rows = co_await fetch_rows(e, "select state_id from system.group0_history");
-            std::vector<milliseconds> result;
+            std::vector<microseconds> result;
             for (auto& row: rows) {
                 auto state_id = value_cast<utils::UUID>(timeuuid_type->deserialize(*row[0]));
-                result.push_back(utils::UUID_gen::unix_timestamp(state_id));
+                result.push_back(utils::UUID_gen::unix_timestamp_micros(state_id));
             }
             co_return result;
         };
@@ -133,13 +133,16 @@ SEASTAR_TEST_CASE(test_group0_history_clearing_old_entries) {
         // The first entry corresponds to the last schema change.
         auto last_ts = timestamps2.front();
 
+        testlog.info("timestamps1: {}", timestamps1);
+        testlog.info("timestamps2: {}", timestamps2);
+
         // All entries in `timestamps2` except `last_ts` should be present in `timestamps1`.
         BOOST_REQUIRE(std::includes(timestamps1.begin(), timestamps1.end(), timestamps2.begin()+1, timestamps2.end(), std::greater{}));
 
         // Count the number of timestamps in `timestamps1` that are older than the last entry by `sleep_dur` or more.
         // There should be about 12 because we slept for `sleep_dur` between the two loops above
         // and performing these schema changes should be much faster than `sleep_dur`.
-        auto older_by_sleep_dur = std::count_if(timestamps1.begin(), timestamps1.end(), [last_ts, sleep_dur] (milliseconds ts) {
+        auto older_by_sleep_dur = std::count_if(timestamps1.begin(), timestamps1.end(), [last_ts, sleep_dur] (microseconds ts) {
             return last_ts - ts > sleep_dur;
         });
 
