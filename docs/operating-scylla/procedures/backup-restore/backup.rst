@@ -17,12 +17,8 @@ The backup includes two procedures. These are:
 Full Backup - Snapshots
 =======================
 
-Snapshots are taken using `nodetool snapshot`_. First, the command flushes the MemTables from memory to SSTables on disk, and afterward, it creates a hard link for each SSTable in each keyspace.
-With time, SSTables are compacted, but the hard link keeps a copy of each file. This takes up an increasing amount of disk space. It is important to clear space by `clean unnecessary snapshots`_.
-
-.. _`nodetool snapshot`: /operating-scylla/nodetool-commands/snapshot
-
-.. _`clean unnecessary snapshots`: /operating-scylla/procedures/backup-restore/delete_snapshot
+Snapshots are taken using :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>`. First, the command flushes the MemTables from memory to SSTables on disk, and afterward, it creates a hard link for each SSTable in each keyspace.
+With time, SSTables are compacted, but the hard link keeps a copy of each file. This takes up an increasing amount of disk space. It is important to clear space by :doc:`clean unnecessary snapshots </operating-scylla/procedures/backup-restore/delete-snapshot>`.
 
 **Procedure**
 
@@ -77,8 +73,6 @@ Incremental Backup
 Additional Resources
 ====================
 
-* `Scylla Snapshots`_
+* :doc:`Scylla Snapshots </kb/snapshots>`
 
-
-.. _`Scylla Snapshots`: /kb/snapshots
 
