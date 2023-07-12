@@ -220,7 +220,7 @@ private:
     std::list<std::vector<inet_address>> _endpoints_to_talk_with;
 
     /* live member set */
-    utils::chunked_vector<inet_address> _live_endpoints;
+    std::unordered_set<inet_address> _live_endpoints;
     uint64_t _live_endpoints_version = 0;
 
     /* nodes are being marked as alive */
@@ -245,7 +245,7 @@ private:
     bool _in_shadow_round = false;
 
     std::unordered_map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
-    utils::chunked_vector<inet_address> _shadow_live_endpoints;
+    std::unordered_set<inet_address> _shadow_live_endpoints;
 
     // replicate shard 0 live endpoints across all other shards.
     // _endpoint_update_semaphore must be held for the whole duration

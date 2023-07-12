@@ -680,7 +680,7 @@ future<> gossiper::remove_endpoint(inet_address endpoint, permit_id pid) {
         logger.info("removed {} from _seeds, updated _seeds list = {}", endpoint, _seeds);
     }
 
-    _live_endpoints.resize(std::distance(_live_endpoints.begin(), std::remove(_live_endpoints.begin(), _live_endpoints.end(), endpoint)));
+    _live_endpoints.erase(endpoint);
     co_await update_live_endpoints_version();
     _unreachable_endpoints.erase(endpoint);
     _syn_handlers.erase(endpoint);
@@ -885,7 +885,7 @@ future<> gossiper::failure_detector_loop() {
             if (!is_enabled()) {
                 co_return;
             }
-            auto nodes = _live_endpoints;
+            auto nodes = boost::copy_range<std::vector<inet_address>>(_live_endpoints);
             auto live_endpoints_version = _live_endpoints_version;
             auto generation_number = _endpoint_state_map[get_broadcast_address()].get_heart_beat_state().get_generation();
             co_await coroutine::parallel_for_each(boost::irange(size_t(0), nodes.size()), [this, generation_number, live_endpoints_version, &nodes] (size_t idx) {
@@ -901,8 +901,9 @@ future<> gossiper::failure_detector_loop() {
                 auto version =  _live_endpoints_version;
                 utils::chunked_vector<inet_address> nodes_down;
                 std::sort(nodes.begin(), nodes.end());
-                std::sort(_live_endpoints.begin(), _live_endpoints.end());
-                std::set_difference(nodes.begin(), nodes.end(), _live_endpoints.begin(), _live_endpoints.end(), std::back_inserter(nodes_down));
+                auto live_nodes = boost::copy_range<std::vector<inet_address>>(_live_endpoints);
+                std::sort(live_nodes.begin(), live_nodes.end());
+                std::set_difference(nodes.begin(), nodes.end(), live_nodes.begin(), live_nodes.end(), std::back_inserter(nodes_down));
                 if (!nodes_down.empty()) {
                     logger.debug("failure_detector_loop: previous_live_nodes={}, current_live_nodes={}, nodes_down={}",
                             nodes, _live_endpoints, nodes_down);
@@ -994,15 +995,16 @@ void gossiper::run() {
                 gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests);
 
                 if (_endpoints_to_talk_with.empty()) {
-                    std::shuffle(_live_endpoints.begin(), _live_endpoints.end(), _random_engine);
+                    auto live_endpoints = boost::copy_range<std::vector<inet_address>>(_live_endpoints);
+                    std::shuffle(live_endpoints.begin(), live_endpoints.end(), _random_engine);
                     // This guarantees the local node will talk with all nodes
                     // in live_endpoints at least once within nr_rounds gossip rounds.
                     // Other gossip implementation like SWIM uses similar approach.
                     // https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf
                     size_t nr_rounds = 10;
-                    size_t nodes_per_round = (_live_endpoints.size() + nr_rounds - 1) / nr_rounds;
+                    size_t nodes_per_round = (live_endpoints.size() + nr_rounds - 1) / nr_rounds;
                     std::vector<inet_address> live_nodes;
-                    for (const auto& node : _live_endpoints) {
+                    for (const auto& node : live_endpoints) {
                         if (live_nodes.size() < nodes_per_round) {
                             live_nodes.push_back(node);
                         } else {
@@ -1014,7 +1016,7 @@ void gossiper::run() {
                         _endpoints_to_talk_with.push_back(live_nodes);
                     }
                     logger.debug("Set live nodes to talk: endpoint_state_map={}, all_live_nodes={}, endpoints_to_talk_with={}",
-                            _endpoint_state_map.size(), _live_endpoints, _endpoints_to_talk_with);
+                            _endpoint_state_map.size(), live_endpoints, _endpoints_to_talk_with);
                 }
                 if (_endpoints_to_talk_with.empty()) {
                     auto nodes = std::vector<inet_address>(_seeds.begin(), _seeds.end());
@@ -1587,15 +1589,14 @@ future<> gossiper::real_mark_alive(inet_address addr) {
     _unreachable_endpoints.erase(addr);
     _expire_time_endpoint_map.erase(addr);
 
-    auto it_ = std::find(_live_endpoints.begin(), _live_endpoints.end(), addr);
-    bool was_live = it_ != _live_endpoints.end();
+    auto [it_, inserted] = _live_endpoints.insert(addr);
+    bool was_live = !inserted;
     if (was_live) {
         co_return;
     }
 
     // Make a copy for endpoint_state because the code below can yield
     endpoint_state state = local_state;
-    _live_endpoints.push_back(addr);
     co_await update_live_endpoints_version();
     if (_endpoints_to_talk_with.empty()) {
         _endpoints_to_talk_with.push_back({addr});
@@ -1618,7 +1619,7 @@ future<> gossiper::mark_dead(inet_address addr, endpoint_state& local_state, per
     verify_permit(addr, pid);
     local_state.mark_dead();
     endpoint_state state = local_state;
-    _live_endpoints.resize(std::distance(_live_endpoints.begin(), std::remove(_live_endpoints.begin(), _live_endpoints.end(), addr)));
+    _live_endpoints.erase(addr);
     co_await update_live_endpoints_version();
     _unreachable_endpoints[addr] = now();
     logger.info("InetAddress {} is now DOWN, status = {}", addr, get_gossip_status(state));
