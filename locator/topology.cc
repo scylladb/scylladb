@@ -9,6 +9,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <utility>
 
 #include "log.hh"
 #include "locator/topology.hh"
@@ -394,7 +395,7 @@ node_holder topology::pop_node(const node* node) {
 
     // shrink _nodes if the last node is popped
     // like when failing to index a newly added node
-    if (node->idx() == _nodes.size() - 1) {
+    if (std::cmp_equal(node->idx(), _nodes.size() - 1)) {
         _nodes.resize(node->idx());
     }
 
@@ -424,7 +425,7 @@ const node* topology::find_node(const inet_address& ep) const noexcept {
 // Finds a node by its index
 // Returns nullptr if not found
 const node* topology::find_node(node::idx_type idx) const noexcept {
-    if (idx >= _nodes.size()) {
+    if (std::cmp_greater_equal(idx, _nodes.size())) {
         return nullptr;
     }
     return _nodes.at(idx).get();

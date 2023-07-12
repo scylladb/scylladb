@@ -5032,7 +5032,7 @@ SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
 
                     testlog.info("Closing sstable of generation {}, table set size: {}", sst.generation(), input_sstable_count);
                     sstables_closed++;
-                    if (input_sstable_count < last_input_sstable_count) {
+                    if (std::cmp_less(input_sstable_count, last_input_sstable_count)) {
                         sstables_closed_during_cleanup++;
                         last_input_sstable_count = input_sstable_count;
                     }

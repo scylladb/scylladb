@@ -15,6 +15,7 @@
 
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
+#include <utility>
 
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/result_set_assertions.hh"
@@ -177,7 +178,7 @@ SEASTAR_TEST_CASE(test_truncate_without_snapshot_during_writes) {
         uint32_t num_keys = 1000;
 
         auto f0 = insert_data(0, num_keys);
-        auto f1 = do_until([&] { return count >= num_keys; }, [&, ts = db_clock::now()] {
+        auto f1 = do_until([&] { return std::cmp_greater_equal(count, num_keys); }, [&, ts = db_clock::now()] {
             return replica::database::truncate_table_on_all_shards(e.db(), "ks", "cf", ts, false /* with_snapshot */).then([] {
                 return yield();
             });

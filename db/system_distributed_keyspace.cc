@@ -579,7 +579,7 @@ system_distributed_keyspace::read_cdc_generation(utils::UUID id) {
     // Paranoic sanity check. Partial reads should not happen since generations should be retrieved only after they
     // were written successfully with CL=ALL. But nobody uses EverywhereStrategy tables so they weren't ever properly
     // tested, so just in case...
-    if (entries.size() != num_ranges) {
+    if (std::cmp_not_equal(entries.size(), num_ranges)) {
         throw std::runtime_error(format(
                 "read_cdc_generation: wrong number of rows. The `num_ranges` column claimed {} rows,"
                 " but reading the partition returned {}.", num_ranges, entries.size()));
