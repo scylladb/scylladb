@@ -152,6 +152,9 @@ compaction_manager_for_testing::wrapped_compaction_manager::wrapped_compaction_m
 
 // Must run in a seastar thread
 compaction_manager_for_testing::wrapped_compaction_manager::~wrapped_compaction_manager() {
+    if (!tm.abort_source().abort_requested()) {
+        tm.abort_source().request_abort();
+    }
     cm.stop().get();
 }
 
