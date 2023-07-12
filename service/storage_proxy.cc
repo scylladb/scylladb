@@ -596,6 +596,9 @@ private:
                     } else if constexpr(std::is_same_v<Ex, replica::stale_topology_exception>) {
                         msg = e.what();
                         return error::FAILURE;
+                    } else if constexpr (std::is_same_v<Ex, replica::abort_requested_exception>) {
+                        msg = e.what();
+                        return error::FAILURE;
                     }
                 }, exception->reason);
             }
