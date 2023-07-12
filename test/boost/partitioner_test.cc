@@ -703,7 +703,7 @@ SEASTAR_THREAD_TEST_CASE(test_split_token_range_msb) {
         BOOST_REQUIRE_EQUAL(ranges.size(), 1 << msb);
 
         std::optional<dht::token> prev_last_token;
-        for (int i = 0; i < ranges.size(); i++) {
+        for (unsigned i = 0; i < ranges.size(); i++) {
             auto t = dht::last_token_of_compaction_group(msb, i);
             testlog.debug("msb: {}, t: {}, range: {}", msb, t, ranges[i]);
             BOOST_REQUIRE(ranges[i].contains(t, cmp));

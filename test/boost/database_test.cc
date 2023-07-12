@@ -1237,7 +1237,7 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
         });
         auto shard = tests::random::get_int<unsigned>(0, smp::count);
         auto found = false;
-        for (auto i = 0; i < smp::count && !found; i++) {
+        for (unsigned i = 0; i < smp::count && !found; i++) {
             found = co_await db.invoke_on((shard + i) % smp::count, [] (replica::database& db) -> future<bool> {
                 auto& cf = db.find_column_family("ks", "cf");
                 bool found = false;
@@ -1286,7 +1286,7 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
         // move a random sstable to quarantine
         auto shard = tests::random::get_int<unsigned>(0, smp::count);
         auto found = false;
-        for (auto i = 0; i < smp::count; i++) {
+        for (unsigned i = 0; i < smp::count; i++) {
             co_await db.invoke_on((shard + i) % smp::count, [&] (replica::database& db) -> future<> {
                 auto& cf = db.find_column_family("ks", "cf");
                 co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {

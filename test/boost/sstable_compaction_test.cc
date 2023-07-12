@@ -321,7 +321,7 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
         std::vector<sstables::shared_sstable> created;
 
         if (create_sstables) {
-            for (auto i = 0; i < create_sstables; i++) {
+            for (unsigned i = 0; i < create_sstables; i++) {
                 const column_definition& r1_col = *s->get_column_definition("r1");
 
                 auto sst = sst_gen();
@@ -459,7 +459,7 @@ SEASTAR_TEST_CASE(compact_02) {
 
         static constexpr size_t num_rounds = 4;
         static constexpr size_t sstables_in_round = 4;
-        for (auto i = 0; i < num_rounds; ++i) {
+        for (unsigned i = 0; i < num_rounds; ++i) {
             compact_and_verify(sstables_in_round);
         }
 
@@ -3843,7 +3843,7 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
 
             std::vector<sstables::shared_sstable> sstables;
             sstables.reserve(disjoint_sstable_count);
-            for (auto i = 0; i < disjoint_sstable_count; i++) {
+            for (unsigned i = 0; i < disjoint_sstable_count; i++) {
                 auto sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(i))});
                 sstables.push_back(std::move(sst));
             }
@@ -3858,7 +3858,7 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
 
             std::vector<sstables::shared_sstable> sstables;
             sstables.reserve(disjoint_sstable_count);
-            for (auto i = 0; i < disjoint_sstable_count; i++) {
+            for (unsigned i = 0; i < disjoint_sstable_count; i++) {
                 auto sst = make_sstable_containing(sst_gen, {make_row(i, std::chrono::hours(24*i))});
                 sstables.push_back(std::move(sst));
                 i++;
@@ -3890,7 +3890,7 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
             mutations_for_small_files.push_back(make_row(0, std::chrono::hours(1)));
 
             std::vector<mutation> mutations_for_big_files;
-            for (auto i = 0; i < keys.size(); i++) {
+            for (unsigned i = 0; i < keys.size(); i++) {
                 mutations_for_big_files.push_back(make_row(i, std::chrono::hours(1)));
             }
 
@@ -4100,7 +4100,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
         });
 
         // Make tables
-        for (auto idx = 0; idx < num_tables; idx++) {
+        for (unsigned idx = 0; idx < num_tables; idx++) {
             auto s = make_schema(idx);
             schemas.push_back(s);
 
@@ -4130,7 +4130,7 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
             column_family_test(cf).add_sstable(sst).get();
         };
 
-        for (auto i = 0; i < num_tables; i++) {
+        for (unsigned i = 0; i < num_tables; i++) {
             add_single_fully_expired_sstable_to_table(i);
         }
 
@@ -4809,7 +4809,7 @@ SEASTAR_TEST_CASE(test_print_shared_sstables_vector) {
         mut1.partition().apply_insert(*s, ss.make_ckey(1), ss.new_timestamp());
         ssts[1] = make_sstable_containing(sst_gen, {std::move(mut1)});
 
-        std::string msg = format("{}", ssts);
+        std::string msg = seastar::format("{}", ssts);
         for (const auto& sst : ssts) {
             auto gen_str = format("{}", sst->generation());
             BOOST_REQUIRE(msg.find(gen_str) != std::string::npos);
@@ -4988,14 +4988,14 @@ SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
         dht::token_range_vector owned_token_ranges;
 
         std::set<mutation, mutation_decorated_key_less_comparator> merged;
-        for (auto i = 0; i < sstables_nr * 2; i++) {
+        for (unsigned i = 0; i < sstables_nr * 2; i++) {
             merged.insert(make_insert(partition_key::from_exploded(*s, {to_bytes(to_sstring(i))})));
         }
 
         std::unordered_set<sstables::generation_type> gens; // input sstable generations
         run_id run_identifier = run_id::create_random_id();
         auto merged_it = merged.begin();
-        for (auto i = 0; i < sstables_nr; i++) {
+        for (unsigned i = 0; i < sstables_nr; i++) {
             auto mut1 = std::move(*merged_it);
             merged_it++;
             auto mut2 = std::move(*merged_it);

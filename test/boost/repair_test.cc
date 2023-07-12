@@ -207,7 +207,7 @@ SEASTAR_TEST_CASE(test_reader_with_different_strategies) {
             if (data1.size() != data2.size()) {
                 mismatch = ::format("size1 {} != size2 {}", data1.size(), data2.size());
             } else {
-                for (int i = 0; i < data1.size(); ++i) {
+                for (unsigned i = 0; i < data1.size(); ++i) {
                     const auto& mf1 = data1[i];
                     const auto& mf2 = data2[i];
                     if (!mf1.equal(s, mf2)) {

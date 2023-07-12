@@ -3078,7 +3078,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_rebuilder_v2_flush) {
     frags.emplace_back(*s, p, partition_end());
 
     mutation_rebuilder_v2 rebuilder_without_flush(s);
-    for (int i = 0; i < frags.size(); ++i) {
+    for (unsigned i = 0; i < frags.size(); ++i) {
         rebuilder_without_flush.consume(mutation_fragment_v2(*s, p, frags[i]));
     }
     auto m_expected = std::move(*rebuilder_without_flush.consume_end_of_stream());
@@ -3087,13 +3087,13 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_rebuilder_v2_flush) {
     // including no flush).
     // This is to test that the first flush doesn't break the rebuilder in
     // a way that prevents another flush.
-    for (int first_flush = 0; first_flush < frags.size(); ++first_flush) {
-        for (int second_flush = first_flush; second_flush < frags.size(); ++second_flush) {
+    for (unsigned first_flush = 0; first_flush < frags.size(); ++first_flush) {
+        for (unsigned second_flush = first_flush; second_flush < frags.size(); ++second_flush) {
             mutation_rebuilder_v2 rebuilder(s);
             auto m1 = mutation(s, pk); // Contents of flush 1.
             auto m2 = mutation(s, pk); // Contents of flush 2.
             auto m3 = mutation(s, pk); // Contents of final flush. 
-            for (int i = 0; i < frags.size(); ++i) {
+            for (unsigned i = 0; i < frags.size(); ++i) {
                 rebuilder.consume(mutation_fragment_v2(*s, p, frags[i]));
                 if (i == first_flush) {
                     m1 = rebuilder.flush();
