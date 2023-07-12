@@ -1511,9 +1511,6 @@ private:
             }
         });
     }
-    bool has_sstable_attached() const noexcept {
-        return bool(_sst);
-    }
     bool is_initialized() const {
         return bool(_context);
     }
@@ -1521,14 +1518,6 @@ private:
     future<bool> maybe_initialize() {
         if (is_initialized()) {
             co_return true;
-        }
-        // If the reader has no SSTable attached, the reader was proactively closed in the
-        // context of fast-forward calls. The higher level code has no way to know that
-        // underlying reader is really exhausted, so reader is responsible for releasing
-        // its resources beforehand. From there on, the reader has the same semantics
-        // as that of an empty reader.
-        if (!has_sstable_attached()) {
-            co_return false;
         }
         if (_single_partition_read) {
             _sst->get_stats().on_single_partition_read();
@@ -1623,15 +1612,6 @@ public:
                     }
                     _index_in_current_partition = false;
                     _read_enabled = false;
-                    if (_index_reader->eof()) {
-                        // Close the SSTable reader proactively, if the index is completely exhausted
-                        // and no partition was found in the current fast-forward call. This allows
-                        // disk space of SSTables to be reclaimed earlier if they take part in a
-                        // long-living read and they're deleted midway.
-                        sstlog.trace("Closing reader {} for {} after fast-forward call found that index reached EOF and there's nothing left to read",
-                                     fmt::ptr(this), _sst->get_filename());
-                        return close();
-                    }
                     return make_ready_future<>();
                 });
             }
@@ -1719,7 +1699,7 @@ public:
             close_index_reader = _index_reader->close().finally([_ = std::move(_index_reader)] {});
         }
 
-        return when_all_succeed(std::move(close_context), std::move(close_index_reader)).discard_result().handle_exception([sst = std::move(_sst)] (std::exception_ptr ep) {
+        return when_all_succeed(std::move(close_context), std::move(close_index_reader)).discard_result().handle_exception([] (std::exception_ptr ep) {
             // close can not fail as it is called either from the destructor or from flat_mutation_reader::close
             sstlog.warn("Failed closing of sstable_mutation_reader: {}. Ignored since the reader is already done.", ep);
         });
