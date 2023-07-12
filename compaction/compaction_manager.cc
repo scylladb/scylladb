@@ -40,7 +40,7 @@ public:
         , _cs(cs)
     { }
 
-    compacting_sstable_registration(compaction_manager& cm, compaction::compaction_state& cs, std::vector<sstables::shared_sstable> compacting)
+    compacting_sstable_registration(compaction_manager& cm, compaction::compaction_state& cs, const std::vector<sstables::shared_sstable>& compacting)
         : compacting_sstable_registration(cm, cs)
     {
         register_compacting(compacting);
