@@ -2288,15 +2288,17 @@ bool gossiper::is_alive(inet_address ep) const {
     if (ep == get_broadcast_address()) {
         return true;
     }
-    auto* eps = get_endpoint_state_for_endpoint_ptr(ep);
-    // we could assert not-null, but having isAlive fail screws a node over so badly that
-    // it's worth being defensive here so minor bugs don't cause disproportionate
-    // badness.  (See CASSANDRA-1463 for an example).
-    if (eps) {
-        return eps->is_alive();
+    bool is_alive = _live_endpoints.contains(ep);
+
+#ifndef SCYLLA_BUILD_MODE_RELEASE
+    // Live endpoints must always have a valid endpoint_state.
+    // Verify that in testing mode to reduce the overhead in production.
+    if (is_alive && !get_endpoint_state_for_endpoint_ptr(ep)) {
+        on_internal_error(logger, fmt::format("Node {} is alive but has no endpoint state", ep));
     }
-    logger.warn("unknown endpoint {}", ep);
-    return false;
+#endif
+
+    return is_alive;
 }
 
 future<> gossiper::wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout) {
