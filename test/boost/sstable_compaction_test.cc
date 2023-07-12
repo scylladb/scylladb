@@ -1636,8 +1636,8 @@ SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
 
 SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
     return test_env::do_with_async([] (test_env& env) {
-        auto make_schema = [&] (sstables::compaction_strategy_type cst) {
-            auto builder = schema_builder("tests", "tombstone_purge")
+        auto make_schema = [&] (std::string_view cf, sstables::compaction_strategy_type cst) {
+            auto builder = schema_builder("tests", cf)
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("c1", utf8_type, column_kind::clustering_key)
                     .with_column("r1", utf8_type);
@@ -1645,7 +1645,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
             return builder.build();
         };
 
-        auto s = make_schema(sstables::compaction_strategy_type::size_tiered);
+        auto s = make_schema("stcs", sstables::compaction_strategy_type::size_tiered);
         auto cf = env.make_table_for_tests(s);
         auto close_cf = deferred_stop(cf);
         auto sst_gen = cf.make_sst_factory();
@@ -1707,7 +1707,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
 
         // Makes sure that get_sstables_for_compaction() is called with a table_state which will provide
         // the correct LCS state.
-        auto lcs_table = env.make_table_for_tests(make_schema(sstables::compaction_strategy_type::leveled));
+        auto lcs_table = env.make_table_for_tests(make_schema("lcs", sstables::compaction_strategy_type::leveled));
         auto close_lcs_table = deferred_stop(lcs_table);
         cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, options);
         sst->set_sstable_level(1);
