@@ -108,10 +108,7 @@ Each of the snapshots is a **hardlink** to to the SSTable directory.
 Additional Resources
 ^^^^^^^^^^^^^^^^^^^^
 
-* `Backup your data`_ 
-* `Scylla Snapshots`_
-
-.. _`Backup your data`: /operating-scylla/procedures/backup-restore/backup
-.. _`Scylla Snapshots`: /kb/snapshots
+* :doc:`Backup your data </operating-scylla/procedures/backup-restore/backup>`
+* :doc:`Scylla Snapshots </kb/snapshots>`
 
 .. include:: /rst_include/apache-copyrights.rst

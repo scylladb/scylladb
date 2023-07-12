@@ -70,9 +70,7 @@ You can use the ``nodetool`` command to describe different aspects of your nodes
 
 ``$ nodetool ring <keyspace>``
 
-Outputs all tokens of a node, and displays the token ring information_.  It produces output as follows for a single datacenter:
-
-.. _information: /operating-scylla/nodetool-commands/ring/
+Outputs all tokens of a node, and displays the :doc:`token ring information </operating-scylla/nodetool-commands/ring>`.  It produces output as follows for a single datacenter:
 
 .. code-block:: shell
 
