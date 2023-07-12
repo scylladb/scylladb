@@ -57,12 +57,13 @@ async def test_banned_node_cannot_communicate(manager: ManagerClient) -> None:
 
     # We need a separate driver session to communicate with the removed server,
     # the original driver session bugs out.
-    profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([srvs[2].ip_addr]))
-    with Cluster([srvs[2].ip_addr], execution_profiles={EXEC_PROFILE_DEFAULT: profile}) as c:
+    logger.info(f"Connecting to {srvs[2]}")
+    with manager.con_gen([srvs[2].ip_addr], manager.port, manager.use_ssl) as c:
         with c.connect() as s:
+            logger.info(f"Connected, sending request")
             q = SimpleStatement('insert into ks.t (pk) values (0)', consistency_level=ConsistencyLevel.ALL)
             # Before introducing host banning, a removed node was able to participate
             # as if it was a normal node and, for example, could insert data into the cluster.
             # Now other nodes refuse to communicate so we'll get an exception.
             with pytest.raises((NoHostAvailable, OperationTimedOut)):
-                await s.run_async(q)
+                await s.run_async(q, execution_profile='whitelist', timeout=5)
