@@ -33,7 +33,7 @@ class ManagerClient():
     # pylint: disable=too-many-public-methods
 
     def __init__(self, sock_path: str, port: int, use_ssl: bool,
-                 con_gen: Optional[Callable[[List[IPAddress], int, bool], CassandraSession]]) \
+                 con_gen: Callable[[List[IPAddress], int, bool], CassandraSession]) \
                          -> None:
         self.port = port
         self.use_ssl = use_ssl
@@ -50,12 +50,11 @@ class ManagerClient():
 
     async def driver_connect(self, server: Optional[ServerInfo] = None) -> None:
         """Connect to cluster"""
-        if self.con_gen is not None:
-            targets = [server] if server else await self.running_servers()
-            servers = [s_info.ip_addr for s_info in targets]
-            logger.debug("driver connecting to %s", servers)
-            self.ccluster = self.con_gen(servers, self.port, self.use_ssl)
-            self.cql = self.ccluster.connect()
+        targets = [server] if server else await self.running_servers()
+        servers = [s_info.ip_addr for s_info in targets]
+        logger.debug("driver connecting to %s", servers)
+        self.ccluster = self.con_gen(servers, self.port, self.use_ssl)
+        self.cql = self.ccluster.connect()
 
     def driver_close(self) -> None:
         """Disconnect from cluster"""
