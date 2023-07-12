@@ -306,9 +306,8 @@ First, download the file locally to the node:
 
   sudo docker exec -it some-scylla.2.0.1 curl -o file.csv https://<url>.com/<path>/<path>/<file>.csv
 
-Once you have the ``.csv`` downloaded, you can use the CQL ``COPY FROM`` command as explained here_ to load the data into ScyllaDB.
+Once you have the ``.csv`` downloaded, you can use the CQL ``COPY FROM`` command as explained :doc:`here </cql/cqlsh>` to load the data into ScyllaDB.
 
-.. _here: /getting-started/cqlsh/
 
 Such a copy command might look like this:
 

@@ -4,9 +4,7 @@ SSTable2json
 
 This tool allows you to converts SSTable into a JSON format file.
 SSTable2json supported when using Scylla 2.x or lower version.
-In newer versions, the tool is named SSTabledump_.
-
-.. _SSTabledump: /operating-scylla/admin-tools/sstabledump
+In newer versions, the tool is named :doc:`SSTabledump </operating-scylla/admin-tools/sstabledump>`.
 
 .. note:: 
 
