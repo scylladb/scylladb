@@ -31,7 +31,6 @@
 #include <functional>
 #include <algorithm>
 #include "compaction.hh"
-#include "compaction_weight_registration.hh"
 #include "compaction_backlog_manager.hh"
 #include "compaction/task_manager_module.hh"
 #include "compaction_state.hh"
@@ -45,8 +44,6 @@ namespace db {
 class system_keyspace;
 class compaction_history_entry;
 }
-
-class compacting_sstable_registration;
 
 class repair_history_map {
 public:
@@ -64,8 +61,6 @@ class rewrite_sstables_compaction_task_executor;
 class cleanup_sstables_compaction_task_executor;
 class validate_sstables_compaction_task_executor;
 }
-class compaction_manager_test_task_executor;
-
 // Compaction manager provides facilities to submit and track compaction jobs on
 // behalf of existing tables.
 class compaction_manager {
@@ -429,7 +424,6 @@ public:
     friend class compaction::rewrite_sstables_compaction_task_executor;
     friend class compaction::cleanup_sstables_compaction_task_executor;
     friend class compaction::validate_sstables_compaction_task_executor;
-    friend class compaction_manager_test_task_executor;
 };
 
 namespace compaction {
