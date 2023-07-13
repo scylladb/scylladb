@@ -21,11 +21,11 @@ async def test_remove_garbage_group0_members(manager: ManagerClient):
     """
     Verify that failing to leave group 0 or remove a node from group 0 in removenode/decommission
     can be handled by executing removenode (which should clear the 'garbage' group 0 member),
-    even though the node is no longer a token ring member.
+    even though the node is no longer a token ring member. Does not apply to Raft-topology mode.
     """
     # 4 servers, one dead
-    await manager.server_add()
-    servers = await manager.running_servers()
+    cfg = {'experimental_features': list[str]()}
+    servers = [await manager.server_add(config=cfg) for _ in range(4)]
     removed_host_id = await manager.get_host_id(servers[0].server_id)
     await manager.server_stop_gracefully(servers[0].server_id)
 
