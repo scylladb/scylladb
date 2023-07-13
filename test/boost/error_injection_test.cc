@@ -333,6 +333,22 @@ SEASTAR_TEST_CASE(test_inject_message) {
     }
 }
 
+SEASTAR_TEST_CASE(test_inject_with_parameters) {
+    utils::error_injection<true> errinj;
+
+    errinj.enable("injection", false, { { "x", "42" } });
+
+    auto f = errinj.inject_with_handler("injection", [] (auto& handler) {
+        auto x = handler.get("x");
+        auto y = handler.get("y");
+        BOOST_REQUIRE(x && *x == "42");
+        BOOST_REQUIRE(!y);
+        return make_ready_future<>();
+    });
+
+    BOOST_REQUIRE_NO_THROW(co_await std::move(f));
+}
+
 // Test error injection CQL API
 // NOTE: currently since functions can't get terminals an auxiliary table
 //       with error injection names and one shot parameters
