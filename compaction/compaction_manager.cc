@@ -66,18 +66,18 @@ public:
     ~compacting_sstable_registration() {
         // _compacting might be empty, but this should be just fine
         // for deregister_compacting_sstables.
-        _cm.deregister_compacting_sstables(_compacting.begin(), _compacting.end());
+        _cm.deregister_compacting_sstables(_compacting);
     }
 
     void register_compacting(const std::vector<sstables::shared_sstable>& sstables) {
         _compacting.reserve(_compacting.size() + sstables.size());
         _compacting.insert(sstables.begin(), sstables.end());
-        _cm.register_compacting_sstables(sstables.begin(), sstables.end());
+        _cm.register_compacting_sstables(sstables);
     }
 
     // Explicitly release compacting sstables
     void release_compacting(const std::vector<sstables::shared_sstable>& sstables) {
-        _cm.deregister_compacting_sstables(sstables.begin(), sstables.end());
+        _cm.deregister_compacting_sstables(sstables);
         for (const auto& sst : sstables) {
             _compacting.erase(sst);
             _cs.sstables_requiring_cleanup.erase(sst);
@@ -243,25 +243,25 @@ std::vector<sstables::shared_sstable> compaction_manager::get_candidates(table_s
     return candidates;
 }
 
-template <typename Iterator, typename Sentinel>
-requires std::same_as<Sentinel, Iterator> || std::sentinel_for<Sentinel, Iterator>
-void compaction_manager::register_compacting_sstables(Iterator first, Sentinel last) {
+template <std::ranges::range Range>
+requires std::same_as<std::ranges::range_value_t<Range>, sstables::shared_sstable>
+void compaction_manager::register_compacting_sstables(const Range& sstables) {
     // make all required allocations in advance to merge
     // so it should not throw
-    _compacting_sstables.reserve(_compacting_sstables.size() + std::distance(first, last));
+    _compacting_sstables.reserve(_compacting_sstables.size() + std::ranges::size(sstables));
     try {
-        _compacting_sstables.insert(first, last);
+        _compacting_sstables.insert(std::ranges::begin(sstables), std::ranges::end(sstables));
     } catch (...) {
         cmlog.error("Unexpected error when registering compacting SSTables: {}. Ignored...", std::current_exception());
     }
 }
 
-template <typename Iterator, typename Sentinel>
-requires std::same_as<Sentinel, Iterator> || std::sentinel_for<Sentinel, Iterator>
-void compaction_manager::deregister_compacting_sstables(Iterator first, Sentinel last) {
+template <std::ranges::range Range>
+requires std::same_as<std::ranges::range_value_t<Range>, sstables::shared_sstable>
+void compaction_manager::deregister_compacting_sstables(const Range& sstables) {
     // Remove compacted sstables from the set of compacting sstables.
-    for (; first != last; ++first) {
-        _compacting_sstables.erase(*first);
+    for (auto& sstable : sstables) {
+        _compacting_sstables.erase(sstable);
     }
 }
 
