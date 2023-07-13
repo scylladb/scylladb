@@ -965,6 +965,7 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
             // Get the range parallelism specified by user
             auto user_permit = _user_ranges_parallelism ? co_await seastar::get_units(*_user_ranges_parallelism, 1) : semaphore_units<>();
             co_await repair_range(range, table_info);
+            ++_ranges_complete;
             if (_reason == streaming::stream_reason::bootstrap) {
                 rs.get_metrics().bootstrap_finished_ranges++;
             } else if (_reason == streaming::stream_reason::replace) {
@@ -1001,6 +1002,13 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
         }
     }
     co_return;
+}
+
+future<tasks::task_manager::task::progress> repair::shard_repair_task_impl::get_progress() const {
+    co_return tasks::task_manager::task::progress{
+        .completed = _ranges_complete,
+        .total = ranges_size()
+    };
 }
 
 // Repairs a list of token ranges, each assumed to be a token

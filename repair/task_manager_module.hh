@@ -123,6 +123,7 @@ private:
     bool _aborted = false;
     std::optional<sstring> _failed_because;
     std::optional<semaphore> _user_ranges_parallelism;
+    uint64_t _ranges_complete = 0;
 public:
     shard_repair_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
@@ -166,6 +167,7 @@ public:
     size_t ranges_size() const noexcept;
 protected:
     future<> do_repair_ranges();
+    virtual future<tasks::task_manager::task::progress> get_progress() const override;
     future<> run() override;
 };
 
