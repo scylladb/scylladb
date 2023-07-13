@@ -422,6 +422,7 @@ class ScyllaServer:
                                          f"{self.log_filename}")
 
         while time.time() < self.start_time + self.TOPOLOGY_TIMEOUT:
+            assert self.cmd is not None
             if self.cmd.returncode:
                 self.cmd = None
                 if expected_error is not None:
