@@ -311,6 +311,15 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
     // read topology state from disk and recreate token_metadata from it
     _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state();
 
+    co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {
+        return fs.enable(boost::copy_range<std::set<std::string_view>>(_topology_state_machine._topology.enabled_features));
+    });
+
+    // Update the legacy `enabled_features` key in `system.scylla_local`.
+    // It's OK to update it after enabling features because `system.topology` now
+    // is the source of truth about enabled features.
+    co_await _sys_ks.local().save_local_enabled_features(_topology_state_machine._topology.enabled_features);
+
     const auto& am = _group0->address_map();
     auto id2ip = [this, &am] (raft::server_id id) -> future<gms::inet_address> {
         auto ip = am.find(id);
