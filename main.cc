@@ -1235,9 +1235,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 ss.stop().get();
             });
             supervisor::notify("initializing virtual tables");
-            sys_ks.invoke_on_all([&db, &ss, &gossiper, &raft_gr, &cfg] (db::system_keyspace& sys_ks) {
-                return sys_ks.initialize_virtual_tables(db, ss, gossiper, raft_gr, *cfg);
-            }).get();
+            sys_ks.invoke_on_all(&db::system_keyspace::initialize_virtual_tables, std::ref(db), std::ref(ss), std::ref(gossiper), std::ref(raft_gr), std::ref(*cfg)).get();
 
             supervisor::notify("starting forward service");
             forward_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(token_metadata)).get();
@@ -1269,16 +1267,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             supervisor::notify("initializing query processor remote part");
             // TODO: do this together with proxy.start_remote(...)
-            qp.invoke_on_all([&mm, &forward_service, &group0_client] (cql3::query_processor& qp) {
-                qp.start_remote(mm.local(), forward_service.local(), group0_client);
-            }).get();
+            qp.invoke_on_all(&cql3::query_processor::start_remote, std::ref(mm), std::ref(forward_service), std::ref(group0_client)).get();
             auto stop_qp_remote = defer_verbose_shutdown("query processor remote part", [&qp] {
                 qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
             });
 
-            ss.invoke_on_all([&] (service::storage_service& ss) {
-                ss.set_query_processor(qp.local());
-            }).get();
+            ss.invoke_on_all(&service::storage_service::set_query_processor, std::ref(qp)).get();
 
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
@@ -1323,9 +1317,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     throw bad_configuration_error();
                 }
                 supervisor::notify("starting Raft Group Registry service");
-                raft_gr.invoke_on_all([] (service::raft_group_registry& raft_gr) {
-                    return raft_gr.start();
-                }).get();
+                raft_gr.invoke_on_all(&service::raft_group_registry::start).get();
             } else {
                 if (cfg->check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
                     startlog.error("Bad configuration: RAFT feature has to be enabled if BROADCAST_TABLES is enabled");
@@ -1381,9 +1373,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     auto rp = db::commitlog_replayer::create_replayer(db, sys_ks).get0();
                     rp.recover(paths, db::schema_tables::COMMITLOG_FILENAME_PREFIX).get();
                     supervisor::notify("replaying schema commit log - flushing memtables");
-                    db.invoke_on_all([] (replica::database& db) {
-                        return db.flush_all_memtables();
-                    }).get();
+                    db.invoke_on_all(&replica::database::flush_all_memtables).get();
                     supervisor::notify("replaying schema commit log - removing old commitlog segments");
                     //FIXME: discarded future
                     (void)sch_cl->delete_segments(std::move(paths));
@@ -1410,9 +1400,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     auto rp = db::commitlog_replayer::create_replayer(db, sys_ks).get0();
                     rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
                     supervisor::notify("replaying commit log - flushing memtables");
-                    db.invoke_on_all([] (replica::database& db) {
-                        return db.flush_all_memtables();
-                    }).get();
+                    db.invoke_on_all(&replica::database::flush_all_memtables).get();
                     supervisor::notify("replaying commit log - removing old commitlog segments");
                     //FIXME: discarded future
                     (void)cl->delete_segments(std::move(paths));
@@ -1459,13 +1447,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             static seastar::sharded<memory_threshold_guard> mtg;
             mtg.start(cfg->large_memory_allocation_warning_threshold()).get();
             supervisor::notify("initializing migration manager RPC verbs");
-            mm.invoke_on_all([] (auto& mm) {
-                mm.init_messaging_service();
-            }).get();
+            mm.invoke_on_all(&service::migration_manager::init_messaging_service).get();
             supervisor::notify("initializing storage proxy RPC verbs");
-            proxy.invoke_on_all([&messaging, &gossiper, &mm] (service::storage_proxy& proxy) {
-                proxy.start_remote(messaging.local(), gossiper.local(), mm.local());
-            }).get();
+            proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(messaging), std::ref(gossiper), std::ref(mm)).get();
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
                 proxy.invoke_on_all(&service::storage_proxy::stop_remote).get();
             });
@@ -1636,9 +1620,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             ss.local().update_fence_version(sys_ks.local().get_topology_fence_version().get()).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                return messaging.invoke_on_all([&token_metadata] (auto& netw) {
-                    return netw.start_listen(token_metadata.local());
-                });
+                return messaging.invoke_on_all(&netw::messaging_service::start_listen, std::ref(token_metadata));
             }).get();
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
@@ -1678,10 +1660,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(mm_notifier), std::ref(mm), auth_config).get();
 
-            auth_service.invoke_on_all([&mm] (auth::service& auth) {
-                return auth.start(mm.local());
-            }).get();
-
+            auth_service.invoke_on_all(&auth::service::start, std::ref(mm)).get();
             auto stop_auth_service = defer_verbose_shutdown("auth service", [] {
                 auth_service.stop().get();
             });
@@ -1702,9 +1681,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             supervisor::notify("starting batchlog manager");
-            bm.invoke_on_all([] (db::batchlog_manager& b) {
-                return b.start();
-            }).get();
+            bm.invoke_on_all(&db::batchlog_manager::start).get();
             auto stop_batchlog_manager = defer_verbose_shutdown("batchlog manager", [&bm] {
                 bm.stop().get();
             });
@@ -1739,9 +1716,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             api::set_server_gossip_settle(ctx, gossiper).get();
 
             supervisor::notify("allow replaying hints");
-            proxy.invoke_on_all([] (service::storage_proxy& local_proxy) {
-                local_proxy.allow_replaying_hints();
-            }).get();
+            proxy.invoke_on_all(&service::storage_proxy::allow_replaying_hints).get();
 
             api::set_hinted_handoff(ctx, gossiper).get();
             auto stop_hinted_handoff_api = defer_verbose_shutdown("hinted handoff API", [&ctx] {
@@ -1757,9 +1732,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             if (cfg->view_building()) {
                 supervisor::notify("starting the view builder");
                 view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier), std::ref(view_update_generator)).get();
-                view_builder.invoke_on_all([&mm] (db::view::view_builder& vb) { 
-                    return vb.start(mm.local());
-                }).get();
+                view_builder.invoke_on_all(&db::view::view_builder::start, std::ref(mm)).get();
             }
             auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {
                 if (cfg->view_building()) {
@@ -1772,9 +1745,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_view_builder(ctx).get();
             });
 
-            db.invoke_on_all([] (replica::database& db) {
-                db.revert_initial_system_read_concurrency_boost();
-            }).get();
+            db.invoke_on_all(&replica::database::revert_initial_system_read_concurrency_boost).get();
 
             notify_set.notify_all(configurable::system_state::started).get();
 
