@@ -9,6 +9,7 @@
 #include "compaction_manager.hh"
 #include "compaction_strategy.hh"
 #include "compaction_backlog_manager.hh"
+#include "compaction_weight_registration.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include <seastar/core/metrics.hh>
