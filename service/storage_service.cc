@@ -2397,7 +2397,10 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
     });
     _listeners.emplace_back(make_lw_shared(std::move(schema_change_announce)));
     co_await _gossiper.wait_for_gossip_to_settle();
-    co_await _feature_service.enable_features_on_join(_gossiper, _sys_ks.local());
+    // TODO: Look at the group 0 upgrade state and use it to decide whether to attach or not
+    if (!_raft_topology_change_enabled) {
+        co_await _feature_service.enable_features_on_join(_gossiper, _sys_ks.local());
+    }
 
     set_mode(mode::JOINING);
 
