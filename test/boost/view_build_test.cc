@@ -464,17 +464,17 @@ SEASTAR_TEST_CASE(test_view_update_generator) {
 
         BOOST_REQUIRE_EQUAL(view_update_generator.available_register_units(), db::view::view_update_generator::registration_queue_size);
 
-        auto register_and_check_semaphore = [&view_update_generator, t] (std::vector<shared_sstable>::iterator b, std::vector<shared_sstable>::iterator e) {
-            std::vector<future<>> register_futures;
-            for (auto it = b; it != e; ++it) {
-                register_futures.emplace_back(view_update_generator.register_staging_sstable(*it, t));
-            }
-            const auto qsz = db::view::view_update_generator::registration_queue_size;
-            when_all(register_futures.begin(), register_futures.end()).get();
-            REQUIRE_EVENTUALLY_EQUAL(view_update_generator.available_register_units(), qsz);
-        };
-        register_and_check_semaphore(ssts.begin(), ssts.begin() + 10);
-        register_and_check_semaphore(ssts.begin() + 10, ssts.end());
+        parallel_for_each(ssts.begin(), ssts.begin() + 10, [&] (shared_sstable& sst) {
+            return view_update_generator.register_staging_sstable(sst, t);
+        }).get();
+
+        BOOST_REQUIRE_EQUAL(view_update_generator.available_register_units(), db::view::view_update_generator::registration_queue_size);
+
+        parallel_for_each(ssts.begin() + 10, ssts.end(), [&] (shared_sstable& sst) {
+            return view_update_generator.register_staging_sstable(sst, t);
+        }).get();
+
+        BOOST_REQUIRE_EQUAL(view_update_generator.available_register_units(), db::view::view_update_generator::registration_queue_size);
 
         auto select_by_p_id = e.prepare("SELECT * FROM t WHERE p = ?").get();
         auto select_by_p_and_c_id = e.prepare("SELECT * FROM t WHERE p = ? and c = ?").get();
