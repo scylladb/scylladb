@@ -107,6 +107,11 @@ For example:
    CREATE KEYSPACE Excelsior
    WITH replication = {'class': 'SimpleStrategy', 'replication_factor' : 3};
 
+.. TODO Add a link to the description of minimum_keyspace_rf when the ScyllaDB options section is added to the docs.
+
+You can configure the minimum acceptable replication factor using the ``minimum_keyspace_rf`` option. 
+Attempting to create a keyspace with a replication factor lower than the value set with 
+``minimum_keyspace_rf`` will return an error (the default value is 0). 
 
 The supported ``options`` are:
 
