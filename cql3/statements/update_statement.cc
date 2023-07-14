@@ -290,12 +290,13 @@ expr::expression get_key(const cql3::expr::expression& partition_key_restriction
 }
 
 static
-void prepare_new_value(broadcast_tables::prepared_update& query, const std::vector<::shared_ptr<operation>>& operations) {
+expr::expression
+prepare_new_value(const std::vector<::shared_ptr<operation>>& operations) {
     if (operations.size() != 1) {
         throw service::broadcast_tables::unsupported_operation_error("only one operation is allowed and must be of the form \"value = X\"");
     }
 
-    operations[0]->prepare_for_broadcast_tables(query);
+    return operations[0]->prepare_new_value_for_broadcast_tables();
 }
 
 static
@@ -345,10 +346,9 @@ update_statement::prepare_for_broadcast_tables() const {
 
     broadcast_tables::prepared_update query = {
         .key = get_key(restrictions().get_partition_key_restrictions()),
+        .new_value = prepare_new_value(_column_operations),
         .value_condition = get_value_condition(_condition),
     };
-
-    prepare_new_value(query, _column_operations);
 
     return ::make_shared<strongly_consistent_modification_statement>(
         get_bound_terms(),

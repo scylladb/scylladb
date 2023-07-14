@@ -23,10 +23,6 @@
 
 namespace cql3 {
 
-namespace statements::broadcast_tables {
-    struct prepared_update;
-}
-
 class update_parameters;
 
 /**
@@ -95,7 +91,7 @@ public:
         return _unset_guard.is_unset(qo);
     }
 
-    virtual void prepare_for_broadcast_tables(statements::broadcast_tables::prepared_update&) const;
+    virtual expr::expression prepare_new_value_for_broadcast_tables() const;
 
     /**
      * A parsed raw UPDATE operation.

@@ -40,7 +40,7 @@ public:
 
         static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, cql3::raw_value_view value);
 
-        virtual void prepare_for_broadcast_tables(statements::broadcast_tables::prepared_update& query) const override;
+        virtual expr::expression prepare_new_value_for_broadcast_tables() const override;
     };
 
     struct adder final : operation_skip_if_unset {
