@@ -27,16 +27,27 @@ namespace gms {
 static logging::logger logger("features");
 
 static const char* enable_test_feature_error_injection_name = "features_enable_test_feature";
+static const char* enable_test_feature_as_deprecated_error_injection_name = "features_enable_test_feature_as_deprecated";
+
+static bool is_test_only_feature_deprecated() {
+    return utils::get_local_injector().enter(enable_test_feature_as_deprecated_error_injection_name);
+}
 
 static bool is_test_only_feature_enabled() {
-    return utils::get_local_injector().enter(enable_test_feature_error_injection_name);
+    return utils::get_local_injector().enter(enable_test_feature_error_injection_name)
+            || is_test_only_feature_deprecated();
 }
 
 feature_config::feature_config() {
 }
 
-feature_service::feature_service(feature_config cfg) : _config(cfg)
-{}
+feature_service::feature_service(feature_config cfg) : _config(cfg) {
+    if (is_test_only_feature_deprecated()) {
+        // Assume it's enabled
+        test_only_feature.enable();
+        unregister_feature(test_only_feature);
+    }
+}
 
 feature_config feature_config_from_db_config(const db::config& cfg, std::set<sstring> disabled) {
     feature_config fcfg;
@@ -126,6 +137,10 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
         "UNBOUNDED_RANGE_TOMBSTONES"sv,
         "MC_SSTABLE_FORMAT"sv,
     };
+
+    if (is_test_only_feature_deprecated()) {
+        features.insert(test_only_feature.name());
+    }
 
     for (auto& [name, f_ref] : _registered_features) {
         features.insert(name);
