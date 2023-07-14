@@ -41,7 +41,7 @@ version |SRC_VERSION| if required.
 This guide covers upgrading ScyllaDB on Red Hat Enterprise Linux (RHEL), CentOS, Debian, and Ubuntu. See 
 :doc:`OS Support by Platform and Version </getting-started/os-support>` for information about supported versions.
 
-It also applies when using ScyllaDB official image on EC2, GCP, or Azure. The image is based on Ubuntu 22.04.
+It also applies when using ScyllaDB official image on EC2, GCP, or Azure.
 
 Upgrade Procedure
 =================
@@ -63,12 +63,12 @@ Apply the following procedure **serially** on each node. Do not move to the next
 **During** the rolling upgrade, it is highly recommended:
 
 * Not to use the new |NEW_VERSION| features.
-* Not to run administration functions, like repairs, refresh, rebuild, or add or remove nodes. See `sctool <https://manager.docs.scylladb.com/stable/sctool/>`_ for suspending ScyllaDB Manager (only available for ScyllaDB Enterprise) scheduled or running repairs.
+* Not to run administration functions, such as repairs, refresh, rebuild, or add or remove nodes. See `sctool <https://manager.docs.scylladb.com/stable/sctool/>`_ for suspending ScyllaDB Manager (only available for ScyllaDB Enterprise) scheduled or running repairs.
 * Not to apply schema changes.
 
 .. note:: 
 
-   If you use the `ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/>`_, we recommend upgrading the Monitoring Stack  to the latest version **before** upgrading ScyllaDB.
+   If you use the `ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/>`_, we recommend upgrading the Monitoring Stack to the latest version **before** upgrading ScyllaDB.
 
 Upgrade Steps
 =============
@@ -95,7 +95,7 @@ backup is performed using the ``nodetool snapshot`` command. For **each** node i
    nodetool snapshot
 
 Take note of the directory name that nodetool gives you, and copy all the directories having that name under ``/var/lib/scylla`` 
-to a backup device.
+to an external backup device.
 
 When the upgrade is completed on all nodes, remove the snapshot with the ``nodetool clearsnapshot -t <snapshot>`` command to prevent 
 running out of space.
@@ -157,7 +157,7 @@ Download and install the new release
 
         There are two alternative upgrade procedures:
 
-        * :ref:`Upgrading ScyllaDB and simultaneously updating 3rd party and OS packages <upgrade-image-recommended-procedure>`. It is recommended if you are running a ScyllaDB official image (EC2 AMI, GCP, and Azure images), which is based on Ubuntu 20.04.
+        * :ref:`Upgrading ScyllaDB and simultaneously updating 3rd party and OS packages <upgrade-image-recommended-procedure>`. It is recommended if you are running a ScyllaDB official image (EC2 AMI, GCP, and Azure images).
 
         * :ref:`Upgrading ScyllaDB without updating any external packages <upgrade-image-upgrade-guide-regular-procedure>`.
 
@@ -193,7 +193,7 @@ Download and install the new release
 
                 .. code:: sh
 
-                   cat scylla-packages-5.2.0-x86_64.txt | sudo xargs -n1 apt-get install -y
+                   cat scylla-packages-5.3.0-x86_64.txt | sudo xargs -n1 apt-get install -y
 
                 .. note::
 
@@ -232,8 +232,8 @@ option. Setting the option to ``true`` on every node enables the Raft consensus 
 to consistently manage cluster-wide metadata as soon as you finish upgrading every node to the new version. See 
 :doc:`Raft in ScyllaDB </architecture/raft/>` to learn more.
 
-In ScyllaDB 5.2 and 5.3, Raft-based consistent cluster management is disabled by default. If you didn't enable the feature
-in version 5.2, you can enable it during the upgrade to version 5.3: modify the ``scylla.yaml`` configuration file 
+In ScyllaDB 5.2 and 5.3, Raft-based consistent cluster management for existing deployments is disabled by default. If you didn't enable 
+the feature in version 5.2, you can enable it during the upgrade to version 5.3: modify the ``scylla.yaml`` configuration file 
 in ``/etc/scylla/`` **on every node** and add the following:
 
 .. code:: yaml
