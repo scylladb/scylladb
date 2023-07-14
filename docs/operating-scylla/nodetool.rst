@@ -9,6 +9,7 @@ Nodetool
 
    nodetool-commands/cfhistograms
    nodetool-commands/cfstats
+   nodetool-commands/checkandrepaircdcstreams
    nodetool-commands/cleanup
    nodetool-commands/clearsnapshot
    nodetool-commands/compactionhistory
@@ -76,6 +77,7 @@ Operations that are not listed below are currently not available.
 
 * :doc:`cfhistograms <nodetool-commands/cfhistograms/>` - Provides statistics about a table, including number of SSTables, read/write latency, partition size and column count.
 * :doc:`cfstats </operating-scylla/nodetool-commands/cfstats/>` - Provides in-depth diagnostics regard table.
+* :doc:`checkandrepaircdcstreams </operating-scylla/nodetool-commands/checkandrepaircdcstreams/>` - Checks and fixes CDC streams.
 * :doc:`cleanup </operating-scylla/nodetool-commands/cleanup/>` - Triggers the immediate cleanup of keys no longer belonging to a node.
 * :doc:`clearsnapshot </operating-scylla/nodetool-commands/clearsnapshot/>` - This command removes snapshots.
 * :doc:`compactionhistory </operating-scylla/nodetool-commands/compactionhistory/>` - Provides the history of compactions.
