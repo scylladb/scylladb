@@ -36,21 +36,21 @@ private:
     /**
      * Restrictions on partitioning columns
      */
-    expr::expression _partition_key_restrictions;
+    expr::expression _partition_key_restrictions = expr::conjunction({});
 
     expr::single_column_restrictions_map _single_column_partition_key_restrictions;
 
     /**
      * Restrictions on clustering columns
      */
-    expr::expression _clustering_columns_restrictions;
+    expr::expression _clustering_columns_restrictions = expr::conjunction({});
 
     expr::single_column_restrictions_map _single_column_clustering_key_restrictions;
 
     /**
      * Restriction on non-primary key columns (i.e. secondary index restrictions)
      */
-    expr::expression _nonprimary_key_restrictions;
+    expr::expression _nonprimary_key_restrictions = expr::conjunction({});
 
     expr::single_column_restrictions_map _single_column_nonprimary_key_restrictions;
 
