@@ -175,6 +175,7 @@ public:
     named_value<uint32_t> failure_detector_timeout_in_ms;
     named_value<sstring> commitlog_sync;
     named_value<uint32_t> commitlog_segment_size_in_mb;
+    named_value<uint32_t> schema_commitlog_segment_size_in_mb;
     named_value<uint32_t> commitlog_sync_period_in_ms;
     named_value<uint32_t> commitlog_sync_batch_window_in_ms;
     named_value<int64_t> commitlog_total_space_in_mb;
