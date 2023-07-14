@@ -120,11 +120,9 @@ static std::vector<expr::expression> extract_partition_range(
             auto s = &cv;
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (s->col->is_partition_key() && (b.op == oper_t::EQ || b.op == oper_t::IN)) {
-                    const auto found = single_column.find(s->col);
-                    if (found == single_column.end()) {
-                        single_column[s->col] = b;
-                    } else {
-                        found->second = make_conjunction(std::move(found->second), b);
+                    const auto [it, inserted] = single_column.try_emplace(s->col, b);
+                    if (!inserted) {
+                        it->second = make_conjunction(std::move(it->second), b);
                     }
                 }
             });
@@ -139,11 +137,9 @@ static std::vector<expr::expression> extract_partition_range(
 
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (cval.col->is_partition_key() && (b.op == oper_t::EQ || b.op == oper_t::IN)) {
-                    const auto found = single_column.find(cval.col);
-                    if (found == single_column.end()) {
-                        single_column[cval.col] = b;
-                    } else {
-                        found->second = make_conjunction(std::move(found->second), b);
+                    const auto [it, inserted] = single_column.try_emplace(cval.col, b);
+                    if (!inserted) {
+                        it->second = make_conjunction(std::move(it->second), b);
                     }
                 }
             });
@@ -247,11 +243,9 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
             auto s = &cv;
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (s->col->is_clustering_key()) {
-                    const auto found = single.find(s->col);
-                    if (found == single.end()) {
-                        single[s->col] = b;
-                    } else {
-                        found->second = make_conjunction(std::move(found->second), b);
+                    const auto [it, inserted] = single.try_emplace(s->col, b);
+                    if (!inserted) {
+                        it->second = make_conjunction(std::move(it->second), b);
                     }
                 }
             });
@@ -262,11 +256,9 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
 
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (cval.col->is_clustering_key()) {
-                    const auto found = single.find(cval.col);
-                    if (found == single.end()) {
-                        single[cval.col] = b;
-                    } else {
-                        found->second = make_conjunction(std::move(found->second), b);
+                    const auto [it, inserted] = single.try_emplace(cval.col, b);
+                    if (!inserted) {
+                        it->second = make_conjunction(std::move(it->second), b);
                     }
                 }
             });
