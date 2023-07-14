@@ -26,6 +26,12 @@ namespace gms {
 
 static logging::logger logger("features");
 
+static const char* enable_test_feature_error_injection_name = "features_enable_test_feature";
+
+static bool is_test_only_feature_enabled() {
+    return utils::get_local_injector().enter(enable_test_feature_error_injection_name);
+}
+
 feature_config::feature_config() {
 }
 
@@ -76,7 +82,7 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
         fcfg._disabled_features.insert("UUID_SSTABLE_IDENTIFIERS"s);
     }
 
-    if (!utils::get_local_injector().enter("features_enable_test_feature")) {
+    if (!is_test_only_feature_enabled()) {
         fcfg._disabled_features.insert("TEST_ONLY_FEATURE"s);
     }
 
