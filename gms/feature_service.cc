@@ -98,9 +98,6 @@ void feature_service::unregister_feature(feature& f) {
 
 
 std::set<std::string_view> feature_service::supported_feature_set() const {
-    // Add features known by this local node. When a new feature is
-    // introduced in scylla, update it here, e.g.,
-    // return sstring("FEATURE1,FEATURE2")
     std::set<std::string_view> features = {
         // Deprecated features - sent to other nodes via gossip, but assumed true in the code
         "RANGE_TOMBSTONES"sv,
@@ -122,7 +119,6 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
         "CORRECT_STATIC_COMPACT_IN_MC"sv,
         "UNBOUNDED_RANGE_TOMBSTONES"sv,
         "MC_SSTABLE_FORMAT"sv,
-        "LARGE_COLLECTION_DETECTION"sv,
     };
 
     for (auto& [name, f_ref] : _registered_features) {
@@ -238,7 +234,7 @@ future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks
     for (auto&& f : persisted_features) {
         logger.debug("Enabling persisted feature '{}'", f);
         const bool is_registered_feat = _registered_features.contains(sstring(f));
-        if (!is_registered_feat || !known_features.contains(f)) {
+        if (!known_features.contains(f)) {
             if (is_registered_feat) {
                 throw std::runtime_error(format(
                     "Feature '{}' was previously enabled in the cluster but its support is disabled by this node. "
