@@ -71,7 +71,7 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
         co_return api_error::unknown_operation("UpdateTimeToLive not yet supported. Experimental support is available if the 'alternator-ttl' experimental feature is enabled on all nodes.");
     }
 
-    schema_ptr schema = get_table(_proxy, request);
+    schema_ptr schema = get_table(request);
     rjson::value* spec = rjson::find(request, "TimeToLiveSpecification");
     if (!spec || !spec->IsObject()) {
         co_return api_error::validation("UpdateTimeToLive missing mandatory TimeToLiveSpecification");
@@ -122,7 +122,7 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
 
 future<executor::request_return_type> executor::describe_time_to_live(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.describe_time_to_live++;
-    schema_ptr schema = get_table(_proxy, request);
+    schema_ptr schema = get_table(request);
     std::map<sstring, sstring> tags_map = get_tags_of_table_or_throw(schema);
     rjson::value desc = rjson::empty_object();
     auto i = tags_map.find(TTL_TAG_KEY);

@@ -84,7 +84,6 @@ namespace parsed {
 class path;
 };
 
-schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request);
 bool is_alternator_keyspace(const sstring& ks_name);
 // Wraps the db::get_tags_of_table and throws if the table is missing the tags extension.
 const std::map<sstring, sstring>& get_tags_of_table_or_throw(schema_ptr schema);
@@ -224,12 +223,10 @@ public:
     static db::timeout_clock::time_point default_timeout();
 private:
     static thread_local utils::updateable_value<uint32_t> s_default_timeout_in_ms;
-public:
-    static schema_ptr find_table(service::storage_proxy&, const rjson::value& request);
-
-private:
     friend class rmw_operation;
 
+    schema_ptr find_table(const rjson::value& request);
+    schema_ptr get_table(const rjson::value& request);
     std::pair<dht::partition_range_vector, std::vector<query::clustering_range>> calculate_bounds_conditions(schema_ptr schema, const rjson::value& conditions);
     std::optional<attrs_to_get> calculate_attrs_to_get(const rjson::value& req, std::unordered_set<std::string>& used_attribute_names, select_type select = select_type::regular);
     std::pair<dht::partition_range_vector, std::vector<query::clustering_range>> calculate_bounds_condition_expression(schema_ptr schema,

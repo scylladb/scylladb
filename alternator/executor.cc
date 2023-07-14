@@ -241,13 +241,13 @@ static std::string get_table_name(const rjson::value& request) {
  *  name is missing, invalid or the table doesn't exist. If everything is
  *  successful, it returns the table's schema.
  */
-schema_ptr executor::find_table(service::storage_proxy& proxy, const rjson::value& request) {
+schema_ptr executor::find_table(const rjson::value& request) {
     auto table_name = find_table_name(request);
     if (!table_name) {
         return nullptr;
     }
     try {
-        return proxy.data_dictionary().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + sstring(*table_name), *table_name);
+        return _proxy.data_dictionary().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + sstring(*table_name), *table_name);
     } catch(data_dictionary::no_such_column_family&) {
         // DynamoDB returns validation error even when table does not exist
         // and the table name is invalid.
@@ -258,8 +258,8 @@ schema_ptr executor::find_table(service::storage_proxy& proxy, const rjson::valu
     }
 }
 
-schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request) {
-    auto schema = executor::find_table(proxy, request);
+schema_ptr executor::get_table(const rjson::value& request) {
+    auto schema = find_table(request);
     if (!schema) {
         // if we get here then the name was missing, since syntax or missing actual CF 
         // checks throw. Slow path, but just call get_table_name to generate exception. 
@@ -536,7 +536,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     _stats.api_operations.describe_table++;
     elogger.trace("Describing table {}", request);
 
-    schema_ptr schema = get_table(_proxy, request);
+    schema_ptr schema = get_table(request);
 
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
@@ -560,7 +560,7 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     tracing::add_table_name(trace_state, keyspace_name, table_name);
     auto& p = _proxy.container();
 
-    schema_ptr schema = get_table(_proxy, request);
+    schema_ptr schema = get_table(request);
     rjson::value table_description = fill_table_description(schema, table_status::deleting, _proxy);
 
     co_await _mm.container().invoke_on(0, [&] (service::migration_manager& mm) -> future<> {
@@ -1182,13 +1182,13 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         verify_billing_mode(request);
     }
 
-    co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state))]
+    co_return co_await _mm.container().invoke_on(0, [&e = this->container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state))]
                                                 (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
         // FIXME: the following needs to be in a loop. If mm.announce() below
         // fails, we need to retry the whole thing.
         auto group0_guard = co_await mm.start_group0_operation();
 
-        schema_ptr tab = get_table(p.local(), request);
+        schema_ptr tab = e.local().get_table(request);
 
         tracing::add_table_name(gt, tab->ks_name(), tab->cf_name());
 
@@ -1200,9 +1200,10 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
         schema_builder builder(tab);
 
+        auto& proxy = e.local()._proxy;
         rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
         if (stream_specification && stream_specification->IsObject()) {
-            add_stream_options(*stream_specification, builder, p.local());
+            add_stream_options(*stream_specification, builder, proxy);
         }
 
         auto schema = builder.build();
@@ -1211,10 +1212,10 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
         co_await mm.announce(std::move(m), std::move(group0_guard), format("alternator-executor: update {} table", tab->cf_name()));
 
-        co_await mm.wait_for_schema_agreement(p.local().local_db(), db::timeout_clock::now() + 10s, nullptr);
+        co_await mm.wait_for_schema_agreement(proxy.local_db(), db::timeout_clock::now() + 10s, nullptr);
 
         rjson::value status = rjson::empty_object();
-        supplement_table_info(request, *schema, p.local());
+        supplement_table_info(request, *schema, proxy);
         rjson::add(status, "TableDescription", std::move(request));
         co_return make_jsonable(std::move(status));
     });
@@ -1496,7 +1497,7 @@ rmw_operation::returnvalues rmw_operation::parse_returnvalues(const rjson::value
 rmw_operation::rmw_operation(executor& executor, rjson::value&& request)
     : _executor(executor)
     , _request(std::move(request))
-    , _schema(get_table(executor._proxy, _request))
+    , _schema(executor.get_table(_request))
     , _write_isolation(get_write_isolation_for_schema(_schema))
     , _returnvalues(parse_returnvalues(_request))
 {
@@ -3150,7 +3151,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     auto start_time = std::chrono::steady_clock::now();
     elogger.trace("Getting item {}", request);
 
-    schema_ptr schema = get_table(_proxy, request);
+    schema_ptr schema = get_table(request);
 
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 

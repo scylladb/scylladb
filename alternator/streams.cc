@@ -143,7 +143,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
 
     auto limit = rjson::get_opt<int>(request, "Limit").value_or(100);
     auto streams_start = rjson::get_opt<stream_arn>(request, "ExclusiveStartStreamArn");
-    auto table = find_table(_proxy, request);
+    auto table = find_table(request);
     auto db = _proxy.data_dictionary();
 
     if (limit < 1) {
