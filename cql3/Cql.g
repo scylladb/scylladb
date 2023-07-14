@@ -118,7 +118,6 @@ struct uninitialized {
     uninitialized(T&& val) : _val(std::move(val)) {}
     uninitialized& operator=(const uninitialized&) = default;
     uninitialized& operator=(uninitialized&&) = default;
-    operator const T&() const & { return check(), *_val; }
     operator T&&() && { return check(), std::move(*_val); }
     operator std::optional<T>&&() && { return check(), std::move(_val); }
     void check() const { if (!_val) { throw std::runtime_error("not intitialized"); } }
@@ -849,7 +848,7 @@ cfamOrdering[cql3::statements::cf_properties& expr]
 createTypeStatement returns [std::unique_ptr<create_type_statement> expr]
     @init { bool if_not_exists = false; }
     : K_CREATE K_TYPE (K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
-         tn=userTypeName { $expr = std::make_unique<create_type_statement>(tn, if_not_exists); }
+         tn=userTypeName { $expr = std::make_unique<create_type_statement>(ut_name(std::move(tn)), if_not_exists); }
          '(' typeColumns[*expr] ( ',' typeColumns[*expr]? )* ')'
     ;
 
@@ -1012,10 +1011,10 @@ cfisStatic returns [bool isStaticColumn]
  */
 alterTypeStatement returns [std::unique_ptr<alter_type_statement> expr]
     : K_ALTER K_TYPE name=userTypeName
-          ( K_ALTER f=ident K_TYPE v=comparatorType { $expr = std::make_unique<alter_type_statement::add_or_alter>(name, false, f, v); }
-          | K_ADD   f=ident v=comparatorType        { $expr = std::make_unique<alter_type_statement::add_or_alter>(name, true, f, v); }
+          ( K_ALTER f=ident K_TYPE v=comparatorType { $expr = std::make_unique<alter_type_statement::add_or_alter>(std::move(name), false, f, v); }
+          | K_ADD   f=ident v=comparatorType        { $expr = std::make_unique<alter_type_statement::add_or_alter>(std::move(name), true, f, v); }
           | K_RENAME
-               { $expr = std::make_unique<alter_type_statement::renames>(name); }
+               { $expr = std::make_unique<alter_type_statement::renames>(std::move(name)); }
                renames[{ static_cast<alter_type_statement::renames&>(*$expr) }]
           )
     ;
@@ -1059,7 +1058,7 @@ dropTableStatement returns [std::unique_ptr<drop_table_statement> stmt]
  */
 dropTypeStatement returns [std::unique_ptr<drop_type_statement> stmt]
     @init { bool if_exists = false; }
-    : K_DROP K_TYPE (K_IF K_EXISTS { if_exists = true; } )? name=userTypeName { $stmt = std::make_unique<drop_type_statement>(name, if_exists); }
+    : K_DROP K_TYPE (K_IF K_EXISTS { if_exists = true; } )? name=userTypeName { $stmt = std::make_unique<drop_type_statement>(std::move(name), if_exists); }
     ;
 
 /**
@@ -1102,10 +1101,10 @@ grantStatement returns [std::unique_ptr<grant_statement> stmt]
     : K_GRANT
           permissionOrAll
       K_ON
-          resource
+          r=resource
       K_TO
           grantee=userOrRoleName
-      { $stmt = std::make_unique<grant_statement>($permissionOrAll.perms, $resource.res, std::move(grantee)); }
+      { $stmt = std::make_unique<grant_statement>($permissionOrAll.perms, std::move(r), std::move(grantee)); }
     ;
 
 /**
@@ -1115,10 +1114,10 @@ revokeStatement returns [std::unique_ptr<revoke_statement> stmt]
     : K_REVOKE
           permissionOrAll
       K_ON
-          resource
+          r=resource
       K_FROM
           revokee=userOrRoleName
-      { $stmt = std::make_unique<revoke_statement>($permissionOrAll.perms, $resource.res, std::move(revokee)); }
+      { $stmt = std::make_unique<revoke_statement>($permissionOrAll.perms, std::move(r), std::move(revokee)); }
     ;
 
 /**
@@ -1145,8 +1144,8 @@ listPermissionsStatement returns [std::unique_ptr<list_permissions_statement> st
     }
     : K_LIST
           permissionOrAll
-      ( K_ON resource { r = $resource.res; } )?
-      ( K_OF rn=userOrRoleName { role = sstring(static_cast<cql3::role_name>(rn).to_string()); } )?
+      ( K_ON rr=resource { r = std::move(rr); } )?
+      ( K_OF rn=userOrRoleName { role = sstring(cql3::role_name(std::move(rn)).to_string()); } )?
       ( K_NORECURSIVE { recursive = false; } )?
       { $stmt = std::make_unique<list_permissions_statement>($permissionOrAll.perms, std::move(r), std::move(role), recursive); }
     ;
@@ -1176,7 +1175,7 @@ dataResource returns [uninitialized<auth::resource> res]
 
 roleResource returns [uninitialized<auth::resource> res]
     : K_ALL K_ROLES { $res = auth::resource(auth::resource_kind::role); }
-    | K_ROLE role = userOrRoleName { $res = auth::make_role_resource(static_cast<const cql3::role_name&>(role).to_string()); }
+    | K_ROLE role = userOrRoleName { $res = auth::make_role_resource(cql3::role_name(std::move(role)).to_string()); }
     ;
 
 functionResource returns [uninitialized<auth::resource> res]
@@ -1233,7 +1232,7 @@ alterUserStatement returns [std::unique_ptr<alter_role_statement> stmt]
 dropUserStatement returns [std::unique_ptr<drop_role_statement> stmt]
     @init { bool ifExists = false; }
     : K_DROP K_USER (K_IF K_EXISTS { ifExists = true; })? u=username
-      { $stmt = std::make_unique<drop_role_statement>(cql3::role_name(u, cql3::preserve_role_case::yes), ifExists); }
+      { $stmt = std::make_unique<drop_role_statement>(cql3::role_name(std::move(u), cql3::preserve_role_case::yes), ifExists); }
     ;
 
 /**
@@ -1255,7 +1254,7 @@ createRoleStatement returns [std::unique_ptr<create_role_statement> stmt]
     }
     : K_CREATE K_ROLE (K_IF K_NOT K_EXISTS { if_not_exists = true; })? name=userOrRoleName
       (K_WITH roleOptions[opts])?
-      { $stmt = std::make_unique<create_role_statement>(name, std::move(opts), if_not_exists); }
+      { $stmt = std::make_unique<create_role_statement>(std::move(name), std::move(opts), if_not_exists); }
     ;
 
 /**
@@ -1267,7 +1266,7 @@ alterRoleStatement returns [std::unique_ptr<alter_role_statement> stmt]
     }
     : K_ALTER K_ROLE name=userOrRoleName
       (K_WITH roleOptions[opts])?
-      { $stmt = std::make_unique<alter_role_statement>(name, std::move(opts)); }
+      { $stmt = std::make_unique<alter_role_statement>(std::move(name), std::move(opts)); }
     ;
 
 /**
@@ -1278,7 +1277,7 @@ dropRoleStatement returns [std::unique_ptr<drop_role_statement> stmt]
         bool if_exists = false;
     }
     : K_DROP K_ROLE (K_IF K_EXISTS { if_exists = true; })? name=userOrRoleName
-      { $stmt = std::make_unique<drop_role_statement>(name, if_exists); }
+      { $stmt = std::make_unique<drop_role_statement>(std::move(name), if_exists); }
     ;
 
 /**
@@ -1432,7 +1431,7 @@ describeStatement returns [std::unique_ptr<cql3::statements::raw::describe_state
     | K_INDEX idx=columnFamilyName                  { $stmt = cql3::statements::raw::describe_statement::index(idx);               }
     | K_MATERIALIZED K_VIEW view=columnFamilyName   { $stmt = cql3::statements::raw::describe_statement::view(view);               }
     | (K_TYPES) => K_TYPES                          { $stmt = cql3::statements::raw::describe_statement::types();                  }
-    | K_TYPE tn=userTypeName                        { $stmt = cql3::statements::raw::describe_statement::type(tn);                 }
+    | K_TYPE tn=userTypeName                        { $stmt = cql3::statements::raw::describe_statement::type(std::move(tn));      }
     | (K_FUNCTIONS) => K_FUNCTIONS                  { $stmt = cql3::statements::raw::describe_statement::functions();              }
     | K_FUNCTION fn=functionName                    { $stmt = cql3::statements::raw::describe_statement::function(fn);             }
     | (K_AGGREGATES) => K_AGGREGATES                { $stmt = cql3::statements::raw::describe_statement::aggregates();             }
@@ -1885,7 +1884,7 @@ comparator_type [bool internal] returns [shared_ptr<cql3_type::raw> t]
     : n=native_or_internal_type[internal]     { $t = cql3_type::raw::from(n); }
     | c=collection_type[internal]   { $t = c; }
     | tt=tuple_type[internal]       { $t = tt; }
-    | id=userTypeName   { $t = cql3::cql3_type::raw::user_type(id); }
+    | id=userTypeName   { $t = cql3::cql3_type::raw::user_type(std::move(id)); }
     | K_FROZEN '<' f=comparator_type[internal] '>'
       {
         try {
