@@ -6,15 +6,15 @@
 # This file configures pytest for all tests in this directory, and also
 # defines common test fixtures for all of them to use
 
-import asyncio
 import ssl
 from typing import List
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient, IPAddress
+from test.pylib.async_cql import event_loop, run_async
 import logging
 import pytest
-from cassandra.cluster import Session, ResponseFuture                    # type: ignore # pylint: disable=no-name-in-module
+from cassandra.cluster import Session                                    # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Cluster, ConsistencyLevel                  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT     # type: ignore # pylint: disable=no-name-in-module
 from cassandra.policies import RoundRobinPolicy                          # type: ignore
@@ -22,6 +22,9 @@ from cassandra.policies import TokenAwarePolicy                          # type:
 from cassandra.policies import WhiteListRoundRobinPolicy                 # type: ignore
 from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
 from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
+
+
+Session.run_async = run_async     # patch Session for convenience
 
 
 logger = logging.getLogger(__name__)
@@ -57,58 +60,6 @@ def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
     item.stash[FAILED_KEY] = report.when == "call" and report.failed
-
-
-# Change default pytest-asyncio event_loop fixture scope to session to
-# allow async fixtures with scope larger than function. (e.g. manager fixture)
-# See https://github.com/pytest-dev/pytest-asyncio/issues/68
-@pytest.fixture(scope="session")
-def event_loop(request):
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
-
-
-def _wrap_future(f: ResponseFuture) -> asyncio.Future:
-    """Wrap a cassandra Future into an asyncio.Future object.
-
-    Args:
-        f: future to wrap
-
-    Returns:
-        And asyncio.Future object which can be awaited.
-    """
-    loop = asyncio.get_event_loop()
-    aio_future = loop.create_future()
-
-    def on_result(result):
-        if not aio_future.done():
-            loop.call_soon_threadsafe(aio_future.set_result, result)
-        else:
-            logger.debug("_wrap_future: on_result() on already done future: %s", result)
-
-    def on_error(exception, *_):
-        if not aio_future.done():
-            loop.call_soon_threadsafe(aio_future.set_exception, exception)
-        else:
-            logger.debug("_wrap_future: on_error() on already done future: %s"), result
-
-    f.add_callback(on_result)
-    f.add_errback(on_error)
-    return aio_future
-
-
-def run_async(self, *args, **kwargs) -> asyncio.Future:
-    # The default timeouts should have been more than enough, but in some
-    # extreme cases with a very slow debug build running on a slow or very busy
-    # machine, they may not be. Observed tests reach 160 seconds. So it's
-    # incremented to 200 seconds.
-    # See issue #11289.
-    kwargs.setdefault("timeout", 200.0)
-    return _wrap_future(self.execute_async(*args, **kwargs))
-
-
-Session.run_async = run_async
 
 
 # cluster_con helper: set up client object for communicating with the CQL API.
