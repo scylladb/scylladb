@@ -116,6 +116,7 @@ struct uninitialized {
     uninitialized(uninitialized&&) = default;
     uninitialized(const T& val) : _val(val) {}
     uninitialized(T&& val) : _val(std::move(val)) {}
+    uninitialized(std::convertible_to<T> auto&& x) : _val(std::forward<decltype(x)>(x)) {}
     uninitialized& operator=(const uninitialized&) = default;
     uninitialized& operator=(uninitialized&&) = default;
     operator T&&() && { return check(), std::move(*_val); }
