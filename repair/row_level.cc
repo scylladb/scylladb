@@ -367,6 +367,7 @@ public:
 
     future<> on_end_of_stream() noexcept {
       return _reader.close().then([this] {
+        _permit.release_base_resources();
         _reader = mutation_fragment_v1_stream(make_empty_flat_reader_v2(_schema, _permit));
         _reader_handle.reset();
       });
@@ -374,6 +375,7 @@ public:
 
     future<> close() noexcept {
       return _reader.close().then([this] {
+        _permit.release_base_resources();
         _reader_handle.reset();
       });
     }
