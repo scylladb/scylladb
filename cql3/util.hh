@@ -29,7 +29,7 @@ namespace util {
 
 void do_with_parser_impl(const sstring_view& cql, noncopyable_function<void (cql3_parser::CqlParser& p)> func);
 
-template <typename Func, typename Result = std::result_of_t<Func(cql3_parser::CqlParser&)>>
+template <typename Func, typename Result = cql3_parser::unwrap_uninitialized_t<std::result_of_t<Func(cql3_parser::CqlParser&)>>>
 Result do_with_parser(const sstring_view& cql, Func&& f) {
     std::optional<Result> ret;
     do_with_parser_impl(cql, [&] (cql3_parser::CqlParser& parser) {
