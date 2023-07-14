@@ -93,10 +93,8 @@ class partition_snapshot_flat_reader : public flat_mutation_reader_v2::impl, pub
         void maybe_refresh_state(const query::clustering_range& ck_range_snapshot,
                            const std::optional<position_in_partition>& last_row,
                            const std::optional<position_in_partition>& last_rts) {
-            auto mark = _snapshot->get_change_mark();
-            if (mark != _change_mark) {
+            if (_snapshot->get_change_mark() != _change_mark) {
                 do_refresh_state(ck_range_snapshot, last_row, last_rts);
-                _change_mark = mark;
             }
         }
 
@@ -159,6 +157,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader_v2::impl, pub
 
             boost::range::make_heap(_clustering_rows, _heap_cmp);
             boost::range::make_heap(_range_tombstones, _heap_cmp);
+            _change_mark = _snapshot->get_change_mark();
         }
         // Valid if has_more_rows()
         const rows_entry& pop_clustering_row() {
@@ -231,7 +230,9 @@ class partition_snapshot_flat_reader : public flat_mutation_reader_v2::impl, pub
         { }
 
         void reset_state(const query::clustering_range& ck_range_snapshot) {
-            do_refresh_state(ck_range_snapshot, {}, {});
+            return in_alloc_section([&] {
+                do_refresh_state(ck_range_snapshot, {}, {});
+            });
         }
 
         template<typename Function>
