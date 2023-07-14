@@ -71,6 +71,13 @@ commitlog_sync_period_in_ms: 10000
 # is reasonable.
 commitlog_segment_size_in_mb: 32
 
+# The size of the individual schema commitlog file segments.
+
+# The segment size puts a limit on the mutation size that can be
+# written at once, and some schema mutation writes are much larger
+# than average.
+schema_commitlog_segment_size_in_mb: 32
+
 # seed_provider class_name is saved for future use.
 # A seed address is mandatory.
 seed_provider:
