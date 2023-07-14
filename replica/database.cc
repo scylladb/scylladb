@@ -952,7 +952,6 @@ void database::maybe_init_schema_commitlog() {
     c.metrics_category_name = "schema-commitlog";
     c.commitlog_total_space_in_mb = 10 << 20;
     c.commitlog_segment_size_in_mb = _cfg.schema_commitlog_segment_size_in_mb();
-    c.commitlog_sync_period_in_ms = _cfg.commitlog_sync_period_in_ms();
     c.mode = db::commitlog::sync_mode::BATCH;
     c.extensions = &_cfg.extensions();
     c.use_o_dsync = _cfg.commitlog_use_o_dsync();
