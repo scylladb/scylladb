@@ -1822,7 +1822,7 @@ static mutation_sets generate_mutation_sets() {
 
         clustering_key ck1 = clustering_key::from_deeply_exploded(*s1, {data_value(bytes("ck1_0")), data_value(bytes("ck1_1"))});
         clustering_key ck2 = clustering_key::from_deeply_exploded(*s1, {data_value(bytes("ck2_0")), data_value(bytes("ck2_1"))});
-        auto ttl = gc_clock::duration(1);
+        auto ttl = gc_clock::duration(10000);   // Note: large value to avoid deletion on tests ignoring query time
 
         {
             auto tomb = new_tombstone();
