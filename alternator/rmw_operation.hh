@@ -79,6 +79,7 @@ protected:
     // called more than once, if apply() will sometimes set this field it
     // must set it (even if just to the default empty value) every time.
     mutable rjson::value _return_attributes;
+    parsed::condition_expression get_parsed_condition_expression(rjson::value& request);
 public:
     // The constructor of a rmw_operation subclass should parse the request
     // and try to discover as many input errors as it can before really

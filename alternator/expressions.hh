@@ -21,21 +21,23 @@
 
 namespace alternator {
 
+namespace parsed {
+    update_expression parse_update_expression(std::string_view query);
+    projection_expression parse_projection_expression(std::string_view query);
+    condition_expression parse_condition_expression(std::string_view query, const char* caller);
+}
+
 class expressions_syntax_error : public std::runtime_error {
 public:
     using runtime_error::runtime_error;
 };
-
-parsed::update_expression parse_update_expression(std::string_view query);
-std::vector<parsed::path> parse_projection_expression(std::string_view query);
-parsed::condition_expression parse_condition_expression(std::string_view query, const char* caller);
 
 void resolve_update_expression(parsed::update_expression& ue,
         const rjson::value* expression_attribute_names,
         const rjson::value* expression_attribute_values,
         std::unordered_set<std::string>& used_attribute_names,
         std::unordered_set<std::string>& used_attribute_values);
-void resolve_projection_expression(std::vector<parsed::path>& pe,
+void resolve_projection_expression(parsed::projection_expression& pe,
         const rjson::value* expression_attribute_names,
         std::unordered_set<std::string>& used_attribute_names);
 void resolve_condition_expression(parsed::condition_expression& ce,

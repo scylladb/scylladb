@@ -69,6 +69,8 @@ public:
     friend std::ostream& operator<<(std::ostream&, const path&);
 };
 
+using projection_expression = std::vector<parsed::path>;
+
 // When an expression is first parsed, all constants are references, like
 // ":val1", into ExpressionAttributeValues. This uses std::string() variant.
 // The resolve_value() function replaces these constants by the JSON item

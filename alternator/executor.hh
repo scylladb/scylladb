@@ -10,6 +10,7 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/http/httpd.hh>
+#include "alternator/expressions_types.hh"
 #include "seastarx.hh"
 #include <seastar/json/json_elements.hh>
 #include <seastar/core/sharded.hh>
@@ -54,6 +55,7 @@ class gossiper;
 namespace alternator {
 
 class rmw_operation;
+enum class select_type { regular, count, projection };
 
 struct make_jsonable : public json::jsonable {
     rjson::value _value;
@@ -214,6 +216,10 @@ public:
         return make_ready_future<>();
     }
 
+    parsed::update_expression parse_update_expression(std::string_view query);
+    parsed::projection_expression parse_projection_expression(std::string_view query);
+    parsed::condition_expression parse_condition_expression(std::string_view query, const char* caller);
+
     static sstring table_name(const schema&);
     static db::timeout_clock::time_point default_timeout();
 private:
@@ -224,8 +230,17 @@ public:
 private:
     friend class rmw_operation;
 
+    std::pair<dht::partition_range_vector, std::vector<query::clustering_range>> calculate_bounds_conditions(schema_ptr schema, const rjson::value& conditions);
+    std::optional<attrs_to_get> calculate_attrs_to_get(const rjson::value& req, std::unordered_set<std::string>& used_attribute_names, select_type select = select_type::regular);
+    std::pair<dht::partition_range_vector, std::vector<query::clustering_range>> calculate_bounds_condition_expression(schema_ptr schema,
+        const rjson::value& expression,
+        const rjson::value* expression_attribute_values,
+        std::unordered_set<std::string>& used_attribute_values,
+        const rjson::value* expression_attribute_names,
+        std::unordered_set<std::string>& used_attribute_names);
+
     static void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string,std::string> * = nullptr);
-    
+
 public:
     static void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>&);
 

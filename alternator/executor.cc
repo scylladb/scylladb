@@ -1635,7 +1635,22 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     });
 }
 
-static parsed::condition_expression get_parsed_condition_expression(rjson::value& request) {
+parsed::condition_expression
+executor::parse_condition_expression(std::string_view query, const char* caller) {
+    return parsed::parse_condition_expression(query, caller);
+}
+
+parsed::update_expression
+executor::parse_update_expression(std::string_view query) {
+    return parsed::parse_update_expression(query);
+}
+
+parsed::projection_expression
+executor::parse_projection_expression(std::string_view query) {
+    return parsed::parse_projection_expression(query);
+}
+
+parsed::condition_expression rmw_operation::get_parsed_condition_expression(rjson::value& request) {
     rjson::value* condition_expression = rjson::find(request, "ConditionExpression");
     if (!condition_expression) {
         // Returning an empty() condition_expression means no condition.
@@ -1648,7 +1663,7 @@ static parsed::condition_expression get_parsed_condition_expression(rjson::value
         throw api_error::validation("ConditionExpression must not be empty");
     }
     try {
-        return parse_condition_expression(rjson::to_string_view(*condition_expression), "ConditionExpression");
+        return _executor.parse_condition_expression(rjson::to_string_view(*condition_expression), "ConditionExpression");
     } catch(expressions_syntax_error& e) {
         throw api_error::validation(e.what());
     }
@@ -2241,7 +2256,6 @@ void attribute_path_map_add(const char* source, attribute_path_map<T>& map, cons
 // An ValidationException is thrown when recognizing an invalid combination
 // of options - such as ALL_PROJECTED_ATTRIBUTES for a base table, or
 // SPECIFIC_ATTRIBUTES without ProjectionExpression or AttributesToGet.
-enum class select_type { regular, count, projection };
 static select_type parse_select(const rjson::value& request, table_or_view_type table_type) {
     const rjson::value* select_value = rjson::find(request, "Select");
     if (!select_value) {
@@ -2295,8 +2309,7 @@ static select_type parse_select(const rjson::value& request, table_or_view_type 
 // that we will need to extract from that serialized JSON.
 // For example, if ProjectionExpression lists a.b and a.c[2], we
 // return one top-level attribute name, "a", with the value "{b, c[2]}".
-
-static std::optional<attrs_to_get> calculate_attrs_to_get(const rjson::value& req, std::unordered_set<std::string>& used_attribute_names, select_type select = select_type::regular) {
+std::optional<attrs_to_get> executor::calculate_attrs_to_get(const rjson::value& req, std::unordered_set<std::string>& used_attribute_names, select_type select) {
     if (select == select_type::count) {
         // An empty map asks to retrieve no attributes. Note that this is
         // different from a disengaged optional which means retrieve all.
@@ -2322,7 +2335,7 @@ static std::optional<attrs_to_get> calculate_attrs_to_get(const rjson::value& re
     } else if (has_projection_expression) {
         const rjson::value& projection_expression = req["ProjectionExpression"];
         const rjson::value* expression_attribute_names = rjson::find(req, "ExpressionAttributeNames");
-        std::vector<parsed::path> paths_to_get;
+        parsed::projection_expression paths_to_get;
         try {
             paths_to_get = parse_projection_expression(rjson::to_string_view(projection_expression));
         } catch(expressions_syntax_error& e) {
@@ -2529,7 +2542,7 @@ update_item_operation::update_item_operation(executor& executor, rjson::value&& 
             throw api_error::validation("UpdateExpression must be a string");
         }
         try {
-            parsed::update_expression expr = parse_update_expression(rjson::to_string_view(*update_expression));
+            parsed::update_expression expr = _executor.parse_update_expression(rjson::to_string_view(*update_expression));
             resolve_update_expression(expr,
                     expression_attribute_names, expression_attribute_values,
                     used_attribute_names, used_attribute_values);
@@ -3450,7 +3463,7 @@ filter::filter(executor& executor, const rjson::value& request, request_type rt,
             throw api_error::validation("Cannot use both old-style and new-style parameters in same request: FilterExpression and AttributesToGet");
         }
         try {
-            auto parsed = parse_condition_expression(rjson::to_string_view(*expression), "FilterExpression");
+            auto parsed = executor.parse_condition_expression(rjson::to_string_view(*expression), "FilterExpression");
             const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
             const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
             resolve_condition_expression(parsed,
@@ -3929,8 +3942,8 @@ static query::clustering_range calculate_ck_bound(schema_ptr schema, const colum
 }
 
 // Calculates primary key bounds from KeyConditions
-static std::pair<dht::partition_range_vector, std::vector<query::clustering_range>>
-calculate_bounds_conditions(schema_ptr schema, const rjson::value& conditions) {
+std::pair<dht::partition_range_vector, std::vector<query::clustering_range>>
+executor::calculate_bounds_conditions(schema_ptr schema, const rjson::value& conditions) {
     dht::partition_range_vector partition_ranges;
     std::vector<query::clustering_range> ck_bounds;
 
@@ -4056,8 +4069,8 @@ static void condition_expression_and_list(
 }
 
 // Calculates primary key bounds from KeyConditionExpression
-static std::pair<dht::partition_range_vector, std::vector<query::clustering_range>>
-calculate_bounds_condition_expression(schema_ptr schema,
+std::pair<dht::partition_range_vector, std::vector<query::clustering_range>>
+executor::calculate_bounds_condition_expression(schema_ptr schema,
         const rjson::value& expression,
         const rjson::value* expression_attribute_values,
         std::unordered_set<std::string>& used_attribute_values,
