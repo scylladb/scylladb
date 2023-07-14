@@ -530,7 +530,7 @@ int statement_restrictions::score(const secondary_index::index& index) const {
 std::pair<std::optional<secondary_index::index>, expr::expression> statement_restrictions::find_idx(const secondary_index::secondary_index_manager& sim) const {
     std::optional<secondary_index::index> chosen_index;
     int chosen_index_score = 0;
-    expr::expression chosen_index_restrictions;
+    expr::expression chosen_index_restrictions = expr::conjunction({});
 
     for (const auto& index : sim.list_indexes()) {
         auto cdef = _schema->get_column_definition(to_bytes(index.target_column()));
@@ -1849,7 +1849,7 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
 
     // If we're here, it means the index cannot be on a partition column: process_partition_key_restrictions()
     // avoids indexing when _partition_range_is_simple.  See _idx_tbl_ck_prefix blurb for its composition.
-    _idx_tbl_ck_prefix = std::vector<expr::expression>(1 + _schema->partition_key_size());
+    _idx_tbl_ck_prefix = std::vector<expr::expression>(1 + _schema->partition_key_size(), expr::conjunction({}));
     _idx_tbl_ck_prefix->reserve(_idx_tbl_ck_prefix->size() + idx_tbl_schema.clustering_key_size());
     for (const auto& e : _partition_range_restrictions) {
         const auto col = expr::as<column_value>(find(e, oper_t::EQ)->lhs).col;
