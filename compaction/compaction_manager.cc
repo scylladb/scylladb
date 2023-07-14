@@ -1408,13 +1408,12 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
         // regular compaction runs in between and picks the same files.
         sstables = co_await get_func();
         compacting.register_compacting(sstables);
-
-        // sort sstables by size in descending order, such that the smallest files will be rewritten first
-        // (as sstable to be rewritten is popped off from the back of container), so rewrite will have higher
-        // chance to succeed when the biggest files are reached.
-        std::sort(sstables.begin(), sstables.end(), [](sstables::shared_sstable& a, sstables::shared_sstable& b) {
-            return a->data_size() > b->data_size();
-        });
+    });
+    // sort sstables by size in descending order, such that the smallest files will be rewritten first
+    // (as sstable to be rewritten is popped off from the back of container), so rewrite will have higher
+    // chance to succeed when the biggest files are reached.
+    std::ranges::sort(sstables, [](sstables::shared_sstable& a, sstables::shared_sstable& b) {
+        return a->data_size() > b->data_size();
     });
     co_return co_await perform_task(seastar::make_shared<TaskType>(*this, &t, std::move(options), std::move(owned_ranges_ptr), std::move(sstables), std::move(compacting), std::forward<Args>(args)...));
 }
