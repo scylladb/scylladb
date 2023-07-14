@@ -3410,7 +3410,7 @@ public:
     enum class request_type { SCAN, QUERY };
     // Note that a filter does not store pointers to the query used to
     // construct it.
-    filter(const rjson::value& request, request_type rt,
+    filter(executor& executor, const rjson::value& request, request_type rt,
             std::unordered_set<std::string>& used_attribute_names,
             std::unordered_set<std::string>& used_attribute_values);
     bool check(const rjson::value& item) const;
@@ -3422,7 +3422,7 @@ public:
     operator bool() const { return bool(_imp); }
 };
 
-filter::filter(const rjson::value& request, request_type rt,
+filter::filter(executor& executor, const rjson::value& request, request_type rt,
         std::unordered_set<std::string>& used_attribute_names,
         std::unordered_set<std::string>& used_attribute_values) {
     const rjson::value* expression = rjson::find(request, "FilterExpression");
@@ -3847,7 +3847,7 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     }
     std::vector<query::clustering_range> ck_bounds{query::clustering_range::make_open_ended_both_sides()};
 
-    filter filter(request, filter::request_type::SCAN, used_attribute_names, used_attribute_values);
+    filter filter(*this, request, filter::request_type::SCAN, used_attribute_names, used_attribute_values);
     // Note: Unlike Query, Scan does allow a filter on the key attributes.
     // For some *specific* cases of key filtering, such an equality test on
     // partition key or comparison operator for the sort key, we could have
@@ -4311,7 +4311,7 @@ future<executor::request_return_type> executor::query(client_state& client_state
                         expression_attribute_names,
                         used_attribute_names);
 
-    filter filter(request, filter::request_type::QUERY,
+    filter filter(*this, request, filter::request_type::QUERY,
             used_attribute_names, used_attribute_values);
 
     // A query is not allowed to filter on the partition key or the sort key.
