@@ -1493,9 +1493,10 @@ rmw_operation::returnvalues rmw_operation::parse_returnvalues(const rjson::value
     }
 }
 
-rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& request)
-    : _request(std::move(request))
-    , _schema(get_table(proxy, _request))
+rmw_operation::rmw_operation(executor& executor, rjson::value&& request)
+    : _executor(executor)
+    , _request(std::move(request))
+    , _schema(get_table(executor._proxy, _request))
     , _write_isolation(get_write_isolation_for_schema(_schema))
     , _returnvalues(parse_returnvalues(_request))
 {
@@ -1681,8 +1682,8 @@ private:
     put_or_delete_item _mutation_builder;
 public:
     parsed::condition_expression _condition_expression;
-    put_item_operation(service::storage_proxy& proxy, rjson::value&& request)
-        : rmw_operation(proxy, std::move(request))
+    put_item_operation(executor& executor, rjson::value&& request)
+        : rmw_operation(executor, std::move(request))
         , _mutation_builder(rjson::get(_request, "Item"), schema(), put_or_delete_item::put_item{}) {
         _pk = _mutation_builder.pk();
         _ck = _mutation_builder.ck();
@@ -1737,7 +1738,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     auto start_time = std::chrono::steady_clock::now();
     elogger.trace("put_item {}", request);
 
-    auto op = make_shared<put_item_operation>(_proxy, std::move(request));
+    auto op = make_shared<put_item_operation>(*this, std::move(request));
     tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
     const bool needs_read_before_write = op->needs_read_before_write();
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
@@ -1766,8 +1767,8 @@ private:
     put_or_delete_item _mutation_builder;
 public:
     parsed::condition_expression _condition_expression;
-    delete_item_operation(service::storage_proxy& proxy, rjson::value&& request)
-        : rmw_operation(proxy, std::move(request))
+    delete_item_operation(executor& executor, rjson::value&& request)
+        : rmw_operation(executor, std::move(request))
         , _mutation_builder(rjson::get(_request, "Key"), schema(), put_or_delete_item::delete_item{}) {
         _pk = _mutation_builder.pk();
         _ck = _mutation_builder.ck();
@@ -1822,7 +1823,7 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     auto start_time = std::chrono::steady_clock::now();
     elogger.trace("delete_item {}", request);
 
-    auto op = make_shared<delete_item_operation>(_proxy, std::move(request));
+    auto op = make_shared<delete_item_operation>(*this, std::move(request));
     tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
     const bool needs_read_before_write = op->needs_read_before_write();
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
@@ -2500,14 +2501,14 @@ public:
 
     parsed::condition_expression _condition_expression;
 
-    update_item_operation(service::storage_proxy& proxy, rjson::value&& request);
+    update_item_operation(executor& executor, rjson::value&& request);
     virtual ~update_item_operation() = default;
     virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const override;
     bool needs_read_before_write() const;
 };
 
-update_item_operation::update_item_operation(service::storage_proxy& proxy, rjson::value&& update_info)
-    : rmw_operation(proxy, std::move(update_info))
+update_item_operation::update_item_operation(executor& executor, rjson::value&& update_info)
+    : rmw_operation(executor, std::move(update_info))
 {
     const rjson::value* key = rjson::find(_request, "Key");
     if (!key) {
@@ -3069,7 +3070,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
     auto start_time = std::chrono::steady_clock::now();
     elogger.trace("update_item {}", request);
 
-    auto op = make_shared<update_item_operation>(_proxy, std::move(request));
+    auto op = make_shared<update_item_operation>(*this, std::move(request));
     tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
     const bool needs_read_before_write = op->needs_read_before_write();
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
