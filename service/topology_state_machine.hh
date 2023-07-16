@@ -119,6 +119,10 @@ struct topology {
     bool contains(raft::server_id id);
     // Calculates a set of features that are supported by all normal nodes but not yet enabled
     std::set<sstring> calculate_not_yet_enabled_features() const;
+    // Number of nodes that are not in the 'left' state
+    size_t size() const;
+    // Are there any non-left nodes?
+    bool is_empty() const;
 };
 
 struct raft_topology_snapshot {

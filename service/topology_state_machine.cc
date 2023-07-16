@@ -60,6 +60,14 @@ std::set<sstring> topology::calculate_not_yet_enabled_features() const {
     return to_enable;
 }
 
+size_t topology::size() const {
+    return normal_nodes.size() + transition_nodes.size() + new_nodes.size();
+}
+
+bool topology::is_empty() const {
+    return size() == 0;
+}
+
 std::ostream& operator<<(std::ostream& os, const fencing_token& fencing_token) {
     return os << "{" << fencing_token.topology_version << "}";
 }
