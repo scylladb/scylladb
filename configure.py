@@ -381,6 +381,7 @@ modes = {
 
 scylla_tests = set([
     'test/boost/UUID_test',
+    'test/boost/pretty_printers_test',
     'test/boost/cdc_generation_test',
     'test/boost/aggregate_fcts_test',
     'test/boost/allocation_strategy_test',

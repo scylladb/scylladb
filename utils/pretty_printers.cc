@@ -11,16 +11,20 @@
 namespace utils {
 
 std::ostream& operator<<(std::ostream& os, pretty_printed_data_size data) {
-    static constexpr const char *suffixes[] = {" bytes", "kB", "MB", "GB", "TB", "PB"};
+    static constexpr const char * suffixes[] = {" bytes", "kB", "MB", "GB", "TB", "PB"};
 
-    unsigned exp = 0;
-    while ((data._size >= 1000) && (exp < sizeof(suffixes))) {
-        exp++;
-        data._size /= 1000;
+    const char* suffix = nullptr;
+    uint64_t size = data._size;
+    uint64_t next_size = size;
+    for (auto s : suffixes) {
+        suffix = s;
+        size = next_size;
+        next_size = size / 1000;
+        if (next_size == 0) {
+            break;
+        }
     }
-
-    os << data._size << suffixes[exp];
-    return os;
+    return os << size << suffix;
 }
 
 std::ostream& operator<<(std::ostream& os, pretty_printed_throughput tp) {
