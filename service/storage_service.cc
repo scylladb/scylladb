@@ -1744,6 +1744,11 @@ class topology_coordinator {
 
     // Returns true if the state machine was transitioned into tablet migration path.
     future<bool> maybe_start_tablet_migration(group0_guard);
+
+    future<> await_event() {
+        _as.check();
+        co_await _topo_sm.event.when();
+    }
 public:
     topology_coordinator(
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
@@ -1817,7 +1822,7 @@ future<> topology_coordinator::run() {
             if (!had_work) {
                 // Nothing to work on. Wait for topology change event.
                 slogger.trace("raft topology: topology coordinator fiber has nothing to do. Sleeping.");
-                co_await _topo_sm.event.when();
+                co_await await_event();
                 slogger.trace("raft topology: topology coordinator fiber got an event");
             }
         } catch (raft::request_aborted&) {
