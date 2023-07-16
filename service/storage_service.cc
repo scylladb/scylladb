@@ -2073,6 +2073,18 @@ future<> storage_service::raft_bootstrap(raft::server& raft_server) {
                .set("shard_count", smp::count)
                .set("ignore_msb", _db.local().get_config().murmur3_partitioner_ignore_msb_bits())
                .set("supported_features", _feature_service.supported_feature_set());
+        if (_topology_state_machine._topology.is_empty()) {
+            // We see ourselves as the first node. Try to immediately enable
+            // the set of features that we currently support.
+            //
+            // After this entry is successfully applied, the features will be
+            // implicitly enabled.
+            //
+            // This is a temporary workaround until we have a proper feature check
+            // using the upcoming JOIN_NODE handshake, which will also explicitly
+            // enable features.
+            builder.add_enabled_features(_feature_service.supported_feature_set());
+        }
         topology_change change{{builder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, "bootstrap: add myself to topology");
         try {
