@@ -352,3 +352,5 @@ add_scylla_test(wasm_alloc_test
   KIND SEASTAR)
 add_scylla_test(wasm_test
   KIND SEASTAR)
+add_scylla_test(pretty_printers_test
+  KIND BOOST)
