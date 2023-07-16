@@ -1179,6 +1179,16 @@ class topology_coordinator {
                     " joining nodes or topology operations in progress");
         }
 
+        if (utils::get_local_injector().enter("raft_topology_suppress_enabling_features")) {
+            // Prevent enabling features while the injection is enabled.
+            // The topology coordinator will detect in the next iteration
+            // that there are still some cluster features to enable and will
+            // reach this place again. In order not to spin in a loop, sleep
+            // for a short while.
+            co_await sleep(std::chrono::milliseconds(100));
+            co_return;
+        }
+
         // If we are here, then we noticed that all nodes support some features
         // that are not enabled yet. Perform a global barrier to make sure that:
         //
