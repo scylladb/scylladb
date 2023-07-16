@@ -192,6 +192,7 @@ async def test_partial_upgrade_can_be_finished_with_removenode(manager: ManagerC
         await manager.server_sees_others(srv.server_id, len(servers) - 1)
 
     # The feature should not be enabled yet on any node
+    cql = manager.get_cql()
     for srv in servers:
         host = (await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60))[0]
         assert TEST_FEATURE_NAME not in await get_enabled_features(cql, host)
@@ -202,7 +203,6 @@ async def test_partial_upgrade_can_be_finished_with_removenode(manager: ManagerC
     await manager.remove_node(servers[0].server_id, servers[-1].server_id)
 
     # The feature should eventually become enabled
-    cql = manager.cql
     hosts = await wait_for_cql_and_get_hosts(cql, servers[:-1], time.time() + 60)
     logging.info(f"Waiting until {TEST_FEATURE_NAME} is enabled on all nodes")
     await asyncio.gather(*(wait_for_feature(TEST_FEATURE_NAME, cql, h, time.time() + 300) for h in hosts))
