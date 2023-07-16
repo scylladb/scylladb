@@ -14,16 +14,17 @@ from cassandra.protocol import InvalidRequest
 # shouldn't write to it).
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
-    with new_test_table(cql, test_keyspace, "p int, c1 int, c2 int, v int, PRIMARY KEY (p, c1, c2)") as table:
-        stmt = cql.prepare(f'INSERT INTO {table} (p, c1, c2, v) VALUES (?, ?, ?, ?)')
-        cql.execute(stmt, [0, 0, 0, 1])
-        cql.execute(stmt, [0, 0, 1, 2])
-        cql.execute(stmt, [0, 1, 0, 3])
-        cql.execute(stmt, [0, 1, 1, 4])
-        cql.execute(stmt, [1, 0, 0, 5])
-        cql.execute(stmt, [1, 0, 1, 6])
-        cql.execute(stmt, [1, 1, 0, 7])
-        cql.execute(stmt, [1, 1, 1, 8])
+    with new_test_table(cql, test_keyspace, "p int, c1 int, c2 int, v int, PRIMARY KEY (p, c1, c2)",
+                        extra="WITH default_time_to_live = 1000000") as table:
+        stmt = cql.prepare(f'INSERT INTO {table} (p, c1, c2, v) VALUES (?, ?, ?, ?) USING TIMESTAMP ?')
+        cql.execute(stmt, [0, 0, 0, 1, 100000001])
+        cql.execute(stmt, [0, 0, 1, 2, 100000002])
+        cql.execute(stmt, [0, 1, 0, 3, 100000003])
+        cql.execute(stmt, [0, 1, 1, 4, 100000004])
+        cql.execute(stmt, [1, 0, 0, 5, 100000005])
+        cql.execute(stmt, [1, 0, 1, 6, 100000006])
+        cql.execute(stmt, [1, 1, 0, 7, 100000007])
+        cql.execute(stmt, [1, 1, 1, 8, 100000008])
         # FIXME: I would like to make the table read-only to prevent tests
         # from messing with it accidentally.
         yield table
@@ -147,6 +148,15 @@ def test_group_by_v_and_sum_with_limit(cql, table1):
     assert len(results) == 4
     for i in range(1,4):
         assert results[:i] == list(cql.execute(f'SELECT p,v,sum(v) FROM {table1} GROUP BY p,c1 LIMIT {i}'))
+
+# GROUP BY of a non-aggregated column qualified by ttl or writetime should work (#14715)
+def test_group_by_non_aggregated_mutation_attribute_of_column(cql, table1):
+    results = list(cql.execute(f'SELECT v, writetime(v), ttl(v) FROM {table1} GROUP BY p, c1'))
+    assert len(results) == 4
+    results = sorted(results, key=lambda row: row[0])
+    assert [row[0] for row in results] == [1, 3, 5, 7]
+    assert [row[1] for row in results] == [100000001, 100000003, 100000005, 100000007]
+    assert all([[row[2] > 900000] for row in results])
 
 # NOTE: we have tests for the combination of GROUP BY and SELECT DISTINCT
 # in test_distinct.py (reproducing issue #12479).

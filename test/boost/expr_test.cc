@@ -4634,4 +4634,31 @@ BOOST_AUTO_TEST_CASE(test_levellize_aggregation_depth) {
     BOOST_REQUIRE_EQUAL(aggregation_depth(e), 3);
     // Somewhat fragile, but easiest way to test entire structure
     BOOST_REQUIRE_EQUAL(fmt::format("{:debug}", e), "foo.my_agg(system.sum(system.$$first$$(r)), system.$$first$$(system.$$first$$(r)))");
+
+    // Repeat the test, but for writetime(r) rather than r, to make sure we
+    // get first(writetime(r)) rather than writetime(first(r)) (#14715).
+    // my_agg(sum(r), writetime(r)))
+    auto e2 = expression(
+            function_call{
+                    .func = make_two_arg_aggregate_function(),
+                    .args = {
+                            function_call{
+                                    .func = functions::function_name::native_function("sum"),
+                                    .args = {
+                                            column_value(&schema->regular_column_at(0)),
+                                    },
+                            },
+                            column_mutation_attribute{
+                                .kind = column_mutation_attribute::attribute_kind::ttl, // conveniently returns int32_type like r
+                                .column = column_value(&schema->regular_column_at(0)),
+                            },
+                    },
+            }
+    );
+    e2 = prepare_expression(e2, db, "test_ks", schema.get(), nullptr);
+    BOOST_REQUIRE_EQUAL(aggregation_depth(e2), 2);
+    e2 = levellize_aggregation_depth(e2, 3); // Note: aggregation_depth(e) == 2 before the call
+    BOOST_REQUIRE_EQUAL(aggregation_depth(e2), 3);
+    // Somewhat fragile, but easiest way to test entire structure
+    BOOST_REQUIRE_EQUAL(fmt::format("{:debug}", e2), "foo.my_agg(system.sum(system.$$first$$(r)), system.$$first$$(system.$$first$$(TTL(r))))");
 }

@@ -2855,19 +2855,23 @@ levellize_aggregation_depth(const cql3::expr::expression& e, unsigned desired_de
             recurse(e);
         }
     };
+
+    auto pad_with_calls_to_first_function = [&] (expression ret) {
+        while (desired_depth) {
+            ret = function_call({
+                .func = functions::aggregate_fcts::make_first_function(type_of(ret)),
+                .args = {std::move(ret)},
+            });
+            desired_depth -= 1;
+        }
+        return ret;
+    };
+
     // Implementation trick: we're returning a new expression, so have the visitor
     // accept everything by value to generate a clean copy for us to mutate.
     return visit(overloaded_functor{
         [&] (column_value cv) -> expression {
-            expression ret = std::move(cv);
-            while (desired_depth) {
-                ret = function_call({
-                    .func = functions::aggregate_fcts::make_first_function(type_of(ret)),
-                    .args = {std::move(ret)},
-                });
-                desired_depth -= 1;
-            }
-            return ret;
+            return pad_with_calls_to_first_function(std::move(cv));
         },
         [&] (conjunction c) -> expression {
             recurse_over_range(c.children);
@@ -2883,9 +2887,10 @@ levellize_aggregation_depth(const cql3::expr::expression& e, unsigned desired_de
             recurse(s.sub);
             return s;
         },
+        // column_mutation_attribute doesn't want to be separated from its nested column_value,
+        // so end the recursion if we reach it.
         [&] (column_mutation_attribute cma) -> expression {
-            recurse(cma.column);
-            return cma;
+            return pad_with_calls_to_first_function(std::move(cma));
         },
         [&] (function_call fc) -> expression {
             unsigned this_function_depth = std::visit(overloaded_functor{
