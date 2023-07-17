@@ -278,27 +278,27 @@ void test_timestamp_like_string_conversions(data_type timestamp_type) {
     BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03T12:30:00+1230"), timestamp_type->decompose(tp)));
     BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-02T23:00-0100"), timestamp_type->decompose(tp)));
 
-    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "2015-07-03T00:00:00");
+    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "2015-07-03T00:00:00.000Z");
 
     // test fractional milliseconds
     tp = db_clock::time_point(db_clock::duration(1435881600123));
-    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "2015-07-03T00:00:00.123000");
+    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "2015-07-03T00:00:00.123Z");
 
     // test time_stamps around the unix epoch time
     tp = db_clock::time_point(db_clock::duration(0));
-    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "1970-01-01T00:00:00");
+    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "1970-01-01T00:00:00.000Z");
     tp = db_clock::time_point(db_clock::duration(456));
-    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "1970-01-01T00:00:00.456000");
+    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "1970-01-01T00:00:00.456Z");
     tp = db_clock::time_point(db_clock::duration(-456));
-    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "1969-12-31T23:59:59.544000");
+    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "1969-12-31T23:59:59.544Z");
 
     // test time_stamps around year 0
     tp = db_clock::time_point(db_clock::duration(-62167219200000));
-    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "0000-01-01T00:00:00");
+    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "0000-01-01T00:00:00.000Z");
     tp = db_clock::time_point(db_clock::duration(-62167219199211));
-    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "0000-01-01T00:00:00.789000");
+    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "0000-01-01T00:00:00.789Z");
     tp = db_clock::time_point(db_clock::duration(-62167219200789));
-    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "-0001-12-31T23:59:59.211000");
+    BOOST_REQUIRE_EQUAL(timestamp_type->to_string(timestamp_type->decompose(tp)), "-0001-12-31T23:59:59.211Z");
 
     auto now = time(nullptr);
     ::tm local_now;

@@ -163,7 +163,7 @@ BOOST_AUTO_TEST_CASE(expr_printer_timestamp_test) {
         raw_value::make_value(timestamp_type->from_string("2011-03-02T03:05:00+0000")),
         timestamp_type
     );
-    BOOST_REQUIRE_EQUAL(expr_print(timestamp_const), "'2011-03-02T03:05:00+0000'");
+    BOOST_REQUIRE_EQUAL(expr_print(timestamp_const), "'2011-03-02T03:05:00.000Z'");
 }
 
 BOOST_AUTO_TEST_CASE(expr_printer_time_test) {
@@ -179,7 +179,7 @@ BOOST_AUTO_TEST_CASE(expr_printer_date_test) {
         raw_value::make_value(date_type->from_string("2011-02-03+0000")),
         date_type
     };
-    BOOST_REQUIRE_EQUAL(expr_print(date_const), "'2011-02-03T00:00:00+0000'");
+    BOOST_REQUIRE_EQUAL(expr_print(date_const), "'2011-02-03T00:00:00.000Z'");
 }
 
 BOOST_AUTO_TEST_CASE(expr_printer_duration_test) {

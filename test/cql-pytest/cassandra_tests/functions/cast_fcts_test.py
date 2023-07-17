@@ -169,7 +169,6 @@ def testNoLossOfPrecisionForCastToDecimal(cql, test_keyspace):
         assertRows(execute(cql, table, "SELECT CAST(bigint_clmn AS decimal), CAST(varint_clmn AS decimal) FROM %s"),
                    row(Decimal("9223372036854775807"), Decimal("1234567890123456789")))
 
-@pytest.mark.xfail(reason="issue #14518")
 def testTimeCastsInSelectionClause(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a timeuuid primary key, b timestamp, c date, d time)") as table:
         yearMonthDay = "2015-05-21"

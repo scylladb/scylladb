@@ -489,7 +489,7 @@ struct to_json_string_visitor {
     sstring operator()(const string_type_impl& t) { return quote_json_string(t.to_string(bv)); }
     sstring operator()(const bytes_type_impl& t) { return quote_json_string("0x" + t.to_string(bv)); }
     sstring operator()(const boolean_type_impl& t) { return t.to_string(bv); }
-    sstring operator()(const timestamp_date_base_class& t) { return quote_json_string(t.to_string(bv)); }
+    sstring operator()(const timestamp_date_base_class& t) { return quote_json_string(timestamp_to_json_string(t, bv)); }
     sstring operator()(const timeuuid_type_impl& t) { return quote_json_string(t.to_string(bv)); }
     sstring operator()(const map_type_impl& t) { return to_json_string_aux(t, bv); }
     sstring operator()(const set_type_impl& t) { return to_json_string_aux(t, bv); }
