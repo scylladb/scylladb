@@ -1636,8 +1636,8 @@ SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
 
 SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
     return test_env::do_with_async([] (test_env& env) {
-        auto make_schema = [&] (sstables::compaction_strategy_type cst) {
-            auto builder = schema_builder("tests", "tombstone_purge")
+        auto make_schema = [&] (std::string_view cf, sstables::compaction_strategy_type cst) {
+            auto builder = schema_builder("tests", cf)
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("c1", utf8_type, column_kind::clustering_key)
                     .with_column("r1", utf8_type);
@@ -1645,23 +1645,23 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
             return builder.build();
         };
 
-        auto s = make_schema(sstables::compaction_strategy_type::size_tiered);
-        auto cf = env.make_table_for_tests(s);
-        auto close_cf = deferred_stop(cf);
-        auto sst_gen = cf.make_sst_factory();
+        auto stcs_schema = make_schema("stcs", sstables::compaction_strategy_type::size_tiered);
+        auto stcs_table = env.make_table_for_tests(stcs_schema);
+        auto close_stcs_table = deferred_stop(stcs_table);
+        auto sst_gen = stcs_table.make_sst_factory();
 
-        auto mt = make_lw_shared<replica::memtable>(s);
+        auto mt = make_lw_shared<replica::memtable>(stcs_schema);
 
         static constexpr float expired = 0.33;
         // we want number of expired keys to be ~ 1.5*sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE so as to
         // test ability of histogram to return a good estimation after merging keys.
         static int total_keys = std::ceil(sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE/expired)*1.5;
 
-        auto insert_key = [&] (bytes k, uint32_t ttl, uint32_t expiration_time) {
-            auto key = partition_key::from_exploded(*s, {k});
-            mutation m(s, key);
-            auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
-            m.set_clustered_cell(c_key, *s->get_column_definition("r1"), make_atomic_cell(utf8_type, bytes("a"), ttl, expiration_time));
+        auto insert_key = [&stcs_schema, &mt] (bytes k, uint32_t ttl, uint32_t expiration_time) {
+            auto key = partition_key::from_exploded(*stcs_schema, {k});
+            mutation m(stcs_schema, key);
+            auto c_key = clustering_key::from_exploded(*stcs_schema, {to_bytes("c1")});
+            m.set_clustered_cell(c_key, *stcs_schema->get_column_definition("r1"), make_atomic_cell(utf8_type, bytes("a"), ttl, expiration_time));
             mt->apply(std::move(m));
         };
 
@@ -1680,7 +1680,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         auto sst = make_sstable_containing(sst_gen, mt);
         const auto& stats = sst->get_stats_metadata();
         BOOST_REQUIRE(stats.estimated_tombstone_drop_time.bin.size() == sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE);
-        auto gc_before = gc_clock::now() - s->gc_grace_seconds();
+        auto gc_before = gc_clock::now() - stcs_schema->gc_grace_seconds();
         auto uncompacted_size = sst->data_size();
         // Asserts that two keys are equal to within a positive delta
         BOOST_REQUIRE(std::fabs(sst->estimate_droppable_tombstone_ratio(gc_before) - expired) <= 0.1);
@@ -1689,7 +1689,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         BOOST_REQUIRE(std::fabs(run.estimate_droppable_tombstone_ratio(gc_before) - expired) <= 0.1);
 
         auto creator = sst_gen;
-        auto info = compact_sstables(sstables::compaction_descriptor({ sst }), cf, creator).get0();
+        auto info = compact_sstables(sstables::compaction_descriptor({ sst }), stcs_table, creator).get0();
         BOOST_REQUIRE(info.new_sstables.size() == 1);
         BOOST_REQUIRE(info.new_sstables.front()->estimate_droppable_tombstone_ratio(gc_before) == 0.0f);
         BOOST_REQUIRE_CLOSE(info.new_sstables.front()->data_size(), uncompacted_size*(1-expired), 5);
@@ -1701,13 +1701,13 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         // that's needed because sstable with expired data should be old enough.
         sstables::test(sst).set_data_file_write_time(db_clock::time_point::min());
         auto strategy_c = make_strategy_control_for_test(false);
-        auto descriptor = cs.get_sstables_for_compaction(cf.as_table_state(), *strategy_c, { sst });
+        auto descriptor = cs.get_sstables_for_compaction(stcs_table.as_table_state(), *strategy_c, { sst });
         BOOST_REQUIRE(descriptor.sstables.size() == 1);
         BOOST_REQUIRE(descriptor.sstables.front() == sst);
 
         // Makes sure that get_sstables_for_compaction() is called with a table_state which will provide
         // the correct LCS state.
-        auto lcs_table = env.make_table_for_tests(make_schema(sstables::compaction_strategy_type::leveled));
+        auto lcs_table = env.make_table_for_tests(make_schema("lcs", sstables::compaction_strategy_type::leveled));
         auto close_lcs_table = deferred_stop(lcs_table);
         cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, options);
         sst->set_sstable_level(1);
@@ -1718,7 +1718,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         BOOST_REQUIRE(descriptor.sstables.front()->get_sstable_level() == 1U);
 
         // check tombstone compaction is disabled by default for TWCS
-        auto twcs_table = env.make_table_for_tests(make_schema(sstables::compaction_strategy_type::time_window));
+        auto twcs_table = env.make_table_for_tests(make_schema("twcs", sstables::compaction_strategy_type::time_window));
         auto close_twcs_table = deferred_stop(twcs_table);
         cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::time_window, {});
         descriptor = cs.get_sstables_for_compaction(twcs_table.as_table_state(), *strategy_c, { sst });
@@ -1733,7 +1733,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
             std::map<sstring, sstring> options;
             options.emplace("tombstone_threshold", "0.5f");
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
-            auto descriptor = cs.get_sstables_for_compaction(cf.as_table_state(), *strategy_c, { sst });
+            auto descriptor = cs.get_sstables_for_compaction(stcs_table.as_table_state(), *strategy_c, { sst });
             BOOST_REQUIRE(descriptor.sstables.size() == 0);
         }
         // sstable which was recently created won't be included due to min interval
@@ -1742,7 +1742,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
             options.emplace("tombstone_compaction_interval", "3600");
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
             sstables::test(sst).set_data_file_write_time(db_clock::now());
-            auto descriptor = cs.get_sstables_for_compaction(cf.as_table_state(), *strategy_c, { sst });
+            auto descriptor = cs.get_sstables_for_compaction(stcs_table.as_table_state(), *strategy_c, { sst });
             BOOST_REQUIRE(descriptor.sstables.size() == 0);
         }
     });
