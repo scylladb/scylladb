@@ -18,6 +18,7 @@ from cassandra.protocol import FunctionFailure, InvalidRequest
 import pytest
 import json
 from decimal import Decimal
+from datetime import datetime
 
 @pytest.fixture(scope="module")
 def type1(cql, test_keyspace):
@@ -29,7 +30,7 @@ def type1(cql, test_keyspace):
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace, type1):
     table = test_keyspace + "." + unique_name()
-    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, bigv bigint, a ascii, b boolean, vi varint, mai map<ascii, int>, tup frozen<tuple<text, int>>, l list<text>, d double, t time, dec decimal, tupmap map<frozen<tuple<text, int>>, int>, t1 frozen<{type1}>, \"CaseSensitive\" int)")
+    cql.execute(f"CREATE TABLE {table} (p int PRIMARY KEY, v int, bigv bigint, a ascii, b boolean, vi varint, mai map<ascii, int>, tup frozen<tuple<text, int>>, l list<text>, d double, t time, dec decimal, tupmap map<frozen<tuple<text, int>>, int>, t1 frozen<{type1}>, \"CaseSensitive\" int, ts timestamp)")
     yield table
     cql.execute("DROP TABLE " + table)
 
@@ -334,6 +335,33 @@ def test_select_json_time(cql, table1):
     stmt = cql.prepare(f"INSERT INTO {table1} (p, t) VALUES (?, ?)")
     cql.execute(stmt, [p, 123])
     assert list(cql.execute(f"SELECT JSON t from {table1} where p = {p}")) == [(EquivalentJson('{"t": "00:00:00.000000123"}'),)]
+
+# Check that toJson() returns timestamp string in correct cassandra compatible format (issue #7997)
+# with milliseconds and timezone specification
+def test_tojson_timestamp(cql, table1):
+    p = unique_key_int()
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, ts) VALUES (?, ?)")
+    cql.execute(stmt, [p, datetime(2014, 1, 1, 12, 15, 45)])
+    assert list(cql.execute(f"SELECT toJson(ts) from {table1} where p = {p}")) == [('"2014-01-01 12:15:45.000Z"',)]
+
+# The EquivalentJson class wraps a JSON string, and compare equal to other
+# strings if both are valid JSON strings which decode to the same object.
+# EquivalentJson("....") can be used in assert_rows() checks below, to check
+# whether functionally-equivalent JSON is returned instead of checking for
+# identical strings.
+class EquivalentJson:
+    def __init__(self, s):
+        self.obj = json.loads(s)
+    def __eq__(self, other):
+        if isinstance(other, EquivalentJson):
+            return self.obj == other.obj
+        elif isinstance(other, str):
+            return self.obj == json.loads(other)
+        return NotImplemented
+    # Implementing __repr__ is useful because when a comparison fails, pytest
+    # helpfully prints what it tried to compare, and uses __repr__ for that.
+    def __repr__(self):
+        return f'EquivalentJson("{self.obj}")'
 
 # Test that toJson() can prints a decimal type with a very high mantissa.
 # Reproduces issue #8002, where it was written as 1 and a billion zeroes,
