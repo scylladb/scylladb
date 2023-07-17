@@ -275,7 +275,7 @@ private:
     virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         return _added_backlog * _available_memory;
     }
-    virtual void replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) override {}
+    virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override {}
 };
 
 compaction::compaction_state& compaction_manager::get_compaction_state(table_state* t) {
@@ -1918,6 +1918,7 @@ void compaction_backlog_tracker::replace_sstables(const std::vector<sstables::sh
         return ret;
     };
 
+    // FIXME: propagate exception to caller once all replace_sstables implementations provide strong exception safety guarantees.
     try {
         _impl->replace_sstables(filter_and_revert_charges(old_ssts), filter_and_revert_charges(new_ssts));
     } catch (...) {

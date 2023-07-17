@@ -922,7 +922,7 @@ void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstab
 
 class scylla_sstable_table_state : public compaction::table_state {
     struct dummy_compaction_backlog_tracker : public compaction_backlog_tracker::impl {
-        virtual void replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) override { }
+        virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override { }
         virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override { return 0.0; }
     };
 

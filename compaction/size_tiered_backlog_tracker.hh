@@ -64,10 +64,14 @@
 // certain point in time, whose size is the amount of bytes currently written. So all we need
 // to do is keep track of them too, and add the current estimate to the static part of (4).
 class size_tiered_backlog_tracker final : public compaction_backlog_tracker::impl {
+    struct sstables_backlog_contribution {
+        double value = 0.0f;
+        std::unordered_set<sstables::shared_sstable> sstables;
+    };
+
     sstables::size_tiered_compaction_strategy_options _stcs_options;
     int64_t _total_bytes = 0;
-    double _sstables_backlog_contribution = 0.0f;
-    std::unordered_set<sstables::shared_sstable> _sstables_contributing_backlog;
+    sstables_backlog_contribution _contrib;
     std::unordered_set<sstables::shared_sstable> _all;
 
     struct inflight_component {
@@ -77,12 +81,12 @@ class size_tiered_backlog_tracker final : public compaction_backlog_tracker::imp
 
     inflight_component compacted_backlog(const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) const;
 
-    double log4(double x) const {
+    static double log4(double x) {
         double inv_log_4 = 1.0f / std::log(4);
         return log(x) * inv_log_4;
     }
 
-    void refresh_sstables_backlog_contribution();
+    static sstables_backlog_contribution calculate_sstables_backlog_contribution(const std::vector<sstables::shared_sstable>& all, const sstables::size_tiered_compaction_strategy_options& stcs_options);
 public:
     size_tiered_backlog_tracker(sstables::size_tiered_compaction_strategy_options stcs_options) : _stcs_options(stcs_options) {}
 
@@ -90,7 +94,8 @@ public:
 
     // Removing could be the result of a failure of an in progress write, successful finish of a
     // compaction, or some one-off operation, like drop
-    virtual void replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) override;
+    // Provides strong exception safety guarantees.
+    virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override;
 
     int64_t total_bytes() const {
         return _total_bytes;

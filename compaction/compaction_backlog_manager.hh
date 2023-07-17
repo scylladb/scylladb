@@ -60,7 +60,8 @@ public:
     using ongoing_compactions = std::unordered_map<sstables::shared_sstable, backlog_read_progress_manager*>;
 
     struct impl {
-        virtual void replace_sstables(std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) = 0;
+        // FIXME: Should provide strong exception safety guarantees
+        virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) = 0;
         virtual double backlog(const ongoing_writes& ow, const ongoing_compactions& oc) const = 0;
         virtual ~impl() { }
     };
@@ -72,6 +73,7 @@ public:
     ~compaction_backlog_tracker();
 
     double backlog() const;
+    // FIXME: Should provide strong exception safety guarantees
     void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts);
     void register_partially_written_sstable(sstables::shared_sstable sst, backlog_write_progress_manager& wp);
     void register_compacting_sstable(sstables::shared_sstable sst, backlog_read_progress_manager& rp);
