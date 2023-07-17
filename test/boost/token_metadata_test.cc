@@ -28,7 +28,6 @@ namespace {
     mutable_token_metadata_ptr create_token_metadata(inet_address this_endpoint) {
         return make_lw_shared<token_metadata>(token_metadata::config {
             topology::config {
-                .this_host_id = host_id::create_random_id(),
                 .this_endpoint = this_endpoint,
                 .local_dc_rack = get_dc_rack(this_endpoint)
             }

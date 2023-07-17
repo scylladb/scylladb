@@ -128,7 +128,6 @@ private:
 class topology {
 public:
     struct config {
-        host_id this_host_id;
         inet_address this_endpoint;
         endpoint_dc_rack local_dc_rack;
         bool disable_proximity_sorting = false;

@@ -34,7 +34,6 @@ SEASTAR_THREAD_TEST_CASE(test_add_node) {
 
     utils::fb_utilities::set_broadcast_address(ep1);
     topology::config cfg = {
-        .this_host_id = id1,
         .this_endpoint = ep1,
         .local_dc_rack = endpoint_dc_rack::default_location,
     };
@@ -73,7 +72,6 @@ SEASTAR_THREAD_TEST_CASE(test_moving) {
 
     utils::fb_utilities::set_broadcast_address(ep1);
     topology::config cfg = {
-        .this_host_id = id1,
         .this_endpoint = ep1,
         .local_dc_rack = endpoint_dc_rack::default_location,
     };
@@ -104,7 +102,6 @@ SEASTAR_THREAD_TEST_CASE(test_update_node) {
 
     utils::fb_utilities::set_broadcast_address(ep1);
     topology::config cfg = {
-        .this_host_id = host_id::create_null_id(),
         .this_endpoint = ep1,
         .local_dc_rack = endpoint_dc_rack::default_location,
     };
@@ -198,7 +195,6 @@ SEASTAR_THREAD_TEST_CASE(test_remove_endpoint) {
 
     utils::fb_utilities::set_broadcast_address(ep1);
     topology::config cfg = {
-        .this_host_id = id1,
         .this_endpoint = ep1,
         .local_dc_rack = dc_rack1
     };

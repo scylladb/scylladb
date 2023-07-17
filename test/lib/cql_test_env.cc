@@ -588,8 +588,6 @@ public:
 
             sharded<locator::shared_token_metadata> token_metadata;
             locator::token_metadata::config tm_cfg;
-            // We assign null ID, the same as main.cc.
-            tm_cfg.topo_cfg.this_host_id = locator::host_id::create_null_id();
             tm_cfg.topo_cfg.this_endpoint = utils::fb_utilities::get_broadcast_address();
             tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
             token_metadata.start([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg).get();
