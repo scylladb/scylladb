@@ -32,6 +32,7 @@
 #include <algorithm>
 #include "compaction.hh"
 #include "compaction_backlog_manager.hh"
+#include "compaction/compaction_descriptor.hh"
 #include "compaction/task_manager_module.hh"
 #include "compaction_state.hh"
 #include "strategy_control.hh"
@@ -476,6 +477,17 @@ public:
 
     virtual ~compaction_task_executor() = default;
 
+    // called when a compaction replaces the exhausted sstables with the new set
+    struct on_replacement {
+        virtual ~on_replacement() {}
+        // called after the replacement completes
+        // @param sstables the old sstable which are replaced in this replacement
+        virtual void on_removal(const std::vector<sstables::shared_sstable>& sstables) = 0;
+        // called before the replacement happens
+        // @param sstables the new sstables to be added to the table's sstable set
+        virtual void on_addition(const std::vector<sstables::shared_sstable>& sstables) = 0;
+    };
+
 protected:
     virtual future<compaction_manager::compaction_stats_opt> do_run() = 0;
 
@@ -497,11 +509,9 @@ protected:
     // otherwise, returns stop_iteration::no after sleep for exponential retry.
     future<stop_iteration> maybe_retry(std::exception_ptr err, bool throw_on_abort = false);
 
-    // Compacts set of SSTables according to the descriptor.
-    using release_exhausted_func_t = std::function<void(const std::vector<sstables::shared_sstable>& exhausted_sstables)>;
-    future<sstables::compaction_result> compact_sstables_and_update_history(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, release_exhausted_func_t release_exhausted,
+    future<sstables::compaction_result> compact_sstables_and_update_history(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, on_replacement&,
                                 compaction_manager::can_purge_tombstones can_purge = compaction_manager::can_purge_tombstones::yes);
-    future<sstables::compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, release_exhausted_func_t release_exhausted,
+    future<sstables::compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, on_replacement&,
                                 compaction_manager::can_purge_tombstones can_purge = compaction_manager::can_purge_tombstones::yes);
     future<> update_history(::compaction::table_state& t, const sstables::compaction_result& res, const sstables::compaction_data& cdata);
     bool should_update_history(sstables::compaction_type ct) {
