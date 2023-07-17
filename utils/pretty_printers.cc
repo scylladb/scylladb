@@ -7,7 +7,6 @@
  */
 
 #include "pretty_printers.hh"
-#include <fmt/ostream.h>
 #include <tuple>
 
 template <typename Suffixes>
@@ -82,17 +81,3 @@ auto fmt::formatter<utils::pretty_printed_throughput>::format<fmt::basic_format_
     const utils::pretty_printed_throughput&,
     fmt::basic_format_context<std::back_insert_iterator<std::string>, char>& ctx) const
     -> decltype(ctx.out());
-
-namespace utils {
-
-std::ostream& operator<<(std::ostream& os, pretty_printed_data_size data) {
-    fmt::print(os, "{}", data);
-    return os;
-}
-
-std::ostream& operator<<(std::ostream& os, pretty_printed_throughput tp) {
-    fmt::print(os, "{}", tp);
-    return os;
-}
-
-}
