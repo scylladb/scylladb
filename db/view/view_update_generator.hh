@@ -85,6 +85,7 @@ public:
             wait_for_all_updates wait_for_all);
 
     ssize_t available_register_units() const { return _registration_sem.available_units(); }
+    size_t queued_batches_count() const { return _sstables_with_tables.size(); }
 private:
     bool should_throttle() const;
     void setup_metrics();

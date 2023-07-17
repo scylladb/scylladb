@@ -632,44 +632,44 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_register_semaphore_unit_leak
             return sst;
         };
 
+        BOOST_REQUIRE_EQUAL(view_update_generator.queued_batches_count(), 0);
+
         std::vector<sstables::shared_sstable> prepared_sstables;
 
-        // We need 2 * N + 1 sstables. N should be at least 5 (number of units
-        // on the register semaphore) + 1 (just to make sure the returned future
-        // blocks). While the initial batch is processed we want to register N
-        // more sstables, + 1 to detect the leak (N units will be returned from
-        // the initial batch). See below for more details.
-        const auto num_sstables = (view_update_generator.available_register_units() + 1) * 2 + 1;
+        // We need 2 * N sstables. While the initial batch is processed we want
+        // to register N more sstables, + 1 to detect the leak (N units will be
+        // returned from the initial batch). See below for more details.
+        const auto num_sstables = 5 * 2;
         for (auto i = 0; i < num_sstables; ++i) {
             prepared_sstables.push_back(make_sstable());
         }
 
-        // First batch: register N sstables.
-        while (view_update_generator.available_register_units()) {
+        BOOST_REQUIRE_EQUAL(view_update_generator.queued_batches_count(), 0);
+
+        for (auto i = 0; i < num_sstables / 2; ++i) {
             auto fut = view_update_generator.register_staging_sstable(std::move(prepared_sstables.back()), t);
             prepared_sstables.pop_back();
             BOOST_REQUIRE(fut.available());
         }
 
-        // Make sure we consumed all units and thus the register future blocks.
-        auto fut1 = view_update_generator.register_staging_sstable(std::move(prepared_sstables.back()), t);
-        prepared_sstables.pop_back();
-        BOOST_REQUIRE(!fut1.available());
+        BOOST_REQUIRE_EQUAL(view_update_generator.queued_batches_count(), 1);
+
+        thread::yield();
+
+        // After the yield above, the first batch should have started processing.
+        eventually_true([&] { return view_update_generator.queued_batches_count() == 0; });
 
         std::vector<future<>> futures;
-        futures.reserve(prepared_sstables.size());
+        futures.reserve(num_sstables);
 
         // While the first batch is processed, concurrently register the
-        // remaining N + 1 sstables, yielding in-between so the first batch
+        // remaining N sstables, yielding in-between so the first batch
         // processing can progress.
         while (!prepared_sstables.empty()) {
             thread::yield();
             futures.emplace_back(view_update_generator.register_staging_sstable(std::move(prepared_sstables.back()), t));
             prepared_sstables.pop_back();
         }
-
-        // Make sure the first batch is processed.
-        fut1.get();
 
         auto fut_res = when_all_succeed(futures.begin(), futures.end());
 
