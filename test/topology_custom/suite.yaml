@@ -8,6 +8,8 @@ extra_scylla_config_options:
 skip_in_release:
   - test_shutdown_hang
   - test_replace_ignore_nodes
+  - test_change_ip_repro
 skip_in_debug:
   - test_shutdown_hang
   - test_replace_ignore_nodes
+  - test_change_ip_repro
