@@ -16,7 +16,7 @@
 #include <seastar/core/fstream.hh>
 #include <seastar/http/exception.hh>
 #include <seastar/util/closeable.hh>
-#include <seastar/testing/thread_test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"

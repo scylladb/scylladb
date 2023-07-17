@@ -7,7 +7,7 @@
  */
 
 #include <boost/test/unit_test.hpp>
-#include <seastar/testing/thread_test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include "utils/fb_utilities.hh"
 #include "locator/token_metadata.hh"
 #include "locator/simple_strategy.hh"
