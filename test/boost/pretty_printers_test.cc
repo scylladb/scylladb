@@ -8,6 +8,7 @@
 
 #define BOOST_TEST_MODULE utils
 
+#include <iterator>
 #include <sstream>
 #include <boost/test/unit_test.hpp>
 #include "utils/pretty_printers.hh"
@@ -18,6 +19,7 @@ BOOST_AUTO_TEST_CASE(test_print_data_size) {
         std::string_view formatted;
     } sizes[] = {
         {0ULL, "0 bytes"},
+        {1ULL, "1 byte"},
         {42ULL, "42 bytes"},
         {10'000ULL, "10kB"},
         {10'000'000ULL, "10MB"},
@@ -31,6 +33,10 @@ BOOST_AUTO_TEST_CASE(test_print_data_size) {
         out << utils::pretty_printed_data_size{n};
         auto actual = out.str();
         BOOST_CHECK_EQUAL(actual, expected);
+
+        std::string s;
+        fmt::format_to(std::back_inserter(s), "{}", utils::pretty_printed_data_size{n});
+        BOOST_CHECK_EQUAL(s, expected);
     }
 }
 
@@ -52,5 +58,9 @@ BOOST_AUTO_TEST_CASE(test_print_throughput) {
         out << utils::pretty_printed_throughput{n, std::chrono::duration<float>(seconds)};
         auto actual = out.str();
         BOOST_CHECK_EQUAL(actual, expected);
+
+        std::string s;
+        fmt::format_to(std::back_inserter(s), "{}", utils::pretty_printed_throughput{n, std::chrono::duration<float>(seconds)});
+        BOOST_CHECK_EQUAL(s, expected);
     }
 }
