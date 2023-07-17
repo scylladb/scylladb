@@ -18,7 +18,15 @@ using populate_fn_ex = std::function<mutation_source(schema_ptr s, const std::ve
 void run_mutation_source_tests(populate_fn populate, bool with_partition_range_forwarding = true);
 void run_mutation_source_tests(populate_fn_ex populate, bool with_partition_range_forwarding = true);
 void run_mutation_source_tests_plain(populate_fn_ex populate, bool with_partition_range_forwarding = true);
+void run_mutation_source_tests_plain_basic(populate_fn_ex populate, bool with_partition_range_forwarding = true);
+void run_mutation_source_tests_plain_reader_conversion(populate_fn_ex populate, bool with_partition_range_forwarding = true);
+void run_mutation_source_tests_plain_fragments_monotonic(populate_fn_ex populate, bool with_partition_range_forwarding = true);
+void run_mutation_source_tests_plain_read_back(populate_fn_ex populate, bool with_partition_range_forwarding = true);
 void run_mutation_source_tests_reverse(populate_fn_ex populate, bool with_partition_range_forwarding = true);
+void run_mutation_source_tests_reverse_basic(populate_fn_ex populate, bool with_partition_range_forwarding = true);
+void run_mutation_source_tests_reverse_reader_conversion(populate_fn_ex populate, bool with_partition_range_forwarding = true);
+void run_mutation_source_tests_reverse_fragments_monotonic(populate_fn_ex populate, bool with_partition_range_forwarding = true);
+void run_mutation_source_tests_reverse_read_back(populate_fn_ex populate, bool with_partition_range_forwarding = true);
 
 enum are_equal { no, yes };
 
