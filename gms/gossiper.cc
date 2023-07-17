@@ -649,15 +649,13 @@ future<> gossiper::force_remove_endpoint(inet_address endpoint) {
 
 future<> gossiper::remove_endpoint(inet_address endpoint) {
     // do subscribers first so anything in the subscriber that depends on gossiper state won't get confused
-    // We can not run on_remove callbacks here becasue on_remove in
-    // storage_service might take the gossiper::timer_callback_lock
-    (void)seastar::async([this, endpoint] {
-        _subscribers.for_each([endpoint] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+    try {
+        co_await _subscribers.for_each([endpoint] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
             return subscriber->on_remove(endpoint);
-        }).get();
-    }).handle_exception([] (auto ep) {
-        logger.warn("Fail to call on_remove callback: {}", ep);
-    });
+        });
+    } catch (...) {
+        logger.warn("Fail to call on_remove callback: {}", std::current_exception());
+    }
 
     if(_seeds.contains(endpoint)) {
         build_seeds_list();
