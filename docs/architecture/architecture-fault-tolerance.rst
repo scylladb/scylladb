@@ -51,7 +51,7 @@ The Consistency Level is tunable per operation in CQL.   This is known as :term:
 
 The Consistency Level and Replication Factor both impact performance. The **lower** the Consistency Level and/or Replication Factor, the **faster** the read or write operation.  However, there will be less fault tolerance if a node goes down.
 
-The Consistency Level itself impacts availability. A **higher** Consistency Level (more nodes required to be online)  means less availability with less tolerance to tolerate node failures. A **lower** Consistency Level means more availability and more fault tolerance.
+The Consistency Level itself impacts availability. A **higher** Consistency Level (more nodes required to be online)  means less availability but with higher tolerance to tolerate node failures. A **lower** Consistency Level means more availability but less fault tolerance.
 
 Refer to the :ref:`Consistency Level table <consistency-levels-reference>` to get information about the Consistency Levels that are available for a read or write operation.
 
