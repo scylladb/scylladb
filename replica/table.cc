@@ -31,7 +31,6 @@
 #include "compaction/table_state.hh"
 #include "sstables/sstable_directory.hh"
 #include "db/system_keyspace.hh"
-#include "db/query_context.hh"
 #include "query-result-writer.hh"
 #include "db/view/view_update_generator.hh"
 #include <boost/range/adaptor/transformed.hpp>
