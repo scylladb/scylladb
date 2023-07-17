@@ -237,7 +237,6 @@ void simple_test() {
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
     locator::token_metadata::config tm_cfg;
-    tm_cfg.topo_cfg.this_host_id = host_id::create_random_id();
     tm_cfg.topo_cfg.this_endpoint = utils::fb_utilities::get_broadcast_address();
     tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
@@ -399,7 +398,6 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     snitch.invoke_on_all(&snitch_ptr::start).get();
 
     locator::token_metadata::config tm_cfg;
-    tm_cfg.topo_cfg.this_host_id = host_id::create_random_id();
     tm_cfg.topo_cfg.this_endpoint = utils::fb_utilities::get_broadcast_address();
     tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
