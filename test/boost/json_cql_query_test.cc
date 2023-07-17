@@ -95,7 +95,7 @@ SEASTAR_TEST_CASE(test_select_json_types) {
                     "\"\\\"G\\\"\": \"127.0.0.1\", " // note the double quoting on case-sensitive column names
                     "\"\\\"H\\\"\": 3, "
                     "\"\\\"I\\\"\": \"zażółć gęślą jaźń\", "
-                    "\"j\": \"2001-10-18T14:15:55.134000\", "
+                    "\"j\": \"2001-10-18 14:15:55.134Z\", "
                     "\"k\": \"d2177dd0-eaa2-11de-a572-001b779c76e3\", "
                     "\"l\": \"d2177dd0-eaa2-11de-a572-001b779c76e3\", "
                     "\"m\": \"varchar\", "
@@ -127,7 +127,7 @@ SEASTAR_TEST_CASE(test_select_json_types) {
                 utf8_type->decompose("\"127.0.0.1\""),
                 utf8_type->decompose("3"),
                 utf8_type->decompose("\"zażółć gęślą jaźń\""),
-                utf8_type->decompose("\"2001-10-18T14:15:55.134000\""),
+                utf8_type->decompose("\"2001-10-18 14:15:55.134Z\""),
                 utf8_type->decompose("\"d2177dd0-eaa2-11de-a572-001b779c76e3\""),
                 utf8_type->decompose("\"d2177dd0-eaa2-11de-a572-001b779c76e3\""),
                 utf8_type->decompose("\"varchar\""),

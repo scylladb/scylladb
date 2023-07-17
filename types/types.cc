@@ -68,7 +68,7 @@ requires requires {
         requires std::same_as<typename T::duration, std::chrono::milliseconds>;
     }
 sstring
-time_point_to_string(const T& tp)
+time_point_to_string(const T& tp, bool use_time_separator = true)
 {
     auto count = tp.time_since_epoch().count();
     auto d = std::div(int64_t(count), int64_t(1000));
@@ -78,17 +78,7 @@ time_point_to_string(const T& tp)
         return fmt::format("{} milliseconds (out of range)", count);
     }
 
-    auto to_string = [] (const std::tm& tm) {
-        auto year_digits = tm.tm_year >= -1900 ? 4 : 5;
-        return fmt::format("{:-0{}d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}",
-                tm.tm_year + 1900, year_digits, tm.tm_mon + 1, tm.tm_mday,
-                tm.tm_hour, tm.tm_min, tm.tm_sec);
-    };
-
     auto millis = d.rem;
-    if (!millis) {
-        return fmt::format("{}", to_string(tm));
-    }
     // adjust seconds for time points earlier than posix epoch
     // to keep the fractional millis positive
     if (millis < 0) {
@@ -96,8 +86,13 @@ time_point_to_string(const T& tp)
         seconds--;
         gmtime_r(&seconds, &tm);
     }
-    auto micros = millis * 1000;
-    return fmt::format("{}.{:06d}", to_string(tm), micros);
+
+    const auto time_separator = (use_time_separator) ? "T" : " ";
+    auto year_digits = tm.tm_year >= -1900 ? 4 : 5;
+
+    return fmt::format("{:-0{}d}-{:02d}-{:02d}{}{:02d}:{:02d}:{:02d}.{:03d}Z",
+            tm.tm_year + 1900, year_digits, tm.tm_mon + 1, tm.tm_mday, time_separator,
+            tm.tm_hour, tm.tm_min, tm.tm_sec, millis);
 }
 
 sstring simple_date_to_string(const uint32_t days_count) {
@@ -2853,6 +2848,12 @@ static sstring format_if_not_empty(
     return f(static_cast<const N&>(*b));
 }
 
+sstring timestamp_to_json_string(const timestamp_date_base_class& t, const bytes_view& bv)
+{
+    auto tp = value_cast<const timestamp_date_base_class::native_type>(t.deserialize(bv));
+    return format_if_not_empty(t, &tp, [](const db_clock::time_point& v) { return time_point_to_string(v, false); });
+}
+
 static sstring to_string_impl(const abstract_type& t, const void* v);
 
 namespace {
@@ -3629,16 +3630,12 @@ sstring data_value::to_parsable_string() const {
 
     abstract_type::kind type_kind = _type->without_reversed().get_kind();
 
-    if (type_kind == abstract_type::kind::date || type_kind == abstract_type::kind::timestamp) {
-        // Put timezone information after a date or timestamp to specify that it's in UTC
-        // Otherwise it will be parsed as a date in the local timezone.
-        return fmt::format("'{}+0000'", *this);
-    }
-
     if (type_kind == abstract_type::kind::utf8
         || type_kind == abstract_type::kind::ascii
         || type_kind == abstract_type::kind::inet
         || type_kind == abstract_type::kind::time
+        || type_kind == abstract_type::kind::date
+        || type_kind == abstract_type::kind::timestamp
     ) {
         // Put quotes on types that require it
         return fmt::format("'{}'", *this);

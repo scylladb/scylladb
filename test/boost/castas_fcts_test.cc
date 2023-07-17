@@ -494,29 +494,29 @@ SEASTAR_TEST_CASE(test_time_casts_in_selection_clause) {
         }
         {
             auto msg = e.execute_cql("SELECT CAST(CAST(a AS timestamp) AS text), CAST(CAST(a AS date) AS text), CAST(CAST(b as date) AS text), CAST(CAST(c AS timestamp) AS text) FROM test").get0();
-            assert_that(msg).is_rows().with_size(1).with_row({{utf8_type->from_string("2009-12-17T00:26:29.805000")},
+            assert_that(msg).is_rows().with_size(1).with_row({{utf8_type->from_string("2009-12-17T00:26:29.805Z")},
                                                               {utf8_type->from_string("2009-12-17")},
                                                               {utf8_type->from_string("2015-05-21")},
-                                                              {utf8_type->from_string("2015-05-21T00:00:00")}});
+                                                              {utf8_type->from_string("2015-05-21T00:00:00.000Z")}});
         }
         {
             auto msg = e.execute_cql("SELECT CAST(a AS text), CAST(b as text), CAST(c AS text), CAST(d AS text) FROM test").get0();
             assert_that(msg).is_rows().with_size(1).with_row({{utf8_type->from_string("d2177dd0-eaa2-11de-a572-001b779c76e3")},
-                                                              {utf8_type->from_string("2015-05-21T11:03:02")},
+                                                              {utf8_type->from_string("2015-05-21T11:03:02.000Z")},
                                                               {utf8_type->from_string("2015-05-21")},
                                                               {utf8_type->from_string("11:03:02.000000000")}});
         }
         {
             auto msg = e.execute_cql("SELECT CAST(CAST(a AS timestamp) AS ascii), CAST(CAST(a AS date) AS ascii), CAST(CAST(b as date) AS ascii), CAST(CAST(c AS timestamp) AS ascii) FROM test").get0();
-            assert_that(msg).is_rows().with_size(1).with_row({{ascii_type->from_string("2009-12-17T00:26:29.805000")},
+            assert_that(msg).is_rows().with_size(1).with_row({{ascii_type->from_string("2009-12-17T00:26:29.805Z")},
                                                               {ascii_type->from_string("2009-12-17")},
                                                               {ascii_type->from_string("2015-05-21")},
-                                                              {ascii_type->from_string("2015-05-21T00:00:00")}});
+                                                              {ascii_type->from_string("2015-05-21T00:00:00.000Z")}});
         }
         {
             auto msg = e.execute_cql("SELECT CAST(a AS ascii), CAST(b as ascii), CAST(c AS ascii), CAST(d AS ascii) FROM test").get0();
             assert_that(msg).is_rows().with_size(1).with_row({{ascii_type->from_string("d2177dd0-eaa2-11de-a572-001b779c76e3")},
-                                                              {ascii_type->from_string("2015-05-21T11:03:02")},
+                                                              {ascii_type->from_string("2015-05-21T11:03:02.000Z")},
                                                               {ascii_type->from_string("2015-05-21")},
                                                               {ascii_type->from_string("11:03:02.000000000")}});
         }

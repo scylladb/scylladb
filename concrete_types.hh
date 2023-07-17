@@ -118,6 +118,8 @@ struct date_type_impl final : public concrete_type<db_clock::time_point> {
 
 using timestamp_date_base_class = concrete_type<db_clock::time_point>;
 
+sstring timestamp_to_json_string(const timestamp_date_base_class& t, const bytes_view& bv);
+
 struct timeuuid_type_impl final : public concrete_type<utils::UUID> {
     timeuuid_type_impl();
     static utils::UUID from_sstring(sstring_view s);
