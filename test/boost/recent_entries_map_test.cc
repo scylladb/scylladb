@@ -7,7 +7,7 @@
  */
 
 #include <boost/test/unit_test.hpp>
-#include <seastar/testing/thread_test_case.hh>
+#include "test/lib/scylla_test_case.hh"
 #include <seastar/core/manual_clock.hh>
 #include <chrono>
 

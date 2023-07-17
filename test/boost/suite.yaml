@@ -20,6 +20,8 @@ all_can_run_compaction_groups_except:
     - exceptions_optimized_test
     - rate_limiter_test
     - exceptions_fallback_test
+    - top_k_test
+    - reusable_buffer_test
 # Custom command line arguments for some of the tests
 custom_args:
     mutation_reader_test:
