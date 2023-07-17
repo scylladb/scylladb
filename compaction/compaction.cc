@@ -556,13 +556,13 @@ protected:
         return bool(_sstable_set);
     }
 
-    compaction_writer create_gc_compaction_writer() const {
+    compaction_writer create_gc_compaction_writer(utils::UUID gc_run) const {
         auto sst = _sstable_creator(this_shard_id());
 
         auto&& priority = _io_priority;
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
         sstable_writer_config cfg = _table_s.configure_writer("garbage_collection");
-        cfg.run_identifier = _run_identifier;
+        cfg.run_identifier = gc_run;
         cfg.monitor = monitor.get();
         auto writer = sst->get_writer(*schema(), partitions_per_sstable(), cfg, get_encoding_stats(), priority);
         return compaction_writer(std::move(monitor), std::move(writer), std::move(sst));
@@ -583,8 +583,14 @@ protected:
     // When compaction finishes, all the temporary sstables generated here will be deleted and removed
     // from table's sstable set.
     compacted_fragments_writer get_gc_compacted_fragments_writer() {
+        // because the temporary sstable run can overlap with the non-gc sstables run created by
+        // get_compacted_fragments_writer(), we have to use a different run_id. the gc_run_id is
+        // created here as:
+        // 1. it can be shared across all sstables created by this writer
+        // 2. it is optional, as gc writer is not always used
+        auto gc_run = utils::make_random_uuid();
         return compacted_fragments_writer(*this,
-             [this] (const dht::decorated_key&) { return create_gc_compaction_writer(); },
+             [this, gc_run] (const dht::decorated_key&) { return create_gc_compaction_writer(gc_run); },
              [this] (compaction_writer* cw) { stop_gc_compaction_writer(cw); },
              _stop_request_observable);
     }
