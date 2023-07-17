@@ -14,7 +14,6 @@
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
 #include "db/timeout_clock.hh"
-#include "exceptions/exceptions.hh"
 #include "timeout_config.hh"
 
 namespace service {
