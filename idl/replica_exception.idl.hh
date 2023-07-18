@@ -20,11 +20,15 @@ class stale_topology_exception {
     int64_t callee_fence_version();
 };
 
+class abort_requested_exception {
+};
+
 struct exception_variant {
     std::variant<replica::unknown_exception,
             replica::no_exception,
             replica::rate_limit_exception,
-            replica::stale_topology_exception
+            replica::stale_topology_exception,
+            replica::abort_requested_exception
     > reason;
 };
 

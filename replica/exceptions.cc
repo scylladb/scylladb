@@ -24,6 +24,8 @@ exception_variant try_encode_replica_exception(std::exception_ptr eptr) {
         return rate_limit_exception();
     } catch (const stale_topology_exception& e) {
         return e;
+    } catch (abort_requested_exception&) {
+        return abort_requested_exception();
     } catch (...) {
         return no_exception{};
     }
