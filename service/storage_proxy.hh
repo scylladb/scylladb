@@ -25,13 +25,13 @@
 #include <seastar/rpc/rpc_types.hh>
 #include "storage_proxy_stats.hh"
 #include "service_permit.hh"
+#include "query-result.hh"
 #include "cdc/stats.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "db/hints/host_filter.hh"
 #include "utils/small_vector.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include <seastar/core/circular_buffer.hh>
-#include "exceptions/exceptions.hh"
 #include "exceptions/coordinator_result.hh"
 #include "replica/exceptions.hh"
 #include "locator/host_id.hh"

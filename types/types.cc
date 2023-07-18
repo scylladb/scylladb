@@ -18,10 +18,8 @@
 #include <exception>
 #include <seastar/core/print.hh>
 #include "types/types.hh"
-#include "utils/exceptions.hh"
 #include "utils/serialization.hh"
 #include "vint-serialization.hh"
-#include "combine.hh"
 #include <cmath>
 #include <chrono>
 #include <sstream>
@@ -47,7 +45,6 @@
 #include "utils/ascii.hh"
 #include "utils/fragment_range.hh"
 #include "utils/managed_bytes.hh"
-#include "mutation/mutation_partition.hh"
 
 #include "types/user.hh"
 #include "types/tuple.hh"

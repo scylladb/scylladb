@@ -38,6 +38,7 @@
 #include "db/snapshot-ctl.hh"
 #include "memtable.hh"
 #include "row_cache.hh"
+#include "query-result.hh"
 #include "compaction/compaction_strategy.hh"
 #include "utils/estimated_histogram.hh"
 #include <seastar/core/metrics_registration.hh>
@@ -63,13 +64,13 @@
 #include "db/operation_type.hh"
 #include "utils/serialized_action.hh"
 #include "compaction/compaction_fwd.hh"
-#include "utils/disk-error-handler.hh"
 
 class cell_locker;
 class cell_locker_stats;
 class locked_cell;
 class mutation;
 
+class compaction_manager;
 class frozen_mutation;
 class reconcilable_result;
 

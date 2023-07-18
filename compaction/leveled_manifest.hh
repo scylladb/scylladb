@@ -11,7 +11,6 @@
 #pragma once
 
 #include "sstables/sstables.hh"
-#include "compaction.hh"
 #include "size_tiered_compaction_strategy.hh"
 #include "range.hh"
 #include "log.hh"

@@ -11,10 +11,8 @@
 #pragma once
 
 #include "compaction_strategy_impl.hh"
-#include "compaction.hh"
 #include "size_tiered_compaction_strategy.hh"
 #include "timestamp.hh"
-#include "exceptions/exceptions.hh"
 #include "sstables/shared_sstable.hh"
 
 namespace sstables {
