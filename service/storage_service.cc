@@ -2960,7 +2960,7 @@ future<> storage_service::stop_transport() {
             _gossiper.container().invoke_on_all(&gms::gossiper::shutdown).get();
             slogger.info("Stop transport: stop_gossiping done");
 
-            do_stop_ms().get();
+            _messaging.invoke_on_all(&netw::messaging_service::shutdown).get();
             slogger.info("Stop transport: shutdown messaging_service done");
 
             _stream_manager.invoke_on_all(&streaming::stream_manager::shutdown).get();
@@ -3517,14 +3517,6 @@ future<> storage_service::stop_gossiping() {
             return ss._gossiper.container().invoke_on_all(&gms::gossiper::stop);
         }
         return make_ready_future<>();
-    });
-}
-
-future<> storage_service::do_stop_ms() {
-    return _messaging.invoke_on_all([] (auto& ms) {
-        return ms.shutdown();
-    }).then([] {
-        slogger.info("messaging_service stopped");
     });
 }
 
