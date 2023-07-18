@@ -101,3 +101,11 @@ int32_t weight(bound_kind k) {
 }
 
 const thread_local clustering_key_prefix bound_view::_empty_prefix = clustering_key::make_empty();
+
+std::ostream&
+operator<<(std::ostream& os, const exploded_clustering_prefix& ecp) {
+    // Can't pass to_hex() to transformed(), since it is overloaded, so wrap:
+    auto enhex = [] (auto&& x) { return fmt_hex(x); };
+    fmt::print(os, "prefix{{{}}}", fmt::join(ecp._v | boost::adaptors::transformed(enhex), ":"));
+    return os;
+}
