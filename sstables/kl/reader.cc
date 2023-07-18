@@ -1184,9 +1184,10 @@ private:
         return (!slice.default_row_ranges().empty() && !slice.default_row_ranges()[0].is_full())
                || slice.get_specific_ranges();
     }
+
     index_reader& get_index_reader() {
         if (!_index_reader) {
-            auto caching = use_caching(global_cache_index_pages && !_slice.options.contains(query::partition_slice::option::bypass_cache));
+            auto caching = index_reader::caching_mode(_slice);
             _index_reader = std::make_unique<index_reader>(_sst, _consumer.permit(),
                                                            _consumer.trace_state(), caching, _single_partition_read);
         }

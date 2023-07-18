@@ -510,6 +510,8 @@ private:
             return advance_to_end(bound);
         }
         auto loader = [this, &bound] (uint64_t summary_idx) -> future<index_list> {
+            sstlog.debug("Loading summary_idx {} for {}", summary_idx, _sstable->get_filename());
+
             auto& summary = _sstable->get_summary();
             uint64_t position = summary.entries[summary_idx].position;
             uint64_t quantity = downsampling::get_effective_index_interval_after_index(summary_idx, summary.header.sampling_level,
@@ -769,18 +771,29 @@ private:
         return options;
     }
 
+    std::unique_ptr<partition_index_cache> make_local_index_cache(use_caching caching) const {
+        switch (caching) {
+        case use_caching::global:
+            return nullptr;
+        case use_caching::local:
+            return std::make_unique<partition_index_cache>(_sstable->manager().get_cache_tracker().get_lru(),
+                                                           _sstable->manager().get_cache_tracker().region());
+        case use_caching::none:
+            // No LRU attached, keeps only used entries.
+            return std::make_unique<partition_index_cache>(_sstable->manager().get_cache_tracker().region());
+        }
+        __builtin_unreachable();
+    }
 public:
     index_reader(shared_sstable sst, reader_permit permit,
                  tracing::trace_state_ptr trace_state = {},
-                 use_caching caching = use_caching::yes,
+                 use_caching caching = use_caching::global,
                  bool single_partition_read = false)
         : _sstable(std::move(sst))
         , _permit(std::move(permit))
         , _trace_state(std::move(trace_state))
-        , _local_index_cache(caching ? nullptr
-            : std::make_unique<partition_index_cache>(_sstable->manager().get_cache_tracker().get_lru(),
-                                                      _sstable->manager().get_cache_tracker().region()))
-        , _index_cache(caching ? *_sstable->_index_cache : *_local_index_cache)
+        , _local_index_cache(make_local_index_cache(caching))
+        , _index_cache(caching == use_caching::global ? *_sstable->_index_cache : *_local_index_cache)
         , _region(_sstable->manager().get_cache_tracker().region())
         , _use_caching(caching)
         , _single_page_read(single_partition_read) // all entries for a given partition are within a single page
@@ -788,6 +801,13 @@ public:
         if (sstlog.is_enabled(logging::log_level::trace)) {
             sstlog.trace("index {}: index_reader for {}", fmt::ptr(this), _sstable->get_filename());
         }
+    }
+
+    static use_caching caching_mode(const query::partition_slice& ps) {
+        if (ps.options.contains(query::partition_slice::option::bypass_cache)) {
+            return use_caching::none;
+        }
+        return (global_cache_index_pages) ? use_caching::global : use_caching::local;
     }
 
     // Ensures that partition_data_ready() returns true.
