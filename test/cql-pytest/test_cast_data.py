@@ -33,6 +33,11 @@ def table2(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, c counter") as table:
         yield table
 
+@pytest.fixture(scope="module")
+def table3(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, i int, a ascii, bi bigint, b blob, bool boolean, d date, dec decimal, db double, dur duration, f float, addr inet, si smallint, t text, tim time, ts timestamp, tu timeuuid, ti tinyint, u uuid, vc varchar, vi varint") as table:
+        yield table
+
 # Utility function for emulating a wrapping cast of a big positive number
 # into a smaller signed integer of given number of bits. For example,
 # casting 511 to 8 bits results in -1.
@@ -133,5 +138,17 @@ def test_cast_from_counter_to_varchar(cql, table2, cassandra_bug):
     p = unique_key_int()
     cql.execute(f'UPDATE {table2} SET c = c + 1000 WHERE p = {p}')
     assert [("1000",)] == list(cql.execute(f"SELECT CAST(c AS varchar) FROM {table2} WHERE p={p}"))
+
+# Test casts from various types *to* counter type. This is a rather silly
+# operation - casting to "counter" doesn't make a real counter. It could
+# have been supported the same as casting to bigint, but Cassandra chose not
+# to support it and neither do we.
+# The only case that works is the do-nothing casting of a counter to counter,
+# and that case is already checked in test_cast_from_counter().
+def test_cast_to_counter(cql, table3):
+    p = unique_key_int()
+    for col in ['i', 'a', 'bi', 'b', 'bool', 'd', 'dec', 'db', 'dur', 'f', 'addr', 'si', 't', 'tim', 'ts', 'tu', 'ti', 'u', 'vc', 'vi']:
+        with pytest.raises(InvalidRequest, match='cannot be cast'):
+            cql.execute(f"SELECT CAST({col} AS counter) FROM {table3} WHERE p={p}")
 
 # TODO: test casts from more types.
