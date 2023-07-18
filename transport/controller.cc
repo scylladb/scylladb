@@ -179,16 +179,13 @@ future<> controller::do_start_server() {
 future<> controller::stop_server() {
     assert(this_shard_id() == 0);
 
-    if (_stopped) {
-        return make_ready_future<>();
-    }
-
-    return _ops_sem.wait().then([this] {
+    if (!_stopped) {
+        co_await _ops_sem.wait();
         _stopped = true;
         _ops_sem.broken();
         _listen_addresses.clear();
-        return do_stop_server();
-    });
+        co_await do_stop_server();
+    }
 }
 
 future<> controller::request_stop_server() {
