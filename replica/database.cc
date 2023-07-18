@@ -1798,6 +1798,12 @@ future<reader_permit> database::obtain_reader_permit(schema_ptr schema, const ch
     return obtain_reader_permit(find_column_family(std::move(schema)), op_name, timeout, std::move(trace_ptr));
 }
 
+bool database::is_user_semaphore(const reader_concurrency_semaphore& semaphore) const {
+    return &semaphore != &_streaming_concurrency_sem
+        && &semaphore != &_compaction_concurrency_sem
+        && &semaphore != &_system_read_concurrency_sem;
+}
+
 std::ostream& operator<<(std::ostream& out, const column_family& cf) {
     fmt::print(out, "{{column_family: {}/{}}}", cf._schema->ks_name(), cf._schema->cf_name());
     return out;

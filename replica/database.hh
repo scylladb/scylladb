@@ -1754,6 +1754,8 @@ public:
     bool uses_schema_commitlog() const {
         return _uses_schema_commitlog;
     }
+
+    bool is_user_semaphore(const reader_concurrency_semaphore& semaphore) const;
 };
 
 } // namespace replica
