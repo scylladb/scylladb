@@ -197,19 +197,35 @@ future<> controller::request_stop_server() {
 }
 
 future<> controller::do_stop_server() {
-    return do_with(std::move(_server), [this] (std::unique_ptr<sharded<cql_server>>& cserver) {
-        if (cserver) {
-            // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
-            return set_cql_ready(false).finally([this, &cserver] {
-                return unsubscribe_server(*cserver).then([&cserver] {
-                    return cserver->stop().then([] {
-                        logger.info("CQL server stopped");
-                    });
-                });
-            });
+    auto cserver = std::move(_server);
+    if (!cserver) {
+        co_return;
+    }
+
+    std::exception_ptr ex;
+
+    try {
+        co_await set_cql_ready(false);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    auto& server = *cserver;
+
+    try {
+        co_await unsubscribe_server(server);
+        co_await server.stop();
+    } catch (...) {
+        if (!ex) {
+            ex = std::current_exception();
         }
-        return make_ready_future<>();
-    });
+    }
+
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
+
+    logger.info("CQL server stopped");
 }
 
 future<> controller::subscribe_server(sharded<cql_server>& server) {
