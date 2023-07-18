@@ -98,6 +98,13 @@ public:
 
     virtual ~server();
 
+    // Makes sure listening sockets no longer generate new connections and aborts the
+    // connected sockets, so that new requests are not served and existing requests don't
+    // send responses back.
+    //
+    // It does _not_ wait for any internal activity started by the established connections
+    // to finish. It's the .stop() method that does it
+    future<> shutdown();
     future<> stop();
 
     future<> listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive);

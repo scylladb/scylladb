@@ -116,6 +116,14 @@ server::~server()
 }
 
 future<> server::stop() {
+    if (!_stopping) {
+        co_await shutdown();
+    }
+
+    co_await _all_connections_stopped.get_future();
+}
+
+future<> server::shutdown() {
     _stopping = true;
     size_t nr = 0;
     size_t nr_total = _listeners.size();
@@ -132,7 +140,7 @@ future<> server::stop() {
             _logger.debug("shutdown connection {} out of {} done", ++(*nr_conn), nr_conn_total);
         });
     }).then([this] {
-        return when_all(std::move(_listeners_stopped), _all_connections_stopped.get_future()).discard_result();
+        return std::move(_listeners_stopped);
     });
 }
 
