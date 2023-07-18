@@ -17,13 +17,22 @@
 #include "idl/hinted_handoff.dist.hh"
 #include "idl/hinted_handoff.dist.impl.hh"
 #include "utils/base64.hh"
+#include "xx_hasher.hh"
 
 namespace db {
 namespace hints {
-
+// Sync points can be encoded in two formats: V1 and V2. V2 extends V1 by adding
+// a checksum. Currently, we use the V2 format, but sync points encoded in the V1
+// format still can be safely decoded.
+//
 // Format V1 (encoded in base64):
 //   uint8_t 0x01 - version of format
-//   sync_point_v1 - encoded using IMR
+//   sync_point_v1 - encoded using IDL
+//
+// Format V2 (encoded in base64):
+//   uint8_t 0x02 - version of format
+//   sync_point_v1 - encoded using IDL
+//   uint64_t - checksum computed using the xxHash algorithm
 //
 // sync_point_v1:
 //   UUID host_id - ID of the host which created the sync point
@@ -40,6 +49,9 @@ namespace hints {
 //       the shards (shard count is defined by the `shard_count`) field.
 //       Flattened representation was chosen in order to save space on
 //       vector lengths etc.
+
+static constexpr size_t version_size = sizeof(uint8_t);
+static constexpr size_t checksum_size = sizeof(uint64_t);
 
 static std::vector<sync_point::shard_rps> decode_one_type_v1(uint16_t shard_count, const per_manager_sync_point_v1& v1) {
     std::vector<sync_point::shard_rps> ret;
@@ -67,16 +79,37 @@ static std::vector<sync_point::shard_rps> decode_one_type_v1(uint16_t shard_coun
     return ret;
 }
 
+static uint64_t calculate_checksum(const sstring_view s) {
+    xx_hasher h;
+    h.update(s.data(), s.size());
+    return h.finalize_uint64();
+}
+
 sync_point sync_point::decode(sstring_view s) {
     bytes raw = base64_decode(s);
     if (raw.empty()) {
         throw std::runtime_error("Could not decode the sync point - not a valid hex string");
     }
-    if (raw[0] != 1) {
-        throw std::runtime_error(format("Unsupported sync point format version: {}", int(raw[0])));
+
+    sstring_view raw_s(reinterpret_cast<const char*>(raw.data()), raw.size());
+    seastar::simple_memory_input_stream in{raw_s.data(), raw_s.size()};
+
+    uint8_t version = ser::serializer<uint8_t>::read(in);
+    if (version == 2) {
+        if (raw_s.size() < version_size + checksum_size) {
+            throw std::runtime_error("Could not decode the sync point encoded in the V2 format - serialized blob is too short");
+        }
+
+        seastar::simple_memory_input_stream in_checksum{raw_s.end() - checksum_size, checksum_size};
+        uint64_t checksum = ser::serializer<uint64_t>::read(in_checksum);
+        if (checksum != calculate_checksum(raw_s.substr(0, raw_s.size() - checksum_size))) {
+            throw std::runtime_error("Could not decode the sync point encoded in the V2 format - wrong checksum");
+        }
+    }
+    else if (version != 1) {
+        throw std::runtime_error(format("Unsupported sync point format version: {}", int(version)));
     }
 
-    seastar::simple_memory_input_stream in{reinterpret_cast<const char*>(raw.data()) + 1, raw.size() - 1};
     sync_point_v1 v1 = ser::serializer<sync_point_v1>::read(in);
 
     return sync_point{
@@ -133,11 +166,16 @@ sstring sync_point::encode() const {
     seastar::measuring_output_stream measure;
     ser::serializer<sync_point_v1>::write(measure, v1);
 
-    // Reserve 1 byte for the version
-    bytes serialized{bytes::initialized_later{}, 1 + measure.size()};
-    serialized[0] = 1;
-    seastar::simple_memory_output_stream out{reinterpret_cast<char*>(serialized.data()), measure.size(), 1};
+    // Reserve version_size bytes for the version and checksum_size bytes for the checksum
+    bytes serialized{bytes::initialized_later{}, version_size + measure.size() + checksum_size};
+
+    // Encode using V2 format
+    seastar::simple_memory_output_stream out{reinterpret_cast<char*>(serialized.data()), serialized.size()};
+    ser::serializer<uint8_t>::write(out, 2);
     ser::serializer<sync_point_v1>::write(out, v1);
+    sstring_view serialized_s(reinterpret_cast<const char*>(serialized.data()), version_size + measure.size());
+    uint64_t checksum = calculate_checksum(serialized_s);
+    ser::serializer<uint64_t>::write(out, checksum);
 
     return base64_encode(serialized);
 }
