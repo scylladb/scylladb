@@ -1027,12 +1027,10 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
     ks.add_or_update_column_family(schema);
     cf->start();
     schema->registry_entry()->set_table(cf->weak_from_this());
-    _tables_metadata._column_families.emplace(uuid, std::move(cf));
-    _tables_metadata._ks_cf_to_uuid.emplace(std::move(kscf), uuid);
+    co_await _tables_metadata.add_table(schema);
     if (schema->is_view()) {
         find_column_family(schema->view_info()->base_id()).add_or_update_view(view_ptr(schema));
     }
-    return make_ready_future();
 }
 
 future<> database::add_column_family_and_make_directory(schema_ptr schema) {
@@ -1065,9 +1063,8 @@ future<> database::remove(table& cf) noexcept {
     auto s = cf.schema();
     auto& ks = find_keyspace(s->ks_name());
     cf.deregister_metrics();
-    _tables_metadata._column_families.erase(s->id());
+    co_await _tables_metadata.remove_table(s);
     ks.metadata()->remove_column_family(s);
-    _tables_metadata._ks_cf_to_uuid.erase(std::make_pair(s->ks_name(), s->cf_name()));
     if (s->is_view()) {
         try {
             find_column_family(s->view_info()->base_id()).remove_view(view_ptr(s));
@@ -1075,7 +1072,6 @@ future<> database::remove(table& cf) noexcept {
             // Drop view mutations received after base table drop.
         }
     }
-    return make_ready_future();
 }
 
 future<> database::detach_column_family(table& cf) {
@@ -2857,6 +2853,30 @@ future<> database::drain() {
         co_await _schema_commitlog->shutdown();
     }
     b.cancel();
+}
+
+future<> database::tables_metadata::add_table(schema_ptr schema) {
+    auto holder = co_await _cf_lock.hold_write_lock();
+    auto id = schema->id();
+    auto kscf = std::make_pair(schema->ks_name(), schema->cf_name());
+    try {
+        _column_families.emplace(id, schema->table().shared_from_this());
+        _ks_cf_to_uuid.emplace(kscf, id);
+    } catch (...) {
+        _ks_cf_to_uuid.erase(std::move(kscf));
+        _column_families.erase(id);
+        throw;
+    }
+}
+
+future<> database::tables_metadata::remove_table(schema_ptr schema) noexcept {
+    try {
+        auto holder = co_await _cf_lock.hold_write_lock();
+        _column_families.erase(schema->id());
+        _ks_cf_to_uuid.erase(std::make_pair(schema->ks_name(), schema->cf_name()));
+    } catch (...) {
+        on_fatal_internal_error(dblog, format("tables_metadata::remove_cf: {}", std::current_exception()));
+    }
 }
 
 data_dictionary::database

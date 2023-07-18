@@ -1308,6 +1308,9 @@ public:
     public: // FIXME: change member access to private. 
         std::unordered_map<table_id, lw_shared_ptr<column_family>> _column_families;
         ks_cf_to_uuid_t _ks_cf_to_uuid;
+
+        future<> add_table(schema_ptr schema);
+        future<> remove_table(schema_ptr schema) noexcept;
     };
 private:
     replica::cf_stats _cf_stats;
