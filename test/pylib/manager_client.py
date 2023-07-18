@@ -66,7 +66,7 @@ class ManagerClient():
 
     def get_cql(self) -> CassandraSession:
         """Precondition: driver is connected"""
-        assert(self.cql)
+        assert self.cql
         return self.cql
 
     # Make driver update endpoints from remote connection
@@ -74,10 +74,6 @@ class ManagerClient():
         if self.ccluster is not None:
             logger.debug("refresh driver node list")
             self.ccluster.control_connection.refresh_node_list_and_token_map()
-
-    def get_cql(self) -> CassandraSession:
-        assert self.cql
-        return self.cql
 
     async def before_test(self, test_case_name: str) -> None:
         """Before a test starts check if cluster needs cycling and update driver connection"""

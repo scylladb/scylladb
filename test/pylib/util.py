@@ -28,6 +28,8 @@ T = TypeVar('T')
 
 
 def unique_name():
+    if not hasattr(unique_name, "last_ms"):
+        unique_name.last_ms = 0
     current_ms = int(round(time.time() * 1000))
     # If unique_name() is called twice in the same millisecond...
     if unique_name.last_ms >= current_ms:
@@ -139,6 +141,3 @@ async def get_enabled_features(cql: Session, host: Host) -> set[str]:
     """Returns a set of cluster features that a node considers to be enabled."""
     rs = await cql.run_async(f"SELECT value FROM system.scylla_local WHERE key = 'enabled_features'", host=host)
     return set(rs[0].value.split(","))
-
-
-unique_name.last_ms = 0
