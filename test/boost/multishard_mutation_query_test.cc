@@ -27,6 +27,7 @@
 #include <source_location>
 
 #include <boost/range/algorithm/sort.hpp>
+#include <utility>
 
 const sstring KEYSPACE_NAME = "ks";
 
@@ -692,7 +693,7 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
         auto [results2, npages] = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t page) {
             const auto new_lookups = aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::lookups);
             if (page) {
-                tests::require(new_lookups > lookups, seastar::compat::source_location::current());
+                tests::require(std::cmp_greater(new_lookups, lookups), seastar::compat::source_location::current());
             }
             lookups = new_lookups;
 

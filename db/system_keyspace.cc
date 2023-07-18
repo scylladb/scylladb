@@ -2699,7 +2699,7 @@ system_keyspace::read_cdc_generation(utils::UUID id) {
             "read_cdc_generation: data for CDC generation {} not present", id));
     }
 
-    if (entries.size() != num_ranges) {
+    if (std::cmp_not_equal(entries.size(), num_ranges)) {
         throw std::runtime_error(format(
             "read_cdc_generation: wrong number of rows. The `num_ranges` column claimed {} rows,"
             " but reading the partition returned {}.", num_ranges, entries.size()));

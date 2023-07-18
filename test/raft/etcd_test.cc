@@ -751,7 +751,7 @@ void handle_proposal(unsigned nodes, std::vector<int> accepting_int) {
     output1 = fsm1.get_output();
     BOOST_CHECK(output1.messages.size() >= nodes - 1);
     BOOST_CHECK(output1.term_and_vote);
-    for (int i = 2; i < nodes + 1; ++i) {
+    for (unsigned i = 2; i < nodes + 1; ++i) {
         fsm1.step(raft::server_id{utils::UUID(0, i)}, raft::vote_reply{output1.term_and_vote->first, true, false});
     }
     BOOST_CHECK(fsm1.is_leader());

@@ -15,6 +15,7 @@
 
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
+#include <utility>
 
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/result_set_assertions.hh"
@@ -177,7 +178,7 @@ SEASTAR_TEST_CASE(test_truncate_without_snapshot_during_writes) {
         uint32_t num_keys = 1000;
 
         auto f0 = insert_data(0, num_keys);
-        auto f1 = do_until([&] { return count >= num_keys; }, [&, ts = db_clock::now()] {
+        auto f1 = do_until([&] { return std::cmp_greater_equal(count, num_keys); }, [&, ts = db_clock::now()] {
             return replica::database::truncate_table_on_all_shards(e.db(), "ks", "cf", ts, false /* with_snapshot */).then([] {
                 return yield();
             });
@@ -1236,7 +1237,7 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
         });
         auto shard = tests::random::get_int<unsigned>(0, smp::count);
         auto found = false;
-        for (auto i = 0; i < smp::count && !found; i++) {
+        for (unsigned i = 0; i < smp::count && !found; i++) {
             found = co_await db.invoke_on((shard + i) % smp::count, [] (replica::database& db) -> future<bool> {
                 auto& cf = db.find_column_family("ks", "cf");
                 bool found = false;
@@ -1285,7 +1286,7 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
         // move a random sstable to quarantine
         auto shard = tests::random::get_int<unsigned>(0, smp::count);
         auto found = false;
-        for (auto i = 0; i < smp::count; i++) {
+        for (unsigned i = 0; i < smp::count; i++) {
             co_await db.invoke_on((shard + i) % smp::count, [&] (replica::database& db) -> future<> {
                 auto& cf = db.find_column_family("ks", "cf");
                 co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {

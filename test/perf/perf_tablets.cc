@@ -83,7 +83,7 @@ static future<> test_basic_operations(app_template& app) {
                 for (int k = 0; k < rf; ++k) {
                     replicas.push_back({h1, 0});
                 }
-                assert(replicas.size() == rf);
+                assert(std::cmp_equal(replicas.size(), rf));
                 tmap.set_tablet(j, tablet_info{std::move(replicas)});
                 ++total_tablets;
             }

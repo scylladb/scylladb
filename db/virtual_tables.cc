@@ -802,7 +802,7 @@ class clients_table : public streaming_virtual_table {
         decorated_ip::compare cmp(*_s);
         std::set<decorated_ip, decorated_ip::compare> ips(cmp);
         std::unordered_map<net::inet_address, client_data_vec> cd_map;
-        for (int i = 0; i < smp::count; i++) {
+        for (unsigned i = 0; i < smp::count; i++) {
             for (auto&& ps_cdc : *cd_vec[i]) {
                 for (auto&& cd : ps_cdc) {
                     if (cd_map.contains(cd.ip)) {

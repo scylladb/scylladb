@@ -274,7 +274,7 @@ SEASTAR_TEST_CASE(test_correctness_when_crossing_chunk_boundary) {
         as(region, [&] {
             size_t max_chunk_size = lsa::chunked_managed_vector<int>::max_chunk_capacity();
 
-            lsa::chunked_managed_vector<int> v;
+            lsa::chunked_managed_vector<size_t> v;
             for (size_t i = 0; i < (max_chunk_size + 1); i++) {
                 v.push_back(i);
             }
