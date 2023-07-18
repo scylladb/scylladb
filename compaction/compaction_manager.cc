@@ -300,6 +300,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
     _tasks.push_back(task);
     auto unregister_task = defer([this, task] {
         _tasks.remove(task);
+        task->switch_state(compaction_task_executor::state::none);
     });
     cmlog.debug("{}: started", *task);
 
@@ -481,6 +482,23 @@ protected:
 
 }
 
+template<typename TaskExecutor, typename... Args>
+requires std::is_base_of_v<compaction_task_executor, TaskExecutor> &&
+        std::is_base_of_v<compaction_task_impl, TaskExecutor> &&
+requires (compaction_manager& cm, Args&&... args) {
+    {TaskExecutor(cm, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
+}
+future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(std::optional<tasks::task_info> parent_info, Args&&... args) {
+    auto task_executor = seastar::make_shared<TaskExecutor>(*this, std::forward<Args>(args)...);
+    if (parent_info) {
+        auto task = co_await get_task_manager_module().make_task(task_executor, parent_info.value());
+        task->start();
+        // We do not need to wait for the task to be done as compaction_task_executor side will take care of that.
+    }
+
+    co_return co_await perform_task(std::move(task_executor));
+}
+
 future<> compaction_manager::perform_major_compaction(table_state& t, tasks::task_info info) {
     if (_state != state::enabled) {
         co_return;
@@ -624,10 +642,6 @@ compaction::compaction_state::~compaction_state() {
 std::string compaction_task_executor::describe() const {
     auto* t = _compacting_table;
     return fmt::format("{} task {} for table {} [{}]", _description, fmt::ptr(this), *t, fmt::ptr(t));
-}
-
-compaction_task_executor::~compaction_task_executor() {
-    switch_state(state::none);
 }
 
 sstables_task_executor::~sstables_task_executor() {
@@ -1020,12 +1034,17 @@ future<stop_iteration> compaction_task_executor::maybe_retry(std::exception_ptr 
 
 namespace compaction {
 
-class regular_compaction_task_executor : public compaction_task_executor {
+class regular_compaction_task_executor : public compaction_task_executor, public regular_compaction_task_impl {
 public:
     regular_compaction_task_executor(compaction_manager& mgr, table_state& t)
         : compaction_task_executor(mgr, &t, sstables::compaction_type::Compaction, "Compaction")
+        , regular_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), mgr._task_manager_module->new_sequence_number(), t.schema()->ks_name(), t.schema()->cf_name(), "", tasks::task_id::create_null_id())
     {}
 protected:
+    virtual future<> run() override {
+        return compaction_done().discard_result();
+    }
+
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
         co_await coroutine::switch_to(_cm.compaction_sg());
 
@@ -1112,7 +1131,7 @@ void compaction_manager::submit(table_state& t) {
 
     // OK to drop future.
     // waited via task->stop()
-    (void)perform_task(make_shared<regular_compaction_task_executor>(*this, t));
+    (void)perform_compaction<regular_compaction_task_executor>(tasks::task_info{}, t).discard_result();
 }
 
 bool compaction_manager::can_perform_regular_compaction(table_state& t) {

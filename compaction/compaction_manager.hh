@@ -160,6 +160,16 @@ private:
 private:
     future<compaction_stats_opt> perform_task(shared_ptr<compaction::compaction_task_executor>);
 
+    // parent_info set to std::nullopt means that task manager should not register this task executor.
+    // To create a task manager task with no parent, parent_info argument should contain empty task_info.
+    template<typename TaskExecutor, typename... Args>
+    requires std::is_base_of_v<compaction_task_executor, TaskExecutor> &&
+            std::is_base_of_v<compaction_task_impl, TaskExecutor> &&
+    requires (compaction_manager& cm, Args&&... args) {
+        {TaskExecutor(cm, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
+    }
+    future<compaction_manager::compaction_stats_opt> perform_compaction(std::optional<tasks::task_info> parent_info, Args&&... args);
+
     future<> stop_tasks(std::vector<shared_ptr<compaction::compaction_task_executor>> tasks, sstring reason);
     future<> update_throughput(uint32_t value_mbs);
 
@@ -464,7 +474,7 @@ public:
     compaction_task_executor(compaction_task_executor&&) = delete;
     compaction_task_executor(const compaction_task_executor&) = delete;
 
-    virtual ~compaction_task_executor();
+    virtual ~compaction_task_executor() = default;
 
 protected:
     virtual future<compaction_manager::compaction_stats_opt> do_run() = 0;
