@@ -306,7 +306,7 @@ public:
             const dht::partition_range& lookup_range,
             const query::partition_slice& lookup_slice) {
 
-        auto querier_opt = _cache.lookup_data_querier(make_cache_key(lookup_key), lookup_schema, lookup_range, lookup_slice, nullptr, db::no_timeout);
+        auto querier_opt = _cache.lookup_data_querier(make_cache_key(lookup_key), lookup_schema, lookup_range, lookup_slice, get_semaphore(), nullptr, db::no_timeout);
         if (querier_opt) {
             querier_opt->close().get();
         }
@@ -319,7 +319,7 @@ public:
             const dht::partition_range& lookup_range,
             const query::partition_slice& lookup_slice) {
 
-        auto querier_opt = _cache.lookup_mutation_querier(make_cache_key(lookup_key), lookup_schema, lookup_range, lookup_slice, nullptr, db::no_timeout);
+        auto querier_opt = _cache.lookup_mutation_querier(make_cache_key(lookup_key), lookup_schema, lookup_range, lookup_slice, get_semaphore(), nullptr, db::no_timeout);
         if (querier_opt) {
             querier_opt->close().get();
         }

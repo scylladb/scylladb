@@ -1657,7 +1657,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     std::exception_ptr ex;
 
     if (cmd.query_uuid && !cmd.is_first_page) {
-        querier_opt = _querier_cache.lookup_data_querier(cmd.query_uuid, *s, ranges.front(), cmd.slice, trace_state, timeout);
+        querier_opt = _querier_cache.lookup_data_querier(cmd.query_uuid, *s, ranges.front(), cmd.slice, semaphore, trace_state, timeout);
     }
 
     auto read_func = [&, this] (reader_permit permit) {
@@ -1724,7 +1724,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     std::exception_ptr ex;
 
     if (cmd.query_uuid && !cmd.is_first_page) {
-        querier_opt = _querier_cache.lookup_mutation_querier(cmd.query_uuid, *s, range, cmd.slice, trace_state, timeout);
+        querier_opt = _querier_cache.lookup_mutation_querier(cmd.query_uuid, *s, range, cmd.slice, semaphore, trace_state, timeout);
     }
 
     auto read_func = [&] (reader_permit permit) {

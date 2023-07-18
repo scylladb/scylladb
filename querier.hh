@@ -311,6 +311,7 @@ public:
     };
 
     using index = std::unordered_multimap<query_id, std::unique_ptr<querier_base>>;
+    using is_user_semaphore_func = std::function<bool(const reader_concurrency_semaphore&)>;
 
 private:
     index _data_querier_index;
@@ -319,7 +320,7 @@ private:
     std::chrono::seconds _entry_ttl;
     stats _stats;
     gate _closing_gate;
-    [[maybe_unused]] std::function<bool(const reader_concurrency_semaphore&)> _is_user_semaphore_func;
+    is_user_semaphore_func _is_user_semaphore_func;
 
 private:
     template <typename Querier>
@@ -338,11 +339,12 @@ private:
         const schema& s,
         dht::partition_ranges_view ranges,
         const query::partition_slice& slice,
+        reader_concurrency_semaphore& current_sem,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout);
 
 public:
-    querier_cache(std::function<bool(const reader_concurrency_semaphore&)> is_user_semaphore_func, std::chrono::seconds entry_ttl = default_entry_ttl);
+    querier_cache(is_user_semaphore_func is_user_semaphore_func, std::chrono::seconds entry_ttl = default_entry_ttl);
 
     querier_cache(const querier_cache&) = delete;
     querier_cache& operator=(const querier_cache&) = delete;
@@ -374,6 +376,7 @@ public:
             const schema& s,
             const dht::partition_range& range,
             const query::partition_slice& slice,
+            reader_concurrency_semaphore& current_sem,
             tracing::trace_state_ptr trace_state,
             db::timeout_clock::time_point timeout);
 
@@ -384,6 +387,7 @@ public:
             const schema& s,
             const dht::partition_range& range,
             const query::partition_slice& slice,
+            reader_concurrency_semaphore& current_sem,
             tracing::trace_state_ptr trace_state,
             db::timeout_clock::time_point timeout);
 
@@ -394,6 +398,7 @@ public:
             const schema& s,
             const dht::partition_range_vector& ranges,
             const query::partition_slice& slice,
+            reader_concurrency_semaphore& current_sem,
             tracing::trace_state_ptr trace_state,
             db::timeout_clock::time_point timeout);
 
