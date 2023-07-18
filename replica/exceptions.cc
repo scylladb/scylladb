@@ -22,6 +22,8 @@ exception_variant try_encode_replica_exception(std::exception_ptr eptr) {
         std::rethrow_exception(std::move(eptr));
     } catch (rate_limit_exception&) {
         return rate_limit_exception();
+    } catch (abort_requested_exception&) {
+        return abort_requested_exception();
     } catch (...) {
         return no_exception{};
     }

@@ -13,6 +13,7 @@
 #include <optional>
 #include <variant>
 
+#include "seastar/core/abort_source.hh"
 #include "seastar/core/sstring.hh"
 #include "seastar/core/timed_out_error.hh"
 
@@ -43,10 +44,13 @@ public:
     virtual const char* what() const noexcept override { return "rate limit exceeded"; }
 };
 
+using abort_requested_exception = seastar::abort_requested_exception;
+
 struct exception_variant {
     std::variant<unknown_exception,
             no_exception,
-            rate_limit_exception
+            rate_limit_exception,
+            abort_requested_exception
     > reason;
 
     exception_variant()

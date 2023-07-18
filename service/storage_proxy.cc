@@ -5195,8 +5195,10 @@ storage_proxy::handle_write(netw::messaging_service::msg_addr src_addr, rpc::opt
                     errors.count++;
                     errors.local = replica::try_encode_replica_exception(eptr);
                     seastar::log_level l = seastar::log_level::warn;
-                    if (is_timeout_exception(eptr) || std::holds_alternative<replica::rate_limit_exception>(errors.local.reason)) {
-                        // ignore timeouts and rate limit exceptions so that logs are not flooded.
+                    if (is_timeout_exception(eptr)
+                            || std::holds_alternative<replica::rate_limit_exception>(errors.local.reason)
+                            || std::holds_alternative<abort_requested_exception>(errors.local.reason)) {
+                        // ignore timeouts, abort requests and rate limit exceptions so that logs are not flooded.
                         // database's total_writes_timedout or total_writes_rate_limited counter was incremented.
                         l = seastar::log_level::debug;
                     }
@@ -5298,16 +5300,20 @@ storage_proxy::handle_mutation_failed(const rpc::client_info& cinfo, unsigned sh
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return container().invoke_on(shard, _write_ack_smp_service_group, [from, response_id, num_failed, backlog = std::move(backlog), exception = std::move(exception)] (storage_proxy& sp) mutable {
             error err = error::FAILURE;
+            std::optional<sstring> msg;
             if (exception) {
-                err = std::visit([] <typename Ex> (Ex&) {
+                err = std::visit([&] <typename Ex> (Ex& e) {
                     if constexpr (std::is_same_v<Ex, replica::rate_limit_exception>) {
                         return error::RATE_LIMIT;
                     } else if constexpr (std::is_same_v<Ex, replica::unknown_exception> || std::is_same_v<Ex, replica::no_exception>) {
                         return error::FAILURE;
+                    } else if constexpr (std::is_same_v<Ex, replica::abort_requested_exception>) {
+                        msg = e.what();
+                        return error::FAILURE;
                     }
                 }, exception->reason);
             }
-            sp.got_failure_response(response_id, from, num_failed, std::move(backlog), err, std::nullopt);
+            sp.got_failure_response(response_id, from, num_failed, std::move(backlog), err, std::move(msg));
             return netw::messaging_service::no_wait();
         });
 }
