@@ -81,7 +81,7 @@ protected:
     uint64_t _current_connections = 0;
     uint64_t _connections_being_accepted = 0;
     uint64_t _total_connections = 0;
-    future<> _stopped = _all_connections_stopped.get_future();
+    future<> _listeners_stopped = make_ready_future<>();
     using connections_list_t = boost::intrusive::list<connection>;
     connections_list_t _connections_list;
     struct gentle_iterator {

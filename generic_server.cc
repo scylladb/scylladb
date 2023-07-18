@@ -132,7 +132,7 @@ future<> server::stop() {
             _logger.debug("shutdown connection {} out of {} done", ++(*nr_conn), nr_conn_total);
         });
     }).then([this] {
-        return std::move(_stopped);
+        return when_all(std::move(_listeners_stopped), _all_connections_stopped.get_future()).discard_result();
     });
 }
 
@@ -163,7 +163,7 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
             throw std::runtime_error(format("{} error while listening on {} -> {}", _server_name, addr, std::current_exception()));
         }
         _listeners.emplace_back(std::move(ss));
-        _stopped = when_all(std::move(_stopped), do_accepts(_listeners.size() - 1, keepalive, addr)).discard_result();
+        _listeners_stopped = when_all(std::move(_listeners_stopped), do_accepts(_listeners.size() - 1, keepalive, addr)).discard_result();
     });
 }
 
