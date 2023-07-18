@@ -1084,6 +1084,7 @@ scylla_core = (['message/messaging_service.cc',
                 'lang/wasm_alien_thread_runner.cc',
                 'lang/wasm_instance_cache.cc',
                 'service/raft/group0_state_machine.cc',
+                'service/raft/group0_state_machine_merger.cc',
                 'service/raft/raft_sys_table_storage.cc',
                 'serializer.cc',
                 'release.cc',
@@ -1384,6 +1385,8 @@ deps['test/boost/exceptions_fallback_test'] = ['test/boost/exceptions_fallback_t
 deps['test/boost/duration_test'] += ['test/lib/exception_utils.cc']
 deps['test/boost/schema_loader_test'] += ['tools/schema_loader.cc']
 deps['test/boost/rust_test'] += ['rust/inc/src/lib.rs']
+
+deps['test/boost/group0_cmd_merge_test'] += ['test/lib/expr_test_utils.cc']
 
 deps['test/raft/replication_test'] = ['test/raft/replication_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies
 deps['test/raft/raft_server_test'] = ['test/raft/raft_server_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc'] + scylla_raft_dependencies

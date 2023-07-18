@@ -22,6 +22,7 @@ class raft_group0_client;
 class migration_manager;
 class storage_proxy;
 class storage_service;
+struct group0_state_machine_merger;
 
 struct schema_change {
     // Mutations of schema tables (such as `system_schema.keyspaces`, `system_schema.tables` etc.)
@@ -84,6 +85,8 @@ class group0_state_machine : public raft_state_machine {
     storage_proxy& _sp;
     storage_service& _ss;
     cdc::generation_service& _cdc_gen_svc;
+
+    future<> merge_and_apply(group0_state_machine_merger& merger);
 public:
     group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss, cdc::generation_service& cdc_gen_svc) : _client(client), _mm(mm), _sp(sp), _ss(ss), _cdc_gen_svc(cdc_gen_svc) {}
     future<> apply(std::vector<raft::command_cref> command) override;
