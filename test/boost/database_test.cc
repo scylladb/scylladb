@@ -42,6 +42,7 @@
 #include "transport/messages/result_message.hh"
 #include "compaction/compaction_manager.hh"
 #include "db/snapshot-ctl.hh"
+#include "replica/mutation_dump.hh"
 
 using namespace std::chrono_literals;
 using namespace sstables;
@@ -1427,4 +1428,15 @@ SEASTAR_TEST_CASE(drop_table_with_explicit_snapshot) {
         BOOST_REQUIRE_EQUAL(cf_dir_exists, true);
         co_return;
     });
+}
+
+SEASTAR_TEST_CASE(mutation_dump_generated_schema_deterministic_id_version) {
+    simple_schema s;
+    auto os1 = replica::mutation_dump::generate_output_schema_from_underlying_schema(s.schema());
+    auto os2 = replica::mutation_dump::generate_output_schema_from_underlying_schema(s.schema());
+
+    BOOST_REQUIRE_EQUAL(os1->id(), os2->id());
+    BOOST_REQUIRE_EQUAL(os1->version(), os2->version());
+
+    return make_ready_future<>();
 }
