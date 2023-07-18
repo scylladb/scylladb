@@ -165,8 +165,6 @@ static data_value castas_fctn_from_dv_to_string(data_value from) {
     return from.type()->to_string_impl(from);
 }
 
-// FIXME: Add conversions for counters, after they are fully implemented...
-
 static constexpr unsigned next_power_of_2(unsigned val) {
     unsigned ret = 1;
     while (ret <= val) {
@@ -370,6 +368,26 @@ castas_fctn get_castas_fctn(data_type to_type, data_type from_type) {
         return castas_fctn_from_dv_to_string;
     case cast_switch_case_val(kind::utf8, kind::ascii):
         return castas_fctn_simple<sstring, sstring>;
+
+    case cast_switch_case_val(kind::byte, kind::counter):
+        return castas_fctn_simple<int8_t, int64_t>;
+    case cast_switch_case_val(kind::short_kind, kind::counter):
+        return castas_fctn_simple<int16_t, int64_t>;
+    case cast_switch_case_val(kind::int32, kind::counter):
+        return castas_fctn_simple<int32_t, int64_t>;
+    case cast_switch_case_val(kind::long_kind, kind::counter):
+        return castas_fctn_simple<int64_t, int64_t>;
+    case cast_switch_case_val(kind::float_kind, kind::counter):
+        return castas_fctn_simple<float, int64_t>;
+    case cast_switch_case_val(kind::double_kind, kind::counter):
+        return castas_fctn_simple<double, int64_t>;
+    case cast_switch_case_val(kind::varint, kind::counter):
+        return castas_fctn_simple<utils::multiprecision_int, int64_t>;
+    case cast_switch_case_val(kind::decimal, kind::counter):
+        return castas_fctn_from_integer_to_decimal<int64_t>;
+    case cast_switch_case_val(kind::ascii, kind::counter):
+    case cast_switch_case_val(kind::utf8, kind::counter):
+        return castas_fctn_to_string<int64_t>;
     }
     throw exceptions::invalid_request_exception(format("{} cannot be cast to {}", from_type->name(), to_type->name()));
 }
