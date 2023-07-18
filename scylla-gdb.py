@@ -1209,7 +1209,7 @@ def find_dbs():
 def for_each_table(db=None):
     if not db:
         db = find_db()
-    cfs = db['_column_families']
+    cfs = db['_tables_metadata']['_column_families']
     for (key, value) in unordered_map(cfs):
         yield value['_p'].reinterpret_cast(lookup_type(['replica::table', 'column_family'])[1].pointer()).dereference()  # it's a lw_shared_ptr
 
@@ -1511,7 +1511,7 @@ class scylla_tables(gdb.Command):
 
         for shard in shards:
             db = find_db(shard)
-            cfs = db['_column_families']
+            cfs = db['_tables_metadata']['_column_families']
             for (key, value) in unordered_map(cfs):
                 value = seastar_lw_shared_ptr(value).get().dereference()
                 schema = schema_ptr(value['_schema'])
@@ -1533,7 +1533,7 @@ class scylla_table(gdb.Command):
 
     def _find_table(self, ks, cf):
         db = find_db()
-        cfs = db['_column_families']
+        cfs = db['_tables_metadata']['_column_families']
         for (key, value) in unordered_map(cfs):
             value = seastar_lw_shared_ptr(value).get().dereference()
             schema = schema_ptr(value['_schema'])
@@ -1900,7 +1900,7 @@ class seastar_lw_shared_ptr():
 def all_tables(db):
     """Returns pointers to table objects which exist on current shard"""
 
-    for (key, value) in unordered_map(db['_column_families']):
+    for (key, value) in unordered_map(db['_tables_metadata']['_column_families']):
         yield seastar_lw_shared_ptr(value).get()
 
 

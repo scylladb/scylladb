@@ -462,7 +462,7 @@ std::vector<replica::column_family*> stream_session::get_column_family_stores(co
     std::vector<replica::column_family*> stores;
     auto& db = manager().db();
     if (column_families.empty()) {
-        for (auto& x : db.get_column_families()) {
+        for (auto& x : db.get_tables_metadata()._column_families) {
             replica::column_family& cf = *(x.second);
             auto cf_name = cf.schema()->cf_name();
             auto ks_name = cf.schema()->ks_name();

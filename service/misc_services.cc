@@ -78,7 +78,7 @@ void load_broadcaster::start_broadcasting() {
         llogger.debug("Disseminating load info ...");
         _done = _db.map_reduce0([](replica::database& db) {
             int64_t res = 0;
-            for (auto i : db.get_column_families()) {
+            for (auto i : db.get_tables_metadata()._column_families) {
                 res += i.second->get_stats().live_disk_space_used;
             }
             return res;
@@ -137,7 +137,7 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
     };
 
     auto cf_to_cache_hit_stats = [non_system_filter] (replica::database& db) {
-        return boost::copy_range<std::unordered_map<table_id, stat>>(db.get_column_families() | boost::adaptors::filtered(non_system_filter) |
+        return boost::copy_range<std::unordered_map<table_id, stat>>(db.get_tables_metadata()._column_families | boost::adaptors::filtered(non_system_filter) |
                 boost::adaptors::transformed([]  (const std::pair<table_id, lw_shared_ptr<replica::column_family>>& cf) {
             auto& stats = cf.second->get_row_cache().stats();
             return std::make_pair(cf.first, stat{float(stats.reads_with_no_misses.rate().rates[0]), float(stats.reads_with_misses.rate().rates[0])});
@@ -159,8 +159,8 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
         // set calculated rates on all shards
         return _db.invoke_on_all([this, cpuid = this_shard_id()] (replica::database& db) {
             return do_for_each(_rates, [this, cpuid, &db] (auto&& r) mutable {
-                auto it = db.get_column_families().find(r.first);
-                if (it == db.get_column_families().end()) { // a table may be added before map/reduce completes and this code runs
+                auto it = db.get_tables_metadata()._column_families.find(r.first);
+                if (it == db.get_tables_metadata()._column_families.end()) { // a table may be added before map/reduce completes and this code runs
                     return;
                 }
                 auto& cf = *it;

@@ -1300,6 +1300,15 @@ public:
         }
     };
 
+    using ks_cf_t = std::pair<sstring, sstring>;
+    using ks_cf_to_uuid_t =
+        flat_hash_map<ks_cf_t, table_id, utils::tuple_hash, string_pair_eq>;
+    class tables_metadata {
+        rwlock _cf_lock;
+    public: // FIXME: change member access to private. 
+        std::unordered_map<table_id, lw_shared_ptr<column_family>> _column_families;
+        ks_cf_to_uuid_t _ks_cf_to_uuid;
+    };
 private:
     replica::cf_stats _cf_stats;
     static constexpr size_t max_count_concurrent_reads{100};
@@ -1366,10 +1375,7 @@ private:
             db::per_partition_rate_limit::info> _apply_stage;
 
     flat_hash_map<sstring, keyspace> _keyspaces;
-    std::unordered_map<table_id, lw_shared_ptr<column_family>> _column_families;
-    using ks_cf_to_uuid_t =
-        flat_hash_map<std::pair<sstring, sstring>, table_id, utils::tuple_hash, string_pair_eq>;
-    ks_cf_to_uuid_t _ks_cf_to_uuid;
+    tables_metadata _tables_metadata;
     std::unique_ptr<db::commitlog> _commitlog;
     std::unique_ptr<db::commitlog> _schema_commitlog;
     utils::updateable_value_source<table_schema_version> _version;
@@ -1646,22 +1652,17 @@ public:
         return _keyspaces;
     }
 
-    const std::unordered_map<table_id, lw_shared_ptr<column_family>>& get_column_families() const {
-        return _column_families;
+    const tables_metadata& get_tables_metadata() const {
+        return _tables_metadata;
     }
 
-    std::unordered_map<table_id, lw_shared_ptr<column_family>>& get_column_families() {
-        return _column_families;
+    tables_metadata& get_tables_metadata() {
+        return _tables_metadata;
     }
 
     std::vector<lw_shared_ptr<column_family>> get_non_system_column_families() const;
 
     std::vector<view_ptr> get_views() const;
-
-    const ks_cf_to_uuid_t&
-    get_column_families_mapping() const {
-        return _ks_cf_to_uuid;
-    }
 
     const db::config& get_config() const {
         return _cfg;

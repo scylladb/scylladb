@@ -68,7 +68,7 @@ struct map_reduce_column_families_locally {
     std::function<std::unique_ptr<std::any>(std::unique_ptr<std::any>, std::unique_ptr<std::any>)> reducer;
     future<std::unique_ptr<std::any>> operator()(replica::database& db) const {
         auto res = seastar::make_lw_shared<std::unique_ptr<std::any>>(std::make_unique<std::any>(init));
-        return do_for_each(db.get_column_families(), [res, this](const std::pair<table_id, seastar::lw_shared_ptr<replica::table>>& i) {
+        return do_for_each(db.get_tables_metadata()._column_families, [res, this](const std::pair<table_id, seastar::lw_shared_ptr<replica::table>>& i) {
             *res = reducer(std::move(*res), mapper(*i.second.get()));
         }).then([res] {
             return std::move(*res);

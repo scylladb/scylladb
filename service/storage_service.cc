@@ -3093,7 +3093,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
         co_await container().invoke_on_all([&] (storage_service& ss) {
             auto& db = ss._db.local();
             auto tmptr = pending_token_metadata_ptr[this_shard_id()];
-            for (auto&& [id, cf] : db.get_column_families()) { // Safe because we iterate without preemption
+            for (auto&& [id, cf] : db.get_tables_metadata()._column_families) { // Safe because we iterate without preemption
                 auto rs = db.find_keyspace(cf->schema()->keypace_name()).get_replication_strategy_ptr();
                 locator::effective_replication_map_ptr erm;
                 if (auto pt_rs = rs->maybe_as_per_table()) {

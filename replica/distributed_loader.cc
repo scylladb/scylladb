@@ -472,7 +472,7 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
 
     dblog.info("Populating Keyspace {}", ks_name);
     auto& ks = i->second;
-    auto& column_families = db.local().get_column_families();
+    auto& column_families = db.local().get_tables_metadata()._column_families;
 
     co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data() | boost::adaptors::map_values, [&] (schema_ptr s) -> future<> {
         auto uuid = s->id();

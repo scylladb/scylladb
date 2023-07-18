@@ -641,7 +641,7 @@ future<> generation_service::maybe_rewrite_streams_descriptions() {
 
     // For each CDC log table get the TTL setting (from CDC options) and the table's creation time
     std::vector<time_and_ttl> times_and_ttls;
-    for (auto& [_, cf] : _db.get_column_families()) {
+    for (auto& [_, cf] : _db.get_tables_metadata()._column_families) {
         auto& s = *cf->schema();
         auto base = cdc::get_base_table(_db, s.ks_name(), s.cf_name());
         if (!base) {

@@ -283,7 +283,7 @@ public:
             const auto snapshots_by_tables = co_await _db.map_reduce(snapshot_reducer(), [ks_name_ = ks_data.name] (replica::database& db) mutable -> future<snapshots_by_tables_map> {
                 auto ks_name = std::move(ks_name_);
                 snapshots_by_tables_map snapshots_by_tables;
-                for (auto& [_, table] : db.get_column_families()) {
+                for (auto& [_, table] : db.get_tables_metadata()._column_families) {
                     if (table->schema()->ks_name() != ks_name) {
                         continue;
                     }
@@ -433,7 +433,7 @@ private:
         };
         co_return co_await _db.map_reduce(shard_reducer(reduce), [map, reduce] (replica::database& db) {
             T val = {};
-            for (auto& [_, table] : db.get_column_families()) {
+            for (auto& [_, table] : db.get_tables_metadata()._column_families) {
                val = reduce(val, map(*table));
             }
             return val;
@@ -560,7 +560,7 @@ public:
                 res.total = occupancy.total_space();
                 res.free = occupancy.free_space();
                 res.entries = db.row_cache_tracker().partitions();
-                for (const auto& [_, t] : db.get_column_families()) {
+                for (const auto& [_, t] : db.get_tables_metadata()._column_families) {
                     auto& cache_stats = t->get_row_cache().stats();
                     res.hits += cache_stats.hits.count();
                     res.misses += cache_stats.misses.count();

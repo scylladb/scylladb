@@ -135,7 +135,7 @@ static future<json::json_return_type>  get_cf_histogram(http_context& ctx, const
 static future<json::json_return_type> get_cf_histogram(http_context& ctx, utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     std::function<utils::ihistogram(const replica::database&)> fun = [f] (const replica::database& db)  {
         utils::ihistogram res;
-        for (auto i : db.get_column_families()) {
+        for (auto i : db.get_tables_metadata()._column_families) {
             res += (i.second->get_stats().*f).hist;
         }
         return res;
@@ -162,7 +162,7 @@ static future<json::json_return_type>  get_cf_rate_and_histogram(http_context& c
 static future<json::json_return_type> get_cf_rate_and_histogram(http_context& ctx, utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     std::function<utils::rate_moving_average_and_histogram(const replica::database&)> fun = [f] (const replica::database& db)  {
         utils::rate_moving_average_and_histogram res;
-        for (auto i : db.get_column_families()) {
+        for (auto i : db.get_tables_metadata()._column_families) {
             res += (i.second->get_stats().*f).rate();
         }
         return res;
@@ -306,7 +306,7 @@ ratio_holder filter_recent_false_positive_as_ratio_holder(const sstables::shared
 void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace>& sys_ks) {
     cf::get_column_family_name.set(r, [&ctx] (const_req req){
         std::vector<sstring> res;
-        for (auto i: ctx.db.local().get_column_families_mapping()) {
+        for (auto i: ctx.db.local().get_tables_metadata()._ks_cf_to_uuid) {
             res.push_back(i.first.first + ":" + i.first.second);
         }
         return res;
@@ -314,7 +314,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     cf::get_column_family.set(r, [&ctx] (std::unique_ptr<http::request> req){
             std::list<cf::column_family_info> res;
-            for (auto i: ctx.db.local().get_column_families_mapping()) {
+            for (auto i: ctx.db.local().get_tables_metadata()._ks_cf_to_uuid) {
                 cf::column_family_info info;
                 info.ks = i.first.first;
                 info.cf =  i.first.second;

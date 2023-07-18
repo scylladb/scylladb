@@ -980,7 +980,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 ks.set_incremental_backups(value);
             }
 
-            for (auto& pair: db.get_column_families()) {
+            for (auto& pair: db.get_tables_metadata()._column_families) {
                 auto cf_ptr = pair.second;
                 cf_ptr->set_incremental_backups(value);
             }
@@ -1258,7 +1258,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
                 auto& ext = db.get_config().extensions();
 
-                for (auto& t : db.get_column_families() | boost::adaptors::map_values) {
+                for (auto& t : db.get_tables_metadata()._column_families | boost::adaptors::map_values) {
                     auto& schema = t->schema();
                     if ((ks.empty() || ks == schema->ks_name()) && (cf.empty() || cf == schema->cf_name())) {
                         // at most Nsstables long

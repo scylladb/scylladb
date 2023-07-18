@@ -66,7 +66,7 @@ public:
     }
     virtual std::vector<data_dictionary::table> get_tables(data_dictionary::database db) const override {
         std::vector<data_dictionary::table> ret;
-        auto&& tables = unwrap(db).get_column_families();
+        auto&& tables = unwrap(db).get_tables_metadata()._column_families;
         ret.reserve(tables.size());
         for (auto&& [uuid, cf] : tables) {
             ret.push_back(wrap(*cf));

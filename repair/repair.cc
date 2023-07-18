@@ -127,7 +127,7 @@ std::ostream& operator<<(std::ostream& out, row_level_diff_detect_algorithm algo
 }
 
 static size_t get_nr_tables(const replica::database& db, const sstring& keyspace) {
-    auto& m = db.get_column_families_mapping();
+    auto& m = db.get_tables_metadata()._ks_cf_to_uuid;
     return std::count_if(m.begin(), m.end(), [&keyspace] (auto& e) {
         return e.first.first == keyspace;
     });
@@ -135,7 +135,7 @@ static size_t get_nr_tables(const replica::database& db, const sstring& keyspace
 
 static std::vector<sstring> list_column_families(const replica::database& db, const sstring& keyspace) {
     std::vector<sstring> ret;
-    for (auto &&e : db.get_column_families_mapping()) {
+    for (auto &&e : db.get_tables_metadata()._ks_cf_to_uuid) {
         if (e.first.first == keyspace) {
             ret.push_back(e.first.second);
         }

@@ -265,7 +265,7 @@ void view_update_generator::setup_metrics() {
 }
 
 void view_update_generator::discover_staging_sstables() {
-    for (auto& x : _db.get_column_families()) {
+    for (auto& x : _db.get_tables_metadata()._column_families) {
         auto t = x.second->shared_from_this();
         for (auto sstables = t->get_sstables(); sstables::shared_sstable sst : *sstables) {
             if (sst->requires_view_building()) {

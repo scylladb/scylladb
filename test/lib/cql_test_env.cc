@@ -860,7 +860,7 @@ public:
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
 
             db.invoke_on_all([] (replica::database& db) {
-                for (auto& x : db.get_column_families()) {
+                for (auto& x : db.get_tables_metadata()._column_families) {
                     replica::table& t = *(x.second);
                     t.enable_auto_compaction();
                 }

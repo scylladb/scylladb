@@ -126,7 +126,7 @@ future<> db::commitlog_replayer::impl::init() {
         }
     }, [this](replica::database& db) {
         return do_with(shard_rpm_map{}, [this, &db](shard_rpm_map& map) {
-            return parallel_for_each(db.get_column_families(), [this, &map](auto& cfp) {
+            return parallel_for_each(db.get_tables_metadata()._column_families, [this, &map](auto& cfp) {
                 auto uuid = cfp.first;
                 // We do this on each cpu, for each CF, which technically is a little wasteful, but the values are
                 // cached, this is only startup, and it makes the code easier.
@@ -156,7 +156,7 @@ future<> db::commitlog_replayer::impl::init() {
         // existing sstables-per-shard.
         // So, go through all CF:s and check, if a shard mapping does not
         // have data for it, assume we must set global pos to zero.
-        for (auto&p : _db.local().get_column_families()) {
+        for (auto&p : _db.local().get_tables_metadata()._column_families) {
             for (auto&p1 : _rpm) { // for each shard
                 if (!p1.second.contains(p.first)) {
                     _min_pos[p1.first] = replay_position();

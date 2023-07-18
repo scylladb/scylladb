@@ -68,7 +68,7 @@ void set_compaction_manager(http_context& ctx, routes& r) {
     cm::get_pending_tasks_by_table.set(r, [&ctx] (std::unique_ptr<http::request> req) {
         return ctx.db.map_reduce0([](replica::database& db) {
             return do_with(std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash>(), [&db](std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash>& tasks) {
-                return do_for_each(db.get_column_families(), [&tasks](const std::pair<table_id, seastar::lw_shared_ptr<replica::table>>& i) -> future<> {
+                return do_for_each(db.get_tables_metadata()._column_families, [&tasks](const std::pair<table_id, seastar::lw_shared_ptr<replica::table>>& i) -> future<> {
                     replica::table& cf = *i.second.get();
                     tasks[std::make_pair(cf.schema()->ks_name(), cf.schema()->cf_name())] = cf.estimate_pending_compactions();
                     return make_ready_future<>();

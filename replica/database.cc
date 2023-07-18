@@ -272,7 +272,7 @@ void database::setup_scylla_memory_diagnostics_producer() {
         for (const auto& [name, op_count_getter] : phased_barriers) {
             writeln("    {} (top 10):\n", name);
             auto total = 0;
-            for (const auto& [count, table_list] : phased_barrier_top_10_counts(_column_families, op_count_getter)) {
+            for (const auto& [count, table_list] : phased_barrier_top_10_counts(_tables_metadata._column_families, op_count_getter)) {
                 total += count;
                 writeln("      {}", count);
                 if (table_list.empty()) {
@@ -863,13 +863,13 @@ database::init_commitlog() {
     return db::commitlog::create_commitlog(db::commitlog::config::from_db_config(_cfg, _dbcfg.commitlog_scheduling_group, _dbcfg.available_memory)).then([this](db::commitlog&& log) {
         _commitlog = std::make_unique<db::commitlog>(std::move(log));
         _commitlog->add_flush_handler([this](db::cf_id_type id, db::replay_position pos) {
-            if (!_column_families.contains(id)) {
+            if (!_tables_metadata._column_families.contains(id)) {
                 // the CF has been removed.
                 _commitlog->discard_completed_segments(id);
                 return;
             }
             // Initiate a background flush. Waited upon in `stop()`.
-            (void)_column_families[id]->flush(pos);
+            (void)_tables_metadata._column_families[id]->flush(pos);
         }).release(); // we have longer life time than CL. Ignore reg anchor
     });
 }
@@ -959,13 +959,13 @@ void database::maybe_init_schema_commitlog() {
 
     _schema_commitlog = std::make_unique<db::commitlog>(db::commitlog::create_commitlog(std::move(c)).get0());
     _schema_commitlog->add_flush_handler([this] (db::cf_id_type id, db::replay_position pos) {
-        if (!_column_families.contains(id)) {
+        if (!_tables_metadata._column_families.contains(id)) {
             // the CF has been removed.
             _schema_commitlog->discard_completed_segments(id);
             return;
         }
         // Initiate a background flush. Waited upon in `stop()`.
-        (void)_column_families[id]->flush(pos);
+        (void)_tables_metadata._column_families[id]->flush(pos);
 
     }).release();
 }
@@ -1017,18 +1017,18 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
     auto uuid = schema->id();
-    if (_column_families.contains(uuid)) {
+    if (_tables_metadata._column_families.contains(uuid)) {
         throw std::invalid_argument("UUID " + uuid.to_sstring() + " already mapped");
     }
     auto kscf = std::make_pair(schema->ks_name(), schema->cf_name());
-    if (_ks_cf_to_uuid.contains(kscf)) {
+    if (_tables_metadata._ks_cf_to_uuid.contains(kscf)) {
         throw std::invalid_argument("Column family " + schema->cf_name() + " exists");
     }
     ks.add_or_update_column_family(schema);
     cf->start();
     schema->registry_entry()->set_table(cf->weak_from_this());
-    _column_families.emplace(uuid, std::move(cf));
-    _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
+    _tables_metadata._column_families.emplace(uuid, std::move(cf));
+    _tables_metadata._ks_cf_to_uuid.emplace(std::move(kscf), uuid);
     if (schema->is_view()) {
         find_column_family(schema->view_info()->base_id()).add_or_update_view(view_ptr(schema));
     }
@@ -1065,9 +1065,9 @@ future<> database::remove(table& cf) noexcept {
     auto s = cf.schema();
     auto& ks = find_keyspace(s->ks_name());
     cf.deregister_metrics();
-    _column_families.erase(s->id());
+    _tables_metadata._column_families.erase(s->id());
     ks.metadata()->remove_column_family(s);
-    _ks_cf_to_uuid.erase(std::make_pair(s->ks_name(), s->cf_name()));
+    _tables_metadata._ks_cf_to_uuid.erase(std::make_pair(s->ks_name(), s->cf_name()));
     if (s->is_view()) {
         try {
             find_column_family(s->view_info()->base_id()).remove_view(view_ptr(s));
@@ -1149,7 +1149,7 @@ future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstri
 
 const table_id& database::find_uuid(std::string_view ks, std::string_view cf) const {
     try {
-        return _ks_cf_to_uuid.at(std::make_pair(ks, cf));
+        return _tables_metadata._ks_cf_to_uuid.at(std::make_pair(ks, cf));
     } catch (std::out_of_range&) {
         throw no_such_column_family(ks, cf);
     }
@@ -1245,7 +1245,7 @@ std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> databa
 
 std::vector<lw_shared_ptr<column_family>> database::get_non_system_column_families() const {
     return boost::copy_range<std::vector<lw_shared_ptr<column_family>>>(
-        get_column_families()
+        get_tables_metadata()._column_families
             | boost::adaptors::map_values
             | boost::adaptors::filtered([](const lw_shared_ptr<column_family>& cf) {
                 return !is_system_keyspace(cf->schema()->ks_name());
@@ -1272,7 +1272,7 @@ const column_family& database::find_column_family(std::string_view ks_name, std:
 
 column_family& database::find_column_family(const table_id& uuid) {
     try {
-        return *_column_families.at(uuid);
+        return *_tables_metadata._column_families.at(uuid);
     } catch (...) {
         throw no_such_column_family(uuid);
     }
@@ -1280,14 +1280,14 @@ column_family& database::find_column_family(const table_id& uuid) {
 
 const column_family& database::find_column_family(const table_id& uuid) const {
     try {
-        return *_column_families.at(uuid);
+        return *_tables_metadata._column_families.at(uuid);
     } catch (...) {
         throw no_such_column_family(uuid);
     }
 }
 
 bool database::column_family_exists(const table_id& uuid) const {
-    return _column_families.contains(uuid);
+    return _tables_metadata._column_families.contains(uuid);
 }
 
 future<>
@@ -1411,7 +1411,7 @@ schema_ptr database::find_schema(const table_id& uuid) const {
 }
 
 bool database::has_schema(std::string_view ks_name, std::string_view cf_name) const {
-    return _ks_cf_to_uuid.contains(std::make_pair(ks_name, cf_name));
+    return _tables_metadata._ks_cf_to_uuid.contains(std::make_pair(ks_name, cf_name));
 }
 
 std::vector<view_ptr> database::get_views() const {
@@ -1456,7 +1456,7 @@ future<> database::create_keyspace_on_all_shards(sharded<database>& sharded_db, 
 
 future<>
 database::drop_caches() const {
-    std::unordered_map<table_id, lw_shared_ptr<column_family>> tables = get_column_families();
+    std::unordered_map<table_id, lw_shared_ptr<column_family>> tables = get_tables_metadata()._column_families;
     for (auto&& e : tables) {
         table& t = *e.second;
         co_await t.get_row_cache().invalidate(row_cache::external_updater([] {}));
@@ -1806,7 +1806,7 @@ std::ostream& operator<<(std::ostream& out, const column_family& cf) {
 
 std::ostream& operator<<(std::ostream& out, const database& db) {
     out << "{\n";
-    for (auto&& e : db._column_families) {
+    for (auto&& e : db._tables_metadata._column_families) {
         auto&& cf = *e.second;
         out << "(" << e.first.to_sstring() << ", " << cf.schema()->cf_name() << ", " << cf.schema()->ks_name() << "): " << cf << "\n";
     }
@@ -2314,7 +2314,7 @@ schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& i
 
 future<> database::close_tables(table_kind kind_to_close) {
     auto b = defer([this] { _stop_barrier.abort(); });
-    co_await coroutine::parallel_for_each(_column_families, [this, kind_to_close](auto& val_pair) -> future<> {
+    co_await coroutine::parallel_for_each(_tables_metadata._column_families, [this, kind_to_close](auto& val_pair) -> future<> {
         auto& s = val_pair.second->schema();
         table_kind k = is_system_table(*s) || _cfg.extensions().is_extension_internal_keyspace(s->ks_name()) ? table_kind::system : table_kind::user;
         if (k == kind_to_close) {
@@ -2403,7 +2403,7 @@ future<> database::stop() {
 }
 
 future<> database::flush_all_memtables() {
-    return parallel_for_each(_column_families, [] (auto& cfp) {
+    return parallel_for_each(_tables_metadata._column_families, [] (auto& cfp) {
         return cfp.second->flush();
     });
 }
@@ -2790,8 +2790,8 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
                     // and has no remaining snapshots
                     if (!has_snapshots) {
                         auto [cf_name, cf_uuid] = extract_cf_name_and_uuid(table_ent->name);
-                        const auto& it = _ks_cf_to_uuid.find(std::make_pair(ks_name, cf_name));
-                        auto dropped = (it == _ks_cf_to_uuid.cend()) || (cf_uuid != it->second);
+                        const auto& it = _tables_metadata._ks_cf_to_uuid.find(std::make_pair(ks_name, cf_name));
+                        auto dropped = (it == _tables_metadata._ks_cf_to_uuid.cend()) || (cf_uuid != it->second);
                         if (dropped) {
                             dblog.info("Removing dropped table dir {}", table_dir);
                             sstables::remove_table_directory_if_has_no_snapshots(table_dir).get();
@@ -2804,7 +2804,7 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
 }
 
 future<> database::flush_non_system_column_families() {
-    auto non_system_cfs = get_column_families() | boost::adaptors::filtered([this] (auto& uuid_and_cf) {
+    auto non_system_cfs = get_tables_metadata()._column_families | boost::adaptors::filtered([this] (auto& uuid_and_cf) {
         auto cf = uuid_and_cf.second;
         auto& ks = cf->schema()->ks_name();
         return !is_system_keyspace(ks) && !_cfg.extensions().is_extension_internal_keyspace(ks);
@@ -2826,7 +2826,7 @@ future<> database::flush_non_system_column_families() {
 }
 
 future<> database::flush_system_column_families() {
-    auto system_cfs = get_column_families() | boost::adaptors::filtered([this] (auto& uuid_and_cf) {
+    auto system_cfs = get_tables_metadata()._column_families | boost::adaptors::filtered([this] (auto& uuid_and_cf) {
         auto cf = uuid_and_cf.second;
         auto& ks = cf->schema()->ks_name();
         return is_system_keyspace(ks) || _cfg.extensions().is_extension_internal_keyspace(ks);

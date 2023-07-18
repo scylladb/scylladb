@@ -1346,7 +1346,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Needs to happen before replaying the schema commitlog, which interprets
             // replay position in the truncation record.
             // Needs to happen before system_keyspace::setup(), which reads truncation records.
-            for (auto&& e : db.local().get_column_families()) {
+            for (auto&& e : db.local().get_tables_metadata()._column_families) {
                 auto table_ptr = e.second;
                 if (table_ptr->schema()->ks_name() == db::schema_tables::NAME) {
                     if (table_ptr->get_truncation_record() != db_clock::time_point::min()) {
@@ -1405,7 +1405,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
 
             db.invoke_on_all([] (replica::database& db) {
-                for (auto& x : db.get_column_families()) {
+                for (auto& x : db.get_tables_metadata()._column_families) {
                     replica::table& t = *(x.second);
                     t.enable_auto_compaction();
                 }
@@ -1423,7 +1423,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // streaming
 
             db.invoke_on_all([] (replica::database& db) {
-                for (auto& x : db.get_column_families()) {
+                for (auto& x : db.get_tables_metadata()._column_families) {
                     replica::column_family& cf = *(x.second);
                     cf.trigger_compaction();
                 }

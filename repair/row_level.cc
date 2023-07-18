@@ -3050,7 +3050,7 @@ future<> repair_service::cleanup_history(tasks::task_id repair_id) {
 }
 
 future<> repair_service::load_history() {
-    auto tables = get_db().local().get_column_families();
+    auto tables = get_db().local().get_tables_metadata()._column_families;
     for (const auto& x : tables) {
         auto& table_uuid = x.first;
         auto& table = x.second;
