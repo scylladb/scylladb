@@ -26,11 +26,28 @@ namespace gms {
 
 static logging::logger logger("features");
 
+static const char* enable_test_feature_error_injection_name = "features_enable_test_feature";
+static const char* enable_test_feature_as_deprecated_error_injection_name = "features_enable_test_feature_as_deprecated";
+
+static bool is_test_only_feature_deprecated() {
+    return utils::get_local_injector().enter(enable_test_feature_as_deprecated_error_injection_name);
+}
+
+static bool is_test_only_feature_enabled() {
+    return utils::get_local_injector().enter(enable_test_feature_error_injection_name)
+            || is_test_only_feature_deprecated();
+}
+
 feature_config::feature_config() {
 }
 
-feature_service::feature_service(feature_config cfg) : _config(cfg)
-{}
+feature_service::feature_service(feature_config cfg) : _config(cfg) {
+    if (is_test_only_feature_deprecated()) {
+        // Assume it's enabled
+        test_only_feature.enable();
+        unregister_feature(test_only_feature);
+    }
+}
 
 feature_config feature_config_from_db_config(const db::config& cfg, std::set<sstring> disabled) {
     feature_config fcfg;
@@ -76,7 +93,7 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
         fcfg._disabled_features.insert("UUID_SSTABLE_IDENTIFIERS"s);
     }
 
-    if (!utils::get_local_injector().enter("features_enable_test_feature")) {
+    if (!is_test_only_feature_enabled()) {
         fcfg._disabled_features.insert("TEST_ONLY_FEATURE"s);
     }
 
@@ -98,9 +115,6 @@ void feature_service::unregister_feature(feature& f) {
 
 
 std::set<std::string_view> feature_service::supported_feature_set() const {
-    // Add features known by this local node. When a new feature is
-    // introduced in scylla, update it here, e.g.,
-    // return sstring("FEATURE1,FEATURE2")
     std::set<std::string_view> features = {
         // Deprecated features - sent to other nodes via gossip, but assumed true in the code
         "RANGE_TOMBSTONES"sv,
@@ -122,8 +136,11 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
         "CORRECT_STATIC_COMPACT_IN_MC"sv,
         "UNBOUNDED_RANGE_TOMBSTONES"sv,
         "MC_SSTABLE_FORMAT"sv,
-        "LARGE_COLLECTION_DETECTION"sv,
     };
+
+    if (is_test_only_feature_deprecated()) {
+        features.insert(test_only_feature.name());
+    }
 
     for (auto& [name, f_ref] : _registered_features) {
         features.insert(name);
@@ -238,7 +255,7 @@ future<> feature_service::enable_features_on_startup(db::system_keyspace& sys_ks
     for (auto&& f : persisted_features) {
         logger.debug("Enabling persisted feature '{}'", f);
         const bool is_registered_feat = _registered_features.contains(sstring(f));
-        if (!is_registered_feat || !known_features.contains(f)) {
+        if (!known_features.contains(f)) {
             if (is_registered_feat) {
                 throw std::runtime_error(format(
                     "Feature '{}' was previously enabled in the cluster but its support is disabled by this node. "
