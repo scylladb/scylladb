@@ -9,7 +9,6 @@
 #include "compaction_backlog_manager.hh"
 #include "size_tiered_compaction_strategy.hh"
 #include <cmath>
-#include <ctgmath>
 
 // Backlog for one SSTable under STCS:
 //
