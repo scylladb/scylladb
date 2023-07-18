@@ -265,8 +265,8 @@ void view_update_generator::setup_metrics() {
 }
 
 void view_update_generator::discover_staging_sstables() {
-    for (auto& x : _db.get_tables_metadata()._column_families) {
-        auto t = x.second->shared_from_this();
+    _db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
+        auto t = table->shared_from_this();
         for (auto sstables = t->get_sstables(); sstables::shared_sstable sst : *sstables) {
             if (sst->requires_view_building()) {
                 _progress_tracker->on_sstable_registration(sst);
@@ -276,7 +276,7 @@ void view_update_generator::discover_staging_sstables() {
                 _registration_sem.consume(1);
             }
         }
-    }
+    });
 }
 
 }

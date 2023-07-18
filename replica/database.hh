@@ -1309,8 +1309,14 @@ public:
         std::unordered_map<table_id, lw_shared_ptr<column_family>> _column_families;
         ks_cf_to_uuid_t _ks_cf_to_uuid;
 
+        size_t size() const noexcept;
+
         future<> add_table(schema_ptr schema);
         future<> remove_table(schema_ptr schema) noexcept;
+        void for_each_table(std::function<void(table_id, lw_shared_ptr<table>)> f) const;
+        void for_each_table_id(std::function<void(const ks_cf_t&, table_id)> f) const;
+        future<> for_each_table_gently(std::function<future<>(table_id, lw_shared_ptr<table>)> f);
+        future<> parallel_for_each_table(std::function<future<>(table_id, lw_shared_ptr<table>)> f);
     };
 private:
     replica::cf_stats _cf_stats;

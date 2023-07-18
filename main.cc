@@ -1346,8 +1346,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Needs to happen before replaying the schema commitlog, which interprets
             // replay position in the truncation record.
             // Needs to happen before system_keyspace::setup(), which reads truncation records.
-            for (auto&& e : db.local().get_tables_metadata()._column_families) {
-                auto table_ptr = e.second;
+            db.local().get_tables_metadata().for_each_table([] (table_id, lw_shared_ptr<replica::table> table_ptr) {
                 if (table_ptr->schema()->ks_name() == db::schema_tables::NAME) {
                     if (table_ptr->get_truncation_record() != db_clock::time_point::min()) {
                         // replay_position stored in the truncation record may belong to
@@ -1360,7 +1359,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                                                         table_ptr->schema()->ks_name(), table_ptr->schema()->cf_name()));
                     }
                 }
-            }
+            });
 
             auto sch_cl = db.local().schema_commitlog();
             if (sch_cl != nullptr) {
@@ -1405,10 +1404,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
 
             db.invoke_on_all([] (replica::database& db) {
-                for (auto& x : db.get_tables_metadata()._column_families) {
-                    replica::table& t = *(x.second);
+                db.get_tables_metadata().for_each_table([] (table_id, lw_shared_ptr<replica::table> table) {
+                    replica::table& t = *table;
                     t.enable_auto_compaction();
-                }
+                });
             }).get();
 
             // If the same sstable is shared by several shards, it cannot be
@@ -1423,10 +1422,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // streaming
 
             db.invoke_on_all([] (replica::database& db) {
-                for (auto& x : db.get_tables_metadata()._column_families) {
-                    replica::column_family& cf = *(x.second);
+                db.get_tables_metadata().for_each_table([] (table_id, lw_shared_ptr<replica::table> table) {
+                    replica::column_family& cf = *table;
                     cf.trigger_compaction();
-                }
+                });
             }).get();
             api::set_server_gossip(ctx, gossiper).get();
             api::set_server_snitch(ctx, snitch).get();

@@ -980,10 +980,9 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 ks.set_incremental_backups(value);
             }
 
-            for (auto& pair: db.get_tables_metadata()._column_families) {
-                auto cf_ptr = pair.second;
-                cf_ptr->set_incremental_backups(value);
-            }
+            db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
+                table->set_incremental_backups(value);
+            });
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
@@ -1258,7 +1257,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
                 auto& ext = db.get_config().extensions();
 
-                for (auto& t : db.get_tables_metadata()._column_families | boost::adaptors::map_values) {
+                db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> t) {
                     auto& schema = t->schema();
                     if ((ks.empty() || ks == schema->ks_name()) && (cf.empty() || cf == schema->cf_name())) {
                         // at most Nsstables long
@@ -1339,7 +1338,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                         }
                         res.emplace_back(std::move(tst));
                     }
-                }
+                });
                 std::sort(res.begin(), res.end(), [](const ss::table_sstables& t1, const ss::table_sstables& t2) {
                     return t1.keyspace() < t2.keyspace() || (t1.keyspace() == t2.keyspace() && t1.table() < t2.table());
                 });

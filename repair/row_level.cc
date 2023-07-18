@@ -3050,13 +3050,10 @@ future<> repair_service::cleanup_history(tasks::task_id repair_id) {
 }
 
 future<> repair_service::load_history() {
-    auto tables = get_db().local().get_tables_metadata()._column_families;
-    for (const auto& x : tables) {
-        auto& table_uuid = x.first;
-        auto& table = x.second;
+    co_await get_db().local().get_tables_metadata().for_each_table_gently(coroutine::lambda([&] (table_id table_uuid, lw_shared_ptr<replica::table> table) -> future<> {
         auto shard = unsigned(table_uuid.uuid().get_most_significant_bits()) % smp::count;
         if (shard != this_shard_id()) {
-            continue;
+            co_return;
         }
         rlogger.info("Loading repair history for keyspace={}, table={}, table_uuid={}",
                 table->schema()->ks_name(), table->schema()->cf_name(), table_uuid);
@@ -3077,8 +3074,7 @@ future<> repair_service::load_history() {
                         entry.ks, entry.cf, range, repair_time);
             }
         });
-    }
-    co_return;
+    }));
 }
 
 repair_meta_ptr repair_service::get_repair_meta(gms::inet_address from, uint32_t repair_meta_id) {

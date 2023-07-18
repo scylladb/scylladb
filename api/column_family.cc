@@ -135,9 +135,9 @@ static future<json::json_return_type>  get_cf_histogram(http_context& ctx, const
 static future<json::json_return_type> get_cf_histogram(http_context& ctx, utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     std::function<utils::ihistogram(const replica::database&)> fun = [f] (const replica::database& db)  {
         utils::ihistogram res;
-        for (auto i : db.get_tables_metadata()._column_families) {
-            res += (i.second->get_stats().*f).hist;
-        }
+        db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) mutable {
+            res += (table->get_stats().*f).hist;
+        });
         return res;
     };
     return ctx.db.map(fun).then([](const std::vector<utils::ihistogram> &res) {
@@ -162,9 +162,9 @@ static future<json::json_return_type>  get_cf_rate_and_histogram(http_context& c
 static future<json::json_return_type> get_cf_rate_and_histogram(http_context& ctx, utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     std::function<utils::rate_moving_average_and_histogram(const replica::database&)> fun = [f] (const replica::database& db)  {
         utils::rate_moving_average_and_histogram res;
-        for (auto i : db.get_tables_metadata()._column_families) {
-            res += (i.second->get_stats().*f).rate();
-        }
+        db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
+            res += (table->get_stats().*f).rate();
+        });
         return res;
     };
     return ctx.db.map(fun).then([](const std::vector<utils::rate_moving_average_and_histogram> &res) {
@@ -306,21 +306,21 @@ ratio_holder filter_recent_false_positive_as_ratio_holder(const sstables::shared
 void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace>& sys_ks) {
     cf::get_column_family_name.set(r, [&ctx] (const_req req){
         std::vector<sstring> res;
-        for (auto i: ctx.db.local().get_tables_metadata()._ks_cf_to_uuid) {
-            res.push_back(i.first.first + ":" + i.first.second);
-        }
+        ctx.db.local().get_tables_metadata().for_each_table_id([&] (const std::pair<sstring, sstring>& kscf, table_id) {
+            res.push_back(kscf.first + ":" + kscf.second);
+        });
         return res;
     });
 
     cf::get_column_family.set(r, [&ctx] (std::unique_ptr<http::request> req){
-            std::list<cf::column_family_info> res;
-            for (auto i: ctx.db.local().get_tables_metadata()._ks_cf_to_uuid) {
+        std::list<cf::column_family_info> res;
+            ctx.db.local().get_tables_metadata().for_each_table_id([&] (const std::pair<sstring, sstring>& kscf, table_id) {
                 cf::column_family_info info;
-                info.ks = i.first.first;
-                info.cf =  i.first.second;
+                info.ks = kscf.first;
+                info.cf =  kscf.second;
                 info.type = "ColumnFamilies";
                 res.push_back(info);
-            }
+            });
             return make_ready_future<json::json_return_type>(json::stream_range_as_array(std::move(res), std::identity()));
         });
 

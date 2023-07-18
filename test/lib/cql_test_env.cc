@@ -860,10 +860,10 @@ public:
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
 
             db.invoke_on_all([] (replica::database& db) {
-                for (auto& x : db.get_tables_metadata()._column_families) {
-                    replica::table& t = *(x.second);
+                db.get_tables_metadata().for_each_table([] (table_id, lw_shared_ptr<replica::table> table) {
+                    replica::table& t = *table;
                     t.enable_auto_compaction();
-                }
+                });
             }).get();
 
             if (raft_gr.local().is_enabled()) {

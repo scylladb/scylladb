@@ -154,20 +154,20 @@ phased_barrier_top_10_counts(const database::tables_metadata& tables_metadata, s
     boost::container::static_vector<count_and_tables, 10> res;
     count_and_tables* min_element = nullptr;
 
-    for (const auto& [tid, table] : tables_metadata._column_families) {
+    tables_metadata.for_each_table([&] (table_id tid, lw_shared_ptr<table> table) {
         const auto count = op_count_getter(*table);
         if (!count) {
-            continue;
+            return;
         }
         if (res.size() < res.capacity()) {
             auto& elem = res.emplace_back(count, table_list({table.get()}));
             if (!min_element || min_element->first > count) {
                 min_element = &elem;
             }
-            continue;
+            return;
         }
         if (min_element->first > count) {
-            continue;
+            return;
         }
 
         auto it = boost::find_if(res, [count] (const count_and_tables& x) {
@@ -175,13 +175,13 @@ phased_barrier_top_10_counts(const database::tables_metadata& tables_metadata, s
         });
         if (it != res.end()) {
             it->second.push_back(table.get());
-            continue;
+            return;
         }
 
         // If we are here, min_element->first < count
         *min_element = {count, table_list({table.get()})};
         min_element = &*boost::min_element(res, less);
-    }
+    });
 
     boost::sort(res, less);
 
@@ -1802,10 +1802,10 @@ std::ostream& operator<<(std::ostream& out, const column_family& cf) {
 
 std::ostream& operator<<(std::ostream& out, const database& db) {
     out << "{\n";
-    for (auto&& e : db._tables_metadata._column_families) {
-        auto&& cf = *e.second;
-        out << "(" << e.first.to_sstring() << ", " << cf.schema()->cf_name() << ", " << cf.schema()->ks_name() << "): " << cf << "\n";
-    }
+    db._tables_metadata.for_each_table([&] (table_id id, const lw_shared_ptr<table> tp) {
+        auto&& cf = *tp;
+        out << "(" << id.to_sstring() << ", " << cf.schema()->cf_name() << ", " << cf.schema()->ks_name() << "): " << cf << "\n";
+    });
     out << "}";
     return out;
 }
@@ -2310,13 +2310,13 @@ schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& i
 
 future<> database::close_tables(table_kind kind_to_close) {
     auto b = defer([this] { _stop_barrier.abort(); });
-    co_await coroutine::parallel_for_each(_tables_metadata._column_families, [this, kind_to_close](auto& val_pair) -> future<> {
-        auto& s = val_pair.second->schema();
+    co_await _tables_metadata.parallel_for_each_table(coroutine::lambda([this, kind_to_close] (table_id, lw_shared_ptr<table> table) -> future<> {
+        auto& s = table->schema();
         table_kind k = is_system_table(*s) || _cfg.extensions().is_extension_internal_keyspace(s->ks_name()) ? table_kind::system : table_kind::user;
         if (k == kind_to_close) {
-            co_await val_pair.second->stop();
+            co_await table->stop();
         }
-    });
+    }));
     co_await _stop_barrier.arrive_and_wait();
     b.cancel();
 }
@@ -2399,8 +2399,8 @@ future<> database::stop() {
 }
 
 future<> database::flush_all_memtables() {
-    return parallel_for_each(_tables_metadata._column_families, [] (auto& cfp) {
-        return cfp.second->flush();
+    return _tables_metadata.parallel_for_each_table([] (table_id, lw_shared_ptr<table> table) {
+        return table->flush();
     });
 }
 
@@ -2855,6 +2855,10 @@ future<> database::drain() {
     b.cancel();
 }
 
+size_t database::tables_metadata::size() const noexcept {
+    return _column_families.size();
+}
+
 future<> database::tables_metadata::add_table(schema_ptr schema) {
     auto holder = co_await _cf_lock.hold_write_lock();
     auto id = schema->id();
@@ -2877,6 +2881,32 @@ future<> database::tables_metadata::remove_table(schema_ptr schema) noexcept {
     } catch (...) {
         on_fatal_internal_error(dblog, format("tables_metadata::remove_cf: {}", std::current_exception()));
     }
+}
+
+void database::tables_metadata::for_each_table(std::function<void(table_id, lw_shared_ptr<table>)> f) const {
+    for (auto& [id, table]: _column_families) {
+        f(id, table);
+    }
+}
+
+void database::tables_metadata::for_each_table_id(std::function<void(const ks_cf_t&, table_id)> f) const {
+    for (auto& [kscf, id]: _ks_cf_to_uuid) {
+        f(kscf, id);
+    }
+}
+
+future<> database::tables_metadata::for_each_table_gently(std::function<future<>(table_id, lw_shared_ptr<table>)> f) {
+    auto holder = co_await _cf_lock.hold_read_lock();
+    for (auto& [id, table]: _column_families) {
+        co_await f(id, table);
+    }
+}
+
+future<> database::tables_metadata::parallel_for_each_table(std::function<future<>(table_id, lw_shared_ptr<table>)> f) {
+    auto holder = co_await _cf_lock.hold_read_lock();
+    co_await coroutine::parallel_for_each(_column_families, [f = std::move(f)] (auto& table) {
+        return f(table.first, table.second);
+    });
 }
 
 data_dictionary::database
