@@ -45,7 +45,7 @@ future<> get_config_swagger_entry(std::string_view name, const std::string& desc
     } else {
         ss <<',';
     };
-    ss << "\"/config/" << name <<"\": {"
+    ss << "\"/v2/config/" << name <<"\": {"
       "\"get\": {"
         "\"description\": \"" << boost::replace_all_copy(boost::replace_all_copy(boost::replace_all_copy(description,"\n","\\n"),"\"", "''"), "\t", " ") <<"\","
         "\"operationId\": \"find_config_"<< name <<"\","
@@ -76,9 +76,9 @@ future<> get_config_swagger_entry(std::string_view name, const std::string& desc
 
 namespace cs = httpd::config_json;
 
-void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx, routes& r, const db::config& cfg) {
-    rb->register_function(r, [&cfg] (output_stream<char>& os) {
-        return do_with(true, [&os, &cfg] (bool& first) {
+void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx, routes& r, const db::config& cfg, bool first) {
+    rb->register_function(r, [&cfg, first] (output_stream<char>& os) {
+        return do_with(first, [&os, &cfg] (bool& first) {
             auto f = make_ready_future();
             for (auto&& cfg_ref : cfg.values()) {
                 auto&& cfg = cfg_ref.get();

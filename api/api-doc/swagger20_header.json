@@ -16,7 +16,7 @@
     }
   },
   "host": "{{Host}}",
-  "basePath": "/v2",
+  "basePath": "/",
   "schemes": [
     "http"
   ],

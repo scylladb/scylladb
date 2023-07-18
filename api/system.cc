@@ -7,10 +7,18 @@
  */
 
 #include "api/api-doc/system.json.hh"
+#include "api/api-doc/metrics.json.hh"
+
 #include "api/api.hh"
 
 #include <seastar/core/reactor.hh>
+#include <seastar/core/metrics_api.hh>
+#include <seastar/core/relabel_config.hh>
 #include <seastar/http/exception.hh>
+#include <seastar/util/short_streams.hh>
+#include <seastar/http/short_streams.hh>
+#include "utils/rjson.hh"
+
 #include "log.hh"
 #include "replica/database.hh"
 
@@ -20,8 +28,77 @@ namespace api {
 using namespace seastar::httpd;
 
 namespace hs = httpd::system_json;
+namespace hm = httpd::metrics_json;
 
 void set_system(http_context& ctx, routes& r) {
+    hm::get_metrics_config.set(r, [](const_req req) {
+        std::vector<hm::metrics_config> res;
+        res.resize(seastar::metrics::get_relabel_configs().size());
+        size_t i = 0;
+        for (auto&& r : seastar::metrics::get_relabel_configs()) {
+            res[i].action = r.action;
+            res[i].target_label = r.target_label;
+            res[i].replacement = r.replacement;
+            res[i].separator = r.separator;
+            res[i].source_labels = r.source_labels;
+            res[i].regex = r.expr.str();
+            i++;
+        }
+        return res;
+    });
+
+    hm::set_metrics_config.set(r, [](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        rapidjson::Document doc;
+        doc.Parse(req->content.c_str());
+        if (!doc.IsArray()) {
+            throw bad_param_exception("Expected a json array");
+        }
+        std::vector<seastar::metrics::relabel_config> relabels;
+        relabels.resize(doc.Size());
+        for (rapidjson::SizeType i = 0; i < doc.Size(); i++) {
+            const auto& element = doc[i];
+            if (element.HasMember("source_labels")) {
+                std::vector<std::string> source_labels;
+                source_labels.resize(element["source_labels"].Size());
+
+                for (size_t j = 0; j < element["source_labels"].Size(); j++) {
+                    source_labels[j] = element["source_labels"][j].GetString();
+                }
+                relabels[i].source_labels = source_labels;
+            }
+            if (element.HasMember("action")) {
+                relabels[i].action = seastar::metrics::relabel_config_action(element["action"].GetString());
+            }
+            if (element.HasMember("replacement")) {
+                relabels[i].replacement = element["replacement"].GetString();
+            }
+            if (element.HasMember("separator")) {
+                relabels[i].separator = element["separator"].GetString();
+            }
+            if (element.HasMember("target_label")) {
+                relabels[i].target_label = element["target_label"].GetString();
+            }
+            if (element.HasMember("regex")) {
+                relabels[i].expr = element["regex"].GetString();
+            }
+        }
+        return do_with(std::move(relabels), false, [](const std::vector<seastar::metrics::relabel_config>& relabels, bool& failed) {
+            return smp::invoke_on_all([&relabels, &failed] {
+                return metrics::set_relabel_configs(relabels).then([&failed](const metrics::metric_relabeling_result& result) {
+                    if (result.metrics_relabeled_due_to_collision > 0) {
+                        failed = true;
+                    }
+                    return;
+                });
+            }).then([&failed](){
+                if (failed) {
+                    throw bad_param_exception("conflicts found during relabeling");
+                }
+                return make_ready_future<json::json_return_type>(seastar::json::json_void());
+            });
+        });
+    });
+
     hs::get_system_uptime.set(r, [](const_req req) {
         return std::chrono::duration_cast<std::chrono::milliseconds>(engine().uptime()).count();
     });
