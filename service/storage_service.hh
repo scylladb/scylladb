@@ -278,7 +278,6 @@ public:
         return _protocol_servers;
     }
 private:
-    future<> do_stop_ms();
     future<> shutdown_protocol_servers();
 
     struct replacement_info {
