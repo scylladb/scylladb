@@ -5,7 +5,8 @@ add_scylla_test(allocation_strategy_test
 add_scylla_test(anchorless_list_test
   KIND BOOST)
 add_scylla_test(alternator_unit_test
-  KIND BOOST)
+  KIND BOOST
+  LIBRARIES alternator)
 add_scylla_test(auth_test
   KIND SEASTAR)
 add_scylla_test(auth_passwords_test
@@ -275,7 +276,8 @@ add_scylla_test(schema_change_test
 add_scylla_test(schema_changes_test
   KIND SEASTAR)
 add_scylla_test(schema_loader_test
-  KIND SEASTAR)
+  KIND SEASTAR
+  LIBRARIES tools)
 add_scylla_test(schema_registry_test
   KIND SEASTAR)
 add_scylla_test(sstable_conforms_to_mutation_source_test
@@ -304,9 +306,9 @@ add_scylla_test(string_format_test
 add_scylla_test(summary_test
   KIND BOOST)
 add_scylla_test(tablets_test
-  KIND BOOST)
+  KIND SEASTAR)
 add_scylla_test(tagged_integer_test
-  KIND BOOST)
+  KIND SEASTAR)
 add_scylla_test(top_k_test
   KIND BOOST)
 add_scylla_test(tracing_test
