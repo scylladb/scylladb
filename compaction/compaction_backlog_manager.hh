@@ -12,7 +12,6 @@
 #include <memory>
 #include <seastar/core/shared_ptr.hh>
 #include "sstables/shared_sstable.hh"
-#include "sstables/progress_monitor.hh"
 #include "timestamp.hh"
 
 class compaction_backlog_manager;

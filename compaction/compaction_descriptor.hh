@@ -18,7 +18,6 @@
 #include "sstables/sstable_set.hh"
 #include "utils/UUID.hh"
 #include "dht/i_partitioner.hh"
-#include "compaction_weight_registration.hh"
 #include "compaction_fwd.hh"
 
 namespace sstables {

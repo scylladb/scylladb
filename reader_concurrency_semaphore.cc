@@ -16,6 +16,7 @@
 #include <utility>
 
 #include "reader_concurrency_semaphore.hh"
+#include "query-result.hh"
 #include "readers/flat_mutation_reader_v2.hh"
 #include "utils/exceptions.hh"
 #include "schema/schema.hh"
