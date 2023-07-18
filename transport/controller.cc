@@ -185,6 +185,7 @@ future<> controller::stop_server() {
         _ops_sem.broken();
         _listen_addresses.clear();
         co_await do_stop_server();
+        co_await _bg_stops.close();
     }
 }
 
@@ -214,12 +215,14 @@ future<> controller::do_stop_server() {
 
     try {
         co_await unsubscribe_server(server);
-        co_await server.stop();
+        co_await server.invoke_on_all([] (auto& s) { return s.shutdown(); });
     } catch (...) {
         if (!ex) {
             ex = std::current_exception();
         }
     }
+
+    (void)server.stop().finally([s = std::move(cserver), h = _bg_stops.hold()] {});
 
     if (ex) {
         std::rethrow_exception(std::move(ex));
