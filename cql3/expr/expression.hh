@@ -143,7 +143,6 @@ class expression final {
     struct impl;                 
     std::unique_ptr<impl> _v;
 public:
-    expression(); // FIXME: remove
     expression(ExpressionElement auto e);
 
     expression(const expression&);
@@ -435,10 +434,6 @@ struct expression::impl final {
 
 expression::expression(ExpressionElement auto e)
         : _v(std::make_unique<impl>(std::move(e))) {
-}
-
-inline expression::expression()
-        : expression(conjunction{}) {
 }
 
 template <invocable_on_expression Visitor>

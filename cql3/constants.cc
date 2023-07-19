@@ -64,8 +64,8 @@ void constants::deleter::execute(mutation& m, const clustering_key_prefix& prefi
     }
 }
 
-void
-constants::setter::prepare_for_broadcast_tables(statements::broadcast_tables::prepared_update& query) const {
-    query.new_value = *_e;
+expr::expression
+constants::setter::prepare_new_value_for_broadcast_tables() const {
+    return *_e;
 }
 }

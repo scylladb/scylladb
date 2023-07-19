@@ -2421,7 +2421,7 @@ BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_with_bind_variable) {
     BOOST_REQUIRE(prepared_constructor->elements.contains(column_identifier("field2", true)));
 
     bind_variable* prepared_bind_var =
-        as_if<bind_variable>(&prepared_constructor->elements[column_identifier("field2", true)]);
+        as_if<bind_variable>(&prepared_constructor->elements.at(column_identifier("field2", true)));
     BOOST_REQUIRE(prepared_bind_var != nullptr);
 
     ::lw_shared_ptr<column_specification> bind_var_receiver = prepared_bind_var->receiver;
@@ -2466,7 +2466,7 @@ BOOST_AUTO_TEST_CASE(prepare_usertype_constructor_with_bind_variable_and_missing
     BOOST_REQUIRE(prepared_constructor->elements.contains(column_identifier("field2", true)));
 
     bind_variable* prepared_bind_var =
-        as_if<bind_variable>(&prepared_constructor->elements[column_identifier("field2", true)]);
+        as_if<bind_variable>(&prepared_constructor->elements.at(column_identifier("field2", true)));
     BOOST_REQUIRE(prepared_bind_var != nullptr);
 
     ::lw_shared_ptr<column_specification> bind_var_receiver = prepared_bind_var->receiver;

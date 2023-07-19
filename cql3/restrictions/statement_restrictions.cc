@@ -120,11 +120,9 @@ static std::vector<expr::expression> extract_partition_range(
             auto s = &cv;
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (s->col->is_partition_key() && (b.op == oper_t::EQ || b.op == oper_t::IN)) {
-                    const auto found = single_column.find(s->col);
-                    if (found == single_column.end()) {
-                        single_column[s->col] = b;
-                    } else {
-                        found->second = make_conjunction(std::move(found->second), b);
+                    const auto [it, inserted] = single_column.try_emplace(s->col, b);
+                    if (!inserted) {
+                        it->second = make_conjunction(std::move(it->second), b);
                     }
                 }
             });
@@ -139,11 +137,9 @@ static std::vector<expr::expression> extract_partition_range(
 
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (cval.col->is_partition_key() && (b.op == oper_t::EQ || b.op == oper_t::IN)) {
-                    const auto found = single_column.find(cval.col);
-                    if (found == single_column.end()) {
-                        single_column[cval.col] = b;
-                    } else {
-                        found->second = make_conjunction(std::move(found->second), b);
+                    const auto [it, inserted] = single_column.try_emplace(cval.col, b);
+                    if (!inserted) {
+                        it->second = make_conjunction(std::move(it->second), b);
                     }
                 }
             });
@@ -247,11 +243,9 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
             auto s = &cv;
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (s->col->is_clustering_key()) {
-                    const auto found = single.find(s->col);
-                    if (found == single.end()) {
-                        single[s->col] = b;
-                    } else {
-                        found->second = make_conjunction(std::move(found->second), b);
+                    const auto [it, inserted] = single.try_emplace(s->col, b);
+                    if (!inserted) {
+                        it->second = make_conjunction(std::move(it->second), b);
                     }
                 }
             });
@@ -262,11 +256,9 @@ static std::vector<expr::expression> extract_clustering_prefix_restrictions(
 
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (cval.col->is_clustering_key()) {
-                    const auto found = single.find(cval.col);
-                    if (found == single.end()) {
-                        single[cval.col] = b;
-                    } else {
-                        found->second = make_conjunction(std::move(found->second), b);
+                    const auto [it, inserted] = single.try_emplace(cval.col, b);
+                    if (!inserted) {
+                        it->second = make_conjunction(std::move(it->second), b);
                     }
                 }
             });
@@ -547,7 +539,7 @@ int statement_restrictions::score(const secondary_index::index& index) const {
 std::pair<std::optional<secondary_index::index>, expr::expression> statement_restrictions::find_idx(const secondary_index::secondary_index_manager& sim) const {
     std::optional<secondary_index::index> chosen_index;
     int chosen_index_score = 0;
-    expr::expression chosen_index_restrictions;
+    expr::expression chosen_index_restrictions = expr::conjunction({});
 
     for (const auto& index : sim.list_indexes()) {
         auto cdef = _schema->get_column_definition(to_bytes(index.target_column()));
@@ -1869,7 +1861,7 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
 
     // If we're here, it means the index cannot be on a partition column: process_partition_key_restrictions()
     // avoids indexing when _partition_range_is_simple.  See _idx_tbl_ck_prefix blurb for its composition.
-    _idx_tbl_ck_prefix = std::vector<expr::expression>(1 + _schema->partition_key_size());
+    _idx_tbl_ck_prefix = std::vector<expr::expression>(1 + _schema->partition_key_size(), expr::conjunction({}));
     _idx_tbl_ck_prefix->reserve(_idx_tbl_ck_prefix->size() + idx_tbl_schema.clustering_key_size());
     for (const auto& e : _partition_range_restrictions) {
         const auto col = expr::as<column_value>(find(e, oper_t::EQ)->lhs).col;

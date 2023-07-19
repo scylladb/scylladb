@@ -116,13 +116,28 @@ struct uninitialized {
     uninitialized(uninitialized&&) = default;
     uninitialized(const T& val) : _val(val) {}
     uninitialized(T&& val) : _val(std::move(val)) {}
+    uninitialized(std::convertible_to<T> auto&& x) : _val(std::forward<decltype(x)>(x)) {}
     uninitialized& operator=(const uninitialized&) = default;
     uninitialized& operator=(uninitialized&&) = default;
-    operator const T&() const & { return check(), *_val; }
     operator T&&() && { return check(), std::move(*_val); }
     operator std::optional<T>&&() && { return check(), std::move(_val); }
     void check() const { if (!_val) { throw std::runtime_error("not intitialized"); } }
 };
+
+template <typename T>
+struct unwrap_uninitialized {
+    using type = T;
+};
+
+template <typename T>
+struct unwrap_uninitialized<uninitialized<T>> {
+    using type = T;
+};
+
+template <typename T>
+using unwrap_uninitialized_t = typename unwrap_uninitialized<T>::type;
+
+using uexpression = uninitialized<expression>;
 
 }
 
@@ -398,8 +413,8 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
       ( K_WHERE w=whereClause { wclause = std::move(w); } )?
       ( K_GROUP K_BY gbcolumns=listOfIdentifiers)?
       ( K_ORDER K_BY orderByClause[orderings] ( ',' orderByClause[orderings] )* )?
-      ( K_PER K_PARTITION K_LIMIT rows=intValue { per_partition_limit = rows; } )?
-      ( K_LIMIT rows=intValue { limit = rows; } )?
+      ( K_PER K_PARTITION K_LIMIT rows=intValue { per_partition_limit = std::move(rows); } )?
+      ( K_LIMIT rows=intValue { limit = std::move(rows); } )?
       ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
       ( K_BYPASS K_CACHE { bypass_cache = true; })?
       ( usingTimeoutClause[attrs] )?
@@ -418,11 +433,11 @@ selectClause returns [std::vector<shared_ptr<raw_selector>> expr]
 
 selector returns [shared_ptr<raw_selector> s]
     @init{ shared_ptr<cql3::column_identifier> alias; }
-    : us=unaliasedSelector (K_AS c=ident { alias = c; })? { $s = ::make_shared<raw_selector>(us, alias); }
+    : us=unaliasedSelector (K_AS c=ident { alias = c; })? { $s = ::make_shared<raw_selector>(std::move(us), alias); }
     ;
 
-unaliasedSelector returns [expression s]
-    @init { expression tmp; }
+unaliasedSelector returns [uexpression s]
+    @init { uexpression tmp; }
     :  ( c=cident                                  { tmp = unresolved_identifier{std::move(c)}; }
        | K_COUNT '(' countArgument ')'             { tmp = make_count_rows_function_expression(); }
        | K_WRITETIME '(' c=cident ')'              { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::writetime,
@@ -450,7 +465,7 @@ countArgument
                 } }
     ;
 
-whereClause returns [expression clause]
+whereClause returns [uexpression clause]
     @init { std::vector<expression> terms; }
     : e1=relation { terms.push_back(std::move(e1)); } (K_AND en=relation { terms.push_back(std::move(en)); })*
         { clause = conjunction{std::move(terms)}; }
@@ -463,7 +478,7 @@ orderByClause[raw::select_statement::parameters::orderings_type& orderings]
     : c=cident (K_ASC | K_DESC { ordering = raw::select_statement::ordering::descending; })? { orderings.emplace_back(c, ordering); }
     ;
 
-jsonValue returns [expression value]
+jsonValue returns [uexpression value]
     :
     | s=STRING_LITERAL { $value = untyped_constant{untyped_constant::string, $s.text}; }
     | m=marker         { $value = std::move(m); }
@@ -487,7 +502,7 @@ insertStatement returns [std::unique_ptr<raw::modification_statement> expr]
     : K_INSERT K_INTO cf=columnFamilyName
         ('(' c1=cident { column_names.push_back(c1); }  ( ',' cn=cident { column_names.push_back(cn); } )* ')'
             K_VALUES
-            '(' v1=term { values.push_back(v1); } ( ',' vn=term { values.push_back(vn); } )* ')'
+            '(' v1=term { values.push_back(std::move(v1)); } ( ',' vn=term { values.push_back(std::move(vn)); } )* ')'
             ( K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
             ( usingClause[attrs] )?
               {
@@ -498,7 +513,7 @@ insertStatement returns [std::unique_ptr<raw::modification_statement> expr]
                                                        if_not_exists);
               }
         | K_JSON
-          json_token=jsonValue { json_value = $json_token.value; }
+          json_token=jsonValue { json_value = std::move(json_token); }
             ( K_DEFAULT K_UNSET { default_unset = true; } | K_DEFAULT K_NULL )?
             ( K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
             ( usingClause[attrs] )?
@@ -517,9 +532,9 @@ usingClause[std::unique_ptr<cql3::attributes::raw>& attrs]
     ;
 
 usingClauseObjective[std::unique_ptr<cql3::attributes::raw>& attrs]
-    : K_TIMESTAMP ts=intValue { attrs->timestamp = ts; }
-    | K_TTL t=intValue { attrs->time_to_live = t; }
-    | K_TIMEOUT to=term { attrs->timeout = to; }
+    : K_TIMESTAMP ts=intValue { attrs->timestamp = std::move(ts); }
+    | K_TTL t=intValue { attrs->time_to_live = std::move(t); }
+    | K_TIMEOUT to=term { attrs->timeout = std::move(to); }
     ;
 
 usingTimestampTimeoutClause[std::unique_ptr<cql3::attributes::raw>& attrs]
@@ -527,12 +542,12 @@ usingTimestampTimeoutClause[std::unique_ptr<cql3::attributes::raw>& attrs]
     ;
 
 usingTimestampTimeoutClauseObjective[std::unique_ptr<cql3::attributes::raw>& attrs]
-    : K_TIMESTAMP ts=intValue { attrs->timestamp = ts; }
-    | K_TIMEOUT to=term { attrs->timeout = to; }
+    : K_TIMESTAMP ts=intValue { attrs->timestamp = std::move(ts); }
+    | K_TIMEOUT to=term { attrs->timeout = std::move(to); }
     ;
 
 usingTimeoutClause[std::unique_ptr<cql3::attributes::raw>& attrs]
-    : K_USING K_TIMEOUT to=term { attrs->timeout = to; }
+    : K_USING K_TIMEOUT to=term { attrs->timeout = std::move(to); }
     ;
 
 /**
@@ -563,7 +578,7 @@ updateStatement returns [std::unique_ptr<raw::update_statement> expr]
      }
     ;
 
-updateConditions returns [expression cond]
+updateConditions returns [uexpression cond]
     @init {
         std::vector<expression> conditions;
     }
@@ -732,7 +747,7 @@ createAggregateStatement returns [std::unique_ptr<cql3::statements::create_aggre
         K_FINALFUNC final_func = allowedFunctionName { ffunc = final_func; }
       )?
       (
-        K_INITCOND init_val = term { ival = init_val; }
+        K_INITCOND init_val = term { ival = std::move(init_val); }
       )?
       { $expr = std::make_unique<cql3::statements::create_aggregate_statement>(std::move(fn), std::move(arg_types), std::move(sfunc), std::move(stype), std::move(rfunc), std::move(ffunc), std::move(ival), or_replace, if_not_exists); }
     ;
@@ -852,7 +867,7 @@ cfamOrdering[cql3::statements::cf_properties& expr]
 createTypeStatement returns [std::unique_ptr<create_type_statement> expr]
     @init { bool if_not_exists = false; }
     : K_CREATE K_TYPE (K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
-         tn=userTypeName { $expr = std::make_unique<create_type_statement>(tn, if_not_exists); }
+         tn=userTypeName { $expr = std::make_unique<create_type_statement>(ut_name(std::move(tn)), if_not_exists); }
          '(' typeColumns[*expr] ( ',' typeColumns[*expr]? )* ')'
     ;
 
@@ -1015,10 +1030,10 @@ cfisStatic returns [bool isStaticColumn]
  */
 alterTypeStatement returns [std::unique_ptr<alter_type_statement> expr]
     : K_ALTER K_TYPE name=userTypeName
-          ( K_ALTER f=ident K_TYPE v=comparatorType { $expr = std::make_unique<alter_type_statement::add_or_alter>(name, false, f, v); }
-          | K_ADD   f=ident v=comparatorType        { $expr = std::make_unique<alter_type_statement::add_or_alter>(name, true, f, v); }
+          ( K_ALTER f=ident K_TYPE v=comparatorType { $expr = std::make_unique<alter_type_statement::add_or_alter>(std::move(name), false, f, v); }
+          | K_ADD   f=ident v=comparatorType        { $expr = std::make_unique<alter_type_statement::add_or_alter>(std::move(name), true, f, v); }
           | K_RENAME
-               { $expr = std::make_unique<alter_type_statement::renames>(name); }
+               { $expr = std::make_unique<alter_type_statement::renames>(std::move(name)); }
                renames[{ static_cast<alter_type_statement::renames&>(*$expr) }]
           )
     ;
@@ -1062,7 +1077,7 @@ dropTableStatement returns [std::unique_ptr<drop_table_statement> stmt]
  */
 dropTypeStatement returns [std::unique_ptr<drop_type_statement> stmt]
     @init { bool if_exists = false; }
-    : K_DROP K_TYPE (K_IF K_EXISTS { if_exists = true; } )? name=userTypeName { $stmt = std::make_unique<drop_type_statement>(name, if_exists); }
+    : K_DROP K_TYPE (K_IF K_EXISTS { if_exists = true; } )? name=userTypeName { $stmt = std::make_unique<drop_type_statement>(std::move(name), if_exists); }
     ;
 
 /**
@@ -1105,10 +1120,10 @@ grantStatement returns [std::unique_ptr<grant_statement> stmt]
     : K_GRANT
           permissionOrAll
       K_ON
-          resource
+          r=resource
       K_TO
           grantee=userOrRoleName
-      { $stmt = std::make_unique<grant_statement>($permissionOrAll.perms, $resource.res, std::move(grantee)); }
+      { $stmt = std::make_unique<grant_statement>($permissionOrAll.perms, std::move(r), std::move(grantee)); }
     ;
 
 /**
@@ -1118,10 +1133,10 @@ revokeStatement returns [std::unique_ptr<revoke_statement> stmt]
     : K_REVOKE
           permissionOrAll
       K_ON
-          resource
+          r=resource
       K_FROM
           revokee=userOrRoleName
-      { $stmt = std::make_unique<revoke_statement>($permissionOrAll.perms, $resource.res, std::move(revokee)); }
+      { $stmt = std::make_unique<revoke_statement>($permissionOrAll.perms, std::move(r), std::move(revokee)); }
     ;
 
 /**
@@ -1148,8 +1163,8 @@ listPermissionsStatement returns [std::unique_ptr<list_permissions_statement> st
     }
     : K_LIST
           permissionOrAll
-      ( K_ON resource { r = $resource.res; } )?
-      ( K_OF rn=userOrRoleName { role = sstring(static_cast<cql3::role_name>(rn).to_string()); } )?
+      ( K_ON rr=resource { r = std::move(rr); } )?
+      ( K_OF rn=userOrRoleName { role = sstring(cql3::role_name(std::move(rn)).to_string()); } )?
       ( K_NORECURSIVE { recursive = false; } )?
       { $stmt = std::make_unique<list_permissions_statement>($permissionOrAll.perms, std::move(r), std::move(role), recursive); }
     ;
@@ -1179,7 +1194,7 @@ dataResource returns [uninitialized<auth::resource> res]
 
 roleResource returns [uninitialized<auth::resource> res]
     : K_ALL K_ROLES { $res = auth::resource(auth::resource_kind::role); }
-    | K_ROLE role = userOrRoleName { $res = auth::make_role_resource(static_cast<const cql3::role_name&>(role).to_string()); }
+    | K_ROLE role = userOrRoleName { $res = auth::make_role_resource(cql3::role_name(std::move(role)).to_string()); }
     ;
 
 functionResource returns [uninitialized<auth::resource> res]
@@ -1236,7 +1251,7 @@ alterUserStatement returns [std::unique_ptr<alter_role_statement> stmt]
 dropUserStatement returns [std::unique_ptr<drop_role_statement> stmt]
     @init { bool ifExists = false; }
     : K_DROP K_USER (K_IF K_EXISTS { ifExists = true; })? u=username
-      { $stmt = std::make_unique<drop_role_statement>(cql3::role_name(u, cql3::preserve_role_case::yes), ifExists); }
+      { $stmt = std::make_unique<drop_role_statement>(cql3::role_name(std::move(u), cql3::preserve_role_case::yes), ifExists); }
     ;
 
 /**
@@ -1258,7 +1273,7 @@ createRoleStatement returns [std::unique_ptr<create_role_statement> stmt]
     }
     : K_CREATE K_ROLE (K_IF K_NOT K_EXISTS { if_not_exists = true; })? name=userOrRoleName
       (K_WITH roleOptions[opts])?
-      { $stmt = std::make_unique<create_role_statement>(name, std::move(opts), if_not_exists); }
+      { $stmt = std::make_unique<create_role_statement>(std::move(name), std::move(opts), if_not_exists); }
     ;
 
 /**
@@ -1270,7 +1285,7 @@ alterRoleStatement returns [std::unique_ptr<alter_role_statement> stmt]
     }
     : K_ALTER K_ROLE name=userOrRoleName
       (K_WITH roleOptions[opts])?
-      { $stmt = std::make_unique<alter_role_statement>(name, std::move(opts)); }
+      { $stmt = std::make_unique<alter_role_statement>(std::move(name), std::move(opts)); }
     ;
 
 /**
@@ -1281,7 +1296,7 @@ dropRoleStatement returns [std::unique_ptr<drop_role_statement> stmt]
         bool if_exists = false;
     }
     : K_DROP K_ROLE (K_IF K_EXISTS { if_exists = true; })? name=userOrRoleName
-      { $stmt = std::make_unique<drop_role_statement>(name, if_exists); }
+      { $stmt = std::make_unique<drop_role_statement>(std::move(name), if_exists); }
     ;
 
 /**
@@ -1435,7 +1450,7 @@ describeStatement returns [std::unique_ptr<cql3::statements::raw::describe_state
     | K_INDEX idx=columnFamilyName                  { $stmt = cql3::statements::raw::describe_statement::index(idx);               }
     | K_MATERIALIZED K_VIEW view=columnFamilyName   { $stmt = cql3::statements::raw::describe_statement::view(view);               }
     | (K_TYPES) => K_TYPES                          { $stmt = cql3::statements::raw::describe_statement::types();                  }
-    | K_TYPE tn=userTypeName                        { $stmt = cql3::statements::raw::describe_statement::type(tn);                 }
+    | K_TYPE tn=userTypeName                        { $stmt = cql3::statements::raw::describe_statement::type(std::move(tn));      }
     | (K_FUNCTIONS) => K_FUNCTIONS                  { $stmt = cql3::statements::raw::describe_statement::functions();              }
     | K_FUNCTION fn=functionName                    { $stmt = cql3::statements::raw::describe_statement::function(fn);             }
     | (K_AGGREGATES) => K_AGGREGATES                { $stmt = cql3::statements::raw::describe_statement::aggregates();             }
@@ -1558,7 +1573,7 @@ mapLiteral returns [collection_constructor map]
       '}' { $map = collection_constructor{collection_constructor::style_type::map, std::move(m)}; }
     ;
 
-setOrMapLiteral[expression t] returns [collection_constructor value]
+setOrMapLiteral[uexpression t] returns [collection_constructor value]
 	@init{ std::vector<expression> e; }
     : ':' v=term { e.push_back(tuple_constructor{{std::move(t), std::move(v)}}); }
           ( ',' kn=term ':' vn=term { e.push_back(tuple_constructor{{std::move(kn), std::move(vn)}}); } )*
@@ -1568,7 +1583,7 @@ setOrMapLiteral[expression t] returns [collection_constructor value]
       { $value = collection_constructor{collection_constructor::style_type::set, std::move(e)}; }
     ;
 
-collectionLiteral returns [expression value]
+collectionLiteral returns [uexpression value]
 	@init{ std::vector<expression> l; }
     : '['
           ( t1=term { l.push_back(std::move(t1)); } ( ',' tn=term { l.push_back(std::move(tn)); } )* )?
@@ -1579,20 +1594,20 @@ collectionLiteral returns [expression value]
     | '{' '}' { $value = collection_constructor{collection_constructor::style_type::set, {}}; }
     ;
 
-usertypeLiteral returns [expression ut]
+usertypeLiteral returns [uexpression ut]
     @init{ usertype_constructor::elements_map_type m; }
     @after{ $ut = usertype_constructor{std::move(m)}; }
     // We don't allow empty literals because that conflicts with sets/maps and is currently useless since we don't allow empty user types
     : '{' k1=ident ':' v1=term { m.emplace(std::move(*k1), std::move(v1)); } ( ',' kn=ident ':' vn=term { m.emplace(std::move(*kn), std::move(vn)); } )* '}'
     ;
 
-tupleLiteral returns [expression tt]
+tupleLiteral returns [uexpression tt]
     @init{ std::vector<expression> l; }
     @after{ $tt = tuple_constructor{std::move(l)}; }
     : '(' t1=term { l.push_back(std::move(t1)); } ( ',' tn=term { l.push_back(std::move(tn)); } )* ')'
     ;
 
-value returns [expression value]
+value returns [uexpression value]
     : c=constant           { $value = std::move(c); }
     | l=collectionLiteral  { $value = std::move(l); }
     | u=usertypeLiteral    { $value = std::move(u); }
@@ -1601,12 +1616,12 @@ value returns [expression value]
     | e=marker             { $value = std::move(e); }
     ;
 
-marker returns [expression value]
+marker returns [uexpression value]
     : ':' id=ident         { $value = new_bind_variables(id); }
     | QMARK                { $value = new_bind_variables(shared_ptr<cql3::column_identifier>{}); }
     ;
 
-intValue returns [expression value]
+intValue returns [uexpression value]
     :
     | t=INTEGER     { $value = untyped_constant{untyped_constant::integer, $t.text}; }
     | e=marker      { $value = std::move(e); }
@@ -1631,7 +1646,7 @@ functionArgs returns [std::vector<expression> a]
        ')'
     ;
 
-term returns [expression term1]
+term returns [uexpression term1]
     : v=value                          { $term1 = std::move(v); }
     | f=functionName args=functionArgs { $term1 = function_call{std::move(f), std::move(args)}; }
     | '(' c=comparatorType ')' t=term  { $term1 = cast{.style = cast::cast_style::c, .arg = std::move(t), .type = c}; }
@@ -1643,21 +1658,21 @@ columnOperation[operations_type& operations]
 
 columnOperationDifferentiator[operations_type& operations, ::shared_ptr<cql3::column_identifier::raw> key]
     : '=' normalColumnOperation[operations, key]
-    | '[' k=term ']' collectionColumnOperation[operations, key, k, false]
+    | '[' k=term ']' collectionColumnOperation[operations, key, std::move(k), false]
     | '.' field=ident udtColumnOperation[operations, key, field]
-    | '[' K_SCYLLA_TIMEUUID_LIST_INDEX '(' k=term ')' ']' collectionColumnOperation[operations, key, k, true]
+    | '[' K_SCYLLA_TIMEUUID_LIST_INDEX '(' k=term ')' ']' collectionColumnOperation[operations, key, std::move(k), true]
     ;
 
 normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_identifier::raw> key]
     : t=term ('+' c=cident )?
       {
           if (!c) {
-              operations.emplace_back(std::move(key), std::make_unique<cql3::operation::set_value>(t));
+              operations.emplace_back(std::move(key), std::make_unique<cql3::operation::set_value>(std::move(t)));
           } else {
               if (*key != *c) {
                 add_recognition_error("Only expressions of the form X = <value> + X are supported.");
               }
-              operations.emplace_back(std::move(key), std::make_unique<cql3::operation::prepend>(t));
+              operations.emplace_back(std::move(key), std::make_unique<cql3::operation::prepend>(std::move(t)));
           }
       }
     | c=cident sig=('+' | '-') t=term
@@ -1667,9 +1682,9 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
           }
           std::unique_ptr<cql3::operation::raw_update> op;
           if ($sig.text == "+") {
-              op = std::make_unique<cql3::operation::addition>(t);
+              op = std::make_unique<cql3::operation::addition>(std::move(t));
           } else {
-              op = std::make_unique<cql3::operation::subtraction>(t);
+              op = std::make_unique<cql3::operation::subtraction>(std::move(t));
           }
           operations.emplace_back(std::move(key), std::move(op));
       }
@@ -1684,7 +1699,7 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
       }
     | K_SCYLLA_COUNTER_SHARD_LIST '(' t=term ')'
       {
-          operations.emplace_back(std::move(key), std::make_unique<cql3::operation::set_counter_value_from_tuple_list>(t));
+          operations.emplace_back(std::move(key), std::make_unique<cql3::operation::set_counter_value_from_tuple_list>(std::move(t)));
       }
     ;
 
@@ -1707,33 +1722,33 @@ udtColumnOperation[operations_type& operations,
       }
     ;
 
-columnRefExpr returns [expression e]
+columnRefExpr returns [uexpression e]
     : column=cident { e = unresolved_identifier{column}; }
     ;
 
-subscriptExpr returns [expression e]
+subscriptExpr returns [uexpression e]
     : col=columnRefExpr { e = std::move(col); }
         ( '[' sub=term ']'  { e = subscript{std::move(e), std::move(sub)}; } )?
     ;
 
-singleColumnInValuesOrMarkerExpr returns [expression e]
+singleColumnInValuesOrMarkerExpr returns [uexpression e]
     : values=singleColumnInValues { e = collection_constructor{collection_constructor::style_type::list, std::move(values)}; }
     | m=marker { e = std::move(m); }
     ;
 
-columnCondition returns [expression e]
+columnCondition returns [uexpression e]
     // Note: we'll reject duplicates later
     : key=subscriptExpr
         ( op=relationType t=term {
                     e = binary_operator(
-                            key,
+                            std::move(key),
                             op,
-                            t);
+                            std::move(t));
                 }
         | K_IN
             values=singleColumnInValuesOrMarkerExpr {
                     e = binary_operator(
-                            key,
+                            std::move(key),
                             oper_t::IN,
                             std::move(values));
                 }
@@ -1770,7 +1785,7 @@ relationType returns [oper_t op]
     | K_LIKE { $op = oper_t::LIKE; }
     ;
 
-relation returns [expression e]
+relation returns [uexpression e]
     @init{ oper_t rt; }
     : name=cident type=relationType t=term { $e = binary_operator(unresolved_identifier{std::move(name)}, type, std::move(t)); }
 
@@ -1888,7 +1903,7 @@ comparator_type [bool internal] returns [shared_ptr<cql3_type::raw> t]
     : n=native_or_internal_type[internal]     { $t = cql3_type::raw::from(n); }
     | c=collection_type[internal]   { $t = c; }
     | tt=tuple_type[internal]       { $t = tt; }
-    | id=userTypeName   { $t = cql3::cql3_type::raw::user_type(id); }
+    | id=userTypeName   { $t = cql3::cql3_type::raw::user_type(std::move(id)); }
     | K_FROZEN '<' f=comparator_type[internal] '>'
       {
         try {
