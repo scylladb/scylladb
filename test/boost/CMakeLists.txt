@@ -315,8 +315,6 @@ add_scylla_test(transport_test
   KIND SEASTAR)
 add_scylla_test(types_test
   KIND SEASTAR)
-add_scylla_test(type_json_test
-  KIND SEASTAR)
 add_scylla_test(utf8_test
   KIND BOOST
   LIBRARIES utils)
