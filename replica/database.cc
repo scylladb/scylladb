@@ -1241,11 +1241,9 @@ std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> databa
 
 std::vector<lw_shared_ptr<column_family>> database::get_non_system_column_families() const {
     return boost::copy_range<std::vector<lw_shared_ptr<column_family>>>(
-        get_tables_metadata()._column_families
-            | boost::adaptors::map_values
-            | boost::adaptors::filtered([](const lw_shared_ptr<column_family>& cf) {
-                return !is_system_keyspace(cf->schema()->ks_name());
-            }));
+        get_tables_metadata().filter([] (auto uuid_and_cf) {
+            return !is_system_keyspace(uuid_and_cf.second->schema()->ks_name());
+        }) | boost::adaptors::map_values);
 }
 
 column_family& database::find_column_family(std::string_view ks_name, std::string_view cf_name) {
@@ -1452,11 +1450,10 @@ future<> database::create_keyspace_on_all_shards(sharded<database>& sharded_db, 
 
 future<>
 database::drop_caches() const {
-    std::unordered_map<table_id, lw_shared_ptr<column_family>> tables = get_tables_metadata()._column_families;
+    std::unordered_map<table_id, lw_shared_ptr<column_family>> tables = get_tables_metadata().get_column_families_copy();
     for (auto&& e : tables) {
         table& t = *e.second;
         co_await t.get_row_cache().invalidate(row_cache::external_updater([] {}));
-
         auto sstables = t.get_sstables();
         for (sstables::shared_sstable sst : *sstables) {
             co_await sst->drop_caches();
@@ -2800,7 +2797,7 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
 }
 
 future<> database::flush_non_system_column_families() {
-    auto non_system_cfs = get_tables_metadata()._column_families | boost::adaptors::filtered([this] (auto& uuid_and_cf) {
+    auto non_system_cfs = get_tables_metadata().filter([this] (auto uuid_and_cf) {
         auto cf = uuid_and_cf.second;
         auto& ks = cf->schema()->ks_name();
         return !is_system_keyspace(ks) && !_cfg.extensions().is_extension_internal_keyspace(ks);
@@ -2822,7 +2819,7 @@ future<> database::flush_non_system_column_families() {
 }
 
 future<> database::flush_system_column_families() {
-    auto system_cfs = get_tables_metadata()._column_families | boost::adaptors::filtered([this] (auto& uuid_and_cf) {
+    auto system_cfs = get_tables_metadata().filter([this] (auto uuid_and_cf) {
         auto cf = uuid_and_cf.second;
         auto& ks = cf->schema()->ks_name();
         return is_system_keyspace(ks) || _cfg.extensions().is_extension_internal_keyspace(ks);
@@ -2937,6 +2934,10 @@ future<> database::tables_metadata::parallel_for_each_table(std::function<future
     co_await coroutine::parallel_for_each(_column_families, [f = std::move(f)] (auto& table) {
         return f(table.first, table.second);
     });
+}
+
+const std::unordered_map<table_id, lw_shared_ptr<table>> database::tables_metadata::get_column_families_copy() const {
+    return _column_families;
 }
 
 data_dictionary::database

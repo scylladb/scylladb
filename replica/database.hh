@@ -1323,6 +1323,11 @@ public:
         void for_each_table_id(std::function<void(const ks_cf_t&, table_id)> f) const;
         future<> for_each_table_gently(std::function<future<>(table_id, lw_shared_ptr<table>)> f);
         future<> parallel_for_each_table(std::function<future<>(table_id, lw_shared_ptr<table>)> f);
+        const std::unordered_map<table_id, lw_shared_ptr<table>> get_column_families_copy() const;
+
+        const auto filter(std::function<bool(std::pair<table_id, lw_shared_ptr<table>>)> f) const {
+            return _column_families | boost::adaptors::filtered(std::move(f));
+        }
     };
 private:
     replica::cf_stats _cf_stats;
