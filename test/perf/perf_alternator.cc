@@ -110,8 +110,47 @@ static void create_alternator_table(http::experimental::client& cli) {
     )").get();
 }
 
+// Exercise various types documented here: https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_AttributeValue.html
+auto update_item_suffix = R"(
+        "UpdateExpression": "set C0 = :C0, C1 = :C1, C2 = :C2, C3 = :C3, C4 = :C4, C5 = :C5, C6 = :C6, C7 = :C7, C8 = :C8, C9 = :C9",
+        "ExpressionAttributeValues": {{
+            {}
+            ":C0": {{
+                "B": "dGhpcyB0ZXh0IGlzIGJhc2U2NC1lbmNvZGVk"
+            }},
+            ":C1": {{
+                "BOOL": true
+            }},
+            ":C2": {{
+                "BS": ["U3Vubnk=", "UmFpbnk=", "U25vd3k="]
+            }},
+            ":C3": {{
+                "L": [ {{"S": "Cookies"}} , {{"S": "Coffee"}}, {{"N": "3.14159"}}]
+            }},
+            ":C4": {{
+                "M": {{"Name": {{"S": "Joe"}}, "Age": {{"N": "35"}}}}
+            }},
+            ":C5": {{
+                "N": "123.45"
+            }},
+            ":C6": {{
+                "NS": ["42.2", "-19", "7.5", "3.14"]
+            }},
+            ":C7": {{
+                "NULL": true
+            }},
+            ":C8": {{
+                "S": "Hello"
+            }},
+            ":C9": {{
+                "SS": ["Giraffe", "Hippo" ,"Zebra"]
+            }}
+        }},
+        "ReturnValues": "NONE"
+    }}
+)";
+
 static future<> update_item(const test_config& _, http::experimental::client& cli, uint64_t seq) {
-    // Exercise various types documented here: https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_AttributeValue.html 
     auto prefix = format(R"({{
             "TableName": "workloads_test",
             "Key": {{
@@ -122,44 +161,36 @@ static future<> update_item(const test_config& _, http::experimental::client& cl
                     "S": "{}"
                 }}
             }},)", seq, seq);
-    auto suffix = R"(
-            "UpdateExpression": "set C0 = :C0, C1 = :C1, C2 = :C2, C3 = :C3, C4 = :C4, C5 = :C5, C6 = :C6, C7 = :C7, C8 = :C8, C9 = :C9",
-            "ExpressionAttributeValues": {
-                ":C0": {
-                    "B": "dGhpcyB0ZXh0IGlzIGJhc2U2NC1lbmNvZGVk"
-                },
-                ":C1": {
-                   "BOOL": true
-                },
-                ":C2": {
-                    "BS": ["U3Vubnk=", "UmFpbnk=", "U25vd3k="]
-                },
-                ":C3": {
-                    "L": [ {"S": "Cookies"} , {"S": "Coffee"}, {"N": "3.14159"}]
-                },
-                ":C4": {
-                    "M": {"Name": {"S": "Joe"}, "Age": {"N": "35"}}
-                },
-                ":C5": {
-                    "N": "123.45"
-                },
-                ":C6": {
-                    "NS": ["42.2", "-19", "7.5", "3.14"]
-                },
-                ":C7": {
-                    "NULL": true
-                },
-                ":C8": {
-                    "S": "Hello"
-                },
-                ":C9": {
-                    "SS": ["Giraffe", "Hippo" ,"Zebra"]
-                }
-            },
-            "ReturnValues": "NONE"
-        }
+
+    return make_request(cli, "UpdateItem", prefix + format(update_item_suffix, ""));
+}
+
+static future<> update_item_rmw(const test_config& _, http::experimental::client& cli, uint64_t seq) {
+    auto prefix = format(R"({{
+            "TableName": "workloads_test",
+            "Key": {{
+                "p": {{
+                    "S": "{}"
+                }},
+                "c": {{
+                    "S": "{}"
+                }}
+            }},)", seq, seq);
+    // making condtional write is one way of making sure scylla will do read before write (rmw)
+    // for our static data this condition is always true to simplify things
+    auto condition_exp = R"(
+         "ConditionExpression": "((NOT attribute_exists(C2)) OR size(C6) <= :val1) AND (C8 <> :val2 OR C6 IN (:val1)) ",
     )";
-    return make_request(cli, "UpdateItem", prefix+suffix);
+    auto condition_attribute_values = R"(
+        ":val1": {
+                "N": "10"
+        },
+        ":val2": {
+                "S": "some_value"
+        },
+    )";
+    return make_request(cli, "UpdateItem", prefix + condition_exp +
+                        format(update_item_suffix, condition_attribute_values));
 }
 
 static future<> get_item(const test_config& _, http::experimental::client& cli, uint64_t seq) {
@@ -236,6 +267,9 @@ void workload_main(const test_config& c) {
         {"read",  get_item},
         {"scan", scan},
         {"write", update_item},
+        // needs to be executed together with --alternator-write-isolation only_rmw_uses_lwt
+        // for realistic scenario
+        {"write_rmw", update_item_rmw},
     };
 
     if (c.workload == "read" || c.workload == "scan") {
