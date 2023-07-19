@@ -275,7 +275,7 @@ flat_mutation_reader_v2 repair_reader::make_reader(
                 tracing::trace_state_ptr,
                 streamed_mutation::forwarding,
                 mutation_reader::forwarding fwd_mr) {
-                return cf.make_streaming_reader(std::move(s), std::move(permit), pr, ps, fwd_mr);
+                return cf.make_streaming_reader(std::move(s), std::move(permit), pr, ps, fwd_mr, {});
             });
             flat_mutation_reader_v2 rd(nullptr);
             std::tie(rd, _reader_handle) = make_manually_paused_evictable_reader_v2(

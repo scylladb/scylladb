@@ -1360,6 +1360,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.view_update_concurrency_semaphore_limit = _config.view_update_concurrency_semaphore_limit;
     cfg.data_listeners = &db.data_listeners();
     cfg.x_log2_compaction_groups = db_config.x_log2_compaction_groups();
+    cfg.enable_compacting_data_for_streaming_and_repair = db_config.enable_compacting_data_for_streaming_and_repair();
 
     return cfg;
 }
@@ -1553,7 +1554,7 @@ public:
         _contexts[shard].read_operation = make_foreign(std::make_unique<utils::phased_barrier::operation>(cf.read_in_progress()));
         _contexts[shard].semaphore = &cf.streaming_read_concurrency_semaphore();
 
-        return cf.make_streaming_reader(std::move(schema), std::move(permit), *_contexts[shard].range, slice, fwd_mr);
+        return cf.make_streaming_reader(std::move(schema), std::move(permit), *_contexts[shard].range, slice, fwd_mr, {});
     }
     virtual const dht::partition_range* get_read_range() const override {
         const auto shard = this_shard_id();
