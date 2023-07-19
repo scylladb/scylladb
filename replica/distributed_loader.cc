@@ -472,11 +472,11 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
 
     dblog.info("Populating Keyspace {}", ks_name);
     auto& ks = i->second;
-    auto& column_families = db.local().get_tables_metadata()._column_families;
+    auto& tables_metadata = db.local().get_tables_metadata();
 
     co_await coroutine::parallel_for_each(ks.metadata()->cf_meta_data() | boost::adaptors::map_values, [&] (schema_ptr s) -> future<> {
         auto uuid = s->id();
-        lw_shared_ptr<replica::column_family> cf = column_families[uuid];
+        lw_shared_ptr<replica::column_family> cf = tables_metadata.get_table(uuid).shared_from_this();
 
         // System tables (from system and system_schema keyspaces) are loaded in two phases.
         // The populate_keyspace function can be called in the second phase for tables that

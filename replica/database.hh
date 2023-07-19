@@ -1313,6 +1313,10 @@ public:
 
         future<> add_table(schema_ptr schema);
         future<> remove_table(schema_ptr schema) noexcept;
+        table& get_table(table_id id) const;
+        table_id get_table_id(const std::pair<std::string_view, std::string_view>& kscf) const;
+        lw_shared_ptr<table> get_table_if_exists(table_id id) const;
+        table_id get_table_id_if_exists(const std::pair<std::string_view, std::string_view>& kscf) const;
         void for_each_table(std::function<void(table_id, lw_shared_ptr<table>)> f) const;
         void for_each_table_id(std::function<void(const ks_cf_t&, table_id)> f) const;
         future<> for_each_table_gently(std::function<future<>(table_id, lw_shared_ptr<table>)> f);

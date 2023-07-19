@@ -869,7 +869,7 @@ database::init_commitlog() {
                 return;
             }
             // Initiate a background flush. Waited upon in `stop()`.
-            (void)_tables_metadata._column_families[id]->flush(pos);
+            (void)_tables_metadata.get_table(id).flush(pos);
         }).release(); // we have longer life time than CL. Ignore reg anchor
     });
 }
@@ -965,7 +965,7 @@ void database::maybe_init_schema_commitlog() {
             return;
         }
         // Initiate a background flush. Waited upon in `stop()`.
-        (void)_tables_metadata._column_families[id]->flush(pos);
+        (void)_tables_metadata.get_table(id).flush(pos);
 
     }).release();
 }
@@ -1145,7 +1145,7 @@ future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstri
 
 table_id database::find_uuid(std::string_view ks, std::string_view cf) const {
     try {
-        return _tables_metadata._ks_cf_to_uuid.at(std::make_pair(ks, cf));
+        return _tables_metadata.get_table_id(std::make_pair(ks, cf));
     } catch (std::out_of_range&) {
         throw no_such_column_family(ks, cf);
     }
@@ -1268,7 +1268,7 @@ const column_family& database::find_column_family(std::string_view ks_name, std:
 
 column_family& database::find_column_family(const table_id& uuid) {
     try {
-        return *_tables_metadata._column_families.at(uuid);
+        return _tables_metadata.get_table(uuid);
     } catch (...) {
         throw no_such_column_family(uuid);
     }
@@ -1276,7 +1276,7 @@ column_family& database::find_column_family(const table_id& uuid) {
 
 const column_family& database::find_column_family(const table_id& uuid) const {
     try {
-        return *_tables_metadata._column_families.at(uuid);
+        return _tables_metadata.get_table(uuid);
     } catch (...) {
         throw no_such_column_family(uuid);
     }
@@ -2786,8 +2786,8 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
                     // and has no remaining snapshots
                     if (!has_snapshots) {
                         auto [cf_name, cf_uuid] = extract_cf_name_and_uuid(table_ent->name);
-                        const auto& it = _tables_metadata._ks_cf_to_uuid.find(std::make_pair(ks_name, cf_name));
-                        auto dropped = (it == _tables_metadata._ks_cf_to_uuid.cend()) || (cf_uuid != it->second);
+                        auto id_opt = _tables_metadata.get_table_id_if_exists(std::make_pair(ks_name, cf_name));
+                        auto dropped = !id_opt || (cf_uuid != id_opt);
                         if (dropped) {
                             dblog.info("Removing dropped table dir {}", table_dir);
                             sstables::remove_table_directory_if_has_no_snapshots(table_dir).get();
@@ -2881,6 +2881,28 @@ future<> database::tables_metadata::remove_table(schema_ptr schema) noexcept {
     } catch (...) {
         on_fatal_internal_error(dblog, format("tables_metadata::remove_cf: {}", std::current_exception()));
     }
+}
+
+table& database::tables_metadata::get_table(table_id id) const {
+    return *_column_families.at(id);
+}
+
+table_id database::tables_metadata::get_table_id(const std::pair<std::string_view, std::string_view>& kscf) const {
+    return _ks_cf_to_uuid.at(kscf);
+}
+
+lw_shared_ptr<table> database::tables_metadata::get_table_if_exists(table_id id) const {
+    if (auto it = _column_families.find(id); it != _column_families.end()) {
+        return it->second;
+    }
+    return nullptr;
+}
+
+table_id database::tables_metadata::get_table_id_if_exists(const std::pair<std::string_view, std::string_view>& kscf) const {
+    if (auto it = _ks_cf_to_uuid.find(kscf); it != _ks_cf_to_uuid.end()) {
+        return it->second;
+    }
+    return table_id::create_null_id();
 }
 
 void database::tables_metadata::for_each_table(std::function<void(table_id, lw_shared_ptr<table>)> f) const {

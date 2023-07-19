@@ -159,11 +159,11 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
         // set calculated rates on all shards
         return _db.invoke_on_all([this, cpuid = this_shard_id()] (replica::database& db) {
             return do_for_each(_rates, [this, cpuid, &db] (auto&& r) mutable {
-                auto it = db.get_tables_metadata()._column_families.find(r.first);
-                if (it == db.get_tables_metadata()._column_families.end()) { // a table may be added before map/reduce completes and this code runs
+                auto cf_opt = db.get_tables_metadata().get_table_if_exists(r.first);
+                if (!cf_opt) { // a table may be added before map/reduce completes and this code runs
                     return;
                 }
-                auto& cf = *it;
+                auto& cf = cf_opt;
                 stat& s = r.second;
                 float rate = 0;
                 if (s.h) {
@@ -171,10 +171,10 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
                 }
                 if (this_shard_id() == cpuid) {
                     // calculate max difference between old rate and new one for all cfs
-                    _diff = std::max(_diff, std::abs(float(cf.second->get_global_cache_hit_rate()) - rate));
-                    _gstate += format("{}.{}:{:0.6f};", cf.second->schema()->ks_name(), cf.second->schema()->cf_name(), rate);
+                    _diff = std::max(_diff, std::abs(float(cf->get_global_cache_hit_rate()) - rate));
+                    _gstate += format("{}.{}:{:0.6f};", cf->schema()->ks_name(), cf->schema()->cf_name(), rate);
                 }
-                cf.second->set_global_cache_hit_rate(cache_temperature(rate));
+                cf->set_global_cache_hit_rate(cache_temperature(rate));
             });
         });
     }).then([this] {
