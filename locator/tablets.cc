@@ -153,6 +153,15 @@ void tablet_map::set_tablet_transition_info(tablet_id id, tablet_transition_info
     _transitions.insert_or_assign(id, std::move(info));
 }
 
+future<> tablet_map::for_each_tablet(seastar::noncopyable_function<void(tablet_id, const tablet_info&)> func) const {
+    std::optional<tablet_id> tid = first_tablet();
+    for (const tablet_info& ti : tablets()) {
+        co_await coroutine::maybe_yield();
+        func(*tid, ti);
+        tid = next_tablet(*tid);
+    }
+}
+
 std::optional<shard_id> tablet_map::get_shard(tablet_id tid, host_id host) const {
     auto&& info = get_tablet_info(tid);
 
