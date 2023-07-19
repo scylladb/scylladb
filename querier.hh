@@ -308,6 +308,9 @@ public:
         uint64_t resource_based_evictions = 0;
         // The number of queriers currently in the cache.
         uint64_t population = 0;
+        // The number of queries dropped due to scheduling group mismatch
+        // between semaphores
+        uint64_t scheduling_group_mismatches = 0;
     };
 
     using index = std::unordered_multimap<query_id, std::unique_ptr<querier_base>>;

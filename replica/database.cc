@@ -576,7 +576,10 @@ database::setup_metrics() {
                        sm::description("Counts querier cache lookups that failed to find a cached querier")),
 
         sm::make_counter("querier_cache_drops", _querier_cache.get_stats().drops,
-                       sm::description("Counts querier cache lookups that found a cached querier but had to drop it due to position mismatch")),
+                       sm::description("Counts querier cache lookups that found a cached querier but had to drop it")),
+            
+        sm::make_counter("querier_cache_scheduling_group_mismatches", _querier_cache.get_stats().scheduling_group_mismatches,
+                       sm::description("Counts querier cache lookups that found a cached querier but had to drop it due to scheduling group mismatch")),
 
         sm::make_counter("querier_cache_time_based_evictions", _querier_cache.get_stats().time_based_evictions,
                        sm::description("Counts querier cache entries that timed out and were evicted.")),

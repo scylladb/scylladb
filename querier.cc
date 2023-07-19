@@ -368,6 +368,7 @@ std::optional<Querier> querier_cache::lookup_querier(
     });
 
     if (can_be_used == can_use::no_scheduling_group_mismatch) {
+        ++stats.scheduling_group_mismatches;
         qlogger.warn("user semaphores mismatch detected. dropping looked-up reader: "
                     "looked-up reader belongs to {} (0x{:x}) the query class appropriate is {} (0x{:x})",
                     q_semaphore_name,
