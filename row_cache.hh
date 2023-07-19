@@ -392,6 +392,12 @@ public:
                 streamed_mutation::forwarding::no, mutation_reader::forwarding::no, gc_state);
     }
 
+    // Only reads what is in the cache, doesn't populate.
+    // Supports reading singular ranges only, for now.
+    // Does not support reading in reverse.
+    flat_mutation_reader_v2 make_nonpopulating_reader(schema_ptr s, reader_permit permit, const dht::partition_range& range,
+            const query::partition_slice& slice, tracing::trace_state_ptr ts);
+
     const stats& stats() const { return _stats; }
 public:
     // Populate cache from given mutation, which must be fully continuous.

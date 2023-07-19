@@ -13,6 +13,7 @@ import pytest
 
 from cassandra.cluster import Cluster, NoHostAvailable
 from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
+import json
 import os
 import ssl
 import subprocess
@@ -200,6 +201,20 @@ def scylla_path(cql):
     except:
         pytest.skip("Local server isn't Scylla")
     return path
+
+# A fixture for finding Scylla's data directory. We get it using the CQL
+# interface to Scylla's configuration. Note that if the server is remote,
+# the directory retrieved this way may be irrelevant, whether or not it
+# exists on the local machine... However, if the same test that uses this
+# fixture also uses the scylla_path fixture, the test will anyway be skipped
+# if the running Scylla is not on the local machine local.
+@pytest.fixture(scope="module")
+def scylla_data_dir(cql):
+    try:
+        dir = json.loads(cql.execute("SELECT value FROM system.config WHERE name = 'data_file_directories'").one().value)[0]
+        return dir
+    except:
+        pytest.skip("Can't find Scylla sstable directory")
 
 @pytest.fixture(scope="function")
 def temp_workdir():

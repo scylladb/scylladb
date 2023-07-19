@@ -23,6 +23,7 @@
 #include "readers/forwardable_v2.hh"
 #include "readers/nonforwardable.hh"
 #include "cache_flat_mutation_reader.hh"
+#include "partition_snapshot_reader.hh"
 #include "clustering_key_filter.hh"
 
 namespace cache {
@@ -775,6 +776,45 @@ row_cache::make_reader_opt(schema_ptr s,
     } else {
         return mr;
     }
+}
+
+flat_mutation_reader_v2 row_cache::make_nonpopulating_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
+        const query::partition_slice& slice, tracing::trace_state_ptr ts) {
+    if (!range.is_singular()) {
+        throw std::runtime_error("row_cache::make_nonpopulating_reader(): only singular ranges are supported");
+    }
+    struct dummy_accounter {
+        void operator()(const clustering_row&) {}
+        void operator()(const static_row&) {}
+        void operator()(const range_tombstone_change&) {}
+        void operator()(const partition_start&) {}
+        void operator()(const partition_end&) {}
+    };
+    return _read_section(_tracker.region(), [&] () -> flat_mutation_reader_v2 {
+        dht::ring_position_comparator cmp(*_schema);
+        auto&& pos = range.start()->value();
+        partitions_type::bound_hint hint;
+        auto i = _partitions.lower_bound(pos, cmp, hint);
+        if (hint.match) {
+            cache_entry& e = *i;
+            upgrade_entry(e);
+            tracing::trace(ts, "Reading partition {} from cache", pos);
+            return make_partition_snapshot_flat_reader<false, dummy_accounter>(
+                    schema,
+                    std::move(permit),
+                    e.key(),
+                    query::clustering_key_filter_ranges(slice.row_ranges(*schema, e.key().key())),
+                    e.partition().read(_tracker.region(), _tracker.memtable_cleaner(), nullptr, phase_of(pos)),
+                    false,
+                    _tracker.region(),
+                    _read_section,
+                    {},
+                    streamed_mutation::forwarding::no);
+        } else {
+            tracing::trace(ts, "Partition {} is not found in cache", pos);
+            return make_empty_flat_reader_v2(std::move(schema), std::move(permit));
+        }
+    });
 }
 
 row_cache::~row_cache() {

@@ -20,8 +20,15 @@
 #include "exceptions/exceptions.hh"
 #include "exceptions/coordinator_result.hh"
 
+namespace locator {
+    class node;
+} // namespace locator
+
 namespace service {
     class client_state;
+    class storage_proxy;
+    class storage_proxy_coordinator_query_options;
+    class storage_proxy_coordinator_query_result;
 } // namespace service
 
 namespace cql3 {
@@ -308,6 +315,42 @@ private:
     query::partition_slice get_partition_slice_for_global_index_posting_list(const query_options& options) const;
 
     bytes compute_idx_token(const partition_key& key) const;
+};
+
+class mutation_fragments_select_statement : public select_statement {
+    schema_ptr _underlying_schema;
+public:
+    mutation_fragments_select_statement(
+            schema_ptr output_schema,
+            schema_ptr underlying_schema,
+            uint32_t bound_terms,
+            lw_shared_ptr<const parameters> parameters,
+            ::shared_ptr<selection::selection> selection,
+            ::shared_ptr<const restrictions::statement_restrictions> restrictions,
+            ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
+            bool is_reversed,
+            ordering_comparator_type ordering_comparator,
+            std::optional<expr::expression> limit,
+            std::optional<expr::expression> per_partition_limit,
+            cql_stats &stats,
+            std::unique_ptr<cql3::attributes> attrs);
+
+    // This statement has a schema that is different from that of the underlying table.
+    static schema_ptr generate_output_schema(schema_ptr underlying_schema);
+
+private:
+    future<exceptions::coordinator_result<service::storage_proxy_coordinator_query_result>>
+    do_query(
+            const locator::node* this_node,
+            service::storage_proxy& sp,
+            schema_ptr schema,
+            lw_shared_ptr<query::read_command> cmd,
+            dht::partition_range_vector partition_ranges,
+            db::consistency_level cl,
+            service::storage_proxy_coordinator_query_options optional_params) const;
+
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_processor& qp,
+            service::query_state& state, const query_options& options) const override;
 };
 
 }

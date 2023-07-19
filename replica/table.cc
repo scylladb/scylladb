@@ -18,6 +18,7 @@
 #include "replica/database.hh"
 #include "replica/data_dictionary_impl.hh"
 #include "replica/compaction_group.hh"
+#include "replica/query_state.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "db/schema_tables.hh"
@@ -330,6 +331,14 @@ flat_mutation_reader_v2 table::make_streaming_reader(schema_ptr schema, reader_p
     const auto fwd_mr = mutation_reader::forwarding::no;
     return sstables->make_range_sstable_reader(std::move(schema), std::move(permit), range, slice,
             std::move(trace_state), fwd, fwd_mr);
+}
+
+flat_mutation_reader_v2 table::make_nonpopulating_cache_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
+        const query::partition_slice& slice, tracing::trace_state_ptr ts) {
+    if (!range.is_singular()) {
+        throw std::runtime_error("table::make_cache_reader(): only singular ranges are supported");
+    }
+    return _cache.make_nonpopulating_reader(std::move(schema), std::move(permit), range, slice, std::move(ts));
 }
 
 future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout) {
@@ -2312,39 +2321,6 @@ write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, sstables::
     });
 }
 
-struct query_state {
-    explicit query_state(schema_ptr s,
-                         const query::read_command& cmd,
-                         query::result_options opts,
-                         const dht::partition_range_vector& ranges,
-                         query::result_memory_accounter memory_accounter)
-            : schema(std::move(s))
-            , cmd(cmd)
-            , builder(cmd.slice, opts, std::move(memory_accounter), cmd.tombstone_limit)
-            , limit(cmd.get_row_limit())
-            , partition_limit(cmd.partition_limit)
-            , current_partition_range(ranges.begin())
-            , range_end(ranges.end()){
-    }
-    schema_ptr schema;
-    const query::read_command& cmd;
-    query::result::builder builder;
-    uint64_t limit;
-    uint32_t partition_limit;
-    bool range_empty = false;   // Avoid ubsan false-positive when moving after construction
-    dht::partition_range_vector::const_iterator current_partition_range;
-    dht::partition_range_vector::const_iterator range_end;
-    uint64_t remaining_rows() const {
-        return limit - builder.row_count();
-    }
-    uint32_t remaining_partitions() const {
-        return partition_limit - builder.partition_count();
-    }
-    bool done() const {
-        return !remaining_rows() || !remaining_partitions() || current_partition_range == range_end || builder.is_short_read();
-    }
-};
-
 future<lw_shared_ptr<query::result>>
 table::query(schema_ptr s,
         reader_permit permit,
@@ -2721,6 +2697,16 @@ table::as_mutation_source_excluding_staging() const {
                                    mutation_reader::forwarding fwd_mr) {
         return this->make_reader_v2_excluding_staging(std::move(s), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr);
     });
+}
+
+std::vector<mutation_source> table::select_memtables_as_mutation_sources(dht::token token) const {
+    auto& cg = compaction_group_for_token(token);
+    std::vector<mutation_source> mss;
+    mss.reserve(cg.memtables()->size());
+    for (auto& mt : *cg.memtables()) {
+        mss.emplace_back(mt->as_data_source());
+    }
+    return mss;
 }
 
 class compaction_group::table_state : public compaction::table_state {

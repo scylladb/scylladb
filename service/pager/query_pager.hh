@@ -21,9 +21,18 @@
 namespace service {
 
 class storage_proxy;
+class storage_proxy_coordinator_query_options;
 class storage_proxy_coordinator_query_result;
 
 namespace pager {
+
+using query_function = std::function<future<exceptions::coordinator_result<service::storage_proxy_coordinator_query_result>>(
+        service::storage_proxy& sp,
+        schema_ptr schema,
+        lw_shared_ptr<query::read_command> cmd,
+        dht::partition_range_vector&& partition_ranges,
+        db::consistency_level cl,
+        service::storage_proxy_coordinator_query_options optional_params)>;
 
 /**
  * Perform a query, paging it by page of a given size.
@@ -76,12 +85,16 @@ protected:
     std::optional<db::read_repair_decision> _query_read_repair_decision;
     uint64_t _rows_fetched_for_last_partition = 0;
     stats _stats;
+
+    query_function _query_function;
+
 public:
     query_pager(service::storage_proxy& p, schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,
                 const cql3::query_options& options,
                 lw_shared_ptr<query::read_command> cmd,
-                dht::partition_range_vector ranges);
+                dht::partition_range_vector ranges,
+                query_function query_function_override = {});
     virtual ~query_pager() {}
 
     /**

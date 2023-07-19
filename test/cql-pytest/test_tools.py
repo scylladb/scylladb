@@ -20,21 +20,6 @@ import shutil
 import util
 
 
-# A fixture for finding Scylla's data directory. We get it using the CQL
-# interface to Scylla's configuration. Note that if the server is remote,
-# the directory retrieved this way may be irrelevant, whether or not it
-# exists on the local machine... However, if the same test that uses this
-# fixture also uses the scylla_path fixture, the test will anyway be skipped
-# if the running Scylla is not on the local machine local.
-@pytest.fixture(scope="module")
-def scylla_data_dir(cql):
-    try:
-        dir = json.loads(cql.execute("SELECT value FROM system.config WHERE name = 'data_file_directories'").one().value)[0]
-        return dir
-    except:
-        pytest.skip("Can't find Scylla sstable directory")
-
-
 def simple_no_clustering_table(cql, keyspace):
     table = util.unique_name()
     schema = f"CREATE TABLE {keyspace}.{table} (pk int PRIMARY KEY, v int) WITH compaction = {{'class': 'NullCompactionStrategy'}}"

@@ -18,7 +18,7 @@ Admin Tools
    Scylla Logs </getting-started/logging/>
    perftune
    Virtual Tables </operating-scylla/admin-tools/virtual-tables/>
-   
+   SELECT * FROM MUTATION_FRAGMENTS() Statement </operating-scylla/admin-tools/select-from-mutation-fragments/>
 
 .. panel-box::
   :title: Admin Tools
