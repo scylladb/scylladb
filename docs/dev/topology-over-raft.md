@@ -71,6 +71,103 @@ Separately from the per-node requests, there is also a 'global' request field
 for operations that don't affect any specific node but the entire cluster,
 such as `check_and_repair_cdc_streams`.
 
+# Load balancing
+
+If there is no work for the state machine, tablet load balancer is invoked to
+check if we need to rebalance. If so, it computes an incremental tablet migration
+plan, persists it by moving tablets into transitional states, and moves the state machine
+into the tablet migration track. All this happens atomically form the perspective
+of group0 state machine.
+The tablet migration track excludes with other topology changes, so node operations
+will have to wait for the plan to finish before they can take over the state machine.
+
+The tablet balancing track migrates a small bunch of tablets, decided by the
+loaded balancer, and then moves back the state machine to the idle state.
+This gives other topology changes a chance to start, and if there aren't any, the
+load balancer will be called again to check the conditions. This way
+we can avoid blocking topology changes for too long, but also drive the cluster
+to eventually achieve balance in the absence of other requests.
+
+The load balancer is always invoked with no pending tablet migrations. This
+allows for simplicity in the implementation, but may lead to underutilization
+of cluster resources if different tablets migrate with different speeds,
+and thus limit the speed of load balancing.
+
+The reason why the load balancer is part of the main state machine and excludes with other topology
+changes is that we want to share the infrastructure for fencing between vnode-based topology
+changes and tablet migration. This calls for some way to mutually exclude the two so that they
+don't interfere with each other. The simplest is to make them part of the same state machine.
+
+When the topology state machine is not in the tablet_migration track, it is guaranteed
+that there are no tablet transitions in the system.
+
+Currently, all tablets in a batch decided by the load balancer are migrated in parallel and
+their state machines are advanced at the same time. This means that streaming has to complete
+for all tablets in a batch before any of them can move to the next phase. This is suboptimal
+and will be changed later to allow for independent transitions.
+
+# Tablet migration
+
+Each tablet has its own migration state machine stored in group0 which is part of the tablet state. It involves
+these properties of a tablet:
+  - replicas: the old replicas of a table
+  - new_replicas: the new replicas of a tablet
+  - stage: determines which replicas should be used by requests on the coordinator side, and which
+           action should be taken by the state machine executor.
+
+Currently, the tablet state machine is driven forward by the tablet balancing track of the
+topology state machine.
+
+The "stage" serves two major purposes:
+
+1. Firstly, it determines which action should be taken by the topology change coordinator on behalf
+   of the tablet before it can move to the next step. When stage is advanced, it means that
+   expected invariants about cluster-wide state relevant to the tablet, associated with the next stage, hold.
+
+2. Also, stage affects which replicas are used by the coordinator for reads and writes.
+   Replica selectors are stored in tablet_transition_info::writes and tablet_transition_info::reads,
+   which are directly derived from the stage stored in system tables.
+
+The invariants of stages, which hold as soon as the stage is committed to group0:
+
+1. allow_write_both_read_old
+
+    Precondition: transition info in group0 is filled with information about migration.
+
+2. write_both_read_old
+
+    Precondition: All old and new replicas:
+
+    1. see the transition info from step 1 via local token metadata and effective replication maps.
+
+    2. are prepared for receiving writes for the local tablet replica.
+
+3. streaming
+
+    Precondition: All writes that will be stored by any replica in the old or the new set,
+    which are executed on behalf of a successful request, will reach CL in both old and new replica sets.
+    This ensures that when step 4 is reached, the new replica set will reflect all successful writes
+    either by the means of coordinator replication or by the means of streaming.
+
+4. write_both_read_new
+
+    Precondition: New tablet replicas contain all the writes which reached the matching leaving tablet replicas
+    before step 3.
+
+5. use_new
+
+    Precondition: All read requests started after this, and which complete successfully, use the new replica set.
+
+6. cleanup
+
+    Precondition: No write request will reach tablet replica in the database layer which does not belong to the new replica set.
+
+When tablet is not in transition, the following invariants hold:
+
+1. The storage layer (database) on any node contains writes for keys which belong to the tablet only if
+    that shard is one of the current tablet replicas.
+
+
 # Topology state persistence table
 
 The in memory state's machine state is persisted in a local table `system.topology`.
