@@ -1536,9 +1536,14 @@ class streaming_reader_lifecycle_policy
     };
     distributed<replica::database>& _db;
     table_id _table_id;
+    std::optional<gc_clock::time_point> _compaction_time;
     std::vector<reader_context> _contexts;
 public:
-    streaming_reader_lifecycle_policy(distributed<replica::database>& db, table_id table_id) : _db(db), _table_id(table_id), _contexts(smp::count) {
+    streaming_reader_lifecycle_policy(distributed<replica::database>& db, table_id table_id, std::optional<gc_clock::time_point> compaction_time)
+        : _db(db)
+        , _table_id(table_id)
+        , _compaction_time(compaction_time)
+        , _contexts(smp::count) {
     }
     virtual flat_mutation_reader_v2 create_reader(
         schema_ptr schema,
@@ -1554,7 +1559,7 @@ public:
         _contexts[shard].read_operation = make_foreign(std::make_unique<utils::phased_barrier::operation>(cf.read_in_progress()));
         _contexts[shard].semaphore = &cf.streaming_read_concurrency_semaphore();
 
-        return cf.make_streaming_reader(std::move(schema), std::move(permit), *_contexts[shard].range, slice, fwd_mr, {});
+        return cf.make_streaming_reader(std::move(schema), std::move(permit), *_contexts[shard].range, slice, fwd_mr, _compaction_time);
     }
     virtual const dht::partition_range* get_read_range() const override {
         const auto shard = this_shard_id();
@@ -2905,11 +2910,12 @@ void database::unplug_view_update_generator() noexcept {
 
 flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::database>& db,
         schema_ptr schema, reader_permit permit,
-        std::function<std::optional<dht::partition_range>()> range_generator) {
+        std::function<std::optional<dht::partition_range>()> range_generator,
+        std::optional<gc_clock::time_point> compaction_time) {
 
     auto& table = db.local().find_column_family(schema);
     auto erm = table.get_effective_replication_map();
-    auto ms = mutation_source([&db, erm] (schema_ptr s,
+    auto ms = mutation_source([&db, erm, compaction_time] (schema_ptr s,
             reader_permit permit,
             const dht::partition_range& pr,
             const query::partition_slice& ps,
@@ -2917,7 +2923,7 @@ flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::da
             streamed_mutation::forwarding,
             mutation_reader::forwarding fwd_mr) {
         auto table_id = s->id();
-        return make_multishard_combining_reader_v2(make_shared<replica::streaming_reader_lifecycle_policy>(db, table_id),
+        return make_multishard_combining_reader_v2(seastar::make_shared<replica::streaming_reader_lifecycle_policy>(db, table_id, compaction_time),
                 std::move(s), erm, std::move(permit), pr, ps, std::move(trace_state), fwd_mr);
     });
     auto&& full_slice = schema->full_slice();
@@ -2926,13 +2932,13 @@ flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::da
 }
 
 flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::database>& db,
-        schema_ptr schema, reader_permit permit, const dht::partition_range& range)
+        schema_ptr schema, reader_permit permit, const dht::partition_range& range, std::optional<gc_clock::time_point> compaction_time)
 {
     const auto table_id = schema->id();
     const auto& full_slice = schema->full_slice();
     auto erm = db.local().find_column_family(schema).get_effective_replication_map();
     return make_multishard_combining_reader_v2(
-        make_shared<replica::streaming_reader_lifecycle_policy>(db, table_id),
+        seastar::make_shared<replica::streaming_reader_lifecycle_policy>(db, table_id, compaction_time),
         std::move(schema),
         std::move(erm),
         std::move(permit),
