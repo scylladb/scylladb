@@ -14,6 +14,7 @@ set(swagger_files
   api-doc/hinted_handoff.json
   api-doc/lsa.json
   api-doc/messaging_service.json
+  api-doc/metrics.json
   api-doc/storage_proxy.json
   api-doc/storage_service.json
   api-doc/stream_manager.json
