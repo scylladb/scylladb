@@ -2747,11 +2747,7 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
     if (is_normal_token_owner) {
         co_await notify_up(endpoint);
     }
-    bool replacing_pending_ranges = _replacing_nodes_pending_ranges_updater.contains(endpoint);
-    if (replacing_pending_ranges) {
-        _replacing_nodes_pending_ranges_updater.erase(endpoint);
-    }
-
+    bool replacing_pending_ranges = false;
     if (!is_normal_token_owner || replacing_pending_ranges) {
         auto tmlock = co_await get_token_metadata_lock();
         auto tmptr = co_await get_mutable_token_metadata_ptr();

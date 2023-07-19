@@ -488,7 +488,6 @@ private:
     future<> replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept;
     sharded<db::system_keyspace>& _sys_ks;
     locator::snitch_signal_slot_t _snitch_reconfigure;
-    std::unordered_set<gms::inet_address> _replacing_nodes_pending_ranges_updater;
 private:
     /**
      * Handle node bootstrap
