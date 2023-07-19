@@ -15,16 +15,16 @@ namespace alternator {
 const char* ALTERNATOR_METRICS = "alternator";
 
 stats::stats() : api_operations{} {
-    // Register the
-    seastar::metrics::label op("op");
+    namespace sm = seastar::metrics;
+    sm::label op("op");
 
     _metrics.add_group("alternator", {
 #define OPERATION(name, CamelCaseName) \
-                seastar::metrics::make_total_operations("operation", api_operations.name, \
-                        seastar::metrics::description("number of operations via Alternator API"), {op(CamelCaseName)}),
+                sm::make_total_operations("operation", api_operations.name, \
+                        sm::description("number of operations via Alternator API"), {op(CamelCaseName)}),
 #define OPERATION_LATENCY(name, CamelCaseName) \
-                seastar::metrics::make_histogram("op_latency", \
-                        seastar::metrics::description("Latency histogram of an operation via Alternator API"), {op(CamelCaseName)}, [this]{return to_metrics_histogram(api_operations.name);}),
+                sm::make_histogram("op_latency", \
+                        sm::description("Latency histogram of an operation via Alternator API"), {op(CamelCaseName)}, [this]{return to_metrics_histogram(api_operations.name);}),
             OPERATION(batch_get_item, "BatchGetItem")
             OPERATION(batch_write_item, "BatchWriteItem")
             OPERATION(create_backup, "CreateBackup")
@@ -72,26 +72,26 @@ stats::stats() : api_operations{} {
             OPERATION_LATENCY(get_records_latency, "GetRecords")
     });
     _metrics.add_group("alternator", {
-            seastar::metrics::make_total_operations("unsupported_operations", unsupported_operations,
-                    seastar::metrics::description("number of unsupported operations via Alternator API")),
-            seastar::metrics::make_total_operations("total_operations", total_operations,
-                    seastar::metrics::description("number of total operations via Alternator API")),
-            seastar::metrics::make_total_operations("reads_before_write", reads_before_write,
-                    seastar::metrics::description("number of performed read-before-write operations")),
-            seastar::metrics::make_total_operations("write_using_lwt", write_using_lwt,
-                    seastar::metrics::description("number of writes that used LWT")),
-            seastar::metrics::make_total_operations("shard_bounce_for_lwt", shard_bounce_for_lwt,
-                    seastar::metrics::description("number writes that had to be bounced from this shard because of LWT requirements")),
-            seastar::metrics::make_total_operations("requests_blocked_memory", requests_blocked_memory,
-                    seastar::metrics::description("Counts a number of requests blocked due to memory pressure.")),
-            seastar::metrics::make_total_operations("requests_shed", requests_shed,
-                    seastar::metrics::description("Counts a number of requests shed due to overload.")),
-            seastar::metrics::make_total_operations("filtered_rows_read_total", cql_stats.filtered_rows_read_total,
-                    seastar::metrics::description("number of rows read during filtering operations")),
-            seastar::metrics::make_total_operations("filtered_rows_matched_total", cql_stats.filtered_rows_matched_total,
-                    seastar::metrics::description("number of rows read and matched during filtering operations")),
-            seastar::metrics::make_total_operations("filtered_rows_dropped_total", [this] { return cql_stats.filtered_rows_read_total - cql_stats.filtered_rows_matched_total; },
-                    seastar::metrics::description("number of rows read and dropped during filtering operations")),
+            sm::make_total_operations("unsupported_operations", unsupported_operations,
+                    sm::description("number of unsupported operations via Alternator API")),
+            sm::make_total_operations("total_operations", total_operations,
+                    sm::description("number of total operations via Alternator API")),
+            sm::make_total_operations("reads_before_write", reads_before_write,
+                    sm::description("number of performed read-before-write operations")),
+            sm::make_total_operations("write_using_lwt", write_using_lwt,
+                    sm::description("number of writes that used LWT")),
+            sm::make_total_operations("shard_bounce_for_lwt", shard_bounce_for_lwt,
+                    sm::description("number writes that had to be bounced from this shard because of LWT requirements")),
+            sm::make_total_operations("requests_blocked_memory", requests_blocked_memory,
+                    sm::description("Counts a number of requests blocked due to memory pressure.")),
+            sm::make_total_operations("requests_shed", requests_shed,
+                    sm::description("Counts a number of requests shed due to overload.")),
+            sm::make_total_operations("filtered_rows_read_total", cql_stats.filtered_rows_read_total,
+                    sm::description("number of rows read during filtering operations")),
+            sm::make_total_operations("filtered_rows_matched_total", cql_stats.filtered_rows_matched_total,
+                    sm::description("number of rows read and matched during filtering operations")),
+            sm::make_total_operations("filtered_rows_dropped_total", [this] { return cql_stats.filtered_rows_read_total - cql_stats.filtered_rows_matched_total; },
+                    sm::description("number of rows read and dropped during filtering operations")),
     });
 }
 
