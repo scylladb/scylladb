@@ -681,9 +681,10 @@ future<> gossiper::remove_endpoint(inet_address endpoint, permit_id pid) {
         logger.info("removed {} from _seeds, updated _seeds list = {}", endpoint, _seeds);
     }
 
-    _live_endpoints.erase(endpoint);
-    co_await update_live_endpoints_version();
-    _unreachable_endpoints.erase(endpoint);
+    co_await mutate_live_and_unreachable_endpoints([endpoint] (gossiper& g) {
+        g._live_endpoints.erase(endpoint);
+        g._unreachable_endpoints.erase(endpoint);
+    });
     _syn_handlers.erase(endpoint);
     _ack_handlers.erase(endpoint);
     quarantine_endpoint(endpoint);
@@ -810,13 +811,6 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep, permi
 
 void gossiper::permit_internal_error(const inet_address& addr, permit_id pid) {
     on_internal_error(logger, fmt::format("Must be called under lock_endpoint for node {}", addr));
-}
-
-future<> gossiper::update_live_endpoints_version() {
-    auto version = _live_endpoints_version + 1;
-    return container().invoke_on_all([version] (gms::gossiper& g) {
-        g._live_endpoints_version = version;
-    });
 }
 
 future<semaphore_units<>> gossiper::lock_endpoint_update_semaphore() {
@@ -1191,7 +1185,9 @@ version_type gossiper::get_max_endpoint_state_version(endpoint_state state) cons
 
 future<> gossiper::evict_from_membership(inet_address endpoint, permit_id pid) {
     verify_permit(endpoint, pid);
-    _unreachable_endpoints.erase(endpoint);
+    co_await mutate_live_and_unreachable_endpoints([endpoint] (gossiper& g) {
+        g._unreachable_endpoints.erase(endpoint);
+    });
     co_await container().invoke_on_all([endpoint] (auto& g) {
         g._endpoint_state_map.erase(endpoint);
     });
@@ -1613,19 +1609,26 @@ future<> gossiper::real_mark_alive(inet_address addr) {
     local_state.mark_alive();
     local_state.update_timestamp(); // prevents do_status_check from racing us and evicting if it was down > A_VERY_LONG_TIME
 
+    // Make a copy for endpoint_state because the code below can yield
+    endpoint_state state = local_state;
+
     logger.debug("removing expire time for endpoint : {}", addr);
     _unreachable_endpoints.erase(addr);
     _expire_time_endpoint_map.erase(addr);
 
-    auto [it_, inserted] = _live_endpoints.insert(addr);
-    bool was_live = !inserted;
+    logger.debug("removing expire time for endpoint : {}", addr);
+    bool was_live = false;
+    co_await mutate_live_and_unreachable_endpoints([addr, &was_live] (gossiper& g) {
+        g._unreachable_endpoints.erase(addr);
+        g._expire_time_endpoint_map.erase(addr);
+
+        auto [it_, inserted] = g._live_endpoints.insert(addr);
+        was_live = !inserted;
+    });
     if (was_live) {
         co_return;
     }
 
-    // Make a copy for endpoint_state because the code below can yield
-    endpoint_state state = local_state;
-    co_await update_live_endpoints_version();
     if (_endpoints_to_talk_with.empty()) {
         _endpoints_to_talk_with.push_back({addr});
     } else {
@@ -1647,9 +1650,10 @@ future<> gossiper::mark_dead(inet_address addr, endpoint_state& local_state, per
     verify_permit(addr, pid);
     local_state.mark_dead();
     endpoint_state state = local_state;
-    _live_endpoints.erase(addr);
-    co_await update_live_endpoints_version();
-    _unreachable_endpoints[addr] = now();
+    co_await mutate_live_and_unreachable_endpoints([addr] (gossiper& g) {
+        g._live_endpoints.erase(addr);
+        g._unreachable_endpoints[addr] = now();
+    });
     logger.info("InetAddress {} is now DOWN, status = {}", addr, get_gossip_status(state));
     co_await _subscribers.for_each([addr, state, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
         co_await subscriber->on_dead(addr, state, pid);

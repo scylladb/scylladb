@@ -651,8 +651,6 @@ public:
 private:
     future<> failure_detector_loop();
     future<> failure_detector_loop_for_node(gms::inet_address node, generation_type gossip_generation, uint64_t live_endpoints_version);
-    // Must be called on shard 0
-    future<> update_live_endpoints_version();
 };
 
 
