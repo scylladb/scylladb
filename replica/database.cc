@@ -863,7 +863,7 @@ database::init_commitlog() {
     return db::commitlog::create_commitlog(db::commitlog::config::from_db_config(_cfg, _dbcfg.commitlog_scheduling_group, _dbcfg.available_memory)).then([this](db::commitlog&& log) {
         _commitlog = std::make_unique<db::commitlog>(std::move(log));
         _commitlog->add_flush_handler([this](db::cf_id_type id, db::replay_position pos) {
-            if (!_tables_metadata._column_families.contains(id)) {
+            if (!_tables_metadata.contains(id)) {
                 // the CF has been removed.
                 _commitlog->discard_completed_segments(id);
                 return;
@@ -959,7 +959,7 @@ void database::maybe_init_schema_commitlog() {
 
     _schema_commitlog = std::make_unique<db::commitlog>(db::commitlog::create_commitlog(std::move(c)).get0());
     _schema_commitlog->add_flush_handler([this] (db::cf_id_type id, db::replay_position pos) {
-        if (!_tables_metadata._column_families.contains(id)) {
+        if (!_tables_metadata.contains(id)) {
             // the CF has been removed.
             _schema_commitlog->discard_completed_segments(id);
             return;
@@ -1017,11 +1017,11 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
     auto uuid = schema->id();
-    if (_tables_metadata._column_families.contains(uuid)) {
+    if (_tables_metadata.contains(uuid)) {
         throw std::invalid_argument("UUID " + uuid.to_sstring() + " already mapped");
     }
     auto kscf = std::make_pair(schema->ks_name(), schema->cf_name());
-    if (_tables_metadata._ks_cf_to_uuid.contains(kscf)) {
+    if (_tables_metadata.contains(kscf)) {
         throw std::invalid_argument("Column family " + schema->cf_name() + " exists");
     }
     ks.add_or_update_column_family(schema);
@@ -1283,7 +1283,7 @@ const column_family& database::find_column_family(const table_id& uuid) const {
 }
 
 bool database::column_family_exists(const table_id& uuid) const {
-    return _tables_metadata._column_families.contains(uuid);
+    return _tables_metadata.contains(uuid);
 }
 
 future<>
@@ -1407,7 +1407,7 @@ schema_ptr database::find_schema(const table_id& uuid) const {
 }
 
 bool database::has_schema(std::string_view ks_name, std::string_view cf_name) const {
-    return _tables_metadata._ks_cf_to_uuid.contains(std::make_pair(ks_name, cf_name));
+    return _tables_metadata.contains(std::make_pair(ks_name, cf_name));
 }
 
 std::vector<view_ptr> database::get_views() const {
@@ -2903,6 +2903,14 @@ table_id database::tables_metadata::get_table_id_if_exists(const std::pair<std::
         return it->second;
     }
     return table_id::create_null_id();
+}
+
+bool database::tables_metadata::contains(table_id id) const {
+    return _column_families.contains(id);
+}
+
+bool database::tables_metadata::contains(std::pair<std::string_view, std::string_view> kscf) const {
+    return _ks_cf_to_uuid.contains(kscf);
 }
 
 void database::tables_metadata::for_each_table(std::function<void(table_id, lw_shared_ptr<table>)> f) const {
