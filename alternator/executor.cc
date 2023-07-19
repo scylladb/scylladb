@@ -7,7 +7,6 @@
  */
 
 #include "utils/base64.hh"
-
 #include <seastar/core/sleep.hh>
 #include "alternator/executor.hh"
 #include "log.hh"
@@ -46,12 +45,14 @@
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm/find_end.hpp>
 #include <unordered_set>
+#include <variant>
 #include "service/storage_proxy.hh"
 #include "gms/gossiper.hh"
 #include "schema/schema_registry.hh"
 #include "utils/error_injection.hh"
 #include "db/schema_tables.hh"
 #include "utils/rjson.hh"
+#include "utils/hashers.hh"
 
 using namespace std::chrono_literals;
 
@@ -232,6 +233,18 @@ static std::string get_table_name(const rjson::value& request) {
         throw api_error::validation("Missing TableName field in request");
     }
     return *name;
+}
+
+executor::executor(gms::gossiper& gossiper,
+    service::storage_proxy& proxy,
+    service::migration_manager& mm,
+    db::system_distributed_keyspace& sdks,
+    cdc::metadata& cdc_metadata,
+    smp_service_group ssg,
+    utils::updateable_value<uint32_t> default_timeout_in_ms)
+        : _gossiper(gossiper), _proxy(proxy), _mm(mm), _sdks(sdks), _cdc_metadata(cdc_metadata),
+          _ssg(ssg), _expression_cache(make_lw_shared<expression_cache_t>(2048, 60min, elogger)) {
+    s_default_timeout_in_ms = std::move(default_timeout_in_ms);
 }
 
 /** Extract table schema from a request.
@@ -1208,7 +1221,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
         auto schema = builder.build();
 
-        auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema, false,  std::vector<view_ptr>(), group0_guard.write_timestamp());
+        auto m = co_await service::prepare_column_family_update_announcement(proxy, schema, false,  std::vector<view_ptr>(), group0_guard.write_timestamp());
 
         co_await mm.announce(std::move(m), std::move(group0_guard), format("alternator-executor: update {} table", tab->cf_name()));
 
@@ -1636,19 +1649,56 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     });
 }
 
+bytes query_cache_key(const std::string_view& query, char query_type) {
+   auto b = md5_hasher::calculate(query);
+   b[0] = query_type; // this avoids key collision for different expression types
+   return b;
+}
+
+template<typename T, typename F>
+requires requires(F f, std::string_view v) {
+    { f(v) } -> std::same_as<T>;
+}
+static T parse_or_get_from_cache(lw_shared_ptr<expression_cache_t> cache, F parse_func, std::string_view query, char query_type) {
+    auto key = query_cache_key(query, query_type);
+    auto ptr = cache->find(key);
+    if (ptr) {
+        // we need to copy, it can be evicted from cache anytime and
+        // aditonally our expression evaluation code modifies T
+        return std::get<T>(*ptr);
+    }
+    // not found in cache, we need to put it there
+    auto loader_func = [parse_func, query_copy = std::string(query)] (bytes key) {
+        return make_ready_future<expression_cache_value_t>(parse_func(query_copy));
+    };
+    // leak future, we have no means to wait for it here
+    (void)cache->get_ptr(key, loader_func).discard_result()
+        .handle_exception([](auto ep) {/* ignore */}).then_wrapped([cache] (auto f) {
+        (void)cache; // keep it alive until we're done with it
+        return make_ready_future();
+    });
+    // parse it second time as synchronization with background task is not possible here
+    return parse_func(query);
+}
+
 parsed::condition_expression
 executor::parse_condition_expression(std::string_view query, const char* caller) {
-    return parsed::parse_condition_expression(query, caller);
+    return parse_or_get_from_cache<parsed::condition_expression>(_expression_cache,
+        [caller] (std::string_view query) {
+            return parsed::parse_condition_expression(query, caller);
+        }, query, 'C');
 }
 
 parsed::update_expression
 executor::parse_update_expression(std::string_view query) {
-    return parsed::parse_update_expression(query);
+    return parse_or_get_from_cache<parsed::update_expression>(_expression_cache,
+        parsed::parse_update_expression, query, 'U');
 }
 
 parsed::projection_expression
 executor::parse_projection_expression(std::string_view query) {
-    return parsed::parse_projection_expression(query);
+    return parse_or_get_from_cache<parsed::projection_expression>(_expression_cache,
+        parsed::parse_projection_expression, query, 'P');
 }
 
 parsed::condition_expression rmw_operation::get_parsed_condition_expression(rjson::value& request) {

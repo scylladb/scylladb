@@ -11,6 +11,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/http/httpd.hh>
 #include "alternator/expressions_types.hh"
+#include "seastar/core/shared_ptr.hh"
 #include "seastarx.hh"
 #include <seastar/json/json_elements.hh>
 #include <seastar/core/sharded.hh>
@@ -153,6 +154,8 @@ using attrs_to_get_node = attribute_path_map_node<std::monostate>;
 // optional means we should get all attributes, not specific ones.
 using attrs_to_get = attribute_path_map<std::monostate>;
 
+using expression_cache_value_t = std::variant<parsed::update_expression, parsed::projection_expression, parsed::condition_expression>;
+using expression_cache_t = utils::loading_cache<bytes, expression_cache_value_t, 1>;
 
 class executor : public peering_sharded_service<executor> {
     gms::gossiper& _gossiper;
@@ -163,7 +166,7 @@ class executor : public peering_sharded_service<executor> {
     // An smp_service_group to be used for limiting the concurrency when
     // forwarding Alternator request between shards - if necessary for LWT.
     smp_service_group _ssg;
-
+    lw_shared_ptr<expression_cache_t> _expression_cache;
 public:
     using client_state = service::client_state;
     using request_return_type = std::variant<json::json_return_type, api_error>;
@@ -178,10 +181,7 @@ public:
              db::system_distributed_keyspace& sdks,
              cdc::metadata& cdc_metadata,
              smp_service_group ssg,
-             utils::updateable_value<uint32_t> default_timeout_in_ms)
-        : _gossiper(gossiper), _proxy(proxy), _mm(mm), _sdks(sdks), _cdc_metadata(cdc_metadata), _ssg(ssg) {
-        s_default_timeout_in_ms = std::move(default_timeout_in_ms);
-    }
+             utils::updateable_value<uint32_t> default_timeout_in_ms);
 
     future<request_return_type> create_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
     future<request_return_type> describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
