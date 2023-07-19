@@ -502,6 +502,8 @@ public:
 
 private:
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql(const sstring& query_string, const std::initializer_list<data_value>& values);
+    template <typename... Args>
+    future<::shared_ptr<cql3::untyped_result_set>> execute_cql_with_timeout(sstring req, db::timeout_clock::time_point timeout, Args&&... args);
 
 public:
     template <typename... Args>

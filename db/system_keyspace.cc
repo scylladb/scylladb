@@ -2233,12 +2233,41 @@ future<std::vector<system_keyspace::view_build_progress>> system_keyspace::load_
     });
 }
 
+
+template <typename... Args>
+future<::shared_ptr<cql3::untyped_result_set>> system_keyspace::execute_cql_with_timeout(sstring req,
+        db::timeout_clock::time_point timeout,
+        Args&&... args) {
+    const db::timeout_clock::time_point now = db::timeout_clock::now();
+    const db::timeout_clock::duration d =
+        now < timeout ?
+            timeout - now :
+            // let the `storage_proxy` time out the query down the call chain
+            db::timeout_clock::duration::zero();
+
+    struct timeout_context {
+        std::unique_ptr<service::client_state> client_state;
+        service::query_state query_state;
+        timeout_context(db::timeout_clock::duration d)
+                : client_state(std::make_unique<service::client_state>(service::client_state::internal_tag{}, timeout_config{d, d, d, d, d, d, d}))
+                , query_state(*client_state, empty_service_permit())
+        {}
+    };
+    return do_with(timeout_context(d), [this, req = std::move(req), &args...] (auto& tctx) {
+        return _qp.execute_internal(req,
+            cql3::query_options::DEFAULT.get_consistency(),
+            tctx.query_state,
+            { data_value(std::forward<Args>(args))... },
+            cql3::query_processor::cache_internal::yes);
+    });
+}
+
 future<service::paxos::paxos_state> system_keyspace::load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
         db::timeout_clock::time_point timeout) {
     static auto cql = format("SELECT * FROM system.{} WHERE row_key = ? AND cf_id = ?", PAXOS);
     // FIXME: we need execute_cql_with_now()
     (void)now;
-    auto f = qctx->execute_cql_with_timeout(cql, timeout, to_legacy(*key.get_compound_type(*s), key.representation()), s->id().uuid());
+    auto f = execute_cql_with_timeout(cql, timeout, to_legacy(*key.get_compound_type(*s), key.representation()), s->id().uuid());
     return f.then([s, key = std::move(key)] (shared_ptr<cql3::untyped_result_set> results) mutable {
         if (results->empty()) {
             return service::paxos::paxos_state();
@@ -2277,7 +2306,7 @@ static int32_t paxos_ttl_sec(const schema& s) {
 
 future<> system_keyspace::save_paxos_promise(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout) {
     static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET promise = ? WHERE row_key = ? AND cf_id = ?", PAXOS);
-    return qctx->execute_cql_with_timeout(cql,
+    return execute_cql_with_timeout(cql,
             timeout,
             utils::UUID_gen::micros_timestamp(ballot),
             paxos_ttl_sec(s),
@@ -2290,7 +2319,7 @@ future<> system_keyspace::save_paxos_promise(const schema& s, const partition_ke
 future<> system_keyspace::save_paxos_proposal(const schema& s, const service::paxos::proposal& proposal, db::timeout_clock::time_point timeout) {
     static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET promise = ?, proposal_ballot = ?, proposal = ? WHERE row_key = ? AND cf_id = ?", PAXOS);
     partition_key_view key = proposal.update.key();
-    return qctx->execute_cql_with_timeout(cql,
+    return execute_cql_with_timeout(cql,
             timeout,
             utils::UUID_gen::micros_timestamp(proposal.ballot),
             paxos_ttl_sec(s),
@@ -2312,7 +2341,7 @@ future<> system_keyspace::save_paxos_decision(const schema& s, const service::pa
     static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET proposal_ballot = null, proposal = null,"
             " most_recent_commit_at = ?, most_recent_commit = ? WHERE row_key = ? AND cf_id = ?", PAXOS);
     partition_key_view key = decision.update.key();
-    return qctx->execute_cql_with_timeout(cql,
+    return execute_cql_with_timeout(cql,
             timeout,
             utils::UUID_gen::micros_timestamp(decision.ballot),
             paxos_ttl_sec(s),
@@ -2329,7 +2358,7 @@ future<> system_keyspace::delete_paxos_decision(const schema& s, const partition
     // guarantees that if there is more recent round it will not be affected.
     static auto cql = format("DELETE most_recent_commit FROM system.{} USING TIMESTAMP ?  WHERE row_key = ? AND cf_id = ?", PAXOS);
 
-    return qctx->execute_cql_with_timeout(cql,
+    return execute_cql_with_timeout(cql,
             timeout,
             utils::UUID_gen::micros_timestamp(ballot),
             to_legacy(*key.get_compound_type(s), key.representation()),
