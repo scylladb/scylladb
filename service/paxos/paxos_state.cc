@@ -46,11 +46,11 @@ future<paxos_state::guard> paxos_state::get_cas_lock(const dht::token& key, cloc
 future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keyspace& sys_ks, tracing::trace_state_ptr tr_state, schema_ptr schema,
         const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
         bool only_digest, query::digest_algorithm da, clock_type::time_point timeout) {
-    return utils::get_local_injector().inject("paxos_prepare_timeout", timeout, [&sp, &cmd, &key, ballot, tr_state, schema, only_digest, da, timeout] {
+    return utils::get_local_injector().inject("paxos_prepare_timeout", timeout, [&sp, &sys_ks, &cmd, &key, ballot, tr_state, schema, only_digest, da, timeout] {
         dht::token token = dht::get_token(*schema, key);
         utils::latency_counter lc;
         lc.start();
-        return with_locked_key(token, timeout, [&sp, &cmd, token, &key, ballot, tr_state, schema, only_digest, da, timeout] () mutable {
+        return with_locked_key(token, timeout, [&sp, &sys_ks, &cmd, token, &key, ballot, tr_state, schema, only_digest, da, timeout] () mutable {
             // When preparing, we need to use the same time as "now" (that's the time we use to decide if something
             // is expired or not) across nodes, otherwise we may have a window where a Most Recent Decision shows up
             // on some replica and not others during a new proposal (in storage_proxy::begin_and_repair_paxos()), and no
@@ -58,8 +58,8 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keys
             // tombstone that hides any re-submit). See CASSANDRA-12043 for details.
             auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(ballot);
 
-            auto f = db::system_keyspace::load_paxos_state(key, schema, gc_clock::time_point(now_in_sec), timeout);
-            return f.then([&sp, &cmd, token = std::move(token), &key, ballot, tr_state, schema, only_digest, da, timeout] (paxos_state state) {
+            auto f = sys_ks.load_paxos_state(key, schema, gc_clock::time_point(now_in_sec), timeout);
+            return f.then([&sp, &sys_ks, &cmd, token = std::move(token), &key, ballot, tr_state, schema, only_digest, da, timeout] (paxos_state state) {
                 // If received ballot is newer that the one we already accepted it has to be accepted as well,
                 // but we will return the previously accepted proposal so that the new coordinator will use it instead of
                 // its own.
@@ -69,7 +69,9 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keys
                     if (utils::get_local_injector().enter("paxos_error_before_save_promise")) {
                         return make_exception_future<prepare_response>(utils::injected_error("injected_error_before_save_promise"));
                     }
-                    auto f1 = futurize_invoke(db::system_keyspace::save_paxos_promise, *schema, std::ref(key), ballot, timeout);
+                    auto f1 = futurize_invoke([&] {
+                        return sys_ks.save_paxos_promise(*schema, std::ref(key), ballot, timeout);
+                    });
                     auto f2 = futurize_invoke([&] {
                         return do_with(dht::partition_range_vector({dht::partition_range::make_singular({token, key})}),
                                 [&sp, tr_state, schema, &cmd, only_digest, da, timeout] (const dht::partition_range_vector& prv) {
@@ -142,13 +144,13 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keys
 future<bool> paxos_state::accept(storage_proxy& sp, db::system_keyspace& sys_ks, tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
         clock_type::time_point timeout) {
     return utils::get_local_injector().inject("paxos_accept_proposal_timeout", timeout,
-            [&sp, token = std::move(token), &proposal, schema, tr_state, timeout] {
+            [&sp, &sys_ks, token = std::move(token), &proposal, schema, tr_state, timeout] {
         utils::latency_counter lc;
         lc.start();
-        return with_locked_key(token, timeout, [&proposal, schema, tr_state, timeout] () mutable {
+        return with_locked_key(token, timeout, [&sys_ks, &proposal, schema, tr_state, timeout] () mutable {
             auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(proposal.ballot);
-            auto f = db::system_keyspace::load_paxos_state(proposal.update.key(), schema, gc_clock::time_point(now_in_sec), timeout);
-            return f.then([&proposal, tr_state, schema, timeout] (paxos_state state) {
+            auto f = sys_ks.load_paxos_state(proposal.update.key(), schema, gc_clock::time_point(now_in_sec), timeout);
+            return f.then([&sys_ks, &proposal, tr_state, schema, timeout] (paxos_state state) {
                 // Accept the proposal if we promised to accept it or the proposal is newer than the one we promised.
                 // Otherwise the proposal was cutoff by another Paxos proposer and has to be rejected.
                 if (proposal.ballot == state._promised_ballot || proposal.ballot.timestamp() > state._promised_ballot.timestamp()) {
@@ -159,7 +161,7 @@ future<bool> paxos_state::accept(storage_proxy& sp, db::system_keyspace& sys_ks,
                         return make_exception_future<bool>(utils::injected_error("injected_error_before_save_proposal"));
                     }
 
-                    return db::system_keyspace::save_paxos_proposal(*schema, proposal, timeout).then([] {
+                    return sys_ks.save_paxos_proposal(*schema, proposal, timeout).then([] {
                         if (utils::get_local_injector().enter("paxos_error_after_save_proposal")) {
                             return make_exception_future<bool>(utils::injected_error("injected_error_after_save_proposal"));
                         }
@@ -187,7 +189,7 @@ future<> paxos_state::learn(storage_proxy& sp, db::system_keyspace& sys_ks, sche
     utils::latency_counter lc;
     lc.start();
 
-    return do_with(std::move(decision), [&sp, tr_state = std::move(tr_state), schema, timeout] (proposal& decision) {
+    return do_with(std::move(decision), [&sp, &sys_ks, tr_state = std::move(tr_state), schema, timeout] (proposal& decision) {
         auto f = utils::get_local_injector().inject("paxos_state_learn_timeout", timeout);
 
         replica::table& cf = sp.get_db().local().find_column_family(schema);
@@ -224,11 +226,11 @@ future<> paxos_state::learn(storage_proxy& sp, db::system_keyspace& sys_ks, sche
             logger.debug("Not committing decision {} as ballot timestamp predates last truncation time", decision);
             tracing::trace(tr_state, "Not committing decision {} as ballot timestamp predates last truncation time", decision);
         }
-        return f.then([&decision, schema, timeout] {
+        return f.then([&sys_ks, &decision, schema, timeout] {
             // We don't need to lock the partition key if there is no gap between loading paxos
             // state and saving it, and here we're just blindly updating.
-            return utils::get_local_injector().inject("paxos_timeout_after_save_decision", timeout, [&decision, schema, timeout] {
-                return db::system_keyspace::save_paxos_decision(*schema, decision, timeout);
+            return utils::get_local_injector().inject("paxos_timeout_after_save_decision", timeout, [&sys_ks, &decision, schema, timeout] {
+                return sys_ks.save_paxos_decision(*schema, decision, timeout);
             });
         });
     }).finally([&sp, schema, lc] () mutable {
@@ -241,7 +243,7 @@ future<> paxos_state::prune(db::system_keyspace& sys_ks, schema_ptr schema, cons
         tracing::trace_state_ptr tr_state) {
     logger.debug("Delete paxos state for ballot {}", ballot);
     tracing::trace(tr_state, "Delete paxos state for ballot {}", ballot);
-    return db::system_keyspace::delete_paxos_decision(*schema, key, ballot, timeout);
+    return sys_ks.delete_paxos_decision(*schema, key, ballot, timeout);
 }
 
 } // end of namespace "service::paxos"
