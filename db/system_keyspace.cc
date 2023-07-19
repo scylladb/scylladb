@@ -2675,7 +2675,7 @@ future<> system_keyspace::update_topology_fence_version(int64_t value) {
 future<cdc::topology_description>
 system_keyspace::read_cdc_generation(utils::UUID id) {
     std::vector<cdc::token_range_description> entries;
-    auto num_ranges = 0;
+    size_t num_ranges = 0;
     co_await _qp.query_internal(
             format("SELECT range_end, streams, ignore_msb, num_ranges FROM {}.{} WHERE id = ?",
                    NAME, CDC_GENERATIONS_V3),
@@ -2699,7 +2699,7 @@ system_keyspace::read_cdc_generation(utils::UUID id) {
             "read_cdc_generation: data for CDC generation {} not present", id));
     }
 
-    if (std::cmp_not_equal(entries.size(), num_ranges)) {
+    if (entries.size() != num_ranges) {
         throw std::runtime_error(format(
             "read_cdc_generation: wrong number of rows. The `num_ranges` column claimed {} rows,"
             " but reading the partition returned {}.", num_ranges, entries.size()));

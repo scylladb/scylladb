@@ -553,7 +553,7 @@ system_distributed_keyspace::insert_cdc_generation(
 future<std::optional<cdc::topology_description>>
 system_distributed_keyspace::read_cdc_generation(utils::UUID id) {
     std::vector<cdc::token_range_description> entries;
-    auto num_ranges = 0;
+    size_t num_ranges = 0;
     co_await _qp.query_internal(
             // This should be a local read so 20s should be more than enough
             format("SELECT range_end, streams, ignore_msb, num_ranges FROM {}.{} WHERE id = ? USING TIMEOUT 20s", NAME_EVERYWHERE, CDC_GENERATIONS_V2),
@@ -579,7 +579,7 @@ system_distributed_keyspace::read_cdc_generation(utils::UUID id) {
     // Paranoic sanity check. Partial reads should not happen since generations should be retrieved only after they
     // were written successfully with CL=ALL. But nobody uses EverywhereStrategy tables so they weren't ever properly
     // tested, so just in case...
-    if (std::cmp_not_equal(entries.size(), num_ranges)) {
+    if (entries.size() != num_ranges) {
         throw std::runtime_error(format(
                 "read_cdc_generation: wrong number of rows. The `num_ranges` column claimed {} rows,"
                 " but reading the partition returned {}.", num_ranges, entries.size()));
