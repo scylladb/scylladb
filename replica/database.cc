@@ -144,7 +144,7 @@ public:
 };
 
 const boost::container::static_vector<std::pair<size_t, boost::container::static_vector<table*, 16>>, 10>
-phased_barrier_top_10_counts(const std::unordered_map<table_id, lw_shared_ptr<column_family>>& tables, std::function<size_t(table&)> op_count_getter) {
+phased_barrier_top_10_counts(const database::tables_metadata& tables_metadata, std::function<size_t(table&)> op_count_getter) {
     using table_list = boost::container::static_vector<table*, 16>;
     using count_and_tables = std::pair<size_t, table_list>;
     const auto less = [] (const count_and_tables& a, const count_and_tables& b) {
@@ -154,7 +154,7 @@ phased_barrier_top_10_counts(const std::unordered_map<table_id, lw_shared_ptr<co
     boost::container::static_vector<count_and_tables, 10> res;
     count_and_tables* min_element = nullptr;
 
-    for (const auto& [tid, table] : tables) {
+    for (const auto& [tid, table] : tables_metadata._column_families) {
         const auto count = op_count_getter(*table);
         if (!count) {
             continue;
@@ -272,7 +272,7 @@ void database::setup_scylla_memory_diagnostics_producer() {
         for (const auto& [name, op_count_getter] : phased_barriers) {
             writeln("    {} (top 10):\n", name);
             auto total = 0;
-            for (const auto& [count, table_list] : phased_barrier_top_10_counts(_tables_metadata._column_families, op_count_getter)) {
+            for (const auto& [count, table_list] : phased_barrier_top_10_counts(_tables_metadata, op_count_getter)) {
                 total += count;
                 writeln("      {}", count);
                 if (table_list.empty()) {
