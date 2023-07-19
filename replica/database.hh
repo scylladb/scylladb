@@ -691,21 +691,21 @@ public:
     // When compaction_time is engaged, the reader's output will be compacted, with the provided query time.
     // This compaction doesn't do tombstone garbage collection.
     flat_mutation_reader_v2 make_streaming_reader(schema_ptr schema, reader_permit permit,
-            const dht::partition_range_vector& ranges, std::optional<gc_clock::time_point> compaction_time) const;
+            const dht::partition_range_vector& ranges, gc_clock::time_point compaction_time) const;
 
     // Single range overload.
     flat_mutation_reader_v2 make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
             const query::partition_slice& slice,
             mutation_reader::forwarding fwd_mr,
-            std::optional<gc_clock::time_point> compaction_time) const;
+            gc_clock::time_point compaction_time) const;
 
-    flat_mutation_reader_v2 make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range, std::optional<gc_clock::time_point> compaction_time) {
+    flat_mutation_reader_v2 make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range, gc_clock::time_point compaction_time) {
         return make_streaming_reader(schema, std::move(permit), range, schema->full_slice(), mutation_reader::forwarding::no, compaction_time);
     }
 
     // Stream reader from the given sstables
     flat_mutation_reader_v2 make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
-            lw_shared_ptr<sstables::sstable_set> sstables, std::optional<gc_clock::time_point> compaction_time) const;
+            lw_shared_ptr<sstables::sstable_set> sstables, gc_clock::time_point compaction_time) const;
 
     // Make a reader which reads only from the row-cache.
     // The reader doens't populate the cache, it reads only what is in the cache
@@ -1786,9 +1786,9 @@ future<> start_large_data_handler(sharded<replica::database>& db);
 // Opt-in for compacting the output by passing `compaction_time`, see
 // make_streaming_reader() for more details.
 flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::database>& db, schema_ptr schema, reader_permit permit,
-        std::function<std::optional<dht::partition_range>()> range_generator, std::optional<gc_clock::time_point> compaction_time);
+        std::function<std::optional<dht::partition_range>()> range_generator, gc_clock::time_point compaction_time);
 
 flat_mutation_reader_v2 make_multishard_streaming_reader(distributed<replica::database>& db,
-    schema_ptr schema, reader_permit permit, const dht::partition_range& range, std::optional<gc_clock::time_point> compaction_time);
+    schema_ptr schema, reader_permit permit, const dht::partition_range& range, gc_clock::time_point compaction_time);
 
 bool is_internal_keyspace(std::string_view name);
