@@ -897,6 +897,15 @@ public:
 
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
 
+            if (cfg_in.need_remote_proxy) {
+                proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(ms), std::ref(gossiper), std::ref(mm), std::ref(sys_ks)).get();
+            }
+            auto stop_proxy_remote = defer([&proxy, need = cfg_in.need_remote_proxy] {
+                if (need) {
+                    proxy.invoke_on_all(&service::storage_proxy::stop_remote).get();
+                }
+            });
+
             sl_controller.invoke_on_all([&sys_dist_ks, &sl_controller] (qos::service_level_controller& service) {
                 qos::service_level_controller::service_level_distributed_data_accessor_ptr service_level_data_accessor =
                         ::static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
