@@ -4548,8 +4548,10 @@ static future<std::vector<mutation>> create_keyspace(std::string_view keyspace_n
 }
 
 future<> executor::start() {
-    // Currently, nothing to do on initialization. We delay the keyspace
-    // creation (create_keyspace()) until a table is actually created.
+    exp_cache_stats_updater::init(&_stats,
+        [c = _expression_cache] () {return c->size();},
+        [c = _expression_cache] () {return c->memory_footprint();}
+    );
     return make_ready_future<>();
 }
 

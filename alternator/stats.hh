@@ -82,10 +82,42 @@ public:
     uint64_t requests_shed = 0;
     // CQL-derived stats
     cql3::cql_stats cql_stats;
+    struct {
+        uint64_t hits = 0;
+        uint64_t misses = 0;
+        uint64_t evictions = 0;
+        uint64_t privileged_evictions = 0;
+        uint64_t unprivileged_evictions = 0;
+    } exp_cache;
 private:
     // The metric_groups object holds this stat object's metrics registered
     // as long as the stats object is alive.
     seastar::metrics::metric_groups _metrics;
+};
+
+class exp_cache_stats_updater {
+public:
+    static void init(stats* s, std::function<size_t()> size_getter, std::function<size_t()>);
+    static size_t size();
+    static size_t footprint();
+    static stats& shard_stats();
+
+    static void inc_hits() noexcept {
+        ++shard_stats().exp_cache.hits;
+    }
+    static void inc_misses() noexcept {
+        ++shard_stats().exp_cache.misses;
+    }
+    static void inc_evictions() noexcept {
+        ++shard_stats().exp_cache.evictions;
+    }
+    static void inc_privileged_on_cache_size_eviction() noexcept {
+        ++shard_stats().exp_cache.privileged_evictions;
+    }
+    static void inc_unprivileged_on_cache_size_eviction() noexcept {
+        ++shard_stats().exp_cache.unprivileged_evictions;
+    }
+    static void inc_blocks() noexcept {}
 };
 
 }

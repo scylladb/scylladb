@@ -92,8 +92,48 @@ stats::stats() : api_operations{} {
                     sm::description("number of rows read and matched during filtering operations")),
             sm::make_total_operations("filtered_rows_dropped_total", [this] { return cql_stats.filtered_rows_read_total - cql_stats.filtered_rows_matched_total; },
                     sm::description("number of rows read and dropped during filtering operations")),
+            // expressions cache metrics
+            sm::make_total_operations("expression_cache_hits", exp_cache.hits,
+                    sm::description("Counts the number of requests which used the cache.")),
+            sm::make_total_operations("expression_cache_misses", exp_cache.misses,
+                    sm::description("Counts the number of requests which couldn't use the cache due to miss.")),
+            sm::make_total_operations("expression_cache_evictions", exp_cache.hits,
+                    sm::description("Counts the number of evictions in the cache.")),
+            sm::make_total_operations("expression_cache_privileged_evictions", exp_cache.hits,
+                    sm::description("Counts the number of evictions in the cache for expressions which have been used more than once.")),
+            sm::make_total_operations("expression_cache_unprivileged_evictions", exp_cache.hits,
+                    sm::description("Counts the number of evictions in the cache for expressions which have been used only once.")),
+            sm::make_gauge("expression_cache_size",
+                    [] { return exp_cache_stats_updater::size(); },
+                    sm::description("Number of entries in the expression cache.")),
+            sm::make_gauge("expression_cache_footprint_bytes",
+                    [] { return exp_cache_stats_updater::footprint(); },
+                    sm::description("Size of the expression cache.")),
     });
 }
 
+// sadly this hack is needed as loading_cache expects object with static functions
+thread_local stats* exp_cache_stats = nullptr;
+thread_local std::function<size_t()> exp_cache_size_getter = nullptr;
+thread_local std::function<size_t()> exp_cache_footprint_getter = nullptr;;
+
+void exp_cache_stats_updater::init(stats* s, std::function<size_t()> size_getter,
+                                             std::function<size_t()> footprint_getter) {
+    exp_cache_stats = s;
+    exp_cache_size_getter = size_getter;
+    exp_cache_footprint_getter = footprint_getter;
+}
+
+size_t exp_cache_stats_updater::size() {
+    return exp_cache_size_getter();
+}
+
+size_t exp_cache_stats_updater::footprint() {
+    return exp_cache_footprint_getter();
+}
+
+stats& exp_cache_stats_updater::shard_stats() {
+    return *exp_cache_stats;
+}
 
 }

@@ -155,7 +155,15 @@ using attrs_to_get_node = attribute_path_map_node<std::monostate>;
 using attrs_to_get = attribute_path_map<std::monostate>;
 
 using expression_cache_value_t = std::variant<parsed::update_expression, parsed::projection_expression, parsed::condition_expression>;
-using expression_cache_t = utils::loading_cache<bytes, expression_cache_value_t, 1>;
+using expression_cache_t = utils::loading_cache<bytes,
+                                                expression_cache_value_t,
+                                                1,
+                                                utils::loading_cache_reload_enabled::no,
+                                                utils::simple_entry_size<expression_cache_value_t>,
+                                                std::hash<bytes>,
+                                                std::equal_to<bytes>,
+                                                exp_cache_stats_updater,
+                                                exp_cache_stats_updater>;
 
 class executor : public peering_sharded_service<executor> {
     gms::gossiper& _gossiper;
