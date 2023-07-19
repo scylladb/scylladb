@@ -2397,17 +2397,6 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
     });
 }
 
-sstring
-storage_service::get_rpc_address(const inet_address& endpoint) const {
-    if (endpoint != get_broadcast_address()) {
-        auto* v = _gossiper.get_application_state_ptr(endpoint, gms::application_state::RPC_ADDRESS);
-        if (v) {
-            return v->value();
-        }
-    }
-    return fmt::to_string(endpoint);
-}
-
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 storage_service::get_range_to_address_map(const sstring& keyspace) const {
     return get_range_to_address_map(_db.local().find_keyspace(keyspace).get_effective_replication_map());
