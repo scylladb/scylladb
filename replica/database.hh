@@ -1305,10 +1305,9 @@ public:
         flat_hash_map<ks_cf_t, table_id, utils::tuple_hash, string_pair_eq>;
     class tables_metadata {
         rwlock _cf_lock;
-    public: // FIXME: change member access to private. 
         std::unordered_map<table_id, lw_shared_ptr<column_family>> _column_families;
         ks_cf_to_uuid_t _ks_cf_to_uuid;
-
+    public:
         size_t size() const noexcept;
 
         future<> add_table(schema_ptr schema);
