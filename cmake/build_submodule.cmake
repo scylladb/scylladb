@@ -1,15 +1,11 @@
 function(build_submodule name dir)
-  file(STRINGS ${CMAKE_BINARY_DIR}/SCYLLA-PRODUCT-FILE scylla_product)
-  file(STRINGS ${CMAKE_BINARY_DIR}/SCYLLA-VERSION-FILE scylla_version_dash)
-  file(STRINGS ${CMAKE_BINARY_DIR}/SCYLLA-RELEASE-FILE scylla_release)
-  string(REPLACE "-" "~" scylla_version_tilde scylla_version_dash)
+  string(REPLACE "-" "~" scylla_version_tilde ${Scylla_VERSION})
   set(scylla_version
-    "${scylla_product}-${scylla_version_dash}-${scylla_release}")
+    "${Scylla_PRODUCT}-${scylla_version_tilde}-${Scylla_RELEASE}")
   set(reloc_pkg "${dir}/build/${name}-${scylla_version}.noarch.tar.gz")
   set(working_dir ${CMAKE_CURRENT_SOURCE_DIR}/${dir})
   add_custom_command(
     OUTPUT ${reloc_pkg}
-    DEPENDS ${version_files}
     COMMAND reloc/build_reloc.sh --version ${scylla_version} --nodeps ${ARGN}
     WORKING_DIRECTORY "${working_dir}"
     COMMENT "Generating submodule ${name} in ${dir}"
