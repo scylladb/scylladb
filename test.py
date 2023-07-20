@@ -406,7 +406,7 @@ class PythonTestSuite(TestSuite):
             cluster = ScyllaCluster(logger, self.hosts, cluster_size, create_server)
 
             async def stop() -> None:
-                await cluster.stop()
+                await cluster.stop_gracefully()
 
             # Suite artifacts are removed when
             # the entire suite ends successfully.
