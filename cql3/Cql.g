@@ -1622,8 +1622,7 @@ marker returns [uexpression value]
     ;
 
 intValue returns [uexpression value]
-    :
-    | t=INTEGER     { $value = untyped_constant{untyped_constant::integer, $t.text}; }
+    : t=INTEGER     { $value = untyped_constant{untyped_constant::integer, $t.text}; }
     | e=marker      { $value = std::move(e); }
     ;
 
