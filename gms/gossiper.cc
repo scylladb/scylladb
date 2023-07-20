@@ -340,7 +340,18 @@ future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_
         std::map<inet_address, endpoint_state> delta_ep_state_map;
         for (auto g_digest : ack_msg_digest) {
             inet_address addr = g_digest.get_endpoint();
-            auto local_ep_state_ptr = this->get_state_for_version_bigger_than(addr, version_type(g_digest.get_max_version()));
+            const auto es = get_endpoint_state_for_endpoint_ptr(addr);
+            if (!es || es->get_heart_beat_state().get_generation() < g_digest.get_generation()) {
+                continue;
+            }
+            // Local generation for addr may have been increased since the
+            // current node sent an initial SYN. Comparing versions across
+            // different generations in get_state_for_version_bigger_than
+            // could result in loosing some app states with smaller versions.
+            const auto version = es->get_heart_beat_state().get_generation() > g_digest.get_generation()
+                ? version_type(0)
+                : g_digest.get_max_version();
+            auto local_ep_state_ptr = this->get_state_for_version_bigger_than(addr, version);
             if (local_ep_state_ptr) {
                 delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
             }
