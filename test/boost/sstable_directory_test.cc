@@ -32,8 +32,8 @@ public:
     static future<> lock_table(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring cf_name) {
         return replica::distributed_loader::lock_table(dir, db, std::move(ks_name), std::move(cf_name));
     }
-    static future<> reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator) {
-        return replica::distributed_loader::reshard(dir, db, std::move(ks_name), std::move(table_name), std::move(creator));
+    static future<> reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr = nullptr) {
+        return replica::distributed_loader::reshard(dir, db, std::move(ks_name), std::move(table_name), std::move(creator), std::move(owned_ranges_ptr));
     }
 };
 
@@ -524,6 +524,60 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
             return cf.get_sstables_manager().make_sstable(cf.schema(), local, upload_path.native(), generation);
         };
         distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", std::move(make_sstable)).get();
+        verify_that_all_sstables_are_local(sstdir, smp::count * smp::count).get();
+      });
+    });
+}
+
+// Regression test for #14618 - resharding with non-empty owned_ranges_ptr.
+SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly_with_owned_ranges) {
+    if (smp::count == 1) {
+        fmt::print("Skipping sstable_directory_shared_sstables_reshard_correctly, smp == 1\n");
+        return make_ready_future<>();
+    }
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table cf (p text PRIMARY KEY, c int)").get();
+        auto& cf = e.local_db().find_column_family("ks", "cf");
+        auto upload_path = fs::path(cf.dir()) / sstables::upload_dir;
+
+        e.db().invoke_on_all([] (replica::database& db) {
+            auto& cf = db.find_column_family("ks", "cf");
+            return cf.disable_auto_compaction();
+        }).get();
+
+        unsigned num_sstables = 10 * smp::count;
+
+        sharded<sstables::sstable_generation_generator> sharded_gen;
+        sharded_gen.start(0).get();
+        auto stop_generator = deferred_stop(sharded_gen);
+
+        for (unsigned nr = 0; nr < num_sstables; ++nr) {
+            auto generation = sharded_gen.invoke_on(nr % smp::count, [] (auto& gen) {
+                return gen(sstables::uuid_identifiers::no);
+            }).get();
+            make_sstable_for_all_shards(e.db().local(), cf, upload_path.native(), generation);
+        }
+
+      with_sstable_directory(upload_path, e, [&] (sharded<sstables::sstable_directory>& sstdir) {
+        distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
+        verify_that_all_sstables_are_local(sstdir, 0).get();
+
+        sharded<sstables::sstable_generation_generator> sharded_gen;
+        auto max_generation_seen = highest_generation_seen(sstdir).get0();
+        sharded_gen.start(max_generation_seen.as_int()).get();
+        auto stop_generator = deferred_stop(sharded_gen);
+
+        auto make_sstable = [&e, upload_path, &sharded_gen] (shard_id shard) {
+            auto generation = sharded_gen.invoke_on(shard, [] (auto& gen) {
+                return gen(sstables::uuid_identifiers::no);
+            }).get();
+            auto& cf = e.local_db().find_column_family("ks", "cf");
+            data_dictionary::storage_options local;
+            return cf.get_sstables_manager().make_sstable(cf.schema(), local, upload_path.native(), generation);
+        };
+        auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(e.db().local().get_keyspace_local_ranges("ks"));
+        distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", std::move(make_sstable), std::move(owned_ranges_ptr)).get();
         verify_that_all_sstables_are_local(sstdir, smp::count * smp::count).get();
       });
     });
