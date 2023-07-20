@@ -7,6 +7,7 @@ import pytest
 import shutil
 import tempfile
 from dataclasses import dataclass
+from contextlib import contextmanager
 
 # use minio_server
 sys.path.insert(1, sys.path[0] + '/../..')
@@ -44,12 +45,28 @@ def ssl(request):
     yield request.config.getoption('--ssl')
 
 
+@contextmanager
+def _maybe_remove_tempdir_on_complete(request, tempdir):
+    if pytest.version_tuple > (7, 3, 0):
+        yield
+        return
+    # tmp_path_retention_count was introduced in pytest 7.3.0, so we have
+    # to swing this by ourselves when using lower version of pytest. see
+    # https://docs.pytest.org/en/7.3.x/changelog.html#pytest-7-3-0-2023-04-08
+    tests_failed = request.session.testsfailed
+    yield
+    if tests_failed == request.session.testsfailed:
+        # not tests failed after this seesion, so remove the tempdir
+        shutil.rmtree(tempdir)
+
+
 @pytest.fixture(scope="function")
-def test_tempdir(tmpdir):
+def test_tempdir(request, tmpdir):
     tempdir = tmpdir.strpath
-    yield tempdir
-    with open(os.path.join(tempdir, 'log'), 'rb') as log:
-        shutil.copyfileobj(log, sys.stdout.buffer)
+    with _maybe_remove_tempdir_on_complete(request, tempdir):
+        yield tempdir
+        with open(os.path.join(tempdir, 'log'), 'rb') as log:
+            shutil.copyfileobj(log, sys.stdout.buffer)
 
 
 @pytest.fixture(scope="function")
