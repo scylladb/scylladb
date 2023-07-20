@@ -329,6 +329,7 @@ public:
     named_value<bool> override_decommission;
     named_value<bool> enable_repair_based_node_ops;
     named_value<sstring> allowed_repair_based_node_ops;
+    named_value<bool> enable_compacting_data_for_streaming_and_repair;
     named_value<uint32_t> ring_delay_ms;
     named_value<uint32_t> shadow_round_ms;
     named_value<uint32_t> fd_max_interval_ms;
