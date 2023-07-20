@@ -2735,22 +2735,10 @@ future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_sta
     bool is_normal_token_owner = get_token_metadata().is_normal_token_owner(endpoint);
     if (is_normal_token_owner) {
         co_await notify_up(endpoint);
-    }
-    bool replacing_pending_ranges = _replacing_nodes_pending_ranges_updater.contains(endpoint);
-    if (replacing_pending_ranges) {
-        _replacing_nodes_pending_ranges_updater.erase(endpoint);
-    }
-
-    if (!is_normal_token_owner || replacing_pending_ranges) {
+    } else {
         auto tmlock = co_await get_token_metadata_lock();
         auto tmptr = co_await get_mutable_token_metadata_ptr();
-        if (replacing_pending_ranges) {
-            slogger.info("Trigger pending ranges updater for replacing node {}", endpoint);
-            co_await handle_state_replacing_update_pending_ranges(tmptr, endpoint);
-        }
-        if (!is_normal_token_owner) {
-            tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
-        }
+        tmptr->update_topology(endpoint, get_dc_rack_for(endpoint));
         co_await replicate_to_all_cores(std::move(tmptr));
     }
 }
