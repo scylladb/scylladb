@@ -74,7 +74,7 @@ Procedure
 	
     .. code-block:: none
 	
-       nodetool repair system_auth
+       nodetool repair -pr system_auth
 
 6. If you want to create users and roles, continue to :doc:`Enable Authorization </operating-scylla/security/enable-authorization>`.
 
