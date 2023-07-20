@@ -583,7 +583,7 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, const endpoint
                     logger.debug("Ignoring remote version {} <= {} for {}", remote_max_version, local_max_version, node);
                 }
                 if (!is_alive(node) && !this->is_dead_state(local_state)) { // unless of course, it was dead
-                    this->mark_alive(node, local_state);
+                    this->mark_alive(node);
                 }
             } else {
                 for (const auto& item : remote_state.get_application_state_map()) {
@@ -1529,7 +1529,7 @@ void gossiper::update_timestamp_for_nodes(const std::map<inet_address, endpoint_
     }
 }
 
-void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
+void gossiper::mark_alive(inet_address addr) {
     // Enter the _background_msg gate so stop() would wait on it
     auto inserted = _pending_mark_alive_endpoints.insert(addr).second;
     if (inserted) {
@@ -1672,7 +1672,7 @@ future<> gossiper::handle_major_state_change(inet_address ep, const endpoint_sta
 
     auto& ep_state = _endpoint_state_map.at(ep);
     if (!is_dead_state(ep_state)) {
-        mark_alive(ep, ep_state);
+        mark_alive(ep);
     } else {
         logger.debug("Not marking {} alive due to dead state {}", ep, get_gossip_status(eps));
         co_await mark_dead(ep, ep_state, pid);

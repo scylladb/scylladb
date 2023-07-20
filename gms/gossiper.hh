@@ -447,7 +447,7 @@ public:
 private:
     void update_timestamp_for_nodes(const std::map<inet_address, endpoint_state>& map);
 
-    void mark_alive(inet_address addr, endpoint_state& local_state);
+    void mark_alive(inet_address addr);
 
     future<> real_mark_alive(inet_address addr);
 
