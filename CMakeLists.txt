@@ -46,6 +46,8 @@ find_package(xxHash REQUIRED)
 set(scylla_gen_build_dir "${CMAKE_BINARY_DIR}/gen")
 file(MAKE_DIRECTORY "${scylla_gen_build_dir}")
 
+include(add_version_library)
+generate_scylla_version()
 
 add_library(scylla-main STATIC)
 target_sources(scylla-main
@@ -131,7 +133,6 @@ add_subdirectory(tracing)
 add_subdirectory(transport)
 add_subdirectory(types)
 add_subdirectory(utils)
-include(add_version_library)
 add_version_library(scylla_version
     release.cc)
 
