@@ -11,8 +11,15 @@ list(APPEND CMAKE_MODULE_PATH
 set(CMAKE_BUILD_TYPE "${CMAKE_BUILD_TYPE}" CACHE
     STRING "Choose the type of build." FORCE)
 # Set the possible values of build type for cmake-gui
+set(scylla_build_types
+    "Debug" "Release" "Dev" "Sanitize" "Coverage")
 set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
-  "Debug" "Release" "Dev" "Sanitize")
+  ${scylla_build_types})
+list(FIND scylla_build_types ${CMAKE_BUILD_TYPE} which_build_type)
+if(which_build_type EQUAL -1)
+    message(FATAL_ERROR "Unknown CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}. "
+        "Following types are supported: ${scylla_build_types}")
+endif()
 string(TOUPPER "${CMAKE_BUILD_TYPE}" build_mode)
 include(mode.${build_mode})
 include(mode.common)
