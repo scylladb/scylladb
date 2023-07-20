@@ -1143,7 +1143,7 @@ future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstri
     co_await table_shards->destroy_storage();
 }
 
-const table_id& database::find_uuid(std::string_view ks, std::string_view cf) const {
+table_id database::find_uuid(std::string_view ks, std::string_view cf) const {
     try {
         return _tables_metadata._ks_cf_to_uuid.at(std::make_pair(ks, cf));
     } catch (std::out_of_range&) {
@@ -1151,7 +1151,7 @@ const table_id& database::find_uuid(std::string_view ks, std::string_view cf) co
     }
 }
 
-const table_id& database::find_uuid(const schema_ptr& schema) const {
+table_id database::find_uuid(const schema_ptr& schema) const {
     return find_uuid(schema->ks_name(), schema->cf_name());
 }
 

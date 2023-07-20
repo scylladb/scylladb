@@ -1551,8 +1551,8 @@ public:
     future<> add_column_family_and_make_directory(schema_ptr schema);
 
     /* throws no_such_column_family if missing */
-    const table_id& find_uuid(std::string_view ks, std::string_view cf) const;
-    const table_id& find_uuid(const schema_ptr&) const;
+    table_id find_uuid(std::string_view ks, std::string_view cf) const;
+    table_id find_uuid(const schema_ptr&) const;
 
     /**
      * Creates a keyspace for a given metadata if it still doesn't exist.

@@ -43,7 +43,7 @@ std::tuple<sstring, sstring> parse_fully_qualified_cf_name(sstring name) {
     return std::make_tuple(name.substr(0, pos), name.substr(end));
 }
 
-const table_id& get_uuid(const sstring& ks, const sstring& cf, const replica::database& db) {
+table_id get_uuid(const sstring& ks, const sstring& cf, const replica::database& db) {
     try {
         return db.find_uuid(ks, cf);
     } catch (replica::no_such_column_family& e) {
@@ -51,7 +51,7 @@ const table_id& get_uuid(const sstring& ks, const sstring& cf, const replica::da
     }
 }
 
-const table_id& get_uuid(const sstring& name, const replica::database& db) {
+table_id get_uuid(const sstring& name, const replica::database& db) {
     auto [ks, cf] = parse_fully_qualified_cf_name(name);
     return get_uuid(ks, cf, db);
 }
