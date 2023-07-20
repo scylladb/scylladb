@@ -21,3 +21,10 @@ def table1(cql, test_keyspace):
 def test_json_empty(cql, table1):
     with pytest.raises(SyntaxException):
         cql.execute(f'INSERT INTO {table1} JSON')
+
+# LIMIT should be followed by an expression (#14705)
+def test_limit_empty(cql, table1):
+    with pytest.raises(SyntaxException):
+        cql.execute(f'SELECT * FROM {table1} LIMIT')
+    with pytest.raises(SyntaxException):
+        cql.execute(f'SELECT * FROM {table1} PER PARTITION LIMIT')
