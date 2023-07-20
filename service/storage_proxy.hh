@@ -490,7 +490,7 @@ public:
     }
 
     // Start/stop the remote part of `storage_proxy` that is required for performing distributed queries.
-    void start_remote(netw::messaging_service&, gms::gossiper&, migration_manager&);
+    void start_remote(netw::messaging_service&, gms::gossiper&, migration_manager&, sharded<db::system_keyspace>& sys_ks);
     future<> stop_remote();
 
 private:

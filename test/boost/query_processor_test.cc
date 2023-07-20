@@ -202,6 +202,8 @@ auto make_options(clevel cl) {
 } // anonymous namespace
 
 SEASTAR_TEST_CASE(test_query_counters) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
     return do_with_cql_env_thread([](cql_test_env& e) {
         // Executes a query and waits for it to complete.
         auto process_query = [&e](const sstring& query, clevel cl) mutable {
@@ -278,7 +280,7 @@ SEASTAR_TEST_CASE(test_query_counters) {
             clevel::ANY);
         expected["ANY"] += 2;
         BOOST_CHECK_EQUAL(expected, get_query_metrics());
-    });
+    }, std::move(cfg));
 }
 
 SEASTAR_TEST_CASE(test_select_full_scan_metrics) {

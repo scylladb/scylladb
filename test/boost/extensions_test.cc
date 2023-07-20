@@ -126,6 +126,8 @@ SEASTAR_TEST_CASE(paxos_grace_seconds_extension) {
     auto ext = std::make_shared<db::extensions>();
     ext->add_schema_extension<db::paxos_grace_seconds_extension>(db::paxos_grace_seconds_extension::NAME);
     auto cfg = ::make_shared<db::config>(ext);
+    cql_test_config cql_cfg(cfg);
+    cql_cfg.need_remote_proxy = true;
 
     return do_with_cql_env([] (cql_test_env& e) {
         // Verify that paxos_grace_seconds extensions gets recognized properly
@@ -156,7 +158,7 @@ SEASTAR_TEST_CASE(paxos_grace_seconds_extension) {
         });
 
         return f;
-    }, cfg);
+    }, std::move(cql_cfg));
 }
 
 SEASTAR_TEST_CASE(test_extension_remove) {
