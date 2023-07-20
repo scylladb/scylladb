@@ -43,6 +43,22 @@ This guide covers upgrading ScyllaDB on Red Hat Enterprise Linux (RHEL), CentOS,
 
 It also applies when using ScyllaDB official image on EC2, GCP, or Azure.
 
+Before You Upgrade ScyllaDB
+==============================
+
+**Upgrade Your Driver**
+
+If you're using a :doc:`ScyllaDB driver </using-scylla/drivers/cql-drivers/index>`, upgrade the driver
+before you upgrade ScyllaDB. The latest two versions of each driver are supported.
+
+**Upgrade ScyllaDB Monitoring Stack**
+
+If you're using the ScyllaDB Monitoring Stack, verify that your Monitoring Stack version supports 
+the ScyllaDB version to which you want to upgrade. See 
+`ScyllaDB Monitoring Stack Support Matrix <https://monitoring.docs.scylladb.com/stable/reference/matrix.html>`_.
+  
+We recommend upgrading the Monitoring Stack to the latest version.
+
 Upgrade Procedure
 =================
 
@@ -65,10 +81,6 @@ Apply the following procedure **serially** on each node. Do not move to the next
 * Not to use the new |NEW_VERSION| features.
 * Not to run administration functions, such as repairs, refresh, rebuild, or add or remove nodes. See `sctool <https://manager.docs.scylladb.com/stable/sctool/>`_ for suspending ScyllaDB Manager (only available for ScyllaDB Enterprise) scheduled or running repairs.
 * Not to apply schema changes.
-
-.. note:: 
-
-   If you use the `ScyllaDB Monitoring Stack <https://monitoring.docs.scylladb.com/>`_, we recommend upgrading the Monitoring Stack to the latest version **before** upgrading ScyllaDB.
 
 Upgrade Steps
 =============
