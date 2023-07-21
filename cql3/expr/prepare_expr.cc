@@ -928,7 +928,7 @@ prepare_function_args_for_type_inference(std::span<const expression> args, data_
         std::optional<expression> prepared_arg_opt = try_prepare_expression(argument, db, keyspace, schema_opt, nullptr);
         auto type = prepared_arg_opt ? std::optional(type_of(*prepared_arg_opt)) : std::nullopt;
         auto expr = prepared_arg_opt ? std::move(*prepared_arg_opt) : argument;
-        partially_prepared_args.emplace_back(as_assignment_testable(std::move(argument), std::move(type)));
+        partially_prepared_args.emplace_back(as_assignment_testable(std::move(expr), std::move(type)));
     }
     return partially_prepared_args;
 }
