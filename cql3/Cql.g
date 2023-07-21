@@ -463,8 +463,7 @@ orderByClause[raw::select_statement::parameters::orderings_type& orderings]
     ;
 
 jsonValue returns [expression value]
-    :
-    | s=STRING_LITERAL { $value = untyped_constant{untyped_constant::string, $s.text}; }
+    : s=STRING_LITERAL { $value = untyped_constant{untyped_constant::string, $s.text}; }
     | m=marker         { $value = std::move(m); }
     ;
 
