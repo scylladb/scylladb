@@ -27,6 +27,11 @@
 //
 //   CREATE TABLE ks.cf (pk text, ck text, v text, s1 text static, PRIMARY KEY (pk, ck));
 //
+// or
+//
+//   CREATE TABLE ${ks}.${cf} (pk text, ck text, v text, s1 text static, PRIMARY KEY (pk, ck));
+//
+// where ks and cf are specified by the contructor.
 class simple_schema {
 public:
     using with_static = bool_class<class static_tag>;
@@ -57,6 +62,22 @@ private:
     static auto get_collection_type() {
         return map_type_impl::get_instance(utf8_type, utf8_type, true);
     }
+    simple_schema(std::string_view ks_name, std::string_view cf_name,
+                  with_static ws, with_collection wc)
+        : _ws(ws)
+        , _wc(wc)
+    {
+        auto sb = schema_builder(ks_name, cf_name)
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("ck", utf8_type, column_kind::clustering_key)
+            .with_column("s1", utf8_type, ws ? column_kind::static_column : column_kind::regular_column)
+            .with_column("v", utf8_type);
+        if (wc) {
+            sb.with_column("c1", get_collection_type());
+        }
+        _s = sb.build();
+    }
+
 public:
     api::timestamp_type current_timestamp() {
         return _timestamp;
@@ -69,19 +90,10 @@ public:
     }
 public:
     simple_schema(with_static ws = with_static::yes, with_collection wc = with_collection::no)
-        : _ws(ws)
-        , _wc(wc)
-    {
-        auto sb = schema_builder("ks", "cf")
-            .with_column("pk", utf8_type, column_kind::partition_key)
-            .with_column("ck", utf8_type, column_kind::clustering_key)
-            .with_column("s1", utf8_type, ws ? column_kind::static_column : column_kind::regular_column)
-            .with_column("v", utf8_type);
-        if (wc) {
-            sb.with_column("c1", get_collection_type());
-        }
-        _s = sb.build();
-    }
+        : simple_schema("ks", "cf", ws, wc) {}
+
+    simple_schema(std::string_view ks_name, std::string_view cf_name)
+        : simple_schema(ks_name, cf_name, with_static::yes, with_collection::no) {}
 
     sstring cql() const {
         return format("CREATE TABLE {}.{} (pk text, ck text, v text, s1 text{}{}, PRIMARY KEY (pk, ck))",
