@@ -42,21 +42,21 @@ public:
         return make_ready_future();
     }
 
-    virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state ep_state, gms::permit_id pid) override {
-        auto* local_value = ep_state.get_application_state_ptr(gms::application_state::LOAD);
+    virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id pid) override {
+        auto* local_value = ep_state->get_application_state_ptr(gms::application_state::LOAD);
         if (local_value) {
             return on_change(endpoint, gms::application_state::LOAD, *local_value, pid);
         }
         return make_ready_future();
     }
     
-    virtual future<> before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, const gms::versioned_value& newValue) override { return make_ready_future(); }
+    virtual future<> before_change(gms::inet_address endpoint, gms::endpoint_state_ptr current_state, gms::application_state new_state_key, const gms::versioned_value& newValue) override { return make_ready_future(); }
 
-    future<> on_alive(gms::inet_address endpoint, gms::endpoint_state, gms::permit_id) override { return make_ready_future(); }
+    future<> on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
 
-    future<> on_dead(gms::inet_address endpoint, gms::endpoint_state, gms::permit_id) override { return make_ready_future(); }
+    future<> on_dead(gms::inet_address endpoint, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
 
-    future<> on_restart(gms::inet_address endpoint, gms::endpoint_state, gms::permit_id) override { return make_ready_future(); }
+    future<> on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
 
     virtual future<> on_remove(gms::inet_address endpoint, gms::permit_id) override {
         _load_info.erase(endpoint);

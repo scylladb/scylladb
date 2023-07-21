@@ -1199,8 +1199,8 @@ future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, table_id 
     return db::schema_tables::get_column_mapping(sys_ks, table_id, v);
 }
 
-future<> migration_manager::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state, gms::permit_id) {
-    schedule_schema_pull(endpoint, ep_state);
+future<> migration_manager::on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) {
+    schedule_schema_pull(endpoint, *ep_state);
     return make_ready_future();
 }
 
@@ -1218,8 +1218,8 @@ future<> migration_manager::on_change(gms::inet_address endpoint, gms::applicati
     return make_ready_future();
 }
 
-future<> migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_state state, gms::permit_id) {
-    schedule_schema_pull(endpoint, state);
+future<> migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) {
+    schedule_schema_pull(endpoint, *state);
     return make_ready_future();
 }
 

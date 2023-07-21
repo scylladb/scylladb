@@ -802,10 +802,10 @@ future<> generation_service::leave_ring() {
     co_await _gossiper.unregister_(shared_from_this());
 }
 
-future<> generation_service::on_join(gms::inet_address ep, gms::endpoint_state ep_state, gms::permit_id pid) {
+future<> generation_service::on_join(gms::inet_address ep, gms::endpoint_state_ptr ep_state, gms::permit_id pid) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
-    auto val = ep_state.get_application_state_ptr(gms::application_state::CDC_GENERATION_ID);
+    auto val = ep_state->get_application_state_ptr(gms::application_state::CDC_GENERATION_ID);
     if (!val) {
         return make_ready_future();
     }

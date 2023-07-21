@@ -2985,13 +2985,13 @@ public:
     }
     virtual future<> on_join(
             gms::inet_address endpoint,
-            gms::endpoint_state ep_state,
+            gms::endpoint_state_ptr ep_state,
             gms::permit_id) override {
         return make_ready_future();
     }
     virtual future<> before_change(
             gms::inet_address endpoint,
-            gms::endpoint_state current_state,
+            gms::endpoint_state_ptr current_state,
             gms::application_state new_state_key,
             const gms::versioned_value& new_value) override {
         return make_ready_future();
@@ -3005,13 +3005,13 @@ public:
     }
     virtual future<> on_alive(
             gms::inet_address endpoint,
-            gms::endpoint_state state,
+            gms::endpoint_state_ptr state,
             gms::permit_id) override {
         return make_ready_future();
     }
     virtual future<> on_dead(
             gms::inet_address endpoint,
-            gms::endpoint_state state,
+            gms::endpoint_state_ptr state,
             gms::permit_id) override {
         return remove_row_level_repair(endpoint);
     }
@@ -3022,7 +3022,7 @@ public:
     }
     virtual future<> on_restart(
             gms::inet_address endpoint,
-            gms::endpoint_state ep_state,
+            gms::endpoint_state_ptr ep_state,
             gms::permit_id) override {
         return remove_row_level_repair(endpoint);
     }
