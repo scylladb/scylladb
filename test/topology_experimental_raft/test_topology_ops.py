@@ -14,6 +14,7 @@ from cassandra.query import SimpleStatement # type: ignore # pylint: disable=no-
 import pytest
 import logging
 import time
+import asyncio
 from datetime import datetime
 from typing import Optional
 
@@ -62,7 +63,8 @@ async def test_topology_ops(request, manager: ManagerClient):
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     gen_timestamps = {r.time for r in await manager.get_cql().run_async(query)}
     logger.info(f"Timestamps before check_and_repair: {gen_timestamps}")
-    await manager.api.client.post("/storage_service/cdc_streams_check_and_repair", servers[1].ip_addr)
+    await asyncio.gather(*[manager.api.client.post("/storage_service/cdc_streams_check_and_repair", servers[i % 2].ip_addr)
+                          for i in range(10)])
     async def new_gen_appeared() -> Optional[set[datetime]]:
         new_gen_timestamps = {r.time for r in await manager.get_cql().run_async(query)}
         assert(gen_timestamps <= new_gen_timestamps)
@@ -70,6 +72,7 @@ async def test_topology_ops(request, manager: ManagerClient):
             return new_gen_timestamps
         return None
     new_gen_timestamps = await wait_for(new_gen_appeared, time.time() + 60)
+    assert(len(gen_timestamps) + 1 == len(new_gen_timestamps))
     logger.info(f"Timestamps after check_and_repair: {new_gen_timestamps}")
 
     logger.info(f"Decommissioning node {servers[0]}")

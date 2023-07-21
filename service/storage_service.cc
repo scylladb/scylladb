@@ -4661,8 +4661,16 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
         }
 
         curr_gen = _topology_state_machine._topology.current_cdc_generation_id;
-
-        // FIXME: check if the current generation is optimal, don't request new one if it isn't
+        if (!curr_gen) {
+            slogger.error("check_and_repair_cdc_streams: no current CDC generation, requesting a new one.");
+        } else {
+            auto gen = co_await _sys_ks.local().read_cdc_generation(curr_gen->id);
+            if (cdc::is_cdc_generation_optimal(gen, get_token_metadata())) {
+                cdc_log.info("CDC generation {} does not need repair", curr_gen);
+                co_return;
+            }
+            cdc_log.info("CDC generation {} needs repair, requesting a new one", curr_gen);
+        }
 
         topology_mutation_builder builder(guard.write_timestamp());
         builder.set_global_topology_request(global_topology_request::new_cdc_generation);
@@ -4679,7 +4687,6 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
     }
 
     // Wait until the current CDC generation changes.
-    // This might happen due to a different reason than our request but we don't care.
     co_await _topology_state_machine.event.when([this, &curr_gen] {
         return curr_gen != _topology_state_machine._topology.current_cdc_generation_id;
     });
