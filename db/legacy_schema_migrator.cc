@@ -51,7 +51,6 @@ public:
 
     migrator(sharded<service::storage_proxy>& sp, sharded<replica::database>& db, sharded<db::system_keyspace>& sys_ks, cql3::query_processor& qp)
                     : _sp(sp), _db(db), _sys_ks(sys_ks), _qp(qp) {
-        (void)_sys_ks;
     }
     migrator(migrator&&) = default;
 
@@ -536,7 +535,7 @@ public:
         mlogger.info("Dropping legacy schema tables");
         auto with_snapshot = !_keyspaces.empty();
         return parallel_for_each(legacy_schema_tables, [this, with_snapshot](const sstring& cfname) {
-            return replica::database::drop_table_on_all_shards(_db, db::system_keyspace::NAME, cfname, with_snapshot);
+            return replica::database::drop_table_on_all_shards(_db, _sys_ks, db::system_keyspace::NAME, cfname, with_snapshot);
         });
     }
 
