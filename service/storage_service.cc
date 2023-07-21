@@ -1115,9 +1115,13 @@ class topology_coordinator {
             guard = std::move(guard_);
 
             topology_mutation_builder builder(guard.write_timestamp());
+            // We don't delete the request now, but only after the generation is committed. If we deleted
+            // the request now and received another new_cdc_generation request later, but before committing
+            // the new generation, the second request would also create a new generation. Deleting requests
+            // after the generation is committed prevents this from happening. The second request would have
+            // no effect - it would just overwrite the first request.
             builder.set_transition_state(topology::transition_state::commit_cdc_generation)
-                   .set_new_cdc_generation_data_uuid(gen_uuid)
-                   .del_global_topology_request();
+                   .set_new_cdc_generation_data_uuid(gen_uuid);
             auto reason = ::format(
                 "insert CDC generation data (UUID: {})", gen_uuid);
             co_await update_topology_state(std::move(guard), {std::move(mutation), builder.build()}, reason);
@@ -1227,6 +1231,9 @@ class topology_coordinator {
                 builder.set_transition_state(topology::transition_state::publish_cdc_generation)
                        .set_current_cdc_generation_id(cdc_gen_id)
                        .set_version(_topo_sm._topology.version + 1);
+                if (_topo_sm._topology.global_request == global_topology_request::new_cdc_generation) {
+                    builder.del_global_topology_request();
+                }
                 auto str = ::format("committed new CDC generation, ID: {}", cdc_gen_id);
                 co_await update_topology_state(std::move(guard), {builder.build()}, std::move(str));
             }
