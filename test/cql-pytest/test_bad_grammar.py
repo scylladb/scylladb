@@ -22,3 +22,9 @@ def test_limit_empty(cql, table1):
         cql.execute(f'SELECT * FROM {table1} LIMIT')
     with pytest.raises(SyntaxException):
         cql.execute(f'SELECT * FROM {table1} PER PARTITION LIMIT')
+
+# INSERT JSON should require a JSON value
+# Reproduces https://github.com/scylladb/scylladb/issues/14709
+def test_json_empty(cql, table1):
+    with pytest.raises(SyntaxException):
+        cql.execute(f'INSERT INTO {table1} JSON')
