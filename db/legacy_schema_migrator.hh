@@ -27,9 +27,11 @@ class storage_proxy;
 }
 
 namespace db {
+class system_keyspace;
+
 namespace legacy_schema_migrator {
 
-future<> migrate(sharded<service::storage_proxy>&, sharded<replica::database>& db, cql3::query_processor&);
+future<> migrate(sharded<service::storage_proxy>&, sharded<replica::database>& db, sharded<db::system_keyspace>& sys_ks, cql3::query_processor&);
 
 }
 }

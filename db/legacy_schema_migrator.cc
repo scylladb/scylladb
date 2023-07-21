@@ -49,8 +49,9 @@ class migrator {
 public:
     static const std::unordered_set<sstring> legacy_schema_tables;
 
-    migrator(sharded<service::storage_proxy>& sp, sharded<replica::database>& db, cql3::query_processor& qp)
-                    : _sp(sp), _db(db), _qp(qp) {
+    migrator(sharded<service::storage_proxy>& sp, sharded<replica::database>& db, sharded<db::system_keyspace>& sys_ks, cql3::query_processor& qp)
+                    : _sp(sp), _db(db), _sys_ks(sys_ks), _qp(qp) {
+        (void)_sys_ks;
     }
     migrator(migrator&&) = default;
 
@@ -582,6 +583,7 @@ public:
 
     sharded<service::storage_proxy>& _sp;
     sharded<replica::database>& _db;
+    sharded<db::system_keyspace>& _sys_ks;
     cql3::query_processor& _qp;
     std::vector<keyspace> _keyspaces;
 };
@@ -600,7 +602,7 @@ const std::unordered_set<sstring> migrator::legacy_schema_tables = {
 }
 
 future<>
-db::legacy_schema_migrator::migrate(sharded<service::storage_proxy>& sp, sharded<replica::database>& db, cql3::query_processor& qp) {
-    return do_with(migrator(sp, db, qp), std::bind(&migrator::migrate, std::placeholders::_1));
+db::legacy_schema_migrator::migrate(sharded<service::storage_proxy>& sp, sharded<replica::database>& db, sharded<db::system_keyspace>& sys_ks, cql3::query_processor& qp) {
+    return do_with(migrator(sp, db, sys_ks, qp), std::bind(&migrator::migrate, std::placeholders::_1));
 }
 
