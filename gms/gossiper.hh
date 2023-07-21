@@ -274,7 +274,7 @@ private:
     // Replicates given endpoint_state to all other shards.
     // The state state doesn't have to be kept alive around until completes.
     // Must be called under lock_endpoint.
-    future<> replicate(inet_address, const endpoint_state&, permit_id);
+    future<> replicate(inet_address, endpoint_state, permit_id);
 public:
     explicit gossiper(abort_source& as, const locator::shared_token_metadata& stm, netw::messaging_service& ms, const db::config& cfg, gossip_config gcfg);
 
@@ -416,6 +416,8 @@ public:
 
     // Gets a shared pointer to the endpoint_state, if exists.
     // Otherwise, returns a null ptr.
+    // The endpoint_state is immutable (except for its update_timestamp), guaranteed not to change while
+    // the endpoint_state_ptr is held.
     endpoint_state_ptr get_endpoint_state_ptr(inet_address ep) const noexcept;
 
     const versioned_value* get_application_state_ptr(inet_address endpoint, application_state appstate) const noexcept;
@@ -465,16 +467,17 @@ public:
      */
     sstring get_rpc_address(const inet_address& endpoint) const;
 private:
-    // FIXME: for now, allow modifying the endpoint_state in place
-    // until all updates are applied only using replicate
+    // FIXME: for now, allow modifying the endpoint_state's heartbeat_state in place
     // Gets or creates endpoint_state for this node
     endpoint_state& get_or_create_endpoint_state(inet_address ep);
     endpoint_state& my_endpoint_state() {
         return get_or_create_endpoint_state(get_broadcast_address());
     }
 
-    endpoint_state* get_mutable_endpoint_state_ptr(inet_address ep) noexcept;
-    endpoint_state& get_endpoint_state(inet_address ep);
+    // Use with care, as the endpoint_state_ptr in the endpoint_state_map is considered
+    // immutable, with one exception - the update_timestamp.
+    void update_timestamp(const endpoint_state_ptr& eps) noexcept;
+    const endpoint_state& get_endpoint_state(inet_address ep) const;
 
     void update_timestamp_for_nodes(const std::map<inet_address, endpoint_state>& map);
 
