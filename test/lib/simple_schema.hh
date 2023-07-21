@@ -84,8 +84,9 @@ public:
     }
 
     sstring cql() const {
-        return format("CREATE TABLE ks.cf (pk text, ck text, v text, s1 text{}{}, PRIMARY KEY (pk, ck))", _ws ? " static" : "",
-                _wc ? ", c1 map<text, text>" : "");
+        return format("CREATE TABLE {}.{} (pk text, ck text, v text, s1 text{}{}, PRIMARY KEY (pk, ck))",
+                      _s->keypace_name(), _s->element_name(),
+                      _ws ? " static" : "", _wc ? ", c1 map<text, text>" : "");
     }
 
     clustering_key make_ckey(sstring ck) {
