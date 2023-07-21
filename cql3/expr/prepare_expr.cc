@@ -892,7 +892,8 @@ field_selection_prepare_expression(const field_selection& fs, data_dictionary::d
 
 assignment_testable::test_result
 field_selection_test_assignment(const field_selection& fs, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver) {
-    auto prepared_structure = try_prepare_expression(fs.structure, db, keyspace, schema_opt, make_lw_shared<column_specification>(receiver));
+    // We can't infer the type of the user defined type from the field being selected
+    auto prepared_structure = try_prepare_expression(fs.structure, db, keyspace, schema_opt, nullptr);
     if (!prepared_structure) {
         throw exceptions::invalid_request_exception(fmt::format("Cannot infer type of {}", fs.structure));
     }
