@@ -3790,7 +3790,7 @@ public:
             throw std::runtime_error(msg);
         }
 
-        slogger.info("{}[{}]: sync_nodes={}, ignore_nodes={}", desc, uuid(), desc, host_id, endpoint, sync_nodes, ignore_nodes);
+        slogger.info("{}[{}]: sync_nodes={}, ignore_nodes={}", desc, uuid(), sync_nodes, ignore_nodes);
     }
 
     future<> stop() noexcept {
