@@ -3770,11 +3770,23 @@ public:
         // sync data with all normal token owners
         sync_nodes.clear();
         const auto& topo = tmptr->get_topology();
+        auto can_sync_with_node = [] (const locator::node& node) {
+            // Sync with reachable token owners.
+            // Note that although nodes in `being_replaced` and `being_removed`
+            // are still token owners, they are known to be dead and can't be sync'ed with.
+            switch (node.get_state()) {
+            case locator::node::state::normal:
+            case locator::node::state::being_decommissioned:
+                return true;
+            default:
+                return false;
+            }
+        };
         topo.for_each_node([&] (const locator::node* np) {
             seastar::thread::maybe_yield();
             // FIXME: use node* rather than endpoint
             auto node = np->endpoint();
-            if (!ignore_nodes.contains(node) && sync_to_node(node)) {
+            if (!ignore_nodes.contains(node) && can_sync_with_node(*np) && sync_to_node(node)) {
                 sync_nodes.insert(node);
             }
         });
