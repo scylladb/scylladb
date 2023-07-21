@@ -1,3 +1,8 @@
+.. |SCYLLADB_VERSION| replace:: 5.2
+
+.. update the version folder URL below (variables won't work):
+    https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-5.2/
+
 ====================================================
 Install ScyllaDB Without root Privileges
 ====================================================
@@ -19,7 +24,80 @@ Note that if you're on CentOS 7, only root offline installation is supported.
 Download and Install
 -----------------------
 
-For installation without root privileges, follow the instructions on `Scylla Download Center <https://www.scylladb.com/download/?platform=tar>`_.
+#. Download the latest tar.gz file for ScyllaDB |SCYLLADB_VERSION| (x86 or ARM) from https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-5.2/.
+#. Uncompress the downloaded package.
+
+   The following example shows the package for ScyllaDB 5.2.4 (x86):
+
+   .. code:: console
+
+    tar xvfz tar scylla-unified-5.2.4-0.20230623.cebbf6c5df2b.x86_64.tar.gz
+
+#. Install OpenJDK 8 or 11.
+
+   The following example shows Java installation on a CentOS-like system:
+
+   .. code:: console
+    
+    sudo yum install -y java-11-openjdk
+
+   For root offline installation on Debian-like systems, two additional packages, ``xfsprogs`` 
+   and ``mdadm``, should be installed to be used in RAID setup.
+
+#. Install ScyllaDB as a user with non-root privileges:
+
+   .. code:: console
+
+    sh -x ./install.sh --nonroot --python3 ~/scylladb/python3/bin/python3
+
+Configure and Run ScyllaDB
+----------------------------
+
+#. Run the ScyllaDB setup script:
+
+   .. code:: console
+
+    ~/scylladb/sbin/scylla_setup
+
+#. Start ScyllaDB:
+
+   .. code:: console
+
+    systemctl --user start scylla-server
+
+#. Verify that ScyllaDB is running:
+
+   .. code:: console
+
+    journalctl --user start scylla-server -xe
+
+Now you can start using ScyllaDB. Here are some tools you may find useful.
+
+
+Run nodetool:
+
+.. code:: console
+
+    ~/scylladb/share/cassandra/bin/nodetool status
+
+Run cqlsh:
+
+.. code:: console
+
+    ~/scylladb/share/cassandra/bin/cqlsh 
+
+Run cassandra-stress:
+
+.. code:: console
+
+    ~/scylladb/share/cassandra/bin/cassandra-stress write -node xxx
+
+.. note::
+
+    You can avoid adding the extended prefix to the commands by exporting the binary directories to PATH:
+
+    ``export PATH=$PATH:~/scylladb/python3/bin:~/scylladb/share/cassandra/bin/:~/scylladb/bin:~/scylladb/sbin``
+
 
 Upgrade/ Downgrade/ Uninstall
 ---------------------------------
@@ -65,3 +143,12 @@ Downgrade
 ===========
 
 To downgrade to your original ScyllaDB version, use the Uninstall_ procedure, then install the original ScyllaDB version. 
+
+Next Steps
+------------
+
+* :doc:`Configure ScyllaDB </getting-started/system-configuration>`
+* Manage your clusters with `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_
+* Monitor your cluster and data with `ScyllaDB Monitoring <https://monitoring.docs.scylladb.com/>`_
+* Get familiar with ScyllaDB’s :doc:`command line reference guide </operating-scylla/nodetool>`.
+* Learn about ScyllaDB at `ScyllaDB University <https://university.scylladb.com/>`_
