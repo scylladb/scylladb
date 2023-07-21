@@ -469,7 +469,7 @@ future<> storage_service::topology_transition(cdc::generation_service& cdc_gen_s
     assert(this_shard_id() == 0);
     co_await topology_state_load(cdc_gen_svc); // reload new state
 
-    _topology_state_machine.event.signal();
+    _topology_state_machine.event.broadcast();
 }
 
 future<> storage_service::merge_topology_snapshot(raft_topology_snapshot snp) {
@@ -1578,7 +1578,7 @@ future<> topology_coordinator::run() {
     slogger.info("raft topology: start topology coordinator fiber");
 
     auto abort = _as.subscribe([this] () noexcept {
-        _topo_sm.event.signal();
+        _topo_sm.event.broadcast();
     });
 
     bool wait_for_event = false;
