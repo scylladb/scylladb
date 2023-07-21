@@ -357,6 +357,9 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _version(empty_version)
     , _compaction_manager(cm)
     , _enable_incremental_backups(cfg.incremental_backups())
+    , _querier_cache([this] (const reader_concurrency_semaphore& s) {
+        return this->is_user_semaphore(s);
+    })
     , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(feat,
               _cfg.compaction_large_partition_warning_threshold_mb,
               _cfg.compaction_large_row_warning_threshold_mb,

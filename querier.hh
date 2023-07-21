@@ -319,6 +319,7 @@ private:
     std::chrono::seconds _entry_ttl;
     stats _stats;
     gate _closing_gate;
+    [[maybe_unused]] std::function<bool(const reader_concurrency_semaphore&)> _is_user_semaphore_func;
 
 private:
     template <typename Querier>
@@ -341,7 +342,7 @@ private:
         db::timeout_clock::time_point timeout);
 
 public:
-    explicit querier_cache(std::chrono::seconds entry_ttl = default_entry_ttl);
+    querier_cache(std::function<bool(const reader_concurrency_semaphore&)> is_user_semaphore_func, std::chrono::seconds entry_ttl = default_entry_ttl);
 
     querier_cache(const querier_cache&) = delete;
     querier_cache& operator=(const querier_cache&) = delete;

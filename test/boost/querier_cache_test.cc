@@ -8,6 +8,7 @@
 
 #include "querier.hh"
 #include "mutation_query.hh"
+#include "reader_concurrency_semaphore.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/random_utils.hh"
@@ -152,7 +153,7 @@ public:
 
     test_querier_cache(const noncopyable_function<sstring(size_t)>& external_make_value, std::chrono::seconds entry_ttl = 24h, ssize_t max_memory = std::numeric_limits<ssize_t>::max())
         : _sem(reader_concurrency_semaphore::for_tests{}, "test_querier_cache", std::numeric_limits<int>::max(), max_memory)
-        , _cache(entry_ttl)
+        , _cache([] (const reader_concurrency_semaphore&) { return true; }, entry_ttl)
         , _mutations(make_mutations(_s, external_make_value))
         , _mutation_source([this] (schema_ptr schema, reader_permit permit, const dht::partition_range& range) {
             auto rd = make_flat_mutation_reader_from_mutations_v2(schema, std::move(permit), _mutations, range);
