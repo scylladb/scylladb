@@ -2599,16 +2599,16 @@ future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, cons
     if (rp == db::replay_position()) {
         rp = st.low_mark;
     }
-    co_await coroutine::parallel_for_each(cf.views(), [this, truncated_at] (view_ptr v) -> future<> {
+    co_await coroutine::parallel_for_each(cf.views(), [this, &sys_ks, truncated_at] (view_ptr v) -> future<> {
         auto& vcf = find_column_family(v);
             db::replay_position rp = co_await vcf.discard_sstables(truncated_at);
-            co_await db::system_keyspace::save_truncation_record(vcf, truncated_at, rp);
+            co_await sys_ks.save_truncation_record(vcf, truncated_at, rp);
     });
     // save_truncation_record() may actually fail after we cached the truncation time
     // but this is not be worse that if failing without caching: at least the correct time
     // will be available until next reboot and a client will have to retry truncation anyway.
     cf.cache_truncation_record(truncated_at);
-    co_await db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
+    co_await sys_ks.save_truncation_record(cf, truncated_at, rp);
 
     auto& gc_state = get_compaction_manager().get_tombstone_gc_state();
     gc_state.drop_repair_history_map_for_table(uuid);
