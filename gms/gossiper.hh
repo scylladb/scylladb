@@ -548,7 +548,7 @@ public:
     */
     void examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_list,
                          utils::chunked_vector<gossip_digest>& delta_gossip_digest_list,
-                         std::map<inet_address, endpoint_state>& delta_ep_state_map);
+                         std::map<inet_address, endpoint_state>& delta_ep_state_map) const;
 
 public:
     /**
