@@ -2348,14 +2348,6 @@ clk::time_point gossiper::compute_expire_time() {
     return now() + A_VERY_LONG_TIME;
 }
 
-void gossiper::dump_endpoint_state_map() {
-    logger.info("=== endpoint_state_map dump starts == ");
-    for (auto& x : _endpoint_state_map) {
-        logger.info("endpoint={}, endpoint_state={}", x.first, x.second);
-    }
-    logger.info("=== endpoint_state_map dump ends ===");
-}
-
 bool gossiper::is_alive(inet_address ep) const {
     if (ep == get_broadcast_address()) {
         return true;

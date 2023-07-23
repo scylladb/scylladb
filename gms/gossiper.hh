@@ -639,8 +639,6 @@ public:
 
     static clk::time_point compute_expire_time();
 public:
-    void dump_endpoint_state_map();
-public:
     bool is_seed(const inet_address& endpoint) const;
     bool is_shutdown(const inet_address& endpoint) const;
     bool is_normal(const inet_address& endpoint) const;
