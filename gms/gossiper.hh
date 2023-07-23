@@ -132,7 +132,7 @@ private:
 public:
     // Get current generation number for the given nodes
     future<generation_for_nodes>
-    get_generation_for_nodes(std::unordered_set<gms::inet_address> nodes);
+    get_generation_for_nodes(std::unordered_set<gms::inet_address> nodes) const;
     // Only respond echo message listed in nodes with the generation number
     future<> advertise_to_nodes(generation_for_nodes advertise_to_nodes = {});
     const sstring& get_cluster_name() const noexcept;

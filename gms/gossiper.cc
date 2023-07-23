@@ -1997,7 +1997,7 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, std::map
 }
 
 future<gossiper::generation_for_nodes>
-gossiper::get_generation_for_nodes(std::unordered_set<gms::inet_address> nodes) {
+gossiper::get_generation_for_nodes(std::unordered_set<gms::inet_address> nodes) const {
     generation_for_nodes ret;
     for (const auto& node : nodes) {
         auto es = get_endpoint_state_ptr(node);
