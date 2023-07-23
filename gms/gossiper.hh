@@ -213,7 +213,7 @@ public:
 
     std::chrono::milliseconds quarantine_delay() const noexcept;
 private:
-    std::default_random_engine _random_engine{std::random_device{}()};
+    mutable std::default_random_engine _random_engine{std::random_device{}()};
 
     /**
      * subscribers for interest in EndpointState change
@@ -357,7 +357,7 @@ private:
      *
      * @param g_digests list of Gossip Digests.
      */
-    void make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests);
+    void make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests) const;
 
 public:
     /**

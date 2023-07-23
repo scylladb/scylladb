@@ -1224,7 +1224,7 @@ void gossiper::quarantine_endpoint(inet_address endpoint, clk::time_point quaran
     _just_removed_endpoints[endpoint] = quarantine_start;
 }
 
-void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests) {
+void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests) const {
     generation_type generation;
     version_type max_version;
 
