@@ -1511,7 +1511,7 @@ std::set<gms::inet_address> gossiper::get_nodes_with_host_id(locator::host_id ho
     return nodes;
 }
 
-std::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_address for_endpoint, version_type version) {
+std::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_address for_endpoint, version_type version) const {
     std::optional<endpoint_state> reqd_endpoint_state;
     auto es = get_endpoint_state_ptr(for_endpoint);
     if (es) {
