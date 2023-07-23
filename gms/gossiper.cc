@@ -1871,7 +1871,7 @@ future<> gossiper::do_on_dead_notifications(inet_address addr, endpoint_state_pt
 }
 
 void gossiper::request_all(gossip_digest& g_digest,
-    utils::chunked_vector<gossip_digest>& delta_gossip_digest_list, generation_type remote_generation) {
+    utils::chunked_vector<gossip_digest>& delta_gossip_digest_list, generation_type remote_generation) const {
     /* We are here since we have no data for this endpoint locally so request everthing. */
     delta_gossip_digest_list.emplace_back(g_digest.get_endpoint(), remote_generation);
     logger.trace("request_all for {}", g_digest.get_endpoint());
@@ -1879,7 +1879,7 @@ void gossiper::request_all(gossip_digest& g_digest,
 
 void gossiper::send_all(gossip_digest& g_digest,
     std::map<inet_address, endpoint_state>& delta_ep_state_map,
-    version_type max_remote_version) {
+    version_type max_remote_version) const {
     auto ep = g_digest.get_endpoint();
     logger.trace("send_all(): ep={}, version > {}", ep, max_remote_version);
     auto local_ep_state_ptr = get_state_for_version_bigger_than(ep, max_remote_version);
