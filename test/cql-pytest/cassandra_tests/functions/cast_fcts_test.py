@@ -15,8 +15,6 @@ def testInvalidQueries(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int primary key, b text, c double)") as table:
         assertInvalidMessage(cql, table, "cannot be cast to", "SELECT CAST(a AS boolean) FROM %s")
 
-# Marked cassandra_bug because of CASSANDRA-18647 (see comment below)
-@pytest.mark.xfail(reason="issue #14508")
 def testNumericCastsInSelectionClause(cql, test_keyspace, cassandra_bug):
     with create_table(cql, test_keyspace, "(a tinyint primary key, b smallint, c int, d bigint, e float, f double, g decimal, h varint, i int)") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e, f, g, h) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

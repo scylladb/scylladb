@@ -1136,8 +1136,15 @@ std::ostream& operator<<(std::ostream& os, const expression::printer& pr) {
                             } else if (!pr.for_metadata) {
                                 fmt::print(os, "{}({})", fn->name(), fmt::join(fc.args | transformed(to_printer), ", "));
                             } else {
-                                auto args = boost::copy_range<std::vector<sstring>>(fc.args | transformed(to_printer) | transformed(fmt::to_string<expression::printer>));
-                                fmt::print(os, "{}", fn->column_name(args));
+                                const std::string_view fn_name = fn->name().name;
+                                if (fn->name().keyspace == "system" && fn_name.starts_with("castas")) {
+                                    auto cast_type = fn_name.substr(6);
+                                    fmt::print(os, "cast({} as {})", fmt::join(fc.args | transformed(to_printer) | transformed(fmt::to_string<expression::printer>), ", "),
+                                         cast_type);
+                                } else {
+                                    auto args = boost::copy_range<std::vector<sstring>>(fc.args | transformed(to_printer) | transformed(fmt::to_string<expression::printer>));
+                                    fmt::print(os, "{}", fn->column_name(args));
+                                }
                             }
                         },
                     }, fc.func);
