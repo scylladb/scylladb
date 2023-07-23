@@ -130,7 +130,7 @@ gossiper::gossiper(abort_source& as, const locator::shared_token_metadata& stm, 
  * Sort this list. Now loop through the sorted list and retrieve the GossipDigest corresponding
  * to the endpoint from the map that was initially constructed.
 */
-void gossiper::do_sort(utils::chunked_vector<gossip_digest>& g_digest_list) {
+void gossiper::do_sort(utils::chunked_vector<gossip_digest>& g_digest_list) const {
     /* Construct a map of endpoint to GossipDigest. */
     std::map<inet_address, gossip_digest> ep_to_digest_map;
     for (auto g_digest : g_digest_list) {
