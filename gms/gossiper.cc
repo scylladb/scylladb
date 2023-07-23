@@ -1397,7 +1397,7 @@ future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
     return make_ready_future<>();
 }
 
-bool gossiper::is_gossip_only_member(inet_address endpoint) {
+bool gossiper::is_gossip_only_member(inet_address endpoint) const {
     auto es = get_endpoint_state_ptr(endpoint);
     if (!es) {
         return false;
@@ -2526,7 +2526,7 @@ future<> gossiper::wait_for_range_setup() const {
     return wait_for_gossip(ring_delay, force_after);
 }
 
-bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
+bool gossiper::is_safe_for_bootstrap(inet_address endpoint) const {
     // We allow to bootstrap a new node in only two cases:
     // 1) The node is a completely new node and no state in gossip at all
     // 2) The node has state in gossip and it is already removed from the
@@ -2547,7 +2547,7 @@ bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
     return allowed;
 }
 
-bool gossiper::is_safe_for_restart(inet_address endpoint, locator::host_id host_id) {
+bool gossiper::is_safe_for_restart(inet_address endpoint, locator::host_id host_id) const {
     // Reject to restart a node in case:
     // *) if the node has been removed from the cluster by nodetool decommission or
     //    nodetool removenode
