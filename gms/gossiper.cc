@@ -1243,17 +1243,6 @@ void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g
         }
         g_digests.push_back(gossip_digest(endpoint, generation, max_version));
     }
-#if 0
-    if (logger.isTraceEnabled()) {
-        StringBuilder sb = new StringBuilder();
-        for (GossipDigest g_digest : g_digests)
-        {
-            sb.append(g_digest);
-            sb.append(" ");
-        }
-        logger.trace("Gossip Digests are : {}", sb);
-    }
-#endif
 }
 
 future<> gossiper::replicate(inet_address ep, endpoint_state es, permit_id pid) {
