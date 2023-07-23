@@ -1346,14 +1346,16 @@ future<> gossiper::assassinate_endpoint(sstring address) {
     });
 }
 
-future<generation_type> gossiper::get_current_generation_number(inet_address endpoint) {
-    return container().invoke_on(0, [endpoint] (auto&& gossiper) {
+future<generation_type> gossiper::get_current_generation_number(inet_address endpoint) const {
+    // FIXME: const container() has no const invoke_on variant
+    return const_cast<gossiper*>(this)->container().invoke_on(0, [endpoint] (const gossiper& gossiper) {
         return gossiper.get_endpoint_state(endpoint).get_heart_beat_state().get_generation();
     });
 }
 
-future<version_type> gossiper::get_current_heart_beat_version(inet_address endpoint) {
-    return container().invoke_on(0, [endpoint] (auto&& gossiper) {
+future<version_type> gossiper::get_current_heart_beat_version(inet_address endpoint) const {
+    // FIXME: const container() has no const invoke_on variant
+    return const_cast<gossiper*>(this)->container().invoke_on(0, [endpoint] (const gossiper& gossiper) {
         return gossiper.get_endpoint_state(endpoint).get_heart_beat_state().get_heart_beat_version();
     });
 }
@@ -1423,7 +1425,7 @@ const endpoint_state& gossiper::get_endpoint_state(inet_address ep) const {
     if (it == _endpoint_state_map.end()) {
         throw std::out_of_range(format("ep={}", ep));
     }
-    return const_cast<endpoint_state&>(*it->second);
+    return *it->second;
 }
 
 endpoint_state& gossiper::get_or_create_endpoint_state(inet_address ep) {

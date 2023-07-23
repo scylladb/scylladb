@@ -382,8 +382,8 @@ public:
     future<> assassinate_endpoint(sstring address);
 
 public:
-    future<generation_type> get_current_generation_number(inet_address endpoint);
-    future<version_type> get_current_heart_beat_version(inet_address endpoint);
+    future<generation_type> get_current_generation_number(inet_address endpoint) const;
+    future<version_type> get_current_heart_beat_version(inet_address endpoint) const;
 
     bool is_gossip_only_member(inet_address endpoint) const;
     bool is_safe_for_bootstrap(inet_address endpoint) const;
