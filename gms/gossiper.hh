@@ -16,6 +16,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/print.hh>
 #include <seastar/rpc/rpc_types.hh>
+#include <seastar/util/source_location-compat.hh>
 #include "utils/atomic_vector.hh"
 #include "utils/UUID.hh"
 #include "utils/fb_utilities.hh"
@@ -148,12 +149,26 @@ public:
     static clk::time_point inline now() noexcept { return clk::now(); }
 public:
     using endpoint_locks_map = utils::loading_shared_values<inet_address, semaphore>;
-    struct endpoint_permit {
-        endpoint_locks_map::entry_ptr _ptr;
-        semaphore_units<> _units;
+    class endpoint_permit {
+        struct permit {
+            endpoint_locks_map::entry_ptr _ptr;
+            semaphore_units<> _units;
+            permit(endpoint_locks_map::entry_ptr&& ptr, semaphore_units<>&& units) noexcept
+                : _ptr(std::move(ptr))
+                , _units(std::move(units))
+            {}
+        };
+        std::unique_ptr<permit> _permit;
+        inet_address _addr;
+        std::string _caller;
+    public:
+        endpoint_permit(endpoint_locks_map::entry_ptr&& ptr, semaphore_units<>&& units, inet_address addr, std::string caller) noexcept;
+        endpoint_permit(endpoint_permit&&) = default;
+        ~endpoint_permit();
+        bool release() noexcept;
     };
     // Must be called on shard 0
-    future<endpoint_permit> lock_endpoint(inet_address);
+    future<endpoint_permit> lock_endpoint(inet_address, seastar::compat::source_location l = seastar::compat::source_location::current());
 
 private:
     /* map where key is the endpoint and value is the state associated with the endpoint */

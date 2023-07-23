@@ -731,13 +731,33 @@ future<> gossiper::do_status_check() {
     }
 }
 
-future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep) {
+gossiper::endpoint_permit::endpoint_permit(endpoint_locks_map::entry_ptr&& ptr, semaphore_units<>&& units, inet_address addr, std::string caller) noexcept
+    : _permit(std::make_unique<permit>(std::move(ptr), std::move(units)))
+    , _addr(std::move(addr))
+    , _caller(std::move(caller))
+{
+    logger.debug("{}: lock_endpoint {}: acquired", _caller, _addr);
+}
+
+gossiper::endpoint_permit::~endpoint_permit() {
+    release();
+}
+
+bool gossiper::endpoint_permit::release() noexcept {
+    if (auto permit = std::move(_permit)) {
+        logger.debug("{}: lock_endpoint {}: released", _caller, _addr);
+        return true;
+    }
+    return false;
+}
+
+future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep, seastar::compat::source_location l) {
     assert(this_shard_id() == 0);
-    return _endpoint_locks.get_or_load(ep, [] (const inet_address& ep) { return semaphore(1); }).then([] (auto eptr) {
-        return get_units(*eptr, 1).then([eptr] (auto units) mutable {
-            return endpoint_permit{std::move(eptr), std::move(units)};
-        });
-    });
+    std::string caller = l.function_name();
+    logger.debug("{}: lock_endpoint {}: waiting", caller, ep);
+    auto eptr = co_await _endpoint_locks.get_or_load(ep, [] (const inet_address& ep) { return semaphore(1); });
+    auto units = co_await get_units(*eptr, 1);
+    co_return endpoint_permit(std::move(eptr), std::move(units), std::move(ep), std::move(caller));
 }
 
 future<> gossiper::update_live_endpoints_version() {
