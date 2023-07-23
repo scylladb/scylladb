@@ -2782,12 +2782,13 @@ future<> storage_service::on_change(inet_address endpoint, application_state sta
             slogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
             co_return;
         }
+        auto is_cql_ready = ep_state->is_cql_ready();
         if (get_token_metadata().is_normal_token_owner(endpoint)) {
             slogger.debug("endpoint={} on_change:     updating system.peers table", endpoint);
             co_await do_update_system_peers_table(endpoint, state, value);
             if (state == application_state::RPC_READY) {
-                slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
-                co_await notify_cql_change(endpoint, ep_state->is_cql_ready());
+                slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, is_cql_ready);
+                co_await notify_cql_change(endpoint, is_cql_ready);
             } else if (state == application_state::INTERNAL_IP) {
                 co_await maybe_reconnect_to_preferred_ip(endpoint, inet_address(value.value()));
             }
@@ -2886,9 +2887,8 @@ future<> storage_service::update_peer_info(gms::inet_address endpoint) {
     if (!ep_state) {
         co_return;
     }
-    for (auto& entry : ep_state->get_application_state_map()) {
-        auto& app_state = entry.first;
-        auto& value = entry.second;
+    auto state_map = ep_state->get_application_state_map();
+    for (auto& [app_state, value] : state_map) {
         co_await do_update_system_peers_table(endpoint, app_state, value);
     }
 }
