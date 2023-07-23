@@ -2470,7 +2470,7 @@ std::string_view gossiper::get_gossip_status(const inet_address& endpoint) const
     return do_get_gossip_status(get_application_state_ptr(endpoint, application_state::STATUS));
 }
 
-future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, std::optional<int32_t> force_after) {
+future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, std::optional<int32_t> force_after) const {
     static constexpr std::chrono::milliseconds GOSSIP_SETTLE_POLL_INTERVAL_MS{1000};
     static constexpr int32_t GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED = 3;
 
@@ -2512,14 +2512,14 @@ future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, std:
     }
 }
 
-future<> gossiper::wait_for_gossip_to_settle() {
+future<> gossiper::wait_for_gossip_to_settle() const {
     auto force_after = _gcfg.skip_wait_for_gossip_to_settle;
     if (force_after != 0) {
         co_await wait_for_gossip(GOSSIP_SETTLE_MIN_WAIT_MS, force_after);
     }
 }
 
-future<> gossiper::wait_for_range_setup() {
+future<> gossiper::wait_for_range_setup() const {
     logger.info("Waiting for pending range setup...");
     auto ring_delay = std::chrono::milliseconds(_gcfg.ring_delay_ms);
     auto force_after = _gcfg.skip_wait_for_gossip_to_settle;
