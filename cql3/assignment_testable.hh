@@ -32,7 +32,7 @@ public:
     }
 
     static bool is_exact_match(test_result tr) {
-        return tr != test_result::EXACT_MATCH;
+        return tr == test_result::EXACT_MATCH;
     }
 
     /**

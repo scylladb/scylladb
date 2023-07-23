@@ -100,6 +100,21 @@ def test_cast_from_large_varint_to_varchar(cql, table1, cassandra_bug):
     cql.execute(f'INSERT INTO {table1} (p, cVarint) VALUES ({p}, {v})')
     assert [(str(v),)] == list(cql.execute(f"SELECT CAST(cVarint AS varchar) FROM {table1} WHERE p={p}"))
 
+# In test_cast_column_names we are checking that columns are named in Cassandra style
+def test_cast_column_names(cql, table1):
+    p = unique_key_int()
+    v = 123
+    for t in ['int', 'double', 'text', 'tinyint', 'smallint']:
+        cql.execute(f'INSERT INTO {table1} (p, cVarint) VALUES ({p}, {v})')
+        assert cql.execute(f"SELECT CAST(cVarint as {t}) FROM {table1} WHERE p={p}").one()._fields[0] == f"cast_cvarint_as_{t}"
+
+#In test_ignore_cast_to_the_same_type we are checking that query with casting of column to the same type is optimized
+def test_ignore_cast_to_the_same_type(cql, table1):
+    p = unique_key_int()
+    v = 456
+    cql.execute(f'INSERT INTO {table1} (p, cVarint) VALUES ({p}, {v})')
+    assert cql.execute(f"SELECT CAST(p as int) FROM {table1} WHERE p={p}").one()._fields[0] == "p"
+
 # Test casting a counter to various other types. Reproduces #14501.
 def test_cast_from_counter(cql, table2):
     p = unique_key_int()

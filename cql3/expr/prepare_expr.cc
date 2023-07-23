@@ -835,6 +835,11 @@ sql_cast_prepare_expression(const cast& c, data_dictionary::database db, const s
         throw exceptions::invalid_request_exception(fmt::format("Could not infer type of cast argument {}", c.arg));
     }
 
+    // cast to the same type should be ommited
+    if (cast_type == type_of(*prepared_arg)) {
+        return prepared_arg;
+    }
+
     // This will throw if a cast is impossible
     auto fun = functions::get_castas_fctn_as_cql3_function(cast_type, type_of(*prepared_arg));
 
