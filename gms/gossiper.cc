@@ -1545,7 +1545,7 @@ std::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_a
     return reqd_endpoint_state;
 }
 
-generation_type::value_type gossiper::compare_endpoint_startup(inet_address addr1, inet_address addr2) {
+generation_type::value_type gossiper::compare_endpoint_startup(inet_address addr1, inet_address addr2) const {
     auto ep1 = get_endpoint_state_ptr(addr1);
     auto ep2 = get_endpoint_state_ptr(addr2);
     if (!ep1 || !ep2) {

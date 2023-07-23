@@ -455,7 +455,7 @@ public:
     /**
      * determine which endpoint started up earlier
      */
-    generation_type::value_type compare_endpoint_startup(inet_address addr1, inet_address addr2);
+    generation_type::value_type compare_endpoint_startup(inet_address addr1, inet_address addr2) const;
 
     /**
      * Return the rpc address associated with an endpoint as a string.
