@@ -10,6 +10,7 @@
 
 #include "querier.hh"
 
+#include "reader_concurrency_semaphore.hh"
 #include "schema.hh"
 #include "log.hh"
 
@@ -24,7 +25,9 @@ enum class can_use {
     yes,
     no_schema_version_mismatch,
     no_ring_pos_mismatch,
-    no_clustering_pos_mismatch
+    no_clustering_pos_mismatch,
+    no_scheduling_group_mismatch,
+    no_fatal_semaphore_mismatch
 };
 
 static sstring cannot_use_reason(can_use cu)
@@ -39,6 +42,10 @@ static sstring cannot_use_reason(can_use cu)
             return "ring pos mismatch";
         case can_use::no_clustering_pos_mismatch:
             return "clustering pos mismatch";
+        case can_use::no_scheduling_group_mismatch:
+            return "scheduling group mismatch";
+        case can_use::no_fatal_semaphore_mismatch:
+            return "fatal semaphore mismatch";
     }
     return "unknown reason";
 }
@@ -152,9 +159,17 @@ static bool ranges_match(const schema& s, dht::partition_ranges_view original_ra
 }
 
 template <typename Querier>
-static can_use can_be_used_for_page(const Querier& q, const schema& s, const dht::partition_range& range, const query::partition_slice& slice) {
+static can_use can_be_used_for_page(querier_cache::is_user_semaphore_func& is_user_semaphore, Querier& q, const schema& s, const dht::partition_range& range, const query::partition_slice& slice, reader_concurrency_semaphore& current_sem) {
     if (s.version() != q.schema().version()) {
         return can_use::no_schema_version_mismatch;
+    }
+
+    auto& querier_sem = q.permit().semaphore();
+    if (&querier_sem != &current_sem) {
+        if (is_user_semaphore(querier_sem) && is_user_semaphore(current_sem)) {
+            return can_use::no_scheduling_group_mismatch;
+        }
+        return can_use::no_fatal_semaphore_mismatch;
     }
 
     const auto pos_opt = q.current_position();
@@ -198,8 +213,8 @@ static std::unique_ptr<querier_base> find_querier(querier_cache::index& index, q
     return ptr;
 }
 
-querier_cache::querier_cache(std::chrono::seconds entry_ttl)
-    : _entry_ttl(entry_ttl) {
+querier_cache::querier_cache(is_user_semaphore_func is_user_semaphore_func, std::chrono::seconds entry_ttl)
+    : _entry_ttl(entry_ttl), _is_user_semaphore_func(is_user_semaphore_func) {
 }
 
 struct querier_utils {
@@ -307,6 +322,7 @@ std::optional<Querier> querier_cache::lookup_querier(
         const schema& s,
         dht::partition_ranges_view ranges,
         const query::partition_slice& slice,
+        reader_concurrency_semaphore& current_sem,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout) {
     auto base_ptr = find_querier(index, key, ranges, trace_state);
@@ -330,7 +346,7 @@ std::optional<Querier> querier_cache::lookup_querier(
     querier_utils::set_reader(q, std::move(*reader_opt));
     --stats.population;
 
-    const auto can_be_used = can_be_used_for_page(q, s, ranges.front(), slice);
+    const auto can_be_used = can_be_used_for_page(_is_user_semaphore_func, q, s, ranges.front(), slice, current_sem);
     if (can_be_used == can_use::yes) {
         tracing::trace(trace_state, "Reusing querier");
         return std::optional<Querier>(std::move(q));
@@ -339,12 +355,35 @@ std::optional<Querier> querier_cache::lookup_querier(
     tracing::trace(trace_state, "Dropping querier because {}", cannot_use_reason(can_be_used));
     ++stats.drops;
 
+    // Save semaphore name and address for later to use it in
+    // error/warning message
+    auto q_semaphore_name = q.permit().semaphore().name();
+    auto q_semaphore_address = reinterpret_cast<uintptr_t>(&q.permit().semaphore());
+
     // Close and drop the querier in the background.
     // It is safe to do so, since _closing_gate is closed and
     // waited on in querier_cache::stop()
     (void)with_gate(_closing_gate, [this, q = std::move(q)] () mutable {
         return q.close().finally([q = std::move(q)] {});
     });
+
+    if (can_be_used == can_use::no_scheduling_group_mismatch) {
+        ++stats.scheduling_group_mismatches;
+        qlogger.warn("user semaphores mismatch detected. dropping looked-up reader: "
+                    "looked-up reader belongs to {} (0x{:x}) the query class appropriate is {} (0x{:x})",
+                    q_semaphore_name,
+                    q_semaphore_address,
+                    current_sem.name(),
+                    reinterpret_cast<uintptr_t>(&current_sem));
+    }
+    else if (can_be_used == can_use::no_fatal_semaphore_mismatch) {
+        on_internal_error(qlogger, format("looked-up reader belongs to different semaphore than the one appropriate for this query class: "
+                "looked-up reader belongs to {} (0x{:x}) the query class appropriate is {} (0x{:x})",
+                q_semaphore_name,
+                q_semaphore_address,
+                current_sem.name(),
+                reinterpret_cast<uintptr_t>(&current_sem)));
+    }
 
     return std::nullopt;
 }
@@ -353,27 +392,30 @@ std::optional<querier> querier_cache::lookup_data_querier(query_id key,
         const schema& s,
         const dht::partition_range& range,
         const query::partition_slice& slice,
+        reader_concurrency_semaphore& current_sem,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout) {
-    return lookup_querier<querier>(_data_querier_index, key, s, range, slice, std::move(trace_state), timeout);
+    return lookup_querier<querier>(_data_querier_index, key, s, range, slice, current_sem, std::move(trace_state), timeout);
 }
 
 std::optional<querier> querier_cache::lookup_mutation_querier(query_id key,
         const schema& s,
         const dht::partition_range& range,
         const query::partition_slice& slice,
+        reader_concurrency_semaphore& current_sem,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout) {
-    return lookup_querier<querier>(_mutation_querier_index, key, s, range, slice, std::move(trace_state), timeout);
+    return lookup_querier<querier>(_mutation_querier_index, key, s, range, slice, current_sem, std::move(trace_state), timeout);
 }
 
 std::optional<shard_mutation_querier> querier_cache::lookup_shard_mutation_querier(query_id key,
         const schema& s,
         const dht::partition_range_vector& ranges,
         const query::partition_slice& slice,
+        reader_concurrency_semaphore& current_sem,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout) {
-    return lookup_querier<shard_mutation_querier>(_shard_mutation_querier_index, key, s, ranges, slice,
+    return lookup_querier<shard_mutation_querier>(_shard_mutation_querier_index, key, s, ranges, slice, current_sem,
             std::move(trace_state), timeout);
 }
 

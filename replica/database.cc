@@ -349,6 +349,9 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _version(empty_version)
     , _compaction_manager(cm)
     , _enable_incremental_backups(cfg.incremental_backups())
+    , _querier_cache([this] (const reader_concurrency_semaphore& s) {
+        return this->is_user_semaphore(s);
+    })
     , _large_data_handler(std::make_unique<db::cql_table_large_data_handler>(feat,
               _cfg.compaction_large_partition_warning_threshold_mb,
               _cfg.compaction_large_row_warning_threshold_mb,
@@ -562,7 +565,10 @@ database::setup_metrics() {
                        sm::description("Counts querier cache lookups that failed to find a cached querier")),
 
         sm::make_counter("querier_cache_drops", _querier_cache.get_stats().drops,
-                       sm::description("Counts querier cache lookups that found a cached querier but had to drop it due to position mismatch")),
+                       sm::description("Counts querier cache lookups that found a cached querier but had to drop it")),
+            
+        sm::make_counter("querier_cache_scheduling_group_mismatches", _querier_cache.get_stats().scheduling_group_mismatches,
+                       sm::description("Counts querier cache lookups that found a cached querier but had to drop it due to scheduling group mismatch")),
 
         sm::make_counter("querier_cache_time_based_evictions", _querier_cache.get_stats().time_based_evictions,
                        sm::description("Counts querier cache entries that timed out and were evicted.")),
@@ -1517,7 +1523,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
     std::exception_ptr ex;
 
     if (cmd.query_uuid && !cmd.is_first_page) {
-        querier_opt = _querier_cache.lookup_data_querier(cmd.query_uuid, *s, ranges.front(), cmd.slice, trace_state, timeout);
+        querier_opt = _querier_cache.lookup_data_querier(cmd.query_uuid, *s, ranges.front(), cmd.slice, semaphore, trace_state, timeout);
     }
 
     auto read_func = [&, this] (reader_permit permit) {
@@ -1583,7 +1589,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
     std::exception_ptr ex;
 
     if (cmd.query_uuid && !cmd.is_first_page) {
-        querier_opt = _querier_cache.lookup_mutation_querier(cmd.query_uuid, *s, range, cmd.slice, trace_state, timeout);
+        querier_opt = _querier_cache.lookup_mutation_querier(cmd.query_uuid, *s, range, cmd.slice, semaphore, trace_state, timeout);
     }
 
     auto read_func = [&, this] (reader_permit permit) {
@@ -1657,6 +1663,12 @@ future<reader_permit> database::obtain_reader_permit(table& tbl, const char* con
 
 future<reader_permit> database::obtain_reader_permit(schema_ptr schema, const char* const op_name, db::timeout_clock::time_point timeout) {
     return obtain_reader_permit(find_column_family(std::move(schema)), op_name, timeout);
+}
+
+bool database::is_user_semaphore(const reader_concurrency_semaphore& semaphore) const {
+    return &semaphore != &_streaming_concurrency_sem
+        && &semaphore != &_compaction_concurrency_sem
+        && &semaphore != &_system_read_concurrency_sem;
 }
 
 std::ostream& operator<<(std::ostream& out, const column_family& cf) {
