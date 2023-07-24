@@ -45,21 +45,6 @@ struct tablet_id {
     bool operator<=>(const tablet_id&) const = default;
 };
 
-}
-
-namespace std {
-
-template<>
-struct hash<locator::tablet_id> {
-    size_t operator()(const locator::tablet_id& id) const {
-        return std::hash<size_t>()(id.value());
-    }
-};
-
-}
-
-namespace locator {
-
 /// Identifies tablet (not be confused with tablet replica) in the scope of the whole cluster.
 struct global_tablet_id {
     table_id table;
@@ -79,6 +64,39 @@ std::ostream& operator<<(std::ostream&, tablet_id);
 std::ostream& operator<<(std::ostream&, const tablet_replica&);
 
 using tablet_replica_set = utils::small_vector<tablet_replica, 3>;
+
+}
+
+namespace std {
+
+template<>
+struct hash<locator::tablet_id> {
+    size_t operator()(const locator::tablet_id& id) const {
+        return std::hash<size_t>()(id.value());
+    }
+};
+
+template<>
+struct hash<locator::tablet_replica> {
+    size_t operator()(const locator::tablet_replica& r) const {
+        return utils::hash_combine(
+                std::hash<locator::host_id>()(r.host),
+                std::hash<shard_id>()(r.shard));
+    }
+};
+
+template<>
+struct hash<locator::global_tablet_id> {
+    size_t operator()(const locator::global_tablet_id& id) const {
+        return utils::hash_combine(
+                std::hash<table_id>()(id.table),
+                std::hash<locator::tablet_id>()(id.tablet));
+    }
+};
+
+}
+
+namespace locator {
 
 /// Creates a new replica set with old_replica replaced by new_replica.
 /// If there is no old_replica, the set is returned unchanged.
@@ -305,28 +323,6 @@ public:
 public:
     bool operator==(const tablet_metadata&) const = default;
     friend std::ostream& operator<<(std::ostream&, const tablet_metadata&);
-};
-
-}
-
-namespace std {
-
-template<>
-struct hash<locator::tablet_replica> {
-    size_t operator()(const locator::tablet_replica& r) const {
-        return utils::hash_combine(
-                std::hash<locator::host_id>()(r.host),
-                std::hash<shard_id>()(r.shard));
-    }
-};
-
-template<>
-struct hash<locator::global_tablet_id> {
-    size_t operator()(const locator::global_tablet_id& id) const {
-        return utils::hash_combine(
-                std::hash<table_id>()(id.table),
-                std::hash<locator::tablet_id>()(id.tablet));
-    }
 };
 
 }
