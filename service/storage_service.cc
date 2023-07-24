@@ -459,6 +459,18 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
         }
     }));
 
+    // We don't load gossiper endpoint states in storage_service::join_cluster
+    // if _raft_topology_change_enabled. On the other hand gossiper is still needed
+    // even in case of _raft_topology_change_enabled mode, since it still contains part
+    // of the cluster state. To work correctly, the gossiper needs to know the current
+    // endpoints. We cannot rely on seeds alone, since it is not guaranteed that seeds
+    // will be up to date and reachable at the time of restart.
+    for (const auto& e: get_token_metadata_ptr()->get_all_endpoints()) {
+        if (!utils::fb_utilities::is_me(e) && !_gossiper.get_endpoint_state_for_endpoint_ptr(e)) {
+            co_await _gossiper.add_saved_endpoint(e);
+        }
+    }
+
     if (auto gen_id = _topology_state_machine._topology.current_cdc_generation_id) {
         slogger.debug("topology_state_load: current CDC generation ID: {}", *gen_id);
         co_await cdc_gen_svc.handle_cdc_generation(*gen_id);
