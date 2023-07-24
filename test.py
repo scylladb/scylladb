@@ -300,12 +300,11 @@ class TestSuite(ABC):
         # NOTE: an already running worker may complete this suite before memory is
         #       available, so check if there are tests remaining to run
         # Wait for minimum available memory before starting a runner for this suite
-        # print(f"XXX TestSuite.run() {worker_name} {runner_id} {self.mode}/{self.name} requesting initial memory {self.min_memory}")
-        if not await memory_manager.reserve(self.min_memory, lambda: self.remaining > 0):
-            async with lock:
-                if self.workers == 1 and self.remaining:
-                    # mark all tests skipped
-                    await self.skip_remaining(console)
+        # print(f"XXX {worker_name} {runner_id} TestSuite.run() {self.mode}/{self.name} requesting INITIAL memory {self.min_memory}")
+        if not await memory_manager.reserve(self.min_memory, lambda: self.remaining > 0
+                                            , debugmsg=f"{worker_name}-{runner_id} {self.mode}/{self.name} INITIAL"  # XXX debug
+                                            ):
+            logger.warning("Suite %s/%s runner %s not enough memory", self.mode, self.name, runner_id)
             return
 
         while True:
@@ -575,7 +574,8 @@ class PythonTestSuite(TestSuite):
     async def _dispose_cluster(self, cluster: ScyllaCluster, logger: logging.LoggerAdapter,
                                remove_logs: bool) -> None:
         # print(f"XXX PythonTestSuite stopping cluster {cluster}")
-        logger.info("PythonTestSuite stopping cluster %s", cluster)
+        logger.info("PythonTestSuite disposing cluster %s and %sremoving logs", cluster,
+                    "" if remove_logs else "not ")
         cluster.setLogger(logger)
         await cluster.stop()
         await cluster.release_ips()
@@ -1478,7 +1478,7 @@ class MemoryManager:
     def __init__(self, lock: asyncio.Lock, base_delay: float = 0.1, max_delay: float = 4.):
         self.lock: Final[asyncio.Lock] = lock
         self.mb_available: Final[float] = psutil.virtual_memory().available / 1024 ** 2
-        # print(f"XXX MemoryManager.__init__(available {self.mb_available:.02f} <<<")
+        print(f"XXX MemoryManager.__init__() available {self.mb_available:.02f} <<<")
         self.mb_reserved: float = 0.
         self.base_delay: Final[float] = base_delay
         self.max_delay: Final[float] = max_delay
@@ -1494,12 +1494,12 @@ class MemoryManager:
         if mb_required > self.mb_available:
             return False                   # Requires more memory than available
 
-        # print(f"XXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}), prev reserved {self.mb_reserved}, total {self.mb_available:.02f} <<<")
+        print(f"XXX {debugmsg} MemoryManager.reserve(mb_required={mb_required}), prev reserved {self.mb_reserved}, total {self.mb_available:.02f} <<<")
 
         actual = psutil.virtual_memory().available / 1024 ** 2
         expected = self.mb_available - self.mb_reserved
         if actual < expected * .8:
-            # print(f"\n\nXXX MemoryManager() total available {self.mb_available:.02f} - reserved {self.mb_reserved:.02f} = expected {expected:.02f} vs. actual {actual:02f} <<<<<<<<<\n")
+            print(f"\n\nXXX MemoryManager() total available {self.mb_available:.02f} - reserved {self.mb_reserved:.02f} = expected {expected:.02f} vs. actual {actual:02f} <<<<<<<<<\n")
             return False   # XXX debug
 
         retries = 0
