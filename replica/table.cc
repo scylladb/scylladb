@@ -2536,7 +2536,7 @@ table::make_reader_v2_excluding_staging(schema_ptr s,
         readers.reserve(memtable_count + 1);
     });
 
-    static std::predicate<const sstable&> auto excl_staging_predicate = [] (const sstable& sst) {
+    static const sstables::sstable_predicate excl_staging_predicate = [] (const sstable& sst) {
         return !sst.requires_view_building();
     };
 
