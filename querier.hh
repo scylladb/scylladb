@@ -284,9 +284,13 @@ public:
         uint64_t resource_based_evictions = 0;
         // The number of queriers currently in the cache.
         uint64_t population = 0;
+        // The number of queries dropped due to scheduling group mismatch
+        // between semaphores
+        uint64_t scheduling_group_mismatches = 0;
     };
 
     using index = std::unordered_multimap<utils::UUID, std::unique_ptr<querier_base>>;
+    using is_user_semaphore_func = std::function<bool(const reader_concurrency_semaphore&)>;
 
 private:
     index _data_querier_index;
@@ -295,6 +299,7 @@ private:
     std::chrono::seconds _entry_ttl;
     stats _stats;
     gate _closing_gate;
+    is_user_semaphore_func _is_user_semaphore_func;
 
 private:
     template <typename Querier>
@@ -313,11 +318,12 @@ private:
         const schema& s,
         dht::partition_ranges_view ranges,
         const query::partition_slice& slice,
+        reader_concurrency_semaphore& current_sem,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout);
 
 public:
-    explicit querier_cache(std::chrono::seconds entry_ttl = default_entry_ttl);
+    querier_cache(is_user_semaphore_func is_user_semaphore_func, std::chrono::seconds entry_ttl = default_entry_ttl);
 
     querier_cache(const querier_cache&) = delete;
     querier_cache& operator=(const querier_cache&) = delete;
@@ -349,6 +355,7 @@ public:
             const schema& s,
             const dht::partition_range& range,
             const query::partition_slice& slice,
+            reader_concurrency_semaphore& current_sem,
             tracing::trace_state_ptr trace_state,
             db::timeout_clock::time_point timeout);
 
@@ -359,6 +366,7 @@ public:
             const schema& s,
             const dht::partition_range& range,
             const query::partition_slice& slice,
+            reader_concurrency_semaphore& current_sem,
             tracing::trace_state_ptr trace_state,
             db::timeout_clock::time_point timeout);
 
@@ -369,6 +377,7 @@ public:
             const schema& s,
             const dht::partition_range_vector& ranges,
             const query::partition_slice& slice,
+            reader_concurrency_semaphore& current_sem,
             tracing::trace_state_ptr trace_state,
             db::timeout_clock::time_point timeout);
 
