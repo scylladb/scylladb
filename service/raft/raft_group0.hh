@@ -238,6 +238,9 @@ private:
     static void init_rpc_verbs(raft_group0& shard0_this);
     static future<> uninit_rpc_verbs(netw::messaging_service& ms);
 
+    // Stop the group 0 server and remove it from the raft_group_registry.
+    future<> stop_group0();
+
     bool joined_group0() const;
     future<bool> raft_upgrade_complete() const;
 
