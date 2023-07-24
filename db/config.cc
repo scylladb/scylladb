@@ -469,6 +469,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , commitlog_segment_size_in_mb(this, "commitlog_segment_size_in_mb", value_status::Used, 64,
         "Sets the size of the individual commitlog file segments. A commitlog segment may be archived, deleted, or recycled after all its data has been flushed to SSTables. This amount of data can potentially include commitlog segments from every table in the system. The default size is usually suitable for most commitlog archiving, but if you want a finer granularity, 8 or 16 MB is reasonable. See Commit log archive configuration.\n"
         "Related information: Commit log archive configuration")
+    , schema_commitlog_segment_size_in_mb(this, "schema_commitlog_segment_size_in_mb", value_status::Used, 128,
+        "Sets the size of the individual schema commitlog file segments. The default size is larger than the default size of the data commitlog because the segment size puts a limit on the mutation size that can be written at once, and some schema mutation writes are much larger than average.\n"
+        "Related information: Commit log archive configuration")
     /* Note: does not exist on the listing page other than in above comment, wtf? */
     , commitlog_sync_period_in_ms(this, "commitlog_sync_period_in_ms", value_status::Used, 10000,
         "Controls how long the system waits for other writes before performing a sync in \"periodic\" mode.")
