@@ -75,6 +75,20 @@ tablet_transition_info::tablet_transition_info(tablet_transition_stage stage, ta
     , reads(get_selector_for_reads(stage))
 { }
 
+tablet_migration_streaming_info get_migration_streaming_info(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
+    tablet_migration_streaming_info result = {
+        .read_from = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end()),
+        .written_to = std::unordered_set<tablet_replica>(trinfo.next.begin(), trinfo.next.end())
+    };
+    for (auto&& r : trinfo.next) {
+        result.read_from.erase(r);
+    }
+    for (auto&& r : tinfo.replicas) {
+        result.written_to.erase(r);
+    }
+    return result;
+}
+
 tablet_replica get_leaving_replica(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
     std::unordered_set<tablet_replica> leaving(tinfo.replicas.begin(), tinfo.replicas.end());
     for (auto&& r : trinfo.next) {

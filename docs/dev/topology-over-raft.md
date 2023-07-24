@@ -78,20 +78,20 @@ check if we need to rebalance. If so, it computes an incremental tablet migratio
 plan, persists it by moving tablets into transitional states, and moves the state machine
 into the tablet migration track. All this happens atomically form the perspective
 of group0 state machine.
+
+The tablet migration track also invokes the load balancer and starts new migrations
+to keep the cluster saturated with streaming. The load balancer is invoked
+on transition of tablet stages, and also continuously as long as it generates
+new migrations.
+
+If there is a pending topology change request, the load balancer
+will not be invoked to allow for current migrations to drain, after which the
+state machine will exit the tablet migration track and allow pending topology
+operation to start.
+
 The tablet migration track excludes with other topology changes, so node operations
-will have to wait for the plan to finish before they can take over the state machine.
-
-The tablet balancing track migrates a small bunch of tablets, decided by the
-loaded balancer, and then moves back the state machine to the idle state.
-This gives other topology changes a chance to start, and if there aren't any, the
-load balancer will be called again to check the conditions. This way
-we can avoid blocking topology changes for too long, but also drive the cluster
-to eventually achieve balance in the absence of other requests.
-
-The load balancer is always invoked with no pending tablet migrations. This
-allows for simplicity in the implementation, but may lead to underutilization
-of cluster resources if different tablets migrate with different speeds,
-and thus limit the speed of load balancing.
+will have to wait for tablet migration track to finish before they can take over
+the state machine.
 
 The reason why the load balancer is part of the main state machine and excludes with other topology
 changes is that we want to share the infrastructure for fencing between vnode-based topology
@@ -101,10 +101,7 @@ don't interfere with each other. The simplest is to make them part of the same s
 When the topology state machine is not in the tablet_migration track, it is guaranteed
 that there are no tablet transitions in the system.
 
-Currently, all tablets in a batch decided by the load balancer are migrated in parallel and
-their state machines are advanced at the same time. This means that streaming has to complete
-for all tablets in a batch before any of them can move to the next phase. This is suboptimal
-and will be changed later to allow for independent transitions.
+Tablets are migrated in parallel and independently.
 
 # Tablet migration
 
@@ -115,7 +112,7 @@ these properties of a tablet:
   - stage: determines which replicas should be used by requests on the coordinator side, and which
            action should be taken by the state machine executor.
 
-Currently, the tablet state machine is driven forward by the tablet balancing track of the
+Currently, the tablet state machine is driven forward by the tablet migration track of the
 topology state machine.
 
 The "stage" serves two major purposes:

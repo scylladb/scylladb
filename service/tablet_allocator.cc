@@ -65,6 +65,13 @@ seastar::logger lblogger("load_balancer");
 /// means that many under-loaded nodes can be driven forward to balance concurrently because the load balancer
 /// will alternate between them across make_plan() calls.
 ///
+/// If the algorithm is called with active tablet migrations in tablet metadata, those are treated
+/// by load balancer as if they were already completed. This allows the algorithm to incrementally
+/// make decision which when executed with active migrations will produce the desired result.
+/// Overload of shards which still contain migrated-away tablets is limited by the fact
+/// that the algorithm tracks streaming concurrency on both source and target shards of active
+/// migrations and takes concurrency limit into account when producing new migrations.
+///
 /// The cost of make_plan() is relatively heavy in terms of preparing data structures, so the current
 /// implementation is not efficient if the scheduler would like to call make_plan() multiple times
 /// to parallelize execution. This will be addressed in the future by keeping the data structures
@@ -79,7 +86,13 @@ class load_balancer {
     using load_type = double;
 
     struct shard_load {
-        size_t tablet_count;
+        size_t tablet_count = 0;
+
+        // Number of tablets which are streamed from this shard.
+        size_t streaming_read_load = 0;
+
+        // Number of tablets which are streamed to this shard.
+        size_t streaming_write_load = 0;
 
         // Tablets which still have a replica on this shard which are candidates for migrating away from this shard.
         std::unordered_set<global_tablet_id> candidates;
@@ -120,7 +133,65 @@ class load_balancer {
         }
     };
 
+    // Per-shard limits for active tablet streaming sessions.
+    //
+    // There is no hard reason for these values being what they are other than
+    // the guidelines below.
+    //
+    // We want to limit concurrency of active streaming for several reasons.
+    // One is that we want to prevent over-utilization of memory required to carry out streaming,
+    // as that may lead to OOM or excessive cache eviction.
+    //
+    // There is no network scheduler yet, so we want to avoid over-utilization of network bandwidth.
+    // Limiting per-shard concurrency is a lame way to achieve that, but it's better than nothing.
+    //
+    // Scheduling groups should limit impact of streaming on other kinds of processes on the same node,
+    // so this aspect is not the reason for limiting concurrency.
+    //
+    // We don't want too much parallelism because it means that we have plenty of migrations
+    // which progress slowly. It's better to have fewer which complete faster because
+    // less user requests suffer from double-quorum overhead, and under-loaded nodes can take
+    // the load sooner. At the same time, we want to have enough concurrency to fully utilize resources.
+    //
+    // Streaming speed is supposed to be I/O bound and writes are more expensive in terms of IO than reads,
+    // so we allow more read concurrency.
+    //
+    // We allow at least two sessions per shard so that there is less chance for idling until load balancer
+    // makes the next decision after streaming is finished.
+    const size_t max_write_streaming_load = 2;
+    const size_t max_read_streaming_load = 4;
+
     token_metadata_ptr _tm;
+private:
+    tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
+        // We reflect migrations in the load as if they already happened,
+        // optimistically assuming that they will succeed.
+        return trinfo ? trinfo->next : ti.replicas;
+    }
+
+    // Whether to count the tablet as putting streaming load on the system.
+    // Tablets which are streaming or are yet-to-stream are counted.
+    bool is_streaming(const tablet_transition_info* trinfo) {
+        if (!trinfo) {
+            return false;
+        }
+        switch (trinfo->stage) {
+            case tablet_transition_stage::allow_write_both_read_old:
+                return true;
+            case tablet_transition_stage::write_both_read_old:
+                return true;
+            case tablet_transition_stage::streaming:
+                return true;
+            case tablet_transition_stage::write_both_read_new:
+                return false;
+            case tablet_transition_stage::use_new:
+                return false;
+            case tablet_transition_stage::cleanup:
+                return false;
+        }
+        on_internal_error(lblogger, format("Invalid transition stage: {}", static_cast<int>(trinfo->stage)));
+    }
+
 public:
     load_balancer(token_metadata_ptr tm)
         : _tm(std::move(tm)) {
@@ -162,9 +233,14 @@ public:
 
         // Compute tablet load on nodes.
 
-        for (auto&& [table, tmap] : _tm->tablets().all_tables()) {
+        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
+            auto& tmap = tmap_;
             co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) {
-                for (auto&& replica : ti.replicas) {
+                auto trinfo = tmap.get_tablet_transition_info(tid);
+
+                // We reflect migrations in the load as if they already happened,
+                // optimistically assuming that they will succeed.
+                for (auto&& replica : get_replicas_for_tablet_load(ti, trinfo)) {
                     if (nodes.contains(replica.host)) {
                         nodes[replica.host].tablet_count += 1;
                         // This invariant is assumed later.
@@ -209,45 +285,50 @@ public:
         // We want to saturate the target node so we migrate several tablets in parallel, one for each shard
         // on the target node. This assumes that the target node is well-balanced and that tablet migrations
         // complete at the same time. Both assumptions are not generally true in practice, which we currently ignore.
-        // If target node is not balanced across shards, we will overload some shards.
-        // If tablets are not balanced in size, throughput will suffer because some shards will be idle sooner than others.
+        // But they will be true typically, because we fill shards starting from least-loaded shards,
+        // so we naturally strive towards balance between shards.
         //
-        // FIXME: To handle the above, we should (1) rebalance the target node
-        // before migrating tablets from other nodes. If shards are balanced on the target node, the balancer
-        // will naturally distribute tablets to different shards. Also, (2) we should change this algorithm
-        // to be a generator for migrations and have a scheduler in the execution layer which pulls migrations
-        // from this algorithm, batches them and decides how many to execute.
-        //
-        // The scheduler decides in which order to execute the plan based on current activity in the system.
-        // We cannot just ask the planner for the next migration and stop when we hit overload on some shard,
-        // because that can lead to underutilization of the cluster. Just because the next migration is blocked
-        // by the target shard being busy doesn't mean we could not proceed with migrations for other shards
-        // which would be produced by the planner subsequently.
+        // If target node is not balanced across shards, we will overload some shards. Streaming concurrency
+        // will suffer because more loaded shards will not participate, which will under-utilize the node.
+        // FIXME: To handle the above, we should rebalance the target node before migrating tablets from other nodes.
 
         auto target_node = topo.find_node(target);
         auto batch_size = target_node->get_shard_count();
 
         // Compute per-shard load and candidate tablets.
 
-        for (auto&& [table, tmap] : _tm->tablets().all_tables()) {
-            if (!tmap.transitions().empty()) {
-                // FIXME: The algorithm doesn't support balancing with active transitions yet. They must finish first.
-                lblogger.warn("Pending transitions active.");
-                co_return migration_plan();
-            }
-
+        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
+            auto& tmap = tmap_;
             co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) {
-                for (auto&& replica : ti.replicas) {
+                auto trinfo = tmap.get_tablet_transition_info(tid);
+
+                if (is_streaming(trinfo)) {
+                    auto streaming_info = get_migration_streaming_info(ti, *trinfo);
+                    for (auto&& replica : streaming_info.read_from) {
+                        if (nodes.contains(replica.host)) {
+                            nodes[replica.host].shards[replica.shard].streaming_read_load += 1;
+                        }
+                    }
+                    for (auto&& replica : streaming_info.written_to) {
+                        if (nodes.contains(replica.host)) {
+                            nodes[replica.host].shards[replica.shard].streaming_write_load += 1;
+                        }
+                    }
+                }
+
+                for (auto&& replica : get_replicas_for_tablet_load(ti, trinfo)) {
                     if (!nodes.contains(replica.host)) {
                         continue;
                     }
                     auto& node_load_info = nodes[replica.host];
-                    auto&& shard_load_info = node_load_info.shards[replica.shard];
+                    shard_load& shard_load_info = node_load_info.shards[replica.shard];
                     if (shard_load_info.tablet_count == 0) {
                         node_load_info.shards_by_load.push_back(replica.shard);
                     }
                     shard_load_info.tablet_count += 1;
-                    shard_load_info.candidates.emplace(global_tablet_id{table, tid});
+                    if (!trinfo) { // migrating tablets are not candidates
+                        shard_load_info.candidates.emplace(global_tablet_id {table, tid});
+                    }
                 }
             });
         }
@@ -283,6 +364,8 @@ public:
         const tablet_metadata& tmeta = _tm->tablets();
         load_type max_off_candidate_load = 0; // max load among nodes which ran out of candidates.
         auto& target_info = nodes[target];
+        const size_t max_skipped_migrations = target_info.shards.size() * 2;
+        size_t skipped_migrations = 0;
         while (plan.size() < batch_size && !nodes_by_load.empty()) {
             co_await coroutine::maybe_yield();
 
@@ -385,8 +468,30 @@ public:
             }
 
             auto dst = global_shard_id {target, target_load.next_shard(target)};
-            lblogger.debug("Select {} to move from {} to {}", source_tablet, src, dst);
-            plan.push_back(tablet_migration_info {source_tablet, src, dst});
+            auto mig = tablet_migration_info {source_tablet, src, dst};
+
+            if (target_info.shards[dst.shard].streaming_write_load < max_write_streaming_load
+                    && src_node_info.shards[src_shard].streaming_read_load < max_read_streaming_load) {
+                target_info.shards[dst.shard].streaming_write_load += 1;
+                src_node_info.shards[src_shard].streaming_read_load += 1;
+                lblogger.debug("Adding migration: {}", mig);
+                plan.push_back(std::move(mig));
+            } else {
+                // Shards are overloaded with streaming. Do not include the migration in the plan, but
+                // continue as if it was in the hope that we will find a migration which can be executed without
+                // violating the load. Next make_plan() invocation will notice that the migration was not executed.
+                // We should not just stop here because that can lead to underutilization of the cluster.
+                // Just because the next migration is blocked doesn't mean we could not proceed with migrations
+                // for other shards which are produced by the planner subsequently.
+                lblogger.debug("Migration {} skipped because of load limit: src_load={}, dst_load={}", mig,
+                               src_node_info.shards[src_shard].streaming_read_load,
+                               target_info.shards[dst.shard].streaming_write_load);
+                skipped_migrations++;
+                if (skipped_migrations >= max_skipped_migrations) {
+                    lblogger.debug("Too many migrations skipped, aborting balancing");
+                    break;
+                }
+            }
 
             target_info.tablet_count += 1;
             target_info.update();

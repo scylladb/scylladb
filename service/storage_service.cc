@@ -1334,6 +1334,15 @@ class topology_coordinator {
             guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
         }
 
+        // In order to keep the cluster saturated, ask the load balancer for more transitions.
+        // Unless there is a pending topology change operation.
+        auto [preempt, new_guard] = should_preempt_balancing(std::move(guard));
+        guard = std::move(new_guard);
+        if (!preempt) {
+            auto plan = co_await balance_tablets(get_token_metadata_ptr());
+            co_await generate_migration_updates(updates, guard, plan);
+        }
+
         // It's ok to execute planned updates after retaking the guard because as long
         // as topology is in tablet_migration state only this coordinator has a right
         // to advance the state machine of tablets.
@@ -1365,10 +1374,26 @@ class topology_coordinator {
         co_await update_topology_state(std::move(guard), std::move(updates), "Finished tablet migration");
     }
 
+    std::pair<bool, group0_guard> should_preempt_balancing(group0_guard guard) {
+        auto node_or_guard = get_node_to_work_on_opt(std::move(guard));
+        if (auto* node = std::get_if<node_to_work_on>(&node_or_guard)) {
+            return std::make_pair(true, std::move(node->guard));
+        }
+
+        guard = std::get<group0_guard>(std::move(node_or_guard));
+        if (_topo_sm._topology.global_request) {
+            return std::make_pair(true, std::move(guard));
+        }
+
+        return std::make_pair(false, std::move(guard));
+    }
+
     // Returns `true` iff there was work to do.
     future<bool> handle_topology_transition(group0_guard guard) {
         auto tstate = _topo_sm._topology.tstate;
         if (!tstate) {
+            // When adding a new source of work, make sure to update should_preempt_balancing() as well.
+
             auto node_or_guard = get_node_to_work_on_opt(std::move(guard));
             if (auto* node = std::get_if<node_to_work_on>(&node_or_guard)) {
                 co_await handle_node_transition(std::move(*node));
