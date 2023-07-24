@@ -588,6 +588,7 @@ SEASTAR_THREAD_TEST_CASE(test_token_ownership_splitting) {
     }
 }
 
+// Reflects the plan in a given token metadata as if the migrations were fully executed.
 static
 void apply_plan(token_metadata& tm, const migration_plan& plan) {
     for (auto&& mig : plan) {
@@ -595,6 +596,25 @@ void apply_plan(token_metadata& tm, const migration_plan& plan) {
         auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
         tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
         tmap.set_tablet(mig.tablet.tablet, tinfo);
+    }
+}
+
+static
+tablet_transition_info migration_to_transition_info(const tablet_migration_info& mig, const tablet_info& ti) {
+    return tablet_transition_info {
+            tablet_transition_stage::allow_write_both_read_old,
+            replace_replica(ti.replicas, mig.src, mig.dst),
+            mig.dst
+    };
+}
+
+// Reflects the plan in a given token metadata as if the migrations were started but not yet executed.
+static
+void apply_plan_as_in_progress(token_metadata& tm, const migration_plan& plan) {
+    for (auto&& mig : plan) {
+        tablet_map& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
+        auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
+        tmap.set_tablet_transition_info(mig.tablet.tablet, migration_to_transition_info(mig, tinfo));
     }
 }
 
@@ -610,6 +630,37 @@ void rebalance_tablets(shared_token_metadata& stm) {
             return make_ready_future<>();
         }).get();
     }
+}
+
+static
+void rebalance_tablets_as_in_progress(shared_token_metadata& stm) {
+    while (true) {
+        auto plan = balance_tablets(stm.get()).get0();
+        if (plan.empty()) {
+            break;
+        }
+        stm.mutate_token_metadata([&] (token_metadata& tm) {
+            apply_plan_as_in_progress(tm, plan);
+            return make_ready_future<>();
+        }).get();
+    }
+}
+
+// Completes any in progress tablet migrations.
+static
+void execute_transitions(shared_token_metadata& stm) {
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
+        for (auto&& [tablet, tmap_] : tm.tablets().all_tables()) {
+            auto& tmap = tmap_;
+            for (auto&& [tablet, trinfo]: tmap.transitions()) {
+                auto ti = tmap.get_tablet_info(tablet);
+                ti.replicas = trinfo.next;
+                tmap.set_tablet(tablet, ti);
+            }
+            tmap.clear_transitions();
+        }
+        return make_ready_future<>();
+    }).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
@@ -703,6 +754,79 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
             BOOST_REQUIRE(load.get_load(h) > 1);
             BOOST_REQUIRE(load.get_avg_shard_load(h) <= 2);
             BOOST_REQUIRE(load.get_avg_shard_load(h) > 0);
+        }
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions) {
+    // Tests the scenario of bootstrapping a single node.
+    // Verifies that the load balancer balances tablets on that node
+    // even though there is already an active migration.
+    // The test verifies that the load balancer creates a plan
+    // which when executed will achieve perfect balance,
+    // which is a proof that it doesn't stop due to active migrations.
+
+    inet_address ip1("192.168.0.1");
+    inet_address ip2("192.168.0.2");
+    inet_address ip3("192.168.0.3");
+
+    auto host1 = host_id(next_uuid());
+    auto host2 = host_id(next_uuid());
+    auto host3 = host_id(next_uuid());
+
+    auto table1 = table_id(next_uuid());
+
+    semaphore sem(1);
+    shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
+        locator::topology::config{
+            .this_endpoint = ip1,
+            .local_dc_rack = locator::endpoint_dc_rack::default_location
+        }
+    });
+
+    stm.mutate_token_metadata([&] (auto& tm) {
+        tm.update_host_id(host1, ip1);
+        tm.update_host_id(host2, ip2);
+        tm.update_host_id(host3, ip3);
+        tm.update_topology(ip1, locator::endpoint_dc_rack::default_location, std::nullopt, 1);
+        tm.update_topology(ip2, locator::endpoint_dc_rack::default_location, std::nullopt, 1);
+        tm.update_topology(ip3, locator::endpoint_dc_rack::default_location, std::nullopt, 2);
+
+        tablet_map tmap(4);
+        std::optional<tablet_id> tid = tmap.first_tablet();
+        for (int i = 0; i < 4; ++i) {
+            tmap.set_tablet(*tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                            tablet_replica {host2, 0},
+                    }
+            });
+            tid = tmap.next_tablet(*tid);
+        }
+        tmap.set_tablet_transition_info(tmap.first_tablet(), tablet_transition_info {
+                tablet_transition_stage::allow_write_both_read_old,
+                tablet_replica_set {
+                        tablet_replica {host3, 0},
+                        tablet_replica {host2, 0},
+                },
+                tablet_replica {host3, 0}
+        });
+        tablet_metadata tmeta;
+        tmeta.set_tablet_map(table1, std::move(tmap));
+        tm.set_tablets(std::move(tmeta));
+        return make_ready_future<>();
+    }).get();
+
+    rebalance_tablets_as_in_progress(stm);
+    execute_transitions(stm);
+
+    {
+        load_sketch load(stm.get());
+        load.populate().get();
+
+        for (auto h : {host1, host2, host3}) {
+            testlog.debug("Checking host {}", h);
+            BOOST_REQUIRE(load.get_avg_shard_load(h) == 2);
         }
     }
 }

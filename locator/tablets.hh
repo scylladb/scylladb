@@ -293,6 +293,7 @@ public:
 public:
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
+    void clear_transitions();
 
     // Destroys gently.
     // The tablet map is not usable after this call and should be destroyed.
@@ -326,6 +327,7 @@ private:
 public:
     const tablet_map& get_tablet_map(table_id id) const;
     const table_to_tablet_map& all_tables() const { return _tablets; }
+    table_to_tablet_map& all_tables() { return _tablets; }
     size_t external_memory_usage() const;
 public:
     void set_tablet_map(table_id, tablet_map);

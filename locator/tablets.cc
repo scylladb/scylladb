@@ -190,6 +190,10 @@ future<> tablet_map::for_each_tablet(seastar::noncopyable_function<void(tablet_i
     }
 }
 
+void tablet_map::clear_transitions() {
+    _transitions.clear();
+}
+
 std::optional<shard_id> tablet_map::get_shard(tablet_id tid, host_id host) const {
     auto&& info = get_tablet_info(tid);
 
