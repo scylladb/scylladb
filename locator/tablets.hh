@@ -168,6 +168,9 @@ struct tablet_transition_info {
     bool operator==(const tablet_transition_info&) const = default;
 };
 
+// Returns the leaving replica for a given transition.
+tablet_replica get_leaving_replica(const tablet_info&, const tablet_transition_info&);
+
 /// Stores information about tablets of a single table.
 ///
 /// The map contains a constant number of tablets, tablet_count().

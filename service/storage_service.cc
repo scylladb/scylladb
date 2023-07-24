@@ -5611,21 +5611,6 @@ future<> storage_service::update_fence_version(token_metadata::version_t new_ver
     });
 }
 
-static
-locator::tablet_replica get_leaving_replica(const locator::tablet_info& tinfo, const locator::tablet_transition_info& trinfo) {
-    std::unordered_set<locator::tablet_replica> leaving(tinfo.replicas.begin(), tinfo.replicas.end());
-    for (auto&& r : trinfo.next) {
-        leaving.erase(r);
-    }
-    if (leaving.empty()) {
-        throw std::runtime_error(format("No leaving replicas"));
-    }
-    if (leaving.size() > 1) {
-        throw std::runtime_error(format("More than one leaving replica"));
-    }
-    return *leaving.begin();
-}
-
 inet_address storage_service::host2ip(locator::host_id host) {
     auto ip = _group0->address_map().find(raft::server_id(host.uuid()));
     if (!ip) {
@@ -5660,7 +5645,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
 
     auto& tinfo = tmap.get_tablet_info(tablet.tablet);
     auto range = tmap.get_token_range(tablet.tablet);
-    locator::tablet_replica leaving_replica = get_leaving_replica(tinfo, *trinfo);
+    locator::tablet_replica leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
     if (leaving_replica.host == tm->get_my_id()) {
         // The algorithm doesn't work with tablet migration within the same node because
         // it assumes there is only one tablet replica, picked by the sharder, on local node.
