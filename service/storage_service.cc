@@ -3647,7 +3647,7 @@ public:
                 }
                 nodes_unknown_verb.emplace(node);
             } catch (const seastar::rpc::closed_error&) {
-                slogger.warn("{}[{}]: Node {} is down for {} verb", desc, uuid(), op_desc, node);
+                slogger.warn("{}[{}]: Node {} is down for {} verb", desc, uuid(), node, op_desc);
                 nodes_down.emplace(node);
             } catch (...) {
                 slogger.warn("{}[{}]: Node {} failed {} verb: {}", desc, uuid(), node, op_desc, std::current_exception());
