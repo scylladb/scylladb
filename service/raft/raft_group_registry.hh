@@ -111,6 +111,11 @@ public:
     // Called by sharded<>::stop()
     seastar::future<> stop();
 
+    // Stop the server for the given group and remove it from the registry.
+    // It differs from abort_server in that it waits for the server to stop
+    // and removes it from the registry.
+    seastar::future<> stop_server(raft::group_id gid, sstring reason);
+
     // Must not be called before `start`.
     const raft::server_id& get_my_raft_id();
 
