@@ -669,6 +669,11 @@ class ScyllaCluster:
         """Add a new server to the cluster"""
         self.is_dirty = True
 
+        # If the cluster isn't empty and all servers are stopped,
+        # adding a new server would create a new cluster.
+        if self.servers and not self.running:
+            raise RuntimeError("Can't add the server: all servers in the cluster are stopped")
+
         extra_config: dict[str, Any] = config.copy() if config else {}
         if replace_cfg:
             replaced_id = replace_cfg.replaced_id
