@@ -127,19 +127,23 @@ seastar::metrics::label_instance current_scheduling_group_label() {
 
 }
 
-template<typename ResultTuple>
-static future<ResultTuple> encode_replica_exception_for_rpc(gms::feature_service& features, std::exception_ptr eptr) {
+template<typename ResultType>
+static future<ResultType> encode_replica_exception_for_rpc(gms::feature_service& features, std::exception_ptr eptr) {
     if (features.typed_errors_in_read_rpc) {
         if (auto ex = replica::try_encode_replica_exception(eptr); ex) {
-            ResultTuple encoded_ex = utils::make_default_rpc_tuple<ResultTuple>();
-            std::get<replica::exception_variant>(encoded_ex) = std::move(ex);
-            return make_ready_future<ResultTuple>(std::move(encoded_ex));
+            if constexpr (std::is_same_v<ResultType, replica::exception_variant>) {
+                return make_ready_future<ResultType>(std::move(ex));
+            } else {
+                ResultType encoded_ex = utils::make_default_rpc_tuple<ResultType>();
+                std::get<replica::exception_variant>(encoded_ex) = std::move(ex);
+                return make_ready_future<ResultType>(std::move(encoded_ex));
+            }
         }
     }
-    return make_exception_future<ResultTuple>(std::move(eptr));
+    return make_exception_future<ResultType>(std::move(eptr));
 }
 
-template<typename ResultTuple, typename SourceTuple>
+template<utils::Tuple ResultTuple, utils::Tuple SourceTuple>
 static future<ResultTuple> add_replica_exception_to_query_result(gms::feature_service& features, future<SourceTuple>&& f) {
     if (!f.failed()) {
         return make_ready_future<ResultTuple>(utils::tuple_insert<ResultTuple>(f.get(), replica::exception_variant{}));
