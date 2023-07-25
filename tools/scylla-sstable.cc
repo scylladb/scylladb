@@ -715,7 +715,7 @@ stop_iteration consume_reader(flat_mutation_reader_v2 rd, sstable_consumer& cons
     consumer_wrapper::filter_type filter;
     if (!partitions.empty()) {
         filter = [&] (const dht::decorated_key& key) {
-            const auto pass = partitions.find(key) != partitions.end();
+            const auto pass = partitions.count(key) != 0;
             sst_log.trace("filter({})={}", key, pass);
             skip_partition = !pass;
             return pass;
