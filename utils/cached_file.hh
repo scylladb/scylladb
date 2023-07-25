@@ -12,6 +12,7 @@
 #include "utils/div_ceil.hh"
 #include "utils/bptree.hh"
 #include "utils/lru.hh"
+#include "utils/error_injection.hh"
 #include "tracing/trace_state.hh"
 
 #include <seastar/core/file.hh>
@@ -193,10 +194,15 @@ private:
                         _metrics.cached_bytes += cp.size_in_allocator();
                         _cached_bytes += cp.size_in_allocator();
                     }
+                    // pages read ahead will be placed into LRU, as there's no guarantee they will be fetched later.
+                    cached_page::ptr_type ptr = cp.share();
                     if (!first_page) {
-                        first_page = cp.share();
+                        first_page = std::move(ptr);
                     }
                 }
+                utils::get_local_injector().inject("cached_file_get_first_page", []() {
+                    throw std::bad_alloc();
+                });
                 return first_page;
             });
     }

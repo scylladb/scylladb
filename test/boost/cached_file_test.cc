@@ -120,6 +120,25 @@ SEASTAR_THREAD_TEST_CASE(test_file_wrapper) {
     BOOST_CHECK_THROW(read_to_string(f, 0, cf.size() + 1), seastar::file::eof_error);
 }
 
+/* Reproducer for issue https://github.com/scylladb/scylladb/issues/14814 */
+SEASTAR_THREAD_TEST_CASE(test_no_crash_on_dtor_after_oom) {
+    auto page_size = cached_file::page_size;
+    cached_file::metrics metrics;
+    test_file tf = make_test_file(page_size * 32); // 128k.
+    logalloc::region region;
+    cached_file cf(tf.f, metrics, cf_lru, region, page_size * 32);
+    seastar::file f = make_cached_seastar_file(cf);
+
+    utils::get_local_injector().enable("cached_file_get_first_page", true /* oneshot */);
+
+    try {
+        BOOST_REQUIRE_EQUAL(tf.contents.substr(0, page_size * 32),
+                            read_to_string(f, 0, page_size * 32));
+    } catch (...) {
+        testlog.info("exception caught: {}", std::current_exception());
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_concurrent_population) {
     auto page_size = cached_file::page_size;
     cached_file::metrics metrics;
