@@ -305,7 +305,7 @@ future<> storage_service::topology_state_load(cdc::generation_service& cdc_gen_s
 
     slogger.debug("raft topology: reload raft topology state");
     // read topology state from disk and recreate token_metadata from it
-    _topology_state_machine._topology = co_await db::system_keyspace::load_topology_state();
+    _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state();
 
     const auto& am = _group0->address_map();
     auto id2ip = [this, &am] (raft::server_id id) -> future<gms::inet_address> {
