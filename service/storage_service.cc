@@ -2086,7 +2086,7 @@ future<> storage_service::join_token_ring(cdc::generation_service& cdc_gen_servi
             slogger.info("Replacing a node with {} IP address, my address={}, node being replaced={}",
                 get_broadcast_address() == *replace_address ? "the same" : "a different",
                 get_broadcast_address(), *replace_address);
-            tmptr->update_topology(*replace_address, std::move(ri->dc_rack), locator::node::state::leaving);
+            tmptr->update_topology(*replace_address, std::move(ri->dc_rack), locator::node::state::being_replaced);
             co_await tmptr->update_normal_tokens(bootstrap_tokens, *replace_address);
             replaced_host_id = ri->host_id;
         }
@@ -2556,7 +2556,7 @@ future<> storage_service::bootstrap(cdc::generation_service& cdc_gen_service, st
                 slogger.debug("bootstrap: update pending ranges: endpoint={} bootstrap_tokens={}", get_broadcast_address(), bootstrap_tokens);
                 mutate_token_metadata([this, &bootstrap_tokens] (mutable_token_metadata_ptr tmptr) {
                     auto endpoint = get_broadcast_address();
-                    tmptr->update_topology(endpoint, _sys_ks.local().local_dc_rack(), locator::node::state::joining);
+                    tmptr->update_topology(endpoint, _sys_ks.local().local_dc_rack(), locator::node::state::bootstrapping);
                     tmptr->add_bootstrap_tokens(bootstrap_tokens, endpoint);
                     return update_topology_change_info(std::move(tmptr), ::format("bootstrapping node {}", endpoint));
                 }).get();
@@ -2674,7 +2674,7 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint) {
         tmptr->remove_endpoint(endpoint);
     }
 
-    tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::node::state::joining);
+    tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::node::state::bootstrapping);
     tmptr->add_bootstrap_tokens(tokens, endpoint);
     if (_gossiper.uses_host_id(endpoint)) {
         tmptr->update_host_id(_gossiper.get_host_id(endpoint), endpoint);
@@ -2869,7 +2869,7 @@ future<> storage_service::handle_state_leaving(inet_address endpoint) {
         // FIXME: this code should probably resolve token collisions too, like handle_state_normal
         slogger.info("Node {} state jump to leaving", endpoint);
 
-        tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::node::state::leaving);
+        tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::node::state::being_decommissioned);
         co_await tmptr->update_normal_tokens(tokens, endpoint);
     } else {
         auto tokens_ = tmptr->get_tokens(endpoint);
@@ -4673,7 +4673,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                     auto existing_node = x.first;
                     auto replacing_node = x.second;
                     slogger.info("replace[{}]: Added replacing_node={} to replace existing_node={}, coordinator={}", req.ops_uuid, replacing_node, existing_node, coordinator);
-                    tmptr->update_topology(replacing_node, get_dc_rack_for(replacing_node), locator::node::state::joining);
+                    tmptr->update_topology(replacing_node, get_dc_rack_for(replacing_node), locator::node::state::replacing);
                     tmptr->add_replacing_endpoint(existing_node, replacing_node);
                 }
                 return make_ready_future<>();
@@ -4725,7 +4725,7 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
                     auto& endpoint = x.first;
                     auto tokens = std::unordered_set<dht::token>(x.second.begin(), x.second.end());
                     slogger.info("bootstrap[{}]: Added node={} as bootstrap, coordinator={}", req.ops_uuid, endpoint, coordinator);
-                    tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::node::state::joining);
+                    tmptr->update_topology(endpoint, get_dc_rack_for(endpoint), locator::node::state::bootstrapping);
                     tmptr->add_bootstrap_tokens(tokens, endpoint);
                 }
                 return update_topology_change_info(tmptr, ::format("bootstrap {}", req.bootstrap_nodes));

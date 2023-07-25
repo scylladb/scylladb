@@ -47,11 +47,14 @@ node_holder node::clone() const {
 
 std::string node::to_string(node::state s) {
     switch (s) {
-    case state::none:       return "none";
-    case state::joining:    return "joining";
-    case state::normal:     return "normal";
-    case state::leaving:    return "leaving";
-    case state::left:       return "left";
+    case state::none:           return "none";
+    case state::bootstrapping:  return "bootstrapping";
+    case state::replacing:      return "replacing";
+    case state::normal:         return "normal";
+    case state::being_decommissioned: return "being_decommissioned";
+    case state::being_removed:        return "being_removed";
+    case state::being_replaced:       return "being_replaced";
+    case state::left:           return "left";
     }
     __builtin_unreachable();
 }
@@ -311,9 +314,9 @@ void topology::index_node(const node* node) {
     if (node->endpoint() != inet_address{}) {
         auto eit = _nodes_by_endpoint.find(node->endpoint());
         if (eit != _nodes_by_endpoint.end()) {
-            if (eit->second->get_state() == node::state::leaving || eit->second->get_state() == node::state::left) {
+            if (eit->second->is_leaving() || eit->second->left()) {
                 _nodes_by_endpoint.erase(node->endpoint());
-            } else if (node->get_state() != node::state::leaving && node->get_state() != node::state::left) {
+            } else if (!node->is_leaving() && !node->left()) {
                 if (node->host_id()) {
                     _nodes_by_host_id.erase(node->host_id());
                 }
