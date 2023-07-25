@@ -90,6 +90,40 @@ def restart_with_dir(old_pid, run_cmd_generator, dir):
 # pid to the temporary directory - which will also be removed.
 run_with_temporary_dir_pids = set()
 
+# killpg_retry() behaves like killpg() (kill process-group), excepts that
+# after trying the given signal (sig), if the main process (pid) doesn't
+# exit within a given timeout, it is killed again with SIGKILL. In any case,
+# the other processes in the process group besides pid itself are killed
+# with SIGKILL at the end.
+def killpg_retry(pid, sig, timeout):
+    os.killpg(pid, sig)
+    deadline = time.time() + timeout
+    sleeptime = 0.01
+    while time.time() < deadline:
+        # To check if the process died, we need to first get rid of the
+        # zombie (if it exists) with waitpid, and then check if the process
+        # still exists, with kill.
+        try:
+            os.waitpid(pid, os.WNOHANG)
+            os.kill(pid, 0)
+        except (ProcessLookupError, ChildProcessError):
+            # The process is dead, we're done. But just in case the process
+            # itself is dead but other processes in its process group survived,
+            # kill them all again with SIGKILL.
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except (ProcessLookupError, ChildProcessError):
+                pass
+            return
+        time.sleep(sleeptime)
+        sleeptime = sleeptime * 2
+    # The gentle signal didn't work (or didn't work quickly enough).
+    # Fall back to killing with SIGKILL, that is guaranteed to work.
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, ChildProcessError):
+        pass
+
 # abort_run_with_temporary_dir() kills a process started earlier by
 # run_with_temporary_directory, and and removes its temporary directory.
 # Currently, the log file is opened and returned so the caller can show
@@ -98,9 +132,13 @@ run_with_temporary_dir_pids = set()
 # of copying it to stdout.
 def abort_run_with_dir(pid, tmpdir):
     try:
-        os.killpg(pid, 9)
+        # We can use os.killpg(pid, signal.SIGKILL) to always kill Scylla
+        # immediately with SIGKILL, but trying SIGTERM first has a tiny
+        # overhead (0.02 seconds), and allows testing the shutdown path
+        # and flushing test-coverage data in a coverage run.
+        killpg_retry(pid, signal.SIGTERM, 10)
         os.waitpid(pid, 0) # don't leave an annoying zombie
-    except ProcessLookupError:
+    except (ProcessLookupError, ChildProcessError):
         pass
     # We want to read tmpdir/log to stdout, but if stdout is piped, this can
     # take a long time and be interrupted. We don't want the rmtree() below
@@ -277,6 +315,7 @@ def run_scylla_cmd(pid, dir):
         '--strict-is-not-null-in-views', 'true',
         '--permissions-update-interval-in-ms', '100',
         '--permissions-validity-in-ms', '100',
+        '--shutdown-announce-in-ms', '0',
         ], env)
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same
