@@ -61,7 +61,10 @@ def run(args, executable=None, distinct_id=None):
         extra_env = env(executable, distinct_id)
     else:
         extra_env = env(args[0], distinct_id)
-    subprocess.check_call(args, env=dict(os.environ, **extra_env))
+    try:
+        subprocess.check_call(args, env=dict(os.environ, **extra_env))
+    except KeyboardInterrupt:
+        pass # allow process to be shut down with ^C
 
 
 def generate_coverage_report(path="build/coverage/test", name="tests", input_files=None, verbose=0):
