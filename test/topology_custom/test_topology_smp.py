@@ -14,6 +14,7 @@ from test.pylib.util import unique_name
 from test.topology.util import wait_for_token_ring_and_group0_consistency
 import pytest
 from pytest import FixtureRequest
+import platform
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +38,27 @@ async def test_nodes_with_different_smp(request: FixtureRequest, manager: Manage
     # on both nodes, then it's guaranteed that the message will be
     # processed on the same shard as the calling code.
     # In the general case, we cannot assume that this same shard guarantee holds.
+
+    # The test is flaky on CI in debug builds on aarch64 (#14752),
+    # here we sprinkle more logs for debug/aarch64
+    # hoping it'll help to debug it.
+    # The hack with xmlpath: it's set by test.py to some file with mode in the path,
+    # couldn't think of a better way to determine the current mode.
+    # This should produce ~16M of logs per Scylla node.
+    log_args = []
+    if ('/debug/' in request.config.getoption('xmlpath', '')) and ('aarch64' in platform.processor()):
+        log_args = [
+            '--default-log-level', 'debug',
+            '--logger-log-level', 'raft_group0=trace:group0_client=trace:storage_service=trace'
+                                  ':raft=trace:raft_group_registry=trace'
+        ]
+
     logger.info(f'Adding --smp=3 server')
-    await manager.server_add(cmdline=['--smp', '3'])
+    await manager.server_add(cmdline=['--smp', '3'] + log_args)
     logger.info(f'Adding --smp=4 server')
-    await manager.server_add(cmdline=['--smp', '4'])
+    await manager.server_add(cmdline=['--smp', '4'] + log_args)
     logger.info(f'Adding --smp=5 server')
-    await manager.server_add(cmdline=['--smp', '5'])
+    await manager.server_add(cmdline=['--smp', '5'] + log_args)
 
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
