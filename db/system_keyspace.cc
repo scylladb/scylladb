@@ -2486,7 +2486,7 @@ static std::set<sstring> decode_features(const set_type_impl::native_type& featu
 }
 
 future<service::topology> system_keyspace::load_topology_state() {
-    auto rs = co_await qctx->execute_cql(
+    auto rs = co_await execute_cql(
         format("SELECT * FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
     assert(rs);
 
@@ -2646,7 +2646,7 @@ future<service::topology> system_keyspace::load_topology_state() {
 
             // Sanity check for CDC generation data consistency.
             {
-                auto gen_rows = co_await qctx->execute_cql(
+                auto gen_rows = co_await execute_cql(
                     format("SELECT count(range_end) as cnt, num_ranges FROM system.{} WHERE id = ?",
                            CDC_GENERATIONS_V3),
                     gen_uuid);
