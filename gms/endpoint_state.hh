@@ -168,4 +168,15 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const endpoint_state& x);
 };
 
+// The endpoint state is protected with an endpoint lock
+// acquired in the gossiper using gossiper::lock_endpoint.
+//
+// permit_id identifies the held endpoint lock
+// and it is used by gossiper::lock_endpoint to prevent a deadlock
+// when a notification function is called under the endpoint lock
+// and calls back into the gossiper on a path that wants to acquire
+// the endpoint_lock for the same endpoint.
+using permit_id = utils::tagged_uuid<struct permit_id_tag>;
+constexpr permit_id null_permit_id = permit_id::create_null_id();
+
 } // gms

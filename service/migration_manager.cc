@@ -1205,12 +1205,12 @@ future<column_mapping> get_column_mapping(table_id table_id, table_schema_versio
     return db::schema_tables::get_column_mapping(table_id, v);
 }
 
-future<> migration_manager::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
+future<> migration_manager::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state, gms::permit_id) {
     schedule_schema_pull(endpoint, ep_state);
     return make_ready_future();
 }
 
-future<> migration_manager::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
+future<> migration_manager::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value, gms::permit_id) {
     if (state == gms::application_state::SCHEMA) {
         auto* ep_state = _gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
         if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
@@ -1224,7 +1224,7 @@ future<> migration_manager::on_change(gms::inet_address endpoint, gms::applicati
     return make_ready_future();
 }
 
-future<> migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
+future<> migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_state state, gms::permit_id) {
     schedule_schema_pull(endpoint, state);
     return make_ready_future();
 }

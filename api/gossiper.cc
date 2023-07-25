@@ -8,6 +8,7 @@
 
 #include "gossiper.hh"
 #include "api/api-doc/gossiper.json.hh"
+#include "gms/endpoint_state.hh"
 #include "gms/gossiper.hh"
 
 namespace api {
@@ -59,7 +60,7 @@ void set_gossiper(http_context& ctx, routes& r, gms::gossiper& g) {
 
     httpd::gossiper_json::force_remove_endpoint.set(r, [&g](std::unique_ptr<http::request> req) {
         gms::inet_address ep(req->param["addr"]);
-        return g.force_remove_endpoint(ep).then([] {
+        return g.force_remove_endpoint(ep, gms::null_permit_id).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });

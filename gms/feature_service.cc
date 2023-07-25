@@ -224,20 +224,20 @@ public:
             , _sys_ks(s)
     {
     }
-    future<> on_join(inet_address ep, endpoint_state state) override {
+    future<> on_join(inet_address ep, endpoint_state state, gms::permit_id) override {
         return enable_features();
     }
-    future<> on_change(inet_address ep, application_state state, const versioned_value&) override {
+    future<> on_change(inet_address ep, application_state state, const versioned_value&, gms::permit_id) override {
         if (state == application_state::SUPPORTED_FEATURES) {
             return enable_features();
         }
         return make_ready_future();
     }
     future<> before_change(inet_address, endpoint_state, application_state, const versioned_value&) override { return make_ready_future(); }
-    future<> on_alive(inet_address, endpoint_state) override { return make_ready_future(); }
-    future<> on_dead(inet_address, endpoint_state) override { return make_ready_future(); }
-    future<> on_remove(inet_address) override { return make_ready_future(); }
-    future<> on_restart(inet_address, endpoint_state) override { return make_ready_future(); }
+    future<> on_alive(inet_address, endpoint_state, gms::permit_id) override { return make_ready_future(); }
+    future<> on_dead(inet_address, endpoint_state, gms::permit_id) override { return make_ready_future(); }
+    future<> on_remove(inet_address, gms::permit_id) override { return make_ready_future(); }
+    future<> on_restart(inet_address, endpoint_state, gms::permit_id) override { return make_ready_future(); }
 
     future<> enable_features();
 };
