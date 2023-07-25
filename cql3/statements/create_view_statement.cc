@@ -367,7 +367,7 @@ create_view_statement::prepare_schema_mutations(query_processor& qp, service::mi
     std::vector<mutation> m;
     auto [definition, warnings] = prepare_view(qp.db());
     try {
-        m = co_await mm.prepare_new_view_announcement(std::move(definition), ts);
+        m = co_await service::prepare_new_view_announcement(qp.proxy(), std::move(definition), ts);
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::CREATED,

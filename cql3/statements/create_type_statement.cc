@@ -124,7 +124,7 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
     try {
         auto t = make_type(qp);
         if (t) {
-            m = co_await mm.prepare_new_type_announcement(*t, ts);
+            m = co_await service::prepare_new_type_announcement(qp.proxy(), *t, ts);
             using namespace cql_transport;
 
             ret = ::make_shared<event::schema_change>(

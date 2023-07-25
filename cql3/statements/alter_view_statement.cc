@@ -77,7 +77,7 @@ view_ptr alter_view_statement::prepare_view(data_dictionary::database db) const 
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> alter_view_statement::prepare_schema_mutations(query_processor& qp, service::migration_manager& mm, api::timestamp_type ts) const {
-    auto m = co_await mm.prepare_view_update_announcement(prepare_view(qp.db()), ts);
+    auto m = co_await service::prepare_view_update_announcement(qp.proxy(), prepare_view(qp.db()), ts);
 
     using namespace cql_transport;
     auto ret = ::make_shared<event::schema_change>(

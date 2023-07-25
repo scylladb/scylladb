@@ -69,7 +69,7 @@ future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutatio
     auto&& updated = make_updated_type(db, to_update->second);
     // Now, we need to announce the type update to basically change it for new tables using this type,
     // but we also need to find all existing user types and CF using it and change them.
-    auto res = co_await mm.prepare_update_type_announcement(updated, ts);
+    auto res = co_await service::prepare_update_type_announcement(mm.get_storage_proxy(), updated, ts);
     std::move(res.begin(), res.end(), std::back_inserter(m));
 
     for (auto&& schema : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
@@ -85,10 +85,10 @@ future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutatio
         }
         if (modified) {
             if (schema->is_view()) {
-                auto res = co_await mm.prepare_view_update_announcement(view_ptr(cfm.build()), ts);
+                auto res = co_await service::prepare_view_update_announcement(mm.get_storage_proxy(), view_ptr(cfm.build()), ts);
                 std::move(res.begin(), res.end(), std::back_inserter(m));
             } else {
-                auto res = co_await mm.prepare_column_family_update_announcement(cfm.build(), false, {}, ts);
+                auto res = co_await service::prepare_column_family_update_announcement(mm.get_storage_proxy(), cfm.build(), false, {}, ts);
                 std::move(res.begin(), res.end(), std::back_inserter(m));
             }
         }

@@ -34,7 +34,7 @@ drop_aggregate_statement::prepare_schema_mutations(query_processor& qp, service:
         if (!user_aggr) {
             throw exceptions::invalid_request_exception(format("'{}' is not a user defined aggregate", func));
         }
-        m = co_await mm.prepare_aggregate_drop_announcement(user_aggr, ts);
+        m = co_await service::prepare_aggregate_drop_announcement(qp.proxy(), user_aggr, ts);
         ret = create_schema_change(*func, false);
     }
 

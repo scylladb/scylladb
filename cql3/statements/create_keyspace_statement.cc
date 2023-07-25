@@ -100,7 +100,7 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
     std::vector<mutation> m;
 
     try {
-        m = mm.prepare_new_keyspace_announcement(_attrs->as_ks_metadata(_name, tm), ts);
+        m = service::prepare_new_keyspace_announcement(qp.db().real_database(), _attrs->as_ks_metadata(_name, tm), ts);
 
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::CREATED,

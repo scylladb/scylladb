@@ -4168,7 +4168,7 @@ SEASTAR_TEST_CASE(row_cache_is_populated_using_compacting_sstable_reader) {
             .with_column(to_bytes("id"), int32_type)
             .build();
         mm.announce(
-            mm.prepare_new_column_family_announcement(s, api::new_timestamp()).get(),
+            service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s, api::new_timestamp()).get(),
             mm.start_group0_operation().get()
         ).get();
 

@@ -73,7 +73,7 @@ create_function_statement::prepare_schema_mutations(query_processor& qp, service
     auto func = dynamic_pointer_cast<functions::user_function>(co_await validate_while_executing(qp));
 
     if (func) {
-        m = co_await mm.prepare_new_function_announcement(func, ts);
+        m = co_await service::prepare_new_function_announcement(qp.proxy(), func, ts);
         ret = create_schema_change(*func, true);
     }
 

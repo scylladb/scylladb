@@ -198,7 +198,7 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
             attrs.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, replication_properties);
             attrs.validate();
 
-            auto muts = mml.prepare_new_keyspace_announcement(attrs.as_ks_metadata(ks_name, *tm), ts);
+            auto muts = service::prepare_new_keyspace_announcement(db.real_database(), attrs.as_ks_metadata(ks_name, *tm), ts);
             std::move(muts.begin(), muts.end(), std::back_inserter(ks_mutations));
         }
 
@@ -210,15 +210,15 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
     auto group0_guard = co_await mml.start_group0_operation();
     std::vector<mutation> table_mutations;
     auto table_gen = std::bind_front(
-            [] (data_dictionary::database db, service::migration_manager& mml, std::vector<mutation>& table_mutations,
+            [] (data_dictionary::database db, service::storage_proxy& sp, std::vector<mutation>& table_mutations,
                 api::timestamp_type ts, sstring ks_name, sstring cf_name, schema_ptr schema) -> future<> {
         if (db.has_schema(ks_name, cf_name)) {
             co_return;
         }
         logger.info("Create keyspace: {}, table: {} for redis.", ks_name, cf_name);
-        auto muts = co_await mml.prepare_new_column_family_announcement(schema, ts);
+        auto muts = co_await service::prepare_new_column_family_announcement(sp, schema, ts);
         std::move(muts.begin(), muts.end(), std::back_inserter(table_mutations));
-    }, db, std::ref(mml), std::ref(table_mutations), group0_guard.write_timestamp());
+    }, db, std::ref(proxy.local()), std::ref(table_mutations), group0_guard.write_timestamp());
 
     co_await coroutine::parallel_for_each(ks_names, [table_gen = std::move(table_gen)] (const sstring& ks_name) mutable {
         return parallel_for_each(tables, [ks_name, table_gen = std::move(table_gen)] (table t) {

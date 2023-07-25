@@ -76,7 +76,7 @@ create_table_statement::prepare_schema_mutations(query_processor& qp, service::m
     std::vector<mutation> m;
 
     try {
-        m = co_await mm.prepare_new_column_family_announcement(get_cf_meta_data(qp.db()), ts);
+        m = co_await service::prepare_new_column_family_announcement(qp.proxy(), get_cf_meta_data(qp.db()), ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(

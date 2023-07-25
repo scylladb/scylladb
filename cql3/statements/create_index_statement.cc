@@ -384,7 +384,7 @@ create_index_statement::prepare_schema_mutations(query_processor& qp, service::m
     std::vector<mutation> m;
 
     if (schema) {
-        m = co_await mm.prepare_column_family_update_announcement(std::move(schema), false, {}, ts);
+        m = co_await service::prepare_column_family_update_announcement(qp.proxy(), std::move(schema), false, {}, ts);
 
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::UPDATED,

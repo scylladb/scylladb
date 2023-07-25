@@ -45,7 +45,7 @@ drop_table_statement::prepare_schema_mutations(query_processor& qp, service::mig
     }
 
     try {
-        m = co_await mm.prepare_column_family_drop_announcement(keyspace(), column_family(), ts);
+        m = co_await service::prepare_column_family_drop_announcement(qp.proxy(), keyspace(), column_family(), ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(

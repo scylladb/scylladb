@@ -79,7 +79,7 @@ drop_index_statement::prepare_schema_mutations(query_processor& qp, service::mig
     auto cfm = make_drop_idex_schema(qp);
 
     if (cfm) {
-        m = co_await mm.prepare_column_family_update_announcement(cfm, false, {}, ts);
+        m = co_await service::prepare_column_family_update_announcement(qp.proxy(), cfm, false, {}, ts);
 
         using namespace cql_transport;
         ret = ::make_shared<event::schema_change>(event::schema_change::change_type::UPDATED,
