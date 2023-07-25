@@ -4448,7 +4448,8 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test) {
         };
 
         auto create_table = [&] () {
-            simple_schema ss;
+            auto cf = utils::UUID_gen::get_time_UUID();
+            simple_schema ss{"ks", fmt::to_string(cf)};
             auto s = ss.schema();
 
             auto t = env.make_table_for_tests(s);
