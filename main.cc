@@ -553,6 +553,10 @@ For more information about individual tools, run: scylla {tool_name} --help
 To start the scylla server proper, simply invoke as: scylla server (or just scylla).
 )";
     app_cfg.default_task_quota = 500us;
+#ifdef DEBUG
+    // Increase the task quota to improve work:poll ratio in slow debug mode.
+    app_cfg.default_task_quota = 5ms;
+#endif
     app_cfg.auto_handle_sigint_sigterm = false;
     app_cfg.max_networking_aio_io_control_blocks = 50000;
     // We need to have the entire app config to run the app, but we need to
