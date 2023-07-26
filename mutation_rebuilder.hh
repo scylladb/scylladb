@@ -18,9 +18,10 @@ class mutation_rebuilder {
 public:
     explicit mutation_rebuilder(schema_ptr s) : _s(std::move(s)) { }
 
-    void consume_new_partition(const dht::decorated_key& dk) {
+    const mutation& consume_new_partition(const dht::decorated_key& dk) {
         assert(!_m);
         _m = mutation(_s, std::move(dk));
+        return *_m;
     }
 
     stop_iteration consume(tombstone t) {
@@ -93,8 +94,8 @@ public:
         return std::move(mf).consume(*this);
     }
 public:
-    void consume_new_partition(const dht::decorated_key& dk) {
-        _builder.consume_new_partition(dk);
+    const mutation& consume_new_partition(const dht::decorated_key& dk) {
+        return _builder.consume_new_partition(dk);
     }
 
     stop_iteration consume(tombstone t) {

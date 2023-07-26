@@ -81,7 +81,11 @@ public:
 
     void consume_new_partition(const dht::decorated_key& dk) {
         _mut_builder.emplace(_schema);
-        _mut_builder->consume_new_partition(dk);
+        // Further accounting is inaccurate as we base it on the consumed
+        // mutation-fragments, not on their final form in the mutation.
+        // This is good enough, as long as the difference is small and mostly
+        // constant (per fragment).
+        _buffer_size += _mut_builder->consume_new_partition(dk).memory_usage(*_schema);
     }
 
     void consume(tombstone t) {

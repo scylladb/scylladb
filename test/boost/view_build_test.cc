@@ -31,6 +31,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/mutation_assertions.hh"
+#include "test/lib/simple_schema.hh"
 #include "utils/ranges.hh"
 
 #include "readers/from_mutations_v2.hh"
@@ -969,4 +970,52 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering_with_random_mutati
         total += x;
     }
     assert_that(total).is_equal_to_compacted(mut);
+}
+
+// Reproducer for #14819
+// Push an partition containing only a tombstone to the view update generator
+// (with soft limit set to 1) and expect it to trigger flushing the buffer on
+// finishing the partition.
+SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering_with_empty_mutations) {
+    class consumer_verifier {
+        std::unique_ptr<row_locker> _rl;
+        std::unique_ptr<row_locker::stats> _rl_stats;
+        std::optional<dht::decorated_key> _last_dk;
+        bool& _buffer_flushed;
+
+    public:
+        consumer_verifier(schema_ptr schema, bool& buffer_flushed)
+            : _rl(std::make_unique<row_locker>(std::move(schema)))
+            , _rl_stats(std::make_unique<row_locker::stats>())
+            , _buffer_flushed(buffer_flushed)
+        { }
+        future<row_locker::lock_holder> operator()(mutation mut) {
+            _buffer_flushed = true;
+            _last_dk = mut.decorated_key();
+            return _rl->lock_pk(*_last_dk, true, db::no_timeout, *_rl_stats);
+        }
+    };
+
+    simple_schema ss;
+    auto schema = ss.schema();
+    reader_concurrency_semaphore sem(reader_concurrency_semaphore::for_tests{}, get_name(), 1, replica::new_reader_base_cost);
+    auto stop_sem = deferred_stop(sem);
+    auto permit = sem.make_tracking_only_permit(schema.get(), "test", db::no_timeout);
+    abort_source as;
+    auto [staging_reader, staging_reader_handle] = make_manually_paused_evictable_reader_v2(make_empty_mutation_source(), schema, permit,
+            query::full_partition_range, schema->full_slice(), default_priority_class(), {}, mutation_reader::forwarding::no);
+    auto close_staging_reader = deferred_close(staging_reader);
+    bool buffer_flushed = false;
+
+    auto vuc = db::view::view_updating_consumer(schema, permit, as, staging_reader_handle, consumer_verifier(schema, buffer_flushed));
+    vuc.set_buffer_size_limit_for_testing_purposes(1);
+
+    vuc.consume_new_partition(ss.make_pkey(0));
+    vuc.consume(ss.new_tombstone());
+    vuc.consume_end_of_partition();
+
+    // consume_end_of_stream() forces a flush, so we need to check before it.
+    BOOST_REQUIRE(buffer_flushed);
+
+    vuc.consume_end_of_stream();
 }
