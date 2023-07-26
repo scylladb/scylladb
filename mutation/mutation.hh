@@ -183,6 +183,8 @@ public:
     // Does not drop expired tombstones.
     // Does not expire TTLed data.
     mutation compacted() const;
+
+    size_t memory_usage(const ::schema& s) const;
 private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
