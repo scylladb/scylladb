@@ -81,7 +81,7 @@ static sstring_view table_status_to_sstring(table_status tbl_status) {
     return "UKNOWN";
 }
 
-static future<std::vector<mutation>> create_keyspace(std::string_view keyspace_name, service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper, api::timestamp_type);
+static future<std::vector<mutation>> create_keyspace(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type);
 
 static map_type attrs_type() {
     static thread_local auto t = map_type_impl::get_instance(utf8_type, bytes_type, true);
@@ -1120,7 +1120,7 @@ static future<executor::request_return_type> create_table_on_shard0(tracing::tra
     auto ts = group0_guard.write_timestamp();
     std::vector<mutation> schema_mutations;
     try {
-        schema_mutations = co_await create_keyspace(keyspace_name, sp, mm, gossiper, ts);
+        schema_mutations = co_await create_keyspace(keyspace_name, sp, gossiper, ts);
     } catch (exceptions::already_exists_exception&) {
         if (sp.data_dictionary().has_schema(keyspace_name, table_name)) {
             co_return api_error::resource_in_use(format("Table {} already exists", table_name));
@@ -4468,7 +4468,7 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
 // of nodes in the cluster: A cluster with 3 or more live nodes, gets RF=3.
 // A smaller cluster (presumably, a test only), gets RF=1. The user may
 // manually create the keyspace to override this predefined behavior.
-static future<std::vector<mutation>> create_keyspace(std::string_view keyspace_name, service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper, api::timestamp_type ts) {
+static future<std::vector<mutation>> create_keyspace(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts) {
     sstring keyspace_name_str(keyspace_name);
     int endpoint_count = gossiper.get_endpoint_states().size();
     int rf = 3;
