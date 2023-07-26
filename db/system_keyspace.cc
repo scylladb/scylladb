@@ -1433,7 +1433,7 @@ future<> system_keyspace::build_bootstrap_info() {
     });
 }
 
-future<> system_keyspace::setup(sharded<locator::snitch_ptr>& snitch, sharded<netw::messaging_service>& ms) {
+future<> system_keyspace::setup(sharded<netw::messaging_service>& ms) {
     assert(this_shard_id() == 0);
 
     co_await setup_version(ms);

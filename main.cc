@@ -1341,7 +1341,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // 1. messaging is on the way with its preferred ip cache
             // 2. cql_test_env() doesn't do it
             // 3. need to check if it depends on any of the above steps
-            sys_ks.local().setup(snitch, messaging).get();
+            sys_ks.local().setup(messaging).get();
 
             supervisor::notify("starting schema commit log");
 
