@@ -1816,18 +1816,18 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
 }
 
 future<compaction_result>
-compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s) {
+compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s, compaction_progress_monitor& progress_monitor) {
     if (descriptor.sstables.empty()) {
         return make_exception_future<compaction_result>(std::runtime_error(format("Called {} compaction with empty set on behalf of {}.{}",
                 compaction_name(descriptor.options.type()), table_s.schema()->ks_name(), table_s.schema()->cf_name())));
     }
     if (descriptor.options.type() == compaction_type::Scrub
             && std::get<compaction_type_options::scrub>(descriptor.options.options()).operation_mode == compaction_type_options::scrub::mode::validate) {
+        // FIXME: gather progress for this branch
         // Bypass the usual compaction machinery for dry-mode scrub
         return scrub_sstables_validate_mode(std::move(descriptor), cdata, table_s);
     }
-    // FIXME: use compaction_progress_monitor from compaction_task_executor.
-    return compaction::run(make_compaction(table_s, std::move(descriptor), cdata, default_compaction_progress_monitor()));
+    return compaction::run(make_compaction(table_s, std::move(descriptor), cdata, progress_monitor));
 }
 
 std::unordered_set<sstables::shared_sstable>

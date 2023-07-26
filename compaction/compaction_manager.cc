@@ -436,7 +436,7 @@ future<sstables::compaction_result> compaction_task_executor::compact_sstables(s
         }
     }
 
-    co_return co_await sstables::compact_sstables(std::move(descriptor), cdata, t);
+    co_return co_await sstables::compact_sstables(std::move(descriptor), cdata, t, _progress_monitor);
 }
 future<> compaction_task_executor::update_history(table_state& t, const sstables::compaction_result& res, const sstables::compaction_data& cdata) {
     auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.stats.ended_at.time_since_epoch());
@@ -592,10 +592,10 @@ future<> compaction_manager::perform_major_compaction(table_state& t, std::optio
 namespace compaction {
 
 class custom_compaction_task_executor : public compaction_task_executor, public compaction_task_impl {
-    noncopyable_function<future<>(sstables::compaction_data&)> _job;
+    noncopyable_function<future<>(sstables::compaction_data&, sstables::compaction_progress_monitor&)> _job;
 
 public:
-    custom_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state* t, tasks::task_id parent_id, sstables::compaction_type type, sstring desc, noncopyable_function<future<>(sstables::compaction_data&)> job)
+    custom_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, table_state* t, tasks::task_id parent_id, sstables::compaction_type type, sstring desc, noncopyable_function<future<>(sstables::compaction_data&, sstables::compaction_progress_monitor&)> job)
         : compaction_task_executor(mgr, do_throw_if_stopping, t, type, std::move(desc))
         , compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
         , _job(std::move(job))
@@ -624,7 +624,7 @@ protected:
         // NOTE:
         // no need to register shared sstables because they're excluded from non-resharding
         // compaction and some of them may not even belong to current shard.
-        co_await _job(compaction_data());
+        co_await _job(compaction_data(), _progress_monitor);
         finish_compaction();
 
         co_return std::nullopt;
@@ -633,7 +633,7 @@ protected:
 
 }
 
-future<> compaction_manager::run_custom_job(table_state& t, sstables::compaction_type type, const char* desc, noncopyable_function<future<>(sstables::compaction_data&)> job, std::optional<tasks::task_info> info, throw_if_stopping do_throw_if_stopping) {
+future<> compaction_manager::run_custom_job(table_state& t, sstables::compaction_type type, const char* desc, noncopyable_function<future<>(sstables::compaction_data&, sstables::compaction_progress_monitor&)> job, std::optional<tasks::task_info> info, throw_if_stopping do_throw_if_stopping) {
     auto gh = start_compaction(t);
     if (!gh) {
         co_return;
@@ -1570,7 +1570,7 @@ private:
                     sstables::compaction_descriptor::default_max_sstable_bytes,
                     sst->run_identifier(),
                     sstables::compaction_type_options::make_scrub(sstables::compaction_type_options::scrub::mode::validate));
-            co_return co_await sstables::compact_sstables(std::move(desc), _compaction_data, *_compacting_table);
+            co_return co_await sstables::compact_sstables(std::move(desc), _compaction_data, *_compacting_table, _progress_monitor);
         } catch (sstables::compaction_stopped_exception&) {
             // ignore, will be handled by can_proceed()
         } catch (storage_io_error& e) {

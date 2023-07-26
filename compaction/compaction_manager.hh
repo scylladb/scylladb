@@ -345,7 +345,7 @@ public:
     // parameter type is the compaction type the operation can most closely be
     //      associated with, use compaction_type::Compaction, if none apply.
     // parameter job is a function that will carry the operation
-    future<> run_custom_job(compaction::table_state& s, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&)> job, std::optional<tasks::task_info> info, throw_if_stopping do_throw_if_stopping);
+    future<> run_custom_job(compaction::table_state& s, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&, sstables::compaction_progress_monitor&)> job, std::optional<tasks::task_info> info, throw_if_stopping do_throw_if_stopping);
 
     class compaction_reenabler {
         compaction_manager& _cm;
@@ -475,6 +475,7 @@ protected:
     sstables::compaction_data _compaction_data;
     state _state = state::none;
     throw_if_stopping _do_throw_if_stopping;
+    sstables::compaction_progress_monitor _progress_monitor;
 
 private:
     shared_future<compaction_manager::compaction_stats_opt> _compaction_done = make_ready_future<compaction_manager::compaction_stats_opt>();
