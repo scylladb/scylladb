@@ -178,6 +178,16 @@ mutation mutation::compacted() const {
     return m;
 }
 
+size_t mutation::memory_usage(const ::schema& s) const {
+    auto res = sizeof(*this);
+    if (_ptr) {
+        res += sizeof(data);
+        res += _ptr->_dk.external_memory_usage();
+        res += _ptr->_p.external_memory_usage(s);
+    }
+    return res;
+}
+
 mutation reverse(mutation mut) {
     auto reverse_schema = mut.schema()->make_reversed();
     mutation_rebuilder_v2 reverse_rebuilder(reverse_schema);
