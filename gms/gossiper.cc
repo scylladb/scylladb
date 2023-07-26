@@ -2033,7 +2033,7 @@ future<> gossiper::add_saved_endpoint(inet_address ep) {
         co_return;
     }
 
-    // FIXME: lock_endpoint
+    auto permit = co_await lock_endpoint(ep, null_permit_id);
 
     //preserve any previously known, in-memory data about the endpoint (such as DC, RACK, and so on)
     auto ep_state = endpoint_state();
@@ -2055,7 +2055,7 @@ future<> gossiper::add_saved_endpoint(inet_address ep) {
     }
     ep_state.mark_dead();
     _endpoint_state_map[ep] = ep_state;
-    co_await replicate(ep, ep_state, null_permit_id);
+    co_await replicate(ep, ep_state, permit.id());
     _unreachable_endpoints[ep] = now();
     logger.trace("Adding saved endpoint {} {}", ep, ep_state.get_heart_beat_state().get_generation());
 }
