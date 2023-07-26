@@ -52,85 +52,20 @@ It is highly recommended to perform this action on a node that is not processing
 .. _superuser:
 
 Set a Superuser
-...............
+.........................
 
-By default, the superuser credentials are username cassandra, password cassandra. This is not secure. It is highly advised to change this to a unique username and password combination.
+The default ScyllaDB superuser role is ``cassandra`` with password ``cassandra``. Using the default
+superuser is unsafe and may significantly impact performance. 
 
-**Procedure**
+If you haven't created a custom superuser while enablint authentication, you should create a custom superuser
+before creating additional roles. 
+See :doc:`Creating a Custom Superuser </operating-scylla/security/create-superuser/>` for instructions.
 
-1. Start cqlsh with the default superuser settings.
-
-.. code-block:: cql
-
-   cqlsh -u cassandra -p cassandra
-
-.. note:: The cassandra user is special. When you try to login with this username, it is required to usen QUORUM consistency level(CL) for replies. On the other hand, your own user requires LOCAL_ONE consistency level.
-          This can be a problematic in certain situations, such as adding or removing DCs. In such cases the cassandra user won't be able to login.
-          Creating a superuser role and assigning yourself to the role is definitely the best way forward. Refer to :doc:`RBAC </operating-scylla/security/rbac-usecase>` for an example of how to create roles and refer to :doc:`Grant Authorization </operating-scylla/security/authorization>` for information on using the grant clause.
-
-
-2. Create a role for the superuser which has all privileges
-
-.. code-block:: cql
-
-   CREATE ROLE <role-name> WITH SUPERUSER = true;
-
-.. code-block:: cql
-
-   CREATE ROLE DBA WITH SUPERUSER = true;
-
-.. note:: This role already has complete read and write permissions on all tables and keyspaces and does not need to be granted anything else. The superuser permission setting is by default, disabled. Only for the administrator does it need to be enabled.
-
-3. Assign that role to yourself and grant login privileges
-
-.. code-block:: cql
-
-   CREATE ROLE <user> WITH PASSWORD = 'password' AND SUPERUSER = true AND LOGIN = true;
-
-.. include:: /operating-scylla/security/_common/warning-no-pwd.rst 
+.. warning::
    
-For example (John is the DBA)
-
-.. code-block:: cql
-
-   CREATE ROLE john WITH PASSWORD = '39fksah!' AND LOGIN = true;
-   GRANT DBA TO john;
-
-4. Exit cqlsh and login again with the new credentials
-
-.. code-block:: none
-  
-   cqlsh> exit
-   cqlsh -u new-username -p new-password
-
-For example:
-
-.. code-block:: none
-  
-   cqlsh> exit
-   cqlsh -u john -p 39fksah!
-
-
-.. note:: To guarantee new authorization values (like a password) are visible across the cluster, make sure to run a repair on table `system_auth` after updating or adding users.
+   We highly recommend creating a custom superuser to ensure security and avoid performance degradation.
 
 .. _roles:
-
-Setting default initial superuser credentials using the config file
-...................................................................
-
-The default super username/password in ScyllaDB is 'cassandra'/'cassandra'. This is very insecure and should be altered using the above CQL procedure. However, to avoid 
-executing with known defaults for the period before the CQL modifications can be done, the default superuser name and password can be configured in the ``scylla.yaml`` configuration file instead.
-
-.. code-block:: yaml
-   
-   auth_superuser_name: <super user name>
-   auth_superuser_salted_password: <super user salted password as processed by mkpassword or similar - not cleartext>
-
-This will set the initial values of the super user credentials. 
-
-.. note:: The password entered here must be salted, i.e. pre-hashed. Cleartext passwords are not allowed. 
-.. note:: If you alter the password of the super user using CQL (like above), the value here is ignored.
-.. note:: If any super user is already defined in the cluster, the value here is ignored.
 
 Create Additional Roles
 .......................

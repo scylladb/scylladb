@@ -62,11 +62,17 @@ Procedure
 
     .. include:: /rst_include/scylla-commands-restart-index.rst
 
-#. Start cqlsh with the default superuser username and password. The default username is ``cassandra``, the default password is ``cassandra``. You can change it later if you are enabling authorization.  
+#. Start cqlsh with the default superuser username and password. 
 
     .. code-block:: cql
 
        cqlsh -u cassandra -p cassandra
+
+   .. warning::
+
+      Before proceeding  to the next step, we highly recommend creating a custom superuser 
+      to ensure security and prevent performance degradation.
+      See :doc:`Creating a Custom Superuser </operating-scylla/security/create-superuser/>` for instructions.
 
 #. Run a repair on the ``system_auth`` keyspace on **all** the nodes in the cluster.
 	
