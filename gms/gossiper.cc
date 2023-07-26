@@ -648,8 +648,9 @@ future<> gossiper::force_remove_endpoint(inet_address endpoint, permit_id pid) {
     if (endpoint == get_broadcast_address()) {
         return make_exception_future<>(std::runtime_error(format("Can not force remove node {} itself", endpoint)));
     }
-    // FIXME: lock_endpoint (with null pid)
     return container().invoke_on(0, [endpoint, pid] (auto& gossiper) mutable -> future<> {
+        auto permit = co_await gossiper.lock_endpoint(endpoint, pid);
+        pid = permit.id();
         try {
             co_await gossiper.remove_endpoint(endpoint, pid);
             co_await gossiper.evict_from_membership(endpoint, pid);
