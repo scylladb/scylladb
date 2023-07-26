@@ -731,10 +731,10 @@ private:
         _ms_metadata.max_timestamp = timestamp_tracker.max();
     }
 
-    // This consumer will perform mutation compaction on producer side using
+    // performs mutation compaction on producer (reader) side using
     // compacting_reader. It's useful for allowing data from different buckets
     // to be compacted together.
-    future<> consume_without_gc_writer(gc_clock::time_point compaction_time) {
+    future<> compact_on_reader() {
         auto consumer = make_interposer_consumer([this] (flat_mutation_reader_v2 reader) mutable {
             return seastar::async([this, reader = std::move(reader)] () mutable {
                 auto close_reader = deferred_close(reader);
@@ -742,44 +742,57 @@ private:
                 reader.consume_in_thread(std::move(cfc));
             });
         });
+        auto now = gc_clock::now();
         const auto& gc_state = _table_s.get_tombstone_gc_state();
-        return consumer(make_compacting_reader(setup_sstable_reader(), compaction_time, max_purgeable_func(), gc_state));
+        return consumer(make_compacting_reader(setup_sstable_reader(), now, max_purgeable_func(), gc_state));
     }
 
-    future<> consume() {
-        auto now = gc_clock::now();
-        // consume_without_gc_writer(), which uses compacting_reader, is ~3% slower.
-        // let's only use it when GC writer is disabled and interposer consumer is enabled, as we
-        // wouldn't like others to pay the penalty for something they don't need.
-        if (!enable_garbage_collected_sstable_writer() && use_interposer_consumer()) {
-            return consume_without_gc_writer(now);
+    template<bool WithGC> auto get_gc_consumer() {
+        if constexpr (WithGC) {
+            return get_gc_compacted_fragments_writer();
+        } else {
+            return noop_compacted_fragments_consumer{};
         }
-        auto consumer = make_interposer_consumer([this, now] (flat_mutation_reader_v2 reader) mutable
-        {
-            return seastar::async([this, reader = std::move(reader), now] () mutable {
+    }
+    // performs mutation compaction on consumer (writer) side using
+    // compact_mutation_v2. in addition to the regular compaction writer, it
+    // also optionally arms the consumer with a gc consumer for generating a
+    // temporary sstable run for collecting the garbage collected data if
+    // `WithGC` is true.
+    template<bool WithGC>
+    future<> compact_on_writer() {
+        auto now = gc_clock::now();
+        auto consumer = make_interposer_consumer([this, now] (flat_mutation_reader_v2 reader) mutable {
+            return seastar::async([this, now, reader = std::move(reader)] () mutable {
                 auto close_reader = deferred_close(reader);
-
-                if (enable_garbage_collected_sstable_writer()) {
-                    using compact_mutations = compact_for_compaction_v2<compacted_fragments_writer, compacted_fragments_writer>;
-                    auto cfc = compact_mutations(*schema(), now,
-                        max_purgeable_func(),
-                        _table_s.get_tombstone_gc_state(),
-                        get_compacted_fragments_writer(),
-                        get_gc_compacted_fragments_writer());
-
-                    reader.consume_in_thread(std::move(cfc));
-                    return;
-                }
-                using compact_mutations = compact_for_compaction_v2<compacted_fragments_writer, noop_compacted_fragments_consumer>;
+                auto gc_consumer = get_gc_consumer<WithGC>();
+                using compact_mutations = compact_for_compaction_v2<::sstables::compacted_fragments_writer,
+                                                                    decltype(gc_consumer)>;
                 auto cfc = compact_mutations(*schema(), now,
                     max_purgeable_func(),
                     _table_s.get_tombstone_gc_state(),
                     get_compacted_fragments_writer(),
-                    noop_compacted_fragments_consumer());
+                    std::move(gc_consumer));
+
                 reader.consume_in_thread(std::move(cfc));
             });
         });
         return consumer(setup_sstable_reader());
+    }
+
+    future<> consume() {
+        // compact_on_reader(), which uses compacting_reader, is ~3% slower.
+        // let's only use it when GC writer is disabled and interposer consumer is enabled, as we
+        // wouldn't like others to pay the penalty for something they don't need.
+        if (!enable_garbage_collected_sstable_writer() &&
+            use_interposer_consumer()) {
+            return compact_on_reader();
+        }
+        if (enable_garbage_collected_sstable_writer()) {
+            return compact_on_writer<true>();
+        } else {
+            return compact_on_writer<false>();
+        }
     }
 
     virtual reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) {
