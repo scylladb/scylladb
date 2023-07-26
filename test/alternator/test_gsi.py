@@ -741,7 +741,7 @@ def test_gsi_2_describe_table_schema(test_table_gsi_2):
 # base-table keys cannot suddenly become the same item in the index.
 @pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_projection_keys_only(dynamodb):
-    table = create_test_table(dynamodb,
+    with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
         AttributeDefinitions=[
                     { 'AttributeName': 'p', 'AttributeType': 'S' },
@@ -754,22 +754,21 @@ def test_gsi_projection_keys_only(dynamodb):
                 ],
                 'Projection': { 'ProjectionType': 'KEYS_ONLY' }
             }
-        ])
-    items = [{'p': random_string(), 'x': random_string(), 'y': random_string()} for i in range(10)]
-    with table.batch_writer() as batch:
-        for item in items:
-            batch.put_item(item)
-    wanted = ['p', 'x']
-    expected_items = [{k: x[k] for k in wanted if k in x} for x in items]
-    assert_index_scan(table, 'hello', expected_items)
-    table.delete()
+        ]) as table:
+        items = [{'p': random_string(), 'x': random_string(), 'y': random_string()} for i in range(10)]
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+        wanted = ['p', 'x']
+        expected_items = [{k: x[k] for k in wanted if k in x} for x in items]
+        assert_index_scan(table, 'hello', expected_items)
 
 # Test for "ProjectionType: INCLUDE". The secondary table includes the
 # its own and the base's keys (as in KEYS_ONLY) plus the extra keys given
 # in NonKeyAttributes.
 @pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_projection_include(dynamodb):
-    table = create_test_table(dynamodb,
+    with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
         AttributeDefinitions=[
                     { 'AttributeName': 'p', 'AttributeType': 'S' },
@@ -783,18 +782,17 @@ def test_gsi_projection_include(dynamodb):
                 'Projection': { 'ProjectionType': 'INCLUDE',
                                 'NonKeyAttributes': ['a', 'b'] }
             }
-        ])
-    # Some items have the projected attributes a,b and some don't:
-    items = [{'p': random_string(), 'x': random_string(), 'a': random_string(), 'b': random_string(), 'y': random_string()} for i in range(10)]
-    items = items + [{'p': random_string(), 'x': random_string(), 'y': random_string()} for i in range(10)]
-    with table.batch_writer() as batch:
-        for item in items:
-            batch.put_item(item)
-    wanted = ['p', 'x', 'a', 'b']
-    expected_items = [{k: x[k] for k in wanted if k in x} for x in items]
-    assert_index_scan(table, 'hello', expected_items)
-    print(len(expected_items))
-    table.delete()
+        ]) as table:
+        # Some items have the projected attributes a,b and some don't:
+        items = [{'p': random_string(), 'x': random_string(), 'a': random_string(), 'b': random_string(), 'y': random_string()} for i in range(10)]
+        items = items + [{'p': random_string(), 'x': random_string(), 'y': random_string()} for i in range(10)]
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+        wanted = ['p', 'x', 'a', 'b']
+        expected_items = [{k: x[k] for k in wanted if k in x} for x in items]
+        assert_index_scan(table, 'hello', expected_items)
+        print(len(expected_items))
 
 # Despite the name "NonKeyAttributes", key attributes *may* be listed.
 # But they have no effect - because key attributes are always projected
@@ -884,7 +882,7 @@ def test_gsi_projection_include_otherkey(dynamodb):
 @pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_projection_error_missing_nonkeyattributes(dynamodb):
     with pytest.raises(ClientError, match='ValidationException.*NonKeyAttributes'):
-        create_test_table(dynamodb,
+        with new_test_table(dynamodb,
             KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
             AttributeDefinitions=[
                 { 'AttributeName': 'p', 'AttributeType': 'S' },
@@ -897,13 +895,14 @@ def test_gsi_projection_error_missing_nonkeyattributes(dynamodb):
                     ],
                     'Projection': { 'ProjectionType': 'INCLUDE' }
                 }
-            ])
+            ]) as table:
+            pass
 
 # With ProjectionType!=INCLUDE, NonKeyAttributes must not be present:
 @pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_projection_error_superflous_nonkeyattributes(dynamodb):
     with pytest.raises(ClientError, match='ValidationException.*NonKeyAttributes'):
-        create_test_table(dynamodb,
+        with new_test_table(dynamodb,
             KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
             AttributeDefinitions=[
                 { 'AttributeName': 'p', 'AttributeType': 'S' },
@@ -917,13 +916,14 @@ def test_gsi_projection_error_superflous_nonkeyattributes(dynamodb):
                     'Projection': { 'ProjectionType': 'ALL',
                                     'NonKeyAttributes': ['a'] }
                 }
-            ])
+            ]) as table:
+            pass
 
 # Duplicate attribute names in NonKeyAttributes of INCLUDE are not allowed:
 @pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_projection_error_duplicate(dynamodb):
     with pytest.raises(ClientError, match='ValidationException.*Duplicate'):
-        create_test_table(dynamodb,
+        with new_test_table(dynamodb,
             KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
             AttributeDefinitions=[
                 { 'AttributeName': 'p', 'AttributeType': 'S' },
@@ -937,7 +937,8 @@ def test_gsi_projection_error_duplicate(dynamodb):
                     'Projection': { 'ProjectionType': 'INCLUDE',
                                     'NonKeyAttributes': ['a', 'a'] }
                 }
-            ])
+            ]) as table:
+            passs
 
 # NonKeyAttributes must be a list of strings. Non-strings in this list
 # result, for some reason, in SerializationException instead of the more
@@ -945,7 +946,7 @@ def test_gsi_projection_error_duplicate(dynamodb):
 @pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_projection_error_nonstring_nonkeyattributes(dynamodb):
     with pytest.raises(ClientError, match='SerializationException'):
-        create_test_table(dynamodb,
+        with new_test_table(dynamodb,
             KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
             AttributeDefinitions=[
                 { 'AttributeName': 'p', 'AttributeType': 'S' },
@@ -959,13 +960,14 @@ def test_gsi_projection_error_nonstring_nonkeyattributes(dynamodb):
                     'Projection': { 'ProjectionType': 'INCLUDE',
                                     'NonKeyAttributes': ['a', 123] }
                 }
-            ])
+            ]) as table:
+            pass
 
 # An unsupported ProjectionType value should result in an error:
 @pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_bad_projection_type(dynamodb):
     with pytest.raises(ClientError, match='ValidationException.*nonsense'):
-        create_test_table(dynamodb,
+        with new_test_table(dynamodb,
             KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
             AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
             GlobalSecondaryIndexes=[
@@ -973,7 +975,8 @@ def test_gsi_bad_projection_type(dynamodb):
                     'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
                     'Projection': { 'ProjectionType': 'nonsense' }
                 }
-            ])
+            ]) as table:
+            pass
 
 # DynamoDB's says the "Projection" argument of GlobalSecondaryIndexes is
 # mandatory, and indeed Boto3 enforces that it must be passed. The
@@ -984,7 +987,7 @@ def test_gsi_bad_projection_type(dynamodb):
 @pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_missing_projection_type(dynamodb):
     with pytest.raises(ClientError, match='ValidationException.*ProjectionType'):
-        create_test_table(dynamodb,
+        with new_test_table(dynamodb,
             KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
             AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
             GlobalSecondaryIndexes=[
@@ -992,7 +995,8 @@ def test_gsi_missing_projection_type(dynamodb):
                     'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
                     'Projection': {}
                 }
-            ])
+            ]) as table:
+            pass
 
 # update_table() for creating a GSI is an asynchronous operation.
 # The table's TableStatus changes from ACTIVE to UPDATING for a short while
@@ -1064,56 +1068,55 @@ def test_gsi_backfill(dynamodb):
     # indexed. Items in item2 have no value for 'x', and in item3 'x' is in
     # not a string; So the items in items2 and items3 will be missing
     # in the index we'll create later.
-    table = create_test_table(dynamodb,
+    with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
-        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ])
-    items1 = [{'p': random_string(), 'x': random_string(), 'y': random_string()} for i in range(10)]
-    items2 = [{'p': random_string(), 'y': random_string()} for i in range(10)]
-    items3 = [{'p': random_string(), 'x': i} for i in range(10)]
-    items = items1 + items2 + items3
-    with table.batch_writer() as batch:
-        for item in items:
-            batch.put_item(item)
-    assert multiset(items) == multiset(full_scan(table))
-    # Now use UpdateTable to create the GSI
-    dynamodb.meta.client.update_table(TableName=table.name,
-        AttributeDefinitions=[{ 'AttributeName': 'x', 'AttributeType': 'S' }],
-        GlobalSecondaryIndexUpdates=[ {  'Create':
-            {  'IndexName': 'hello',
-                'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
-                'Projection': { 'ProjectionType': 'ALL' }
-            }}])
-    # update_table is an asynchronous operation. We need to wait until it
-    # finishes and the table is backfilled.
-    wait_for_gsi(table, 'hello')
-    # As explained above, only items in items1 got copied to the gsi,
-    # and Scan on them works as expected.
-    # Note that we don't need to retry the reads here (i.e., use the
-    # assert_index_scan() or assert_index_query() functions) because after
-    # we waited for backfilling to complete, we know all the pre-existing
-    # data is already in the index.
-    assert multiset(items1) == multiset(full_scan(table, ConsistentRead=False, IndexName='hello'))
-    # We can also use Query on the new GSI, to search on the attribute x:
-    assert multiset([items1[3]]) == multiset(full_query(table,
-        ConsistentRead=False, IndexName='hello',
-        KeyConditions={'x': {'AttributeValueList': [items1[3]['x']], 'ComparisonOperator': 'EQ'}}))
-    # Let's also test that we cannot add another index with the same name
-    # that already exists
-    with pytest.raises(ClientError, match='ValidationException.*already exists'):
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
+        items1 = [{'p': random_string(), 'x': random_string(), 'y': random_string()} for i in range(10)]
+        items2 = [{'p': random_string(), 'y': random_string()} for i in range(10)]
+        items3 = [{'p': random_string(), 'x': i} for i in range(10)]
+        items = items1 + items2 + items3
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+        assert multiset(items) == multiset(full_scan(table))
+        # Now use UpdateTable to create the GSI
         dynamodb.meta.client.update_table(TableName=table.name,
-            AttributeDefinitions=[{ 'AttributeName': 'y', 'AttributeType': 'S' }],
+            AttributeDefinitions=[{ 'AttributeName': 'x', 'AttributeType': 'S' }],
             GlobalSecondaryIndexUpdates=[ {  'Create':
                 {  'IndexName': 'hello',
-                    'KeySchema': [{ 'AttributeName': 'y', 'KeyType': 'HASH' }],
+                    'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
                     'Projection': { 'ProjectionType': 'ALL' }
                 }}])
-    table.delete()
+        # update_table is an asynchronous operation. We need to wait until it
+        # finishes and the table is backfilled.
+        wait_for_gsi(table, 'hello')
+        # As explained above, only items in items1 got copied to the gsi,
+        # and Scan on them works as expected.
+        # Note that we don't need to retry the reads here (i.e., use the
+        # assert_index_scan() or assert_index_query() functions) because after
+        # we waited for backfilling to complete, we know all the pre-existing
+        # data is already in the index.
+        assert multiset(items1) == multiset(full_scan(table, ConsistentRead=False, IndexName='hello'))
+        # We can also use Query on the new GSI, to search on the attribute x:
+        assert multiset([items1[3]]) == multiset(full_query(table,
+            ConsistentRead=False, IndexName='hello',
+            KeyConditions={'x': {'AttributeValueList': [items1[3]['x']], 'ComparisonOperator': 'EQ'}}))
+        # Let's also test that we cannot add another index with the same name
+        # that already exists
+        with pytest.raises(ClientError, match='ValidationException.*already exists'):
+            dynamodb.meta.client.update_table(TableName=table.name,
+                AttributeDefinitions=[{ 'AttributeName': 'y', 'AttributeType': 'S' }],
+                GlobalSecondaryIndexUpdates=[ {  'Create':
+                    {  'IndexName': 'hello',
+                        'KeySchema': [{ 'AttributeName': 'y', 'KeyType': 'HASH' }],
+                        'Projection': { 'ProjectionType': 'ALL' }
+                    }}])
 
 # Test deleting an existing GSI using UpdateTable
 # Reproduces issue #5022.
 @pytest.mark.xfail(reason="issue #5022")
 def test_gsi_delete(dynamodb):
-    table = create_test_table(dynamodb,
+    with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
         AttributeDefinitions=[
                     { 'AttributeName': 'p', 'AttributeType': 'S' },
@@ -1126,26 +1129,25 @@ def test_gsi_delete(dynamodb):
                 ],
                 'Projection': { 'ProjectionType': 'ALL' }
             }
-        ])
-    items = [{'p': random_string(), 'x': random_string()} for i in range(10)]
-    with table.batch_writer() as batch:
-        for item in items:
-            batch.put_item(item)
-    # So far, we have the index for "x" and can use it:
-    assert_index_query(table, 'hello', [items[3]],
-        KeyConditions={'x': {'AttributeValueList': [items[3]['x']], 'ComparisonOperator': 'EQ'}})
-    # Now use UpdateTable to delete the GSI for "x"
-    dynamodb.meta.client.update_table(TableName=table.name,
-        GlobalSecondaryIndexUpdates=[{  'Delete':
-            { 'IndexName': 'hello' } }])
-    # update_table is an asynchronous operation. We need to wait until it
-    # finishes and the GSI is removed.
-    wait_for_gsi_gone(table, 'hello')
-    # Now index is gone. We cannot query using it.
-    with pytest.raises(ClientError, match='ValidationException.*hello'):
-        full_query(table, ConsistentRead=False, IndexName='hello',
+        ]) as table:
+        items = [{'p': random_string(), 'x': random_string()} for i in range(10)]
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+        # So far, we have the index for "x" and can use it:
+        assert_index_query(table, 'hello', [items[3]],
             KeyConditions={'x': {'AttributeValueList': [items[3]['x']], 'ComparisonOperator': 'EQ'}})
-    table.delete()
+        # Now use UpdateTable to delete the GSI for "x"
+        dynamodb.meta.client.update_table(TableName=table.name,
+            GlobalSecondaryIndexUpdates=[{  'Delete':
+                { 'IndexName': 'hello' } }])
+        # update_table is an asynchronous operation. We need to wait until it
+        # finishes and the GSI is removed.
+        wait_for_gsi_gone(table, 'hello')
+        # Now index is gone. We cannot query using it.
+        with pytest.raises(ClientError, match='ValidationException.*hello'):
+            full_query(table, ConsistentRead=False, IndexName='hello',
+                KeyConditions={'x': {'AttributeValueList': [items[3]['x']], 'ComparisonOperator': 'EQ'}})
 
 # Utility function for creating a new table a GSI with the given name,
 # and, if creation was successful, delete it. Useful for testing which
