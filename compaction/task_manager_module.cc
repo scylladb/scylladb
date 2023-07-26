@@ -265,6 +265,10 @@ future<tasks::task_manager::task::progress> compaction_task_impl::get_progress(c
     };
 }
 
+tasks::is_abortable compaction_task_impl::is_abortable() const noexcept {
+    return tasks::is_abortable{!_parent_id};
+}
+
 future<> major_keyspace_compaction_task_impl::run() {
     co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
         tasks::task_info parent_info{_status.id, _status.shard};
