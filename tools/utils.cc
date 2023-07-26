@@ -6,7 +6,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <seastar/core/thread.hh>
+
 #include "tools/utils.hh"
+#include "utils/logalloc.hh"
 
 namespace tools::utils {
 
@@ -28,6 +31,72 @@ void configure_tool_mode(app_template::seastar_options& opts, const sstring& log
         opts.log_opts.logger_log_level.set_value({});
         opts.log_opts.logger_log_level.get_value()[logger_name] = log_level::info;
     }
+}
+
+int tool_app_template::run_async(int argc, char** argv, noncopyable_function<int(const operation&, const boost::program_options::variables_map&)> main_func) {
+    const operation* found_op = nullptr;
+    if (std::strcmp(argv[1], "--help") != 0 && std::strcmp(argv[1], "-h") != 0) {
+        found_op = &tools::utils::get_selected_operation(argc, argv, _cfg.operations, "operation");
+    }
+
+    app_template::seastar_options app_cfg;
+    app_cfg.name = _cfg.name;
+
+    if (found_op) {
+        app_cfg.description = format("{}\n\n{}\n", found_op->summary(), found_op->description());
+    } else {
+        app_cfg.description = _cfg.description;
+    }
+
+    tools::utils::configure_tool_mode(app_cfg, _cfg.logger_name);
+
+    app_template app(std::move(app_cfg));
+
+    if (_cfg.global_options) {
+        auto& global_desc = app.get_options_description();
+        for (const auto& go : *_cfg.global_options) {
+            go.add_option(global_desc);
+        }
+    }
+    if (_cfg.global_positional_options) {
+        for (const auto& gpo : *_cfg.global_positional_options) {
+            app.add_positional_options({gpo});
+        }
+    }
+
+    if (found_op) {
+        boost::program_options::options_description op_desc(found_op->name());
+        size_t options_added = 0;
+        for (const auto& opt_name : found_op->available_options()) {
+            if (_cfg.operation_options) {
+                auto it = std::ranges::find_if(*_cfg.operation_options, [&] (const operation_option& opt) { return opt.name() == opt_name; });
+                if (it != _cfg.operation_options->end()) {
+                    it->add_option(op_desc);
+                    ++options_added;
+                    continue;
+                }
+            }
+            if (_cfg.operation_positional_options) {
+                auto it = std::ranges::find_if(*_cfg.operation_positional_options, [&] (const app_template::positional_option& opt) { return opt.name == opt_name; });
+                if (it != _cfg.operation_positional_options->end()) {
+                    app.add_positional_options({*it});
+                    continue;
+                }
+            }
+            std::abort(); // failed to look-up option
+        }
+        if (options_added) {
+            app.get_options_description().add(op_desc);
+        }
+    }
+
+    return app.run(argc, argv, [this, &main_func, &app, found_op] {
+        return async([this, &main_func, &app, found_op] {
+            logalloc::use_standard_allocator_segment_pool_backend(_cfg.lsa_segment_pool_backend_size_mb * 1024 * 1024).get();
+            assert(found_op);
+            return main_func(*found_op, app.configuration());
+        });
+    });
 }
 
 } // namespace tools::utils
