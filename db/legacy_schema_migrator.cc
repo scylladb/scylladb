@@ -49,8 +49,8 @@ class migrator {
 public:
     static const std::unordered_set<sstring> legacy_schema_tables;
 
-    migrator(sharded<service::storage_proxy>& sp, sharded<replica::database>& db, cql3::query_processor& qp)
-                    : _sp(sp), _db(db), _qp(qp) {
+    migrator(sharded<service::storage_proxy>& sp, sharded<replica::database>& db, sharded<db::system_keyspace>& sys_ks, cql3::query_processor& qp)
+                    : _sp(sp), _db(db), _sys_ks(sys_ks), _qp(qp) {
     }
     migrator(migrator&&) = default;
 
@@ -535,7 +535,7 @@ public:
         mlogger.info("Dropping legacy schema tables");
         auto with_snapshot = !_keyspaces.empty();
         return parallel_for_each(legacy_schema_tables, [this, with_snapshot](const sstring& cfname) {
-            return replica::database::drop_table_on_all_shards(_db, db::system_keyspace::NAME, cfname, with_snapshot);
+            return replica::database::drop_table_on_all_shards(_db, _sys_ks, db::system_keyspace::NAME, cfname, with_snapshot);
         });
     }
 
@@ -582,6 +582,7 @@ public:
 
     sharded<service::storage_proxy>& _sp;
     sharded<replica::database>& _db;
+    sharded<db::system_keyspace>& _sys_ks;
     cql3::query_processor& _qp;
     std::vector<keyspace> _keyspaces;
 };
@@ -600,7 +601,7 @@ const std::unordered_set<sstring> migrator::legacy_schema_tables = {
 }
 
 future<>
-db::legacy_schema_migrator::migrate(sharded<service::storage_proxy>& sp, sharded<replica::database>& db, cql3::query_processor& qp) {
-    return do_with(migrator(sp, db, qp), std::bind(&migrator::migrate, std::placeholders::_1));
+db::legacy_schema_migrator::migrate(sharded<service::storage_proxy>& sp, sharded<replica::database>& db, sharded<db::system_keyspace>& sys_ks, cql3::query_processor& qp) {
+    return do_with(migrator(sp, db, sys_ks, qp), std::bind(&migrator::migrate, std::placeholders::_1));
 }
 

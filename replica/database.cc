@@ -1126,7 +1126,8 @@ future<global_table_ptr> get_table_on_all_shards(sharded<database>& sharded_db, 
     co_return table_shards;
 }
 
-future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name, bool with_snapshot) {
+future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
+        sstring ks_name, sstring cf_name, bool with_snapshot) {
     auto auto_snapshot = sharded_db.local().get_config().auto_snapshot();
     dblog.info("Dropping {}.{} {}snapshot", ks_name, cf_name, with_snapshot && auto_snapshot ? "with auto-" : "without ");
 
@@ -1143,7 +1144,7 @@ future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, sstri
     // to ensure all sstables are truncated,
     // but be careful to stays within the client's datetime limits.
     constexpr db_clock::time_point truncated_at(std::chrono::seconds(253402214400));
-    auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt)));
+    auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt)));
     co_await smp::invoke_on_all([&] {
         return table_shards->stop();
     });
@@ -2478,10 +2479,11 @@ future<> database::snapshot_keyspace_on_all_shards(sharded<database>& sharded_db
     });
 }
 
-future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, sstring ks_name, sstring cf_name, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
+future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
+        sstring ks_name, sstring cf_name, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
     auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
     auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
-    co_return co_await truncate_table_on_all_shards(sharded_db, table_shards, truncated_at_opt, with_snapshot, std::move(snapshot_name_opt));
+    co_return co_await truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at_opt, with_snapshot, std::move(snapshot_name_opt));
 }
 
 struct database::table_truncate_state {
@@ -2492,7 +2494,8 @@ struct database::table_truncate_state {
     bool did_flush;
 };
 
-future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
+future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
+        const global_table_ptr& table_shards, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
     auto& cf = *table_shards;
     auto s = cf.schema();
 
@@ -2580,11 +2583,11 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, c
         auto& cf = *table_shards;
         auto& st = *table_states[shard];
 
-        return db.truncate(cf, st, truncated_at);
+        return db.truncate(sys_ks.local(), cf, st, truncated_at);
     });
 }
 
-future<> database::truncate(column_family& cf, const table_truncate_state& st, db_clock::time_point truncated_at) {
+future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, const table_truncate_state& st, db_clock::time_point truncated_at) {
     dblog.trace("Truncating {}.{} on shard", cf.schema()->ks_name(), cf.schema()->cf_name());
 
     const auto uuid = cf.schema()->id();
@@ -2607,16 +2610,16 @@ future<> database::truncate(column_family& cf, const table_truncate_state& st, d
     if (rp == db::replay_position()) {
         rp = st.low_mark;
     }
-    co_await coroutine::parallel_for_each(cf.views(), [this, truncated_at] (view_ptr v) -> future<> {
+    co_await coroutine::parallel_for_each(cf.views(), [this, &sys_ks, truncated_at] (view_ptr v) -> future<> {
         auto& vcf = find_column_family(v);
             db::replay_position rp = co_await vcf.discard_sstables(truncated_at);
-            co_await db::system_keyspace::save_truncation_record(vcf, truncated_at, rp);
+            co_await sys_ks.save_truncation_record(vcf, truncated_at, rp);
     });
     // save_truncation_record() may actually fail after we cached the truncation time
     // but this is not be worse that if failing without caching: at least the correct time
     // will be available until next reboot and a client will have to retry truncation anyway.
     cf.cache_truncation_record(truncated_at);
-    co_await db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
+    co_await sys_ks.save_truncation_record(cf, truncated_at, rp);
 
     auto& gc_state = get_compaction_manager().get_tombstone_gc_state();
     gc_state.drop_repair_history_map_for_table(uuid);

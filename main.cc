@@ -1328,7 +1328,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             group0_client.init().get();
 
             // schema migration, if needed, is also done on shard 0
-            db::legacy_schema_migrator::migrate(proxy, db, qp.local()).get();
+            db::legacy_schema_migrator::migrate(proxy, db, sys_ks, qp.local()).get();
 
             // making compaction manager api available, after system keyspace has already been established.
             api::set_server_compaction_manager(ctx).get();

@@ -148,6 +148,7 @@ struct qualified_name {
 static future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy, const qualified_name& table, schema_ptr s);
 
 static future<> merge_tables_and_views(distributed<service::storage_proxy>& proxy,
+    sharded<db::system_keyspace>& sys_ks,
     std::map<table_id, schema_mutations>&& tables_before,
     std::map<table_id, schema_mutations>&& tables_after,
     std::map<table_id, schema_mutations>&& views_before,
@@ -164,7 +165,7 @@ static future<user_types_to_drop> merge_types(distributed<service::storage_proxy
 static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after);
 static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after, schema_result scylla_before, schema_result scylla_after);
 
-static future<> do_merge_schema(distributed<service::storage_proxy>&, std::vector<mutation>, bool do_flush);
+static future<> do_merge_schema(distributed<service::storage_proxy>&, sharded<db::system_keyspace>& sys_ks, std::vector<mutation>, bool do_flush);
 
 using computed_columns_map = std::unordered_map<bytes, column_computation_ptr>;
 static computed_columns_map get_computed_columns(const schema_mutations& sm);
@@ -980,7 +981,7 @@ future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service:
     }
     co_await with_merge_lock([&] () mutable -> future<> {
         bool flush_schema = proxy.local().get_db().local().get_config().flush_schema_tables_after_modification();
-        co_await do_merge_schema(proxy, std::move(mutations), flush_schema);
+        co_await do_merge_schema(proxy, sys_ks, std::move(mutations), flush_schema);
         co_await update_schema_version_and_announce(sys_ks, proxy, feat.cluster_schema_features());
     });
 }
@@ -1219,7 +1220,7 @@ table_selector get_affected_tables(const sstring& keyspace_name, const mutation&
     return result;
 }
 
-static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush)
+static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks, std::vector<mutation> mutations, bool do_flush)
 {
     slogger.trace("do_merge_schema: {}", mutations);
     schema_ptr s = keyspaces();
@@ -1300,7 +1301,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
 
     std::set<sstring> keyspaces_to_drop = co_await merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces));
     auto types_to_drop = co_await merge_types(proxy, std::move(old_types), std::move(new_types));
-    co_await merge_tables_and_views(proxy,
+    co_await merge_tables_and_views(proxy, sys_ks,
         std::move(old_column_families), std::move(new_column_families),
         std::move(old_views), std::move(new_views));
     co_await merge_functions(proxy, std::move(old_functions), std::move(new_functions));
@@ -1435,6 +1436,7 @@ static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy
 // upon an alter table or alter type statement), then they are published together
 // as well, without any deferring in-between.
 static future<> merge_tables_and_views(distributed<service::storage_proxy>& proxy,
+    sharded<db::system_keyspace>& sys_ks,
     std::map<table_id, schema_mutations>&& tables_before,
     std::map<table_id, schema_mutations>&& tables_after,
     std::map<table_id, schema_mutations>&& views_before,
@@ -1488,13 +1490,13 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     // to a mv not finding its schema when snapshoting since the main table
     // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
     auto& db = proxy.local().get_db();
-    co_await max_concurrent_for_each(views_diff.dropped, max_concurrent, [&db] (schema_diff::dropped_schema& dt) {
+    co_await max_concurrent_for_each(views_diff.dropped, max_concurrent, [&db, &sys_ks] (schema_diff::dropped_schema& dt) {
         auto& s = *dt.schema.get();
-        return replica::database::drop_table_on_all_shards(db, s.ks_name(), s.cf_name());
+        return replica::database::drop_table_on_all_shards(db, sys_ks, s.ks_name(), s.cf_name());
     });
-    co_await max_concurrent_for_each(tables_diff.dropped, max_concurrent, [&db] (schema_diff::dropped_schema& dt) -> future<> {
+    co_await max_concurrent_for_each(tables_diff.dropped, max_concurrent, [&db, &sys_ks] (schema_diff::dropped_schema& dt) -> future<> {
         auto& s = *dt.schema.get();
-        return replica::database::drop_table_on_all_shards(db, s.ks_name(), s.cf_name());
+        return replica::database::drop_table_on_all_shards(db, sys_ks, s.ks_name(), s.cf_name());
     });
 
     co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
