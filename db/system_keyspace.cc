@@ -1437,7 +1437,6 @@ future<> system_keyspace::setup(sharded<netw::messaging_service>& ms) {
     assert(this_shard_id() == 0);
 
     co_await setup_version(ms);
-    co_await update_schema_version(_db.get_version());
     co_await build_bootstrap_info();
     co_await check_health();
     co_await db::schema_tables::save_system_keyspace_schema(_qp);
