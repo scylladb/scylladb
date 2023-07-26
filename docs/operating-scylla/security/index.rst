@@ -7,6 +7,7 @@ Security
    security-checklist
    authentication
    runtime-authentication
+   create-superuser
    gen-cqlsh-file
    Reset Authenticator Password </troubleshooting/password-reset>
    enable-authorization
@@ -33,6 +34,7 @@ Security
 
   * :doc:`Enable Authentication </operating-scylla/security/authentication/>`
   * :doc:`Enable and Disable Authentication Without Downtime </operating-scylla/security/runtime-authentication/>`
+  * :doc:`Creating a Custom Superuser </operating-scylla/security/create-superuser/>`
   * :doc:`Generate a cqlshrc File <gen-cqlsh-file>`
   * :doc:`Enable Authorization</operating-scylla/security/enable-authorization/>`
   * :doc:`Role Based Access Control (RBAC) </operating-scylla/security/rbac-usecase/>`
