@@ -385,6 +385,10 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
     explicit compaction_read_monitor_generator(table_state& table_s, use_backlog_tracker use_backlog_tracker = use_backlog_tracker::yes)
         : _table_s(table_s), _use_backlog_tracker(use_backlog_tracker) {}
 
+    uint64_t compacted() const {
+        return boost::accumulate(_generated_monitors | boost::adaptors::map_values | boost::adaptors::transformed([](auto& monitor) { return monitor.compacted(); }), uint64_t(0));
+    }
+
     void remove_exhausted_sstables(const std::vector<sstables::shared_sstable>& exhausted_sstables) {
         for (auto& sst : exhausted_sstables) {
             auto it = _generated_monitors.find(sst->generation());
@@ -397,7 +401,32 @@ private:
     table_state& _table_s;
     std::unordered_map<generation_type, compaction_read_monitor> _generated_monitors;
     use_backlog_tracker _use_backlog_tracker;
+
+    friend class compaction_progress_monitor;
 };
+
+static compaction_progress_monitor default_noop_compaction_progress_monitor;
+compaction_progress_monitor& default_compaction_progress_monitor() {
+    return default_noop_compaction_progress_monitor;
+}
+
+void compaction_progress_monitor::set_generator(std::unique_ptr<read_monitor_generator> generator) {
+    _generator = std::move(generator);
+}
+
+void compaction_progress_monitor::reset_generator() {
+    if (_generator) {
+        _progress = dynamic_cast<compaction_read_monitor_generator&>(*_generator).compacted();
+    }
+    _generator = nullptr;
+}
+
+uint64_t compaction_progress_monitor::get_progress() const {
+    if (_generator) {
+        return dynamic_cast<compaction_read_monitor_generator&>(*_generator).compacted();
+    }
+    return _progress;
+}
 
 class formatted_sstables_list {
     bool _include_origin = true;
@@ -469,13 +498,15 @@ protected:
     // Garbage collected sstables that were added to SSTable set and should be eventually removed from it.
     std::vector<shared_sstable> _used_garbage_collected_sstables;
     utils::observable<> _stop_request_observable;
+    // keeps track of monitors for input sstable, which are responsible for adjusting backlog as compaction progresses.
+    compaction_progress_monitor& _progress_monitor;
 private:
     compaction_data& init_compaction_data(compaction_data& cdata, const compaction_descriptor& descriptor) const {
         cdata.compaction_fan_in = descriptor.fan_in();
         return cdata;
     }
 protected:
-    compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata)
+    compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor)
         : _cdata(init_compaction_data(cdata, descriptor))
         , _table_s(table_s)
         , _sstable_creator(std::move(descriptor.creator))
@@ -494,6 +525,7 @@ protected:
         , _owned_ranges(std::move(descriptor.owned_ranges))
         , _sharder(descriptor.sharder)
         , _owned_ranges_checker(_owned_ranges ? std::optional<dht::incremental_owned_ranges_checker>(*_owned_ranges) : std::nullopt)
+        , _progress_monitor(progress_monitor)
     {
         for (auto& sst : _sstables) {
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
@@ -502,6 +534,13 @@ protected:
         _contains_multi_fragment_runs = std::any_of(_sstables.begin(), _sstables.end(), [&ssts_run_ids] (shared_sstable& sst) {
             return !ssts_run_ids.insert(sst->run_identifier()).second;
         });
+    }
+
+    read_monitor_generator& unwrap_monitor_generator() const {
+        if (_progress_monitor._generator) {
+            return *_progress_monitor._generator;
+        }
+        return default_read_monitor_generator();
     }
 
     virtual uint64_t partitions_per_sstable() const {
@@ -625,6 +664,7 @@ public:
     compaction& operator=(compaction&& other) = delete;
 
     virtual ~compaction() {
+        _progress_monitor.reset_generator();
     }
 private:
     // Default range sstable reader that will only return mutation that belongs to current shard.
@@ -1045,14 +1085,12 @@ void compacted_fragments_writer::consume_end_of_stream() {
 }
 
 class regular_compaction : public compaction {
-    // keeps track of monitors for input sstable, which are responsible for adjusting backlog as compaction progresses.
-    mutable compaction_read_monitor_generator _monitor_generator;
     seastar::semaphore _replacer_lock = {1};
 public:
-    regular_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata)
-        : compaction(table_s, std::move(descriptor), cdata)
-        , _monitor_generator(_table_s)
+    regular_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor)
+        : compaction(table_s, std::move(descriptor), cdata, progress_monitor)
     {
+        _progress_monitor.set_generator(std::make_unique<compaction_read_monitor_generator>(_table_s));
     }
 
     flat_mutation_reader_v2 make_sstable_reader(schema_ptr s,
@@ -1069,7 +1107,7 @@ public:
                 std::move(trace),
                 sm_fwd,
                 mr_fwd,
-                _monitor_generator);
+                unwrap_monitor_generator());
     }
 
     std::string_view report_start_desc() const override {
@@ -1140,7 +1178,7 @@ private:
             log_debug("Replacing earlier exhausted sstable(s) {} by new sstable(s) {}", formatted_sstables_list(exhausted_ssts, false), formatted_sstables_list(_new_unused_sstables, true));
             _replacer(get_compaction_completion_desc(exhausted_ssts, std::move(_new_unused_sstables)));
             _sstables.erase(exhausted, _sstables.end());
-            _monitor_generator.remove_exhausted_sstables(exhausted_ssts);
+            dynamic_cast<compaction_read_monitor_generator&>(unwrap_monitor_generator()).remove_exhausted_sstables(exhausted_ssts);
         }
     }
 
@@ -1187,8 +1225,8 @@ private:
         return bool(_replacer);
     }
 public:
-    reshape_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata)
-            : regular_compaction(table_s, std::move(descriptor), cdata) {
+    reshape_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor)
+        : regular_compaction(table_s, std::move(descriptor), cdata, progress_monitor) {
     }
 
     virtual sstables::sstable_set make_sstable_set_for_input() const override {
@@ -1274,8 +1312,8 @@ protected:
     }
 
 public:
-    cleanup_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata)
-        : regular_compaction(table_s, std::move(descriptor), cdata)
+    cleanup_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor)
+        : regular_compaction(table_s, std::move(descriptor), cdata, progress_monitor)
     {
     }
 
@@ -1504,8 +1542,8 @@ private:
     mutable uint64_t _validation_errors = 0;
 
 public:
-    scrub_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_type_options::scrub options)
-        : regular_compaction(table_s, std::move(descriptor), cdata)
+    scrub_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_type_options::scrub options, compaction_progress_monitor& progress_monitor)
+        : regular_compaction(table_s, std::move(descriptor), cdata, progress_monitor)
         , _options(options)
         , _scrub_start_description(fmt::format("Scrubbing in {} mode", _options.operation_mode))
         , _scrub_finish_description(fmt::format("Finished scrubbing in {} mode", _options.operation_mode)) {
@@ -1601,8 +1639,8 @@ private:
                 _table_s.get_compaction_strategy().adjust_partition_estimate(_ms_metadata, _estimation_per_shard[s].estimated_partitions));
     }
 public:
-    resharding_compaction(table_state& table_s, sstables::compaction_descriptor descriptor, compaction_data& cdata)
-        : compaction(table_s, std::move(descriptor), cdata)
+    resharding_compaction(table_state& table_s, sstables::compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor)
+        : compaction(table_s, std::move(descriptor), cdata, progress_monitor)
         , _estimation_per_shard(smp::count)
         , _run_identifiers(smp::count)
     {
@@ -1708,31 +1746,32 @@ compaction_type compaction_type_options::type() const {
     return index_to_type[_options.index()];
 }
 
-static std::unique_ptr<compaction> make_compaction(table_state& table_s, sstables::compaction_descriptor descriptor, compaction_data& cdata) {
+static std::unique_ptr<compaction> make_compaction(table_state& table_s, sstables::compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor) {
     struct {
         table_state& table_s;
         sstables::compaction_descriptor&& descriptor;
         compaction_data& cdata;
+        compaction_progress_monitor& progress_monitor;
 
         std::unique_ptr<compaction> operator()(compaction_type_options::reshape) {
-            return std::make_unique<reshape_compaction>(table_s, std::move(descriptor), cdata);
+            return std::make_unique<reshape_compaction>(table_s, std::move(descriptor), cdata, progress_monitor);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::reshard) {
-            return std::make_unique<resharding_compaction>(table_s, std::move(descriptor), cdata);
+            return std::make_unique<resharding_compaction>(table_s, std::move(descriptor), cdata, progress_monitor);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::regular) {
-            return std::make_unique<regular_compaction>(table_s, std::move(descriptor), cdata);
+            return std::make_unique<regular_compaction>(table_s, std::move(descriptor), cdata, progress_monitor);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::cleanup) {
-            return std::make_unique<cleanup_compaction>(table_s, std::move(descriptor), cdata);
+            return std::make_unique<cleanup_compaction>(table_s, std::move(descriptor), cdata, progress_monitor);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::upgrade) {
-            return std::make_unique<cleanup_compaction>(table_s, std::move(descriptor), cdata);
+            return std::make_unique<cleanup_compaction>(table_s, std::move(descriptor), cdata, progress_monitor);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::scrub scrub_options) {
-            return std::make_unique<scrub_compaction>(table_s, std::move(descriptor), cdata, scrub_options);
+            return std::make_unique<scrub_compaction>(table_s, std::move(descriptor), cdata, scrub_options, progress_monitor);
         }
-    } visitor_factory{table_s, std::move(descriptor), cdata};
+    } visitor_factory{table_s, std::move(descriptor), cdata, progress_monitor};
 
     return descriptor.options.visit(visitor_factory);
 }
@@ -1785,7 +1824,8 @@ compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cd
         // Bypass the usual compaction machinery for dry-mode scrub
         return scrub_sstables_validate_mode(std::move(descriptor), cdata, table_s);
     }
-    return compaction::run(make_compaction(table_s, std::move(descriptor), cdata));
+    // FIXME: use compaction_progress_monitor from compaction_task_executor.
+    return compaction::run(make_compaction(table_s, std::move(descriptor), cdata, default_compaction_progress_monitor()));
 }
 
 std::unordered_set<sstables::shared_sstable>

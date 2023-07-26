@@ -100,6 +100,22 @@ struct compaction_result {
     compaction_stats stats;
 };
 
+class read_monitor_generator;
+
+class compaction_progress_monitor {
+    std::unique_ptr<read_monitor_generator> _generator = nullptr;
+    uint64_t _progress = 0;
+public:
+    void set_generator(std::unique_ptr<read_monitor_generator> generator);
+    void reset_generator();
+    // Returns number of bytes processed with _generator.
+    uint64_t get_progress() const;
+
+    friend class compaction;
+};
+
+compaction_progress_monitor& default_compaction_progress_monitor();
+
 // Compact a list of N sstables into M sstables.
 // Returns info about the finished compaction, which includes vector to new sstables.
 //
