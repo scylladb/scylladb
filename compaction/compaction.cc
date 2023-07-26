@@ -498,15 +498,16 @@ protected:
     // Garbage collected sstables that were added to SSTable set and should be eventually removed from it.
     std::vector<shared_sstable> _used_garbage_collected_sstables;
     utils::observable<> _stop_request_observable;
-    // keeps track of monitors for input sstable, which are responsible for adjusting backlog as compaction progresses.
-    compaction_progress_monitor& _progress_monitor;
 private:
+    // Keeps track of monitors for input sstable.
+    // If _update_backlog_tracker is set to true, monitors are responsible for adjusting backlog as compaction progresses.
+    compaction_progress_monitor& _progress_monitor;
     compaction_data& init_compaction_data(compaction_data& cdata, const compaction_descriptor& descriptor) const {
         cdata.compaction_fan_in = descriptor.fan_in();
         return cdata;
     }
 protected:
-    compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor)
+    compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor, use_backlog_tracker use_backlog_tracker)
         : _cdata(init_compaction_data(cdata, descriptor))
         , _table_s(table_s)
         , _sstable_creator(std::move(descriptor.creator))
@@ -534,6 +535,7 @@ protected:
         _contains_multi_fragment_runs = std::any_of(_sstables.begin(), _sstables.end(), [&ssts_run_ids] (shared_sstable& sst) {
             return !ssts_run_ids.insert(sst->run_identifier()).second;
         });
+        _progress_monitor.set_generator(std::make_unique<compaction_read_monitor_generator>(_table_s, use_backlog_tracker));
     }
 
     read_monitor_generator& unwrap_monitor_generator() const {
@@ -1087,10 +1089,9 @@ void compacted_fragments_writer::consume_end_of_stream() {
 class regular_compaction : public compaction {
     seastar::semaphore _replacer_lock = {1};
 public:
-    regular_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor)
-        : compaction(table_s, std::move(descriptor), cdata, progress_monitor)
+    regular_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor, use_backlog_tracker use_backlog_tracker = use_backlog_tracker::yes)
+        : compaction(table_s, std::move(descriptor), cdata, progress_monitor, use_backlog_tracker)
     {
-        _progress_monitor.set_generator(std::make_unique<compaction_read_monitor_generator>(_table_s));
     }
 
     flat_mutation_reader_v2 make_sstable_reader(schema_ptr s,
@@ -1226,7 +1227,7 @@ private:
     }
 public:
     reshape_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor)
-        : regular_compaction(table_s, std::move(descriptor), cdata, progress_monitor) {
+        : regular_compaction(table_s, std::move(descriptor), cdata, progress_monitor, use_backlog_tracker::no) {
     }
 
     virtual sstables::sstable_set make_sstable_set_for_input() const override {
@@ -1252,7 +1253,7 @@ public:
                 std::move(trace),
                 sm_fwd,
                 mr_fwd,
-                default_read_monitor_generator());
+                unwrap_monitor_generator());
     }
 
     std::string_view report_start_desc() const override {
@@ -1543,7 +1544,7 @@ private:
 
 public:
     scrub_compaction(table_state& table_s, compaction_descriptor descriptor, compaction_data& cdata, compaction_type_options::scrub options, compaction_progress_monitor& progress_monitor)
-        : regular_compaction(table_s, std::move(descriptor), cdata, progress_monitor)
+        : regular_compaction(table_s, std::move(descriptor), cdata, progress_monitor, use_backlog_tracker::no)
         , _options(options)
         , _scrub_start_description(fmt::format("Scrubbing in {} mode", _options.operation_mode))
         , _scrub_finish_description(fmt::format("Finished scrubbing in {} mode", _options.operation_mode)) {
@@ -1570,7 +1571,7 @@ public:
         if (!range.is_full()) {
             on_internal_error(clogger, fmt::format("Scrub compaction in mode {} expected full partition range, but got {} instead", _options.operation_mode, range));
         }
-        auto crawling_reader = _compacting->make_crawling_reader(std::move(s), std::move(permit), nullptr);
+        auto crawling_reader = _compacting->make_crawling_reader(std::move(s), std::move(permit), nullptr, unwrap_monitor_generator());
         return make_flat_mutation_reader_v2<reader>(std::move(crawling_reader), _options.operation_mode, _validation_errors);
     }
 
@@ -1640,7 +1641,7 @@ private:
     }
 public:
     resharding_compaction(table_state& table_s, sstables::compaction_descriptor descriptor, compaction_data& cdata, compaction_progress_monitor& progress_monitor)
-        : compaction(table_s, std::move(descriptor), cdata, progress_monitor)
+        : compaction(table_s, std::move(descriptor), cdata, progress_monitor, use_backlog_tracker::no)
         , _estimation_per_shard(smp::count)
         , _run_identifiers(smp::count)
     {
@@ -1674,7 +1675,8 @@ public:
                 slice,
                 nullptr,
                 sm_fwd,
-                mr_fwd);
+                mr_fwd,
+                unwrap_monitor_generator());
 
     }
 
