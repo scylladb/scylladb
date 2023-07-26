@@ -4400,8 +4400,8 @@ future<> storage_service::removenode(locator::host_id host_id, std::list<locator
 
                     // Step 7: Announce the node has left
                     slogger.info("removenode[{}]: Advertising that the node left the ring", uuid);
-                    // FIXME: lock_endpoint
-                    gms::permit_id pid;
+                    auto permit = ss._gossiper.lock_endpoint(endpoint, gms::null_permit_id).get();
+                    const auto& pid = permit.id();
                     ss._gossiper.advertise_token_removed(endpoint, host_id, pid).get();
                     std::unordered_set<token> tmp(tokens.begin(), tokens.end());
                     ss.excise(std::move(tmp), endpoint, pid).get();
@@ -5798,8 +5798,8 @@ future<> storage_service::force_remove_completion() {
                         slogger.warn("No host_id is found for endpoint {}", endpoint);
                         continue;
                     }
-                    // FIXME: lock_endpoint
-                    gms::permit_id pid;
+                    auto permit = co_await ss._gossiper.lock_endpoint(endpoint, gms::null_permit_id);
+                    const auto& pid = permit.id();
                     co_await ss._gossiper.advertise_token_removed(endpoint, host_id, pid);
                     std::unordered_set<token> tokens_set(tokens.begin(), tokens.end());
                     co_await ss.excise(tokens_set, endpoint, pid);
