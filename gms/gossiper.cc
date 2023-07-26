@@ -1209,7 +1209,9 @@ void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g
 }
 
 future<> gossiper::replicate(inet_address ep, const endpoint_state& es, permit_id pid) {
-    // FIXME: verify that the permit is non-null, under lock_endpoint
+    if (!pid) {
+        on_internal_error_noexcept(logger, fmt::format("replicate {} called with null permit", ep));
+    }
     return container().invoke_on_all([ep, es, orig = this_shard_id(), self = shared_from_this()] (gossiper& g) {
         if (this_shard_id() != orig) {
             g._endpoint_state_map[ep].add_application_state(es);
