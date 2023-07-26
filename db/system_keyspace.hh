@@ -257,7 +257,6 @@ public:
      */
     future<> update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens);
 
-private:
     future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_ips();
 
 public:

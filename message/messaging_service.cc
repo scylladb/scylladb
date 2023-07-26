@@ -435,6 +435,8 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
         ci.attach_auxiliary("max_result_size", max_result_size.value_or(query::result_memory_limiter::maximum_result_size));
         return rpc::no_wait;
     });
+
+    init_local_preferred_ip_cache(_cfg.preferred_ips);
 }
 
 msg_addr messaging_service::get_source(const rpc::client_info& cinfo) {
