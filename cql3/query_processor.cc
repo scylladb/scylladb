@@ -890,7 +890,7 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
         try {
             auto group0_guard = co_await mm.start_group0_operation();
 
-            auto [ret, m, cql_warnings] = co_await stmt.prepare_schema_mutations(*this, mm, group0_guard.write_timestamp());
+            auto [ret, m, cql_warnings] = co_await stmt.prepare_schema_mutations(*this, group0_guard.write_timestamp());
             warnings = std::move(cql_warnings);
 
             if (!m.empty()) {
