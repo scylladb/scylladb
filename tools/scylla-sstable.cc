@@ -2548,7 +2548,20 @@ public:
     void add_option(bpo::options_description& opts) const { _opt->add_option(opts); }
 };
 
-const std::vector<operation_option> all_options {
+const std::vector<operation_option> global_options {
+    typed_option<sstring>("schema-file", "schema.cql", "file containing the schema description"),
+    typed_option<sstring>("keyspace", "keyspace name"),
+    typed_option<sstring>("table", "table name"),
+    typed_option<>("system-schema", "the table designated by --keyspace and --table is a system table, use the hard-coded in-memory hard-coded schema for it"),
+    typed_option<sstring>("scylla-yaml-file", "path to the scylla.yaml config file, to obtain the data directory path from, this can be also provided directly with --scylla-data-dir"),
+    typed_option<sstring>("scylla-data-dir", "path to the scylla data dir (usually /var/lib/scylla/data), to read the schema tables from"),
+};
+
+const std::vector<app_template::positional_option> global_positional_options{
+    {"sstables", bpo::value<std::vector<sstring>>(), "sstable(s) to process for operations that have sstable inputs, can also be provided as positional arguments", -1},
+};
+
+const std::vector<operation_option> operation_options {
     typed_option<std::vector<sstring>>("partition", "partition(s) to filter for, partitions are expected to be in the hex format"),
     typed_option<sstring>("partitions-file", "file containing partition(s) to filter for, partitions are expected to be in the hex format"),
     typed_option<>("merge", "merge all sstables into a single mutation fragment stream (use a combining reader over all sstable readers)"),
@@ -2912,23 +2925,19 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
     app_template app(std::move(app_cfg));
 
-    app.add_options()
-        ("schema-file", bpo::value<sstring>()->default_value("schema.cql"), "file containing the schema description")
-        ("keyspace", bpo::value<sstring>(), "keyspace name")
-        ("table", bpo::value<sstring>(), "table name")
-        ("system-schema", "the table designated by --keyspace and --table is a system table, use the hard-coded in-memory hard-coded schema for it")
-        ("scylla-yaml-file", bpo::value<sstring>(), "path to the scylla.yaml config file, to obtain the data directory path from, this can be also provided directly with --scylla-data-dir")
-        ("scylla-data-dir", bpo::value<sstring>(), "path to the scylla data dir (usually /var/lib/scylla/data), to read the schema tables from")
-        ;
-    app.add_positional_options({
-        {"sstables", bpo::value<std::vector<sstring>>(), "sstable(s) to process for operations that have sstable inputs, can also be provided as positional arguments", -1},
-    });
+    auto& global_desc = app.get_options_description();
+    for (const auto& global_option : global_options) {
+        global_option.add_option(global_desc);
+    }
+    for (const auto global_positional_option : global_positional_options) {
+        app.add_positional_options({global_positional_option});
+    }
 
     if (found_op) {
         bpo::options_description op_desc(found_op->name());
         for (const auto& opt_name : found_op->available_options()) {
-            auto it = std::find_if(all_options.begin(), all_options.end(), [&] (const operation_option& opt) { return opt.name() == opt_name; });
-            assert(it != all_options.end());
+            auto it = std::find_if(operation_options.begin(), operation_options.end(), [&] (const operation_option& opt) { return opt.name() == opt_name; });
+            assert(it != operation_options.end());
             it->add_option(op_desc);
         }
         if (!found_op->available_options().empty()) {
