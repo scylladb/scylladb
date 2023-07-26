@@ -325,16 +325,21 @@ public:
     void consume_end_of_stream();
 };
 
+using use_backlog_tracker = bool_class<class use_backlog_tracker_tag>;
+
 struct compaction_read_monitor_generator final : public read_monitor_generator {
     class compaction_read_monitor final : public  sstables::read_monitor, public backlog_read_progress_manager {
         sstables::shared_sstable _sst;
         table_state& _table_s;
         const sstables::reader_position_tracker* _tracker = nullptr;
         uint64_t _last_position_seen = 0;
+        use_backlog_tracker _use_backlog_tracker;
     public:
         virtual void on_read_started(const sstables::reader_position_tracker& tracker) override {
             _tracker = &tracker;
-            _table_s.get_backlog_tracker().register_compacting_sstable(_sst, *this);
+            if (_use_backlog_tracker) {
+                _table_s.get_backlog_tracker().register_compacting_sstable(_sst, *this);
+            }
         }
 
         virtual void on_read_completed() override {
@@ -352,19 +357,19 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
         }
 
         void remove_sstable() {
-            if (_sst) {
+            if (_sst && _use_backlog_tracker) {
                 _table_s.get_backlog_tracker().revert_charges(_sst);
             }
             _sst = {};
         }
 
-        compaction_read_monitor(sstables::shared_sstable sst, table_state& table_s)
-            : _sst(std::move(sst)), _table_s(table_s) { }
+        compaction_read_monitor(sstables::shared_sstable sst, table_state& table_s, use_backlog_tracker use_backlog_tracker)
+            : _sst(std::move(sst)), _table_s(table_s), _use_backlog_tracker(use_backlog_tracker) { }
 
         ~compaction_read_monitor() {
             // We failed to finish handling this SSTable, so we have to update the backlog_tracker
             // about it.
-            if (_sst) {
+            if (_sst && _use_backlog_tracker) {
                 _table_s.get_backlog_tracker().revert_charges(_sst);
             }
         }
@@ -373,12 +378,12 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
     };
 
     virtual sstables::read_monitor& operator()(sstables::shared_sstable sst) override {
-        auto p = _generated_monitors.emplace(sst->generation(), compaction_read_monitor(sst, _table_s));
+        auto p = _generated_monitors.emplace(sst->generation(), compaction_read_monitor(sst, _table_s, _use_backlog_tracker));
         return p.first->second;
     }
 
-    explicit compaction_read_monitor_generator(table_state& table_s)
-        : _table_s(table_s) {}
+    explicit compaction_read_monitor_generator(table_state& table_s, use_backlog_tracker use_backlog_tracker = use_backlog_tracker::yes)
+        : _table_s(table_s), _use_backlog_tracker(use_backlog_tracker) {}
 
     void remove_exhausted_sstables(const std::vector<sstables::shared_sstable>& exhausted_sstables) {
         for (auto& sst : exhausted_sstables) {
@@ -391,6 +396,7 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
 private:
     table_state& _table_s;
     std::unordered_map<generation_type, compaction_read_monitor> _generated_monitors;
+    use_backlog_tracker _use_backlog_tracker;
 };
 
 class formatted_sstables_list {
