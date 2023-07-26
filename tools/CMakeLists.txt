@@ -3,6 +3,7 @@ target_sources(tools
   PRIVATE
     scylla-types.cc
     scylla-sstable.cc
+    scylla-nodetool.cc
     schema_loader.cc
     utils.cc
     lua_sstable_consumer.cc)
