@@ -662,7 +662,8 @@ future<> gossiper::force_remove_endpoint(inet_address endpoint, permit_id pid) {
 }
 
 future<> gossiper::remove_endpoint(inet_address endpoint, permit_id pid) {
-    // FIXME: lock_endpoint (with null pid)
+    auto permit = co_await lock_endpoint(endpoint, pid);
+    pid = permit.id();
 
     // do subscribers first so anything in the subscriber that depends on gossiper state won't get confused
     try {
