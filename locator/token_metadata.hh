@@ -114,6 +114,7 @@ public:
     ~token_metadata();
     const std::vector<token>& sorted_tokens() const;
     const tablet_metadata& tablets() const;
+    tablet_metadata& tablets();
     void set_tablets(tablet_metadata);
     // Update token->endpoint mappings for a given \c endpoint.
     // \c tokens are all the tokens that are now owned by \c endpoint.

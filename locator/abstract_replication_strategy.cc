@@ -112,10 +112,10 @@ inet_address_vector_topology_change vnode_effective_replication_map::get_pending
     return endpoints;
 }
 
-std::optional<inet_address_vector_replica_set> vnode_effective_replication_map::get_endpoints_for_reading(const token& token) const {
+inet_address_vector_replica_set vnode_effective_replication_map::get_endpoints_for_reading(const token& token) const {
     const auto* endpoints = find_token(_read_endpoints, token);
     if (endpoints == nullptr) {
-        return {};
+        return get_natural_endpoints_without_node_being_replaced(token);
     }
     return inet_address_vector_replica_set(endpoints->begin(), endpoints->end());
 }

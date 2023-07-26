@@ -15,6 +15,7 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "locator/tablets.hh"
 #include "inet_address_vectors.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/condition-variable.hh>
@@ -145,6 +146,8 @@ private:
     future<> node_ops_abort(node_ops_id ops_uuid);
     void node_ops_signal_abort(std::optional<node_ops_id> ops_uuid);
     future<> node_ops_abort_thread();
+    future<> stream_tablet(locator::global_tablet_id);
+    inet_address host2ip(locator::host_id);
 public:
     storage_service(abort_source& as, distributed<replica::database>& db,
         gms::gossiper& gossiper,
@@ -759,6 +762,7 @@ private:
     std::optional<shared_future<>> _decomission_result;
     std::optional<shared_future<>> _rebuild_result;
     std::unordered_map<raft::server_id, std::optional<shared_future<>>> _remove_result;
+    std::unordered_map<locator::global_tablet_id, std::optional<shared_future<>>> _tablet_streaming;
     // During decommission, the node waits for the coordinator to tell it to shut down.
     std::optional<promise<>> _shutdown_request_promise;
     struct {

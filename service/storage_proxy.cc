@@ -22,6 +22,7 @@
 #include "query_result_merger.hh"
 #include <seastar/core/do_with.hh>
 #include "message/messaging_service.hh"
+#include "locator/tablets.hh"
 #include "gms/gossiper.hh"
 #include <seastar/core/future-util.hh>
 #include "db/read_repair_decision.hh"
@@ -6184,13 +6185,10 @@ void storage_proxy::sort_endpoints_by_proximity(const locator::topology& topo, i
 
 inet_address_vector_replica_set storage_proxy::get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const {
     auto endpoints = erm.get_endpoints_for_reading(token);
-    if (!endpoints) {
-        endpoints = erm.get_natural_endpoints_without_node_being_replaced(token);
-    }
-    auto it = boost::range::remove_if(*endpoints, std::not_fn(std::bind_front(&storage_proxy::is_alive, this)));
-    endpoints->erase(it, endpoints->end());
-    sort_endpoints_by_proximity(erm.get_topology(), *endpoints);
-    return std::move(*endpoints);
+    auto it = boost::range::remove_if(endpoints, std::not_fn(std::bind_front(&storage_proxy::is_alive, this)));
+    endpoints.erase(it, endpoints.end());
+    sort_endpoints_by_proximity(erm.get_topology(), endpoints);
+    return endpoints;
 }
 
 // `live_endpoints` must already contain only replicas for this query; the function only filters out some of them.

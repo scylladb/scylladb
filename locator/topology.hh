@@ -171,6 +171,14 @@ public:
     // Returns a pointer to the node if found, or nullptr otherwise.
     const node* find_node(host_id id) const noexcept;
 
+    const node& get_node(host_id id) const {
+        auto n = find_node(id);
+        if (!n) {
+            throw_with_backtrace<std::runtime_error>(format("Node {} not found in topology", id));
+        }
+        return *n;
+    };
+
     // Looks up a node by its inet_address.
     // Returns a pointer to the node if found, or nullptr otherwise.
     const node* find_node(const inet_address& ep) const noexcept;

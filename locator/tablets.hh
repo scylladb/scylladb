@@ -19,6 +19,9 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <seastar/core/reactor.hh>
 #include <seastar/util/log.hh>
+#include <seastar/core/coroutine.hh>
+#include <seastar/util/noncopyable_function.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 #include <vector>
 
@@ -34,7 +37,36 @@ using token = dht::token;
 // Different tablets in subsequent token metadata version can have the same tablet_id.
 // When splitting a tablet, one of the new tablets (in the new token metadata version)
 // will have the same tablet_id as the old one.
-enum class tablet_id : size_t;
+struct tablet_id {
+    size_t id;
+    explicit tablet_id(size_t id) : id(id) {}
+    size_t value() const { return id; }
+    explicit operator size_t() const { return id; }
+    bool operator<=>(const tablet_id&) const = default;
+};
+
+}
+
+namespace std {
+
+template<>
+struct hash<locator::tablet_id> {
+    size_t operator()(const locator::tablet_id& id) const {
+        return std::hash<size_t>()(id.value());
+    }
+};
+
+}
+
+namespace locator {
+
+/// Identifies tablet (not be confused with tablet replica) in the scope of the whole cluster.
+struct global_tablet_id {
+    table_id table;
+    tablet_id tablet;
+
+    bool operator<=>(const global_tablet_id&) const = default;
+};
 
 struct tablet_replica {
     host_id host;
@@ -48,6 +80,22 @@ std::ostream& operator<<(std::ostream&, const tablet_replica&);
 
 using tablet_replica_set = utils::small_vector<tablet_replica, 3>;
 
+/// Creates a new replica set with old_replica replaced by new_replica.
+/// If there is no old_replica, the set is returned unchanged.
+inline
+tablet_replica_set replace_replica(const tablet_replica_set& rs, tablet_replica old_replica, tablet_replica new_replica) {
+    tablet_replica_set result;
+    result.reserve(rs.size());
+    for (auto&& r : rs) {
+        if (r == old_replica) {
+            result.push_back(new_replica);
+        } else {
+            result.push_back(r);
+        }
+    }
+    return result;
+}
+
 /// Stores information about a single tablet.
 struct tablet_info {
     tablet_replica_set replicas;
@@ -55,11 +103,49 @@ struct tablet_info {
     bool operator==(const tablet_info&) const = default;
 };
 
+/// Represents states of the tablet migration state machine.
+///
+/// The stage serves two major purposes:
+///
+/// Firstly, it determines which action should be taken by the topology change coordinator on behalf
+/// of the tablet before it can move to the next step. When stage is advanced, it means that
+/// expected invariants about cluster-wide state relevant to the tablet, associated with the new stage, hold.
+///
+/// Also, stage affects which replicas are used by the coordinator for reads and writes.
+/// Replica selectors kept in tablet_transition_info::writes and tablet_transition_info::reads,
+/// are directly derived from the stage stored in group0.
+///
+/// See "Tablet migration" in docs/dev/topology-over-raft.md
+enum class tablet_transition_stage {
+    allow_write_both_read_old,
+    write_both_read_old,
+    streaming,
+    write_both_read_new,
+    use_new,
+    cleanup,
+};
+
+sstring tablet_transition_stage_to_string(tablet_transition_stage);
+tablet_transition_stage tablet_transition_stage_from_string(const sstring&);
+
+enum class write_replica_set_selector {
+    previous, both, next
+};
+
+enum class read_replica_set_selector {
+    previous, next
+};
+
 /// Used for storing tablet state transition during topology changes.
 /// Describes transition of a single tablet.
 struct tablet_transition_info {
+    tablet_transition_stage stage;
     tablet_replica_set next;
     tablet_replica pending_replica; // Optimization (next - tablet_info::replicas)
+    write_replica_set_selector writes;
+    read_replica_set_selector reads;
+
+    tablet_transition_info(tablet_transition_stage stage, tablet_replica_set next, tablet_replica pending_replica);
 
     bool operator==(const tablet_transition_info&) const = default;
 };
@@ -149,6 +235,9 @@ public:
         return _tablets;
     }
 
+    /// Calls a given function for each tablet in the map in token ownership order.
+    future<> for_each_tablet(seastar::noncopyable_function<void(tablet_id, const tablet_info&)> func) const;
+
     const auto& transitions() const {
         return _transitions;
     }
@@ -231,4 +320,23 @@ struct hash<locator::tablet_replica> {
     }
 };
 
+template<>
+struct hash<locator::global_tablet_id> {
+    size_t operator()(const locator::global_tablet_id& id) const {
+        return utils::hash_combine(
+                std::hash<table_id>()(id.table),
+                std::hash<locator::tablet_id>()(id.tablet));
+    }
+};
+
 }
+
+template <>
+struct fmt::formatter<locator::tablet_transition_stage> : fmt::formatter<std::string_view> {
+    auto format(const locator::tablet_transition_stage&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<locator::global_tablet_id> : fmt::formatter<std::string_view> {
+    auto format(const locator::global_tablet_id&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};

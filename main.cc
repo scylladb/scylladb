@@ -1242,6 +1242,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             distributed<service::tablet_allocator> tablet_allocator;
             if (cfg->check_experimental(db::experimental_features_t::feature::TABLETS)) {
+                if (!cfg->check_experimental(db::experimental_features_t::feature::CONSISTENT_TOPOLOGY_CHANGES)) {
+                    startlog.error("Bad configuration: The consistent-topology-changes feature has to be enabled if tablets feature is enabled");
+                    throw bad_configuration_error();
+                }
                 tablet_allocator.start(std::ref(mm_notifier), std::ref(db)).get();
             }
             auto stop_tablet_allocator = defer_verbose_shutdown("tablet allocator", [&tablet_allocator] {

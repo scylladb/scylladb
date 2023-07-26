@@ -28,6 +28,53 @@ namespace locator {
 
 seastar::logger tablet_logger("tablets");
 
+
+static
+write_replica_set_selector get_selector_for_writes(tablet_transition_stage stage) {
+    switch (stage) {
+        case tablet_transition_stage::allow_write_both_read_old:
+            return write_replica_set_selector::previous;
+        case tablet_transition_stage::write_both_read_old:
+            return write_replica_set_selector::both;
+        case tablet_transition_stage::streaming:
+            return write_replica_set_selector::both;
+        case tablet_transition_stage::write_both_read_new:
+            return write_replica_set_selector::both;
+        case tablet_transition_stage::use_new:
+            return write_replica_set_selector::next;
+        case tablet_transition_stage::cleanup:
+            return write_replica_set_selector::next;
+    }
+    on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
+}
+
+static
+read_replica_set_selector get_selector_for_reads(tablet_transition_stage stage) {
+    switch (stage) {
+        case tablet_transition_stage::allow_write_both_read_old:
+            return read_replica_set_selector::previous;
+        case tablet_transition_stage::write_both_read_old:
+            return read_replica_set_selector::previous;
+        case tablet_transition_stage::streaming:
+            return read_replica_set_selector::previous;
+        case tablet_transition_stage::write_both_read_new:
+            return read_replica_set_selector::next;
+        case tablet_transition_stage::use_new:
+            return read_replica_set_selector::next;
+        case tablet_transition_stage::cleanup:
+            return read_replica_set_selector::next;
+    }
+    on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
+}
+
+tablet_transition_info::tablet_transition_info(tablet_transition_stage stage, tablet_replica_set next, tablet_replica pending_replica)
+    : stage(stage)
+    , next(std::move(next))
+    , pending_replica(std::move(pending_replica))
+    , writes(get_selector_for_writes(stage))
+    , reads(get_selector_for_reads(stage))
+{ }
+
 const tablet_map& tablet_metadata::get_tablet_map(table_id id) const {
     try {
         return _tablets.at(id);
@@ -106,6 +153,15 @@ void tablet_map::set_tablet_transition_info(tablet_id id, tablet_transition_info
     _transitions.insert_or_assign(id, std::move(info));
 }
 
+future<> tablet_map::for_each_tablet(seastar::noncopyable_function<void(tablet_id, const tablet_info&)> func) const {
+    std::optional<tablet_id> tid = first_tablet();
+    for (const tablet_info& ti : tablets()) {
+        co_await coroutine::maybe_yield();
+        func(*tid, ti);
+        tid = next_tablet(*tid);
+    }
+}
+
 std::optional<shard_id> tablet_map::get_shard(tablet_id tid, host_id host) const {
     auto&& info = get_tablet_info(tid);
 
@@ -135,6 +191,36 @@ const tablet_transition_info* tablet_map::get_tablet_transition_info(tablet_id i
     return &i->second;
 }
 
+// The names are persisted in system tables so should not be changed.
+static const std::unordered_map<tablet_transition_stage, sstring> tablet_transition_stage_to_name = {
+    {tablet_transition_stage::allow_write_both_read_old, "allow_write_both_read_old"},
+    {tablet_transition_stage::write_both_read_old, "write_both_read_old"},
+    {tablet_transition_stage::write_both_read_new, "write_both_read_new"},
+    {tablet_transition_stage::streaming, "streaming"},
+    {tablet_transition_stage::use_new, "use_new"},
+    {tablet_transition_stage::cleanup, "cleanup"},
+};
+
+static const std::unordered_map<sstring, tablet_transition_stage> tablet_transition_stage_from_name = std::invoke([] {
+    std::unordered_map<sstring, tablet_transition_stage> result;
+    for (auto&& [v, s] : tablet_transition_stage_to_name) {
+        result.emplace(s, v);
+    }
+    return result;
+});
+
+sstring tablet_transition_stage_to_string(tablet_transition_stage stage) {
+    auto i = tablet_transition_stage_to_name.find(stage);
+    if (i == tablet_transition_stage_to_name.end()) {
+        on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
+    }
+    return i->second;
+}
+
+tablet_transition_stage tablet_transition_stage_from_string(const sstring& name) {
+    return tablet_transition_stage_from_name.at(name);
+}
+
 std::ostream& operator<<(std::ostream& out, tablet_id id) {
     return out << size_t(id);
 }
@@ -156,7 +242,7 @@ std::ostream& operator<<(std::ostream& out, const tablet_map& r) {
         }
         out << format("\n    [{}]: last_token={}, replicas={}", tid, r.get_last_token(tid), tablet.replicas);
         if (auto tr = r.get_tablet_transition_info(tid)) {
-            out << format(", new_replicas={}, pending={}", tr->next, tr->pending_replica);
+            out << format(", stage={}, new_replicas={}, pending={}", tr->stage, tr->next, tr->pending_replica);
         }
         first = false;
         tid = *r.next_tablet(tid);
@@ -237,7 +323,22 @@ public:
     virtual inet_address_vector_replica_set get_natural_endpoints(const token& search_token) const override {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
-        auto&& replicas = tablets.get_tablet_info(tablet).replicas;
+        auto* info = tablets.get_tablet_transition_info(tablet);
+        auto&& replicas = std::invoke([&] () -> const tablet_replica_set& {
+            if (!info) {
+                return tablets.get_tablet_info(tablet).replicas;
+            }
+            switch (info->writes) {
+                case write_replica_set_selector::previous:
+                    [[fallthrough]];
+                case write_replica_set_selector::both:
+                    return tablets.get_tablet_info(tablet).replicas;
+                case write_replica_set_selector::next: {
+                    return info->next;
+                }
+            }
+            on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->writes)));
+        });
         tablet_logger.trace("get_natural_endpoints({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
         return to_replica_set(replicas);
     }
@@ -255,13 +356,40 @@ public:
         if (!info) {
             return {};
         }
-        tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}",
-                            search_token, _table, tablet, info->pending_replica);
-        return {get_endpoint_for_host_id(info->pending_replica.host)};
+        switch (info->writes) {
+            case write_replica_set_selector::previous:
+                return {};
+            case write_replica_set_selector::both:
+                tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}",
+                                    search_token, _table, tablet, info->pending_replica);
+                return {get_endpoint_for_host_id(info->pending_replica.host)};
+            case write_replica_set_selector::next:
+                return {};
+        }
+        on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->writes)));
     }
 
-    virtual std::optional<inet_address_vector_replica_set> get_endpoints_for_reading(const token& search_token) const override {
-        return std::nullopt;
+    virtual inet_address_vector_replica_set get_endpoints_for_reading(const token& search_token) const override {
+        auto&& tablets = get_tablet_map();
+        auto tablet = tablets.get_tablet_id(search_token);
+        auto&& info = tablets.get_tablet_transition_info(tablet);
+        auto&& replicas = std::invoke([&] () -> const tablet_replica_set& {
+            if (!info) {
+                return tablets.get_tablet_info(tablet).replicas;
+            }
+            switch (info->reads) {
+                case read_replica_set_selector::previous:
+                    return tablets.get_tablet_info(tablet).replicas;
+                case read_replica_set_selector::next: {
+                    return info->next;
+                }
+            }
+            on_internal_error(tablet_logger, format("Invalid replica selector", static_cast<int>(info->reads)));
+        });
+        tablet_logger.trace("get_endpoints_for_reading({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
+        auto result = to_replica_set(replicas);
+        maybe_remove_node_being_replaced(*_tmptr, *_rs, result);
+        return result;
     }
 
     virtual bool has_pending_ranges(inet_address endpoint) const override {
@@ -351,4 +479,14 @@ effective_replication_map_ptr tablet_aware_replication_strategy::do_make_replica
     return seastar::make_shared<tablet_effective_replication_map>(table, std::move(rs), std::move(tm), replication_factor);
 }
 
+}
+
+auto fmt::formatter<locator::global_tablet_id>::format(const locator::global_tablet_id& id, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}:{}", id.table, id.tablet);
+}
+
+auto fmt::formatter<locator::tablet_transition_stage>::format(const locator::tablet_transition_stage& stage, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", locator::tablet_transition_stage_to_string(stage));
 }
