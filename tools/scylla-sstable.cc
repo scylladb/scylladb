@@ -11,7 +11,6 @@
 #include <filesystem>
 #include <source_location>
 #include <fmt/chrono.h>
-#include <seastar/core/app-template.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/util/closeable.hh>
 
@@ -44,6 +43,10 @@ using namespace seastar;
 using json_writer = mutation_json::json_writer;
 
 namespace bpo = boost::program_options;
+
+using namespace tools::utils;
+
+using operation_func = void(*)(schema_ptr, reader_permit, const std::vector<sstables::shared_sstable>&, sstables::sstables_manager&, const bpo::variables_map&);
 
 namespace {
 
@@ -865,34 +868,6 @@ void validate_output_dir(std::filesystem::path output_dir, bool accept_nonempty_
         throw std::invalid_argument("output-directory is not empty, pass --unsafe-accept-nonempty-output-dir if you are sure you want to write into this directory");
     }
 }
-
-using operation_func = void(*)(schema_ptr, reader_permit, const std::vector<sstables::shared_sstable>&, sstables::sstables_manager&, const bpo::variables_map&);
-
-class operation {
-    std::string _name;
-    std::string _summary;
-    std::string _description;
-    std::vector<std::string> _available_options;
-    operation_func _func;
-
-public:
-    operation(std::string name, std::string summary, std::string description, operation_func func)
-        : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)), _func(func) {
-    }
-    operation(std::string name, std::string summary, std::string description, std::vector<std::string> available_options, operation_func func)
-        : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)), _available_options(std::move(available_options)), _func(func) {
-    }
-
-    const std::string& name() const { return _name; }
-    const std::string& summary() const { return _summary; }
-    const std::string& description() const { return _description; }
-    const std::vector<std::string>& available_options() const { return _available_options; }
-
-    void operator()(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-            sstables::sstables_manager& sst_man, const bpo::variables_map& vm) const {
-        _func(std::move(schema), std::move(permit), sstables, sst_man, vm);
-    }
-};
 
 void validate_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
@@ -2499,55 +2474,6 @@ void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const s
     consumer->consume_stream_end().get();
 }
 
-class basic_option {
-public:
-    const char* name;
-    const char* description;
-
-public:
-    basic_option(const char* name, const char* description) : name(name), description(description) { }
-
-    virtual void add_option(bpo::options_description& opts) const = 0;
-};
-
-template <typename T = std::monostate>
-class typed_option : public basic_option {
-    std::optional<T> _default_value;
-
-    virtual void add_option(bpo::options_description& opts) const override {
-        if (_default_value) {
-            opts.add_options()(name, bpo::value<T>()->default_value(*_default_value), description);
-        } else {
-            opts.add_options()(name, bpo::value<T>(), description);
-        }
-    }
-
-public:
-    typed_option(const char* name, const char* description) : basic_option(name, description) { }
-    typed_option(const char* name, T default_value, const char* description) : basic_option(name, description), _default_value(std::move(default_value)) { }
-};
-
-template <>
-class typed_option<std::monostate> : public basic_option {
-    virtual void add_option(bpo::options_description& opts) const override {
-        opts.add_options()(name, description);
-    }
-public:
-    typed_option(const char* name, const char* description) : basic_option(name, description) { }
-};
-
-class operation_option {
-    shared_ptr<basic_option> _opt; // need copy to support convenient range declaration of std::vector<option>
-
-public:
-    template <typename T>
-    operation_option(typed_option<T> opt) : _opt(make_shared<typed_option<T>>(std::move(opt))) { }
-
-    const char* name() const { return _opt->name; }
-    const char* description() const { return _opt->description; }
-    void add_option(bpo::options_description& opts) const { _opt->add_option(opts); }
-};
-
 const std::vector<operation_option> global_options {
     typed_option<sstring>("schema-file", "schema.cql", "file containing the schema description"),
     typed_option<sstring>("keyspace", "keyspace name"),
@@ -2578,9 +2504,9 @@ const std::vector<operation_option> operation_options {
     typed_option<>("unsafe-accept-nonempty-output-dir", "allow the operation to write into a non-empty output directory, acknowledging the risk that this may result in sstable clash"),
 };
 
-const std::vector<operation> operations{
+const std::map<operation, operation_func> operations_with_func{
 /* dump-data */
-    {"dump-data",
+    {{"dump-data",
             "Dump content of sstable(s)",
 R"(
 Dump the content of the data component. This component contains the data-proper
@@ -2597,10 +2523,10 @@ printers, which are also used when logging mutation-related data structures.
 See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#dump-data
 for more information on this operation, including the schema of the JSON output.
 )",
-            {"partition", "partitions-file", "merge", "no-skips", "output-format"},
+            {"partition", "partitions-file", "merge", "no-skips", "output-format"}},
             sstable_consumer_operation<dumping_consumer>},
 /* dump-index */
-    {"dump-index",
+    {{"dump-index",
             "Dump content of sstable index(es)",
 R"(
 Dump the content of the index component. Contains the partition-index of the data
@@ -2612,10 +2538,10 @@ data.
 
 See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#dump-index
 for more information on this operation, including the schema of the JSON output.
-)",
+)"},
             dump_index_operation},
 /* dump-compression-info */
-    {"dump-compression-info",
+    {{"dump-compression-info",
             "Dump content of sstable compression info(s)",
 R"(
 Dump the content of the compression-info component. Contains compression
@@ -2626,10 +2552,10 @@ to be decompressed.
 
 See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#dump-compression-info
 for more information on this operation, including the schema of the JSON output.
-)",
+)"},
             dump_compression_info_operation},
 /* dump-summary */
-    {"dump-summary",
+    {{"dump-summary",
             "Dump content of sstable summary(es)",
 R"(
 Dump the content of the summary component. The summary is a sampled index of the
@@ -2640,10 +2566,10 @@ sstables.
 See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#dump-summary
 for more information on this operation, including the schema of the JSON output.
 
-)",
+)"},
             dump_summary_operation},
 /* dump-statistics */
-    {"dump-statistics",
+    {{"dump-statistics",
             "Dump content of sstable statistics(s)",
 R"(
 Dump the content of the statistics component. Contains various metadata about the
@@ -2652,10 +2578,10 @@ the data component.
 
 See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#dump-statistics
 for more information on this operation, including the schema of the JSON output.
-)",
+)"},
             dump_statistics_operation},
 /* dump-scylla-metadata */
-    {"dump-scylla-metadata",
+    {{"dump-scylla-metadata",
             "Dump content of sstable scylla metadata(s)",
 R"(
 Dump the content of the scylla-metadata component. Contains scylla-specific
@@ -2664,10 +2590,10 @@ produced by Apache Cassandra.
 
 See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#dump-scylla-metadata
 for more information on this operation, including the schema of the JSON output.
-)",
+)"},
             dump_scylla_metadata_operation},
 /* writetime-histogram */
-    {"writetime-histogram",
+    {{"writetime-histogram",
             "Generate a histogram of all the timestamps (writetime)",
 R"(
 Crawl over all timestamps in the data component and add them to a histogram. The
@@ -2707,10 +2633,10 @@ following example python script:
 
      plt.show()
 )",
-            {"bucket"},
+            {"bucket"}},
             sstable_consumer_operation<writetime_histogram_collecting_consumer>},
 /* validate */
-    {"validate",
+    {{"validate",
             "Validate the sstable(s), same as scrub in validate mode",
 R"(
 Validates the content of the sstable on the mutation-fragment level, see
@@ -2721,11 +2647,10 @@ validation will happen on the fragment level.
 
 See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#validate
 for more information on this operation.
-)",
-            {},
+)"},
             validate_operation},
 /* scrub */
-    {"scrub",
+    {{"scrub",
             "Scrub the sstable(s), in the specified mode",
 R"(
 Read and re-write the sstable, getting rid of or fixing broken parts, depending
@@ -2743,10 +2668,10 @@ pre-existing sstables in the directory.
 See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#scrub
 for more information on this operation, including what the different modes do.
 )",
-            {"scrub-mode", "output-dir", "unsafe-accept-nonempty-output-dir"},
+            {"scrub-mode", "output-dir", "unsafe-accept-nonempty-output-dir"}},
             scrub_operation},
 /* validate-checksums */
-    {"validate-checksums",
+    {{"validate-checksums",
             "Validate the checksums of the sstable(s)",
 R"(
 Validate both the whole-file and the per-chunk checksums checksums of the data
@@ -2754,10 +2679,10 @@ component.
 
 See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#validate-checksums
 for more information on this operation.
-)",
+)"},
             validate_checksums_operation},
 /* decompress */
-    {"decompress",
+    {{"decompress",
             "Decompress sstable(s)",
 R"(
 Decompress Data.db if compressed. Noop if not compressed. The decompressed data
@@ -2768,10 +2693,10 @@ is written to Data.db.decompressed. E.g. for an sstable:
 the output will be:
 
     md-12311-big-Data.db.decompressed
-)",
+)"},
             decompress_operation},
 /* write */
-    {"write",
+    {{"write",
             "Write an sstable",
 R"(
 Write an sstable based on a JSON representation of the content. The JSON
@@ -2796,10 +2721,10 @@ output sstable clashes with an existing sstable, the write will fail.
 See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#write
 for more information on this operation, including the schema of the JSON input.
 )",
-            {"input-file", "output-dir", "generation", "validation-level"},
+            {"input-file", "output-dir", "generation", "validation-level"}},
             write_operation},
 /* script */
-    {"script",
+    {{"script",
             "Run a script on content of an sstable",
 R"(
 Read the sstable(s) and pass the resulting fragment stream to the script
@@ -2808,7 +2733,7 @@ specified by `--script-file`. Currently only Lua scripts are supported.
 See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#script
 for more information on this operation, including the API documentation.
 )",
-            {"merge", "script-file", "script-arg"},
+            {"merge", "script-file", "script-arg"}},
             script_operation},
 };
 
@@ -2817,14 +2742,6 @@ for more information on this operation, including the API documentation.
 namespace tools {
 
 int scylla_sstable_main(int argc, char** argv) {
-    const operation* found_op = nullptr;
-    if (std::strcmp(argv[1], "--help") != 0 && std::strcmp(argv[1], "-h") != 0) {
-        found_op = &tools::utils::get_selected_operation(argc, argv, operations, "operation");
-    }
-
-    app_template::seastar_options app_cfg;
-    app_cfg.name = app_name;
-
     const auto description_template =
 R"(scylla-sstable - a multifunctional command-line tool to examine the content of sstables.
 
@@ -2913,46 +2830,21 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
 )";
 
-    if (found_op) {
-        app_cfg.description = format("{}\n\n{}\n", found_op->summary(), found_op->description());
-    } else  {
-        app_cfg.description = format(description_template, app_name, boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
-            return format("* {}: {}", op.name(), op.summary());
-        }), "\n"));
-    }
+    const auto operations = boost::copy_range<std::vector<operation>>(operations_with_func | boost::adaptors::map_keys);
+    tool_app_template::config app_cfg{
+            .name = app_name,
+            .description = format(description_template, app_name, boost::algorithm::join(operations | boost::adaptors::transformed([] (const auto& op) {
+                return format("* {}: {}", op.name(), op.summary());
+            }), "\n")),
+            .logger_name = app_name,
+            .lsa_segment_pool_backend_size_mb = 100,
+            .operations = std::move(operations),
+            .global_options = &global_options,
+            .global_positional_options = &global_positional_options,
+            .operation_options = &operation_options};
+    tool_app_template app(std::move(app_cfg));
 
-    tools::utils::configure_tool_mode(app_cfg, sst_log.name());
-
-    app_template app(std::move(app_cfg));
-
-    auto& global_desc = app.get_options_description();
-    for (const auto& global_option : global_options) {
-        global_option.add_option(global_desc);
-    }
-    for (const auto global_positional_option : global_positional_options) {
-        app.add_positional_options({global_positional_option});
-    }
-
-    if (found_op) {
-        bpo::options_description op_desc(found_op->name());
-        for (const auto& opt_name : found_op->available_options()) {
-            auto it = std::find_if(operation_options.begin(), operation_options.end(), [&] (const operation_option& opt) { return opt.name() == opt_name; });
-            assert(it != operation_options.end());
-            it->add_option(op_desc);
-        }
-        if (!found_op->available_options().empty()) {
-            app.get_options_description().add(op_desc);
-        }
-    }
-
-    return app.run(argc, argv, [&app, found_op] {
-        return async([&app, found_op] {
-            logalloc::use_standard_allocator_segment_pool_backend(100 * 1024 * 1024).get();
-
-            auto& app_config = app.configuration();
-
-            const auto& operation = *found_op;
-
+    return app.run_async(argc, argv, [] (const operation& operation, const bpo::variables_map& app_config) {
             schema_ptr schema;
             {
                 unsigned schema_sources = 0;
@@ -2996,7 +2888,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             const auto permit = rcs_sem.make_tracking_only_permit(schema.get(), app_name, db::no_timeout, {});
 
             try {
-                operation(schema, permit, sstables, sst_man, app_config);
+                operations_with_func.at(operation)(schema, permit, sstables, sst_man, app_config);
             } catch (std::invalid_argument& e) {
                 fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
                 return 1;
@@ -3006,7 +2898,6 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             }
 
             return 0;
-        });
     });
 }
 
