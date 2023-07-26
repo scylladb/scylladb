@@ -39,6 +39,7 @@ public:
     }
 
     virtual std::string type() const override = 0;
+    virtual tasks::is_abortable is_abortable() const noexcept override;
 protected:
     virtual future<> run() override = 0;
 
