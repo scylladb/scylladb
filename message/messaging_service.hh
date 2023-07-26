@@ -272,6 +272,7 @@ public:
         tcp_nodelay_what tcp_nodelay = tcp_nodelay_what::all;
         bool listen_on_broadcast_address = false;
         size_t rpc_memory_limit = 1'000'000;
+        std::unordered_map<gms::inet_address, gms::inet_address> preferred_ips;
     };
 
     struct scheduling_config {
@@ -326,6 +327,7 @@ private:
     future<> stop_tls_server();
     future<> stop_nontls_server();
     future<> stop_client();
+    void init_local_preferred_ip_cache(const std::unordered_map<gms::inet_address, gms::inet_address>& ips_cache);
 public:
     using clock_type = lowres_clock;
 
@@ -342,7 +344,6 @@ public:
     static rpc::no_wait_type no_wait();
     bool is_shutting_down() { return _shutting_down; }
     gms::inet_address get_preferred_ip(gms::inet_address ep);
-    void init_local_preferred_ip_cache(const std::unordered_map<gms::inet_address, gms::inet_address>& ips_cache);
     void cache_preferred_ip(gms::inet_address ep, gms::inet_address ip);
     gms::inet_address get_public_endpoint_for(const gms::inet_address&) const;
 

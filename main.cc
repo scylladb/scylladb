@@ -1102,6 +1102,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             mscfg.ssl_port = cfg->ssl_storage_port();
             mscfg.listen_on_broadcast_address = cfg->listen_on_broadcast_address();
             mscfg.rpc_memory_limit = std::max<size_t>(0.08 * memory::stats().total_memory(), mscfg.rpc_memory_limit);
+            if (snitch.local()->prefer_local()) {
+                mscfg.preferred_ips = sys_ks.local().get_preferred_ips().get0();
+            }
 
             const auto& seo = cfg->server_encryption_options();
             auto encrypt = utils::get_or_default(seo, "internode_encryption", "none");
@@ -1342,7 +1345,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // 1. messaging is on the way with its preferred ip cache
             // 2. cql_test_env() doesn't do it
             // 3. need to check if it depends on any of the above steps
-            sys_ks.local().setup(snitch, messaging).get();
+            sys_ks.local().setup(messaging).get();
 
             supervisor::notify("starting schema commit log");
 

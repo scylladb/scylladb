@@ -244,7 +244,7 @@ public:
 
     static table_schema_version generate_schema_version(table_id table_id, uint16_t offset = 0);
 
-    future<> setup(sharded<locator::snitch_ptr>& snitch, sharded<netw::messaging_service>& ms);
+    future<> setup(sharded<netw::messaging_service>& ms);
     future<> update_schema_version(table_schema_version version);
 
     /*
@@ -257,7 +257,6 @@ public:
      */
     future<> update_tokens(gms::inet_address ep, const std::unordered_set<dht::token>& tokens);
 
-private:
     future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_ips();
 
 public:
