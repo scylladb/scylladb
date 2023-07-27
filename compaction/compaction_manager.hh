@@ -316,6 +316,8 @@ private:
 
     // Add sst to or remove it from the respective compaction_state.sstables_requiring_cleanup set.
     bool update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges);
+
+    future<> on_compaction_completion(table_state& t, sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy);
 public:
     // Submit a table to be upgraded and wait for its termination.
     future<> perform_sstable_upgrade(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, bool exclude_current_version, std::optional<tasks::task_info> info = std::nullopt);

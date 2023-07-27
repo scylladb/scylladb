@@ -347,6 +347,10 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
     co_return std::nullopt;
 }
 
+future<> compaction_manager::on_compaction_completion(table_state& t, sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) {
+    return t.on_compaction_completion(std::move(desc), offstrategy);
+}
+
 future<sstables::compaction_result> compaction_task_executor::compact_sstables_and_update_history(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, on_replacement& on_replace, compaction_manager::can_purge_tombstones can_purge) {
     if (!descriptor.sstables.size()) {
         // if there is nothing to compact, just return.
@@ -388,7 +392,7 @@ future<sstables::compaction_result> compaction_task_executor::compact_sstables(s
         // - are not being compacted.
         on_replace.on_addition(desc.new_sstables);
         auto old_sstables = desc.old_sstables;
-        t.on_compaction_completion(std::move(desc), sstables::offstrategy::no).get();
+        _cm.on_compaction_completion(t, std::move(desc), sstables::offstrategy::no).get();
         on_replace.on_removal(old_sstables);
     };
 
@@ -1330,7 +1334,7 @@ private:
             .old_sstables = std::move(old_sstables),
             .new_sstables = std::move(reshape_candidates)
         };
-        co_await t.on_compaction_completion(std::move(completion_desc), sstables::offstrategy::yes);
+        co_await _cm.on_compaction_completion(t, std::move(completion_desc), sstables::offstrategy::yes);
 
         cleanup_new_unused_sstables_on_failure.cancel();
         if (err) {
