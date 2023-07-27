@@ -1716,12 +1716,12 @@ sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partition
 }
 
 future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
-        std::function<void(sstring)> error_handler) {
+        std::function<void(sstring)> error_handler, sstables::read_monitor& monitor) {
     if (_version >= sstable_version_types::mc) {
-        co_return co_await mx::validate(shared_from_this(), std::move(permit), abort, std::move(error_handler));
+        co_return co_await mx::validate(shared_from_this(), std::move(permit), abort, std::move(error_handler), monitor);
     }
 
-    auto reader = make_crawling_reader(_schema, permit, nullptr);
+    auto reader = make_crawling_reader(_schema, permit, nullptr, monitor);
 
     uint64_t errors = 0;
     std::exception_ptr ex;

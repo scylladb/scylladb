@@ -112,6 +112,7 @@ public:
     uint64_t get_progress() const;
 
     friend class compaction;
+    friend future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor, compaction_data&, table_state&, compaction_progress_monitor&);
 };
 
 compaction_progress_monitor& default_compaction_progress_monitor();

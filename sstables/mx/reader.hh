@@ -59,7 +59,8 @@ future<uint64_t> validate(
         shared_sstable sstable,
         reader_permit permit,
         abort_source& abort,
-        std::function<void(sstring)> error_handler);
+        std::function<void(sstring)> error_handler,
+        sstables::read_monitor& monitor);
 
 } // namespace mx
 } // namespace sstables

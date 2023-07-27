@@ -1778,7 +1778,7 @@ static std::unique_ptr<compaction> make_compaction(table_state& table_s, sstable
     return descriptor.options.visit(visitor_factory);
 }
 
-static future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s) {
+static future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s, read_monitor_generator& monitor_generator) {
     auto schema = table_s.schema();
     auto permit = table_s.make_compaction_reader_permit();
 
@@ -1789,7 +1789,7 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
 
         validation_errors += co_await sst->validate(permit, cdata.abort, [&schema] (sstring what) {
             scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, what);
-        });
+        }, monitor_generator(sst));
         // Did validation actually finish because aborted?
         if (cdata.is_stop_requested()) {
             // Compaction manager will catch this exception and re-schedule the compaction.
@@ -1815,6 +1815,13 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
     };
 }
 
+future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s, compaction_progress_monitor& progress_monitor = default_compaction_progress_monitor()) {
+    progress_monitor.set_generator(std::make_unique<compaction_read_monitor_generator>(table_s, use_backlog_tracker::no));
+    auto d = defer([&] { progress_monitor.reset_generator(); });
+    auto res = co_await scrub_sstables_validate_mode(descriptor, cdata, table_s, *progress_monitor._generator);
+    co_return res;
+}
+
 future<compaction_result>
 compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s, compaction_progress_monitor& progress_monitor) {
     if (descriptor.sstables.empty()) {
@@ -1823,9 +1830,8 @@ compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cd
     }
     if (descriptor.options.type() == compaction_type::Scrub
             && std::get<compaction_type_options::scrub>(descriptor.options.options()).operation_mode == compaction_type_options::scrub::mode::validate) {
-        // FIXME: gather progress for this branch
         // Bypass the usual compaction machinery for dry-mode scrub
-        return scrub_sstables_validate_mode(std::move(descriptor), cdata, table_s);
+        return scrub_sstables_validate_mode(std::move(descriptor), cdata, table_s, progress_monitor);
     }
     return compaction::run(make_compaction(table_s, std::move(descriptor), cdata, progress_monitor));
 }
