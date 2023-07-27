@@ -147,34 +147,14 @@ Example output:
 
 Networking
 ----------
-On AWS:
-^^^^^^^
-1. Prevent irqbalance from moving your NICs’ IRQs.
-2. Bind all NICs’ HW queues to CPU0:
+ 
+ To configure networking, we recommend running the ``perftune.py`` script with 
+ the following parameters:
+ 
+ * ``--tune net``
+ * ``--nic <your network interface name>``
 
-.. code-block:: shell
-
-   for irq in `cat /proc/interrupts | grep <networking iface name> | cut -d":" -f1`
-   do echo "Binding IRQ $irq to CPU0" echo 1 > /proc/irq/$irq/smp_affinity done
-
-3. Enable RPS and bind RPS queues to CPUs other than CPU0 and its hyper-threading siblings.
-4. Enable XPS and distribute all XPS queues among all available CPUs.
-
-The `posix_net_conf.sh <https://github.com/scylladb/seastar/blob/master/scripts/posix_net_conf.sh>`_ script does all of the above.*
-
-On Bare Metal Setups with Multi-Queue NICs
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-1. Prevent irqbalance from moving your NICs IRQs.
-2. Bind each NIC’s IRQ to a separate CPU.
-3. Enable XPS exactly the same way as for AWS above.
-4. Set higher values for a listen() socket backlog and for unacknowledged pending connections backlog:
-
-.. code-block:: shell
-
-   echo 4096 > /proc/sys/net/core/somaxconn
-   echo 4096 > /proc/sys/net/ipv4/tcp_max_syn_backlog
-
-The `posix_net_conf.sh <https://github.com/scylladb/seastar/blob/master/scripts/posix_net_conf.sh>`_ script with the :code:`-mq` parameter does all of the above.
+See :doc:`Seastar Perftune </operating-scylla/admin-tools/perftune>` for details.
 
 Configuring Scylla
 ------------------
