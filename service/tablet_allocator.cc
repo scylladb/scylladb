@@ -398,7 +398,6 @@ public:
                 // If balance is not achieved, still consider migrating from candidate nodes which have higher load than the target.
                 // max_off_candidate_load may be higher than the load of current candidate.
                 if (src_node_info.avg_load <= target_info.avg_load) {
-                    lblogger.debug("No more candidate nodes.");
                     lblogger.debug("No more candidate nodes. Next candidate is {} with avg_load={}, target's avg_load={}",
                             src_host, src_node_info.avg_load, target_info.avg_load);
                     break;
