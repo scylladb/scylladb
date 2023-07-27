@@ -871,7 +871,7 @@ public:
         });
     }
 
-    future<std::string> execute_schema_command(std::function<future<std::vector<mutation>>(service::migration_manager&, data_dictionary::database, api::timestamp_type)> ddl) {
+    future<std::string> execute_schema_command(std::function<future<std::vector<mutation>>(data_dictionary::database, api::timestamp_type)> ddl) {
         return _query_processor.invoke_on(0, [ddl = std::move(ddl)] (cql3::query_processor& qp) mutable {
             return qp.execute_thrift_schema_command(std::move(ddl));
         });
@@ -885,7 +885,7 @@ public:
 
             co_await t._query_state.get_client_state().has_keyspace_access(cf_def.keyspace, auth::permission::CREATE);
 
-            co_return co_await t.execute_schema_command([&p = t._proxy.local(), &cf_def] (service::migration_manager& mm, data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
+            co_return co_await t.execute_schema_command([&p = t._proxy.local(), &cf_def] (data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
                 if (!db.has_keyspace(cf_def.keyspace)) {
                     throw NotFoundException();
                 }
@@ -906,7 +906,7 @@ public:
             co_await t._query_state.get_client_state().has_column_family_access(t.current_keyspace(), column_family, auth::permission::DROP);
 
             co_return co_await t.execute_schema_command(
-                       [&p = t._proxy.local(), &column_family, &current_keyspace = t.current_keyspace()] (service::migration_manager& mm, data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
+                       [&p = t._proxy.local(), &column_family, &current_keyspace = t.current_keyspace()] (data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
                 auto cf = db.find_table(current_keyspace, column_family);
                 if (cf.schema()->is_view()) {
                     throw make_exception<InvalidRequestException>("Cannot drop Materialized Views from Thrift");
@@ -928,7 +928,7 @@ public:
 
             co_await t._query_state.get_client_state().has_all_keyspaces_access(auth::permission::CREATE);
 
-            co_return co_await t.execute_schema_command([&ks_def] (service::migration_manager& mm, data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
+            co_return co_await t.execute_schema_command([&ks_def] (data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
                 co_return service::prepare_new_keyspace_announcement(db.real_database(), keyspace_from_thrift(ks_def), ts);
             });
         });
@@ -942,7 +942,7 @@ public:
 
             co_await t._query_state.get_client_state().has_keyspace_access(keyspace, auth::permission::DROP);
 
-            co_return co_await t.execute_schema_command([&keyspace] (service::migration_manager& mm, data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
+            co_return co_await t.execute_schema_command([&keyspace] (data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
                 thrift_validation::validate_keyspace_not_system(keyspace);
                 if (!db.has_keyspace(keyspace)) {
                     throw NotFoundException();
@@ -962,7 +962,7 @@ public:
 
             co_await t._query_state.get_client_state().has_keyspace_access(ks_def.name, auth::permission::ALTER);
 
-            co_return co_await t.execute_schema_command([&ks_def] (service::migration_manager& mm, data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
+            co_return co_await t.execute_schema_command([&ks_def] (data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
                 if (!db.has_keyspace(ks_def.name)) {
                     throw NotFoundException();
                 }
@@ -984,7 +984,7 @@ public:
 
             co_await t._query_state.get_client_state().has_schema_access(cf_def.keyspace, cf_def.name, auth::permission::ALTER);
 
-            co_return co_await t.execute_schema_command([&p = t._proxy.local(), &cf_def] (service::migration_manager& mm, data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
+            co_return co_await t.execute_schema_command([&p = t._proxy.local(), &cf_def] (data_dictionary::database db, api::timestamp_type ts) -> future<std::vector<mutation>> {
                 auto cf = db.find_table(cf_def.keyspace, cf_def.name);
                 auto schema = cf.schema();
 

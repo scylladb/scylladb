@@ -408,7 +408,7 @@ public:
     future<std::string>
     execute_thrift_schema_command(
             std::function<future<std::vector<mutation>>(
-                service::migration_manager&, data_dictionary::database, api::timestamp_type)
+                data_dictionary::database, api::timestamp_type)
             > prepare_schema_mutations);
 
     std::unique_ptr<statements::prepared_statement> get_statement(
