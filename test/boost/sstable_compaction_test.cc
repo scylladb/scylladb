@@ -5055,6 +5055,101 @@ SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
     });
 }
 
+SEASTAR_TEST_CASE(cleanup_during_offstrategy_incremental_compaction_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto builder = schema_builder("tests", "test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        builder.set_gc_grace_seconds(10000);
+        builder.set_compaction_strategy(sstables::compaction_strategy_type::leveled);
+        std::map<sstring, sstring> opts = {
+            { "sstable_size_in_mb", "0" }, // makes sure that every mutation produces one fragment, to trigger incremental compaction
+        };
+        builder.set_compaction_strategy_options(std::move(opts));
+        auto s = builder.build();
+        auto sst_gen = env.make_sst_factory(s);
+
+        auto make_insert = [&] (partition_key key) {
+            mutation m(s, key);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), api::new_timestamp());
+            return m;
+        };
+
+        std::vector<utils::observer<sstable&>> observers;
+        std::vector<shared_sstable> ssts;
+        size_t sstables_closed = 0;
+        size_t sstables_missing_on_delete = 0;
+        static constexpr size_t sstables_nr = 10;
+
+        dht::token_range_vector owned_token_ranges;
+
+        std::set<mutation, mutation_decorated_key_less_comparator> merged;
+        for (unsigned i = 0; i < sstables_nr * 2; i++) {
+            merged.insert(make_insert(partition_key::from_exploded(*s, {to_bytes(to_sstring(i))})));
+        }
+
+        std::unordered_set<sstables::generation_type> gens; // input sstable generations
+        auto merged_it = merged.begin();
+        for (unsigned i = 0; i < sstables_nr; i++) {
+            auto mut1 = std::move(*merged_it);
+            merged_it++;
+            auto mut2 = std::move(*merged_it);
+            merged_it++;
+            auto sst = make_sstable_containing(sst_gen, {
+                std::move(mut1),
+                std::move(mut2)
+            });
+            // Force a new run_id to trigger offstrategy compaction
+            sstables::test(sst).set_run_identifier(run_id::create_random_id());
+            // Set level to 0 to trigger offstrategy compaction
+            sst->set_sstable_level(0);
+
+            // every sstable will be eligible for cleanup, by having both an owned and unowned token.
+            owned_token_ranges.push_back(dht::token_range::make_singular(sst->get_last_decorated_key().token()));
+
+            gens.insert(sst->generation());
+            ssts.push_back(std::move(sst));
+        }
+
+        {
+            auto t = env.make_table_for_tests(s);
+            auto& cm = t->get_compaction_manager();
+            auto stop = deferred_stop(t);
+            t->disable_auto_compaction().get();
+            const dht::token_range_vector empty_owned_ranges;
+            for (auto&& sst : ssts) {
+                testlog.info("run id {}", sst->run_identifier());
+                column_family_test(t).add_sstable(sst, sstables::offstrategy::yes).get();
+                column_family_test::update_sstables_known_generation(*t, sst->generation());
+                observers.push_back(sst->add_on_closed_handler([&] (sstable& sst) mutable {
+                    auto sstables = t->get_sstables();
+                    testlog.info("Closing sstable of generation {}, table set size: {}", sst.generation(), sstables->size());
+                    sstables_closed++;
+                }));
+                observers.push_back(sst->add_on_delete_handler([&] (sstable& sst) mutable {
+                    auto missing = !file_exists(sst.get_filename()).get();
+                    testlog.info("Deleting sstable of generation {}: missing={}", sst.generation(), missing);
+                    sstables_missing_on_delete += missing;
+                }));
+            }
+            ssts = {}; // releases references
+            auto owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(std::move(owned_token_ranges));
+            t->perform_cleanup_compaction(std::move(owned_ranges_ptr)).get();
+            BOOST_REQUIRE(cm.sstables_requiring_cleanup(t->as_table_state()).empty());
+            testlog.info("Cleanup has finished");
+        }
+
+        while (sstables_closed != sstables_nr) {
+            yield().get();
+        }
+
+        testlog.info("Closed sstables {}, missing on delete {}", sstables_closed, sstables_missing_on_delete);
+
+        BOOST_REQUIRE_EQUAL(sstables_closed, sstables_nr);
+        BOOST_REQUIRE_EQUAL(sstables_missing_on_delete, 0);
+    });
+}
+
 SEASTAR_TEST_CASE(test_sstables_excluding_staging_correctness) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
