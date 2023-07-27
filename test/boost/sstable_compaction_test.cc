@@ -5015,6 +5015,7 @@ SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
         size_t last_input_sstable_count = sstables_nr;
         {
             auto t = env.make_table_for_tests(s);
+            auto& cm = t->get_compaction_manager();
             auto stop = deferred_stop(t);
             t->disable_auto_compaction().get();
             const dht::token_range_vector empty_owned_ranges;
@@ -5039,6 +5040,7 @@ SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
             ssts = {}; // releases references
             auto owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(std::move(owned_token_ranges));
             t->perform_cleanup_compaction(std::move(owned_ranges_ptr)).get();
+            BOOST_REQUIRE(cm.sstables_requiring_cleanup(t->as_table_state()).empty());
             testlog.info("Cleanup has finished");
         }
 

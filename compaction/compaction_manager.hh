@@ -422,6 +422,7 @@ public:
 
     // checks if the sstable is in the respective compaction_state.sstables_requiring_cleanup set.
     bool requires_cleanup(table_state& t, const sstables::shared_sstable& sst) const;
+    const std::unordered_set<sstables::shared_sstable>& sstables_requiring_cleanup(table_state& t) const;
 
     friend class compacting_sstable_registration;
     friend class compaction_weight_registration;

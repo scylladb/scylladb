@@ -1724,6 +1724,11 @@ bool compaction_manager::requires_cleanup(table_state& t, const sstables::shared
     return cs.sstables_requiring_cleanup.contains(sst);
 }
 
+const std::unordered_set<sstables::shared_sstable>& compaction_manager::sstables_requiring_cleanup(table_state& t) const {
+    const auto& cs = get_compaction_state(&t);
+    return cs.sstables_requiring_cleanup;
+}
+
 future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_ranges, table_state& t, std::optional<tasks::task_info> info) {
     constexpr auto sleep_duration = std::chrono::seconds(10);
     constexpr auto max_idle_duration = std::chrono::seconds(300);
