@@ -89,15 +89,18 @@ static bool is_extra_durable(const sstring& ks_name, const sstring& cf_name) {
 /** system.schema_* tables used to store keyspace/table/type attributes prior to C* 3.0 */
 namespace db {
 
-schema_ctxt::schema_ctxt(const db::config& cfg, std::shared_ptr<data_dictionary::user_types_storage> uts)
-    : _extensions(cfg.extensions())
+schema_ctxt::schema_ctxt(const db::config& cfg, std::shared_ptr<data_dictionary::user_types_storage> uts, 
+                         const gms::feature_service& features, replica::database* db)
+    : _db(db)
+    , _features(features)
+    , _extensions(cfg.extensions())
     , _murmur3_partitioner_ignore_msb_bits(cfg.murmur3_partitioner_ignore_msb_bits())
     , _schema_registry_grace_period(cfg.schema_registry_grace_period())
     , _user_types(std::move(uts))
 {}
 
-schema_ctxt::schema_ctxt(const replica::database& db)
-    : schema_ctxt(db.get_config(), db.as_user_types_storage())
+schema_ctxt::schema_ctxt(replica::database& db)
+    : schema_ctxt(db.get_config(), db.as_user_types_storage(), db.features(), &db)
 {}
 
 schema_ctxt::schema_ctxt(distributed<replica::database>& db)
@@ -144,7 +147,8 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     std::map<utils::UUID, schema_mutations>&& tables_before,
     std::map<utils::UUID, schema_mutations>&& tables_after,
     std::map<utils::UUID, schema_mutations>&& views_before,
-    std::map<utils::UUID, schema_mutations>&& views_after);
+    std::map<utils::UUID, schema_mutations>&& views_after,
+    bool reload);
 
 struct [[nodiscard]] user_types_to_drop final {
     seastar::noncopyable_function<future<> ()> drop;
@@ -157,7 +161,7 @@ static future<user_types_to_drop> merge_types(distributed<service::storage_proxy
 static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after);
 static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after, schema_result scylla_before, schema_result scylla_after);
 
-static future<> do_merge_schema(distributed<service::storage_proxy>&, std::vector<mutation>, bool do_flush);
+static future<> do_merge_schema(distributed<service::storage_proxy>&, std::vector<mutation>, bool do_flush, bool reload);
 
 using computed_columns_map = std::unordered_map<bytes, column_computation_ptr>;
 static computed_columns_map get_computed_columns(const schema_mutations& sm);
@@ -937,7 +941,7 @@ future<> update_schema_version_and_announce(sharded<db::system_keyspace>& sys_ks
  * @throws ConfigurationException If one of metadata attributes has invalid value
  * @throws IOException If data was corrupted during transportation or failed to apply fs operations
  */
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations)
+future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations, bool reload)
 {
     if (this_shard_id() != 0) {
         // mutations must be applied on the owning shard (0).
@@ -948,7 +952,7 @@ future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service:
     }
     co_await with_merge_lock([&] () mutable -> future<> {
         bool flush_schema = proxy.local().get_db().local().get_config().flush_schema_tables_after_modification();
-        co_await do_merge_schema(proxy, std::move(mutations), flush_schema);
+        co_await do_merge_schema(proxy, std::move(mutations), flush_schema, reload);
         co_await update_schema_version_and_announce(sys_ks, proxy, feat.cluster_schema_features());
     });
 }
@@ -1084,7 +1088,7 @@ future<> store_column_mapping(distributed<service::storage_proxy>& proxy, schema
     co_await proxy.local().mutate_locally(std::move(muts), tracing::trace_state_ptr());
 }
 
-static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush)
+static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush, bool reload)
 {
     slogger.trace("do_merge_schema: {}", mutations);
     schema_ptr s = keyspaces();
@@ -1097,6 +1101,12 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
         // We must force recalculation of schema version after the merge, since the resulting
         // schema may be a mix of the old and new schemas.
         delete_schema_version(mutation);
+    }
+
+    if (reload) {
+        for (auto&& ks : proxy.local().get_db().local().get_non_system_keyspaces()) {
+            keyspaces.emplace(ks);
+        }
     }
 
     // current state of the schema
@@ -1134,7 +1144,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
     auto types_to_drop = co_await merge_types(proxy, std::move(old_types), std::move(new_types));
     co_await merge_tables_and_views(proxy,
         std::move(old_column_families), std::move(new_column_families),
-        std::move(old_views), std::move(new_views));
+        std::move(old_views), std::move(new_views), reload);
     co_await merge_functions(proxy, std::move(old_functions), std::move(new_functions));
     co_await merge_aggregates(proxy, std::move(old_aggregates), std::move(new_aggregates), std::move(old_scylla_aggregates), std::move(new_scylla_aggregates));
     co_await types_to_drop.drop();
@@ -1244,6 +1254,7 @@ enum class schema_diff_side {
 static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy,
     std::map<utils::UUID, schema_mutations>&& before,
     std::map<utils::UUID, schema_mutations>&& after,
+    bool reload,
     noncopyable_function<schema_ptr (schema_mutations sm, schema_diff_side)> create_schema)
 {
     schema_diff d;
@@ -1264,6 +1275,13 @@ static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy
         slogger.info("Altering {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
         d.altered.emplace_back(schema_diff::altered_schema{s_before, s});
     }
+    if (reload) {
+        for (auto&& key: diff.entries_in_common) {
+            auto s = create_schema(std::move(after.at(key)), schema_diff_side::right);
+            slogger.info("Reloading {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
+            d.altered.emplace_back(schema_diff::altered_schema {s, s});
+        }
+    }
     return d;
 }
 
@@ -1276,12 +1294,13 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     std::map<utils::UUID, schema_mutations>&& tables_before,
     std::map<utils::UUID, schema_mutations>&& tables_after,
     std::map<utils::UUID, schema_mutations>&& views_before,
-    std::map<utils::UUID, schema_mutations>&& views_after)
+    std::map<utils::UUID, schema_mutations>&& views_after,
+    bool reload)
 {
-    auto tables_diff = diff_table_or_view(proxy, std::move(tables_before), std::move(tables_after), [&] (schema_mutations sm, schema_diff_side) {
+    auto tables_diff = diff_table_or_view(proxy, std::move(tables_before), std::move(tables_after), reload, [&] (schema_mutations sm, schema_diff_side) {
         return create_table_from_mutations(proxy, std::move(sm));
     });
-    auto views_diff = diff_table_or_view(proxy, std::move(views_before), std::move(views_after), [&] (schema_mutations sm, schema_diff_side side) {
+    auto views_diff = diff_table_or_view(proxy, std::move(views_before), std::move(views_after), reload, [&] (schema_mutations sm, schema_diff_side side) {
         // The view schema mutation should be created with reference to the base table schema because we definitely know it by now.
         // If we don't do it we are leaving a window where write commands to this schema are illegal.
         // There are 3 possibilities:
@@ -2902,7 +2921,7 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
     if (version) {
         builder.with_version(*version);
     } else {
-        builder.with_version(sm.digest());
+        builder.with_version(sm.digest(ctxt.features().cluster_schema_features()));
     }
 
     if (auto partitioner = sm.partitioner()) {
@@ -3133,7 +3152,7 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
     if (version) {
         builder.with_version(*version);
     } else {
-        builder.with_version(sm.digest());
+        builder.with_version(sm.digest(ctxt.features().cluster_schema_features()));
     }
 
     auto base_id = row.get_nonnull<utils::UUID>("base_table_id");

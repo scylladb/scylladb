@@ -24,6 +24,10 @@ enum class schema_feature {
     PER_TABLE_PARTITIONERS,
     SCYLLA_KEYSPACES,
     SCYLLA_AGGREGATES,
+
+    // When enabled, schema_mutations::digest() will skip empty mutations (with only tombstones),
+    // so that the digest remains the same after schema tables are compacted.
+    TABLE_DIGEST_INSENSITIVE_TO_EXPIRY,
 };
 
 using schema_features = enum_set<super_enum<schema_feature,
@@ -33,7 +37,8 @@ using schema_features = enum_set<super_enum<schema_feature,
     schema_feature::CDC_OPTIONS,
     schema_feature::PER_TABLE_PARTITIONERS,
     schema_feature::SCYLLA_KEYSPACES,
-    schema_feature::SCYLLA_AGGREGATES
+    schema_feature::SCYLLA_AGGREGATES,
+    schema_feature::TABLE_DIGEST_INSENSITIVE_TO_EXPIRY
     >>;
 
 }

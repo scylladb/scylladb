@@ -14,6 +14,7 @@
 #include "schema_fwd.hh"
 #include "schema_features.hh"
 #include "hashing.hh"
+#include "gms/feature_service.hh"
 #include "schema_mutations.hh"
 #include "types/map.hh"
 #include "query-result-set.hh"
@@ -66,8 +67,8 @@ class config;
 
 class schema_ctxt {
 public:
-    schema_ctxt(const config&, std::shared_ptr<data_dictionary::user_types_storage> uts);
-    schema_ctxt(const replica::database&);
+    schema_ctxt(const config&, std::shared_ptr<data_dictionary::user_types_storage> uts, const gms::feature_service&, replica::database* = nullptr);
+    schema_ctxt(replica::database&);
     schema_ctxt(distributed<replica::database>&);
     schema_ctxt(distributed<service::storage_proxy>&);
 
@@ -87,7 +88,17 @@ public:
         return *_user_types;
     }
 
+    const gms::feature_service& features() const {
+        return _features;
+    }
+
+    replica::database* get_db() const {
+        return _db;
+    }
+
 private:
+    replica::database* _db;
+    const gms::feature_service& _features;
     const db::extensions& _extensions;
     const unsigned _murmur3_partitioner_ignore_msb_bits;
     const uint32_t _schema_registry_grace_period;
@@ -184,7 +195,7 @@ future<mutation> read_keyspace_mutation(distributed<service::storage_proxy>&, co
 // Must be called on shard 0.
 future<semaphore_units<>> hold_merge_lock() noexcept;
 
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations);
+future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations, bool reload = false);
 
 // Recalculates the local schema version.
 //
