@@ -41,7 +41,7 @@ SEASTAR_TEST_CASE(test_abort_server_on_background_error) {
             const auto& value_map = seastar::metrics::impl::get_value_map();
             const auto& metric_family = value_map.at("raft_group0_" + name);
             const auto& registered_metric = metric_family.at({{"shard", "0"}});
-            return (*registered_metric)().ui();
+            return registered_metric->get_function()().ui();
         };
 
         auto get_status = [&] {
