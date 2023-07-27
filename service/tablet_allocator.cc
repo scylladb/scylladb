@@ -12,6 +12,7 @@
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
 #include "service/tablet_allocator.hh"
+#include "utils/error_injection.hh"
 #include "utils/stall_free.hh"
 #include "locator/load_sketch.hh"
 #include "utils/div_ceil.hh"
@@ -215,6 +216,12 @@ public:
     future<migration_plan> make_plan(sstring dc) {
         lblogger.info("Examining DC {}", dc);
 
+        // Causes load balancer to move some tablet even though load is balanced.
+        auto shuffle = utils::get_local_injector().enter("tablet_allocator_shuffle");
+        if (shuffle) {
+            lblogger.warn("Running without convergence checks");
+        }
+
         const locator::topology& topo = _tm->get_topology();
 
         // Select subset of nodes to balance.
@@ -269,7 +276,7 @@ public:
             }
         }
 
-        if (max_load == min_load) {
+        if (!shuffle && max_load == min_load) {
             // load is balanced.
             // TODO: Evaluate and fix intra-node balance.
             co_return migration_plan();
@@ -373,35 +380,38 @@ public:
             auto src_host = nodes_by_load.back();
             auto& src_node_info = nodes[src_host];
 
-            // Check if all nodes reached the same avg_load. There are three sets of nodes: target, candidates (nodes_by_load)
-            // and off-candidates (removed from nodes_by_load). At any time, the avg_load for target is not greater than
-            // that of any candidate, and avg_load of any candidate is not greater than that of any in the off-candidates set.
-            // This is ensured by the fact that we remove candidates in the order of avg_load from the heap, and
-            // because we prevent load inversion between candidate and target in the next check.
-            // So the max avg_load of candidates is that of the current src_node_info, and max avg_load of off-candidates
-            // is tracked in max_off_candidate_load. If max_off_candidate_load is equal to target's avg_load,
-            // it means that all nodes have equal avg_load. We take the maximum with the current candidate in src_node_info
-            // to handle the case of off-candidates being empty. In that case, max_off_candidate_load is 0.
-            if (std::max(max_off_candidate_load, src_node_info.avg_load) == target_info.avg_load) {
-                lblogger.debug("Balance achieved.");
-                break;
-            }
+            if (!shuffle) {
+                // Check if all nodes reached the same avg_load. There are three sets of nodes: target, candidates (nodes_by_load)
+                // and off-candidates (removed from nodes_by_load). At any time, the avg_load for target is not greater than
+                // that of any candidate, and avg_load of any candidate is not greater than that of any in the off-candidates set.
+                // This is ensured by the fact that we remove candidates in the order of avg_load from the heap, and
+                // because we prevent load inversion between candidate and target in the next check.
+                // So the max avg_load of candidates is that of the current src_node_info, and max avg_load of off-candidates
+                // is tracked in max_off_candidate_load. If max_off_candidate_load is equal to target's avg_load,
+                // it means that all nodes have equal avg_load. We take the maximum with the current candidate in src_node_info
+                // to handle the case of off-candidates being empty. In that case, max_off_candidate_load is 0.
+                if (std::max(max_off_candidate_load, src_node_info.avg_load) == target_info.avg_load) {
+                    lblogger.debug("Balance achieved.");
+                    break;
+                }
 
-            // If balance is not achieved, still consider migrating from candidate nodes which have higher load than the target.
-            // max_off_candidate_load may be higher than the load of current candidate.
-            if (src_node_info.avg_load <= target_info.avg_load) {
-                lblogger.debug("No more candidate nodes.");
-                lblogger.debug("No more candidate nodes. Next candidate is {} with avg_load={}, target's avg_load={}",
-                               src_host, src_node_info.avg_load, target_info.avg_load);
-                break;
-            }
+                // If balance is not achieved, still consider migrating from candidate nodes which have higher load than the target.
+                // max_off_candidate_load may be higher than the load of current candidate.
+                if (src_node_info.avg_load <= target_info.avg_load) {
+                    lblogger.debug("No more candidate nodes.");
+                    lblogger.debug("No more candidate nodes. Next candidate is {} with avg_load={}, target's avg_load={}",
+                            src_host, src_node_info.avg_load, target_info.avg_load);
+                    break;
+                }
 
-            // Prevent load inversion which can lead to oscillations.
-            if (src_node_info.get_avg_load(nodes[src_host].tablet_count - 1) <
-                    target_info.get_avg_load(target_info.tablet_count + 1)) {
-                lblogger.debug("No more candidate nodes, load would be inverted. Next candidate is {} with avg_load={}, target's avg_load={}",
-                               src_host, src_node_info.avg_load, target_info.avg_load);
-                break;
+                // Prevent load inversion which can lead to oscillations.
+                if (src_node_info.get_avg_load(nodes[src_host].tablet_count - 1) <
+                        target_info.get_avg_load(target_info.tablet_count + 1)) {
+                    lblogger.debug("No more candidate nodes, load would be inverted. Next candidate is {} with "
+                                   "avg_load={}, target's avg_load={}",
+                            src_host, src_node_info.avg_load, target_info.avg_load);
+                    break;
+                }
             }
 
             if (src_node_info.shards_by_load.empty()) {

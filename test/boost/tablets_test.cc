@@ -25,6 +25,7 @@
 #include "locator/tablet_replication_strategy.hh"
 #include "utils/fb_utilities.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/error_injection.hh"
 
 using namespace locator;
 using namespace replica;
@@ -830,6 +831,64 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
         }
     }
 }
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
+    inet_address ip1("192.168.0.1");
+    inet_address ip2("192.168.0.2");
+    inet_address ip3("192.168.0.3");
+
+    auto host1 = host_id(next_uuid());
+    auto host2 = host_id(next_uuid());
+    auto host3 = host_id(next_uuid());
+
+    auto table1 = table_id(next_uuid());
+
+    semaphore sem(1);
+    shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
+        locator::topology::config{
+            .this_endpoint = ip1,
+            .local_dc_rack = locator::endpoint_dc_rack::default_location
+        }
+    });
+
+    stm.mutate_token_metadata([&] (auto& tm) {
+        tm.update_host_id(host1, ip1);
+        tm.update_host_id(host2, ip2);
+        tm.update_host_id(host3, ip3);
+        tm.update_topology(ip1, locator::endpoint_dc_rack::default_location, std::nullopt, 1);
+        tm.update_topology(ip2, locator::endpoint_dc_rack::default_location, std::nullopt, 1);
+        tm.update_topology(ip3, locator::endpoint_dc_rack::default_location, std::nullopt, 2);
+
+        tablet_map tmap(4);
+        std::optional<tablet_id> tid = tmap.first_tablet();
+        for (int i = 0; i < 4; ++i) {
+            tmap.set_tablet(*tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                            tablet_replica {host2, 0},
+                    }
+            });
+            tid = tmap.next_tablet(*tid);
+        }
+        tablet_metadata tmeta;
+        tmeta.set_tablet_map(table1, std::move(tmap));
+        tm.set_tablets(std::move(tmeta));
+        return make_ready_future<>();
+    }).get();
+
+    rebalance_tablets(stm);
+
+    BOOST_REQUIRE(balance_tablets(stm.get()).get0().empty());
+
+    utils::get_local_injector().enable("tablet_allocator_shuffle");
+    auto disable_injection = seastar::defer([&] {
+        utils::get_local_injector().disable("tablet_allocator_shuffle");
+    });
+
+    BOOST_REQUIRE(!balance_tablets(stm.get()).get0().empty());
+}
+#endif
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_two_empty_nodes) {
     inet_address ip1("192.168.0.1");
