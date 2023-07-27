@@ -7,7 +7,7 @@
  */
 
 #include <boost/algorithm/string/join.hpp>
-#include <seastar/core/app-template.hh>
+#include <boost/range/adaptor/map.hpp>
 #include <seastar/core/coroutine.hh>
 
 #include "compound.hh"
@@ -15,7 +15,6 @@
 #include "log.hh"
 #include "schema/schema_builder.hh"
 #include "tools/utils.hh"
-#include "utils/logalloc.hh"
 
 using namespace seastar;
 using namespace tools::utils;
@@ -28,6 +27,10 @@ using type_variant = std::variant<
         data_type,
         compound_type<allow_prefixes::yes>,
         compound_type<allow_prefixes::no>>;
+
+using bytes_func = void(*)(type_variant, std::vector<bytes>, const bpo::variables_map& vm);
+using string_func = void(*)(type_variant, std::vector<sstring>, const bpo::variables_map& vm);
+using operation_func_variant = std::variant<bytes_func, string_func>;
 
 struct serializing_visitor {
     const std::vector<sstring>& values;
@@ -232,44 +235,6 @@ void shardof_handler(type_variant type, std::vector<bytes> values, const bpo::va
     }
 }
 
-class action_handler {
-public:
-    using bytes_func = void(*)(type_variant, std::vector<bytes>, const bpo::variables_map& vm);
-    using string_func = void(*)(type_variant, std::vector<sstring>, const bpo::variables_map& vm);
-
-    enum class value_type {
-        bytes = 0,
-        string,
-    };
-
-private:
-    std::string _name;
-    std::string _summary;
-    std::string _description;
-    std::variant<bytes_func, string_func> _func;
-
-public:
-    action_handler(std::string name, std::string summary, bytes_func func, std::string description)
-        : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)), _func(func) {
-    }
-    action_handler(std::string name, std::string summary, string_func func, std::string description)
-        : _name(std::move(name)), _summary(std::move(summary)), _description(std::move(description)), _func(func) {
-    }
-
-    const std::string& name() const { return _name; }
-    const std::string& summary() const { return _summary; }
-    const std::string& description() const { return _description; }
-
-    value_type get_value_type() const { return value_type(_func.index()); }
-
-    void operator()(type_variant type, std::vector<bytes> values, const bpo::variables_map& vm) const {
-        std::get<bytes_func>(_func)(std::move(type), std::move(values), vm);
-    }
-    void operator()(type_variant type, std::vector<sstring> values, const bpo::variables_map& vm) const {
-        std::get<string_func>(_func)(std::move(type), std::move(values), vm);
-    }
-};
-
 const std::vector<operation_option> global_options{
     typed_option<std::vector<sstring>>("type,t", "the type of the values, all values must be of the same type;"
             " when values are compounds, multiple types can be specified, one for each type making up the compound, "
@@ -284,8 +249,8 @@ const std::vector<app_template::positional_option> global_positional_options{
     {"value", bpo::value<std::vector<sstring>>(), "value(s) to process, can also be provided as positional arguments", -1}
 };
 
-const std::vector<action_handler> action_handlers = {
-    {"serialize", "serialize the value and print it in hex encoded form", serialize_handler,
+const std::map<operation, operation_func_variant> operations_with_func = {
+    {{"serialize", "serialize the value and print it in hex encoded form",
 R"(
 Serialize the value and print it in a hex encoded form.
 
@@ -311,8 +276,8 @@ $ scylla types serialize --prefix-compound -t TimeUUIDType -t Int32Type -- d0081
 
 $ scylla types serialize --prefix-compound -t TimeUUIDType -t Int32Type -- d0081989-6f6b-11ea-0000-0000001c571b
 0010d00819896f6b11ea00000000001c571b
-)"},
-    {"deserialize", "deserialize the value(s) and print them in a human readable form", deserialize_handler,
+)"}, serialize_handler},
+    {{"deserialize", "deserialize the value(s) and print them in a human readable form",
 R"(
 Deserialize the value(s) and print them in a human-readable form.
 
@@ -325,8 +290,8 @@ $ scylla types deserialize -t Int32Type b34b62d4
 
 $ scylla types deserialize --prefix-compound -t TimeUUIDType -t Int32Type 0010d00819896f6b11ea00000000001c571b000400000010
 (d0081989-6f6b-11ea-0000-0000001c571b, 16)
-)"},
-    {"compare", "compare two values", compare_handler,
+)"}, deserialize_handler},
+    {{"compare", "compare two values",
 R"(
 Compare two values and print the result.
 
@@ -336,8 +301,8 @@ Examples:
 
 $ scylla types compare -t 'ReversedType(TimeUUIDType)' b34b62d46a8d11ea0000005000237906 d00819896f6b11ea00000000001c571b
 b34b62d4-6a8d-11ea-0000-005000237906 > d0081989-6f6b-11ea-0000-0000001c571b
-)"},
-    {"validate", "validate the value(s)", validate_handler,
+)"}, compare_handler},
+    {{"validate", "validate the value(s)",
 R"(
 Check that the value(s) are valid for the type according to the requirements of
 the type.
@@ -348,8 +313,8 @@ Examples:
 
 $  scylla types validate -t Int32Type b34b62d4
 b34b62d4: VALID - -1286905132
-)"},
-    {"tokenof", "tokenof (calculate the token of) the partition-key", tokenof_handler,
+)"}, validate_handler},
+    {{"tokenof", "tokenof (calculate the token of) the partition-key",
 R"(
 Decorate the key, that is calculate its token.
 Only supports --full-compound.
@@ -360,8 +325,8 @@ Examples:
 
 $ scylla types tokenof --full-compound -t UTF8Type -t SimpleDateType -t UUIDType 000d66696c655f696e7374616e63650004800049190010c61a3321045941c38e5675255feb0196
 (file_instance, 2021-03-27, c61a3321-0459-41c3-8e56-75255feb0196): -5043005771368701888
-)"},
-    {"shardof", "calculate which shard the partition-key belongs to", shardof_handler,
+)"}, tokenof_handler},
+    {{"shardof", "calculate which shard the partition-key belongs to",
 R"(
 Decorate the key and calculate which shard its token belongs to.
 Only supports --full-compound. Use --shards and --ignore-msb-bits to specify
@@ -373,7 +338,7 @@ Examples:
 
 $ scylla types shardof --full-compound -t UTF8Type -t SimpleDateType -t UUIDType --shards=7 000d66696c655f696e7374616e63650004800049190010c61a3321045941c38e5675255feb0196
 (file_instance, 2021-03-27, c61a3321-0459-41c3-8e56-75255feb0196): token: -5043005771368701888, shard: 1
-)"},
+)"}, shardof_handler},
 };
 
 }
@@ -381,14 +346,6 @@ $ scylla types shardof --full-compound -t UTF8Type -t SimpleDateType -t UUIDType
 namespace tools {
 
 int scylla_types_main(int argc, char** argv) {
-    const action_handler* found_ah = nullptr;
-    if (std::strcmp(argv[1], "--help") != 0 && std::strcmp(argv[1], "-h") != 0) {
-        found_ah = &tools::utils::get_selected_operation(argc, argv, action_handlers, "action");
-    }
-
-    app_template::seastar_options app_cfg;
-    app_cfg.name = "scylla-types";
-
     auto description_template =
 R"(scylla-types - a command-line tool to examine values belonging to scylla types.
 
@@ -413,30 +370,18 @@ For more information about individual actions, see their specific help:
 $ scylla types {{action}} --help
 )";
 
-    if (found_ah) {
-        app_cfg.description = found_ah->description();
-    } else {
-        app_cfg.description = format(description_template, boost::algorithm::join(action_handlers | boost::adaptors::transformed(
-                        [] (const action_handler& ah) { return format("* {} - {}", ah.name(), ah.summary()); } ), "\n"));
-    }
+    const auto operations = boost::copy_range<std::vector<operation>>(operations_with_func | boost::adaptors::map_keys);
+    tool_app_template::config app_cfg{
+        .name = "scylla-types",
+        .description = format(description_template, boost::algorithm::join(operations | boost::adaptors::transformed(
+                [] (const operation& op) { return format("* {} - {}", op.name(), op.summary()); } ), "\n")),
+        .operations = std::move(operations),
+        .global_options = &global_options,
+        .global_positional_options = &global_positional_options,
+    };
+    tool_app_template app(std::move(app_cfg));
 
-    tools::utils::configure_tool_mode(app_cfg);
-
-    app_template app(std::move(app_cfg));
-
-    auto& global_desc = app.get_options_description();
-    for (const auto& global_option : global_options) {
-        global_option.add_option(global_desc);
-    }
-    for (const auto global_positional_option : global_positional_options) {
-        app.add_positional_options({global_positional_option});
-    }
-
-    return app.run(argc, argv, [&app, found_ah] {
-      return logalloc::use_standard_allocator_segment_pool_backend(1 * 1024 * 1024).then([&app, found_ah] {
-        const action_handler& handler = *found_ah;
-        const auto& app_config = app.configuration();
-
+    return app.run_async(argc, argv, [] (const operation& op, const boost::program_options::variables_map& app_config) {
         if (!app_config.contains("type")) {
             throw std::invalid_argument("error: missing required option '--type'");
         }
@@ -459,20 +404,22 @@ $ scylla types {{action}} --help
             throw std::invalid_argument("error: no values specified");
         }
 
-        switch (handler.get_value_type()) {
-            case action_handler::value_type::bytes:
+        const auto& handler = operations_with_func.at(op);
+        switch (handler.index()) {
+            case 0:
                 {
                     auto values = boost::copy_range<std::vector<bytes>>(
                             app_config["value"].as<std::vector<sstring>>() | boost::adaptors::transformed(from_hex));
 
-                    handler(std::move(type), std::move(values), app_config);
+                    std::get<bytes_func>(handler)(std::move(type), std::move(values), app_config);
                 }
                 break;
-            case action_handler::value_type::string:
-                handler(std::move(type), app_config["value"].as<std::vector<sstring>>(), app_config);
+            case 1:
+                std::get<string_func>(handler)(std::move(type), app_config["value"].as<std::vector<sstring>>(), app_config);
                 break;
         }
-      });
+
+        return 0;
     });
 }
 
