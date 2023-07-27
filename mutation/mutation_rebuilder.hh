@@ -18,6 +18,7 @@ class mutation_rebuilder {
 public:
     explicit mutation_rebuilder(schema_ptr s) : _s(std::move(s)) { }
 
+    // Returned reference is valid until consume_end_of_stream() or flush() is called.
     const mutation& consume_new_partition(const dht::decorated_key& dk) {
         assert(!_m);
         _m = mutation(_s, std::move(dk));
@@ -94,6 +95,7 @@ public:
         return std::move(mf).consume(*this);
     }
 public:
+    // Returned reference is valid until consume_end_of_stream() or flush() is called.
     const mutation& consume_new_partition(const dht::decorated_key& dk) {
         return _builder.consume_new_partition(dk);
     }
