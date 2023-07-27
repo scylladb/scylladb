@@ -531,7 +531,9 @@ schema_ptr do_load_schema_from_schema_tables(std::filesystem::path scylla_data_p
 
     db::config dbcfg;
     auto user_type_storage = std::make_shared<single_keyspace_user_types_storage>(std::move(utm));
-    db::schema_ctxt ctxt(dbcfg, user_type_storage);
+    gms::feature_service features(gms::feature_config_from_db_config(dbcfg));
+    db::schema_ctxt ctxt(dbcfg, user_type_storage, features);
+
     schema_mutations muts(std::move(*tables), std::move(*columns), std::move(view_virtual_columns), std::move(computed_columns), std::move(indexes),
             std::move(dropped_columns), std::move(scylla_tables));
     return db::schema_tables::create_table_from_mutations(ctxt, muts);

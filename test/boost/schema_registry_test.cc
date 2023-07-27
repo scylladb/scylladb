@@ -32,10 +32,12 @@ static schema_ptr random_schema() {
 
 struct dummy_init {
     std::unique_ptr<db::config> config;
+    gms::feature_service fs;
 
-    dummy_init() {
-        config = std::make_unique<db::config>();
-        local_schema_registry().init(db::schema_ctxt(*config,std::make_shared<data_dictionary::dummy_user_types_storage>()));
+    dummy_init()
+            : config(std::make_unique<db::config>())
+            , fs(gms::feature_config_from_db_config(*config)) {
+        local_schema_registry().init(db::schema_ctxt(*config, std::make_shared<data_dictionary::dummy_user_types_storage>(), fs));
     }
 };
 
