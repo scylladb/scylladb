@@ -112,6 +112,7 @@ public:
     // Coalesces requests.
     future<> merge_schema_from(netw::msg_addr);
     future<> do_merge_schema_from(netw::msg_addr);
+    future<> reload_schema();
 
     // Merge mutations received from src.
     // Keep mutations alive around whole async operation.

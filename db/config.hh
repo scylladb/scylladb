@@ -358,6 +358,7 @@ public:
     named_value<bool> enable_sstables_md_format;
     named_value<sstring> sstable_format;
     named_value<bool> uuid_sstable_identifiers_enabled;
+    named_value<bool> table_digest_insensitive_to_expiry;
     named_value<bool> enable_dangerous_direct_import_of_cassandra_counters;
     named_value<bool> enable_shard_aware_drivers;
     named_value<bool> enable_ipv6_dns_lookup;
