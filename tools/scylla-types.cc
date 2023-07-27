@@ -18,6 +18,7 @@
 #include "utils/logalloc.hh"
 
 using namespace seastar;
+using namespace tools::utils;
 
 namespace bpo = boost::program_options;
 
@@ -269,6 +270,20 @@ public:
     }
 };
 
+const std::vector<operation_option> global_options{
+    typed_option<std::vector<sstring>>("type,t", "the type of the values, all values must be of the same type;"
+            " when values are compounds, multiple types can be specified, one for each type making up the compound, "
+            "note that the order of the types on the command line will be their order in the compound too"),
+    typed_option<>("prefix-compound", "values are prefixable compounds (e.g. clustering key), composed of multiple values of possibly different types"),
+    typed_option<>("full-compound", "values are full compounds (e.g. partition key), composed of multiple values of possibly different types"),
+    typed_option<unsigned>("shards", "number of shards (only relevant for shardof action)"),
+    typed_option<unsigned>("ignore-msb-bits", 12u, "number of shards (only relevant for shardof action)"),
+};
+
+const std::vector<app_template::positional_option> global_positional_options{
+    {"value", bpo::value<std::vector<sstring>>(), "value(s) to process, can also be provided as positional arguments", -1}
+};
+
 const std::vector<action_handler> action_handlers = {
     {"serialize", "serialize the value and print it in hex encoded form", serialize_handler,
 R"(
@@ -409,33 +424,28 @@ $ scylla types {{action}} --help
 
     app_template app(std::move(app_cfg));
 
-    app.add_options()
-        ("type,t", bpo::value<std::vector<sstring>>(), "the type of the values, all values must be of the same type;"
-                " when values are compounds, multiple types can be specified, one for each type making up the compound, "
-                "note that the order of the types on the command line will be their order in the compound too")
-        ("prefix-compound", "values are prefixable compounds (e.g. clustering key), composed of multiple values of possibly different types")
-        ("full-compound", "values are full compounds (e.g. partition key), composed of multiple values of possibly different types")
-        ("shards", bpo::value<unsigned>(), "number of shards (only relevant for shardof action)")
-        ("ignore-msb-bits", bpo::value<unsigned>()->default_value(12), "number of shards (only relevant for shardof action)")
-        ;
-
-    app.add_positional_options({
-        {"value", bpo::value<std::vector<sstring>>(), "value(s) to process, can also be provided as positional arguments", -1}
-    });
+    auto& global_desc = app.get_options_description();
+    for (const auto& global_option : global_options) {
+        global_option.add_option(global_desc);
+    }
+    for (const auto global_positional_option : global_positional_options) {
+        app.add_positional_options({global_positional_option});
+    }
 
     return app.run(argc, argv, [&app, found_ah] {
       return logalloc::use_standard_allocator_segment_pool_backend(1 * 1024 * 1024).then([&app, found_ah] {
         const action_handler& handler = *found_ah;
+        const auto& app_config = app.configuration();
 
-        if (!app.configuration().contains("type")) {
+        if (!app_config.contains("type")) {
             throw std::invalid_argument("error: missing required option '--type'");
         }
-        type_variant type = [&app] () -> type_variant {
-            auto types = boost::copy_range<std::vector<data_type>>(app.configuration()["type"].as<std::vector<sstring>>()
+        type_variant type = [&app_config] () -> type_variant {
+            auto types = boost::copy_range<std::vector<data_type>>(app_config["type"].as<std::vector<sstring>>()
                     | boost::adaptors::transformed([] (const sstring_view type_name) { return db::marshal::type_parser::parse(type_name); }));
-            if (app.configuration().contains("prefix-compound")) {
+            if (app_config.contains("prefix-compound")) {
                 return compound_type<allow_prefixes::yes>(std::move(types));
-            } else if (app.configuration().contains("full-compound")) {
+            } else if (app_config.contains("full-compound")) {
                 return compound_type<allow_prefixes::no>(std::move(types));
             } else { // non-compound type
                 if (types.size() != 1) {
@@ -445,7 +455,7 @@ $ scylla types {{action}} --help
             }
         }();
 
-        if (!app.configuration().contains("value")) {
+        if (!app_config.contains("value")) {
             throw std::invalid_argument("error: no values specified");
         }
 
@@ -453,13 +463,13 @@ $ scylla types {{action}} --help
             case action_handler::value_type::bytes:
                 {
                     auto values = boost::copy_range<std::vector<bytes>>(
-                            app.configuration()["value"].as<std::vector<sstring>>() | boost::adaptors::transformed(from_hex));
+                            app_config["value"].as<std::vector<sstring>>() | boost::adaptors::transformed(from_hex));
 
-                    handler(std::move(type), std::move(values), app.configuration());
+                    handler(std::move(type), std::move(values), app_config);
                 }
                 break;
             case action_handler::value_type::string:
-                handler(std::move(type), app.configuration()["value"].as<std::vector<sstring>>(), app.configuration());
+                handler(std::move(type), app_config["value"].as<std::vector<sstring>>(), app_config);
                 break;
         }
       });
