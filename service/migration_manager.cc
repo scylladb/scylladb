@@ -1101,9 +1101,8 @@ future<> migration_manager::maybe_sync(const schema_ptr& s, netw::messaging_serv
             mlogger.debug("Syncing schema of {}.{} (v={}) with {}", s->ks_name(), s->cf_name(), s->version(), endpoint);
             return merge_schema_from(endpoint);
         } else {
-            return container().invoke_on(0, [gs = global_schema_ptr(s), endpoint] (migration_manager& local_mm) {
-                schema_ptr s = gs.get();
-                mlogger.debug("Syncing schema of {}.{} (v={}) with {}", s->ks_name(), s->cf_name(), s->version(), endpoint);
+            return container().invoke_on(0, [ks_name = s->ks_name(), cf_name = s->cf_name(), version = s->version(), endpoint] (migration_manager& local_mm) {
+                mlogger.debug("Syncing schema of {}.{} (v={}) with {}", ks_name, cf_name, version, endpoint);
                 return local_mm.merge_schema_from(endpoint);
             });
         }
