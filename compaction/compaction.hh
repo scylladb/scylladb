@@ -48,6 +48,7 @@ struct compaction_info {
 };
 
 struct compaction_data {
+    uint64_t compaction_size = 0;
     uint64_t total_partitions = 0;
     uint64_t total_keys_written = 0;
     sstring stop_requested;

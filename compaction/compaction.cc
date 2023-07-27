@@ -752,6 +752,7 @@ private:
                 continue;
             }
 
+            _cdata.compaction_size += sst->data_size();
             // We also capture the sstable, so we keep it alive while the read isn't done
             ssts->insert(sst);
             // FIXME: If the sstables have cardinality estimation bitmaps, use that
@@ -1783,6 +1784,7 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
     auto permit = table_s.make_compaction_reader_permit();
 
     uint64_t validation_errors = 0;
+    cdata.compaction_size = boost::accumulate(descriptor.sstables | boost::adaptors::transformed([] (auto& sst) { return sst->data_size(); }), int64_t(0));
 
     for (const auto& sst : descriptor.sstables) {
         clogger.info("Scrubbing in validate mode {}", sst->get_filename());
