@@ -220,10 +220,10 @@ future<> save_system_schema(cql3::query_processor& qp, const sstring & ksname) {
     auto ksm = ks.metadata();
 
     // delete old, possibly obsolete entries in schema tables
-    co_await coroutine::parallel_for_each(all_table_names(schema_features::full()), [ksm] (sstring cf) -> future<> {
+    co_await coroutine::parallel_for_each(all_table_names(schema_features::full()), [&qp, ksm] (sstring cf) -> future<> {
         auto deletion_timestamp = system_keyspace::schema_creation_timestamp() - 1;
-        co_await qctx->execute_cql(format("DELETE FROM {}.{} USING TIMESTAMP {} WHERE keyspace_name = ?", NAME, cf,
-            deletion_timestamp), ksm->name()).discard_result();
+        co_await qp.execute_internal(format("DELETE FROM {}.{} USING TIMESTAMP {} WHERE keyspace_name = ?", NAME, cf,
+            deletion_timestamp), { ksm->name() }, cql3::query_processor::cache_internal::yes).discard_result();
     });
     {
         auto mvec  = make_create_keyspace_mutations(qp.db().features().cluster_schema_features(), ksm, system_keyspace::schema_creation_timestamp(), true);
