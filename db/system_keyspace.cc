@@ -2396,7 +2396,7 @@ future<utils::UUID> system_keyspace::get_last_group0_state_id() {
 }
 
 future<bool> system_keyspace::group0_history_contains(utils::UUID state_id) {
-    auto rs = co_await qctx->execute_cql(
+    auto rs = co_await execute_cql(
         format(
             "SELECT state_id FROM system.{} WHERE key = '{}' AND state_id = ?",
             GROUP0_HISTORY, GROUP0_HISTORY_KEY),

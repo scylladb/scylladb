@@ -197,7 +197,7 @@ future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard g
         // on this node to proceed
     } ();
 
-    if (!(co_await db::system_keyspace::group0_history_contains(new_group0_state_id))) {
+    if (!(co_await _sys_ks.group0_history_contains(new_group0_state_id))) {
         // The command was applied but the history table does not contain the new group 0 state ID.
         // This means `apply` skipped the change due to previous state ID mismatch.
         throw group0_concurrent_modification{};

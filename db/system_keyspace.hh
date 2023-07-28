@@ -458,7 +458,7 @@ public:
 
     // Checks whether the group 0 history table contains the given state ID.
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
-    static future<bool> group0_history_contains(utils::UUID state_id);
+    future<bool> group0_history_contains(utils::UUID state_id);
 
     future<service::topology> load_topology_state();
     future<int64_t> get_topology_fence_version();
