@@ -65,6 +65,7 @@ class dns_connection_factory : public http::experimental::connection_factory {
 protected:
     std::string _host;
     int _port;
+    logging::logger& _logger;
     struct state {
         bool initialized = false;
         socket_address addr;
@@ -91,13 +92,14 @@ protected:
         );
 
         state->initialized = true;
-        s3l.debug("Initialized factory, address={} tls={}", state->addr, state->creds == nullptr ? "no" : "yes");
+        _logger.debug("Initialized factory, address={} tls={}", state->addr, state->creds == nullptr ? "no" : "yes");
     }
 
 public:
-    dns_connection_factory(std::string host, int port, bool use_https)
+    dns_connection_factory(std::string host, int port, bool use_https, logging::logger& logger)
         : _host(std::move(host))
         , _port(port)
+        , _logger(logger)
         , _state(make_lw_shared<state>())
         , _done(initialize(use_https))
     {
@@ -105,15 +107,15 @@ public:
 
     virtual future<connected_socket> make() override {
         if (!_state->initialized) {
-            s3l.debug("Waiting for factory to initialize");
+            _logger.debug("Waiting for factory to initialize");
             co_await _done.get_future();
         }
 
         if (_state->creds) {
-            s3l.debug("Making new HTTPS connection addr={} host={}", _state->addr, _host);
+            _logger.debug("Making new HTTPS connection addr={} host={}", _state->addr, _host);
             co_return co_await tls::connect(_state->creds, _state->addr, tls::tls_options{.server_name = _host});
         } else {
-            s3l.debug("Making new HTTP connection");
+            _logger.debug("Making new HTTP connection");
             co_return co_await seastar::connect(_state->addr, {}, transport::TCP);
         }
     }
@@ -183,7 +185,7 @@ future<> client::make_request(http::request req, http::experimental::client::rep
     auto sg = current_scheduling_group();
     auto it = _https.find(sg);
     if (it == _https.end()) [[unlikely]] {
-        auto factory = std::make_unique<dns_connection_factory>(_host, _cfg->port, _cfg->use_https);
+        auto factory = std::make_unique<dns_connection_factory>(_host, _cfg->port, _cfg->use_https, s3l);
         // Limit the maximum number of connections this group's http client
         // may have proportional to its shares. Shares are typically in the
         // range of 100...1000, thus resulting in 1..10 connections
