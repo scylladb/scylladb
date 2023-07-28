@@ -2845,59 +2845,59 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
     tool_app_template app(std::move(app_cfg));
 
     return app.run_async(argc, argv, [] (const operation& operation, const bpo::variables_map& app_config) {
-            schema_ptr schema;
-            {
-                unsigned schema_sources = 0;
-                schema_sources += !app_config["schema-file"].defaulted();
-                schema_sources += app_config.contains("system-schema");
-                schema_sources += app_config.contains("scylla-data-dir");
-                schema_sources += app_config.contains("scylla-yaml-file");
+        schema_ptr schema;
+        {
+            unsigned schema_sources = 0;
+            schema_sources += !app_config["schema-file"].defaulted();
+            schema_sources += app_config.contains("system-schema");
+            schema_sources += app_config.contains("scylla-data-dir");
+            schema_sources += app_config.contains("scylla-yaml-file");
 
-                if (!schema_sources) {
-                    sst_log.debug("No user-provided schema source, attempting to auto-detect it");
-                    schema = try_load_schema_autodetect(app_config);
-                } else if (schema_sources == 1) {
-                    sst_log.debug("Single schema source provided");
-                    schema = try_load_schema_from_user_provided_source(app_config);
-                } else {
-                    fmt::print(std::cerr, "Multiple schema sources provided, please provide exactly one of: --schema-file, --system-schema, --scylla-data-dir or --scylla-yaml-file (with the accompanying --keyspace and --table if necessary)\n");
-                }
+            if (!schema_sources) {
+                sst_log.debug("No user-provided schema source, attempting to auto-detect it");
+                schema = try_load_schema_autodetect(app_config);
+            } else if (schema_sources == 1) {
+                sst_log.debug("Single schema source provided");
+                schema = try_load_schema_from_user_provided_source(app_config);
+            } else {
+                fmt::print(std::cerr, "Multiple schema sources provided, please provide exactly one of: --schema-file, --system-schema, --scylla-data-dir or --scylla-yaml-file (with the accompanying --keyspace and --table if necessary)\n");
             }
-            if (!schema) {
-                return 1;
-            }
+        }
+        if (!schema) {
+            return 1;
+        }
 
-            // Place on heap to avoid wasting stack space
-            auto pdbcfg = std::make_unique<db::config>();
-            auto& dbcfg = *pdbcfg;
-            gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
-            cache_tracker tracker;
-            dbcfg.host_id = locator::host_id::create_random_id();
-            sstables::directory_semaphore dir_sem(1);
-            sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem);
-            auto close_sst_man = deferred_close(sst_man);
+        // Place on heap to avoid wasting stack space
+        auto pdbcfg = std::make_unique<db::config>();
+        auto& dbcfg = *pdbcfg;
+        gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
+        cache_tracker tracker;
+        dbcfg.host_id = locator::host_id::create_random_id();
+        sstables::directory_semaphore dir_sem(1);
+        sstables::sstables_manager sst_man(large_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem);
+        auto close_sst_man = deferred_close(sst_man);
 
-            std::vector<sstables::shared_sstable> sstables;
-            if (app_config.count("sstables")) {
-                sstables = load_sstables(schema, sst_man, app_config["sstables"].as<std::vector<sstring>>());
-            }
+        std::vector<sstables::shared_sstable> sstables;
+        if (app_config.count("sstables")) {
+            sstables = load_sstables(schema, sst_man, app_config["sstables"].as<std::vector<sstring>>());
+        }
 
-            reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, app_name);
-            auto stop_semaphore = deferred_stop(rcs_sem);
+        reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, app_name);
+        auto stop_semaphore = deferred_stop(rcs_sem);
 
-            const auto permit = rcs_sem.make_tracking_only_permit(schema.get(), app_name, db::no_timeout, {});
+        const auto permit = rcs_sem.make_tracking_only_permit(schema.get(), app_name, db::no_timeout, {});
 
-            try {
-                operations_with_func.at(operation)(schema, permit, sstables, sst_man, app_config);
-            } catch (std::invalid_argument& e) {
-                fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
-                return 1;
-            } catch (...) {
-                fmt::print(std::cerr, "error running operation: {}\n", std::current_exception());
-                return 2;
-            }
+        try {
+            operations_with_func.at(operation)(schema, permit, sstables, sst_man, app_config);
+        } catch (std::invalid_argument& e) {
+            fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
+            return 1;
+        } catch (...) {
+            fmt::print(std::cerr, "error running operation: {}\n", std::current_exception());
+            return 2;
+        }
 
-            return 0;
+        return 0;
     });
 }
 
