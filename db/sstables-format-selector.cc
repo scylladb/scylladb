@@ -28,10 +28,11 @@ void feature_enabled_listener::on_enabled() {
     }
 }
 
-sstables_format_selector::sstables_format_selector(gms::gossiper& g, sharded<gms::feature_service>& f, sharded<replica::database>& db)
+sstables_format_selector::sstables_format_selector(gms::gossiper& g, sharded<gms::feature_service>& f, sharded<replica::database>& db, db::system_keyspace& sys_ks)
     : _gossiper(g)
     , _features(f)
     , _db(db)
+    , _sys_ks(sys_ks)
     , _md_feature_listener(*this, sstables::sstable_version_types::md)
     , _me_feature_listener(*this, sstables::sstable_version_types::me)
 { }
@@ -41,7 +42,7 @@ future<> sstables_format_selector::maybe_select_format(sstables::sstable_version
     auto units = co_await get_units(_sem, 1);
 
     if (new_format > _selected_format) {
-        co_await db::system_keyspace::set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, fmt::to_string(new_format));
+        co_await _sys_ks.set_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME, fmt::to_string(new_format));
         co_await select_format(new_format);
         // FIXME discarded future
         (void)_gossiper.add_local_application_state(gms::application_state::SUPPORTED_FEATURES,
@@ -61,7 +62,7 @@ future<> sstables_format_selector::stop() {
 }
 
 future<> sstables_format_selector::read_sstables_format() {
-    std::optional<sstring> format_opt = co_await db::system_keyspace::get_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME);
+    std::optional<sstring> format_opt = co_await _sys_ks.get_scylla_local_param(SSTABLE_FORMAT_PARAM_NAME);
     if (format_opt) {
         sstables::sstable_version_types format = sstables::version_from_string(*format_opt);
         co_await select_format(format);

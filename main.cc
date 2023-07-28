@@ -1299,7 +1299,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             bm.start(std::ref(qp), std::ref(sys_ks), bm_cfg).get();
 
-            db::sstables_format_selector sst_format_selector(gossiper.local(), feature_service, db);
+            db::sstables_format_selector sst_format_selector(gossiper.local(), feature_service, db, sys_ks.local());
 
             sst_format_selector.start().get();
             auto stop_format_selector = defer_verbose_shutdown("sstables format selector", [&sst_format_selector] {

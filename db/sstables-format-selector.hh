@@ -29,6 +29,7 @@ class feature_service;
 
 namespace db {
 
+class system_keyspace;
 class sstables_format_selector;
 
 class feature_enabled_listener : public gms::feature::listener {
@@ -47,6 +48,7 @@ class sstables_format_selector {
     gms::gossiper& _gossiper;
     sharded<gms::feature_service>& _features;
     sharded<replica::database>& _db;
+    db::system_keyspace& _sys_ks;
     seastar::named_semaphore _sem = {1, named_semaphore_exception_factory{"feature listeners"}};
     seastar::gate _sel;
 
@@ -58,7 +60,7 @@ class sstables_format_selector {
     future<> read_sstables_format();
 
 public:
-    sstables_format_selector(gms::gossiper& g, sharded<gms::feature_service>& f, sharded<replica::database>& db);
+    sstables_format_selector(gms::gossiper& g, sharded<gms::feature_service>& f, sharded<replica::database>& db, db::system_keyspace& sys_ks);
 
     future<> start();
     future<> stop();
