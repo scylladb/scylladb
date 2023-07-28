@@ -15,15 +15,11 @@
 #include <boost/range/adaptor/map.hpp>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/gate.hh>
-#include <seastar/core/seastar.hh>
-#include <seastar/core/shared_future.hh>
-#include <seastar/coroutine/all.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
-#include <seastar/net/dns.hh>
-#include <seastar/net/tls.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/http/request.hh>
 #include "utils/s3/client.hh"
+#include "utils/http.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/aws_sigv4.hh"
@@ -60,66 +56,6 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     auto in = std::move(in_);
     co_await util::skip_entire_stream(in);
 }
-
-class dns_connection_factory : public http::experimental::connection_factory {
-protected:
-    std::string _host;
-    int _port;
-    logging::logger& _logger;
-    struct state {
-        bool initialized = false;
-        socket_address addr;
-        ::shared_ptr<tls::certificate_credentials> creds;
-    };
-    lw_shared_ptr<state> _state;
-    shared_future<> _done;
-
-    future<> initialize(bool use_https) {
-        auto state = _state;
-
-        co_await coroutine::all(
-            [state, host = _host, port = _port] () -> future<> {
-                auto hent = co_await net::dns::get_host_by_name(host, net::inet_address::family::INET);
-                state->addr = socket_address(hent.addr_list.front(), port);
-            },
-            [state, use_https] () -> future<> {
-                if (use_https) {
-                    tls::credentials_builder cbuild;
-                    co_await cbuild.set_system_trust();
-                    state->creds = cbuild.build_certificate_credentials();
-                }
-            }
-        );
-
-        state->initialized = true;
-        _logger.debug("Initialized factory, address={} tls={}", state->addr, state->creds == nullptr ? "no" : "yes");
-    }
-
-public:
-    dns_connection_factory(std::string host, int port, bool use_https, logging::logger& logger)
-        : _host(std::move(host))
-        , _port(port)
-        , _logger(logger)
-        , _state(make_lw_shared<state>())
-        , _done(initialize(use_https))
-    {
-    }
-
-    virtual future<connected_socket> make() override {
-        if (!_state->initialized) {
-            _logger.debug("Waiting for factory to initialize");
-            co_await _done.get_future();
-        }
-
-        if (_state->creds) {
-            _logger.debug("Making new HTTPS connection addr={} host={}", _state->addr, _host);
-            co_return co_await tls::connect(_state->creds, _state->addr, tls::tls_options{.server_name = _host});
-        } else {
-            _logger.debug("Making new HTTP connection");
-            co_return co_await seastar::connect(_state->addr, {}, transport::TCP);
-        }
-    }
-};
 
 client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, private_tag)
         : _host(std::move(host))
@@ -185,7 +121,7 @@ future<> client::make_request(http::request req, http::experimental::client::rep
     auto sg = current_scheduling_group();
     auto it = _https.find(sg);
     if (it == _https.end()) [[unlikely]] {
-        auto factory = std::make_unique<dns_connection_factory>(_host, _cfg->port, _cfg->use_https, s3l);
+        auto factory = std::make_unique<utils::http::dns_connection_factory>(_host, _cfg->port, _cfg->use_https, s3l);
         // Limit the maximum number of connections this group's http client
         // may have proportional to its shares. Shares are typically in the
         // range of 100...1000, thus resulting in 1..10 connections
