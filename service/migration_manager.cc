@@ -1183,7 +1183,7 @@ future<> migration_manager::sync_schema(const replica::database& db, const std::
     });
 }
 
-future<column_mapping> get_column_mapping(table_id table_id, table_schema_version v) {
+future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, table_id table_id, table_schema_version v) {
     schema_ptr s = local_schema_registry().get_or_null(v);
     if (s) {
         return make_ready_future<column_mapping>(s->get_column_mapping());

@@ -80,7 +80,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keys
                                     prv, tr_state, timeout);
                         });
                     });
-                    return when_all(std::move(f1), std::move(f2)).then([state = std::move(state), only_digest, schema] (auto t) mutable {
+                    return when_all(std::move(f1), std::move(f2)).then([state = std::move(state), only_digest, schema, &sys_ks] (auto t) mutable {
                         if (utils::get_local_injector().enter("paxos_error_after_save_promise")) {
                             return make_exception_future<prepare_response>(utils::injected_error("injected_error_after_save_promise"));
                         }
@@ -105,7 +105,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keys
                             auto ex = f2.get_exception();
                             logger.debug("Failed to get data or digest: {}. Ignored.", std::move(ex));
                         }
-                        auto upgrade_if_needed = [schema = std::move(schema)] (std::optional<proposal> p) {
+                        auto upgrade_if_needed = [schema = std::move(schema), &sys_ks] (std::optional<proposal> p) {
                             if (!p || p->update.schema_version() == schema->version()) {
                                 return make_ready_future<std::optional<proposal>>(std::move(p));
                             }
@@ -117,7 +117,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keys
                             // for that version and upgrade the mutation with it.
                             logger.debug("Stored mutation references outdated schema version. "
                                 "Trying to upgrade the accepted proposal mutation to the most recent schema version.");
-                            return service::get_column_mapping(p->update.column_family_id(), p->update.schema_version()).then([schema, p = std::move(p)] (const column_mapping& cm) {
+                            return service::get_column_mapping(sys_ks, p->update.column_family_id(), p->update.schema_version()).then([schema, p = std::move(p)] (const column_mapping& cm) {
                                 return make_ready_future<std::optional<proposal>>(proposal(p->ballot, freeze(p->update.unfreeze_upgrading(schema, cm))));
                             });
                         };
