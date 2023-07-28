@@ -1,51 +1,91 @@
 Seastar Perftune
 ================
 
-Configure various system parameters to improve the seastar application performance, called from of scylla_setup script.
+ScyllaDB's Seastar Perftune helps you run ScyllaDB with its maximum performance.
+The `perftune.py <https://github.com/scylladb/seastar/blob/master/scripts/perftune.py>`_ script 
+handles network and disk tuning, reassigning IRQs to specific CPU cores and freeing 
+the other cores for ScyllaDB’s exclusive use.
 
-This script will:
+More specifically, running the script will:
 
 * Ban relevant IRQs from being moved by irqbalance.
 * Configure various system parameters in /proc/sys.
-* Distribute the IRQs (using SMP affinity configuration) among CPUs according to the configuration mode (see below).
+* Distribute the IRQs (using SMP affinity configuration) among CPUs according to 
+  the ``irq_cpu_mask`` value. Note that more than one physical core will be used 
+  for IRQ handling for large machines.
 
-As a result, some of the CPUs may be destined only to handle the IRQs and taken out of the CPU set to be used to run the seastar application ("compute CPU set").
+To ensure that the tuning persists after a host reboot, we recommend creating a systemd unit 
+that will run on host startup and re-tune the hosts.
 
+perftune.yaml
+------------------
 
-perftune.py [options]
+The ``perfrune.yaml`` file is the output file of the ``perftune.py`` script 
+(with the ``--dump-options-file`` option enabled). The script determines 
+the ``irq_cpu_mask`` and prints it to ``perftume.yaml`` on the first machine.
 
-Options:
+It's important to use the same ``irq_cpu_mask`` value on other machines, even if more machines are 
+added to the cluster, to avoid a  mixed-cluster situation.
 
-* ``--mode`` -  configuration mode (see below)
-* ``--nic`` -  network interface name(s), by default uses *eth0* (may appear more than once)
-* ``--tune-clock`` -  Force tuning of the system clocksource
-* ``--get-cpu-mask`` - print the CPU mask to be used for compute
-* ``--get-cpu-mask-quiet`` - print the CPU mask to be used for compute, print the zero CPU set if that's what it turns out to be
-* ``--verbose`` - be more verbose about operations and their result
-* ``--tune`` -  components to configure (may be given more than once)
-* ``--cpu-mask`` - mask of cores to use, by default use all available cores
-* ``--irq-cpu-mask``- mask of cores to use for IRQs binding
-* ``--dir`` - directory to optimize (may appear more than once)
-* ``--dev`` device to optimize (may appear more than once), e.g. sda1
-* ``--options-file`` - configuration YAML file
-* ``--dump-options-file`` - Print the configuration YAML file containing the current configuration
-* ``--dry-run`` - Don't take any action, just recommend what to do
-* ``--write-back-cache`` Enable/Disable *write back* write cache mode
+Note that ``perftune.yaml`` is generated only if the file doesn’t exist.
 
-Modes description:
+Available Options
+------------------------
 
-* *sq* - set all IRQs of a given NIC to CPU0 and configure RPS to spreads NAPIs' handling between other CPUs.
-* *sq_split* - divide all IRQs of a given NIC between CPU0 and its HT siblings and configure RPS to spreads NAPIs' handling between other CPUs.
-* *mq* - distribute NIC's IRQs among all CPUs instead of binding them all to CPU0. In this mode RPS is always enabled to spreads NAPIs' handling between all CPUs.
+You can run ``perftune.py`` with the following options: 
 
-If there isn't any mode given script will use a default mode:
+.. list-table::
+   :widths: 30 70
+   :header-rows: 1
 
-- If number of physical CPU cores per Rx HW queue is greater than 4 - use the 'sq-split' mode.
-- Otherwise, if number of hyperthreads per Rx HW queue is greater than 4 - use the 'sq' mode.
-- Otherwise use the 'mq' mode.
+   * - Option
+     - Description
+   * - ``--arfs``
+     - Enables/disables aRFS.
+   * - ``--cpu-mask``
+     - The masks of cores to use. The default is all available cores.
+   * - ``--dev``
+     - Specifies the device to optimize; for example, ``sda1``. You can use it more than 
+       once to specify multiple devices.
+   * - ``--dir``
+     - Specifies the directory to optimize. You can use it more than once to specify 
+       multiple directories.
+   * - ``--dry-run``
+     - Prints recommendations on what to do without taking any action.
+   * - ``--dump-options-file``
+     - Prints the configuration YAML file containing the current configuration.
+   * - ``--get-cpu-mask``
+     - Prints the CPU mask to be used for computation.
+   * - ``--get-cpu-mask-quiet``
+     - Prints the CPU mask to be used for computation. Prints the zero CPU set if that's 
+       what it is.
+   * - ``--get-irq-cpu-mask``
+     - Prints the CPU mask to be used for IRQs binding.
+   * - ``--irq-core-auto-detection-ratio``
+     - Specifies a ratio for IRQ mask auto-detection. For example, if 8 is given and 
+       auto-detection is requested, a single IRQ CPU core is going to be allocated 
+       for every 8 CPU cores out of available according to the ``cpu_mask`` value. 
+       The default is 16.
+   * - ``--irq-cpu-mask``
+     - The mask of the cores to be used for IRQs binding.
+   * - ``--nic``
+     - The network interface name. The default is ``eth0``. You can use it more than once 
+       to specify multiple interfaces.
+   * - ``--num-rx-queues``
+     - Sets a given number of Rx queues.
+   * - ``--options-file``
+     - The configuration YAML file.
+   * - ``--tune``
+     - Specifies the components to configure. You can use it more than once to specify 
+       multiple values. The available values are:
 
-Default values:
-
-* --nic NIC: eth0
-* --cpu-mask MASK: all available cores mask
-* --tune-clock: false
+         * ``net`` - Enables tuning the network.
+         * ``disks`` - Enables tuning the disks.
+         * ``system`` - Enables tuning system-related components.
+   * - ``--tune-clock``
+     - Forces tuning of /system/clocksource. The default is ``false``. Requires the ``--tune`` option.
+   * - ``--verbose``
+     - Provides additional details about operations and their results.
+   * - ``--write-back-cache`` 
+     - Enables/disables the *write back* write cache mode.
+ 
