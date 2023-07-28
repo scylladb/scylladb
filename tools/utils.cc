@@ -7,12 +7,52 @@
  */
 
 #include <seastar/core/thread.hh>
+#include <boost/algorithm/string/join.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 
 #include "tools/utils.hh"
 #include "utils/logalloc.hh"
 
 namespace tools::utils {
 
+namespace {
+
+// Extract the operation from the argv.
+//
+// The operation is expected to be at argv[1].If found, it is shifted out to the
+// end (effectively removed) and the corresponding operation* is returned.
+// If not found or unrecognized an error is logged and exit() is called.
+const operation& get_selected_operation(int& ac, char**& av, const std::vector<operation>& operations, std::string_view alias) {
+    if (ac < 2) {
+        fmt::print(std::cerr, "error: missing mandatory {} argument\n", alias);
+        exit(1);
+    }
+
+    const operation* found_operation = nullptr;
+    for (const auto& op : operations) {
+        if (av[1] == op.name()) {
+            found_operation = &op;
+            break;
+        }
+    }
+    if (found_operation) {
+        --ac;
+        for (int i = 1; i < ac; ++i) {
+            std::swap(av[i], av[i + 1]);
+        }
+        return *found_operation;
+    }
+
+    const auto all_operation_names = boost::algorithm::join(operations | boost::adaptors::transformed([] (const operation op) { return op.name(); } ), ", ");
+
+    fmt::print(std::cerr, "error: unrecognized {} argument: expected one of ({}), got {}\n", alias, all_operation_names, av[1]);
+    exit(1);
+}
+
+// Configure seastar with defaults more appropriate for a tool.
+// Make seastar not act as if it owns the place, taking over all system resources.
+// Set ERROR as the default log level, except for the logger \p logger_name, which
+// is configured with INFO level.
 void configure_tool_mode(app_template::seastar_options& opts, const sstring& logger_name) {
     opts.reactor_opts.blocked_reactor_notify_ms.set_value(60000);
     opts.reactor_opts.overprovisioned.set_value();
@@ -32,6 +72,8 @@ void configure_tool_mode(app_template::seastar_options& opts, const sstring& log
         opts.log_opts.logger_log_level.get_value()[logger_name] = log_level::info;
     }
 }
+
+} // anonymous namespace
 
 int tool_app_template::run_async(int argc, char** argv, noncopyable_function<int(const operation&, const boost::program_options::variables_map&)> main_func) {
     const operation* found_op = nullptr;
