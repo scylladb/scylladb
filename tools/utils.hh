@@ -8,9 +8,6 @@
 
 #include <boost/program_options.hpp>
 #include <seastar/core/app-template.hh>
-#include <string>
-#include <vector>
-#include <fmt/format.h>
 #include "seastarx.hh"
 
 namespace tools::utils {
