@@ -1552,9 +1552,9 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
             store_column_mapping(proxy, altered.old_schema.get(), true),
             store_column_mapping(proxy, altered.new_schema.get(), false));
     });
-    co_await max_concurrent_for_each(tables_diff.dropped, max_concurrent, [] (schema_diff::dropped_schema& dropped) -> future<> {
+    co_await max_concurrent_for_each(tables_diff.dropped, max_concurrent, [&sys_ks] (schema_diff::dropped_schema& dropped) -> future<> {
         schema_ptr s = dropped.schema.get();
-        co_await drop_column_mapping(s->id(), s->version());
+        co_await drop_column_mapping(sys_ks.local(), s->id(), s->version());
     });
 }
 
@@ -3704,7 +3704,7 @@ future<schema_mutations> read_table_mutations(distributed<service::storage_proxy
 static auto GET_COLUMN_MAPPING_QUERY = format("SELECT column_name, clustering_order, column_name_bytes, kind, position, type FROM system.{} WHERE cf_id = ? AND schema_version = ?",
     db::schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY);
 
-future<column_mapping> get_column_mapping(::table_id table_id, table_schema_version version) {
+future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, ::table_id table_id, table_schema_version version) {
     shared_ptr<cql3::untyped_result_set> results = co_await qctx->qp().execute_internal(
         GET_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
@@ -3745,7 +3745,7 @@ future<column_mapping> get_column_mapping(::table_id table_id, table_schema_vers
     co_return std::move(cm);
 }
 
-future<bool> column_mapping_exists(table_id table_id, table_schema_version version) {
+future<bool> column_mapping_exists(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version) {
     shared_ptr<cql3::untyped_result_set> results = co_await qctx->qp().execute_internal(
         GET_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
@@ -3755,7 +3755,7 @@ future<bool> column_mapping_exists(table_id table_id, table_schema_version versi
     co_return !results->empty();
 }
 
-future<> drop_column_mapping(table_id table_id, table_schema_version version) {
+future<> drop_column_mapping(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version) {
     const static sstring DEL_COLUMN_MAPPING_QUERY =
         format("DELETE FROM system.{} WHERE cf_id = ? and schema_version = ?",
             db::schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY);
