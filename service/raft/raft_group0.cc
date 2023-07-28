@@ -394,7 +394,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_
     assert(this_shard_id() == 0);
     assert(!joined_group0());
 
-    auto group0_id = raft::group_id{co_await db::system_keyspace::get_raft_group0_id()};
+    auto group0_id = raft::group_id{co_await sys_ks.get_raft_group0_id()};
     if (group0_id) {
         // Group 0 ID present means we've already joined group 0 before.
         co_return co_await start_server_for_group0(group0_id, ss, qp, mm, cdc_gen_service);
@@ -560,7 +560,7 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
         co_return;
     }
 
-    auto group0_id = raft::group_id{co_await db::system_keyspace::get_raft_group0_id()};
+    auto group0_id = raft::group_id{co_await sys_ks.get_raft_group0_id()};
     if (group0_id) {
         // Group 0 ID is present => we've already joined group 0 earlier.
         group0_log.info("setup_group0: group 0 ID present. Starting existing Raft server.");

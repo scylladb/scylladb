@@ -444,7 +444,7 @@ public:
     future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
 
     // Load Raft Group 0 id from scylla.local
-    static future<utils::UUID> get_raft_group0_id();
+    future<utils::UUID> get_raft_group0_id();
 
     // Persist Raft Group 0 id. Should be a TIMEUUID.
     static future<> set_raft_group0_id(utils::UUID id);
