@@ -470,7 +470,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_
         // Try again after a pause
         co_await seastar::sleep_abortable(std::chrono::milliseconds{1000}, _abort_source);
     }
-    co_await db::system_keyspace::set_raft_group0_id(group0_id.id);
+    co_await sys_ks.set_raft_group0_id(group0_id.id);
     // Allow peer_exchange() RPC to access group 0 only after group0_id is persisted.
 
     _group0 = group0_id;

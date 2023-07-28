@@ -447,7 +447,7 @@ public:
     future<utils::UUID> get_raft_group0_id();
 
     // Persist Raft Group 0 id. Should be a TIMEUUID.
-    static future<> set_raft_group0_id(utils::UUID id);
+    future<> set_raft_group0_id(utils::UUID id);
 
     // Save advertised gossip feature set to system.local
     future<> save_local_supported_features(const std::set<std::string_view>& feats);
