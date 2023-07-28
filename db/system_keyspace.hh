@@ -78,6 +78,13 @@ namespace db {
 
 sstring system_keyspace_name();
 
+class system_keyspace;
+namespace schema_tables {
+future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, ::table_id table_id, table_schema_version version);
+future<bool> column_mapping_exists(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version);
+future<> drop_column_mapping(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version);
+}
+
 class config;
 struct local_cache;
 
@@ -509,6 +516,10 @@ public:
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql(sstring req, Args&&... args) {
         return execute_cql(req, { data_value(std::forward<Args>(args))... });
     }
+
+    friend future<column_mapping> db::schema_tables::get_column_mapping(db::system_keyspace& sys_ks, ::table_id table_id, table_schema_version version);
+    friend future<bool> db::schema_tables::column_mapping_exists(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version);
+    friend future<> db::schema_tables::drop_column_mapping(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version);
 }; // class system_keyspace
 
 } // namespace db

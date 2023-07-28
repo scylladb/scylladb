@@ -3705,7 +3705,7 @@ static auto GET_COLUMN_MAPPING_QUERY = format("SELECT column_name, clustering_or
     db::schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY);
 
 future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, ::table_id table_id, table_schema_version version) {
-    shared_ptr<cql3::untyped_result_set> results = co_await qctx->qp().execute_internal(
+    shared_ptr<cql3::untyped_result_set> results = co_await sys_ks._qp.execute_internal(
         GET_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
         {table_id.uuid(), version.uuid()},
@@ -3746,7 +3746,7 @@ future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, ::table_i
 }
 
 future<bool> column_mapping_exists(db::system_keyspace& sys_ks, table_id table_id, table_schema_version version) {
-    shared_ptr<cql3::untyped_result_set> results = co_await qctx->qp().execute_internal(
+    shared_ptr<cql3::untyped_result_set> results = co_await sys_ks._qp.execute_internal(
         GET_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
         {table_id.uuid(), version.uuid()},
@@ -3759,7 +3759,7 @@ future<> drop_column_mapping(db::system_keyspace& sys_ks, table_id table_id, tab
     const static sstring DEL_COLUMN_MAPPING_QUERY =
         format("DELETE FROM system.{} WHERE cf_id = ? and schema_version = ?",
             db::schema_tables::SCYLLA_TABLE_SCHEMA_HISTORY);
-    co_await qctx->qp().execute_internal(
+    co_await sys_ks._qp.execute_internal(
         DEL_COLUMN_MAPPING_QUERY,
         db::consistency_level::LOCAL_ONE,
         {table_id.uuid(), version.uuid()},
