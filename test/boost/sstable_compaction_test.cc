@@ -178,13 +178,14 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
         return sleep(std::chrono::milliseconds(100));
     }).wait();
     // test no more running compactions
-    BOOST_REQUIRE(cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0);
+    BOOST_CHECK_EQUAL(cm.get_stats().pending_tasks, 0);
+    BOOST_CHECK_EQUAL(cm.get_stats().active_tasks, 0);
     // test compaction successfully finished
-    BOOST_REQUIRE(cm.get_stats().completed_tasks == 1);
-    BOOST_REQUIRE(cm.get_stats().errors == 0);
+    BOOST_CHECK_EQUAL(cm.get_stats().completed_tasks, 1);
+    BOOST_CHECK_EQUAL(cm.get_stats().errors, 0);
 
     // expect sstables of cf to be compacted.
-    BOOST_REQUIRE(cf->sstables_count() == 1);
+    BOOST_CHECK_EQUAL(cf->sstables_count(), 1);
   });
 }
 
