@@ -589,9 +589,13 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
 void repair::shard_repair_task_impl::check_failed_ranges() {
     rlogger.info("repair[{}]: stats: repair_reason={}, keyspace={}, tables={}, ranges_nr={}, {}",
         global_repair_id.uuid(), _reason, _status.keyspace, table_names(), ranges.size(), _stats.get_stats());
-    if (nr_failed_ranges || _aborted || _failed) {
-        auto msg = format("repair[{}]: {} out of {} ranges failed, keyspace={}, tables={}, repair_reason={}, nodes_down_during_repair={}, aborted_by_user={}",
-                global_repair_id.uuid(), nr_failed_ranges, ranges_size(), _status.keyspace, table_names(), _reason, nodes_down, _aborted);
+    if (nr_failed_ranges || _aborted || _failed_because) {
+        sstring failed_because = "N/A";
+        if (!_aborted) {
+            failed_because = _failed_because ? *_failed_because : "unknown";
+        }
+        auto msg = format("repair[{}]: {} out of {} ranges failed, keyspace={}, tables={}, repair_reason={}, nodes_down_during_repair={}, aborted_by_user={}, failed_because={}",
+                global_repair_id.uuid(), nr_failed_ranges, ranges_size(), _status.keyspace, table_names(), _reason, nodes_down, _aborted, failed_because);
         rlogger.warn("{}", msg);
         throw std::runtime_error(msg);
     } else {
@@ -1000,7 +1004,7 @@ future<> repair::shard_repair_task_impl::run() {
     try {
         co_await do_repair_ranges();
     } catch (...) {
-        _failed = true;
+        _failed_because.emplace(fmt::to_string(std::current_exception()));
         rlogger.debug("repair[{}]: got error in do_repair_ranges: {}",
             global_repair_id.uuid(), std::current_exception());
     }

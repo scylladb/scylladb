@@ -1425,16 +1425,6 @@ private:
             _has_compacted_partition_start = false;
         }
     }
-    void maybe_inject_partition_end() {
-        // The compactor needs a valid stream, but downstream doesn't care about
-        // the injected partition end, so ignore it.
-        if (_last_uncompacted_kind != mutation_fragment_v2::kind::partition_end) {
-            _ignore_partition_end = true;
-            _compactor.consume_end_of_partition(*this, _gc_consumer);
-            _last_uncompacted_kind = mutation_fragment_v2::kind::partition_end;
-            _ignore_partition_end = false;
-        }
-    }
     void consume_new_partition(const dht::decorated_key& dk) {
         _has_compacted_partition_start = true;
         // We need to reset the partition's tombstone here. If the tombstone is
@@ -1544,13 +1534,13 @@ public:
             return make_ready_future<>();
         }
         _end_of_stream = false;
-        maybe_inject_partition_end();
+        _compactor.abandon_current_partition();
         return _reader.next_partition();
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         clear_buffer();
         _end_of_stream = false;
-        maybe_inject_partition_end();
+        _compactor.abandon_current_partition();
         return _reader.fast_forward_to(pr);
     }
     virtual future<> fast_forward_to(position_range pr) override {

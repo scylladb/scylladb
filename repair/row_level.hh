@@ -214,6 +214,7 @@ public:
             shard_config master_node_shard_config,
             table_schema_version schema_version,
             streaming::stream_reason reason,
+            gc_clock::time_point compaction_time,
             abort_source& as);
 
     future<>

@@ -2310,7 +2310,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
                 return dht::to_partition_range(*next);
             }
             return std::nullopt;
-        });
+        }, gc_clock::now());
         auto close_tested_reader = deferred_close(tested_reader);
 
         auto reader_factory = [db = &env.db()] (

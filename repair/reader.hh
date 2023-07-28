@@ -52,7 +52,8 @@ private:
         replica::column_family& cf,
         read_strategy strategy,
         const dht::sharder& remote_sharder,
-        unsigned remote_shard);
+        unsigned remote_shard,
+        gc_clock::time_point compaction_time);
 
 public:
     repair_reader(
@@ -64,7 +65,8 @@ public:
         const dht::sharder& remote_sharder,
         unsigned remote_shard,
         uint64_t seed,
-        read_strategy strategy);
+        read_strategy strategy,
+        gc_clock::time_point compaction_time);
 
     future<mutation_fragment_opt>
     read_mutation_fragment();

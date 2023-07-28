@@ -578,6 +578,11 @@ public:
         }
     }
 
+    /// Signal to the compactor that the current partition will not be finished.
+    void abandon_current_partition() {
+        _validator.reset(mutation_fragment_v2::kind::partition_end, position_in_partition_view::for_partition_end(), {});
+    }
+
     bool are_limits_reached() const {
         return _row_limit == 0 || _partition_limit == 0;
     }

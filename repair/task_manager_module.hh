@@ -122,7 +122,7 @@ public:
     std::unordered_set<gms::inet_address> nodes_down;
 private:
     bool _aborted = false;
-    bool _failed = false;
+    std::optional<sstring> _failed_because;
 public:
     shard_repair_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,

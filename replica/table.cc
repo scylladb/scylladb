@@ -292,9 +292,22 @@ sstables::shared_sstable table::make_streaming_staging_sstable() {
     return make_streaming_sstable_for_write(sstables::staging_dir);
 }
 
+static flat_mutation_reader_v2 maybe_compact_for_streaming(flat_mutation_reader_v2 underlying, const compaction_manager& cm, gc_clock::time_point compaction_time, bool compaction_enabled) {
+    if (!compaction_enabled) {
+        return underlying;
+    }
+    return make_compacting_reader(
+            std::move(underlying),
+            compaction_time,
+            [] (const dht::decorated_key&) { return api::min_timestamp; }, // disable tombstone purging
+            cm.get_tombstone_gc_state(),
+            streamed_mutation::forwarding::no);
+}
+
 flat_mutation_reader_v2
 table::make_streaming_reader(schema_ptr s, reader_permit permit,
-                           const dht::partition_range_vector& ranges) const {
+                           const dht::partition_range_vector& ranges,
+                           gc_clock::time_point compaction_time) const {
     auto& slice = s->full_slice();
 
     auto source = mutation_source([this] (schema_ptr s, reader_permit permit, const dht::partition_range& range, const query::partition_slice& slice,
@@ -307,11 +320,15 @@ table::make_streaming_reader(schema_ptr s, reader_permit permit,
         return make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr);
     });
 
-    return make_flat_multi_range_reader(s, std::move(permit), std::move(source), ranges, slice, nullptr, mutation_reader::forwarding::no);
+    return maybe_compact_for_streaming(
+            make_flat_multi_range_reader(s, std::move(permit), std::move(source), ranges, slice, nullptr, mutation_reader::forwarding::no),
+            get_compaction_manager(),
+            compaction_time,
+            _config.enable_compacting_data_for_streaming_and_repair());
 }
 
 flat_mutation_reader_v2 table::make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
-        const query::partition_slice& slice, mutation_reader::forwarding fwd_mr) const {
+        const query::partition_slice& slice, mutation_reader::forwarding fwd_mr, gc_clock::time_point compaction_time) const {
     auto trace_state = tracing::trace_state_ptr();
     const auto fwd = streamed_mutation::forwarding::no;
 
@@ -320,17 +337,25 @@ flat_mutation_reader_v2 table::make_streaming_reader(schema_ptr schema, reader_p
         readers.reserve(memtable_count + 1);
     });
     readers.emplace_back(make_sstable_reader(schema, permit, _sstables, range, slice, std::move(trace_state), fwd, fwd_mr));
-    return make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr);
+    return maybe_compact_for_streaming(
+            make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr),
+            get_compaction_manager(),
+            compaction_time,
+            _config.enable_compacting_data_for_streaming_and_repair());
 }
 
 flat_mutation_reader_v2 table::make_streaming_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
-        lw_shared_ptr<sstables::sstable_set> sstables) const {
+        lw_shared_ptr<sstables::sstable_set> sstables, gc_clock::time_point compaction_time) const {
     auto& slice = schema->full_slice();
     auto trace_state = tracing::trace_state_ptr();
     const auto fwd = streamed_mutation::forwarding::no;
     const auto fwd_mr = mutation_reader::forwarding::no;
-    return sstables->make_range_sstable_reader(std::move(schema), std::move(permit), range, slice,
-            std::move(trace_state), fwd, fwd_mr);
+    return maybe_compact_for_streaming(
+            sstables->make_range_sstable_reader(std::move(schema), std::move(permit), range, slice,
+                    std::move(trace_state), fwd, fwd_mr),
+            get_compaction_manager(),
+            compaction_time,
+            _config.enable_compacting_data_for_streaming_and_repair());
 }
 
 flat_mutation_reader_v2 table::make_nonpopulating_cache_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range,
