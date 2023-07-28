@@ -390,11 +390,11 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service:
 }
 
 future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_voter, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
-                                  cdc::generation_service& cdc_gen_service) {
+                                  cdc::generation_service& cdc_gen_service, db::system_keyspace& sys_ks) {
     assert(this_shard_id() == 0);
     assert(!joined_group0());
 
-    auto group0_id = raft::group_id{co_await db::system_keyspace::get_raft_group0_id()};
+    auto group0_id = raft::group_id{co_await sys_ks.get_raft_group0_id()};
     if (group0_id) {
         // Group 0 ID present means we've already joined group 0 before.
         co_return co_await start_server_for_group0(group0_id, ss, qp, mm, cdc_gen_service);
@@ -470,7 +470,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, bool as_
         // Try again after a pause
         co_await seastar::sleep_abortable(std::chrono::milliseconds{1000}, _abort_source);
     }
-    co_await db::system_keyspace::set_raft_group0_id(group0_id.id);
+    co_await sys_ks.set_raft_group0_id(group0_id.id);
     // Allow peer_exchange() RPC to access group 0 only after group0_id is persisted.
 
     _group0 = group0_id;
@@ -560,7 +560,7 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
         co_return;
     }
 
-    auto group0_id = raft::group_id{co_await db::system_keyspace::get_raft_group0_id()};
+    auto group0_id = raft::group_id{co_await sys_ks.get_raft_group0_id()};
     if (group0_id) {
         // Group 0 ID is present => we've already joined group 0 earlier.
         group0_log.info("setup_group0: group 0 ID present. Starting existing Raft server.");
@@ -608,7 +608,7 @@ future<> raft_group0::setup_group0(
     }
 
     group0_log.info("setup_group0: joining group 0...");
-    co_await join_group0(std::move(seeds), false /* non-voter */, ss, qp, mm, cdc_gen_service);
+    co_await join_group0(std::move(seeds), false /* non-voter */, ss, qp, mm, cdc_gen_service, sys_ks);
     group0_log.info("setup_group0: successfully joined group 0.");
 
     utils::get_local_injector().inject("stop_after_joining_group0", [&] {
@@ -1562,7 +1562,7 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state, ser
 
     if (!joined_group0()) {
         upgrade_log.info("Joining group 0...");
-        co_await join_group0(co_await _sys_ks.load_peers(), true, ss, qp, mm, cdc_gen_service);
+        co_await join_group0(co_await _sys_ks.load_peers(), true, ss, qp, mm, cdc_gen_service, _sys_ks);
     } else {
         upgrade_log.info(
             "We're already a member of group 0."

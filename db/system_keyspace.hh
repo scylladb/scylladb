@@ -444,21 +444,21 @@ public:
     future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
 
     // Load Raft Group 0 id from scylla.local
-    static future<utils::UUID> get_raft_group0_id();
+    future<utils::UUID> get_raft_group0_id();
 
     // Persist Raft Group 0 id. Should be a TIMEUUID.
-    static future<> set_raft_group0_id(utils::UUID id);
+    future<> set_raft_group0_id(utils::UUID id);
 
     // Save advertised gossip feature set to system.local
     future<> save_local_supported_features(const std::set<std::string_view>& feats);
 
     // Get the last (the greatest in timeuuid order) state ID in the group 0 history table.
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
-    static future<utils::UUID> get_last_group0_state_id();
+    future<utils::UUID> get_last_group0_state_id();
 
     // Checks whether the group 0 history table contains the given state ID.
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
-    static future<bool> group0_history_contains(utils::UUID state_id);
+    future<bool> group0_history_contains(utils::UUID state_id);
 
     future<service::topology> load_topology_state();
     future<int64_t> get_topology_fence_version();
