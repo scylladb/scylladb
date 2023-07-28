@@ -1,2 +1,3 @@
 type: Python
 extra_scylla_cmdline_options: ["--consistent-cluster-management=true", "--experimental-features=broadcast-tables"]
+suite_load: 4

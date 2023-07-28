@@ -1,3 +1,4 @@
 type: Run
 run_in_release:
     - run
+suite_load: 8

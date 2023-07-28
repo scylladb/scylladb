@@ -24,3 +24,4 @@ custom_args:
     btree_compaction_test:
         - '-c1 -m1G --count=10000 --iter=13'
         - '-c1 -m1G --count=17 --iter=3'
+suite_load: 10
