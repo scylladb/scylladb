@@ -249,7 +249,7 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source* 
             // Read barrier may wait for `group0_state_machine::apply` which also takes this mutex.
             auto read_apply_holder = co_await hold_read_apply_mutex();
 
-            auto observed_group0_state_id = co_await db::system_keyspace::get_last_group0_state_id();
+            auto observed_group0_state_id = co_await _sys_ks.get_last_group0_state_id();
             auto new_group0_state_id = generate_group0_state_id(observed_group0_state_id);
 
             co_return group0_guard {

@@ -2384,7 +2384,7 @@ future<> system_keyspace::set_raft_group0_id(utils::UUID uuid) {
 static constexpr auto GROUP0_HISTORY_KEY = "history";
 
 future<utils::UUID> system_keyspace::get_last_group0_state_id() {
-    auto rs = co_await qctx->execute_cql(
+    auto rs = co_await execute_cql(
         format(
             "SELECT state_id FROM system.{} WHERE key = '{}' LIMIT 1",
             GROUP0_HISTORY, GROUP0_HISTORY_KEY));

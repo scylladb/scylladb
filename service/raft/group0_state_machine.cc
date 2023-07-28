@@ -117,7 +117,7 @@ future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
 
     // max_mutation_size = 1/2 of commitlog segment size, thus max_command_size is set 1/3 of commitlog segment size to leave space for metadata.
     size_t max_command_size = _sp.data_dictionary().get_config().commitlog_segment_size_in_mb() * 1024 * 1024 / 3;
-    group0_state_machine_merger m(co_await db::system_keyspace::get_last_group0_state_id(), std::move(read_apply_mutex_holder),
+    group0_state_machine_merger m(co_await _client.sys_ks().get_last_group0_state_id(), std::move(read_apply_mutex_holder),
                                   max_command_size, _sp.data_dictionary());
 
     for (auto&& c : command) {

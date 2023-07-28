@@ -454,7 +454,7 @@ public:
 
     // Get the last (the greatest in timeuuid order) state ID in the group 0 history table.
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
-    static future<utils::UUID> get_last_group0_state_id();
+    future<utils::UUID> get_last_group0_state_id();
 
     // Checks whether the group 0 history table contains the given state ID.
     // Assumes that the history table exists, i.e. Raft experimental feature is enabled.
