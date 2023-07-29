@@ -45,28 +45,29 @@ def ssl(request):
     yield request.config.getoption('--ssl')
 
 
-@contextmanager
-def _maybe_remove_tempdir_on_complete(request, tempdir):
-    if pytest.version_tuple > (7, 3, 0):
-        yield
+def _remove_all_but(tempdir, to_preserve):
+    orig_fn = os.path.join(tempdir, to_preserve)
+    # orig_fn does not exist
+    if not os.path.exists(orig_fn):
+        # it's fine if tempdir does not exist
+        shutil.rmtree(tempdir=True)
         return
-    # tmp_path_retention_count was introduced in pytest 7.3.0, so we have
-    # to swing this by ourselves when using lower version of pytest. see
-    # https://docs.pytest.org/en/7.3.x/changelog.html#pytest-7-3-0-2023-04-08
-    tests_failed = request.session.testsfailed
-    yield
-    if tests_failed == request.session.testsfailed:
-        # not tests failed after this seesion, so remove the tempdir
+
+    with tempfile.TemporaryDirectory() as backup_tempdir:
+        backup_fn = os.path.join(backup_tempdir, to_preserve)
+        shutil.move(orig_fn, backup_fn)
         shutil.rmtree(tempdir)
+        os.mkdir(tempdir)
+        shutil.move(backup_fn, orig_fn)
 
 
 @pytest.fixture(scope="function")
-def test_tempdir(request, tmpdir):
+def test_tempdir(tmpdir):
     tempdir = tmpdir.strpath
-    with _maybe_remove_tempdir_on_complete(request, tempdir):
+    try:
         yield tempdir
-        with open(os.path.join(tempdir, 'log'), 'rb') as log:
-            shutil.copyfileobj(log, sys.stdout.buffer)
+    finally:
+        _remove_all_but(tempdir, 'log')
 
 
 @pytest.fixture(scope="function")
