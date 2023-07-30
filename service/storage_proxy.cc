@@ -5553,157 +5553,156 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     };
     const auto to_token_range = [] (const dht::partition_range& r) { return r.transform(std::mem_fn(&dht::ring_position::token)); };
 
-  for (;;) {
-    std::vector<::shared_ptr<abstract_read_executor>> exec;
-    std::unordered_map<abstract_read_executor*, std::vector<dht::token_range>> ranges_per_exec;
-    dht::partition_range_vector ranges = ranges_to_vnodes(concurrency_factor);
-    dht::partition_range_vector::iterator i = ranges.begin();
+    for (;;) {
+        std::vector<::shared_ptr<abstract_read_executor>> exec;
+        std::unordered_map<abstract_read_executor*, std::vector<dht::token_range>> ranges_per_exec;
+        dht::partition_range_vector ranges = ranges_to_vnodes(concurrency_factor);
+        dht::partition_range_vector::iterator i = ranges.begin();
 
-    // query_ranges_to_vnodes_generator can return less results than requested. If the number of results
-    // is small enough or there are a lot of results - concurrentcy_factor which is increased by shifting left can
-    // eventualy zero out resulting in an infinite recursion. This line makes sure that concurrency factor is never
-    // get stuck on 0 and never increased too much if the number of results remains small.
-    concurrency_factor = std::max(size_t(1), ranges.size());
+        // query_ranges_to_vnodes_generator can return less results than requested. If the number of results
+        // is small enough or there are a lot of results - concurrentcy_factor which is increased by shifting left can
+        // eventualy zero out resulting in an infinite recursion. This line makes sure that concurrency factor is never
+        // get stuck on 0 and never increased too much if the number of results remains small.
+        concurrency_factor = std::max(size_t(1), ranges.size());
 
-    while (i != ranges.end()) {
-        dht::partition_range& range = *i;
-        inet_address_vector_replica_set live_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(range));
-        inet_address_vector_replica_set merged_preferred_replicas = preferred_replicas_for_range(*i);
-        inet_address_vector_replica_set filtered_endpoints = filter_replicas_for_read(cl, *erm, live_endpoints, merged_preferred_replicas, pcf);
-        std::vector<dht::token_range> merged_ranges{to_token_range(range)};
-        ++i;
+        while (i != ranges.end()) {
+            dht::partition_range& range = *i;
+            inet_address_vector_replica_set live_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(range));
+            inet_address_vector_replica_set merged_preferred_replicas = preferred_replicas_for_range(*i);
+            inet_address_vector_replica_set filtered_endpoints = filter_replicas_for_read(cl, *erm, live_endpoints, merged_preferred_replicas, pcf);
+            std::vector<dht::token_range> merged_ranges{to_token_range(range)};
+            ++i;
 
-        // getRestrictedRange has broken the queried range into per-[vnode] token ranges, but this doesn't take
-        // the replication factor into account. If the intersection of live endpoints for 2 consecutive ranges
-        // still meets the CL requirements, then we can merge both ranges into the same RangeSliceCommand.
-      if (!erm->get_replication_strategy().uses_tablets()) {
-        while (i != ranges.end())
-        {
-            const auto current_range_preferred_replicas = preferred_replicas_for_range(*i);
-            dht::partition_range& next_range = *i;
-            inet_address_vector_replica_set next_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(next_range));
-            inet_address_vector_replica_set next_filtered_endpoints = filter_replicas_for_read(cl, *erm, next_endpoints, current_range_preferred_replicas, pcf);
+            // getRestrictedRange has broken the queried range into per-[vnode] token ranges, but this doesn't take
+            // the replication factor into account. If the intersection of live endpoints for 2 consecutive ranges
+            // still meets the CL requirements, then we can merge both ranges into the same RangeSliceCommand.
+            if (!erm->get_replication_strategy().uses_tablets()) {
+                while (i != ranges.end())
+                {
+                    const auto current_range_preferred_replicas = preferred_replicas_for_range(*i);
+                    dht::partition_range& next_range = *i;
+                    inet_address_vector_replica_set next_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(next_range));
+                    inet_address_vector_replica_set next_filtered_endpoints = filter_replicas_for_read(cl, *erm, next_endpoints, current_range_preferred_replicas, pcf);
 
-            // Origin has this to say here:
-            // *  If the current range right is the min token, we should stop merging because CFS.getRangeSlice
-            // *  don't know how to deal with a wrapping range.
-            // *  Note: it would be slightly more efficient to have CFS.getRangeSlice on the destination nodes unwraps
-            // *  the range if necessary and deal with it. However, we can't start sending wrapped range without breaking
-            // *  wire compatibility, so It's likely easier not to bother;
-            // It obviously not apply for us(?), but lets follow origin for now
-            if (end_token(range) == dht::maximum_token()) {
-                break;
-            }
-
-            // Implementing a proper contiguity check is hard, because it requires
-            // is_successor(range_bound<dht::ring_position> a, range_bound<dht::ring_position> b)
-            // relation to be defined. It is needed for intervals for which their possibly adjacent
-            // bounds are either both exclusive or inclusive.
-            // For example: is_adjacent([a, b], [c, d]) requires checking is_successor(b, c).
-            // Defining a successor relationship for dht::ring_position is hard, because
-            // dht::ring_position can possibly contain partition key.
-            // Luckily, a full contiguity check here is not needed.
-            // Ranges that we want to merge here are formed by dividing a bigger ranges using
-            // query_ranges_to_vnodes_generator. By knowing query_ranges_to_vnodes_generator internals,
-            // it can be assumed that usually, mergable ranges are of the form [a, b) [b, c).
-            // Therefore, for the most part, contiguity check is reduced to equality & inclusivity test.
-            // It's fine, that we don't detect contiguity of some other possibly contiguous
-            // ranges (like [a, b] [b+1, c]), because not merging contiguous ranges (as opposed
-            // to merging discontiguous ones) is not a correctness problem.
-            bool maybe_discontiguous = !next_range.start() || !(
-                range.end()->value().equal(*schema, next_range.start()->value()) ?
-                (range.end()->is_inclusive() || next_range.start()->is_inclusive()) : false
-            );
-            // Do not merge ranges that may be discontiguous with each other
-            if (maybe_discontiguous) {
-                break;
-            }
-
-            inet_address_vector_replica_set merged = intersection(live_endpoints, next_endpoints);
-            inet_address_vector_replica_set current_merged_preferred_replicas = intersection(merged_preferred_replicas, current_range_preferred_replicas);
-
-            // Check if there is enough endpoint for the merge to be possible.
-            if (!is_sufficient_live_nodes(cl, *erm, merged)) {
-                break;
-            }
-
-            inet_address_vector_replica_set filtered_merged = filter_replicas_for_read(cl, *erm, merged, current_merged_preferred_replicas, pcf);
-
-            // Estimate whether merging will be a win or not
-            if (filtered_merged.empty()
-                    || !is_worth_merging_for_range_query(
-                            erm->get_topology(), filtered_merged, filtered_endpoints, next_filtered_endpoints)) {
-                break;
-            } else if (pcf) {
-                // check that merged set hit rate is not to low
-                auto find_min = [this, pcf] (const inet_address_vector_replica_set& range) {
-                    if (only_me(range)) {
-                        // The `min_element` call below would return the same thing, but thanks to this branch
-                        // we avoid having to access `remote` - so we can perform local queries without `remote`.
-                        return float(pcf->get_my_hit_rate().rate);
+                    // Origin has this to say here:
+                    // *  If the current range right is the min token, we should stop merging because CFS.getRangeSlice
+                    // *  don't know how to deal with a wrapping range.
+                    // *  Note: it would be slightly more efficient to have CFS.getRangeSlice on the destination nodes unwraps
+                    // *  the range if necessary and deal with it. However, we can't start sending wrapped range without breaking
+                    // *  wire compatibility, so It's likely easier not to bother;
+                    // It obviously not apply for us(?), but lets follow origin for now
+                    if (end_token(range) == dht::maximum_token()) {
+                        break;
                     }
 
-                    // There are nodes other than us in `range`.
-                    struct {
-                        const gms::gossiper& g;
-                        replica::column_family* cf = nullptr;
-                        float operator()(const gms::inet_address& ep) const {
-                            return float(cf->get_hit_rate(g, ep).rate);
+                    // Implementing a proper contiguity check is hard, because it requires
+                    // is_successor(range_bound<dht::ring_position> a, range_bound<dht::ring_position> b)
+                    // relation to be defined. It is needed for intervals for which their possibly adjacent
+                    // bounds are either both exclusive or inclusive.
+                    // For example: is_adjacent([a, b], [c, d]) requires checking is_successor(b, c).
+                    // Defining a successor relationship for dht::ring_position is hard, because
+                    // dht::ring_position can possibly contain partition key.
+                    // Luckily, a full contiguity check here is not needed.
+                    // Ranges that we want to merge here are formed by dividing a bigger ranges using
+                    // query_ranges_to_vnodes_generator. By knowing query_ranges_to_vnodes_generator internals,
+                    // it can be assumed that usually, mergable ranges are of the form [a, b) [b, c).
+                    // Therefore, for the most part, contiguity check is reduced to equality & inclusivity test.
+                    // It's fine, that we don't detect contiguity of some other possibly contiguous
+                    // ranges (like [a, b] [b+1, c]), because not merging contiguous ranges (as opposed
+                    // to merging discontiguous ones) is not a correctness problem.
+                    bool maybe_discontiguous = !next_range.start() || !(
+                        range.end()->value().equal(*schema, next_range.start()->value()) ?
+                        (range.end()->is_inclusive() || next_range.start()->is_inclusive()) : false
+                    );
+                    // Do not merge ranges that may be discontiguous with each other
+                    if (maybe_discontiguous) {
+                        break;
+                    }
+
+                    inet_address_vector_replica_set merged = intersection(live_endpoints, next_endpoints);
+                    inet_address_vector_replica_set current_merged_preferred_replicas = intersection(merged_preferred_replicas, current_range_preferred_replicas);
+
+                    // Check if there is enough endpoint for the merge to be possible.
+                    if (!is_sufficient_live_nodes(cl, *erm, merged)) {
+                        break;
+                    }
+
+                    inet_address_vector_replica_set filtered_merged = filter_replicas_for_read(cl, *erm, merged, current_merged_preferred_replicas, pcf);
+
+                    // Estimate whether merging will be a win or not
+                    if (filtered_merged.empty()
+                            || !is_worth_merging_for_range_query(
+                                    erm->get_topology(), filtered_merged, filtered_endpoints, next_filtered_endpoints)) {
+                        break;
+                    } else if (pcf) {
+                        // check that merged set hit rate is not to low
+                        auto find_min = [this, pcf] (const inet_address_vector_replica_set& range) {
+                            if (only_me(range)) {
+                                // The `min_element` call below would return the same thing, but thanks to this branch
+                                // we avoid having to access `remote` - so we can perform local queries without `remote`.
+                                return float(pcf->get_my_hit_rate().rate);
+                            }
+
+                            // There are nodes other than us in `range`.
+                            struct {
+                                const gms::gossiper& g;
+                                replica::column_family* cf = nullptr;
+                                float operator()(const gms::inet_address& ep) const {
+                                    return float(cf->get_hit_rate(g, ep).rate);
+                                }
+                            } ep_to_hr{remote().gossiper(), pcf};
+
+                            if (range.empty()) {
+                                on_internal_error(slogger, "empty range passed to `find_min`");
+                            }
+                            return *boost::range::min_element(range | boost::adaptors::transformed(ep_to_hr));
+                        };
+                        auto merged = find_min(filtered_merged) * 1.2; // give merged set 20% boost
+                        if (merged < find_min(filtered_endpoints) && merged < find_min(next_filtered_endpoints)) {
+                            // if lowest cache hits rate of a merged set is smaller than lowest cache hit
+                            // rate of un-merged sets then do not merge. The idea is that we better issue
+                            // two different range reads with highest chance of hitting a cache then one read that
+                            // will cause more IO on contacted nodes
+                            break;
                         }
-                    } ep_to_hr{remote().gossiper(), pcf};
-
-                    if (range.empty()) {
-                        on_internal_error(slogger, "empty range passed to `find_min`");
                     }
-                    return *boost::range::min_element(range | boost::adaptors::transformed(ep_to_hr));
-                };
-                auto merged = find_min(filtered_merged) * 1.2; // give merged set 20% boost
-                if (merged < find_min(filtered_endpoints) && merged < find_min(next_filtered_endpoints)) {
-                    // if lowest cache hits rate of a merged set is smaller than lowest cache hit
-                    // rate of un-merged sets then do not merge. The idea is that we better issue
-                    // two different range reads with highest chance of hitting a cache then one read that
-                    // will cause more IO on contacted nodes
-                    break;
+
+                    // If we get there, merge this range and the next one
+                    range = dht::partition_range(range.start(), next_range.end());
+                    live_endpoints = std::move(merged);
+                    merged_preferred_replicas = std::move(current_merged_preferred_replicas);
+                    filtered_endpoints = std::move(filtered_merged);
+                    ++i;
+                    merged_ranges.push_back(to_token_range(next_range));
                 }
             }
+            slogger.trace("creating range read executor for range {} in table {}.{} with targets {}",
+                        range, schema->ks_name(), schema->cf_name(), filtered_endpoints);
+            try {
+                db::assure_sufficient_live_nodes(cl, *erm, filtered_endpoints);
+            } catch(exceptions::unavailable_exception& ex) {
+                slogger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
+                get_stats().range_slice_unavailables.mark();
+                throw;
+            }
 
-            // If we get there, merge this range and the next one
-            range = dht::partition_range(range.start(), next_range.end());
-            live_endpoints = std::move(merged);
-            merged_preferred_replicas = std::move(current_merged_preferred_replicas);
-            filtered_endpoints = std::move(filtered_merged);
-            ++i;
-            merged_ranges.push_back(to_token_range(next_range));
-        }
-      }
-        slogger.trace("creating range read executor for range {} in table {}.{} with targets {}",
-                      range, schema->ks_name(), schema->cf_name(), filtered_endpoints);
-        try {
-            db::assure_sufficient_live_nodes(cl, *erm, filtered_endpoints);
-        } catch(exceptions::unavailable_exception& ex) {
-            slogger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
-            get_stats().range_slice_unavailables.mark();
-            throw;
+            exec.push_back(::make_shared<never_speculating_read_executor>(schema, cf.shared_from_this(), p, erm, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state, permit, std::monostate()));
+            ranges_per_exec.emplace(exec.back().get(), std::move(merged_ranges));
         }
 
-        exec.push_back(::make_shared<never_speculating_read_executor>(schema, cf.shared_from_this(), p, erm, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state, permit, std::monostate()));
-        ranges_per_exec.emplace(exec.back().get(), std::move(merged_ranges));
-    }
+        query::result_merger merger(cmd->get_row_limit(), cmd->partition_limit);
+        merger.reserve(exec.size());
 
-    query::result_merger merger(cmd->get_row_limit(), cmd->partition_limit);
-    merger.reserve(exec.size());
+        auto wrapped_result = co_await utils::result_map_reduce(exec.begin(), exec.end(), [timeout] (::shared_ptr<abstract_read_executor>& rex) {
+            return rex->execute(timeout);
+        }, std::move(merger));
 
-    auto wrapped_result = co_await utils::result_map_reduce(exec.begin(), exec.end(), [timeout] (::shared_ptr<abstract_read_executor>& rex) {
-        return rex->execute(timeout);
-    }, std::move(merger));
+        if (!wrapped_result) {
+            auto error = std::move(wrapped_result).assume_error();
+            p->handle_read_error(error.clone(), true);
+            co_return error;
+        }
 
-    if (!wrapped_result) {
-        auto error = std::move(wrapped_result).assume_error();
-        p->handle_read_error(error.clone(), true);
-        co_return error;
-    }
-
-        // FIXME: indentation
         foreign_ptr<lw_shared_ptr<query::result>> result = std::move(wrapped_result).value();
         result->ensure_counts();
         remaining_row_count -= result->row_count().value();
@@ -5728,7 +5727,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             cmd->partition_limit = remaining_partition_count;
             concurrency_factor *= 2;
         }
-  }
+    }
 }
 
 future<result<storage_proxy::coordinator_query_result>>
