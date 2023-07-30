@@ -5527,22 +5527,20 @@ bool storage_proxy::is_worth_merging_for_range_query(
 future<result<query_partition_key_range_concurrent_result>>
 storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::time_point timeout,
         locator::effective_replication_map_ptr erm,
-        std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
         lw_shared_ptr<query::read_command> cmd,
         db::consistency_level cl,
-        query_ranges_to_vnodes_generator&& ranges_to_vnodes,
+        query_ranges_to_vnodes_generator ranges_to_vnodes,
         int concurrency_factor,
         tracing::trace_state_ptr trace_state,
         uint64_t remaining_row_count,
         uint32_t remaining_partition_count,
         replicas_per_token_range preferred_replicas,
         service_permit permit) {
+    std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results;
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
-    std::vector<::shared_ptr<abstract_read_executor>> exec;
     auto p = shared_from_this();
     auto& cf= _db.local().find_column_family(schema);
     auto pcf = _db.local().get_config().cache_hit_rate_read_balancing() ? &cf : nullptr;
-    std::unordered_map<abstract_read_executor*, std::vector<dht::token_range>> ranges_per_exec;
     const auto& tm = erm->get_token_metadata();
 
     if (_features.range_scan_data_variant) {
@@ -5555,6 +5553,9 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     };
     const auto to_token_range = [] (const dht::partition_range& r) { return r.transform(std::mem_fn(&dht::ring_position::token)); };
 
+  for (;;) {
+    std::vector<::shared_ptr<abstract_read_executor>> exec;
+    std::unordered_map<abstract_read_executor*, std::vector<dht::token_range>> ranges_per_exec;
     dht::partition_range_vector ranges = ranges_to_vnodes(concurrency_factor);
     dht::partition_range_vector::iterator i = ranges.begin();
 
@@ -5692,27 +5693,18 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     query::result_merger merger(cmd->get_row_limit(), cmd->partition_limit);
     merger.reserve(exec.size());
 
-    auto f = utils::result_map_reduce(exec.begin(), exec.end(), [timeout] (::shared_ptr<abstract_read_executor>& rex) {
+    auto wrapped_result = co_await utils::result_map_reduce(exec.begin(), exec.end(), [timeout] (::shared_ptr<abstract_read_executor>& rex) {
         return rex->execute(timeout);
     }, std::move(merger));
 
-    return utils::result_futurize_try([&] {
-      return f.then(utils::result_wrap([p,
-            erm, // protects &tm
-            &tm,
-            exec = std::move(exec),
-            results = std::move(results),
-            ranges_to_vnodes = std::move(ranges_to_vnodes),
-            cl,
-            cmd,
-            concurrency_factor,
-            timeout,
-            remaining_row_count,
-            remaining_partition_count,
-            trace_state = std::move(trace_state),
-            preferred_replicas = std::move(preferred_replicas),
-            ranges_per_exec = std::move(ranges_per_exec),
-            permit = std::move(permit)] (foreign_ptr<lw_shared_ptr<query::result>>&& result) mutable {
+    if (!wrapped_result) {
+        auto error = std::move(wrapped_result).assume_error();
+        p->handle_read_error(error.clone(), true);
+        co_return error;
+    }
+
+        // FIXME: indentation
+        foreign_ptr<lw_shared_ptr<query::result>> result = std::move(wrapped_result).value();
         result->ensure_counts();
         remaining_row_count -= result->row_count().value();
         remaining_partition_count -= result->partition_count().value();
@@ -5730,18 +5722,13 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                     used_replicas.emplace(std::move(r), replica_ids);
                 }
             }
-            return make_ready_future<::result<query_partition_key_range_concurrent_result>>(query_partition_key_range_concurrent_result{std::move(results), std::move(used_replicas)});
+            co_return query_partition_key_range_concurrent_result{std::move(results), std::move(used_replicas)};
         } else {
             cmd->set_row_limit(remaining_row_count);
             cmd->partition_limit = remaining_partition_count;
-            return p->query_partition_key_range_concurrent(timeout, std::move(erm), std::move(results), cmd, cl, std::move(ranges_to_vnodes),
-                    concurrency_factor * 2, std::move(trace_state), remaining_row_count, remaining_partition_count, std::move(preferred_replicas), std::move(permit));
+            concurrency_factor *= 2;
         }
-      }));
-    },  utils::result_catch_dots([p] (auto&& handle) {
-        p->handle_read_error(handle.clone_inner(), true);
-        return handle.into_future();
-    }));
+  }
 }
 
 future<result<storage_proxy::coordinator_query_result>>
@@ -5762,8 +5749,6 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     int result_rows_per_range = 0;
     int concurrency_factor = 1;
 
-    std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results;
-
     slogger.debug("Estimated result rows per range: {}; requested rows: {}, concurrent range requests: {}",
             result_rows_per_range, cmd->get_row_limit(), concurrency_factor);
 
@@ -5782,7 +5767,6 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
 
     auto wrapped_result = co_await query_partition_key_range_concurrent(query_options.timeout(*this),
             std::move(erm),
-            std::move(results),
             cmd,
             cl,
             std::move(ranges_to_vnodes),
