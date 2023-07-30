@@ -5573,6 +5573,8 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             std::vector<dht::token_range> merged_ranges{to_token_range(range)};
             ++i;
 
+            co_await coroutine::maybe_yield();
+
             // getRestrictedRange has broken the queried range into per-[vnode] token ranges, but this doesn't take
             // the replication factor into account. If the intersection of live endpoints for 2 consecutive ranges
             // still meets the CL requirements, then we can merge both ranges into the same RangeSliceCommand.
@@ -5674,6 +5676,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                     filtered_endpoints = std::move(filtered_merged);
                     ++i;
                     merged_ranges.push_back(to_token_range(next_range));
+                    co_await coroutine::maybe_yield();
                 }
             }
             slogger.trace("creating range read executor for range {} in table {}.{} with targets {}",
