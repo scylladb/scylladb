@@ -5780,7 +5780,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     const auto row_limit = cmd->get_row_limit();
     const auto partition_limit = cmd->partition_limit;
 
-    return query_partition_key_range_concurrent(query_options.timeout(*this),
+    auto wrapped_result = co_await query_partition_key_range_concurrent(query_options.timeout(*this),
             std::move(erm),
             std::move(results),
             cmd,
@@ -5791,20 +5791,24 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
             cmd->get_row_limit(),
             cmd->partition_limit,
             std::move(query_options.preferred_replicas),
-            std::move(query_options.permit)).then(utils::result_wrap([row_limit, partition_limit] (
-                    query_partition_key_range_concurrent_result result) {
-        std::vector<foreign_ptr<lw_shared_ptr<query::result>>>& results = result.result;
-        replicas_per_token_range& used_replicas = result.replicas;
+            std::move(query_options.permit));
 
-        query::result_merger merger(row_limit, partition_limit);
-        merger.reserve(results.size());
+    if (!wrapped_result) {
+        co_return bo::failure(std::move(wrapped_result).assume_error());
+    }
 
-        for (auto&& r: results) {
-            merger(std::move(r));
-        }
+    auto query_result = std::move(wrapped_result).value();
+    std::vector<foreign_ptr<lw_shared_ptr<query::result>>>& query_results = query_result.result;
+    replicas_per_token_range& used_replicas = query_result.replicas;
 
-        return make_ready_future<::result<coordinator_query_result>>(coordinator_query_result(merger.get(), std::move(used_replicas)));
-    }));
+    query::result_merger merger(row_limit, partition_limit);
+    merger.reserve(query_results.size());
+
+    for (auto&& r: query_results) {
+        merger(std::move(r));
+    }
+
+    co_return coordinator_query_result(merger.get(), std::move(used_replicas));
 }
 
 future<storage_proxy::coordinator_query_result>
