@@ -423,9 +423,9 @@ class compaction {
 protected:
     compaction_data& _cdata;
     table_state& _table_s;
-    compaction_sstable_creator_fn _sstable_creator;
-    schema_ptr _schema;
-    reader_permit _permit;
+    const compaction_sstable_creator_fn _sstable_creator;
+    const schema_ptr _schema;
+    const reader_permit _permit;
     std::vector<shared_sstable> _sstables;
     std::vector<generation_type> _input_sstable_generations;
     // Unused sstables are tracked because if compaction is interrupted we can only delete them.
@@ -434,30 +434,30 @@ protected:
     std::vector<shared_sstable> _new_unused_sstables;
     std::vector<shared_sstable> _all_new_sstables;
     lw_shared_ptr<sstable_set> _compacting;
-    sstables::compaction_type _type;
-    uint64_t _max_sstable_size;
-    uint32_t _sstable_level;
+    const sstables::compaction_type _type;
+    const uint64_t _max_sstable_size;
+    const uint32_t _sstable_level;
     uint64_t _start_size = 0;
     uint64_t _end_size = 0;
     uint64_t _estimated_partitions = 0;
     uint64_t _bloom_filter_checks = 0;
     db::replay_position _rp;
     encoding_stats_collector _stats_collector;
-    bool _can_split_large_partition = false;
+    const bool _can_split_large_partition = false;
     bool _contains_multi_fragment_runs = false;
     mutation_source_metadata _ms_metadata = {};
-    compaction_sstable_replacer_fn _replacer;
-    run_id _run_identifier;
+    const compaction_sstable_replacer_fn _replacer;
+    const run_id _run_identifier;
     // optional clone of sstable set to be used for expiration purposes, so it will be set if expiration is enabled.
     std::optional<sstable_set> _sstable_set;
     // used to incrementally calculate max purgeable timestamp, as we iterate through decorated keys.
     std::optional<sstable_set::incremental_selector> _selector;
     std::unordered_set<shared_sstable> _compacting_for_max_purgeable_func;
     // optional owned_ranges vector for cleanup;
-    owned_ranges_ptr _owned_ranges = {};
+    const owned_ranges_ptr _owned_ranges = {};
     // required for reshard compaction.
     const dht::sharder* _sharder = nullptr;
-    std::optional<dht::incremental_owned_ranges_checker> _owned_ranges_checker;
+    const std::optional<dht::incremental_owned_ranges_checker> _owned_ranges_checker;
     // Garbage collected sstables that are sealed but were not added to SSTable set yet.
     std::vector<shared_sstable> _unused_garbage_collected_sstables;
     // Garbage collected sstables that were added to SSTable set and should be eventually removed from it.
