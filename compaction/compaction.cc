@@ -738,7 +738,7 @@ private:
         auto consumer = make_interposer_consumer([this] (flat_mutation_reader_v2 reader) mutable {
             return seastar::async([this, reader = std::move(reader)] () mutable {
                 auto close_reader = deferred_close(reader);
-                auto cfc = compacted_fragments_writer(get_compacted_fragments_writer());
+                auto cfc = get_compacted_fragments_writer();
                 reader.consume_in_thread(std::move(cfc));
             });
         });
