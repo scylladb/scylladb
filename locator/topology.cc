@@ -98,9 +98,9 @@ void topology::remove_endpoint(inet_address ep)
         } else {
             auto& racks = _dc_racks[dc];
             if (auto rit = racks.find(rack); rit != racks.end()) {
-                eps = rit->second;
-                eps.erase(ep);
-                if (eps.empty()) {
+                auto& rack_eps = rit->second;
+                rack_eps.erase(ep);
+                if (rack_eps.empty()) {
                     racks.erase(rit);
                 }
             }
