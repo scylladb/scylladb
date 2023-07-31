@@ -447,7 +447,8 @@ public:
                     // counted in compaction_manager::stats::pending_tasks
         active,     // task initiated active compaction, may alternate with pending
                     // counted in compaction_manager::stats::active_tasks
-        done,       // task completed successfully (may transition only to state::none)
+        done,       // task completed successfully (may transition only to state::none, or
+                    // state::pending for regular compaction)
                     // counted in compaction_manager::stats::completed_tasks
         postponed,  // task was postponed (may transition only to state::none)
                     // represented by the postponed_compactions metric
