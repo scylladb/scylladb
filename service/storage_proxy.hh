@@ -371,10 +371,9 @@ private:
     static inet_address_vector_replica_set intersection(const inet_address_vector_replica_set& l1, const inet_address_vector_replica_set& l2);
     future<result<query_partition_key_range_concurrent_result>> query_partition_key_range_concurrent(clock_type::time_point timeout,
             locator::effective_replication_map_ptr erm,
-            std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
             lw_shared_ptr<query::read_command> cmd,
             db::consistency_level cl,
-            query_ranges_to_vnodes_generator&& ranges_to_vnodes,
+            query_ranges_to_vnodes_generator ranges_to_vnodes,
             int concurrency_factor,
             tracing::trace_state_ptr trace_state,
             uint64_t remaining_row_count,
